@@ -24,12 +24,16 @@ internal enum PresenceOp : byte
     DrainGateway = 16,
     DrainWorker = 17,
     Logout = 18,
+    ChannelModerate = 19,
+    ChannelState = 20,
 }
 
 /// <summary>
 /// Encoding of the presence protocol over the peer link's request/answer payload. Request: op byte then the op's fields; reply: status byte (0 ok, 1 error) then the
 /// result or, for an error, a message string. Integers little-endian (<see cref="BinaryWriter"/>), strings length-prefixed UTF-8, lists an int32 count (at most
-/// <see cref="MaxListCount"/>). Decoders throw <see cref="InvalidDataException"/> or <see cref="EndOfStreamException"/> on a frame that does not fit.
+/// <see cref="MaxListCount"/>). A reply is bounded to fit the peer link's payload limit: a Route reply carries only the delivery count (never the deliveries), a DrainWorker reply at most
+/// <see cref="InMemoryClusterSocialRouter.MaxDrainBatchDeliveries"/> deliveries and <see cref="InMemoryClusterSocialRouter.MaxDrainBatchBytes"/> bytes (the rest stays queued for the next
+/// drain). Decoders throw <see cref="InvalidDataException"/> or <see cref="EndOfStreamException"/> on a frame that does not fit.
 /// Pure functions except <see cref="Dispatch"/>, which calls the holder service; thread-safe.
 /// </summary>
 internal static class PresenceWireCodec
@@ -137,6 +141,8 @@ internal static class PresenceWireCodec
         w.Write(e.IsAfk);
         w.Write(e.IsDnd);
         WriteNullableString(w, e.StatusMessage);
+        w.Write(e.Security);
+        w.Write(e.GmInvisible);
     }
 
     public static RealmPresenceEntry ReadEntry(BinaryReader r)
@@ -162,9 +168,11 @@ internal static class PresenceWireCodec
         bool afk = r.ReadBoolean();
         bool dnd = r.ReadBoolean();
         string? status = ReadNullableString(r);
+        byte security = r.ReadByte();
+        bool gmInvisible = r.ReadBoolean();
         return new RealmPresenceEntry(
             guid, name, account, worker, gateway, map, zone, area, level, cls, race, gender, guild, group, version, generation,
-            new DateTimeOffset(ticks, TimeSpan.Zero), guildName, afk, dnd, status);
+            new DateTimeOffset(ticks, TimeSpan.Zero), guildName, afk, dnd, status, security, gmInvisible);
     }
 
     public static void WriteNullableEntry(BinaryWriter w, RealmPresenceEntry? e)
@@ -366,6 +374,69 @@ internal static class PresenceWireCodec
         }
     }
 
+    /// <summary>The bytes <see cref="WriteDeliveries"/> writes for one delivery (strings are 7-bit length-prefixed UTF-8).</summary>
+    public static int DeliveryWireSize(RoutedSocialDelivery d)
+        => 16 + 1 + 8 + StringWireSize(d.RecipientName) + 4 + 8 + StringWireSize(d.TargetWorkerId) + StringWireSize(d.TargetGatewayId)
+            + 8 + StringWireSize(d.SenderName) + 8 + StringWireSize(d.PayloadText);
+
+    private static int StringWireSize(string value)
+    {
+        int bytes = Encoding.UTF8.GetByteCount(value);
+        int prefix = 1;
+        for (int rest = bytes; rest >= 0x80; rest >>= 7)
+        {
+            prefix++;
+        }
+
+        return prefix + bytes;
+    }
+
+    public static void WriteChannelState(BinaryWriter w, ChannelModerationState? state)
+    {
+        w.Write(state is not null);
+        if (state is null)
+        {
+            return;
+        }
+
+        w.Write(state.Owner);
+        WriteGuids(w, state.Moderators);
+        WriteGuids(w, state.Banned);
+        WriteGuids(w, state.Muted);
+    }
+
+    public static ChannelModerationState? ReadChannelState(BinaryReader r)
+    {
+        if (!r.ReadBoolean())
+        {
+            return null;
+        }
+
+        ulong owner = r.ReadUInt64();
+        return new ChannelModerationState(owner, ReadGuids(r), ReadGuids(r), ReadGuids(r));
+    }
+
+    private static void WriteGuids(BinaryWriter w, IReadOnlyList<ulong> guids)
+    {
+        w.Write(guids.Count);
+        foreach (ulong guid in guids)
+        {
+            w.Write(guid);
+        }
+    }
+
+    private static List<ulong> ReadGuids(BinaryReader r)
+    {
+        int count = ReadCount(r);
+        var list = new List<ulong>(count);
+        for (int i = 0; i < count; i++)
+        {
+            list.Add(r.ReadUInt64());
+        }
+
+        return list;
+    }
+
     public static IReadOnlyList<RoutedSocialDelivery> ReadDeliveries(BinaryReader r)
     {
         int count = ReadCount(r);
@@ -480,10 +551,12 @@ internal static class PresenceWireCodec
             case PresenceOp.Route:
             {
                 SocialRouteResult routed = router.Route(ReadMessage(r));
+                int delivered = routed.Deliveries.Count;
                 return EncodeReply(w =>
                 {
+                    // Only the count goes back: the deliveries are queued at the holder for their workers, and echoing them could exceed the link's payload limit.
                     w.Write((byte)routed.Status);
-                    WriteDeliveries(w, routed.Deliveries);
+                    w.Write(delivered);
                 });
             }
 
@@ -513,7 +586,7 @@ internal static class PresenceWireCodec
 
             case PresenceOp.DrainWorker:
             {
-                IReadOnlyList<RoutedSocialDelivery> drained = router.DrainWorkerDeliveries(r.ReadString());
+                IReadOnlyList<RoutedSocialDelivery> drained = router.DrainWorkerDeliveriesBatch(r.ReadString());
                 return EncodeReply(w => WriteDeliveries(w, drained));
             }
 
@@ -529,6 +602,22 @@ internal static class PresenceWireCodec
                     w.Write((byte)result);
                     WriteDeliveries(w, flushed);
                 });
+            }
+
+            case PresenceOp.ChannelModerate:
+            {
+                string channel = r.ReadString();
+                var action = (ChannelModerationAction)r.ReadByte();
+                ulong actor = r.ReadUInt64();
+                ulong target = r.ReadUInt64();
+                bool ok = router.ModerateChannel(channel, action, actor, target);
+                return EncodeReply(w => w.Write(ok));
+            }
+
+            case PresenceOp.ChannelState:
+            {
+                ChannelModerationState? state = router.GetChannelModeration(r.ReadString());
+                return EncodeReply(w => WriteChannelState(w, state));
             }
 
             default:

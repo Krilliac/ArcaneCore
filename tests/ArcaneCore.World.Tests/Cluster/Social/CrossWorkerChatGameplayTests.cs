@@ -4,7 +4,9 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Protocol;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,12 +72,12 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncDisposable
         }
     }
 
-    private async Task<ulong> PublishAsync(WorldTestHost host, string worker, string name, int guildId = 0)
+    private async Task<ulong> PublishAsync(WorldTestHost host, string worker, string name, int guildId = 0, byte security = 0, bool gmInvisible = false)
     {
         ulong guid = await host.PlayerStateAsync(name, p => p.Guid.Value);
         byte race = await host.PlayerStateAsync(name, p => (byte)p.Race);
         var entry = new RealmPresenceEntry(
-            guid, name, (int)guid + 1000, worker, GatewayId, 0, 12, 0, 10, 1, race, 0, guildId, 0, ++_version, 1, DateTimeOffset.UtcNow);
+            guid, name, (int)guid + 1000, worker, GatewayId, 0, 12, 0, 10, 1, race, 0, guildId, 0, ++_version, 1, DateTimeOffset.UtcNow, Security: security, GmInvisible: gmInvisible);
         Assert.Equal(PresenceMutationResult.Applied, _directory.TryUpsert(entry, out _));
         return guid;
     }
@@ -202,6 +204,76 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncDisposable
         await PumpAsync(_routingB);
         await PumpAsync(_routingA);
         await alice.ReadUntilAsync(WorldOpcode.SmsgChatWrongFaction);
+    }
+
+    private static async Task<List<string>> WhoAsync(WorldTestClient client)
+    {
+        var who = new PacketWriter(64);
+        who.WriteUInt32(0);
+        who.WriteUInt32(100);
+        who.WriteCString(string.Empty);
+        who.WriteCString(string.Empty);
+        who.WriteUInt32(0xFFFFFFFF);
+        who.WriteUInt32(0xFFFFFFFF);
+        who.WriteUInt32(0);
+        who.WriteUInt32(0);
+
+        await client.SendAsync(WorldOpcode.CmsgWho, who.ToArray());
+        var reader = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgWho));
+        uint listed = reader.ReadUInt32();
+        reader.ReadUInt32();
+        var names = new List<string>();
+        for (int i = 0; i < listed; i++)
+        {
+            names.Add(reader.ReadCString());
+            reader.ReadCString();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+        }
+
+        names.Sort(StringComparer.Ordinal);
+        return names;
+    }
+
+    [Fact]
+    public async Task Who_ForAPlainPlayer_ListsOtherWorkersPlayers_AndHidesAnInvisibleGm()
+    {
+        WorldTestClient alice = await EnterAsync(_hostA, "ALICE", "Alice");
+        await SkipGuidsOnBAsync(1);
+        await EnterAsync(_hostB, "BOB", "Bob");
+        await EnterAsync(_hostB, "SEER", "Seer", AccountSecurity.GameMaster);
+        await EnterAsync(_hostB, "KEEPER", "Keeper", AccountSecurity.GameMaster);
+        await PublishAsync(_hostA, WorkerA, "Alice");
+        await PublishAsync(_hostB, WorkerB, "Bob");
+        await PublishAsync(_hostB, WorkerB, "Seer", security: (byte)AccountSecurity.GameMaster);
+        await PublishAsync(_hostB, WorkerB, "Keeper", security: (byte)AccountSecurity.GameMaster, gmInvisible: true);
+        await alice.CollectAsync();
+
+        // No staff gate: a plain player sees Bob and the visible GM of the other worker, not the GM who is hidden.
+        Assert.Equal(["Alice", "Bob", "Seer"], await WhoAsync(alice));
+    }
+
+    [Fact]
+    public void RemoteWhoVisible_AppliesGmLevelInWhoList_Faction_AndGmVisibility()
+    {
+        var options = new WorldRuntimeOptions { GmLevelInWhoList = AccountSecurity.Moderator };
+        RealmPresenceEntry Entry(byte race, byte security, bool hidden) => new(
+            9, "Other", 1009, WorkerB, GatewayId, 0, 12, 0, 10, 1, race, 0, 0, 0, 1, 1, DateTimeOffset.UtcNow, Security: security, GmInvisible: hidden);
+
+        Assert.True(ChatHandlers.RemoteWhoVisible(Entry(1, 0, false), AccountSecurity.Player, Team.Alliance, options));
+        Assert.False(ChatHandlers.RemoteWhoVisible(Entry(2, 0, false), AccountSecurity.Player, Team.Alliance, options), "other faction");
+        options.AllowTwoSideWhoList = true;
+        Assert.True(ChatHandlers.RemoteWhoVisible(Entry(2, 0, false), AccountSecurity.Player, Team.Alliance, options));
+
+        Assert.True(ChatHandlers.RemoteWhoVisible(Entry(1, 1, false), AccountSecurity.Player, Team.Alliance, options), "staff up to GmLevelInWhoList");
+        Assert.False(ChatHandlers.RemoteWhoVisible(Entry(1, 2, false), AccountSecurity.Player, Team.Alliance, options), "staff above GmLevelInWhoList");
+        Assert.True(ChatHandlers.RemoteWhoVisible(Entry(1, 2, false), AccountSecurity.Moderator, Team.Alliance, options));
+
+        Assert.False(ChatHandlers.RemoteWhoVisible(Entry(1, 1, true), AccountSecurity.Player, Team.Alliance, options), "hidden GM");
+        Assert.True(ChatHandlers.RemoteWhoVisible(Entry(1, 2, true), AccountSecurity.GameMaster, Team.Alliance, options), "an asker of at least its security still sees it");
+        Assert.False(ChatHandlers.RemoteWhoVisible(Entry(1, 2, true), AccountSecurity.Moderator, Team.Alliance, options));
     }
 
     [Fact]

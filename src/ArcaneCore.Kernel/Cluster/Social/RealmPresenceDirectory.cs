@@ -10,6 +10,10 @@ namespace ArcaneCore.Kernel.Cluster.Social;
 /// from the gateway session claim. Together they guarantee that a late logout or stale update from
 /// a prior worker or superseded session cannot overwrite or delete a newer presence entry.
 /// </para>
+/// <para>
+/// <see cref="Security"/> is the account security level (0 player ... 3 administrator) and <see cref="GmInvisible"/> the character's <c>.gm visible off</c> state: with them a worker can apply
+/// the <c>GmLevelInWhoList</c> and GM-visibility rules to the entries of other workers in a realm-wide <c>/who</c>.
+/// </para>
 /// </summary>
 public sealed record RealmPresenceEntry(
     ulong CharacterGuid,
@@ -32,7 +36,9 @@ public sealed record RealmPresenceEntry(
     string? GuildName = null,
     bool IsAfk = false,
     bool IsDnd = false,
-    string? StatusMessage = null);
+    string? StatusMessage = null,
+    byte Security = 0,
+    bool GmInvisible = false);
 
 /// <summary>Filter criteria for realm-wide <c>/who</c> queries against <see cref="IRealmPresenceDirectory"/>.</summary>
 public sealed record RealmWhoFilter(

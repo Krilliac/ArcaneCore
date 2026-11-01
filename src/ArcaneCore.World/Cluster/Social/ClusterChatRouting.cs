@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Threading.Channels;
 using ArcaneCore.Kernel.Cluster.Social;
@@ -223,7 +224,9 @@ public sealed record ClusterChatDelivery(ulong RecipientGuid, long RecipientSess
 /// generation is not the one this worker registered for the character any more (a replaced or logged-out session), and hands the rest to <see cref="Deliver"/>.
 /// <para>
 /// Same-worker delivery never passes here: callers serve local recipients themselves and the origin check keeps a worker from applying its own frames, so a single-worker realm
-/// behaves as before. Channel membership (join, leave) is kept at the router by <see cref="JoinChannel"/>; the channel's owner, moderators and bans stay with the worker objects.
+/// behaves as before. Channel membership (join, leave) and moderation (owner, moderators, bans, mutes) are kept at the router (the presence holder) by <see cref="JoinChannel"/> and
+/// <see cref="ModerateChannel"/>: the router refuses a join of a banned character and a line of a banned or muted speaker, and the pump drops a delivery whose speaker has been
+/// barred since (<see cref="IsSpeakerBarred"/>).
 /// </para>
 /// <para>
 /// Threading: every <c>Send</c>, <c>JoinChannel</c>, <c>LeaveChannel</c> and <see cref="QueryWho"/> member only enqueues (never blocks, safe on the world thread); one background
@@ -236,6 +239,12 @@ public sealed class ClusterChatRouting : IAsyncDisposable
 {
     /// <summary>Most operations waiting for the sender task; beyond it a new one is dropped.</summary>
     public const int MaxQueuedOperations = 4096;
+
+    /// <summary>Most bounded batches one <see cref="PumpOnce"/> pass takes from the holder; what is left stays queued for the next pass.</summary>
+    public const int MaxPumpBatches = 64;
+
+    /// <summary>Most channels whose moderation snapshot is cached for <see cref="IsSpeakerBarred"/>.</summary>
+    private const int MaxCachedChannels = 1024;
 
     private readonly IClusterSocialRouter _router;
     private readonly IRealmPresenceDirectory _directory;
@@ -250,8 +259,10 @@ public sealed class ClusterChatRouting : IAsyncDisposable
     private Task _pump = Task.CompletedTask;
     private Action<ClusterChatDelivery>? _deliver;
     private long _sequence;
+    private readonly ConcurrentDictionary<string, ChannelModerationState> _moderation = new(StringComparer.OrdinalIgnoreCase);
     private long _staleDropped;
     private long _queueDropped;
+    private long _barredDropped;
     private int _started;
     private int _disposed;
 
@@ -297,6 +308,16 @@ public sealed class ClusterChatRouting : IAsyncDisposable
 
     /// <summary>Operations dropped because the queue was full.</summary>
     public long QueueDropped => Interlocked.Read(ref _queueDropped);
+
+    /// <summary>Channel lines dropped at the pump because their speaker was banned or muted at the holder.</summary>
+    public long BarredDropped => Interlocked.Read(ref _barredDropped);
+
+    /// <summary>
+    /// True when the holder's moderation state, as the pump last read it for <paramref name="channelName"/>, bans or mutes <paramref name="speakerGuid"/>. Never blocks (a cache the pump
+    /// refreshes for every channel delivery it handles), so the world thread may call it when applying a delivery.
+    /// </summary>
+    public bool IsSpeakerBarred(string channelName, ulong speakerGuid)
+        => !string.IsNullOrEmpty(channelName) && _moderation.TryGetValue(channelName, out ChannelModerationState? state) && state.IsBarred(speakerGuid);
 
     /// <summary>True when this worker's registration of <paramref name="characterGuid"/> is at <paramref name="generation"/>. Thread-safe.</summary>
     public bool IsCurrent(ulong characterGuid, long generation) => generation > 0 && _registeredGeneration(characterGuid) == generation;
@@ -383,6 +404,22 @@ public sealed class ClusterChatRouting : IAsyncDisposable
         }
 
         Enqueue(() => _router.LeaveChannel(channelName, member.Guid, generation));
+    }
+
+    /// <summary>
+    /// A moderation change decided on this worker (owner claimed or handed on, moderator, ban, mute) is sent to the holder, which applies it only if <paramref name="actorGuid"/> may
+    /// moderate the channel there (<see cref="IClusterSocialRouter.ModerateChannel"/>). Queued behind the join and leave operations before it.
+    /// </summary>
+    public void ModerateChannel(string channelName, ChannelModerationAction action, ulong actorGuid, ulong targetGuid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
+        Enqueue(() =>
+        {
+            if (!_router.ModerateChannel(channelName, action, actorGuid, targetGuid))
+            {
+                _logger.LogDebug("Channel moderation {Action} of {Target} in {Channel} refused by the holder", action, targetGuid, channelName);
+            }
+        });
     }
 
     /// <summary>
@@ -510,17 +547,33 @@ public sealed class ClusterChatRouting : IAsyncDisposable
     /// </summary>
     public int PumpOnce()
     {
-        // Chat is delivered through the worker queue; the gateway copy of each delivery has no consumer in a cluster realm (every worker shares one gateway id), so it is
-        // discarded here to keep the holder from retaining it forever.
-        _ = _router.DrainGatewayDeliveries(_gatewayId);
-
+        // Chat is delivered through the worker queue. The gateway copy of each delivery has no consumer in a cluster realm (every worker shares one gateway id); the router bounds that
+        // queue itself (InMemoryClusterSocialRouter.MaxGatewayQueueDeliveries), so nothing is drained or retained here.
         Action<ClusterChatDelivery>? deliver = Deliver;
         if (deliver is null)
         {
             return 0;
         }
 
-        IReadOnlyList<RoutedSocialDelivery> deliveries = _router.DrainWorkerDeliveries(_workerId);
+        // The holder answers one bounded batch per request (its reply must fit the peer link's payload limit); the remainder stays queued there, so take batches until it is empty.
+        int handed = 0;
+        Dictionary<string, ChannelModerationState?>? channelStates = null;
+        for (int batchNumber = 0; batchNumber < MaxPumpBatches; batchNumber++)
+        {
+            IReadOnlyList<RoutedSocialDelivery> batch = _router.DrainWorkerDeliveriesBatch(_workerId);
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            handed += HandOver(batch, deliver, ref channelStates);
+        }
+
+        return handed;
+    }
+
+    private int HandOver(IReadOnlyList<RoutedSocialDelivery> deliveries, Action<ClusterChatDelivery> deliver, ref Dictionary<string, ChannelModerationState?>? channelStates)
+    {
         int handed = 0;
         foreach (RoutedSocialDelivery delivery in deliveries.OrderBy(static d => d.DeliverySequence))
         {
@@ -546,11 +599,61 @@ public sealed class ClusterChatRouting : IAsyncDisposable
                 continue;
             }
 
+            if (frame.Kind == ClusterChatFrameKind.Channel && frame.Channel is { Length: > 0 } channelName
+                && RefreshChannelState(channelName, ref channelStates) is { } state && state.IsBarred(frame.SenderGuid))
+            {
+                Interlocked.Increment(ref _barredDropped); // banned or muted at the holder since the line was routed
+                continue;
+            }
+
             deliver(new ClusterChatDelivery(delivery.RecipientGuid, delivery.RecipientSessionGeneration, delivery.DeliverySequence, frame));
             handed++;
         }
 
         return handed;
+    }
+
+    /// <summary>
+    /// The holder's moderation state of <paramref name="channelName"/>, read once per pump pass and kept for <see cref="IsSpeakerBarred"/>. A holder that cannot be reached leaves the
+    /// previous snapshot in place (the holder already refused the line of a barred speaker when it routed it).
+    /// </summary>
+    private ChannelModerationState? RefreshChannelState(string channelName, ref Dictionary<string, ChannelModerationState?>? channelStates)
+    {
+        channelStates ??= new Dictionary<string, ChannelModerationState?>(StringComparer.OrdinalIgnoreCase);
+        if (channelStates.TryGetValue(channelName, out ChannelModerationState? known))
+        {
+            return known;
+        }
+
+        ChannelModerationState? state;
+        try
+        {
+            state = _router.GetChannelModeration(channelName);
+        }
+        catch (Exception ex) when (IsTransportFailure(ex))
+        {
+            _logger.LogDebug("Channel moderation state of {Channel} not read ({Message})", channelName, ex.Message);
+            _moderation.TryGetValue(channelName, out state);
+            channelStates[channelName] = state;
+            return state;
+        }
+
+        channelStates[channelName] = state;
+        if (state is null)
+        {
+            _moderation.TryRemove(channelName, out _);
+        }
+        else
+        {
+            if (_moderation.Count >= MaxCachedChannels)
+            {
+                _moderation.Clear();
+            }
+
+            _moderation[channelName] = state;
+        }
+
+        return state;
     }
 
     /// <summary>Starts the pump: <see cref="PumpOnce"/> every <paramref name="interval"/>. Idempotent.</summary>

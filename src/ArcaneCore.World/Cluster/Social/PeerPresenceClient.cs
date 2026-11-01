@@ -13,6 +13,9 @@ namespace ArcaneCore.World.Cluster.Social;
 /// </summary>
 public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter
 {
+    /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
+    public const int MaxDrainBatches = 64;
+
     private async Task<BinaryReader> SendAsync(PresenceOp op, Action<BinaryWriter>? write, CancellationToken cancellationToken = default)
     {
         byte[] reply = await link.EchoAsync(PresenceWireCodec.EncodeRequest(op, write), cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -110,10 +113,12 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
             throw new ArgumentException("MessageId must be non-empty.", nameof(message));
         }
 
+        // The reply carries the status and the number of deliveries only; the deliveries themselves stay queued at the holder for their workers.
         return Send(PresenceOp.Route, w => PresenceWireCodec.WriteMessage(w, message), r =>
         {
             var status = (SocialRouteStatus)r.ReadByte();
-            return new SocialRouteResult(status, PresenceWireCodec.ReadDeliveries(r));
+            r.ReadInt32();
+            return new SocialRouteResult(status, []);
         });
     }
 
@@ -135,8 +140,48 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
     public IReadOnlyList<RoutedSocialDelivery> DrainGatewayDeliveries(string gatewayId)
         => string.IsNullOrWhiteSpace(gatewayId) ? [] : Send(PresenceOp.DrainGateway, w => w.Write(gatewayId), PresenceWireCodec.ReadDeliveries);
 
+    /// <summary>Every delivery queued for the worker when the call starts, fetched as successive bounded batches (at most <see cref="MaxDrainBatches"/> per call; the rest stays queued).</summary>
     public IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveries(string workerId)
+    {
+        if (string.IsNullOrWhiteSpace(workerId))
+        {
+            return [];
+        }
+
+        var all = new List<RoutedSocialDelivery>();
+        for (int i = 0; i < MaxDrainBatches; i++)
+        {
+            IReadOnlyList<RoutedSocialDelivery> batch = DrainWorkerDeliveriesBatch(workerId);
+            if (batch.Count == 0)
+            {
+                break;
+            }
+
+            all.AddRange(batch);
+        }
+
+        return all;
+    }
+
+    /// <summary>One bounded reply of the holder's worker queue (see <see cref="InMemoryClusterSocialRouter.MaxDrainBatchBytes"/>); the remainder stays queued there.</summary>
+    public IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveriesBatch(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.DrainWorker, w => w.Write(workerId), PresenceWireCodec.ReadDeliveries);
+
+    public bool ModerateChannel(string channelName, ChannelModerationAction action, ulong actorGuid, ulong targetGuid)
+        => !string.IsNullOrWhiteSpace(channelName)
+            && Send(
+                PresenceOp.ChannelModerate,
+                w =>
+                {
+                    w.Write(channelName);
+                    w.Write((byte)action);
+                    w.Write(actorGuid);
+                    w.Write(targetGuid);
+                },
+                r => r.ReadBoolean());
+
+    public ChannelModerationState? GetChannelModeration(string channelName)
+        => string.IsNullOrWhiteSpace(channelName) ? null : Send(PresenceOp.ChannelState, w => w.Write(channelName), PresenceWireCodec.ReadChannelState);
 
     public PresenceMutationResult LogoutWithOrderedFlush(
         ulong characterGuid,
@@ -230,6 +275,12 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
     public IReadOnlyList<RoutedSocialDelivery> DrainGatewayDeliveries(string gatewayId) => Router.DrainGatewayDeliveries(gatewayId);
 
     public IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveries(string workerId) => Router.DrainWorkerDeliveries(workerId);
+
+    public IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveriesBatch(string workerId) => Router.DrainWorkerDeliveriesBatch(workerId);
+
+    public bool ModerateChannel(string channelName, ChannelModerationAction action, ulong actorGuid, ulong targetGuid) => Router.ModerateChannel(channelName, action, actorGuid, targetGuid);
+
+    public ChannelModerationState? GetChannelModeration(string channelName) => Router.GetChannelModeration(channelName);
 
     public PresenceMutationResult LogoutWithOrderedFlush(
         ulong characterGuid,

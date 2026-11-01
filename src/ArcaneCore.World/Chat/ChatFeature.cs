@@ -307,7 +307,7 @@ public sealed class ChatFeature : IWorldFeature
     /// Applies one chat frame that another worker routed to a character of this one (world thread; posted by the routing's pump). The delivery is checked against the registered
     /// session generation again here, because the session can be replaced between the pump and the tick; a stale one is dropped. Rules are the local ones: a whisper's faction,
     /// staff and mute gates and away/busy auto-reply (answered to the whisperer through <see cref="ClusterChatRouting.SendReply"/>), the sub-group of party chat, the listen
-    /// right and ignore list of guild and officer chat, the channel membership, faction and ignore list of a channel line.
+    /// right and ignore list of guild and officer chat, the channel membership, faction and ignore list of a channel line, and the ban and mute of the speaker held at the holder.
     /// </summary>
     internal void ApplyClusterDelivery(WorldRuntime world, ClusterChatDelivery delivery)
     {
@@ -369,6 +369,13 @@ public sealed class ChatFeature : IWorldFeature
                     || social.Channels.Find(recipient.Team, channelName) is not { } channel || !channel.IsOn(recipient.Guid)
                     || (!social.Options.AllowTwoSideChannel && (Team)frame.SenderTeam != recipient.Team)
                     || (!frame.IgnoreExempt && social.IsIgnoring(recipient, speaker)))
+                {
+                    return;
+                }
+
+                // Moderation lives at the holder: a speaker banned or muted there (as the pump last read it), or banned from this worker's own channel object, is not heard even
+                // when the line was routed before the ban.
+                if (cluster.IsSpeakerBarred(channelName, frame.SenderGuid) || channel.IsBanned(speaker))
                 {
                     return;
                 }

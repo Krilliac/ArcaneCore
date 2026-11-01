@@ -263,7 +263,7 @@ public sealed class CrossWorkerChatTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Pump_LeavesNothingQueuedAtTheHolder()
+    public async Task Pump_LeavesNoWorkerDeliveryQueuedAtTheHolder_AndTheSharedGatewayQueueStaysBounded()
     {
         Register(_a, 1, "Alice", 5, guildId: 9);
         Register(_b, 2, "Bob", 7, guildId: 9);
@@ -272,11 +272,44 @@ public sealed class CrossWorkerChatTests : IAsyncDisposable
         await _a.Routing.FlushAsync();
         Assert.Equal(1, _b.Routing.PumpOnce());
         Assert.Equal(0, _a.Routing.PumpOnce()); // the speaker's own copy, if the router queued one, is dropped as served locally
-
-        // The gateway copy of every delivery is discarded by the pump, the worker copy was handed over: nothing stays on the holder.
-        Assert.Empty(_router.DrainGatewayDeliveries(GatewayId));
         Assert.Empty(_router.DrainWorkerDeliveries("worker-b"));
         Assert.Empty(_router.DrainWorkerDeliveries("worker-a"));
+
+        // Every worker shares one gateway id and nothing consumes its queue in a cluster realm: it must not grow with the realm's chat. More lines than the cap leave at most the cap.
+        for (int i = 0; i < InMemoryClusterSocialRouter.MaxGatewayQueueDeliveries + 100; i++)
+        {
+            _a.Routing.SendToGuild(Sender(1, "Alice"), 9, Line(ClusterChatFrameKind.Guild, "line " + i));
+        }
+
+        await _a.Routing.FlushAsync();
+        IReadOnlyList<RoutedSocialDelivery> gateway = _router.DrainGatewayDeliveries(GatewayId);
+        Assert.InRange(gateway.Count, 1, InMemoryClusterSocialRouter.MaxGatewayQueueDeliveries);
+        Assert.Equal(gateway.OrderBy(static d => d.DeliverySequence).ToArray(), gateway); // the newest survive, in order
+        Assert.True(gateway.Sum(static d => PresenceWireCodec.DeliveryWireSize(d)) <= InMemoryClusterSocialRouter.MaxGatewayQueueBytes);
+        Assert.Empty(_router.DrainGatewayDeliveries(GatewayId));
+    }
+
+    [Fact]
+    public async Task Pump_TakesALargeBacklogInBoundedBatches_WithoutLosingOrReorderingAny()
+    {
+        Register(_a, 1, "Alice", 5, guildId: 9);
+        Register(_b, 2, "Bob", 7, guildId: 9);
+        string filler = new('x', 1500);
+        const int Lines = 120;
+        for (int i = 0; i < Lines; i++)
+        {
+            _a.Routing.SendToGuild(Sender(1, "Alice"), 9, Line(ClusterChatFrameKind.Guild, i.ToString("D3") + filler));
+        }
+
+        await _a.Routing.FlushAsync();
+
+        Assert.True(_router.DrainWorkerDeliveriesBatch("worker-b").Count < Lines, "one batch is bounded");
+        // That batch was dropped from the queue above; run the rest through the pump (it takes batches until the queue is empty).
+        int handed = _b.Routing.PumpOnce();
+        Assert.Equal(handed, _b.Received.Count);
+        Assert.True(handed > 0);
+        Assert.Equal(_b.Received.Select(static d => d.DeliverySequence).Order().ToArray(), _b.Received.Select(static d => d.DeliverySequence).ToArray());
+        Assert.Empty(_router.DrainWorkerDeliveriesBatch("worker-b"));
     }
 
     // ---- golden bytes --------------------------------------------------------------------------------------------------------------------------

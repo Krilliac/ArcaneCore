@@ -781,6 +781,22 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
+    /// Whether a player of another worker (a realm presence entry) is listed for an asker: a plain player does not see the other faction (unless <c>AllowTwoSide.WhoList</c>) nor staff
+    /// above <c>GmLevelInWhoList</c>, and a GM who is invisible (<c>.gm visible off</c>) is hidden from askers of lower security, the same rules the local list applies to local players
+    /// (vmangos WhoListClientQueryTask, Player::IsVisibleGloballyFor).
+    /// </summary>
+    internal static bool RemoteWhoVisible(RealmPresenceEntry other, AccountSecurity askerSecurity, Team askerTeam, WorldRuntimeOptions options)
+    {
+        if (askerSecurity == AccountSecurity.Player
+            && ((TeamRules.TeamOf((Race)other.Race) != askerTeam && !options.AllowTwoSideWhoList) || (AccountSecurity)other.Security > options.GmLevelInWhoList))
+        {
+            return false;
+        }
+
+        return !other.GmInvisible || askerSecurity >= (AccountSecurity)other.Security;
+    }
+
+    /// <summary>
     /// CMSG_WHO: u32 min level, u32 max level, CString name, CString guild, u32 race mask,
     /// u32 class mask, u32 zone count (≤ 10) + zones, u32 string count (≤ 4) + strings
     /// (vmangos Misc::Who, gtker cmsg_who). Filtering follows vmangos WhoListClientQueryTask: the zone
@@ -892,11 +908,10 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
         // The online total is reported only when the list was truncated (vmangos).
         int online = session.World.OnlinePlayerCount;
-        // Cluster: the players of other workers come from realm presence, asynchronously (the list below answers when that is not wanted or not possible). Presence carries no
-        // security level, so for a plain player the other workers' entries are listed only while staff are never hidden (GmLevelInWhoList at its maximum).
+        // Cluster: the players of other workers come from realm presence, asynchronously (the list below answers when that is not wanted or not possible). Presence entries carry
+        // the account security and the GM visibility, so the same GmLevelInWhoList, faction and GM-visibility rules as for local players apply to every asker (RemoteWhoVisible).
         if (entries.Count < WhoMaxEntries
-            && session.Services.GetService<ChatFeature>()?.Cluster is { } cluster
-            && session.Security >= AccountSecurity.Administrator)
+            && session.Services.GetService<ChatFeature>()?.Cluster is { } cluster)
         {
             AskerWho asker = new(session.Security, player.Team, player.ZoneId, askerMap, askerInstance);
             var filter = new RealmWhoFilter(
@@ -912,8 +927,9 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                         break;
                     }
 
-                    if (string.Equals(other.WorkerId, cluster.WorkerId, StringComparison.Ordinal) || !seen.Add(other.CharacterName)
-                        || (asker.Security == AccountSecurity.Player && TeamRules.TeamOf((Race)other.Race) != asker.Team && !options.AllowTwoSideWhoList))
+                    if (string.Equals(other.WorkerId, cluster.WorkerId, StringComparison.Ordinal)
+                        || !RemoteWhoVisible(other, asker.Security, asker.Team, options)
+                        || !seen.Add(other.CharacterName))
                     {
                         continue;
                     }
