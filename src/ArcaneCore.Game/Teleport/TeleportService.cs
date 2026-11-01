@@ -522,6 +522,10 @@ public sealed partial class TeleportService
             return false;
         }
 
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966), before the map change; done once the router
+        // accepted so a refused transfer changes nothing. The revive reads no map state of the destination.
+        player.Map?.Combat.ReviveForDungeonEntry(player, destination.MapId);
+
         // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872).
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
         if (!staysAboard)

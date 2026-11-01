@@ -1,7 +1,10 @@
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Graveyards;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Game.Tests.Death;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -18,10 +21,12 @@ public sealed class FarTeleportRoutingTests
 {
     private static readonly MapContent Content = new(
         [
-            new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+            new MapTemplate(0, 0, MapType.Common, 12, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
             new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
+            new MapTemplate(33, 0, MapType.Instance, 0, 5, 0, -1, 0, 0, "Dungeon", ""),
         ],
-        [], [], [], []);
+        [new AreaTemplate(12, 0, 0, 0, 0, 0, "Elwynn", 0, 0)],
+        [], [], []);
 
     private sealed class RecordingRouter : IClusterFarTeleportRouter
     {
@@ -36,10 +41,10 @@ public sealed class FarTeleportRoutingTests
         }
     }
 
-    private static (WorldRuntime World, TeleportService Teleports, Player Player, FakeSession Session, RecordingRouter Router) Setup(string owned)
+    private static (WorldRuntime World, TeleportService Teleports, Player Player, FakeSession Session, RecordingRouter Router) Setup(string owned, bool allowInstanceMaps = true)
     {
         WorldRuntime world = TestWorld.CreateRuntime();
-        Assert.True(MapOwnership.TryParse(owned, allowInstanceMaps: true, out MapOwnership ownership, out string? error), error);
+        Assert.True(MapOwnership.TryParse(owned, allowInstanceMaps: allowInstanceMaps, out MapOwnership ownership, out string? error), error);
         world.Ownership = ownership;
         WorldMaps.Of(world).Load(Content);
         var teleports = new TeleportService(world, _ => { }, _ => { });
@@ -145,6 +150,55 @@ public sealed class FarTeleportRoutingTests
             Assert.False(teleports.CanTeleportTo(player, 1, 1000, 2000, 30, 0));
             Assert.False(teleports.TeleportTo(player, 1, 1000, 2000, 30, 0));
             Assert.Empty(router.Calls);
+        }
+    }
+
+    [Fact]
+    public void ADungeonAnotherWorkerOwns_CallsTheRouterOnce()
+    {
+        // allowInstanceMaps false: this worker owns map 0 only, so an instance copy of map 33 is remote (Owns(33, 1) is false).
+        (WorldRuntime world, TeleportService teleports, Player player, FakeSession session, RecordingRouter router) = Setup("0", allowInstanceMaps: false);
+        using (world)
+        {
+            Assert.True(teleports.TeleportTo(player, 33, 10, 20, 30, 0));
+            world.RunTick(50);
+
+            Assert.Equal(33u, Assert.Single(router.Calls).Destination.MapId);
+            Assert.Same(world.FindMap(0), player.Map);
+            Assert.Null(teleports.StageOf(player));
+            Assert.DoesNotContain(session.Sent, p => p.Opcode is WorldOpcode.SmsgTransferPending or WorldOpcode.SmsgNewWorld);
+        }
+    }
+
+    [Fact]
+    public void ADungeonThisWorkerOwnsThroughInstanceMaps_NeverCallsTheRouter()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0", allowInstanceMaps: true);
+        using (world)
+        {
+            Assert.True(world.Owns(33, 1));
+
+            teleports.TeleportTo(player, 33, 10, 20, 30, 0);
+
+            Assert.Empty(router.Calls);
+        }
+    }
+
+    [Fact]
+    public void ASpiritReleasedToAGraveyardOnAnUnownedMap_CallsTheRouterOnce()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0");
+        using (world)
+        {
+            DeathHooks.Register(world, new DeathHooks(new DeathOptions(), new FixedDeathClock(1_700_000_000)));
+            var graveyard = new WorldSafeLoc(1, 1, 1000, 2000, 30, 1f, "loc1");
+            WorldGraveyards.Of(world).Load(new GraveyardContent([graveyard], [new GraveyardLink(1, 12, 0)]), null);
+            var repop = new GraveyardRepopService(world, () => teleports);
+
+            Assert.True(repop.RepopAtGraveyard(player));
+
+            TeleportDestination destination = Assert.Single(router.Calls).Destination;
+            Assert.Equal(new TeleportDestination(1, 1000, 2000, 30, 1f), destination);
         }
     }
 }

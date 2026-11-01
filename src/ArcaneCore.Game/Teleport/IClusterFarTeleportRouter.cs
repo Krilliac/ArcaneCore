@@ -9,11 +9,18 @@ namespace ArcaneCore.Game.Teleport;
 /// target worker then sends SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD and completes on MSG_MOVE_WORLDPORT_ACK
 /// (<see cref="TeleportService.BeginClusterArrival"/>), so the client sees the retail far-teleport sequence exactly once.
 /// <para>
-/// Every source path (hearthstone, summon, portals, GM tele and worldport, spirit release, dungeon and battleground entry, continent
-/// transports) reaches <see cref="TeleportService.TeleportTo(Player, uint, float, float, float, float, TeleportOptions)"/>, so this is the single
-/// hook. A destination this worker owns never reaches the router; nothing is ever transferred mid-map.
+/// Every source path that ends in <see cref="TeleportService.TeleportTo(Player, uint, float, float, float, float, TeleportOptions)"/>
+/// (hearthstone, summon, portals, GM tele and worldport, spirit release, dungeon entry) reaches this hook. A destination this worker owns
+/// never reaches the router. Not covered: a ship or zeppelin whose next map is unowned. <c>TransportSystem.TeleportTransport</c> holds the
+/// ship before it calls <c>TeleportTo</c>, so the router never sees it; moving a ship and its passengers across workers is not routed here.
+/// Battleground entry is gated locally by <see cref="TeleportService.BattlegroundEntryAllowed"/> before the router is asked.
 /// </para>
-/// <para>Thread affinity: called on the world thread. Implementations must not block it; the transfer itself runs asynchronously.</para>
+/// <para>
+/// Thread affinity: called on the world thread, possibly inside a map update. Implementations must not block it, and must defer anything
+/// that touches map state; the transfer itself runs asynchronously. The player is taken off its transport and its movement reset only
+/// after this returns true, so a snapshot taken inside the call still sees the transport and the moving flags. The ghost revive for a
+/// dungeon holding its corpse runs after acceptance too.
+/// </para>
 /// </summary>
 public interface IClusterFarTeleportRouter
 {
