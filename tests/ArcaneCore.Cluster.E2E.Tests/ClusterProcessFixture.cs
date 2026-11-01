@@ -9,6 +9,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
@@ -31,6 +32,18 @@ namespace ArcaneCore.Cluster.E2E.Tests;
 public sealed class PostgresClusterFactAttribute : FactAttribute
 {
     public PostgresClusterFactAttribute()
+    {
+        if (ClusterProcessFixture.SkipReason is { } reason)
+        {
+            Skip = reason;
+        }
+    }
+}
+
+/// <summary>A theory that is reported as Skipped, with the variable to set, unless <c>ARCANECORE_TEST_POSTGRES</c> names a PostgreSQL server (see <see cref="PostgresClusterFactAttribute"/>).</summary>
+public sealed class PostgresClusterTheoryAttribute : TheoryAttribute
+{
+    public PostgresClusterTheoryAttribute()
     {
         if (ClusterProcessFixture.SkipReason is { } reason)
         {
@@ -76,6 +89,18 @@ public sealed class ClusterOptions
     /// There is no supervisor in this fixture, so a retired source is not relaunched.
     /// </summary>
     public int? StandbyWorkerIndex { get; init; }
+
+    /// <summary>Extra environment variables for the first launch of the gateway only (not for <see cref="ClusterProcessFixture.RestartGatewayAsync"/>); the crash-mid-transfer scenarios use it to hold the coordinator at a stage.</summary>
+    public IReadOnlyDictionary<string, string>? FirstGatewayEnvironment { get; init; }
+
+    /// <summary>Copper a new character starts with (<c>CharacterCreation:StartPlayerMoney</c> on every worker); 0, the default, leaves the retail option unset.</summary>
+    public long StartPlayerMoney { get; init; }
+
+    /// <summary>
+    /// When set, the world database gets an item template with this entry and a <c>playercreateinfo_item</c> row giving one of it to a human warrior (the race and class the scenario
+    /// client creates), so a new character owns a persisted <c>item_instance</c> row. Null, the default, seeds nothing.
+    /// </summary>
+    public uint? StartingItemEntry { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
@@ -114,6 +139,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private readonly List<string> _databases = [];
     private readonly List<ClusterWorkerInfo> _workers = [];
     private readonly Dictionary<int, ChildProcess> _workerProcesses = [];
+    private readonly List<ChildProcess> _retired = [];
     private readonly string _postgresBase;
     private readonly string _linkSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-cluster-e2e-" + Guid.NewGuid().ToString("N"));
@@ -128,6 +154,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private int _gatewayPort;
     private ClusterStandbyInfo? _standby;
     private ChildProcess? _standbyProcess;
+    private ChildProcess? _gatewayProcess;
 
     private ClusterProcessFixture(ClusterOptions options)
     {
@@ -319,7 +346,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             _children.Add(_standbyProcess);
         }
 
-        _children.Add(ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(), secrets));
+        _gatewayProcess = ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(firstLaunch: true), secrets);
+        _children.Add(_gatewayProcess);
 
         var listeners = new List<(string Name, int Port)> { ("realm", _realmPort), ("gateway", _gatewayPort) };
         listeners.AddRange(_workers.Select(worker => (worker.NodeId + " client listener", worker.ClientPort)));
@@ -381,6 +409,18 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             await provider.GetRequiredService<WorldDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
 
             await using AsyncServiceScope scope = provider.CreateAsyncScope();
+            if (_options.StartingItemEntry is { } startingItem)
+            {
+                // Human (race 1) warrior (class 1): the character the scenario client creates (ScenarioWire.CharacterCreate).
+                await using WorldDbContext world = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+                world.Set<ItemTemplateRow>().Add(new ItemTemplateRow
+                {
+                    Entry = startingItem, Class = 7, Name = "Crash Test Cloth", DisplayId = 3776, Quality = 1, AllowableClass = -1, AllowableRace = -1, Stackable = 20,
+                });
+                world.Set<PlayerCreateInfoItemRow>().Add(new PlayerCreateInfoItemRow { Race = 1, Class = 1, ItemId = startingItem, Amount = 1 });
+                await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             AuthDbContext auth = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
             // The initializer seeds a row as Stopped (offline in the list). This fixture's row is unmanaged: State Unknown, no Offline flag,
             // so the realm list shows it online whatever the worker has reported yet.
@@ -466,6 +506,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             env["Cluster__Worker__Transfers__Enabled"] = "true";
         }
 
+        if (_options.StartPlayerMoney > 0)
+        {
+            env["CharacterCreation__StartPlayerMoney"] = _options.StartPlayerMoney.ToString(CultureInfo.InvariantCulture);
+        }
+
         AddDatabase(env, "Auth", _authConnection);
         AddDatabase(env, "Characters", _charactersConnection);
         AddDatabase(env, "World", _worldConnection);
@@ -489,9 +534,17 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return env;
     }
 
-    private Dictionary<string, string> GatewayEnvironment()
+    private Dictionary<string, string> GatewayEnvironment(bool firstLaunch)
     {
         Dictionary<string, string> env = CommonEnvironment();
+        if (firstLaunch && _options.FirstGatewayEnvironment is { } extra)
+        {
+            foreach ((string key, string value) in extra)
+            {
+                env[key] = value;
+            }
+        }
+
         env["Gateway__BindAddress"] = IPAddress.Loopback.ToString();
         env["Gateway__Port"] = _gatewayPort.ToString(CultureInfo.InvariantCulture);
         env["Gateway__LinkSecret"] = _linkSecret;
@@ -630,6 +683,50 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         await child.KillAsync().ConfigureAwait(false);
     }
 
+    /// <summary>Starts the killed world worker with this index again on its original ports, node id and databases, and waits for its client listener.</summary>
+    public async Task RestartWorkerAsync(int index, CancellationToken cancellationToken)
+    {
+        if (!_workerProcesses.TryGetValue(index, out ChildProcess? old))
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), "No worker with that index.");
+        }
+
+        if (!old.HasExited)
+        {
+            throw new InvalidOperationException($"Worker {index} is still running; kill it before restarting.");
+        }
+
+        ClusterWorkerInfo worker = _workers[index];
+        _children.Remove(old);
+        _retired.Add(old);
+        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        ChildProcess child = ChildProcess.Start(
+            worker.NodeId, "world", "ArcaneCore.World", Path.Combine(_root, worker.NodeId), WorldEnvironment(worker), secrets);
+        _children.Add(child);
+        _workerProcesses[index] = child;
+        await WaitForListenerAsync(worker.NodeId + " client listener", worker.ClientPort, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
+    public Task KillGatewayAsync() => (_gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.")).KillAsync();
+
+    /// <summary>Starts the killed gateway again on its original port (without <see cref="ClusterOptions.FirstGatewayEnvironment"/>) and waits for its listener.</summary>
+    public async Task RestartGatewayAsync(CancellationToken cancellationToken)
+    {
+        ChildProcess old = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
+        if (!old.HasExited)
+        {
+            throw new InvalidOperationException("The gateway is still running; kill it before restarting.");
+        }
+
+        _children.Remove(old);
+        _retired.Add(old);
+        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        _gatewayProcess = ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(firstLaunch: false), secrets);
+        _children.Add(_gatewayProcess);
+        await WaitForListenerAsync("gateway", _gatewayPort, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Logon at the realm daemon, then connect and authenticate at the gateway, as a client does. The processes are still starting
     /// when this is first called, so a refused connection and the gateway's "unavailable" answer (no worker link yet) are retried until
@@ -722,7 +819,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             failures.Add(ex); // a handle still open on the directory means a process is still alive
         }
 
-        foreach (ChildProcess child in _children)
+        foreach (ChildProcess child in _children.Concat(_retired))
         {
             child.Dispose();
         }
