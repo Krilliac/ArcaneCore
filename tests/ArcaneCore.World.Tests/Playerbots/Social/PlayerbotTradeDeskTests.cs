@@ -337,15 +337,16 @@ public sealed class PlayerbotTradeDeskTests
         var initiate = new PacketWriter(8);
         initiate.WriteUInt64(scene.BotGuid.Value);
         await scene.Customer!.SendAsync(WorldOpcode.CmsgInitiateTrade, initiate.ToArray());
-        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Exists, "the invitation to reach the server");
+        // The request is transient: the bot declines a stranger as busy (AnswerTrades is on), which closes the unopened trade within a tick or two. So the test waits for that
+        // decline, the event itself, never for the trade to exist (a poll could miss the short window under load).
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgBusyTrade) > 0, "the bot to decline the stranger's request as busy");
+        await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the declined request to close");
         await Scene.WaitWhileAsync(() => scene.BotSent(WorldOpcode.CmsgBeginTrade) > 0, 2000);
         Assert.Equal(0, scene.BotSent(WorldOpcode.CmsgBeginTrade));
         Assert.False((await scene.TradeAsync()).Opened);
         Assert.Equal(0, scene.Desk.Count);
 
-        // Control: withdraw the request, get a quote, ask again.
-        await scene.Customer.SendAsync(WorldOpcode.CmsgCancelTrade, []);
-        await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the first request to be withdrawn");
+        // Control: the request is already closed; get a quote, ask again.
         Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
         await scene.OpenWindowAsync(scene.Customer);
         Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgBeginTrade));
