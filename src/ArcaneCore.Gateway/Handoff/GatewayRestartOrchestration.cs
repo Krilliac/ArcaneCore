@@ -141,7 +141,6 @@ public sealed class GatewayRestartOrchestration : IHostedService
                 _started = true;
                 _stopping = new CancellationTokenSource();
                 _server.WorkerLinkUp += OnWorkerLinkUp;
-                _server.RestartSubmitsHandled = true; // from now on a restart submit is ours to answer; with this service off the server refuses it
             }
         }
 
@@ -150,6 +149,8 @@ public sealed class GatewayRestartOrchestration : IHostedService
         {
             Attach(worker.Link);
         }
+
+        _server.RestartSubmitsHandled = true; // set after the attach: from now on a restart submit is ours to answer; with this service off the server refuses it
 
         return Task.CompletedTask;
     }

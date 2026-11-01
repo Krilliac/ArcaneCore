@@ -301,25 +301,104 @@ public sealed class GatewayControlHardeningTests
         using var cts = new CancellationTokenSource(Deadline);
         await using Rig rig = await Rig.StartAsync(withHandoff: true, cts.Token);
         await using Operator op = await rig.ConnectOperatorAsync(AccountSecurity.Administrator, cts.Token);
-        var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        rig.Restart!.AfterStageForTests = async (stage, ct) =>
-        {
-            if (stage == WorldHandoffStage.Frozen)
-            {
-                held.TrySetResult();
-                await Task.Delay(Timeout.Infinite, ct);
-            }
-        };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var verdictSeen = new TaskCompletionSource<ControlNotice>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.AEndpoint.Host!.ControlNoticeReceived += notice => verdictSeen.TrySetResult(notice);
+
+        // The handoff service's first await with the run's token is the transfer guard, before any stage and before the coordinator (which would turn a cancellation into its own abort verdict).
+        // Parking there is the point where the cancellation of a stopping gateway reaches the restart run as an OperationCanceledException, with the operation id already told to the worker.
+        rig.Service!.Guard = new BlockingGuard(entered);
 
         ClusterRestartSubmission started = await op.Relay.SubmitRestartAsync(op.Session, AccountSecurity.Administrator, NodeA, cts.Token);
         Assert.True(started.Accepted, started.Reason);
-        await held.Task.WaitAsync(cts.Token);
+        await entered.Task.WaitAsync(cts.Token);
 
-        await rig.Restart.StopAsync(cts.Token);
+        await rig.Restart!.StopAsync(cts.Token);
 
-        // The run ends either as an abort of the handoff (the coordinator's own verdict) or as the gateway-stopped notice; either way the operator is told, not left waiting.
-        string text = await op.ReadSystemTextContainingAnyAsync(["gateway stopped", "aborted"], cts.Token);
-        Assert.False(string.IsNullOrWhiteSpace(text));
+        ControlNotice verdict = await verdictSeen.Task.WaitAsync(cts.Token);
+        Assert.Equal(ControlReasonCode.GatewayStopping, verdict.Code);
+        Assert.Equal(ControlNoticeOutcome.Failed, verdict.Outcome);
+        Assert.Equal(started.OperationId, verdict.OperationId);
+        Assert.Contains("The gateway stopped while the restart ran", verdict.Text);
+    }
+
+    // ------------------------------------------------------------------ (3) the standby link
+
+    [Fact]
+    public async Task ASubmitArrivingOnTheStandbyLink_IsAnsweredStandbyLink()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(withHandoff: true, cts.Token);
+        var answered = new TaskCompletionSource<ControlSubmitReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.BEndpoint!.Host!.ControlSubmitReplyReceived += reply => answered.TrySetResult(reply);
+
+        // The standby link carries no sessions, so the worker side cannot send a submit on it through TrySendControlSubmit; the receive path of the gateway's client is driven directly
+        // (its private OnControlSubmit is what the link's receive loop calls), and the answer travels the real link back to B's host.
+        GatewayStandbyLink standby = rig.Service!.StandbyLink(NodeA)!;
+        var client = (GatewaySessionLinkClient)typeof(GatewayStandbyLink).GetField("_client", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(standby)!;
+        typeof(GatewaySessionLinkClient).GetMethod("OnControlSubmit", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(client, [new ControlSubmit(77, new ControlRestartSubmit(1, 1, 0, NodeA))]);
+
+        ControlSubmitReply reply = await answered.Task.WaitAsync(cts.Token);
+        Assert.Equal(77UL, reply.RequestId);
+        Assert.False(reply.Accepted);
+        Assert.Equal(ControlReasonCode.StandbyLink, reply.Code);
+        Assert.Contains("standby", reply.Reason);
+    }
+
+    // ------------------------------------------------------------------ (4) the kept link of a superseded retarget
+
+    [Fact]
+    public async Task ASecondRetargetBeforeTheFirstMigration_KeepsTheOlderLinkThatCarriesTheSessions()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(withHandoff: true, cts.Token);
+        await using Operator op = await rig.ConnectOperatorAsync(AccountSecurity.Player, cts.Token);
+        GatewayClientConnection connection = Assert.Single(AllConnections(rig.Gateway));
+        GatewayWorkerLink link = rig.Gateway.Workers[0];
+        GatewaySessionLinkClient original = link.Link!;
+        IPEndPoint aEndpoint = rig.AEndpoint.Host!.BoundEndPoint;
+        IPEndPoint bEndpoint = rig.BEndpoint!.Host!.BoundEndPoint;
+        Assert.True(connection.IsForwardingOn(original));
+        Assert.True(original.SessionCount > 0);
+
+        int firstMigrations = 0;
+        var migrated = new TaskCompletionSource<MigrationView>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task FirstMigrate(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, CancellationToken token)
+        {
+            Interlocked.Increment(ref firstMigrations);
+            return Task.CompletedTask;
+        }
+
+        Task SecondMigrate(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, CancellationToken token)
+        {
+            migrated.TrySetResult(new MigrationView(
+                previous, previous?.IsConnected ?? false, previous?.SessionCount ?? 0, previous is not null && connection.IsForwardingOn(previous), connection.KickReason));
+            return Task.CompletedTask;
+        }
+
+        // The retarget to B is superseded while B's link is being registered: WorkerLinkUp runs on the link's loop right after the registration and before the loop checks its target, so the
+        // second retarget (back to A) lands exactly between "B connected" and "first migration".
+        int registrations = 0;
+        rig.Gateway.WorkerLinkUp += node =>
+        {
+            if (node == NodeA && Interlocked.Increment(ref registrations) == 1)
+            {
+                link.Retarget(aEndpoint, SecondMigrate);
+            }
+        };
+
+        link.Retarget(bEndpoint, FirstMigrate);
+
+        MigrationView view = await migrated.Task.WaitAsync(cts.Token);
+        Assert.Equal(0, firstMigrations); // superseded: the second callback replaced it
+        // The link that carries the operator's session is the one handed to the migration; the newer, empty link to B was the one closed.
+        Assert.Same(original, view.Previous);
+        Assert.True(view.PreviousConnected);
+        Assert.True(view.PreviousSessions > 0);
+        Assert.True(view.StillForwarding);
+        Assert.Null(view.KickReason);
+        Assert.Null(connection.KickReason);
     }
 
     // ------------------------------------------------------------------ helpers
@@ -391,24 +470,6 @@ public sealed class GatewayControlHardeningTests
             }
         }
 
-        public async Task<string> ReadSystemTextContainingAnyAsync(string[] fragments, CancellationToken token)
-        {
-            while (true)
-            {
-                WorldFrame frame = await client.ReadAsync(token);
-                if (frame.Opcode != (ushort)WorldOpcode.SmsgMessagechat)
-                {
-                    continue;
-                }
-
-                string text = Encoding.UTF8.GetString(frame.Payload);
-                if (fragments.Any(fragment => text.Contains(fragment, StringComparison.Ordinal)))
-                {
-                    return text;
-                }
-            }
-        }
-
         public ValueTask DisposeAsync() => client.DisposeAsync();
     }
 
@@ -437,6 +498,8 @@ public sealed class GatewayControlHardeningTests
         }
 
         public SyntheticArcaneServer A { get; }
+
+        public GatewayWorkerEndpoint? BEndpoint => _bEndpoint;
 
         public GatewayWorkerEndpoint AEndpoint { get; }
 
@@ -649,6 +712,19 @@ public sealed class GatewayControlHardeningTests
     }
 
     /// <summary>The supervisor boundary: no process is ever relaunched in these tests.</summary>
+    private sealed record MigrationView(GatewaySessionLinkClient? Previous, bool PreviousConnected, int PreviousSessions, bool StillForwarding, string? KickReason);
+
+    /// <summary>A transfer guard that parks the handoff at its first step until the run's token is cancelled.</summary>
+    private sealed class BlockingGuard(TaskCompletionSource entered) : IGatewayHandoffGuard
+    {
+        public async Task<IDisposable> EnterHandoffAsync(string slotNode, CancellationToken cancellationToken)
+        {
+            entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("the blocking guard was released without a cancellation");
+        }
+    }
+
     private sealed class NoRestartRequester : IWorkerRestartRequester
     {
         public Task<bool> RequestRestartAsync(WorkerNodeId worker, string requestedBy, CancellationToken cancellationToken) => Task.FromResult(false);

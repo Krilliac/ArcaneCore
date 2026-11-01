@@ -991,7 +991,7 @@ public sealed class GatewayWorkerLink
                 GatewayMeters.CountLinkFailure(_config.NodeId);
                 _logger.LogWarning("Worker link {Node} to {Worker} not established ({Message}); retrying in {Delay}", NodeId, worker, ex.Message, nextDelay);
                 var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                Volatile.Write(ref _backoffWake, wake);
+                Interlocked.Exchange(ref _backoffWake, wake); // a full fence: Retarget stores _target and then reads this field, this publishes it and then reads _target
                 bool woken = true;
                 try
                 {

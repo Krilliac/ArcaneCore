@@ -101,17 +101,17 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     }
 
     [Fact]
-    public void ContractVersion5_RefusesAVersion4Peer_AtAdmission()
+    public void ContractVersion6_RefusesAVersion5Peer_AtAdmission()
     {
         ClusterNodeManifest worker = GatewayLinkManifest.Create(ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         ClusterNodeManifest gateway = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
-        Assert.Equal(5, GatewayLinkManifest.ContractVersion);
-        Assert.Equal(5, gateway.ContractVersion);
+        Assert.Equal(6, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(6, gateway.ContractVersion);
         Assert.True(worker.TryAdmit(gateway, out _));
-        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 4 }, out string? reason));
+        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 5 }, out string? reason));
         Assert.Contains("contract version mismatch", reason);
-        Assert.Contains("v4", reason);
-        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 4 }, out _));
+        Assert.Contains("v5", reason);
+        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 5 }, out _));
     }
 
     // ------------------------------------------------------------------ golden bytes
