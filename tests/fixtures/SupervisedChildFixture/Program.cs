@@ -4,7 +4,9 @@
 //   --spawn-child              start a copy of itself first, for the tree-kill case (the copy gets the same --lifetime-ms)
 //   --pid-file <path>          append "self <pid>" and, after --spawn-child, "child <pid>" (race-free alternative to parsing stdout)
 //   --lifetime-ms <n>          maximum life in milliseconds (default 60000)
-//   --stack-depth <bytes>      run a guarded 2 KB-a-frame recursion on a thread created with that stack size, print "depth <n>" and exit 0 (stack-guard tests)
+//   --stack-depth <bytes>      run a 2 KB-a-frame recursion, guarded by the production StackGuard.TryEnter, on a thread created with that stack size, print "depth <n>" and exit 0 (stack-guard tests)
+//   --game-dll <path>          the ArcaneCore.Game.dll that holds StackGuard (internal: reached by reflection, so the fixture needs no project reference); required with --stack-depth
+//   --unguarded                with --stack-depth: suspend the production guard on the recursion thread (StackGuard.Suspend), so the recursion overflows the stack and the process dies (the RED run)
 //   --cr-heartbeat             after "ready", write one line "noise<CR>heartbeat <utc> pid=<pid> alive" (a bare CR, not CRLF), then the line "done"
 // Otherwise: print "ready" on stdout and sleep for the bounded lifetime, then exit 0. The bound is what cleans up after a failing test:
 // nothing ever kills a fixture by pid, so a fixture that is left behind ends by itself.
@@ -19,8 +21,17 @@ int stackAt = Array.IndexOf(args, "--stack-depth");
 if (stackAt >= 0)
 {
     int stackBytes = int.Parse(args[stackAt + 1], CultureInfo.InvariantCulture);
+    int gameAt = Array.IndexOf(args, "--game-dll");
+    if (gameAt < 0)
+    {
+        Console.Error.WriteLine("--stack-depth needs --game-dll <path>");
+        return 2;
+    }
+
+    StackProbe.Bind(args[gameAt + 1]);
+    bool unguarded = args.Contains("--unguarded");
     int depth = -1;
-    var probe = new Thread(() => depth = StackProbe.Recurse(0), stackBytes);
+    var probe = new Thread(() => depth = StackProbe.Run(unguarded), stackBytes);
     probe.Start();
     probe.Join();
     Console.Out.WriteLine($"depth {depth}");
@@ -59,13 +70,50 @@ if (args.Contains("--cr-heartbeat"))
 Thread.Sleep(lifetimeMs);
 return 0;
 
-/// <summary>Recursion that stops where the runtime says the stack is nearly gone (the pattern StackGuard wraps); without that check it would end the process.</summary>
+/// <summary>
+/// Recursion that stops where the production <c>ArcaneCore.Game.StackGuard.TryEnter</c> says the stack is nearly gone. StackGuard is internal, so it is bound by
+/// reflection from the Game assembly file (its dependencies sit beside it). Unguarded (<c>StackGuard.Suspend</c>), the recursion has nothing to stop it and ends the process.
+/// </summary>
 internal static class StackProbe
 {
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    public static int Recurse(int depth)
+    private static System.Reflection.MethodInfo? s_tryEnter;
+    private static System.Reflection.MethodInfo? s_suspend;
+
+    public static void Bind(string gameDll)
     {
-        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        var game = System.Reflection.Assembly.LoadFrom(gameDll);
+        Type guard = game.GetType("ArcaneCore.Game.StackGuard", throwOnError: true)!;
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+        s_tryEnter = guard.GetMethod("TryEnter", flags) ?? throw new MissingMethodException("StackGuard.TryEnter");
+        s_suspend = guard.GetMethod("Suspend", flags) ?? throw new MissingMethodException("StackGuard.Suspend");
+    }
+
+    public static int Run(bool unguarded)
+    {
+        // Warm the exception machinery on a roomy stack, as the guard's own fault record needs some at the margin.
+        try
+        {
+            throw new InsufficientExecutionStackException("warm-up");
+        }
+        catch (InsufficientExecutionStackException)
+        {
+        }
+
+        IDisposable? scope = unguarded ? (IDisposable)s_suspend!.Invoke(null, null)! : null;
+        try
+        {
+            return Recurse(0);
+        }
+        finally
+        {
+            scope?.Dispose();
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static int Recurse(int depth)
+    {
+        if (!(bool)s_tryEnter!.Invoke(null, ["fixture.stack-probe", null])!)
         {
             return depth;
         }

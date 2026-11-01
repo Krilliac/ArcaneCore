@@ -12,10 +12,10 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Diagnostics;
 
 /// <summary>
-/// The world thread's explicit stack (<see cref="WorldRuntime.WorldThreadStackBytes"/>) and the stack guard on a deep recursion, on the world thread
-/// itself and in a child process (the throwaway fixture, which runs the same guarded 2 KB-a-frame recursion on a thread of a given stack size).
-/// A real overflow ends the process and cannot be caught, so the child is where a deep fixture may run without risking the test host: it must
-/// stop cleanly (exit 0, a depth printed), never crash.
+/// The world thread's explicit stack (<see cref="WorldRuntime.WorldThreadStackBytes"/>) and the production stack guard on a deep recursion, on the world
+/// thread itself and in a child process (the throwaway fixture, which binds the real <c>StackGuard</c> from ArcaneCore.Game.dll and runs a 2 KB-a-frame
+/// recursion on a thread of a given stack size). A real overflow ends the process and cannot be caught, so the child is where it may run: guarded it must
+/// stop cleanly (exit 0, a depth printed); with the guard suspended (the RED run) it must die with a stack overflow.
 /// </summary>
 public sealed class StackGuardRuntimeTests
 {
@@ -56,24 +56,34 @@ public sealed class StackGuardRuntimeTests
     }
 
     [Fact]
-    public async Task InAChildProcess_TheDeepGuardedRecursion_StopsCleanlyAtTheWorldStackSize()
+    public async Task InAChildProcess_TheProductionGuard_StopsADeepRecursionCleanly_AtTheWorldStackSize()
     {
-        (int exitCode, string output) = await RunFixtureAsync(WorldRuntime.WorldThreadStackBytes);
+        (int exitCode, string output) = await RunFixtureAsync(WorldRuntime.WorldThreadStackBytes, unguarded: false);
 
         Assert.Equal(0, exitCode);
-        int depth = ParseDepth(output);
-        Assert.True(depth >= 5000, $"the child reached only {depth} frames: {output}");
+        Assert.True(ParseDepth(output) >= 5000, $"the child reached only {output}");
     }
 
     [Fact]
-    public async Task InAChildProcess_ASmallStack_StopsCleanlyAndMuchSooner()
+    public async Task InAChildProcess_TheProductionGuard_CutsASmallStackMuchSooner()
     {
-        (int smallExit, string smallOutput) = await RunFixtureAsync(512 * 1024);
-        (int bigExit, string bigOutput) = await RunFixtureAsync(WorldRuntime.WorldThreadStackBytes);
+        (int smallExit, string smallOutput) = await RunFixtureAsync(512 * 1024, unguarded: false);
+        (int bigExit, string bigOutput) = await RunFixtureAsync(WorldRuntime.WorldThreadStackBytes, unguarded: false);
 
         Assert.Equal(0, smallExit);
         Assert.Equal(0, bigExit);
         Assert.True(ParseDepth(bigOutput) > ParseDepth(smallOutput) * 10, $"small: {smallOutput}; big: {bigOutput}");
+    }
+
+    [Fact]
+    public async Task InAChildProcess_WithTheProductionGuardSuspended_TheSameRecursionOverflowsAndKillsTheChild()
+    {
+        // RED: the same recursion, the same production StackGuard, suspended: nothing stops it and the runtime ends the process.
+        (int exitCode, string output) = await RunFixtureAsync(256 * 1024, unguarded: true);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Stack overflow", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("depth ", output, StringComparison.Ordinal);
     }
 
     private static int ParseDepth(string output)
@@ -89,7 +99,7 @@ public sealed class StackGuardRuntimeTests
         throw new InvalidOperationException("the child printed no depth: " + output);
     }
 
-    private static async Task<(int ExitCode, string Output)> RunFixtureAsync(int stackBytes)
+    private static async Task<(int ExitCode, string Output)> RunFixtureAsync(int stackBytes, bool unguarded)
     {
         var info = new ProcessStartInfo(ConfProcess.DotnetMuxer())
         {
@@ -101,6 +111,15 @@ public sealed class StackGuardRuntimeTests
         info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "SupervisedChildFixture.dll"));
         info.ArgumentList.Add("--stack-depth");
         info.ArgumentList.Add(stackBytes.ToString(CultureInfo.InvariantCulture));
+        info.ArgumentList.Add("--game-dll");
+        info.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "ArcaneCore.Game.dll"));
+        if (unguarded)
+        {
+            info.ArgumentList.Add("--unguarded");
+        }
+
+        // No runtime crash dump for the deliberate overflow (the fixture installs no ArcaneCore crash handler, so there is no repo dump mode to turn off).
+        info.Environment["DOTNET_DbgEnableMiniDump"] = "0";
 
         using Process process = Process.Start(info) ?? throw new InvalidOperationException("the fixture did not start");
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
