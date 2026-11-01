@@ -20,6 +20,7 @@ public sealed class GatewayWorkerOptions
     public bool Standby { get; set; }
 
     /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("an IPv4 or IPv6 address such as 127.0.0.1 or ::1 (host names are not resolved)")]
     public string BindAddress { get; set; } = "127.0.0.1";
 
     /// <summary>Port of the gateway listener; must equal the gateway's Gateway:WorkerPort.</summary>
