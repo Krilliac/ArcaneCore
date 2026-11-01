@@ -7,7 +7,9 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Items;
@@ -467,7 +469,8 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     /// <summary>World thread: expire auctions from the cache and letters from storage.</summary>
     public void RunExpirySweep()
     {
-        if (!Enabled || _stopping)
+        // Only the Economy lease holder runs expiry (auctions, letters, recovery): a worker that forwards its requests would settle the same rows twice.
+        if (!Enabled || _stopping || !IsEconomyHolder)
         {
             return;
         }
@@ -540,4 +543,510 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private const long BattlegroundMarkMailDelaySeconds = 15 * 60;
     private const long BattlegroundMarkMailExpirySeconds = 24 * 60 * 60;
+
+    // ---- Requests from workers that do not hold the Economy lease (M15 S3d, docs/CLUSTERING_DESIGN.md section 8 mail and auctions).
+    // The holder owns the only auction cache, the expiry sweep and the fenced store writes. A worker reads through ServeForwardedAsync and sends
+    // every mail or auction write as the commit it built for its own participants; the holder validates it against its cache, commits it (the store
+    // verifies the lease fence in the same transaction), applies it to the cache and tells the parties. Thread affinity: ServeForwardedAsync may be called
+    // from any thread (the peer link); everything that touches the caches runs on the world thread.
+
+    private volatile IEconomyHolderLink? _holderLink;
+    private readonly HashSet<Guid> _forwardedDone = [];
+    private readonly Queue<Guid> _forwardedDoneOrder = new();
+
+    // Operation ids whose commit is running now (world thread). A resend of one is answered Unknown: the first attempt may still commit.
+    private readonly HashSet<Guid> _forwardedInFlight = [];
+
+    /// <summary>Most committed forwarded operation ids remembered, so a retry after a lost answer is answered Ok without a second write.</summary>
+    private const int ForwardedDoneLimit = 1024;
+
+    /// <summary>Most auctions one forwarded list answer carries.</summary>
+    public const int MaxForwardedAuctions = 4096;
+
+    /// <summary>
+    /// The link to the node holding the Economy lease, or null when this node is the holder (the default). A non-null link makes this node a forwarding
+    /// worker: it refuses forwarded requests (<see cref="EconomyForwardStatus.NotHolder"/>) and runs no expiry sweep. Settable at any time (a lease change).
+    /// </summary>
+    public IEconomyHolderLink? HolderLink
+    {
+        get => _holderLink;
+        set => _holderLink = value;
+    }
+
+    /// <summary>Whether this node runs the economy singletons (expiry and the forwarded-request service).</summary>
+    public bool IsEconomyHolder => _holderLink is null;
+
+    /// <summary>Routes notifications for recipients not hosted here (after a forwarded commit) to their workers; null sends none.</summary>
+    public EconomyCommitNotifier? CommitNotifier { get; set; }
+
+    /// <summary>
+    /// Serve one worker request on the holder: reads answer from the cache (mail from the store when the character is not online here), writes are validated,
+    /// committed and applied. Never throws for a bad request (the answer carries the status); a cancelled <paramref name="cancellationToken"/> stops the wait only,
+    /// not a commit already started (the same request sent again learns its outcome).
+    /// </summary>
+    public Task<EconomyForwardResult> ServeForwardedAsync(EconomyForwardRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!IsEconomyHolder)
+        {
+            return Task.FromResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.NotHolder));
+        }
+
+        if (!Enabled || _stopping || _world is not { } world)
+        {
+            return Task.FromResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Disabled));
+        }
+
+        var done = new TaskCompletionSource<EconomyForwardResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        world.Post(() =>
+        {
+            try
+            {
+                ServeForwardedOnWorld(request, world, done);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("economy.forward", ex, "forwarded economy request {Request} failed", request.RequestId);
+                done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Failed));
+            }
+        });
+        return done.Task.WaitAsync(cancellationToken);
+    }
+
+    private void ServeForwardedOnWorld(EconomyForwardRequest request, WorldRuntime world, TaskCompletionSource<EconomyForwardResult> done)
+    {
+        if (!IsEconomyHolder || !Enabled || _stopping)
+        {
+            done.TrySetResult(EconomyForwardResult.Of(request.RequestId,
+                IsEconomyHolder ? EconomyForwardStatus.Disabled : EconomyForwardStatus.NotHolder));
+            return;
+        }
+
+        switch (request.Kind)
+        {
+            case EconomyForwardKind.AuctionList:
+                done.TrySetResult(new EconomyForwardResult(request.RequestId, EconomyForwardStatus.Ok, [],
+                    [.. HouseAuctions(request.HouseId, Now)
+                        .Where(v => request.AuctionId == 0 || v.Auction.Id == request.AuctionId)
+                        .Take(MaxForwardedAuctions)
+                        .Select(v => new ForwardedAuction(v.Auction, v.Item))]));
+                break;
+            case EconomyForwardKind.MailList:
+                ServeForwardedMailList(request, done);
+                break;
+            case EconomyForwardKind.MailWrite:
+            case EconomyForwardKind.AuctionWrite:
+                ServeForwardedWrite(request, world, done);
+                break;
+            default:
+                done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Invalid));
+                break;
+        }
+    }
+
+    private void ServeForwardedMailList(EconomyForwardRequest request, TaskCompletionSource<EconomyForwardResult> done)
+    {
+        int characterId = request.CharacterId;
+        if (characterId <= 0)
+        {
+            done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Invalid));
+            return;
+        }
+
+        if (CachedMail(characterId) is { } cached)
+        {
+            done.TrySetResult(new EconomyForwardResult(request.RequestId, EconomyForwardStatus.Ok,
+                [.. cached.Select(m => new ForwardedMail(m.Mail, m.Item))], []));
+            return;
+        }
+
+        // Not online here: the store is the only copy, so read it as LoadMailbox does (newest first, with the escrowed items).
+        Read(async (store, ct) =>
+        {
+            IReadOnlyList<MailRecord> mails = await store.GetMailsAsync(characterId, ct).ConfigureAwait(false);
+            IReadOnlyDictionary<uint, ItemInstanceData> items = await store
+                .GetEscrowItemsAsync(mails.Where(m => m.HasItem).Select(m => m.ItemGuid).ToArray(), ct).ConfigureAwait(false);
+            return mails.OrderByDescending(m => m.Id)
+                .Select(m => new ForwardedMail(m, m.HasItem ? items.GetValueOrDefault(m.ItemGuid) : null)).ToList();
+        }, mails => done.TrySetResult(new EconomyForwardResult(request.RequestId, EconomyForwardStatus.Ok, mails, [])),
+            failed: () => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Failed)));
+    }
+
+    private void ServeForwardedWrite(EconomyForwardRequest request, WorldRuntime world, TaskCompletionSource<EconomyForwardResult> done)
+    {
+        void Answer(EconomyForwardStatus status) => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, status));
+
+        if (request.Commit is not { } commit || commit.OperationId == Guid.Empty || !ForwardedChangesMatch(request.Kind, commit.Changes))
+        {
+            Answer(EconomyForwardStatus.Invalid);
+            return;
+        }
+
+        if (_forwardedDone.Contains(commit.OperationId))
+        {
+            Answer(EconomyForwardStatus.Ok);
+            return;
+        }
+
+        if (_forwardedInFlight.Contains(commit.OperationId))
+        {
+            Answer(EconomyForwardStatus.Unknown);
+            return;
+        }
+
+        var auctionIds = new HashSet<uint>();
+        var mailIds = new HashSet<uint>();
+        foreach (EconomyChange change in commit.Changes)
+        {
+            switch (change)
+            {
+                case InsertAuction insertAuction:
+                    auctionIds.Add(insertAuction.Auction.Id);
+                    break;
+                case UpdateAuction updateAuction:
+                    auctionIds.Add(updateAuction.Expected.Id);
+                    break;
+                case DeleteAuction deleteAuction:
+                    auctionIds.Add(deleteAuction.Expected.Id);
+                    break;
+                case InsertMail insertMail:
+                    mailIds.Add(insertMail.Mail.Id);
+                    break;
+                case UpdateMail updateMail:
+                    mailIds.Add(updateMail.Expected.Id);
+                    break;
+                case DeleteMail deleteMail:
+                    mailIds.Add(deleteMail.Expected.Id);
+                    break;
+            }
+        }
+
+        if (auctionIds.Any(_busyAuctions.Contains) || mailIds.Any(_busyMails.Contains))
+        {
+            RefuseForwarded(request, commit.OperationId, EconomyForwardStatus.Busy, done);
+            return;
+        }
+
+        // The cache must still hold exactly the rows the worker saw: a stale bid or cancel is refused before anything is written
+        // (the store compares the expected rows again inside its transaction).
+        foreach (EconomyChange change in commit.Changes)
+        {
+            bool stale = change switch
+            {
+                InsertAuction insert => _auctions.ContainsKey(insert.Auction.Id) || _auctionRecoveries.ContainsKey(insert.Auction.Id),
+                UpdateAuction update => !CachedAuctionIs(update.Expected),
+                DeleteAuction delete => !CachedAuctionIs(delete.Expected),
+                _ => false,
+            };
+            if (stale)
+            {
+                RefuseForwarded(request, commit.OperationId, EconomyForwardStatus.Conflict, done);
+                return;
+            }
+        }
+
+        _forwardedInFlight.Add(commit.OperationId);
+
+        foreach (uint id in auctionIds)
+        {
+            _busyAuctions.Add(id);
+        }
+
+        foreach (uint id in mailIds)
+        {
+            _busyMails.Add(id);
+        }
+
+        CommitForwarded(request, commit, [.. auctionIds], [.. mailIds], world, done);
+    }
+
+    /// <summary>
+    /// A write refused from the cache (Busy or Conflict) may be a resend of one that did commit (a holder restart or an evicted replay id), so the store
+    /// is asked first: a committed operation is answered Ok, an unreadable store Unknown, and only an operation not in the store gets the refusal.
+    /// </summary>
+    private void RefuseForwarded(EconomyForwardRequest request, Guid operationId, EconomyForwardStatus refusal, TaskCompletionSource<EconomyForwardResult> done)
+        => Read((store, ct) => store.IsCommittedAsync(operationId, ct),
+            committed => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, committed ? EconomyForwardStatus.Ok : refusal)),
+            failed: () => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Unknown)));
+
+    private bool CachedAuctionIs(AuctionRecord expected)
+        => _auctions.TryGetValue(expected.Id, out AuctionView? cached) && cached.Auction == expected && !_auctionRecoveries.ContainsKey(expected.Id);
+
+    /// <summary>
+    /// A write kind carries only changes of its class, row updates keep their id, and a new auction brings its escrow item in the same commit
+    /// (the cache needs it to list the auction).
+    /// </summary>
+    private static bool ForwardedChangesMatch(EconomyForwardKind kind, IReadOnlyList<EconomyChange> changes)
+    {
+        bool auction = changes.Any(c => c is InsertAuction or UpdateAuction or DeleteAuction);
+        bool mail = changes.Any(c => c is InsertMail or UpdateMail or DeleteMail);
+        bool kindFits = kind switch
+        {
+            EconomyForwardKind.AuctionWrite => auction,
+            EconomyForwardKind.MailWrite => mail && !auction,
+            _ => false,
+        };
+        return kindFits
+            && changes.All(c => c switch
+            {
+                UpdateAuction u => u.Updated.Id == u.Expected.Id,
+                UpdateMail m => m.Updated.Id == m.Expected.Id,
+                InsertAuction i => ForwardedEscrowItem(changes, i.Auction.ItemGuid) is not null,
+                _ => true,
+            });
+    }
+
+    /// <summary>The escrow item a commit creates, mints or moves out of an inventory, by item guid.</summary>
+    private static ItemInstanceData? ForwardedEscrowItem(IReadOnlyList<EconomyChange> changes, uint itemGuid)
+    {
+        foreach (EconomyChange change in changes)
+        {
+            ItemInstanceData? item = change switch
+            {
+                EscrowFromInventory fromInventory => fromInventory.Item,
+                CreateEscrowItem created => created.Item,
+                MintEscrowItem minted => minted.Item,
+                _ => null,
+            };
+            if (item is not null && item.Guid == itemGuid)
+            {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    private void CommitForwarded(EconomyForwardRequest request, EconomyCommitRequest commit, uint[] auctionIds, uint[] mailIds, WorldRuntime world,
+        TaskCompletionSource<EconomyForwardResult> done)
+    {
+        Task task = Task.Run(async () =>
+        {
+            EconomyOutcome outcome = EconomyOutcome.Unknown;
+            EconomyForwardStatus refusal = EconomyForwardStatus.Failed;
+            bool replay = false;
+            try
+            {
+                using var budget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
+                budget.CancelAfter(Settlements.Budget);
+                await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+                EconomyCommitResult result = await scope.ServiceProvider.GetRequiredService<IEconomyStore>()
+                    .CommitAsync(commit, budget.Token).ConfigureAwait(false);
+                if (result is EconomyCommitResult.Committed or EconomyCommitResult.AlreadyCommitted)
+                {
+                    outcome = EconomyOutcome.After;
+                    replay = result == EconomyCommitResult.AlreadyCommitted;
+                }
+                else
+                {
+                    outcome = EconomyOutcome.Before;
+                    refusal = EconomyForwardStatus.Conflict;
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("economy.forward-commit", ex, "forwarded economy operation {Operation} from worker {Worker} failed", commit.OperationId, request.WorkerId);
+                try
+                {
+                    using var reconcileBudget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
+                    reconcileBudget.CancelAfter(Settlements.Budget);
+                    await using AsyncServiceScope reconcileScope = _scopes.CreateAsyncScope();
+                    outcome = await reconcileScope.ServiceProvider.GetRequiredService<IEconomyStore>()
+                        .IsCommittedAsync(commit.OperationId, reconcileBudget.Token).ConfigureAwait(false) ? EconomyOutcome.After : EconomyOutcome.Before;
+                }
+                catch (Exception reconcile) when (reconcile is not OutOfMemoryException)
+                {
+                    _logger.LogFault("economy.forward-reconcile", reconcile, "could not reconcile forwarded economy operation {Operation}", commit.OperationId);
+                    outcome = EconomyOutcome.Unknown;
+                }
+            }
+
+            world.Post(() => FinishForwarded(request, commit, auctionIds, mailIds, outcome, refusal, replay, done));
+        });
+        lock (_readGate)
+        {
+            _reads.Add(task);
+        }
+
+        task.ContinueWith(t =>
+        {
+            lock (_readGate)
+            {
+                _reads.Remove(t);
+            }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    /// <summary>World thread: release the rows, reserve what the outcome left uncertain, apply a committed write to the cache and answer the worker.</summary>
+    private void FinishForwarded(EconomyForwardRequest request, EconomyCommitRequest commit, uint[] auctionIds, uint[] mailIds, EconomyOutcome outcome,
+        EconomyForwardStatus refusal, bool replay, TaskCompletionSource<EconomyForwardResult> done)
+    {
+        _forwardedInFlight.Remove(commit.OperationId);
+        try
+        {
+            foreach (uint id in mailIds)
+            {
+                _busyMails.Remove(id);
+            }
+
+            foreach (uint id in auctionIds)
+            {
+                if (outcome == EconomyOutcome.Unknown || (outcome == EconomyOutcome.Before && ChangesExpectedAuction(commit.Changes, id)))
+                {
+                    // As RunAuctionOperation: the cache may no longer match the row, so the id stays reserved until an authoritative read repairs it.
+                    QuarantineAuction(id, commit.Changes);
+                }
+                else
+                {
+                    _busyAuctions.Remove(id);
+                }
+            }
+
+            if (outcome == EconomyOutcome.After)
+            {
+                if (_forwardedDone.Add(commit.OperationId))
+                {
+                    _forwardedDoneOrder.Enqueue(commit.OperationId);
+                    while (_forwardedDoneOrder.Count > ForwardedDoneLimit)
+                    {
+                        _forwardedDone.Remove(_forwardedDoneOrder.Dequeue());
+                    }
+                }
+
+                // A replay of an earlier commit (the store already had it) is answered Ok without touching the cache or the parties: the rows may
+                // have changed since, and the first application already notified.
+                if (!replay)
+                {
+                    ApplyForwardedCommit(commit.Changes);
+                }
+            }
+            else if (outcome == EconomyOutcome.Before && commit.Changes.Any(c => c is InsertAuction or InsertMail))
+            {
+                // As Start: a refused insert may mean the id counters are behind the store.
+                ReseedIds();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("economy.forward-apply", ex, "applying forwarded economy operation {Operation} to the cache failed", commit.OperationId);
+        }
+
+        EconomyForwardStatus status = outcome switch
+        {
+            EconomyOutcome.After => EconomyForwardStatus.Ok,
+            EconomyOutcome.Unknown => EconomyForwardStatus.Unknown,
+            _ => refusal,
+        };
+        done.TrySetResult(EconomyForwardResult.Of(request.RequestId, status));
+    }
+
+    /// <summary>
+    /// World thread: apply a committed forwarded write to the holder's caches and tell the parties. A new letter reaches a receiver online here directly and any
+    /// other receiver through <see cref="CommitNotifier"/>; a changed bid notifies the outbid bidder and the seller the same way.
+    /// </summary>
+    private void ApplyForwardedCommit(IReadOnlyList<EconomyChange> changes)
+    {
+        long now = Now;
+        foreach (EconomyChange change in changes)
+        {
+            switch (change)
+            {
+                case InsertAuction insertAuction:
+                    if (ForwardedEscrowItem(changes, insertAuction.Auction.ItemGuid) is { } escrow)
+                    {
+                        _auctions[insertAuction.Auction.Id] = new AuctionView(insertAuction.Auction, escrow);
+                    }
+
+                    break;
+                case UpdateAuction updateAuction:
+                    if (_auctions.TryGetValue(updateAuction.Expected.Id, out AuctionView? current))
+                    {
+                        _auctions[updateAuction.Expected.Id] = current with { Auction = updateAuction.Updated };
+                        NotifyForwardedBid(updateAuction, current.Item);
+                    }
+
+                    break;
+                case DeleteAuction deleteAuction:
+                    _auctions.Remove(deleteAuction.Expected.Id);
+                    _expiryBackoff.Remove(deleteAuction.Expected.Id);
+                    break;
+                case InsertMail insertMail:
+                    DeliverForwardedLetter(new MailView(insertMail.Mail,
+                        insertMail.Mail.HasItem ? ForwardedEscrowItem(changes, insertMail.Mail.ItemGuid) : null), now);
+                    break;
+                case UpdateMail updateMail:
+                    ApplyForwardedLetterUpdate(updateMail, now);
+                    break;
+                case DeleteMail deleteMail:
+                    RemoveMail(deleteMail.Expected.ReceiverId, deleteMail.Expected.Id);
+                    break;
+            }
+        }
+    }
+
+    private void ApplyForwardedLetterUpdate(UpdateMail update, long now)
+    {
+        MailView? existing = _mailboxes.TryGetValue(update.Expected.ReceiverId, out Mailbox? box)
+            ? box.Mails.FirstOrDefault(m => m.Mail.Id == update.Expected.Id)
+            : null;
+        var view = new MailView(update.Updated, update.Updated.HasItem ? existing?.Item : null) { Body = existing?.Body };
+        if (update.Updated.ReceiverId != update.Expected.ReceiverId)
+        {
+            RemoveMail(update.Expected.ReceiverId, update.Expected.Id);
+            DeliverForwardedLetter(view, now);
+        }
+        else
+        {
+            ReplaceMail(update.Updated.ReceiverId, view);
+        }
+    }
+
+    private void DeliverForwardedLetter(MailView view, long now)
+    {
+        int receiver = view.Mail.ReceiverId;
+        if (OnlinePlayer(receiver) is not null)
+        {
+            if (!(_mailboxes.TryGetValue(receiver, out Mailbox? box) && box.Mails.Any(m => m.Mail.Id == view.Mail.Id)))
+            {
+                Deliver(view);
+            }
+
+            return;
+        }
+
+        CommitNotifier?.MailCommitted(receiver, view.Mail.DeliverTime, now);
+    }
+
+    private void NotifyForwardedBid(UpdateAuction update, ItemInstanceData item)
+    {
+        AuctionRecord before = update.Expected;
+        AuctionRecord after = update.Updated;
+        if (after.BidderId == 0 || (after.BidderId == before.BidderId && after.Bid == before.Bid))
+        {
+            return;
+        }
+
+        int randomProperty = item.RandomPropertyId;
+        if (before.BidderId != 0 && before.BidderId != after.BidderId)
+        {
+            // As the local bid path: the outbid notice is built from the auction before the bid (vmangos SendAuctionOutbiddedMail).
+            if (OnlinePlayer(before.BidderId) is { } outbid)
+            {
+                outbid.Session.Send(WorldOpcode.SmsgAuctionBidderNotification, EconomyPackets.BidderNotification(before, won: false, randomProperty));
+            }
+            else
+            {
+                CommitNotifier?.Outbid(before, randomProperty);
+            }
+        }
+
+        if (OnlinePlayer(before.SellerId) is { } seller)
+        {
+            seller.Session.Send(WorldOpcode.SmsgAuctionOwnerNotification, EconomyPackets.OwnerNotification(after, sold: false, randomProperty));
+        }
+        else
+        {
+            CommitNotifier?.AuctionOwnerResult(after, sold: false, randomProperty);
+        }
+    }
 }
