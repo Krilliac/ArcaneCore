@@ -161,8 +161,7 @@ public sealed class CharacterClaimTests
         await rig.WriteAsync(character, a); // the settlement save runs while the transfer is reserved: still allowed
 
         TransferDecisionRecord committed = await rig.Store.CommitDecisionAsync(transfer, b.Incarnation, CancellationToken.None, b.Scope);
-        Assert.Equal(b.Scope, committed.TargetOwnershipToken!.Scope);
-        Assert.Equal(a.Epoch + 1, committed.TargetOwnershipToken.Epoch);
+        Assert.Equal(b, committed.TargetOwnershipToken); // into another worker scope the committed token is that worker's own live scope token
 
         // The source still holds a snapshot for the character (a retained retry): refused by the database, not by anything in its own memory.
         await AssertRefusedAsync<CharacterClaimRejectedException>(() => rig.WriteAsync(character, a));
@@ -170,6 +169,31 @@ public sealed class CharacterClaimTests
         TransferDecisionRecord done = await rig.Store.MarkCompletedAsync(transfer);
         Assert.Equal(b.Scope, done.TargetOwnershipToken!.Scope);
         Assert.Equal(committed.TargetOwnershipToken, rig.Store.GetActiveOwnership(character));
+    }
+
+    [Fact]
+    public async Task ACommitIntoAWorkerScope_WithNoLiveRowUnderTheTargetIncarnation_IsRefused_AndTheTransferStaysAbortable()
+    {
+        using var directory = new TempDirectory("arcanecore-claims-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        const int character = 16;
+        await rig.Store.TryClaimCharacterAsync(character, a);
+
+        Guid transfer = Guid.NewGuid();
+        await rig.Store.CreateReservationAsync(transfer, character, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        await rig.Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.SuspendAndCapture, PlayerTransferValidatorTests.CreateSampleValidBundle(transfer, character, NodeA, NodeB, a));
+        await rig.Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.InstallPassive);
+        await rig.Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
+
+        // Worker b's scope is live, but not under this incarnation (b restarted, or the coordinator names a stale one): b could never write the character.
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => rig.Store.CommitDecisionAsync(transfer, Guid.NewGuid(), CancellationToken.None, b.Scope));
+        Assert.Equal(PlayerTransferDecisionState.PreCommit, (await rig.Store.GetDecisionAsync(transfer))!.DecisionState);
+        await rig.WriteAsync(character, a); // the source still holds the claim
+
+        await rig.Store.AbortPreCommitAsync(transfer, "target not live");
+        await rig.WriteAsync(character, a);
     }
 
     [Fact]

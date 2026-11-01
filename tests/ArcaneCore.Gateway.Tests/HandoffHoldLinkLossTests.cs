@@ -31,7 +31,50 @@ public sealed class HandoffHoldLinkLossTests
     public async Task ALinkLostAfterFlushed_KeepsTheClient_AndItLandsOnTheStandby()
     {
         using var cts = new CancellationTokenSource(Deadline);
-        await using SyntheticArcaneServer a = await StartActiveAsync(cts.Token);
+        SyntheticArcaneServer a = await StartActiveAsync(cts.Token);
+        Exception? stopFailure = null;
+        try
+        {
+            await RunLinkLostAfterFlushedAsync(a, cts);
+        }
+        finally
+        {
+            try
+            {
+                await a.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                stopFailure = ex;
+            }
+        }
+
+        // The retired A logs its player out as it stops (its link was lost, so the session closed there): every write it still attempts is refused by the characters fence
+        // (epoch N), nothing else fails. Same contract as WorldHandoffTests.
+        if (stopFailure is not null)
+        {
+            Assert.All(Leaves(stopFailure), leaf => Assert.IsType<CharacterOwnershipRejectedException>(leaf));
+        }
+    }
+
+    private static IEnumerable<Exception> Leaves(Exception error)
+    {
+        IEnumerable<Exception> inner = error is AggregateException aggregate ? aggregate.InnerExceptions
+            : error.InnerException is { } one ? [one] : [];
+        bool any = false;
+        foreach (Exception child in inner)
+        {
+            any = true;
+            foreach (Exception leaf in Leaves(child))
+                yield return leaf;
+        }
+
+        if (!any)
+            yield return error;
+    }
+
+    private static async Task RunLinkLostAfterFlushedAsync(SyntheticArcaneServer a, CancellationTokenSource cts)
+    {
         await using SyntheticArcaneServer b = await StartStandbyAsync(a, cts.Token);
         await using Linked linked = await LinkAsync(a, cts.Token);
         GatewayWorkerEndpoint bEndpoint = b.Services.GetRequiredService<GatewayWorkerEndpoint>();

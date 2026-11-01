@@ -319,8 +319,12 @@ public sealed class PetMapSystem : IMapUpdater
     public void OnPlayerRemoved(Map map, Player player)
     {
         // A map removal also happens on far-map transfer. Save the stable pet identity and state
-        // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal).
-        _service?.QueueCurrentPetSave(player);
+        // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal). A cluster transfer's detach does not: its capture
+        // (PlayerTransferPreparing) already queued the pet, and after the commit the pet row is the target's.
+        if (!map.World.IsDetachingForTransfer)
+        {
+            _service?.QueueCurrentPetSave(player);
+        }
 
         // The owner leaves the map, so its summons cannot stay (vmangos Player::RemoveFromWorld unsummons totems and the mini pet,
         // Unit::RemoveFromWorld the guardians and the pet). A far teleport has already put the pet away by then and brings it back in

@@ -244,6 +244,13 @@ public sealed class WorldHandoffHostingTests
 
         Assert.Equal(ClusterRestartOutcome.RestartQueued, result.Outcome);
         Assert.Equal(WorldHandoffStage.Retired, result.Handoff!.Stage);
+        // The supervisor channel only queues the request line; its own writer thread writes it, so it can land just after RunAsync returns.
+        using var wait = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!events.Snapshot().Any(e => e.StartsWith("supervisor:", StringComparison.Ordinal)))
+        {
+            await Task.Delay(10, wait.Token);
+        }
+
         string[] seen = events.Snapshot();
         int retire = Array.IndexOf(seen, "source:retire");
         int request = Array.FindIndex(seen, e => e.StartsWith("supervisor:", StringComparison.Ordinal));

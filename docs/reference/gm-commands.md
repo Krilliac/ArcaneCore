@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 408 |
-| `Administrator` | 6 | 611 |
+| `GameMaster` | 3 | 410 |
+| `Administrator` | 6 | 613 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -402,7 +402,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.packetcheck bots` | 6 | Administrator | stored level through the map | Syntax: .packetcheck bots on\|off On: check the managed playerbot sessions too. Off: exempt them (the default). |
 | `.packetcheck staff` | 6 | Administrator | stored level through the map | Syntax: .packetcheck staff on\|off On: check staff accounts and GM-mode players too. Off: exempt them (the default). |
 | `.packetcheck reset` | 6 | Administrator | stored level through the map | Syntax: .packetcheck reset Zero the counters and let every session report again at once. |
-| `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag\|restart] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
+| `.cluster` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster [status\|node\|routes\|nodes\|leases\|social\|diag\|restart\|handoff] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
 | `.cluster status` | 3 | GameMaster | stored level through the map | Syntax: .cluster status Show the cluster node identity, durable ownership fence, map routing summary, and authority leases. |
 | `.cluster node` | 3 | GameMaster | stored level through the map | Syntax: .cluster node [$player] Show which cluster node and map worker host the selected or named player (or this daemon at the console), along with their ownership token and map coordinates. |
 | `.cluster routes` | 3 | GameMaster | stored level through the map | Syntax: .cluster routes [$mapId] List the static continent and active instance map routes across cluster workers, with online player, bot, object, and transit counts. |
@@ -410,7 +410,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.cluster leases` | 3 | GameMaster | stored level through the map | Syntax: .cluster leases Show durable character ownership fencing, realm singleton authority leases (economy, social, instances), and write-behind queue depths. |
 | `.cluster social` | 3 | GameMaster | stored level through the map | Syntax: .cluster social Show cross-worker social presence counts by continent/worker, active groups, guilds, and social router state. |
 | `.cluster diag` | 6 | Administrator | stored level through the map | Syntax: .cluster diag Run the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered. |
-| `.cluster restart` | 6 | Administrator | stored level through the map | Syntax: .cluster restart $worker Drain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing. |
+| `.cluster restart` | 6 | Administrator | stored level through the map | Syntax: .cluster restart $worker Drain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing. On a gateway-coordinated cluster the request goes to the gateway, which answers 'started' at once and sends the verdict to your session (also after it moved to the new world); the operation id it prints is the journal key for '.cluster handoff status'. |
+| `.cluster handoff` ... | 3 | GameMaster | stored level through the map | Syntax: .cluster handoff status [$operationId] Show the whole-World handoffs the journal has not resolved, or one handoff by its operation id (stage, decision, abort reason). Works from the console too. |
+| `.cluster handoff status` | 3 | GameMaster | stored level through the map | Syntax: .cluster handoff status [$operationId] Show the unresolved whole-World handoffs of the journal, or the one with the given operation id. |
 | `.creature` ... | 3 | GameMaster | stored level through the map | Creature commands. |
 | `.creature add` | 3 | GameMaster | stored level through the map | Syntax: .creature add &lt;entry&gt; — spawn a temporary creature where you stand (not saved). |
 | `.creature info` | 3 | GameMaster | stored level through the map | Syntax: .creature info — details of the selected creature. |

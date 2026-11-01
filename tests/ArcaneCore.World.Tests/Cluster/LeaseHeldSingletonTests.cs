@@ -341,6 +341,9 @@ public sealed class LeaseHeldSingletonTests
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, _saves, NullLogger<WorldRuntime>.Instance);
             Feature = new EconomyFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLogger<EconomyFeature>.Instance, clock);
             Feature.Options.ExpirySweepSeconds = 0; // the test drives the sweep itself
+            // The letter's sender has no character row here (and no directory says so), so the default return of an expired money-only letter would be refused by the store
+            // (a returned letter needs its receiver to exist); the vmangos deletion is what this case is about.
+            Feature.Options.ReturnExpiredMoneyOnlyMail = false;
             Feature.Attach(World);
             World.Start();
         }

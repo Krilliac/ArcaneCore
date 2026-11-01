@@ -257,7 +257,8 @@ public sealed class OwnedMapSweepTests
         ManagedPlayerbotFeature feature = second.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
 
-        PlayerbotStatus[] snapshot = [.. feature.Snapshot()];
+        // Read on the world thread: off it, Snapshot() is the copy the last tick published, which may predate the restore's start of the owned bot.
+        PlayerbotStatus[] snapshot = [.. await second.OnWorldAsync(() => feature.Snapshot())];
         Assert.NotEqual(ManagedPlayerbotState.Stopped, Assert.Single(snapshot, s => s.BotId == mine).State);
         Assert.Equal(ManagedPlayerbotState.Stopped, Assert.Single(snapshot, s => s.BotId == theirs).State);
         Assert.Null(feature.FindSession(theirs));
