@@ -74,6 +74,13 @@ public sealed class ItemGuidAllocator
 
     public ItemGuidAllocator(uint lastUsed = 0) => _last = lastUsed;
 
+    /// <summary>
+    /// When true (a Worker-mode node, where several processes share one characters database), <see cref="Next"/> never falls back
+    /// to the in-process counter: without a durable block allocator it throws, because a process-local counter would hand out
+    /// GUIDs another worker also hands out. Set by the host before the world starts.
+    /// </summary>
+    public volatile bool RequireDurableIds;
+
     public ItemGuidAllocator(DurableIdBlockAllocator blockAllocator)
     {
         ArgumentNullException.ThrowIfNull(blockAllocator);
@@ -169,6 +176,13 @@ public sealed class ItemGuidAllocator
             uint allocated = blockAllocator.Next();
             Seed(allocated);
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Item,
+                $"Item GUID allocator for scope '{IdRangeScopes.Item}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         long next = Interlocked.Increment(ref _last);

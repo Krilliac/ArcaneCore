@@ -15,6 +15,26 @@ public static class IdRangeScopes
     public const string Auction = "auction";
     public const string ItemText = "item_text";
 
+    /// <summary>Pet numbers (vmangos GeneratePetNumber); realm-unique, unlike the per-character persisted key.</summary>
+    public const string Pet = "pet";
+
+    /// <summary>GM ticket ids (<c>gm_ticket.id</c>, a signed 32-bit column).</summary>
+    public const string GmTicket = "gm_ticket";
+
+    /// <summary>Guild charter petition ids (<c>petition.id</c>, a signed 32-bit column).</summary>
+    public const string Petition = "petition";
+
+    /// <summary>
+    /// Scopes added after the v61 <c>character_id_ranges</c> module shipped. They are deliberately not in <see cref="All"/>
+    /// (released modules are frozen); their rows are inserted on first reservation, or seeded by a later module.
+    /// </summary>
+    public static readonly ImmutableArray<string> Extended =
+    [
+        Pet,
+        GmTicket,
+        Petition,
+    ];
+
     /// <summary>
     /// Minimum first ID for the `"instance"` scope so dynamic dungeon/raid IDs never collide
     /// with static continent instance IDs (`0`..`100`).
@@ -48,7 +68,7 @@ public static class IdRangeScopes
 
     /// <summary>
     /// Returns the maximum valid ID for the given <paramref name="scope"/>.
-    /// Guild and Instance IDs are stored in signed 32-bit integer columns (`int.MaxValue`),
+    /// Guild, Instance, GmTicket and Petition IDs are stored in signed 32-bit integer columns (`int.MaxValue`),
     /// whereas Item, Group, Mail, Auction, and ItemText IDs span the full 32-bit unsigned range (`uint.MaxValue`).
     /// </summary>
     public static uint GetMaxId(string scope)
@@ -56,7 +76,7 @@ public static class IdRangeScopes
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         return scope switch
         {
-            Guild or Instance => (uint)int.MaxValue,
+            Guild or Instance or GmTicket or Petition => (uint)int.MaxValue,
             _ => uint.MaxValue,
         };
     }

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 
@@ -29,6 +30,43 @@ public sealed class PetitionManager
     {
         _context = context;
         context.Guilds.MemberJoined += OnMemberJoined;
+    }
+
+    /// <summary>
+    /// Durable block allocator for the <c>"petition"</c> scope. Set by the host before the world starts when several workers share one
+    /// characters database; null keeps the process counter (Realm mode).
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
+
+    /// <summary>When true (Worker mode) a petition id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    internal int AllocatePetitionId()
+    {
+        if (IdBlockAllocator is { } allocator)
+        {
+            int allocated = allocator.NextInt32();
+            if (allocated >= _nextId && allocated < int.MaxValue)
+            {
+                _nextId = allocated + 1;
+            }
+
+            return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Petition,
+                $"Petition id allocator for scope '{IdRangeScopes.Petition}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+
+        if (_nextId <= 0)
+        {
+            throw new IdRangeExhaustedException(IdRangeScopes.Petition, "petition ID space exhausted");
+        }
+
+        return _nextId++;
     }
 
     /// <summary>The NPC and money services (set by the world daemon); without them nothing NPC-bound works.</summary>
@@ -189,12 +227,14 @@ public sealed class PetitionManager
 
         // vmangos charges, then stores (PetitionsHandler.cpp:116-125). The charge can fail with money in hand (the
         // quest-NPC state is not Loaded yet), and then nothing is handed out.
+        // The id comes first: AllocatePetitionId can throw (unprimed Worker-mode allocator, drained block), and the copper
+        // taken by TryCharge is flushed, so a throw after the charge would cost the player money for nothing.
+        int id = AllocatePetitionId();
         if (!Npc.TryCharge(player, PetitionConstants.CharterCost))
         {
             return;
         }
 
-        int id = _nextId++;
         Item charter = player.Inventory.StoreNewItem(destination, template, template.BuyCount);
         charter.SetUInt32(UpdateFields.ItemFieldEnchantment + (PetitionConstants.EnchantmentSlot * 3), (uint)id);
 
