@@ -125,6 +125,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     // Control requests being answered; DisposeAsync waits for them (each ends at once: the handler's token is the host's stop token).
     private readonly ConcurrentDictionary<Task, int> _controlRuns = new();
+    private static readonly TimeSpan ControlStopWait = TimeSpan.FromSeconds(5);
     private Task? _acceptTask;
     private int _nextLinkId;
     private long _droppedClientPackets;
@@ -864,7 +865,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
         }
 
-        await Task.WhenAll(_controlRuns.Keys).ConfigureAwait(false); // each answer ends at once: the handler's token is cancelled above, and AnswerControlAsync never throws
+        // Each answer ends at once when its handler honours the token cancelled above, and AnswerControlAsync never throws. A handler that ignores the token must not hang the stop: the wait is bounded.
+        try
+        {
+            await Task.WhenAll(_controlRuns.Keys.ToArray()).WaitAsync(ControlStopWait).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("Worker link host: {Count} control request(s) still running {Seconds:0.###} s after stop; not waiting for them", _controlRuns.Count, ControlStopWait.TotalSeconds);
+        }
 
         _stop.Dispose();
     }
