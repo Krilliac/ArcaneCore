@@ -249,69 +249,6 @@ public class CreatureEventAI : AggressorAI
         }
     }
 
-    /// <summary>
-    /// ACTION_T_SET_RANGED_MODE (57). The types are cmangos UnitAI RangedModeType: 0 none, 1 full caster, 2 proximity,
-    /// 3 no melee mode (keeps the creature in ranged mode even when the victim is inside melee reach) and 4 distancer.
-    /// Types 2 and 4 leave ranged mode while the victim is inside melee reach and return once it is 3 yd past it
-    /// (cmangos UnitAI::UpdateAI, UnitAI.cpp:1096-1110; <see cref="UpdateRangedModeByReach"/>); every type leaves it when a main spell
-    /// (CAST_MAIN_SPELL) fails for power, range or prevention (<see cref="HandleMainSpellCastResult"/>). Movement selection remains owned by
-    /// CreatureMapSystem; this state is the contract consumed by EventAI gates and melee control.
-    /// </summary>
-    internal bool SetRangedMode(bool enabled, float chaseDistance, int type)
-    {
-        if (type is < 0 or > 4 || !float.IsFinite(chaseDistance) || chaseDistance < 0)
-        {
-            return false;
-        }
-
-        _rangedMode = enabled;
-        _chaseDistance = chaseDistance;
-        AttackDistance = chaseDistance;
-        _rangedModeType = type;
-        _currentRangedMode = enabled;
-        return true;
-    }
-
-    /// <summary>cmangos UnitAI::SetCurrentRangedMode for the proximity and distancer types: ranged back on chases at the chase distance, off closes in.</summary>
-    private void SetCurrentRangedMode(bool state)
-    {
-        _currentRangedMode = state;
-        AttackDistance = state ? _chaseDistance : 0f;
-        System?.ApplyCombatMovement(Me);
-    }
-
-    /// <summary>
-    /// cmangos UnitAI::UpdateAI for TYPE_PROXIMITY and TYPE_DISTANCER (UnitAI.cpp:1096-1110): in ranged mode a victim inside melee reach ends
-    /// it; out of ranged mode it returns once the victim is more than 3 yd past melee reach. Not delivered: the distancing step away from an
-    /// immobilised victim (DistanceYourself) and the main-spell-prevented conditions.
-    /// </summary>
-    private void UpdateRangedModeByReach()
-    {
-        if (!_rangedMode || _rangedModeType is not (2 or 4) || Victim is not { } victim || !_engine.Context.CanExecuteCombatAction)
-        {
-            return;
-        }
-
-        if (_currentRangedMode)
-        {
-            if (MapCombat.CanReachWithMeleeAutoAttack(Me, victim))
-            {
-                SetCurrentRangedMode(false);
-            }
-
-            return;
-        }
-
-        float reach = MathF.Max(Me.GetFloat(UpdateFields.UnitFieldCombatreach), CombatConstants.MinMeleeCombatReach)
-            + MathF.Max(victim.GetFloat(UpdateFields.UnitFieldCombatreach), CombatConstants.MinMeleeCombatReach) + CombatConstants.BaseMeleeRangeOffset;
-        reach = MathF.Max(reach, CombatConstants.AttackDistance) + 3f;
-        float dx = Me.X - victim.X, dy = Me.Y - victim.Y;
-        if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim) && (dx * dx) + (dy * dy) > reach * reach)
-        {
-            SetCurrentRangedMode(true);
-        }
-    }
-
     /// <summary>Back to the engine's reset state with combat movement and melee on (cmangos Reset).</summary>
     public void Reset()
     {
