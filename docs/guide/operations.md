@@ -87,6 +87,7 @@ step, not something a daemon should do by surprise: set `Database:Upgrade:Policy
 5. `arcane-db check` to compare the databases with the model.
 
 The runbook, with the exit codes, the per-engine behaviour while a step runs and recovery, is [database upgrade tooling](../ops/database-upgrade.md).
+Moving the live realm from SQLite to PostgreSQL 16 (backup, copy, verify, switch, rollback) is scripted by `tools/ops/live/pg-cutover.ps1`: [cutover runbook](../ops/database-upgrade.md#cutover-of-the-live-realm-to-postgresql-16).
 The schema versions are listed in the [schema reference](../reference/schema.md). Characters are per realm: run the tool once per realm configuration.
 
 ## Single-host supervisor (optional)
