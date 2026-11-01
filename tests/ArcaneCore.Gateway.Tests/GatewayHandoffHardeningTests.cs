@@ -653,11 +653,8 @@ public sealed class GatewayHandoffHardeningTests
                 stopFailure ??= ex;
             }
 
-            // The retired A logs its player out as it stops: every write it still attempts is refused by the characters fence (epoch N), nothing else fails.
-            if (stopFailure is not null)
-            {
-                Assert.All(Leaves(stopFailure), leaf => Assert.IsType<ArcaneCore.Kernel.Characters.CharacterOwnershipRejectedException>(leaf));
-            }
+            // A retired source drops the writes of the characters that moved to the new owner (CharacterRetirementRegistry), so it stops cleanly: nothing is refused by the fence.
+            Assert.Null(stopFailure);
         }
 
         private static Dictionary<string, string?> Worker(string nodeId, bool standby) => new()
@@ -669,25 +666,5 @@ public sealed class GatewayHandoffHardeningTests
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Handoff:Enabled"] = "true",
         };
-
-        private static IEnumerable<Exception> Leaves(Exception error)
-        {
-            IEnumerable<Exception> inner = error is AggregateException aggregate ? aggregate.InnerExceptions
-                : error.InnerException is { } one ? [one] : [];
-            bool any = false;
-            foreach (Exception child in inner)
-            {
-                any = true;
-                foreach (Exception leaf in Leaves(child))
-                {
-                    yield return leaf;
-                }
-            }
-
-            if (!any)
-            {
-                yield return error;
-            }
-        }
     }
 }

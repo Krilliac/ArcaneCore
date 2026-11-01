@@ -20,10 +20,10 @@ namespace ArcaneCore.World.WorldState;
 /// the login instead of showing a re-explored map. With no <see cref="IExploredZonesStore"/>
 /// registered the words live in memory only.
 /// </summary>
-public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers, ShutdownDrain? drain = null)
+public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers, ShutdownDrain? drain = null, CharacterRetirementRegistry? retirement = null)
     : IWorldFeature, ICharacterHooks, IExploredZonesSink
 {
-    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>(), drain?.Features);
+    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>(), drain?.Features) { Retirement = retirement };
 
     private WorldRuntime? _world;
 

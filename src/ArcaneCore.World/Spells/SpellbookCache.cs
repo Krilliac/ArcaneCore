@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -77,6 +78,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
 
     /// <summary>A spell was removed from a player's book by <see cref="ForgetSpell"/> (same rules as <see cref="SpellLearned"/>).</summary>
     public event Action<Player, uint>? SpellForgotten;
+
+    private const string QueueName = "SpellbookCache";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired; set once before <see cref="Start"/>). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; set; }
 
     /// <summary>Characters with a cached spellbook.</summary>
     public int CharacterCount
@@ -343,6 +349,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             await _writer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(_logger, QueueName);
         if (_terminalFailure is { } terminal)
         {
             throw new InvalidOperationException("SpellbookCache stopped with a terminal ownership failure", terminal);
@@ -360,6 +367,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         int[] failed;
         lock (_lock)
         {
+            _failedCharacters.RemoveWhere(id => CharacterRetirementRegistry.Retired(Retirement, id)); // moved to another world: dropped, so it counts as drained
             failed = [.. _failedCharacters];
         }
 
@@ -417,6 +425,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
             return;
         }
 
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         TryAppend(new PendingWrite(characterId, write));
     }
 
@@ -430,6 +443,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         if (_scopes is null)
         {
             return;
+        }
+
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
         }
 
         lock (_writesLock)
@@ -491,6 +509,12 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         HashSet<uint>? desired;
         lock (_lock)
         {
+            if (CharacterRetirementRegistry.Retired(Retirement, characterId))
+            {
+                _failedCharacters.Remove(characterId); // moved to another world: nothing to reconcile
+                return;
+            }
+
             if (_terminalFailure is { } terminal)
             {
                 throw new InvalidOperationException($"spellbook writes for character {characterId} are not durable", terminal);
@@ -621,6 +645,17 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 try
                 {
+                    if (pending.CharacterId is { } retiredId && CharacterRetirementRegistry.Drops(Retirement, QueueName, retiredId))
+                    {
+                        lock (_lock)
+                        {
+                            _failedCharacters.Remove(retiredId);
+                        }
+
+                        pending.Done?.TrySetResult(); // retired since it was queued: dropped, so it counts as drained
+                        continue;
+                    }
+
                     lock (_lock)
                     {
                         if (_terminalFailure is { } terminal && pending.CharacterId is not null)
@@ -644,6 +679,15 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
                     }
 
                     await pending.Write(store).ConfigureAwait(false);
+                    pending.Done?.TrySetResult();
+                }
+                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.Drops(Retirement, QueueName, movedId))
+                {
+                    lock (_lock)
+                    {
+                        _failedCharacters.Remove(movedId); // refused because the character moved to another world: counted, neither logged nor terminal
+                    }
+
                     pending.Done?.TrySetResult();
                 }
                 catch (CharacterOwnershipRejectedException ex)

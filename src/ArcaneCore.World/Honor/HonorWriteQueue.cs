@@ -48,6 +48,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
     private int _pending;
 
+    private const string QueueName = "HonorWriteQueue";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
     private enum Kind
     {
         Write,
@@ -115,6 +120,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     public void AppendCp(int characterId, HonorCpRecord row)
     {
         ArgumentNullException.ThrowIfNull(row);
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -130,6 +140,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     public void SaveState(int characterId, CharacterHonorState state)
     {
         ArgumentNullException.ThrowIfNull(state);
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -144,6 +159,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     /// <summary>Queue a reset (HonorMgr::Reset): rows and numbers go, and anything still waiting for the character is discarded.</summary>
     public void Reset(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -164,6 +184,11 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     /// </summary>
     public void DeleteCharacter(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -261,6 +286,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(logger, QueueName);
         int[] failed;
         Exception? first;
         Exception? terminal;
@@ -547,6 +573,12 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
                 unsaved.Queued = false;
             }
 
+            if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                _characters.Remove(characterId); // retired since it was queued (or retained): dropped, so it counts as drained
+                return null;
+            }
+
             if (_terminalFailure is { } terminal)
             {
                 if (!unsaved.IsEmpty)
@@ -724,6 +756,10 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
 
                 progress.Succeeded();
                 return;
+            }
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                return; // refused because the character moved to another world: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {

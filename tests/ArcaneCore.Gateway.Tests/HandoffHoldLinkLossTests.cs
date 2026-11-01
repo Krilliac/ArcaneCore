@@ -49,28 +49,8 @@ public sealed class HandoffHoldLinkLossTests
             }
         }
 
-        // The retired A logs its player out as it stops (its link was lost, so the session closed there): every write it still attempts is refused by the characters fence
-        // (epoch N), nothing else fails. Same contract as WorldHandoffTests.
-        if (stopFailure is not null)
-        {
-            Assert.All(Leaves(stopFailure), leaf => Assert.IsType<CharacterOwnershipRejectedException>(leaf));
-        }
-    }
-
-    private static IEnumerable<Exception> Leaves(Exception error)
-    {
-        IEnumerable<Exception> inner = error is AggregateException aggregate ? aggregate.InnerExceptions
-            : error.InnerException is { } one ? [one] : [];
-        bool any = false;
-        foreach (Exception child in inner)
-        {
-            any = true;
-            foreach (Exception leaf in Leaves(child))
-                yield return leaf;
-        }
-
-        if (!any)
-            yield return error;
+        // A retired source drops the writes of the characters that moved to the new owner (CharacterRetirementRegistry), so it stops cleanly: nothing is refused by the fence.
+        Assert.Null(stopFailure);
     }
 
     private static async Task RunLinkLostAfterFlushedAsync(SyntheticArcaneServer a, CancellationTokenSource cts)
@@ -266,7 +246,8 @@ public sealed class HandoffHoldLinkLossTests
 
     private static LocalWorldHandoffSource Source(SyntheticArcaneServer a) => new(
         new WorkerNodeId("a"), a.World, a.Services.GetRequiredService<CharacterSaveQueue>(), a.Services.GetRequiredService<WorkerAdmission>(),
-        a.Services.GetRequiredService<WorldWriterGuard>(), a.Services.GetRequiredService<CharacterPersistenceBarrier>());
+        a.Services.GetRequiredService<WorldWriterGuard>(), a.Services.GetRequiredService<CharacterPersistenceBarrier>(),
+        a.Services.GetRequiredService<CharacterRetirementRegistry>());
 
     private static WorldHandoffCoordinator Coordinator(SyntheticArcaneServer a, SyntheticArcaneServer b, IWorldHandoffSource source, IWorldHandoffRouter router)
         => new(Store(a), source, new StandbyWorldHandoffTarget(new WorkerNodeId("b"), Host(b)), router);

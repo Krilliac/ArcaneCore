@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,14 @@ public sealed class SpellStatePersistence
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
+    private const string QueueName = "SpellStatePersistence";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired; set once before the first write). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; set; }
+
+    /// <summary>At stop: one informational line with the number of writes dropped for characters that moved to another world (nothing when none).</summary>
+    public void LogDroppedAtStop() => Retirement?.LogStopSummary(_logger, QueueName);
+
     /// <summary>Terminal failure that halted persistence (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
     public Exception? TerminalFailure
     {
@@ -55,6 +64,11 @@ public sealed class SpellStatePersistence
         if (_scopes is null)
         {
             return;
+        }
+
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
         }
 
         lock (_lock)
@@ -113,6 +127,12 @@ public sealed class SpellStatePersistence
         await FlushCharacterAsync(characterId).WaitAsync(cancellationToken).ConfigureAwait(false);
         if (_scopes is null)
         {
+            return;
+        }
+
+        if (CharacterRetirementRegistry.Retired(Retirement, characterId))
+        {
+            ForgetRetired(characterId); // moved to another world: nothing of it is retained here
             return;
         }
 
@@ -211,6 +231,11 @@ public sealed class SpellStatePersistence
         if (_scopes is null)
         {
             return;
+        }
+
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
         }
 
         lock (_lock)
@@ -325,8 +350,24 @@ public sealed class SpellStatePersistence
         FatalFailure?.Invoke(ex);
     }
 
+    /// <summary>Forget the unsaved snapshot and failure of a character that moved to another world (dropped, so it counts as drained).</summary>
+    private void ForgetRetired(int characterId)
+    {
+        lock (_lock)
+        {
+            _unsaved.Remove(characterId);
+            _lastFailure.Remove(characterId);
+        }
+    }
+
     private async Task WriteAsync(int characterId, SpellStateSnapshot snapshot)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            ForgetRetired(characterId); // retired since it was queued (or retained): dropped
+            return;
+        }
+
         lock (_lock)
         {
             if (_terminalFailure is { } terminal)
@@ -379,6 +420,11 @@ public sealed class SpellStatePersistence
 
                     return;
                 }
+                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                {
+                    ForgetRetired(characterId); // refused because the character moved to another world: counted, neither logged nor terminal
+                    return;
+                }
                 catch (CharacterOwnershipRejectedException ex)
                 {
                     FaultLedger.Shared.Record("writequeue.spellstate-ownership", ex);
@@ -416,6 +462,11 @@ public sealed class SpellStatePersistence
 
     private async Task DeleteAsync(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // retired since it was queued: nothing is deleted from here
+        }
+
         lock (_lock)
         {
             if (_terminalFailure is not null)
@@ -438,6 +489,10 @@ public sealed class SpellStatePersistence
                 {
                     await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
                 }
+            }
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                // refused because the character moved to another world: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {

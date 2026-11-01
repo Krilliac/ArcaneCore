@@ -274,7 +274,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             var settings = new HonorSettings();
             services.GetService<IConfiguration>()?.GetSection(HonorSettings.SectionName).Bind(settings);
             _options = settings.ToOptions();
-            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>(), drain: services.GetService<ShutdownDrain>()?.Features);
+            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>(), drain: services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
             _writes.FatalFailure += ex =>
             {
                 FaultLedger.Shared.Record("honor.writes-fatal", ex);

@@ -22,6 +22,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
@@ -106,6 +107,11 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             // Features attach alphabetically: TeleportFeature attaches after this feature.
             // Resolve its singleton now, but defer accessing its service until a spell lands.
             TeleportFeature teleports = scope.ServiceProvider.GetRequiredService<TeleportFeature>();
+
+            // The characters a whole-World handoff moved to another process: both writers drop their writes silently (set before either writes).
+            CharacterRetirementRegistry? retirement = scope.ServiceProvider.GetService<CharacterRetirementRegistry>();
+            Spellbook.Retirement = retirement;
+            State.Retirement = retirement;
 
             // Seams owned by other areas: combat rules and groups (social area, attached later, so
             // its manager is resolved per query). Line of sight comes from map.Collision (vmap-los).
@@ -320,6 +326,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
 
         await State.FlushAsync().ConfigureAwait(false);
+        State.LogDroppedAtStop();
         await Spellbook.DisposeAsync().ConfigureAwait(false);
     }
 

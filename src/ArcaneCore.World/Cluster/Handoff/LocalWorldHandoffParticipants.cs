@@ -24,7 +24,8 @@ public sealed class LocalWorldHandoffSource(
     CharacterSaveQueue saveQueue,
     WorkerAdmission admission,
     WorldWriterGuard writerGuard,
-    CharacterPersistenceBarrier? barrier = null) : IWorldHandoffSource, IDisposable
+    CharacterPersistenceBarrier? barrier = null,
+    CharacterRetirementRegistry? retirement = null) : IWorldHandoffSource, IDisposable
 {
     /// <summary>The admission closed reason while A drains.</summary>
     public const string DrainingReason = "draining";
@@ -129,12 +130,19 @@ public sealed class LocalWorldHandoffSource(
 
     public Task RetireAsync(CancellationToken cancellationToken)
     {
+        int[] moved;
         lock (_gate)
         {
             _retired = true;
             admission.Close(RetiredReason);
+            moved = [.. _frozenCharacters];
         }
 
+        // The characters this world froze now belong to the new owner: every write queue of this process drops their writes silently and counts them
+        // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
+        // (one informational line), instead of attempting writes the fence must refuse. Only the frozen characters are named; any other character keeps its writes.
+        retirement?.Retire(moved);
+        saveQueue.RetireCharacters(moved);
         return Task.CompletedTask;
     }
 
