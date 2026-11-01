@@ -944,7 +944,13 @@ public sealed class GatewayWorkerLink
             if (_controlSubmit is { } routeSubmit)
             {
                 // A worker's request to start an operation (a far teleport): answered on this link by the gateway's transfer service.
-                link.ControlSubmitReceived = submit => routeSubmit(this, submit);
+                link.ControlSubmitReceived += submit =>
+                {
+                    if (submit.Body is ControlTransferSubmit)
+                    {
+                        routeSubmit(this, submit); // kind 2; kind 1 (operator restart) is answered by GatewayRestartOrchestration, subscribed to the same event
+                    }
+                };
             }
 
             try

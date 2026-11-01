@@ -86,6 +86,10 @@ public static class GatewayServiceCollectionExtensions
         services.AddSingleton(sp => new GatewayHandoffService(
             sp.GetRequiredService<GatewayServer>(), sp.GetRequiredService<IWorldHandoffStore>(), sp.GetRequiredService<ILoggerFactory>()));
         services.AddHostedService(sp => sp.GetRequiredService<GatewayHandoffService>());
+        // The operator's .cluster restart, relayed by the workers over the control channel (design section 3.4).
+        services.AddSingleton(sp => new GatewayRestartOrchestration(
+            sp.GetRequiredService<GatewayServer>(), sp.GetRequiredService<GatewayHandoffService>(), null, sp.GetRequiredService<ILoggerFactory>()));
+        services.AddHostedService(sp => sp.GetRequiredService<GatewayRestartOrchestration>());
         services.AddHostedService(sp => new GatewayHandoffRecoveryService(
             sp.GetRequiredService<GatewayHandoffService>(),
             sp.GetRequiredService<IWorldHandoffStore>(),

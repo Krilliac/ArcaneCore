@@ -473,10 +473,10 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     /// Runs one whole-World handoff of slot <paramref name="slotNode"/>: the active worker drains into the slot's standby, the gateway's sessions follow, the roles swap.
     /// Pre-flight (<c>Describe</c> of both, which refuses a worker with control off, a standby that is not one, no characters ownership, or more than one admitted gateway)
     /// journals nothing. Throws <see cref="WorldHandoffAbortedException"/> when the handoff aborted (the active worker resumed), <see cref="WorldHandoffUnavailableException"/> when the slot has no
-    /// standby or a link is down; any other exception after the takeover leaves it committed for recovery. <paramref name="afterStage"/> is the coordinator's per-stage hook (tests).
+    /// standby or a link is down; any other exception after the takeover leaves it committed for recovery. <paramref name="afterStage"/> is the coordinator's per-stage hook (tests). <paramref name="handoffId"/> is the journal key the caller already told someone (null: a fresh one).
     /// </summary>
     public async Task<WorldHandoffRecord> HandoffAsync(
-        string slotNode, Func<WorldHandoffStage, CancellationToken, Task>? afterStage = null, CancellationToken cancellationToken = default)
+        string slotNode, Func<WorldHandoffStage, CancellationToken, Task>? afterStage = null, CancellationToken cancellationToken = default, Guid? handoffId = null)
     {
         GatewayHandoffSlot slot = RequireSlot(slotNode);
         if (!slot.TryEnter())
@@ -494,7 +494,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
                 ?? throw new WorldHandoffUnavailableException($"the worker link of slot '{slotNode}' is down");
             LinkControlChannel standby = slot.Standby.Channel
                 ?? throw new WorldHandoffUnavailableException($"the standby link of slot '{slotNode}' is down");
-            Guid id = Guid.NewGuid();
+            Guid id = handoffId is { } chosen && chosen != Guid.Empty ? chosen : Guid.NewGuid();
             RemoteWorldHandoffSource described = await RemoteWorldHandoffSource.ConnectAsync(active, id, token).ConfigureAwait(false);
             RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, token).ConfigureAwait(false);
             if (!slot.IsActive(described.WorkerId.Value) || !slot.IsStandby(target.WorkerId.Value))

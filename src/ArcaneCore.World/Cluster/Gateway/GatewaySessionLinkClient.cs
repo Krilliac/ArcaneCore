@@ -472,10 +472,12 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeRequest(request));
 
     /// <summary>
-    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation, design section 2.3). The handler must not block
-    /// and must not throw; it answers with <see cref="SendControlSubmitReply"/>. Without a handler the worker is answered with a refusal here, so its request never waits for a reply that cannot come.
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation, design section 2.3). An event so that the
+    /// operator-restart handler (body kind 1) and the transfer handler (body kind 2) can both listen: each answers with <see cref="SendControlSubmitReply"/> only for the body kind it owns.
+    /// Handlers must not block and must not throw; one that throws is logged and answered with a refusal. With no handler at all the worker is answered with a refusal here,
+    /// so its request never waits for a reply that cannot come.
     /// </summary>
-    public Action<ControlSubmit>? ControlSubmitReceived { get; set; }
+    public event Action<ControlSubmit>? ControlSubmitReceived;
 
     /// <summary>Answers a <see cref="ControlSubmit"/> to the worker. False when the link is down.</summary>
     public bool SendControlSubmitReply(ControlSubmitReply reply) =>

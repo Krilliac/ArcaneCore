@@ -540,6 +540,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         try
         {
             SubmitSink?.OnSubmitReply(reply);
+            ControlSubmitReplyReceived?.Invoke(reply);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -552,6 +553,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         try
         {
             SubmitSink?.OnNotice(notice);
+            ControlNoticeReceived?.Invoke(notice);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -595,6 +597,20 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
         return false;
     }
+
+    /// <summary>
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmitReply"/> frame (the gateway's answer to a <see cref="TrySendControlSubmit"/>), after <see cref="SubmitSink"/>
+    /// saw it. Several submitters share the link (the far-teleport router and the operator-restart relay), so each ignores a reply whose request id it does not own.
+    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// </summary>
+    public event Action<ControlSubmitReply>? ControlSubmitReplyReceived;
+
+    /// <summary>
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlNotice"/> frame, after <see cref="SubmitSink"/> saw it. Kind <see cref="ControlNoticeKind.OperatorText"/> is
+    /// the operator-restart relay's, kind <see cref="ControlNoticeKind.TransferOutcome"/> the far-teleport router's; each ignores the other's.
+    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// </summary>
+    public event Action<ControlNotice>? ControlNoticeReceived;
 
     /// <summary>
     /// A control request of an admitted gateway: answered on the same link, off the receive loop (a verb may take a minute: a freeze, a flush, a promotion). The decoder
