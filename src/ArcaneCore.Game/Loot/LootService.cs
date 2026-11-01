@@ -158,8 +158,12 @@ public sealed partial class LootService : IViewerFieldFilter
     /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
     /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
     /// </param>
+    /// <param name="rollProperties">
+    /// False leaves every item's <see cref="LootItem.RandomPropertyId"/> at 0. A durable (instance) chest passes false: its takes stage a
+    /// reward grant that has no property field and rolls the bag item's property itself, so a rolled window value would disagree with the item.
+    /// </param>
     public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
-        bool zeroEntryIsATable = false)
+        bool zeroEntryIsATable = false, bool rollProperties = true)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         var bag = new LootBag(source, kind, type);
@@ -206,7 +210,16 @@ public sealed partial class LootService : IViewerFieldFilter
             }
         }
 
-        IItemRandomPropertySource? properties = RandomProperties ?? recipients.Select(p => p.Inventory.RandomProperties).FirstOrDefault(s => s is not null);
+        IItemRandomPropertySource? properties = null;
+        if (rollProperties && (normal.Count > 0 || quest.Count > 0))
+        {
+            properties = RandomProperties;
+            for (int i = 0; properties is null && i < recipients.Count; i++)
+            {
+                properties = recipients[i].Inventory.RandomProperties;
+            }
+        }
+
         byte slot = 0;
         foreach ((RolledLoot roll, ItemTemplate template, List<Player>? allowed) in normal)
         {
@@ -795,7 +808,8 @@ public sealed partial class LootService : IViewerFieldFilter
         // group's round-robin position only moves when the generation committed. No money: the durable record has no
         // place for it yet (LootBag.ToRecord refuses a bag with gold), so a stored chest pays nothing (docs/areas/loot-conditions-chest-gold.md).
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
-        LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
+        LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients,
+            rollProperties: false); // TakeDurableItem's reward grant carries no property, so window and item stay at 0 together
         fresh.DurableKey = key;
         CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
