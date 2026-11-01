@@ -82,6 +82,9 @@ public sealed class TransformAuras : ISpellHandlerModule
     /// <summary>Orb of Deception (SpellAuras.cpp:2647): the only misc value 0 transform with a built-in model table.</summary>
     public const uint OrbOfDeception = 16739;
 
+    /// <summary>Discombobulate, the Discombobulator Ray's transform (spell_item.cpp DiscombobulateAuraScript).</summary>
+    public const uint Discombobulate = 4060;
+
     // Orb of Deception: native display -> Orb display (SpellAuras.cpp:2647-2704 by race and gender; mangoszero SpellAuraShapeshift.cpp:514-545).
     private static readonly Dictionary<uint, uint> s_orbDisplays = new()
     {
@@ -127,6 +130,12 @@ public sealed class TransformAuras : ISpellHandlerModule
     {
         if (apply)
         {
+            // Discombobulate (Discombobulator Ray), vmangos DiscombobulateAuraScript::OnAfterApply: its first effect removes every mount aura.
+            if (holder.Spell.Id == Discombobulate && aura.EffectIndex == 0)
+            {
+                system.RemoveAurasByType(holder.Target, AuraType.Mounted);
+            }
+
             // "update active transform spell only not set or not overwriting negative by positive case"
             ActiveTransform state = s_active.GetOrCreateValue(holder.Target);
             if (state.Holder is null || !holder.IsPositive || state.Holder.IsPositive)

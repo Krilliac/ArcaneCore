@@ -116,8 +116,11 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
             effect,
             context =>
             {
-                registry.FindForEffect(context.Spell.Id, effect)?.OnEffectExecute(context);
-                previous?.Invoke(context);
+                // A script that returns false cancels this effect for this target (vmangos: the effect is skipped when OnEffectExecute is false).
+                if (registry.FindForEffect(context.Spell.Id, effect)?.OnEffectExecute(context, true) ?? true)
+                {
+                    previous?.Invoke(context);
+                }
             },
             previous,
             () => effect is not (SpellEffectName.Dummy or SpellEffectName.ScriptEffect) && !registry.ExecuteEffects.Contains(effect));

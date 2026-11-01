@@ -27,12 +27,10 @@ public sealed partial class PlayerInventory
     }
 
     /// <summary>
-    /// The pool the hit-taken wear roll draws from (<c>MapCombat.RollHitTakenDurability</c>): fills <paramref name="slots"/>, in slot
+    /// The pool the absorb-wear roll draws from (<c>MapCombat.RollDefenseDurability</c>, <c>Items:DurabilityLossChanceAbsorb</c>): fills <paramref name="slots"/>, in slot
     /// order, with every equipment slot that holds a piece of armor (<see cref="ItemClass.Armor"/>, so a shield counts and a weapon
-    /// does not) whose template has a durability maximum, and returns how many there are. The reference core rolls over all 19
-    /// slots and lets an empty slot (mangosserver <c>PlayerDurability.cpp:253-259</c>, the null check) or an item without durability
-    /// (<c>PlayerDurability.cpp:213-228</c>: old and new durability both 0, nothing changes) absorb the roll; this pool leaves those
-    /// out, so every successful percent roll wears armor. A broken piece (durability 0, maximum above 0) stays in the pool and its
+    /// does not) whose template has a durability maximum, and returns how many there are. The hit-taken and hit-done rolls do not use it
+    /// (they roll all 19 slots like the reference cores); the absorb wear is a reconstruction that has no reference to follow. A broken piece (durability 0, maximum above 0) stays in the pool and its
     /// roll does nothing, as in the reference. Allocation free; <paramref name="slots"/> needs <see cref="InventorySlots.EquipmentEnd"/> entries.
     /// </summary>
     public int CollectWornArmorWithDurability(Span<byte> slots)

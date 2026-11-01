@@ -182,6 +182,9 @@ public enum SpellAttributesExCombat : uint
 {
     None = 0,
 
+    /// <summary>SPELL_ATTR_EX_ONLY_PEACEFUL_TARGETS (bit 8): the target must not be in combat (Sap, Distract, Duel).</summary>
+    OnlyPeacefulTargets = 0x00000100,
+
     /// <summary>SPELL_ATTR_EX_FINISHING_MOVE_DAMAGE (bit 20): uses combo points.</summary>
     FinishingMoveDamage = 0x00100000,
 
@@ -216,6 +219,9 @@ public enum SpellAttributesEx3Combat : uint
 
     /// <summary>SPELL_ATTR_EX3_COMPLETELY_BLOCKED (bit 3): all effects are prevented on a block.</summary>
     CompletelyBlocked = 0x00000008,
+
+    /// <summary>SPELL_ATTR_EX3_ONLY_ON_PLAYER (bit 8): a strict single-target cast needs a player target.</summary>
+    OnlyOnPlayer = 0x00000100,
 
     /// <summary>SPELL_ATTR_EX3_REQUIRES_MAIN_HAND_WEAPON (bit 10).</summary>
     RequiresMainHandWeapon = 0x00000400,

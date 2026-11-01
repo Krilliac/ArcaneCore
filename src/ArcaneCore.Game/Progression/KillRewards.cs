@@ -126,7 +126,7 @@ public static class KillRewards
         return recipients;
     }
 
-    public static IReadOnlyList<Player> Recipients(Player actor, Unit source, RewardGroup? group, float distance)
+    public static IReadOnlyList<Player> Recipients(Player actor, WorldObject source, RewardGroup? group, float distance)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(source);

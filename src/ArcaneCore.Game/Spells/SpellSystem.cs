@@ -744,6 +744,7 @@ public sealed partial class SpellSystem
             }
 
             ApplyToTargets(cast, targetEffects, ref currentFaultTarget);
+            RaiseGameObjectCastCredit(cast);
 
             HandleGroundEffects(cast, unitTarget); // vmangos "process ground" (Spell.cpp:3971-3976)
             if (!spell.IsChanneled || cast.IsTriggered)

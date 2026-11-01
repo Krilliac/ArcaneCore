@@ -58,8 +58,9 @@ public sealed class ItemFeedbackProbeTests
     [Fact]
     public async Task MissingItemProducesExactItemNotFoundFailureAndCleanLogout()
     {
+        // The fixture starts under its own hang bound; the scenario deadline is armed afterwards (TestDeadlines).
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await server.AddAccountAsync("ITEMPROBE", "ProbePass1", deadline.Token);
         const string variable = "ARCANE_ITEM_FEEDBACK_TEST_PASSWORD";
         string? previous = Environment.GetEnvironmentVariable(variable);

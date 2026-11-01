@@ -4199,7 +4199,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. MariaDB, MySQL and SQLite ignore it.",
+      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. Only the characters database takes the single-writer lock, so this key has an effect under `Database:Characters` only and the realm daemon ignores it; under `Database:Auth` and `Database:World` it does nothing. MariaDB, MySQL and SQLite ignore it.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
@@ -4287,7 +4287,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. MariaDB, MySQL and SQLite ignore it.",
+      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. Only the characters database takes the single-writer lock, so this key has an effect under `Database:Characters` only and the realm daemon ignores it; under `Database:Auth` and `Database:World` it does nothing. MariaDB, MySQL and SQLite ignore it.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
@@ -4611,7 +4611,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. MariaDB, MySQL and SQLite ignore it.",
+      "meaning": "PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides `Database:WriterLockDatabase`; unset inherits it, default `postgres`). PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does. The login needs CONNECT on it. Only the characters database takes the single-writer lock, so this key has an effect under `Database:Characters` only and the realm daemon ignores it; under `Database:Auth` and `Database:World` it does nothing. MariaDB, MySQL and SQLite ignore it.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
@@ -4627,7 +4627,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "PostgreSQL only: the existing maintenance database (default `postgres`) in which the world takes its single-writer advisory lock. PostgreSQL scopes advisory locks to the database the session is connected to, so all worlds of one characters database must lock in the same database, one that exists before the characters database is created. The login needs CONNECT on it. Each component may override it with a Database:Characters WriterLockDatabase key. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).",
+      "meaning": "PostgreSQL only: the existing maintenance database (default `postgres`) in which the world takes its single-writer advisory lock. PostgreSQL scopes advisory locks to the database the session is connected to, so all worlds of one characters database must lock in the same database, one that exists before the characters database is created. The login needs CONNECT on it. Only the characters database takes the single-writer lock, so the world uses this value (or the Database:Characters WriterLockDatabase key that overrides it) for the characters database alone; the realm daemon and the Auth and World components ignore it. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#database",
       "isCollection": false
@@ -5817,7 +5817,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "mangos `DurabilityLossChance.Absorb` (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; mangos default 0.5): the percent chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken pool). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.",
+      "meaning": "mangos `DurabilityLossChance.Absorb` (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; mangos default 0.5): the percent chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (drawn from the worn armor pieces that have a durability maximum, a shield included and a weapon not). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#items",
       "isCollection": false
@@ -5849,7 +5849,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing wears the weapon of the swinging hand. Zero or less never rolls; `DurabilityLossEnable` false overrides it.",
+      "meaning": "vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing likewise wears one of the 19 equipment slots chosen uniformly. Zero or less never rolls; `DurabilityLossEnable` false overrides it.",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#items",
       "isCollection": false
