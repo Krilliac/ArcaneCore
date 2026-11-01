@@ -385,7 +385,9 @@ public sealed class GatewayHandoffNodeKeyedTests
 
             await using AsyncServiceScope scope = Eastern.Services.CreateAsyncScope();
             ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-            await store.SaveStateAsync(new CharacterState(id, mapId, 1, 100f, 100f, 50f, 0f, 1, 0), token);
+            // The worlds run on Worker scope with fencing on: a tokenless write is refused while any ownership row is active, so write under the login world's own token.
+            CharacterOwnershipToken? owner = Eastern.Services.GetRequiredService<ICharacterOwnershipContext>().Current;
+            await store.SaveStateAsync(new CharacterState(id, mapId, 1, 100f, 100f, 50f, 0f, 1, 0, Ownership: owner), token);
             CharacterRecord saved = Assert.IsType<CharacterRecord>(await store.GetByIdAsync(id, token));
             Assert.Equal(mapId, saved.MapId);
             return id;
