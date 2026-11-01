@@ -48,7 +48,8 @@ public sealed partial class SummonService
 
         SpellCastTargets targets = context.Cast.Targets;
         (float x, float y, float z) = targets.HasDest ? targets.Dest : (caster.X, caster.Y, caster.Z);
-        if (targets.GameObject is { IsEmpty: false } ritualGuid && caster.Map?.FindObject(ritualGuid) is GameObjects.GameObject { Type: GameObjects.GameObjectType.SummoningRitual } ritual)
+        if (targets.GameObject is { IsEmpty: false } ritualGuid
+            && caster.Map?.FindObject(ritualGuid) is GameObjects.GameObject { Type: GameObjects.GameObjectType.SummoningRitual } ritual)
         {
             (x, y, z) = (ritual.X, ritual.Y, ritual.Z);
         }
