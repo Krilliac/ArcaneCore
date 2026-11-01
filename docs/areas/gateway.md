@@ -69,7 +69,7 @@ After the two proofs, both directions switch to MAC-protected frames. Each end d
 with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
 direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
 reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
-The gateway contract version is 3 and the peer link protocol version is 2, so a gateway or peer from before this change is
+The gateway contract version is 4 (3 added the link integrity described here; 4 added the worker status frame) and the peer link protocol version is 2, so a gateway or peer from before this change is
 refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
 (`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
 
@@ -98,13 +98,14 @@ Cluster.Worker.LinkSecret = "<long random string>"
 The World's own client listener (`World:Port`) stays open in worker mode; point the realm list at the gateway's port to
 send clients through the gateway.
 
-Realm liveness in this topology belongs to the operator, not to a world. A combined-mode world keeps its realm-list row current: offline
+Realm liveness in this topology belongs to the gateway, not to a world. A combined-mode world keeps its realm-list row current: offline
 while starting, online while its loop ticks, offline at stop, with a heartbeat the logon daemon judges (`World:Realm:Id`,
 [installation](../guide/installation.md) section 4, [realm list liveness](../ops/realm-liveness.md), vmangos Master.cpp:215/:330). A worker
-does not (neither state nor heartbeat; having the gateway own liveness would need the worker's tick counter on the link and is not built): an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
-the promoted standby is serving, and the client-facing endpoint is the gateway, which has no realm-list writer. Set the row's flags with
-SQL (`realmlist.Flags`, Offline = 0x02) when the gateway itself is taken down, and keep `realmlist.State` at 0 (Unknown) so the logon daemon
-enforces no heartbeat for a row no world writes: a row left at another state by an earlier combined-mode world would go offline for good.
+does not write the row (an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
+the promoted standby is serving). Instead each worker sends its tick counter, session count and countdown state on the link (a `WorkerStatus` frame), and
+the gateway writes the row of `Gateway:RealmId`: Online while an active worker ticks, Restarting during a restart countdown, Starting until a worker is
+ready, Offline when no active worker has ticked for 60 s, and the summed population; a standby's ticks do not count
+([realm list liveness](../ops/realm-liveness.md) section 7, with the failover behaviour). `Gateway:RealmId` must therefore be the realm's `realmlist` row id.
 
 Worker mode makes character fencing **mandatory** (Tier 3b groundwork): with `Cluster:Worker:Enabled = true` the
 characters write fence is registered whatever `Cluster:Fencing:Enabled` says, and the World refuses to start unless

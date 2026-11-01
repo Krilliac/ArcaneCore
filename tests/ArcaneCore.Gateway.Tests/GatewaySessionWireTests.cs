@@ -183,12 +183,48 @@ public sealed class GatewaySessionWireTests
     }
 
     [Fact]
+    public void WorkerStatus_GoldenAndRoundTrip()
+    {
+        // type 23 (0x17), ticks 0x0102030405060708 (int64), sessions 300 (int32), player limit 100 (int32), flags Restarting | Standby (byte).
+        byte[] golden = Convert.FromHexString("17" + "0807060504030201" + "2C010000" + "64000000" + "03");
+        var report = new WorkerStatusReport(0x0102030405060708, 300, 100, WorkerStatusFlags.Standby | WorkerStatusFlags.Restarting);
+        Assert.Equal(golden, GatewaySessionWire.EncodeWorkerStatus(report));
+        Assert.Equal(1 + GatewaySessionWire.WorkerStatusBodyBytes, golden.Length);
+        WorkerStatusReport decoded = GatewaySessionWire.DecodeWorkerStatus(golden.AsSpan(1));
+        Assert.Equal(report, decoded);
+        Assert.True(decoded.Standby);
+        Assert.True(decoded.Restarting);
+        Assert.False(decoded.ShuttingDown);
+
+        // Negative counters are sent as 0; the decoder refuses what an honest encoder never writes.
+        Assert.Equal(new WorkerStatusReport(0, 0, 0, WorkerStatusFlags.None),
+            GatewaySessionWire.DecodeWorkerStatus(GatewaySessionWire.EncodeWorkerStatus(new WorkerStatusReport(-5, -1, -2, WorkerStatusFlags.None)).AsSpan(1)));
+    }
+
+    [Fact]
+    public void WorkerStatus_DecoderRefusesShortLongNegativeAndUnknownFlagFrames()
+    {
+        byte[] frame = GatewaySessionWire.EncodeWorkerStatus(new WorkerStatusReport(1, 2, 3, WorkerStatusFlags.None));
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeWorkerStatus(frame.AsSpan(1, frame.Length - 2)));
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeWorkerStatus([.. frame.AsSpan(1), (byte)0]));
+        byte[] unknownFlag = [.. frame];
+        unknownFlag[^1] = 0x08;
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeWorkerStatus(unknownFlag.AsSpan(1)));
+        byte[] negativeTicks = [.. frame];
+        negativeTicks[8] = 0x80; // the high byte of the little-endian int64
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeWorkerStatus(negativeTicks.AsSpan(1)));
+        byte[] negativeSessions = [.. frame];
+        negativeSessions[12] = 0x80; // the high byte of the sessions int32
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeWorkerStatus(negativeSessions.AsSpan(1)));
+    }
+
+    [Fact]
     public void GatewayLinkContractVersion_RefusesAVersion1Peer_AndTheV2PeerWithoutLinkAuth()
     {
         var worker = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         var current = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
         var old = current with { ContractVersion = 1 };
-        Assert.Equal(3, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(4, GatewayLinkManifest.ContractVersion);
         Assert.Equal(GatewayLinkManifest.ContractVersion, current.ContractVersion);
         Assert.True(worker.TryAdmit(current, out _));
         Assert.False(worker.TryAdmit(old, out string? reason));

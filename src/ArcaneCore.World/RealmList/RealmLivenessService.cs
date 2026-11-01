@@ -32,7 +32,9 @@ namespace ArcaneCore.World.RealmList;
 /// Threading: the world thread only bumps a counter and, on a countdown, stores one integer; every database call runs on a thread-pool
 /// thread, one at a time (<c>_gate</c>). A failed write is logged and the loop goes on. Off when <see cref="RealmStatusOptions.Id"/> is 0,
 /// when no <see cref="IRealmStatusStore"/> is registered (no auth database), and in gateway worker mode (<c>Cluster:Worker:Enabled</c>), where
-/// an active and a standby world share the realm and the gateway owns the client-facing address.
+/// an active and a standby world share the realm and the gateway owns the client-facing address: there the gateway writes the row
+/// (<c>GatewayRealmLiveness</c>) from the tick counter, session count and countdown state each worker sends on the link
+/// (docs/ops/realm-liveness.md section 7).
 /// </summary>
 public sealed class RealmLivenessService : IHostedService, IDisposable
 {
@@ -343,7 +345,7 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
 
         if (_services.GetService<IOptions<GatewayWorkerOptions>>()?.Value is { Enabled: true })
         {
-            _logger.LogInformation("Gateway worker mode: the realm-list row of realm {RealmId} is not written by this world", _options.Id);
+            _logger.LogInformation("Gateway worker mode: the realm-list row of realm {RealmId} is not written by this world (the gateway writes it from the worker's status reports)", _options.Id);
             return false;
         }
 
