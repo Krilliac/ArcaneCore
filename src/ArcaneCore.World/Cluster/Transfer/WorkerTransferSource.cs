@@ -331,6 +331,10 @@ public sealed class WorkerTransferSource(
 
         probe.CloseInterruptible(player);
 
+        // Queue what logout would queue (skills past their debounce, the current pet, explored zones, rest, spell state, pvp flags) so the
+        // flush after this command makes it durable; the target reloads from the database.
+        world.RaisePlayerTransferPreparing(player);
+
         // Freeze: snapshot, start the settlement save, suppress later snapshots, leave the map; one world-thread command, so no tick runs between.
         CharacterState state = player.CreateSnapshot(world.NowMs);
         Task save = persistence.SaveAndHold(state);

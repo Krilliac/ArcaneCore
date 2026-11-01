@@ -126,6 +126,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += OnPlayerTransferPreparing;
         _logger.LogInformation("Honor enabled: week begins on game day {Day}", WeekBeginDay);
     }
 
@@ -211,6 +212,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             world.MapCreated -= OnMapCreated;
             world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            world.PlayerTransferPreparing -= OnPlayerTransferPreparing;
             foreach (Map map in world.Maps)
             {
                 OnMapUnloading(map);
@@ -236,6 +238,9 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         }
     }
 
+    /// <summary>A cluster transfer's capture: the pvp flags a logout would write, queued before the capture's flush.</summary>
+    private void OnPlayerTransferPreparing(Player player) => _service?.CapturePvpFlags(player);
+
     private void OnPlayerLoggingOut(Player player)
     {
         if (_service is null)
@@ -243,7 +248,11 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             return;
         }
 
-        _service.CapturePvpFlags(player);
+        if (_world is not { IsRetiringTransferredPlayer: true }) // a retire after a committed transfer must not write the honor state
+        {
+            _service.CapturePvpFlags(player);
+        }
+
         _service.Untrack(player);
         int characterId = (int)player.Guid.Low;
         if (_writes is { } writes && writes.HasRetainedFailure(characterId))

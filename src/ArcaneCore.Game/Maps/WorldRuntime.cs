@@ -552,7 +552,8 @@ public sealed partial class WorldRuntime : IDisposable
 
     /// <summary>
     /// Run the logout-side teardown for a player detached by <see cref="DetachPlayerForTransfer"/> whose transfer committed (world thread):
-    /// raises <see cref="PlayerLoggingOut"/> so every feature forgets the guid, and the <c>OnLogout</c> script hook. No snapshot is queued
+    /// raises <see cref="PlayerLoggingOut"/> (with <see cref="IsRetiringTransferredPlayer"/> set, so persisting handlers only forget) so every
+    /// feature forgets the guid, and the <c>OnLogout</c> script hook. No snapshot and no feature write is queued
     /// (the transfer's settlement save is the last write) and the entity is already out of the map and registry. Returns false, doing
     /// nothing, when <paramref name="player"/> is online (it was never detached or has been re-added).
     /// </summary>
@@ -564,9 +565,28 @@ public sealed partial class WorldRuntime : IDisposable
             return false;
         }
 
-        Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        IsRetiringTransferredPlayer = true;
+        try
+        {
+            Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        }
+        finally
+        {
+            IsRetiringTransferredPlayer = false;
+        }
+
         Scripts.Player.OnLogout(player);
         return true;
+    }
+
+    /// <summary>
+    /// Ask every persisting feature to queue the dirty state it would queue on logout (world thread, player still in its map): the capture of a
+    /// cluster transfer calls this before it snapshots the character and flushes. See <see cref="PlayerTransferPreparing"/>.
+    /// </summary>
+    public void RaisePlayerTransferPreparing(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Raise(PlayerTransferPreparing, player, nameof(PlayerTransferPreparing));
     }
 
     /// <summary>
