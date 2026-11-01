@@ -278,6 +278,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     private readonly ILogger _logger;
     private readonly ITransferInstanceAllocator? _instances;
     private readonly Func<PlayerTransferBundle, bool>? _sessionReady;
+    private readonly ITransferOfflineArrival? _offline;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, Slot> _slots = [];
     private readonly Dictionary<ulong, Guid> _byCharacter = [];
@@ -295,7 +296,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ILogger<WorkerTransferTarget>? logger = null,
         Func<uint, ObjectGuid, uint>? allocateInstance = null,
         ITransferInstanceAllocator? instances = null,
-        Func<PlayerTransferBundle, bool>? sessionReady = null)
+        Func<PlayerTransferBundle, bool>? sessionReady = null,
+        ITransferOfflineArrival? offlineArrival = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
@@ -311,6 +313,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         _logger = logger ?? NullLogger<WorkerTransferTarget>.Instance;
         _instances = instances ?? (allocateInstance is null ? null : new DelegateTransferInstanceAllocator(allocateInstance));
         _sessionReady = sessionReady;
+        _offline = offlineArrival;
     }
 
     public WorkerNodeId WorkerId => _workerId;
@@ -633,6 +636,13 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ArgumentNullException.ThrowIfNull(targetOwnershipToken);
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBundle(transferId, bundle);
+        if (_offline is not null && _sessionReady is not null && !SessionReady(bundle))
+        {
+            // The commit is past and the client's session is not here (it closed, or this worker restarted): the player cannot be built, so the character arrives offline.
+            await ActivateOfflineAsync(transferId, bundle, targetOwnershipToken, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         Slot? slot = TryBeginInstall(transferId, bundle, deferUntilSession: false, out Task<Player>? load);
         if (slot is null)
         {
@@ -643,6 +653,96 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         // The command must not lose a race to cancellation once it may have started adding the player.
         await _world.InvokeAsync(() => ActivateOnWorldThread(slot, bundle, targetOwnershipToken, shadow), CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Activation of a committed transfer without the client (design _wf/handoff-control-DESIGN.md section 6): the character's stored position becomes the transfer's target through
+    /// <see cref="ITransferOfflineArrival"/>, written under this worker's token, and the transfer finishes like an activated one (the slot, the shadow and an instance the reservation
+    /// allocated are released). A character that is online here already keeps its live state (nothing is written). A refused or failed write throws and leaves the slot for the retry.
+    /// </summary>
+    private async Task ActivateOfflineAsync(Guid transferId, PlayerTransferBundle bundle, CharacterOwnershipToken token, CancellationToken cancellationToken)
+    {
+        Slot slot;
+        lock (_gate)
+        {
+            if (_activated.Contains(transferId))
+            {
+                return; // a duplicate activate: no-op
+            }
+
+            if (_discarded.Contains(transferId))
+            {
+                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{_workerId}'");
+            }
+
+            if (!_slots.TryGetValue(transferId, out Slot? found))
+            {
+                // The reservation is gone (this worker restarted after the reserve): adopt the transfer from the bundle, as an install does.
+                if (_byCharacter.TryGetValue(bundle.CharacterGuid, out Guid other))
+                {
+                    throw new InvalidOperationException($"character {bundle.CharacterGuid} is reserved by transfer '{other}', not '{transferId}'");
+                }
+
+                found = new Slot(transferId, bundle.CharacterGuid) { InstanceId = bundle.TargetInstanceId };
+                AddSlot(found);
+            }
+            else if (found.CharacterGuid != bundle.CharacterGuid)
+            {
+                throw new InvalidOperationException($"transfer '{transferId}' reserved character {found.CharacterGuid}, the bundle carries {bundle.CharacterGuid}");
+            }
+
+            if (found.Activating)
+            {
+                throw new InvalidOperationException($"transfer '{transferId}' is already activating on worker '{_workerId}'");
+            }
+
+            found.Activating = true; // from here a discard of this transfer is ignored
+            slot = found;
+        }
+
+        try
+        {
+            if (PlayerTokenFor(token) is not { } playerToken)
+            {
+                throw new InvalidOperationException(
+                    $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+            }
+
+            bool online = await _world.InvokeAsync(() => _world.FindOnlinePlayer(new ObjectGuid(bundle.CharacterGuid)) is not null, cancellationToken).ConfigureAwait(false);
+            if (!online)
+            {
+                await _offline!.CompleteAsync(bundle, playerToken, cancellationToken).ConfigureAwait(false);
+            }
+
+            _logger.LogInformation(
+                online
+                    ? "Transfer {TransferId}: character {Character} is online on {Worker} already; the activation without the client writes nothing"
+                    : "Transfer {TransferId}: the client of character {Character} is gone; the character arrived offline on {Worker}",
+                transferId, bundle.CharacterGuid, _workerId);
+        }
+        catch
+        {
+            slot.Activating = false;
+            throw;
+        }
+
+        Task<Player>? loading;
+        lock (_gate)
+        {
+            loading = slot.Loading;
+            RemoveSlot(transferId);
+            _activated.Add(transferId, slot.InstanceId);
+        }
+
+        if (loading is not null)
+        {
+            ReleaseWhenLoaded(loading);
+        }
+
+        if (slot.Allocated)
+        {
+            await ReleaseInstanceAsync(slot.MapId, slot.InstanceId).ConfigureAwait(false);
+        }
     }
 
     private bool ActivateOnWorldThread(Slot slot, PlayerTransferBundle bundle, CharacterOwnershipToken token, Player shadow)
