@@ -929,8 +929,14 @@ public sealed class PlayerbotMountTests
             Assert.Equal(MountFixture.TrainerEntry, trips.TargetEntry);
 
             // No step can be taken (no packet budget): the bot closes no distance, and after the stuck time the only site is set aside.
+            // The stuck test compares the bot's stored position with the best distance seen, so that position is pinned where the walk
+            // started: a step the bot had already begun (a movement block that follows its motion, a tick between the two Updates on the
+            // real clock) must not count as progress and reset the stuck time. Everything here runs inside one world-thread callback.
+            float x = player.X, y = player.Y, z = player.Z;
             session.ManagedBudget = new ManagedActionBudget(0);
+            player.Relocate(x, y, z, player.Orientation, host.World.NowMs);
             trips.Update(player, 500);
+            player.Relocate(x, y, z, player.Orientation, host.World.NowMs);
             Assert.False(trips.Update(player, PlayerbotRidingTrips.StuckMs));
             Assert.Equal(0u, trips.TargetEntry);
 

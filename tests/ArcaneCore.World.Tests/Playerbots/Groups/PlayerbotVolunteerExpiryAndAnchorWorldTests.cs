@@ -68,7 +68,10 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
         var bot = await WaitingBotAsync(world, "Volqbot", Warrior, 1, []);
         await using WorldTestClient player = await world.World.EnterWorldAsync("VOLQ", "Volq", AccountSecurity.Player);
         Assert.Equal(PlayerbotVolunteerOutcome.Noted, (await VolunteerAsync(world, bot.Id, "Volq")).Outcome);
-        await world.RunAsync(PlayerbotGroupCoordinator.VolunteerLifeMs - 20_000); // an invitation lapses on its own: engage the player just before the end
+        // Engage the player as late as the expiry allows, not 20 s ahead: nothing but the coordinator's own pass (which does not know a hand-made
+        // invitation) and the bot's party AI may answer or drop it, so a short window leaves them no time to free the player first.
+        const uint EngageLeadMs = 2_000;
+        await world.RunAsync(PlayerbotGroupCoordinator.VolunteerLifeMs - EngageLeadMs);
         if (engaged != Engaged.Ungrouped)
         {
             await world.OnWorldAsync(() =>
@@ -79,7 +82,17 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
             });
         }
 
-        await world.RunAsync(40_000);
+        // The engaged state must hold on the world thread right before the final run: a failure below is then the expiry's, not a lost engagement.
+        (bool pending, bool grouped, int leftMs) = await world.OnWorldAsync(() =>
+        {
+            ObjectGuid guid = Online(world, "Volq").Guid;
+            return (world.GroupManager.GetInvite(guid) is not null, world.GroupManager.GetGroup(guid) is not null, world.Coordinator.VolunteerRemainingMs(guid));
+        });
+        Assert.True(leftMs > 0, "the volunteer entry ran out before the player was engaged");
+        Assert.Equal(engaged == Engaged.InvitePending, pending);
+        Assert.Equal(engaged == Engaged.Grouped, grouped);
+
+        await world.RunAsync(EngageLeadMs + 3_000);
 
         var queued = await world.OnWorldAsync(() => world.Coordinator.TakeExpiredVolunteers());
         if (engaged == Engaged.Ungrouped) Assert.Equal(bot.Id, Assert.Single(queued).BotId);
