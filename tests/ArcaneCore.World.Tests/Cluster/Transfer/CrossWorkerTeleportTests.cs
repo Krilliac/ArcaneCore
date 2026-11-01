@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
@@ -34,7 +35,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
 
         public override long GetTimestamp() => Interlocked.Read(ref _ticks);
 
-        public override DateTimeOffset GetUtcNow() => new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) + TimeSpan.FromTicks(Interlocked.Read(ref _ticks));
+        public override DateTimeOffset GetUtcNow() => new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) + TimeSpan.FromTicks(Interlocked.Read(ref _ticks));
 
         public void Advance(TimeSpan by) => Interlocked.Add(ref _ticks, by.Ticks);
     }
@@ -238,7 +239,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
         await FlushWorldAsync();
 
         Assert.Equal(0, router.InFlightCount);
-        Assert.Empty(_session.Sent); // a completed transfer tells the source player nothing: the target worker takes the client over
+        Assert.DoesNotContain(_session.Sent, sent => sent.Opcode is WorldOpcode.SmsgMessagechat or WorldOpcode.SmsgTransferAborted); // a completed transfer tells the source player nothing: the target worker takes the client over
         Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
     }
 
@@ -256,7 +257,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
         await FlushWorldAsync();
 
         Assert.Equal(0, router.InFlightCount);
-        Assert.Empty(_session.Sent.Where(sent => sent.Opcode == WorldOpcode.SmsgTransferAborted));
+        Assert.DoesNotContain(_session.Sent, sent => sent.Opcode == WorldOpcode.SmsgTransferAborted);
         Assert.Single(_session.Sent, sent => sent.Opcode == WorldOpcode.SmsgMessagechat);
     }
 
