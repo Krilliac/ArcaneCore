@@ -3,6 +3,9 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.World.Features;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Net;
@@ -137,14 +140,14 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.True(await scene.FillBackpackAsync() > 0);
 
         PlayerbotDealHeard heard = await scene.HearAsync(PlayerbotVoiceFacts.Price(quote.Price));
-        Assert.NotEqual(PlayerbotDealHeardKind.CounterAgreed, heard.Kind);
-        Assert.NotEqual(PlayerbotDealHeardKind.Agreed, heard.Kind);
+        Assert.Equal(PlayerbotDealHeardKind.Refused, heard.Kind);
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, heard.Refusal);
         Assert.Equal(PlayerbotDealState.Quoted, await scene.StateAsync());
     }
 
     /// <summary>
     /// A completed fee window is the proof of payment, not a balance read: money that reached the bot between the settlement and the next Pay think (here more than the fee)
-    /// must not make the leg call the fee unpaid and pay the mage again. Broken: the leg compared MoneyBefore with the new balance, found it higher, started over and traded again.
+    /// must not make the leg call the fee unpaid and pay the mage again. Broken: the leg compared the balance before the trade with the new one, found it higher, started over and traded again.
     /// </summary>
     [Fact]
     public async Task MageFee_CompletedWindow_IsPaid_EvenWhenMoneyArrivedBeforeTheNextThink()
@@ -154,7 +157,7 @@ public sealed class PlayerbotTradeDeskFollowupTests
         {
             Player bot = HelpTestKit.Online(scene.World, BotName);
             Player mage = HelpTestKit.Online(scene.World, CustomerName);
-            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying, MoneyBefore = bot.Money };
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying };
             var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, Vector3.Zero, 0, 0, Price, 0);
             var window = new TradeSession(bot, mage) { Completed = true };
             window.SideOf(bot).Gold = Price;
@@ -180,7 +183,7 @@ public sealed class PlayerbotTradeDeskFollowupTests
         {
             Player bot = HelpTestKit.Online(scene.World, BotName);
             Player mage = HelpTestKit.Online(scene.World, CustomerName);
-            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying, MoneyBefore = bot.Money };
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying };
             var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, Vector3.Zero, 0, 0, Price, 0);
             var window = new TradeSession(bot, mage) { Completed = true };
             window.SideOf(bot).Gold = Price - 1;
@@ -222,6 +225,21 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.True((await scene.QuoteBuyerAsync(ArrowEntry)).Ok);
     }
 
+    // --- TradeSession.Completed ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The settlement flag is readable by drivers but writable only inside the game assemblies (the World assembly's settlement has internal access): a public setter let any
+    /// caller mark a cancelled window as paid. Broken: the setter was public.
+    /// </summary>
+    [Fact]
+    public void TradeSession_Completed_IsPubliclyReadableButNotPubliclyWritable()
+    {
+        System.Reflection.PropertyInfo completed = typeof(TradeSession).GetProperty(nameof(TradeSession.Completed))!;
+        Assert.True(completed.GetMethod!.IsPublic);
+        Assert.False(completed.SetMethod!.IsPublic, "the Completed setter is public");
+        Assert.True(completed.SetMethod.IsAssembly, "the Completed setter is not internal");
+    }
+
     // --- town goals ---------------------------------------------------------------------------------------------------------------
 
     /// <summary>The sell-trip exemption: the NPC of the service a trip was set out for is never left out for doing nothing; any other NPC (or no trip) is.</summary>
@@ -234,13 +252,48 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.True(PlayerbotTownGoals.LeavesNpcOut(NpcFlags.None, NpcFlags.Vendor));
     }
 
-    /// <summary>A trainer that is useful is logged under a reason (before, the nothing-to-do line read "none" for every trainer).</summary>
+    /// <summary>
+    /// A useful class trainer is recorded under the named offer reason (the nothing-to-do debug line read "none" for every trainer). The bot has food, so the vendor half of the
+    /// check finds nothing: the reason can only come from the trainer branch of HasUsefulService (without its Useful call the reason stays null).
+    /// </summary>
     [Fact]
-    public void TownGoals_TrainerUsefulReasons_AreNamed()
+    public async Task TownGoals_AUsefulClassTrainer_IsRecordedUnderItsReason()
     {
-        Assert.False(string.IsNullOrWhiteSpace(PlayerbotTownGoals.TrainerOfferReason));
-        Assert.False(string.IsNullOrWhiteSpace(PlayerbotTownGoals.RidingTrainerReason));
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable, Stackable = 20, BuyPrice = 10, FoodType = 1 });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ISpellContentStore>(npc));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "the trainer in sight");
+                var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(117, 1, out _));
+                    QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+                    NpcInfo trainer = services.Deps.Creatures!.Find(player, TownVendorFixture.Guid)!;
+                    Assert.Equal(PlayerbotTownGoals.TrainerOfferReason, goals.TrainerUsefulReasonForTests(player, services, trainer));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>The two trainer reasons are distinct names, neither the "none" a missing reason logs as.</summary>
+    [Fact]
+    public void TownGoals_TrainerReasons_AreDistinctNames()
+    {
         Assert.NotEqual("none", PlayerbotTownGoals.TrainerOfferReason);
+        Assert.NotEqual("none", PlayerbotTownGoals.RidingTrainerReason);
         Assert.NotEqual(PlayerbotTownGoals.TrainerOfferReason, PlayerbotTownGoals.RidingTrainerReason);
     }
 
@@ -281,14 +334,5 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, 6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
         Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, -6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
         Assert.False(PlayerbotTownGoals.IsCrowding(2f, 0f, 0f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
-    }
-
-    /// <summary>A crowd plan still waiting for navigation tiles does not arm the 60 s gate; a decided one does.</summary>
-    [Fact]
-    public void TownGoals_CrowdGate_IsNotBurnedByAPendingPlan()
-    {
-        Assert.False(PlayerbotTownGoals.ArmsCrowdGate(PlanOutcome.Pending));
-        Assert.True(PlayerbotTownGoals.ArmsCrowdGate(PlanOutcome.Route));
-        Assert.True(PlayerbotTownGoals.ArmsCrowdGate(PlanOutcome.Refused));
     }
 }

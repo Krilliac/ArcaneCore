@@ -1465,10 +1465,20 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
-        => HasUsefulVendorService(player, services, npc, ref needs)
-            || (!Refused(_refusedTrainers, npc.Guid) && (npc.TrainerType == TrainerType.Mounts
-                ? RidingQuote(player, services, npc, 0) is not null && Useful(RidingTrainerReason)
-                : TrainerHasOffer(player, services, npc) && Useful(TrainerOfferReason)));
+        => HasUsefulVendorService(player, services, npc, ref needs) || HasUsefulTrainerService(player, services, npc);
+
+    /// <summary>The trainer half of <see cref="HasUsefulService"/>: records the reason (<see cref="RidingTrainerReason"/> or <see cref="TrainerOfferReason"/>) the trainer is useful under.</summary>
+    private bool HasUsefulTrainerService(Player player, QuestNpcServices services, NpcInfo npc)
+        => !Refused(_refusedTrainers, npc.Guid) && (npc.TrainerType == TrainerType.Mounts
+            ? RidingQuote(player, services, npc, 0) is not null && Useful(RidingTrainerReason)
+            : TrainerHasOffer(player, services, npc) && Useful(TrainerOfferReason));
+
+    /// <summary>Test seam: the reason the trainer half of the usefulness check records for <paramref name="npc"/> (null when the trainer is not useful).</summary>
+    internal string? TrainerUsefulReasonForTests(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        _usefulReason = null;
+        return HasUsefulTrainerService(player, services, npc) ? _usefulReason : null;
+    }
 
     /// <summary>The useful-reason a Mounts trainer's riding training is logged under (the "nothing to do" debug line read "none" for every trainer).</summary>
     internal const string RidingTrainerReason = "riding training";

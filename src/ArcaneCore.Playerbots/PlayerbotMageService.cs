@@ -133,10 +133,7 @@ internal sealed class MageLeg(TravelMeans means, uint spellId, TravelPlace desti
     /// <summary>The bot joined the mage's party for the portal (it leaves it at the end).</summary>
     public bool JoinedGroup { get; set; }
 
-    /// <summary>The money before the fee trade, and when the last trade request went out.</summary>
-    public uint MoneyBefore { get; set; }
-
-    /// <summary>The leg's own fee window (the trade slot claimed for it, with the mage) was seen open: only then does a closed trade with the money down count as the fee paid.</summary>
+    /// <summary>The leg's own fee window (the trade slot claimed for it, with the mage) was seen open: only then can the fee count as paid (by the window's completion).</summary>
     public bool FeeSeen { get; set; }
 
     /// <summary>The fee window seen open (set with <see cref="FeeSeen"/>): once it is gone, the fee is paid only when the server marked it <see cref="TradeSession.Completed"/>.</summary>
@@ -741,7 +738,6 @@ internal static class PlayerbotMageService
             leg.Walk.Reset();
             if (!request.Paid)
             {
-                leg.MoneyBefore = player.Money;
                 Enter(leg, MageLegStage.Paying, now);
                 return Pay(session, player, leg, request, mage, now, out failure);
             }
@@ -757,7 +753,7 @@ internal static class PlayerbotMageService
 
     /// <summary>
     /// The fee by a real trade (EconomyHandlers): CMSG_INITIATE_TRADE to the mage, CMSG_SET_TRADE_GOLD with the fee once the mage opened the
-    /// window, CMSG_ACCEPT_TRADE (again after a scam-prevention bounce); paid when the trade closed and the bot's money fell by the fee.
+    /// window, CMSG_ACCEPT_TRADE (again after a scam-prevention bounce); paid when the fee's own window completed (the server marked the session) with the fee as the bot's gold side.
     /// </summary>
     internal static TravelLegStep Pay(WorldSession session, Player player, MageLeg leg, PortalRequest request, Player mage, uint now, out string? failure)
     {
@@ -778,8 +774,6 @@ internal static class PlayerbotMageService
             leg.FeeTrade = null;
         }
 
-        if (!leg.FeeSeen) leg.MoneyBefore = player.Money; // re-based until the fee's own window has been seen open: another driver's spending is never this fee
-
         // The completed window's own gold side is the proof: a balance read would call a fee unpaid when money arrived between the settlement and this think, and pay the mage twice.
         if (feeCompleted && leg.FeeTrade is { } feeTrade && feeTrade.SideOf(player).Gold == request.FeeCopper)
         {
@@ -792,9 +786,8 @@ internal static class PlayerbotMageService
 
         if (feeCompleted)
         {
-            leg.FeeSeen = false; // completed, yet the money did not fall by the fee: not paid, start over
+            leg.FeeSeen = false; // completed, yet its gold side was not the fee: not paid, start over
             leg.FeeTrade = null;
-            leg.MoneyBefore = player.Money;
         }
 
         if (mine && trade is { Settling: true }) return TravelLegStep.Traveling;
