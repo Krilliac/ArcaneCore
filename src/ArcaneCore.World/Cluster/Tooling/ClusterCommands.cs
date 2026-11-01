@@ -180,7 +180,7 @@ public sealed class ClusterCommands : ICommandGroup
     internal static bool Restart(CommandContext context, string args)
     {
         string worker = args.Trim();
-        if (worker.Length == 0 || worker.Contains(' '))
+        if (worker.Length == 0 || worker.Any(char.IsWhiteSpace))
         {
             return false;
         }
@@ -202,13 +202,16 @@ public sealed class ClusterCommands : ICommandGroup
         AccountSecurity security = context.Security;
         string invoker = context.InvokerName;
         ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        // Host-stopping token, not context.Lifetime: that is the RA connection's lifetime, and a dropped connection after the epoch-takeover commit
+        // would cancel the roll-forward and leave the handoff committed but unfinished.
+        CancellationToken lifetime = services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
         IDisposable hold = context.Defer();
         _ = Task.Run(async () =>
         {
             string reply;
             try
             {
-                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker).ConfigureAwait(false);
+                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker, lifetime).ConfigureAwait(false);
                 reply = result.Message;
             }
             catch (OperationCanceledException)

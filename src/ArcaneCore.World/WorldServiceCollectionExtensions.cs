@@ -64,6 +64,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<AntiCheat.PacketHeuristics.PacketHeuristicsOptions>(configuration.GetSection(AntiCheat.PacketHeuristics.PacketHeuristicsOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         services.Configure<Cluster.Supervision.ClusterSupervisorOptions>(configuration.GetSection(Cluster.Supervision.ClusterSupervisorOptions.SectionName));
+        Cluster.Supervision.ClusterRestartHosting.AddClusterRestart(services, configuration); // .cluster restart: handoff driver + supervisor restart requester (only with Cluster:Supervisor:Processes)
         // Subsystem modules (the playerbot pack's options and services, bot QA): discovered, so the core names none of their types.
         foreach (IWorldServiceModule module in ServiceModules)
         {

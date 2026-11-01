@@ -3,6 +3,9 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Cluster.Transfer;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -78,9 +81,23 @@ public sealed class ClusterRestartOrchestration(
             return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, "No worker was named.", null);
         }
 
-        if (placement is not null && !placement.TryGetWorker(worker, out _))
+        if (worker.Value.Any(char.IsWhiteSpace))
         {
-            return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, $"Unknown worker '{worker}'; nothing was done.", null);
+            return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, "A worker name has no whitespace; nothing was done.", null);
+        }
+
+        if (placement is not null && placement.SnapshotWorkers().Count > 0)
+        {
+            if (!placement.TryGetWorker(worker, out _))
+            {
+                return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, $"Unknown worker '{worker}'; nothing was done.", null);
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Operator restart of {Worker} requested by {By}: no placement table with registered workers is available; the worker name was not checked against the cluster",
+                worker, invokerName);
         }
 
         WorldHandoffRecord record;
@@ -135,5 +152,43 @@ public sealed class ClusterRestartOrchestration(
         return accepted
             ? new ClusterRestartResult(ClusterRestartOutcome.Restarted, $"Worker '{worker}' was handed off (sessions kept) and the supervisor was asked to restart it.", record)
             : new ClusterRestartResult(ClusterRestartOutcome.RestartNotAccepted, $"Worker '{worker}' was handed off (sessions kept) but the supervisor did not accept its restart.", record);
+    }
+}
+
+/// <summary>
+/// Production registration of <see cref="ClusterRestartOrchestration"/> and its two seams. Registered only when <c>Cluster:Supervisor:Processes</c> names at
+/// least one child (a node that belongs to a supervised cluster); elsewhere <c>.cluster restart</c> keeps answering "unavailable". <c>TryAdd</c>: a driver,
+/// requester or orchestration registered earlier (a test, a custom host) wins.
+/// </summary>
+public static class ClusterRestartHosting
+{
+    /// <summary>Registers the handoff driver, the supervisor restart requester and the orchestration. Call once while building the world's services.</summary>
+    public static IServiceCollection AddClusterRestart(this IServiceCollection services, IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        if (!configuration.GetSection(ClusterSupervisorOptions.SectionName + ":Processes").GetChildren().Any())
+        {
+            return services;
+        }
+
+        services.TryAddSingleton<IWorkerHandoffDriver>(sp => new CoordinatorWorkerHandoffDriver(
+            () => sp.GetService<WorldHandoffCoordinator>(),
+            () => sp.GetService<IWorldHandoffSource>()));
+        services.TryAddSingleton<IWorkerRestartRequester>(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ClusterSupervisorOptions>>();
+            return new SupervisorWorkerRestartRequester(
+                sp.GetService<ArcaneCore.World.Ops.Lifecycle.SupervisorProtocolChannel>() ?? ArcaneCore.World.Ops.Lifecycle.SupervisorProtocolChannel.Process,
+                worker => SupervisorWorkerRestartRequester.RealmIdOf(options.Value, worker),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<SupervisorWorkerRestartRequester>());
+        });
+        services.TryAddSingleton(sp => new ClusterRestartOrchestration(
+            sp.GetRequiredService<IWorkerHandoffDriver>(),
+            sp.GetRequiredService<IWorkerRestartRequester>(),
+            sp.GetService<ClusterMapPlacementTable>() ?? sp.GetService<ArcaneCore.World.Cluster.Tooling.ClusterNodeBridgeFeature>()?.Placement,
+            sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterRestartOrchestration>()));
+        return services;
     }
 }
