@@ -17,7 +17,7 @@ namespace ArcaneCore.World.Tests.Cluster;
 /// <summary>
 /// The unified control wire (C3 of _wf/handoff-control-DESIGN.md): frames 28-32 (<see cref="ClusterControlWire"/>), contract 5 and the shared
 /// bundle JSON. Golden bytes pin the layout, every verb round-trips, every malformed shape is refused with <see cref="InvalidDataException"/>
-/// (what closes a gateway link: the link hosts catch it on their receive loops), and a bundle crosses the journal and the wire identically.
+/// (the exception a gateway link host's receive loop turns into a closed link once C4 dispatches these frames; no host calls the decoders yet), and a bundle crosses the journal and the wire identically.
 /// </summary>
 public sealed class ClusterControlWireTests : IAsyncLifetime
 {
@@ -167,6 +167,79 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     {
         byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(4, ControlKind.PlayerTransfer, Op, ControlVerb.Suspend, ControlStatus.Ok, "", new ControlSuspendPayload([0x7B, 0x7D])));
         Assert.Equal(Concat([29], [4, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [22], [1], [0, 0, 0, 0], [2, 0, 0, 0], [0x7B, 0x7D]), frame);
+    }
+
+    [Fact]
+    public void ControlRequest_Suspend_GoldenBytes()
+    {
+        byte[] frame = ClusterControlWire.EncodeRequest(new ControlRequest(6, ControlKind.PlayerTransfer, Op, ControlVerb.Suspend, new ControlSuspendArguments(0x1112131415161718UL, "world-b", 530, 3, Position)));
+        Assert.Equal(
+            Concat(
+                [28], [6, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [22],
+                [0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11], [7, 0, 0, 0], "world-b"u8.ToArray(),
+                [0x12, 0x02, 0, 0], [3, 0, 0, 0],
+                BitConverter.GetBytes(1.5f), BitConverter.GetBytes(-2.5f), BitConverter.GetBytes(3.25f), BitConverter.GetBytes(0.5f)),
+            frame);
+    }
+
+    [Theory]
+    [InlineData(ControlVerb.Discard, 21)]
+    [InlineData(ControlVerb.ResumeSource, 23)]
+    public void ControlRequest_ReasonVerbs_GoldenBytes(ControlVerb verb, byte verbByte)
+    {
+        byte[] frame = ClusterControlWire.EncodeRequest(new ControlRequest(7, ControlKind.PlayerTransfer, Op, verb, new ControlReasonArguments("why")));
+        Assert.Equal(Concat([28], [7, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [verbByte], [3, 0, 0, 0], "why"u8.ToArray()), frame);
+    }
+
+    [Theory]
+    [InlineData(ControlVerb.Activate, 20)]
+    [InlineData(ControlVerb.RetireSource, 24)]
+    public void ControlRequest_TokenVerbs_GoldenBytes(ControlVerb verb, byte verbByte)
+    {
+        byte[] frame = ClusterControlWire.EncodeRequest(new ControlRequest(8, ControlKind.PlayerTransfer, Op, verb, new ControlTokenArguments(Token)));
+        Assert.Equal(
+            Concat([28], [8, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [verbByte], [5, 0, 0, 0], "world"u8.ToArray(), [7, 0, 0, 0, 0, 0, 0, 0], Inc.ToByteArray()),
+            frame);
+    }
+
+    [Fact]
+    public void ControlReply_Describe_GoldenBytes_WithAHeldToken()
+    {
+        var payload = new ControlDescribePayload("world-a", true, Inc, "node-1", "world", [1u, 530u], Token, 2, true);
+        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(10, ControlKind.WorldHandoff, Op, ControlVerb.Describe, ControlStatus.Ok, "", payload));
+        Assert.Equal(
+            Concat(
+                [29], [10, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [1], [1], [0, 0, 0, 0],
+                [7, 0, 0, 0], "world-a"u8.ToArray(), [1], Inc.ToByteArray(),
+                [6, 0, 0, 0], "node-1"u8.ToArray(), [5, 0, 0, 0], "world"u8.ToArray(),
+                [2, 0, 0, 0], [1, 0, 0, 0], [0x12, 0x02, 0, 0],
+                [1], [5, 0, 0, 0], "world"u8.ToArray(), [7, 0, 0, 0, 0, 0, 0, 0], Inc.ToByteArray(),
+                [2, 0, 0, 0], [1]),
+            frame);
+    }
+
+    [Fact]
+    public void ControlReply_Describe_GoldenBytes_WithoutAHeldToken()
+    {
+        var payload = new ControlDescribePayload("world-b", false, Inc, "n", "w", [], null, 0, false);
+        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(11, ControlKind.WorldHandoff, Op, ControlVerb.Describe, ControlStatus.Ok, "", payload));
+        Assert.Equal(
+            Concat(
+                [29], [11, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [1], [1], [0, 0, 0, 0],
+                [7, 0, 0, 0], "world-b"u8.ToArray(), [0], Inc.ToByteArray(),
+                [1, 0, 0, 0], "n"u8.ToArray(), [1, 0, 0, 0], "w"u8.ToArray(),
+                [0, 0, 0, 0], [0],
+                [0, 0, 0, 0], [0]),
+            frame);
+    }
+
+    [Fact]
+    public void ControlReply_TargetDescribe_GoldenBytes()
+    {
+        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(12, ControlKind.PlayerTransfer, Op, ControlVerb.TargetDescribe, ControlStatus.Ok, "", new ControlTargetDescribePayload(Inc, "worker:b", true, 12)));
+        Assert.Equal(
+            Concat([29], [12, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [17], [1], [0, 0, 0, 0], Inc.ToByteArray(), [8, 0, 0, 0], "worker:b"u8.ToArray(), [1], [12, 0, 0, 0]),
+            frame);
     }
 
     [Fact]
