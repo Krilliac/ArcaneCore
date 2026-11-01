@@ -80,6 +80,35 @@ public sealed class GatewayEndToEndTests
     }
 
     [Fact]
+    public async Task Login_RecordsTheLinkLatency_SessionOpens_AndForwardedPackets_PerNode()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        string node = "e2e-metrics-" + Guid.NewGuid().ToString("N")[..8];
+        using var probe = new GatewayMeterProbe();
+        await using Stack stack = await Stack.StartAsync(cts.Token, node);
+        await stack.Server.AddAccountAsync("GATEMETER", "PASSWORD", cts.Token);
+        LogonResult logon = await LogonClient.AuthenticateAsync(stack.Server.RealmEndpoint, "GATEMETER", "PASSWORD", cts.Token);
+
+        Assert.Equal(1, probe.Gauge("arcanecore.gateway.link_state", node));
+        await using WorldClient client = await WorldClient.ConnectAsync(stack.Gateway.ListenEndPoint, cts.Token);
+        Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync("GATEMETER", logon.SessionKey, cts.Token));
+        await WaitUntilAsync(() => Task.FromResult(probe.Gauge("arcanecore.gateway.sessions", node) == 1), cts.Token);
+        Assert.Equal(1, probe.Gauge("arcanecore.gateway.connections", node));
+
+        // One accepted open, timed once, with the worker endpoint as the per-link tag.
+        Assert.Equal(1, probe.Sum("arcanecore.gateway.session_opens", node, result: "accepted"));
+        Assert.Equal(1, probe.Count("arcanecore.gateway.link_latency", node));
+        Assert.True(probe.Sum("arcanecore.gateway.link_latency", node) >= 0);
+
+        // A client packet crosses the link to the worker, and the worker's answer crosses back.
+        await client.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
+        Assert.True(probe.Sum("arcanecore.gateway.forwarded_packets", node, direction: "to_worker") >= 1);
+        Assert.True(probe.Sum("arcanecore.gateway.forwarded_packets", node, direction: "to_client") >= 1);
+        Assert.True(probe.Sum("arcanecore.gateway.forwarded_bytes", node, direction: "to_client") > 0);
+    }
+
+    [Fact]
     public async Task WrongSessionKey_IsRefusedByTheGatewayInPlainText_AndOpensNothingOnTheWorker()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -161,7 +190,7 @@ public sealed class GatewayEndToEndTests
         return payload;
     }
 
-    private static GatewayServer CreateGateway(SyntheticArcaneServer server, int workerPort) => new(
+    private static GatewayServer CreateGateway(SyntheticArcaneServer server, int workerPort, string nodeId = "gateway") => new(
         server.Services.GetRequiredService<IServiceScopeFactory>(),
         Options.Create(new GatewayOptions
         {
@@ -171,6 +200,7 @@ public sealed class GatewayEndToEndTests
             WorkerPort = workerPort,
             LinkSecret = Stack.Secret,
             LinkRetryDelay = TimeSpan.FromMilliseconds(100),
+            NodeId = nodeId,
         }),
         server.Services.GetRequiredService<ILoggerFactory>());
 
@@ -219,7 +249,7 @@ public sealed class GatewayEndToEndTests
 
         public WorldRuntime World => Server.World;
 
-        public static async Task<Stack> StartAsync(CancellationToken token)
+        public static async Task<Stack> StartAsync(CancellationToken token, string nodeId = "gateway")
         {
             SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
             IServiceProvider services = server.Services;
@@ -232,7 +262,7 @@ public sealed class GatewayEndToEndTests
                 services.GetRequiredService<SessionRegistry>(),
                 services.GetRequiredService<ILoggerFactory>());
             await endpoint.StartAsync(token);
-            GatewayServer gateway = CreateGateway(server, endpoint.Host!.BoundEndPoint.Port);
+            GatewayServer gateway = CreateGateway(server, endpoint.Host!.BoundEndPoint.Port, nodeId);
             await gateway.StartAsync(token);
             await gateway.WaitForLinkAsync(token);
             return new Stack { Server = server, Endpoint = endpoint, Gateway = gateway };

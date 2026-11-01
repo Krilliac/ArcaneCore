@@ -65,13 +65,11 @@ internal static class ConfigExceptionTable
     public static readonly IReadOnlySet<string> FrameworkTypes = new HashSet<string>(StringComparer.Ordinal) { "HostOptions" };
 
     /// <summary>
-    /// Source trees of daemons the catalog does not cover, with the reason. Their bindings are not World or Realm keys, so the
+    /// Source trees of daemons the catalog does not cover, with the reason. Their bindings are not World, Realm or Gateway keys, so the
     /// source-binding coverage scan skips them instead of demanding catalog rows that would land in the wrong .conf.dist.
     /// </summary>
     public static readonly IReadOnlyDictionary<string, string> UncataloguedSourceRoots = new Dictionary<string, string>(StringComparer.Ordinal)
     {
-        ["src/ArcaneCore.Gateway/"] = "The Tier 3a gateway daemon reads `Gateway:*` from gateway.json; `ConfigDaemon` has no Gateway value and no gateway.conf.dist exists yet. "
-            + "Its keys are documented in docs/areas/gateway.md.",
         ["tools/ArcaneCore.Atlas/Host/Public/"] = "The Atlas public listener reads `Atlas:Public:*` from atlas.json (bound in `PublicOptions`); it is neither World nor Realm configuration. "
             + "Its keys are documented in docs/areas/atlas-public.md and checked against `PublicOptions` by `PublicDocsTests` in the Atlas tests.",
     };
@@ -101,6 +99,7 @@ internal static class ConfigExceptionTable
         typeof(WorldConfigKeys).Assembly,
         typeof(ArcaneCore.World.Playerbots.PlayerbotOptions).Assembly, // the contracts: the playerbot options (tier 2b, hot-reload-tiers.md 4.6)
         typeof(ArcaneCore.World.Playerbots.ManagedPlayerbotFeature).Assembly, // the Playerbots pack: its own sections (World:Playerbots:Qa)
+        typeof(ArcaneCore.Gateway.GatewayOptions).Assembly, // the Tier 3a gateway daemon: Gateway (ConfigDaemon.Gateway, gateway.conf.dist)
     ];
 
     /// <summary>The names of the classes that carry a section constant, with that constant's value.</summary>

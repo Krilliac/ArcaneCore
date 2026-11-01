@@ -126,6 +126,7 @@ public sealed class GatewayServer : BackgroundService
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;
+        GatewayMeters.Attach(this);
         Guard = new NetGuard(_protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
             _logger, bindAddress: IPAddress.Parse(config.BindAddress));
         _logger.LogInformation("Gateway listening on {Endpoint}; worker link to {Worker}:{Port}", listener.LocalEndpoint, config.WorkerAddress, config.WorkerPort);
@@ -182,8 +183,15 @@ public sealed class GatewayServer : BackgroundService
                 await link.DisposeAsync().ConfigureAwait(false);
             }
 
+            GatewayMeters.Detach(this);
             _logger.LogInformation("Gateway stopped");
         }
+    }
+
+    public override void Dispose()
+    {
+        GatewayMeters.Detach(this);
+        base.Dispose();
     }
 
     private async Task RunConnectionAsync(GatewayClientConnection connection, IDisposable? lease, CancellationToken stoppingToken)
@@ -209,6 +217,7 @@ public sealed class GatewayServer : BackgroundService
         GatewayOptions config = _options.Value;
         TimeSpan delay = config.LinkRetryDelay > TimeSpan.Zero ? config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
+        int linkRegistrations = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             IPEndPoint worker = WorkerEndPoint;
@@ -226,6 +235,8 @@ public sealed class GatewayServer : BackgroundService
                 {
                     return;
                 }
+
+                GatewayMeters.CountLinkFailure(config.NodeId);
 
                 _logger.LogWarning("Worker link to {Worker} not established ({Message}); retrying in {Delay}", worker, ex.Message, nextDelay);
                 try
@@ -246,6 +257,11 @@ public sealed class GatewayServer : BackgroundService
             Volatile.Write(ref _retarget, retarget);
             _linkWorker = worker;
             _link = link;
+            if (linkRegistrations++ > 0)
+            {
+                GatewayMeters.CountLinkReconnect(config.NodeId);
+            }
+
             _logger.LogInformation("Worker link to {Worker} registered", worker);
             Volatile.Read(ref _linkUp).TrySetResult();
             try

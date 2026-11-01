@@ -236,6 +236,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     {
         if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload))
         {
+            GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
             return true;
         }
 
@@ -315,6 +316,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         if (link is null)
         {
             _logger.LogWarning("[{Endpoint}] no worker link; refusing '{Account}' with AUTH_UNAVAILABLE", RemoteEndpoint, request.Account);
+            GatewayMeters.CountSessionOpen(_server.Options.NodeId, "no_link");
             SendAuthResponse(AuthResponseCode.Unavailable);
             return false;
         }
@@ -331,6 +333,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         _state = ConnectionState.Authenticating;
         // The link takes the generation and queues the open under one lock: concurrent logins reach the worker in generation order
         // (it refuses an open not above the last one it saw).
+        long openStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         GatewaySessionOpenReply reply = await link.OpenAsync(
             _server.NextGeneration,
             generation =>
@@ -341,6 +344,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             this,
             token).ConfigureAwait(false);
         _pending = null;
+        GatewayMeters.RecordLinkLatency(_server.Options.NodeId, _server.WorkerEndPoint, System.Diagnostics.Stopwatch.GetElapsedTime(openStarted).TotalMilliseconds);
+        GatewayMeters.CountSessionOpen(_server.Options.NodeId, reply.Accepted ? "accepted" : "refused");
         if (!reply.Accepted)
         {
             _logger.LogInformation("[{Endpoint}] worker refused '{Account}': {Code} ({Reason})", RemoteEndpoint, request.Account, reply.RefusalCode, reply.Reason);
@@ -374,7 +379,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(pending.AddonBlock, _logger, RemoteEndpoint));
     }
 
-    void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
+    void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        GatewayMeters.CountForwarded(_server.Options.NodeId, "to_client", payload.Length);
+        Send(opcode, payload);
+    }
 
     void IGatewaySessionSink.OnClosed(ClusterSessionDetachReason reason)
     {
