@@ -395,6 +395,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                     case GatewayWorkerFrameType.TransferCommit:
                         OnTransferControl(GatewayTransferWire.DecodeControl(type, body.Span));
                         break;
+                    case GatewayWorkerFrameType.ControlReply:
+                        OnControlReply(ClusterControlWire.DecodeReply(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (_sessions.TryGetValue(generation, out ClientSession? closing) && closing.AccountId == accountId
@@ -454,6 +457,28 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     /// must not throw; it answers with <see cref="SendTransferAck"/>. Without a handler the frame is ignored (the worker's coordinator then times out).
     /// </summary>
     public Action<GatewayTransferControl>? TransferControlReceived { get; set; }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlReply"/> frame (the worker's answer to a <see cref="SendControlRequest"/>).
+    /// The handler must not block and must not throw. Without a handler the reply is ignored.
+    /// </summary>
+    public Action<ControlReply>? ControlReplyReceived { get; set; }
+
+    /// <summary>Sends one control request to the worker (contract 5). False when the link is down. The reply arrives on <see cref="ControlReplyReceived"/>.</summary>
+    public bool SendControlRequest(ControlRequest request) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeRequest(request));
+
+    private void OnControlReply(ControlReply reply)
+    {
+        try
+        {
+            ControlReplyReceived?.Invoke(reply);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control reply handler failed", _worker);
+        }
+    }
 
     /// <summary>Answers a transfer control frame to the worker. False when the link is down.</summary>
     public bool SendTransferAck(GatewayTransferAck ack) =>
