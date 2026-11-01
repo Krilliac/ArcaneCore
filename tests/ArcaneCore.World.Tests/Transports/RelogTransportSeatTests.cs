@@ -71,6 +71,29 @@ public sealed class RelogTransportSeatTests
         Assert.Equal((0u, destX, destY, StartZ), (saved.MapId, saved.X, saved.Y, saved.Z));
     }
 
+    [Fact]
+    public async Task LogoutMidShipTeleport_KeepsTheSeat()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services => Register(services));
+        TransportFeature feature = host.WorldServices.GetRequiredService<TransportFeature>();
+        TeleportFeature teleports = host.WorldServices.GetRequiredService<TeleportFeature>();
+        await host.WaitForWorldAsync(() => feature.System is { Ships.Count: 2 }, "two ships sail");
+        (WorldTestClient client, _, int characterId) = await LoginFirstAsync(host, "RELOGSHIPTP", "Shiptelerelog");
+        ShipTransport ferry = await host.OnWorldAsync(() => feature.System!.FindByEntry(Ferry)!);
+        Player player = await host.PlayerAsync("Shiptelerelog");
+        await BoardAsync(host, client, player, ferry, 2f, 1f, 4f);
+
+        bool started = await host.OnWorldAsync(() => teleports.Teleports.TeleportTo(player, 0, StartX + 40f, StartY + 25f, StartZ, 1.5f,
+            TeleportOptions.NotLeaveTransport));
+        Assert.True(started, "the ship's teleport starts");
+        Assert.True(await host.OnWorldAsync(() => teleports.Teleports.IsBeingTeleported(player)), "the teleport is pending (no client ack)");
+
+        await client.DisposeAsync();
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Shiptelerelog") is null, "the session to leave the world");
+        await WorldTestHost.WaitForAsync(() => host.Characters.GetByIdAsync(characterId).Result is { TransportGuid: Ferry },
+            "the logout save of the seat to reach the store");
+    }
+
     private static async Task<(WorldTestClient Client, byte[] Key, int CharacterId)> LoginFirstAsync(WorldTestHost host, string account, string character)
     {
         byte[] key = await host.AddAccountAsync(account, AccountSecurity.Player);

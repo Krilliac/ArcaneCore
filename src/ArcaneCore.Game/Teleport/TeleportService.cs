@@ -593,8 +593,13 @@ public sealed partial class TeleportService
             // vmangos Player::SaveToDB (Player.cpp:16408-16424): while IsBeingTeleported the destination is saved instead of the
             // current position, so the next login lands where the teleport was going. The final snapshot follows this handler
             // (WorldRuntime.RemovePlayer); a location already chosen (a spirit's graveyard) wins.
-            player.LogoutLocation ??= (pending.Destination.MapId, pending.Destination.X, pending.Destination.Y,
-                pending.Destination.Z, pending.Destination.Orientation);
+            // A passenger that stays aboard through the teleport (a ship's map change) keeps its seat instead: the snapshot
+            // drops the seat for a relocated player, and the next login must put it back on the ship.
+            if (player.Transport is null && player.LogoutTransportSeat is null)
+            {
+                player.LogoutLocation ??= (pending.Destination.MapId, pending.Destination.X, pending.Destination.Y,
+                    pending.Destination.Z, pending.Destination.Orientation);
+            }
 
             pending.SourceMap.EndTransit(player);
         }
