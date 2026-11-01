@@ -362,4 +362,98 @@ public sealed class StratholmeBossTests
             Assert.InRange(castTimes.Count(t => t.Spell == PostmasterMalownAI.SpellWailingDead), 1, wailingRolls);
         }
     }
+
+    // --- Evade resets the fight (vmangos ScriptedAI::EnterEvadeMode calls Reset) ----------------
+
+    [Fact]
+    public void Barthilas_Evade_ResetsTimersAndAngerCount()
+    {
+        var caster = new DungeonTestCaster();
+        (DungeonScriptTestKit rig, Creature boss) = Fighting(Barthilas, caster);
+        using (rig)
+        {
+            var ai = new MagistrateBarthilasAI(boss);
+            ai.OnRespawn();
+            ai.OnUpdate(5_000);
+            for (int i = 0; i < 25; i++)
+            {
+                ai.OnUpdate(4_000);
+            }
+
+            int Anger() => caster.Casts.Count(c => c.Spell == MagistrateBarthilasAI.SpellFuriousAnger);
+            Assert.Equal(26u, ai.AngerCount);
+
+            ai.OnEvade();
+            Assert.Equal(0u, ai.AngerCount);
+
+            ai.OnUpdate(4_900);
+            Assert.Equal(26, Anger());
+            ai.OnUpdate(100); // 5 s into the new pull
+            Assert.Equal(27, Anger());
+            Assert.Equal(1u, ai.AngerCount);
+        }
+    }
+
+    [Fact]
+    public void Ramstein_Evade_RestartsTrampleAndKnockoutTimers()
+    {
+        var caster = new DungeonTestCaster();
+        (DungeonScriptTestKit rig, Creature boss) = Fighting(Ramstein, caster);
+        using (rig)
+        {
+            var ai = new RamsteinTheGorgerAI(boss);
+            ai.OnRespawn();
+            ai.OnUpdate(2_000); // timers partly run down
+            ai.OnEvade();
+            int Trample() => caster.Casts.Count(c => c.Spell == RamsteinTheGorgerAI.SpellTrample);
+
+            ai.OnUpdate(2_900);
+            Assert.Equal(0, Trample()); // the first Trample is 3 s after the reset, not 1 s
+            ai.OnUpdate(100);
+            Assert.Equal(1, Trample());
+        }
+    }
+
+    [Fact]
+    public void Malown_Evade_RestartsTimers()
+    {
+        var caster = new DungeonTestCaster();
+        (DungeonScriptTestKit rig, Creature boss) = Fighting(Malown, caster);
+        using (rig)
+        {
+            var ai = new PostmasterMalownAI(boss);
+            ai.OnRespawn();
+            ai.OnUpdate(7_000);
+            ai.OnEvade();
+            int before = caster.Casts.Count;
+
+            // Backhand (45 %) would be rolled at 8 s of the old pull (1 s from now); after the reset no timer is due before 8 s.
+            for (int i = 0; i < 7; i++)
+            {
+                ai.OnUpdate(1_000);
+            }
+
+            Assert.Equal(before, caster.Casts.Count);
+        }
+    }
+
+    [Fact]
+    public void Nerubenkan_Evade_RestartsWebsTimer()
+    {
+        var caster = new WebCaster();
+        (DungeonScriptTestKit rig, Creature boss) = Fighting(Nerubenkan, caster, NerubenkanAI.NpcCryptScarab, NerubenkanAI.NpcUndeadScarab);
+        using (rig)
+        {
+            var ai = new NerubenkanAI(boss);
+            ai.OnRespawn();
+            ai.OnUpdate(6_000);
+            ai.OnEvade();
+            int Webs() => caster.Casts.Count(c => c.Spell == NerubenkanAI.SpellEncasingWebs);
+
+            ai.OnUpdate(6_900);
+            Assert.Equal(0, Webs()); // the first Encasing Webs is 7 s after the reset
+            ai.OnUpdate(100);
+            Assert.Equal(1, Webs());
+        }
+    }
 }

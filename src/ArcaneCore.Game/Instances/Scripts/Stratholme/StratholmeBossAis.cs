@@ -277,7 +277,12 @@ public sealed class RamsteinTheGorgerAI(Creature creature) : ScriptDevBossAI(cre
     public const uint SpellTrample = 5568, SpellKnockout = 17307;
     private uint _trample, _knockout;
 
-    public override void OnRespawn()
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
     {
         _trample = 3_000;
         _knockout = 12_000;
@@ -326,7 +331,12 @@ public sealed class MagistrateBarthilasAI(Creature creature) : ScriptDevBossAI(c
     /// <summary>How many Furious Anger casts he has made this fight.</summary>
     public uint AngerCount => _angerCount;
 
-    public override void OnRespawn()
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
     {
         _draining = 16_000;
         _pummel = 12_000;
@@ -396,7 +406,12 @@ public sealed class NerubenkanAI(Creature creature) : ScriptDevBossAI(creature)
     private Unit? _webbed;
     private float _webbedThreat;
 
-    public override void OnRespawn()
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
     {
         _webs = 7_000;
         _pierce = 15_000;
@@ -492,7 +507,12 @@ public sealed class PostmasterMalownAI(Creature creature) : ScriptDevBossAI(crea
     public const int SayAggro = 6504, SayKilled = 6530; // broadcast_text ids
     private uint _wailing, _backhand, _weakness, _tongues, _grave;
 
-    public override void OnRespawn()
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
     {
         _wailing = 19_000;
         _backhand = 8_000;
