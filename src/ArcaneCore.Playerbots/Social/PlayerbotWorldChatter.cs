@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Bots.Progression;
@@ -22,12 +23,16 @@ internal enum WorldLineKind : byte
 
     /// <summary>"WTB Linen Cloth", "LF Copper Ore": a player wants to buy something.</summary>
     WantToBuy,
+
+    /// <summary>"WTS Linen Cloth x20", "selling copper ore": a player offers goods; a bot that needs them for a recipe opens a buy deal.</summary>
+    WantToSell,
 }
 
 /// <summary>
 /// World channel answers (<see cref="PlayerbotConversationOptions.WorldReactions"/>): a real player's LFM line for a dungeon that fits a
 /// free bot (no group, not driven by a master or the group coordinator, the asked role when one is named) gets a whispered "inv" or
-/// "lvl 24 priest here, inv?"; a WTB line naming goods a bot carries spare gets a whispered offer priced from the goods' vendor value.
+/// "lvl 24 priest here, inv?"; a WTB line naming goods a bot carries spare (beyond what its wanted recipes need) gets a whispered offer priced from the price book; a WTS line naming a reagent
+/// a bot's wanted recipe lacks gets a whispered bid, backed by a quoted buyer deal of the trade desk (<see cref="PlayerbotTradeDesk"/>).
 /// The bots' own LFG / WTS posts are the bot voice's (<see cref="PlayerbotNeedsVoice"/>). Heard lines are queued (at most
 /// <see cref="PlayerbotConversationOptions.MaxHeardQueue"/>, the first bot hearing each) and read on the social pass; at most
 /// <see cref="PlayerbotConversationOptions.ReactionsPerLine"/> bots answer one line, at most
@@ -106,6 +111,7 @@ internal sealed partial class PlayerbotWorldChatter
         if (string.IsNullOrWhiteSpace(text)) return WorldLineKind.None;
         if (Lfm().IsMatch(text)) return WorldLineKind.LookingForMore;
         if (Wtb().IsMatch(text)) return WorldLineKind.WantToBuy;
+        if (Wts().IsMatch(text)) return WorldLineKind.WantToSell;
         return WorldLineKind.None;
     }
 
@@ -217,7 +223,7 @@ internal sealed partial class PlayerbotWorldChatter
         WorldLineKind kind = Read(line.Text);
         if (kind == WorldLineKind.None) return;
         BotChatRole? role = kind == WorldLineKind.LookingForMore ? AskedRole(line.Text) : null;
-        string? normalizedWtb = kind == WorldLineKind.WantToBuy ? Normalize(line.Text) : null;
+        string? normalizedWtb = kind is WorldLineKind.WantToBuy or WorldLineKind.WantToSell ? Normalize(line.Text) : null;
 
         // A bounded look at the bots in that channel, from a random start.
         IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
@@ -233,6 +239,7 @@ internal sealed partial class PlayerbotWorldChatter
             {
                 WorldLineKind.LookingForMore => LfmAnswer(pass, bot, line, role),
                 WorldLineKind.WantToBuy => WtbAnswer(pass, bot, line, normalizedWtb!),
+                WorldLineKind.WantToSell => WtsAnswer(pass, bot, line, normalizedWtb!),
                 _ => null,
             };
             if (speech is null || chat.TrySpeak(bot.Id, player.Guid, speech) != BotSpeechAdmission.Queued) continue;
@@ -262,7 +269,16 @@ internal sealed partial class PlayerbotWorldChatter
     private static BotSpeech? WtbAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line, string normalizedText)
     {
         PlayerbotPersonaFacts.Bags bags = PlayerbotPersonaFacts.ReadBags(bot.Player, spells: null);
-        if (WantedNormalized(normalizedText, bags.Surplus) is not { } item) return null;
+        IReadOnlyList<BotChatItem> spare = bags.Surplus;
+        // Reagents the bot's wanted recipes call for are kept back: only what is held above one craft's need is offered.
+        if (spare.Count > 0 && bot.Session.Services.GetService<SpellFeature>() is { } feature)
+        {
+            var supply = new PlayerbotVendorSupplyNeeds();
+            supply.Refresh(bot.Player, feature.System.Store, feature.Spellbook);
+            spare = PlayerbotTradeGifts.WithoutReserved(spare, supply.Reagents);
+        }
+
+        if (WantedNormalized(normalizedText, spare) is not { } item) return null;
         CultureInfo c = CultureInfo.InvariantCulture;
         return Answer(pass, bot, line, "react.wtb", new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -271,6 +287,35 @@ internal sealed partial class PlayerbotWorldChatter
             ["price"] = pass.Services.GetService<ManagedPlayerbotFeature>()?.DealPrices is { } prices
                 ? Price(item, prices, bot.Player.Inventory.Templates.Find(item.Entry))
                 : Price(item),
+        });
+    }
+
+    /// <summary>
+    /// A player's WTS line naming a reagent a wanted recipe of the bot lacks (<see cref="PlayerbotVendorSupplyNeeds.Shortfalls"/>, a tradeable item): the trade desk quotes
+    /// the bot as buyer for the missing count (<see cref="PlayerbotTradeDesk.Quote"/>: price book bid, money, bag space and every limit checked) and the bot whispers that
+    /// price. The sender then agrees ("ok", a counter-offer) in a whisper and the desk's normal buyer flow takes over. Null when the bot needs nothing the line names,
+    /// the desk is off or refuses, or the bot has no spellbook.
+    /// </summary>
+    private static BotSpeech? WtsAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line, string normalizedText)
+    {
+        if (bot.Session.Services.GetService<SpellFeature>() is not { } feature || pass.Services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is not { Enabled: true } desk) return null;
+        Player player = bot.Player;
+        var supply = new PlayerbotVendorSupplyNeeds();
+        supply.Refresh(player, feature.System.Store, feature.Spellbook);
+        var needed = new List<BotChatItem>(8);
+        foreach ((uint itemId, uint missing) in supply.Shortfalls(player, 8))
+            if (player.Inventory.Templates.Find(itemId) is { Name.Length: > 0 } template && PlayerbotVoiceFacts.Tradeable(template))
+                needed.Add(new BotChatItem(itemId, template.Name, (int)Math.Min(missing, int.MaxValue), template.Quality, template.SellPrice));
+        if (PlayerbotTradeGifts.NeededFromLine(normalizedText, needed) is not { } item) return null;
+        if (pass.World.FindOnlinePlayer(line.SenderGuid) is not { } seller) return null;
+        PlayerbotDealQuote quote = desk.Quote(bot.Id, player, seller, PlayerbotDealRole.Buyer, item.Entry, (uint)item.Count);
+        if (!quote.Ok) return null;
+        CultureInfo c = CultureInfo.InvariantCulture;
+        return Answer(pass, bot, line, "react.wts", new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["item"] = item.Name,
+            ["count"] = item.Count.ToString(c),
+            ["price"] = quote.PriceText,
         });
     }
 
@@ -289,6 +334,9 @@ internal sealed partial class PlayerbotWorldChatter
 
     [GeneratedRegex(@"\b(wtb|buying)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Wtb();
+
+    [GeneratedRegex(@"\b(wts|selling)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex Wts();
 
     [GeneratedRegex(@"\b(tank|tanks|mt)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex Tank();

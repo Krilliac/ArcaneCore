@@ -97,6 +97,9 @@ internal enum PlayerbotDealStepKind : byte
 
     /// <summary>CMSG_CANCEL_TRADE.</summary>
     Cancel,
+
+    /// <summary>CMSG_SPLIT_ITEM: <see cref="PlayerbotDealStep.Amount"/> units of the stack at (<see cref="PlayerbotDealStep.Bag"/>, <see cref="PlayerbotDealStep.Slot"/>) into the empty slot (<see cref="PlayerbotDealStep.DstBag"/>, <see cref="PlayerbotDealStep.DstSlot"/>).</summary>
+    Split,
 }
 
 /// <summary>One step of <see cref="PlayerbotTradeDesk.Drive"/>.</summary>
@@ -108,7 +111,10 @@ internal readonly record struct PlayerbotDealStep(
     byte Slot = 0,
     uint Gold = 0,
     string? SayKey = null,
-    string? PartnerName = null);
+    string? PartnerName = null,
+    byte DstBag = 0,
+    byte DstSlot = 0,
+    byte Amount = 0);
 
 /// <summary>How a desk window ended (<see cref="PlayerbotTradeDesk.WindowClosed"/>); <see cref="PlayerbotDealOutcome.Entry"/> and <see cref="PlayerbotDealOutcome.Role"/> name the deal's goods, to spend the bot's board post.</summary>
 internal enum PlayerbotDealOutcomeKind : byte
@@ -142,7 +148,7 @@ internal readonly record struct PlayerbotDealOutcome(PlayerbotDealOutcomeKind Ki
 /// the partner side differs from what it accepted. A second such change cancels the deal and counts as a scam attempt.
 /// </para>
 /// <para>
-/// Limits (documented in the area doc): the desk never splits a stack (a seller whose stacks cannot sum exactly to the count cancels), and the hourly trade counts
+/// Limits (documented in the area doc): a seller whose stacks cannot sum exactly to the count splits the shortfall off a larger stack first (<see cref="PlayerbotTradeGifts.PlanSplit"/>), and the hourly trade counts
 /// and daily outflow counters live in memory only (they reset on a restart). Prices come from <see cref="IPlayerbotDealPriceSource"/> (the reference price until the
 /// price book lands). Options are read live on every call; the desk caches none. The desk owns its clock (a Unix-millisecond function, the same base as the chat
 /// service's clock): callers never pass a time. World thread; every public member also takes one lock, so a test may read it from anywhere.
@@ -168,6 +174,12 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
 
     /// <summary>Quoted deals one bot keeps (the oldest is dropped for a new one).</summary>
     internal const int MaxQuotedPerBot = 4;
+
+    /// <summary>The splits one seller deal may ask for (a split the server refused is retried, then the deal fails without blame).</summary>
+    internal const int MaxSplits = 3;
+
+    /// <summary>The least gap between two splits of one deal (the first one's packet must have been processed).</summary>
+    internal const long SplitGapMs = 1000;
 
     /// <summary>Deals the desk holds at all.</summary>
     internal const int MaxDeals = 1024;
@@ -604,7 +616,22 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         if (deal.Role == PlayerbotDealRole.Seller)
         {
             List<Item>? plan = PlanStacks(bot, deal.Entry, deal.Count);
-            if (plan is null) return FailDeal(deal, cancel: true, say: true, blame: false, now); // the bot cannot make the count: no blame on the partner
+            if (plan is null)
+            {
+                // The stacks cannot sum to the count: split the shortfall off a larger stack (only while the bot has put nothing in), else the bot cannot make the count: no blame on the partner.
+                if (botGoods.Count == 0 && mine.Gold == 0 && deal.Splits < MaxSplits)
+                {
+                    if (deal.LastSplitMs != 0 && now - deal.LastSplitMs < SplitGapMs) return default;
+                    if (PlayerbotTradeGifts.PlanSplit(bot, deal.Entry, deal.Count) is { } split)
+                    {
+                        deal.Splits++;
+                        deal.LastSplitMs = now;
+                        return new PlayerbotDealStep(PlayerbotDealStepKind.Split, deal.Partner, Bag: split.SrcBag, Slot: split.SrcSlot, DstBag: split.DstBag, DstSlot: split.DstSlot, Amount: split.Amount);
+                    }
+                }
+
+                return FailDeal(deal, cancel: true, say: true, blame: false, now);
+            }
             if (mine.Gold > 0)
             {
                 deal.LastPutMs = now;
@@ -670,8 +697,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     }
 
     /// <summary>
-    /// The stacks a seller puts in: one stack of exactly <paramref name="count"/>, else the largest stacks first (a stack larger than what remains is skipped; the desk
-    /// never splits one) within the six traded slots; null when the count cannot be made exactly. Only tradeable bag items count (not soulbound, equipped or banked).
+    /// The stacks a seller puts in: one stack of exactly <paramref name="count"/>, else the largest stacks first (a stack larger than what remains is skipped; the plan
+    /// never splits one; <see cref="PlayerbotTradeGifts.PlanSplit"/> asks the split) within the six traded slots; null when the count cannot be made exactly. Only tradeable bag items count (not soulbound, equipped or banked).
     /// </summary>
     internal static List<Item>? PlanStacks(Player bot, uint entry, uint count)
     {
@@ -950,6 +977,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         public long LastAcceptMs;
         public long GoneSinceMs;
         public int Resets;
+        public int Splits;
+        public long LastSplitMs;
     }
 
     /// <summary>Counts events per key inside a sliding hour (bounded: trimmed past <see cref="MapCap"/> keys).</summary>

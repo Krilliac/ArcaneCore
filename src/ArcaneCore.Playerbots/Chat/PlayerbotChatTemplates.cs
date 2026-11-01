@@ -143,6 +143,7 @@ internal static class PlayerbotChatTemplates
         // --- whispers to a real player's world channel line -------------------------------------------------------------------
         ["react.lfm"] = ["inv", "inv pls", "{level} {class} here, inv?", "can {role} if you still need, inv", "id come, {level} {class}", "{role} here, inv for {dungeon}?"],
         ["react.wtb"] = ["got {surplus} x{surpluscount}, want it?", "i have {surplus}, {price} each?", "have {surplus} x{surpluscount}, cod or meet?", "got some {surplus}, still need?"],
+        ["react.wts"] = ["i'll take {item} x{count}, {price}?", "need {item}, {price} for {count}?", "buying {item} x{count}, {price} ok?", "{price} for {count} {item}?"],
 
         // --- bot-to-bot conversations (PlayerbotConversations): {player} is the other bot -------------------------------------
         ["convo.need.ask"] = ["anyone got {wanted}? all out", "{player}, u got any {wanted}?", "out of {wanted} again lol", "need {wanted}, anyone?"],

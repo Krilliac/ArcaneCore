@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// The keys are live (a change applies without a restart). The trade desk (<c>PlayerbotTradeDesk</c>) reads <see cref="Enabled"/>, <see cref="LowTrustPermille"/>,
 /// <see cref="TradeTimeoutSeconds"/> and every key of <see cref="Deals"/> (the price book keys through the price book the desk, the WTS posts and the whisper quotes share) and <see cref="Limits"/>;
 /// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/> are read by the trade ledger. The gift keys (<see cref="AnswerTrades"/>, <see cref="AcceptGifts"/>, <see cref="GiftMinValueCopper"/>,
-/// <see cref="MaxGiftsReceivedPerHour"/>, <see cref="Gifts"/>) are read by later P4 steps and nothing yet. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
+/// <see cref="MaxGiftsReceivedPerHour"/>) are read by the party AI through <c>PlayerbotTradeGifts</c>; <see cref="Gifts"/> is read by nothing yet. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
 /// also needs <c>World:Playerbots:Chat:Enabled</c> and the bot voice. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
 /// </summary>
 public sealed class PlayerbotSocialTradingOptions
@@ -13,10 +13,10 @@ public sealed class PlayerbotSocialTradingOptions
     /// <summary>Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default).</summary>
+    /// <summary>Answer trade requests (on by default): a trusted partner (master, groupmate, an allowed trader) gets a gift window, anyone else a busy answer. Off: no request is answered.</summary>
     public bool AnswerTrades { get; set; } = true;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Accept gift windows (an empty bot side) from partners the rules allow (on by default).</summary>
+    /// <summary>Accept gift windows (an empty bot side) from partners the rules allow (on by default). Off: a gift window with items is cancelled.</summary>
     public bool AcceptGifts { get; set; } = true;
 
     /// <summary>The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45).</summary>
@@ -31,10 +31,10 @@ public sealed class PlayerbotSocialTradingOptions
     /// <summary>The trust (permille) below which a partner's deals are capped at a quarter of the deal maximum (0..1000, default 350).</summary>
     public int LowTrustPermille { get; set; } = 350;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100).</summary>
+    /// <summary>The vendor value in copper below which a received gift earns no affinity (0..1000000, default 100).</summary>
     public int GiftMinValueCopper { get; set; } = 100;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The gifts one bot accepts from one partner in an hour (0..120, default 10).</summary>
+    /// <summary>The gifts one bot accepts from one partner in an hour (0..120, default 10; 0 accepts none). The count is kept in memory and resets with the bot's session.</summary>
     public int MaxGiftsReceivedPerHour { get; set; } = 10;
 
     /// <summary>Fixed-price deals (<c>World:Playerbots:Social:Trading:Deals</c>).</summary>

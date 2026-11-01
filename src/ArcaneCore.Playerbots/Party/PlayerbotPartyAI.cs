@@ -99,11 +99,15 @@ internal sealed class PlayerbotPartyAI
     /// <summary>The world's trade desk, which drives the bot's deal windows (set by the feature; null in a host or a test without it).</summary>
     internal BotSocial.PlayerbotTradeDesk? TradeDesk { get; set; }
 
+    /// <summary>The bot's gift rules (<c>Social:Trading:AnswerTrades</c>, <c>AcceptGifts</c>, <c>GiftMinValueCopper</c>, <c>MaxGiftsReceivedPerHour</c>); a test may replace it to drive the clock.</summary>
+    internal BotSocial.PlayerbotTradeGifts Gifts { get; set; }
+
     /// <summary>Who owns the bot's one trade slot (the feature's registry), or null in a host without the playerbot feature: each driver is then the sole owner.</summary>
     private BotSocial.PlayerbotTradeOwners? Owners => BotSocial.PlayerbotTradeOwners.Of(_session);
 
     /// <summary>Who the bot is trading with, from the begin-trade packet or the bot's own request; empty when no trade is open.</summary>
     private ObjectGuid _tradePartner;
+    private bool _tradeGift; // the window with _tradePartner is a gift (partner items, none from the bot): completion counts toward MaxGiftsReceivedPerHour
     private bool _tradeCounts; // the window with _tradePartner is worth a TradeCompleted note (set on the partner's accept, read on completion)
     private readonly PlayerbotCombatSpells _combatSpells;
     private readonly PlayerbotKite _kite;
@@ -176,6 +180,7 @@ internal sealed class PlayerbotPartyAI
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        Gifts = new BotSocial.PlayerbotTradeGifts(options, static () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _combatSpells = new PlayerbotCombatSpells(session);
         _kite = new PlayerbotKite(session, options, _combatSpells);
         _equipment = equipment ?? new PlayerbotEquipment(session);
@@ -751,7 +756,7 @@ internal sealed class PlayerbotPartyAI
                     if (Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(speaker.Guid.Value), budgeted: false))
                     {
                         _tradePartner = speaker.Guid; // only a window this bot really asked for
-                        _tradeCounts = false;
+                        _tradeCounts = false; _tradeGift = false;
                         owners?.Of(player, LiveTrade(player)); // bind the claim to the window this initiate just opened, so it can never adopt a later one
                     }
                     else owners?.Release(player, BotSocial.PlayerbotTradeOwner.Gift);
@@ -1042,10 +1047,19 @@ internal sealed class PlayerbotPartyAI
                 ObjectGuid master = ResolveMaster(player);
                 bool trusted = trader == _master || trader == master
                     || Services.Social?.Groups.AreInSameGroup(player.Guid, trader) == true;
-                if (!trusted) return; // a stranger's request is not answered here, and never takes over the partner an open window is credited to
+                // AnswerTrades off: nothing is answered. A stranger's request is declined as busy and never takes over the partner an open window is credited to.
+                switch (Gifts.Answer(trusted))
+                {
+                    case BotSocial.PlayerbotTradeAnswer.Ignore:
+                        return;
+                    case BotSocial.PlayerbotTradeAnswer.Busy:
+                        Act(WorldOpcode.CmsgBusyTrade, [], budgeted: false);
+                        return;
+                }
+
                 if (owners?.TryClaim(player, BotSocial.PlayerbotTradeOwner.Gift, trader, LiveTrade(player)) == false) return; // another driver owns the slot
                 _tradePartner = trader;
-                _tradeCounts = false;
+                _tradeCounts = false; _tradeGift = false;
                 if (!Act(WorldOpcode.CmsgBeginTrade, [], budgeted: false)) owners?.Release(player, BotSocial.PlayerbotTradeOwner.Gift);
                 else owners?.Of(player, LiveTrade(player));
                 break;
@@ -1064,10 +1078,11 @@ internal sealed class PlayerbotPartyAI
                 // Decide desk ownership before the window is closed out: a desk sale is not a paid tip, so gratitude never sees it.
                 BotSocial.PlayerbotDealOutcome deskOutcome = TradeDesk?.WindowClosed(_botId, completed: true) ?? default;
                 if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.None) Social?.NoteTradeDone(_botId);
+                if (!_tradePartner.IsEmpty && _tradeGift) Gifts.NoteReceived(_tradePartner.Value);
                 if (!_tradePartner.IsEmpty && _tradeCounts) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
-                _tradeCounts = false;
+                _tradeCounts = false; _tradeGift = false;
                 Owners?.ReleaseClosed(player, LiveTrade(player));
                 if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.Settled) SpendPost(deskOutcome);
                 break;
@@ -1079,12 +1094,12 @@ internal sealed class PlayerbotPartyAI
                 if (LiveTrade(player) is { } newer)
                 {
                     BotSocial.PlayerbotTradeClaim own = Owners?.Of(player, newer) ?? default; // no registry (the playerbot feature is absent): default, so the partner is forgotten
-                    if (!(own.Owner == BotSocial.PlayerbotTradeOwner.Gift && ReferenceEquals(own.Session, newer) && own.Partner == _tradePartner)) { _tradePartner = ObjectGuid.Empty; _tradeCounts = false; }
+                    if (!(own.Owner == BotSocial.PlayerbotTradeOwner.Gift && ReferenceEquals(own.Session, newer) && own.Partner == _tradePartner)) { _tradePartner = ObjectGuid.Empty; _tradeCounts = false; _tradeGift = false; }
                     break;
                 }
 
                 _tradePartner = ObjectGuid.Empty;
-                _tradeCounts = false;
+                _tradeCounts = false; _tradeGift = false;
                 // CLOSE_WINDOW (12) carries an inventory error and a flag that it is the partner's bags: an error without the flag is the bot's own full bags.
                 bool ownBags = status == 12 && payload.Length >= 9 && BitConverter.ToUInt32(payload, 4) != 0 && payload[8] == 0;
                 TradeDesk?.WindowClosed(_botId, completed: false, botCaused: ownBags);
@@ -1125,6 +1140,9 @@ internal sealed class PlayerbotPartyAI
             case BotSocial.PlayerbotDealStepKind.Cancel:
                 Act(WorldOpcode.CmsgCancelTrade, [], budgeted: false);
                 break;
+            case BotSocial.PlayerbotDealStepKind.Split:
+                Act(WorldOpcode.CmsgSplitItem, [step.Bag, step.Slot, step.DstBag, step.DstSlot, step.Amount], budgeted: false);
+                break;
         }
 
         if (step.SayKey is { } key && step.PartnerName is { Length: > 0 } name && !step.Partner.IsEmpty) SayDeal(player, key, step.Partner, name);
@@ -1146,16 +1164,10 @@ internal sealed class PlayerbotPartyAI
     }
 
     /// <summary>
-    /// The vendor value (copper, summed over the stack) from which a gift counts as a trade for the bot's memory. P4 S1 turns it into
-    /// <c>GiftMinValueCopper</c>; until then it is that option's default.
-    /// </summary>
-    private const long GiftMinValueCopper = 100;
-
-    /// <summary>
     /// The partner accepted (status 4). The bot accepts only a window it opened or answered for <see cref="_tradePartner"/> (trusted, or the
     /// bot-initiated "trade me" partner) in which its own side is empty, read from the live window in this same world-thread step, so a
     /// partner cannot talk it into giving something it did not check. Notes whether the window counts as a trade for the memory (it received
-    /// at least <see cref="GiftMinValueCopper"/> of item vendor value, or the bot gave something). Gold the partner puts in is not counted
+    /// at least <c>Social:Trading:GiftMinValueCopper</c> of item vendor value, or the bot gave something). Gold the partner puts in is not counted
     /// (the design's "vendor value"). A window the partner has since changed (its accept cleared) is left alone.
     /// </summary>
     private void AnswerPartnerAccept(Player player)
@@ -1167,10 +1179,26 @@ internal sealed class PlayerbotPartyAI
         bool gave = mine.Gold != 0;
         foreach (ObjectGuid _ in mine.TradedItems) { gave = true; break; }
         long received = 0;
+        bool theirItems = false;
         foreach (ObjectGuid guid in theirs.TradedItems)
+        {
+            theirItems = true;
             if (theirs.Player.Inventory.GetItemByGuid(guid) is { } item) received += (long)item.Template.SellPrice * item.Count;
-        _tradeCounts = gave || received >= GiftMinValueCopper;
-        if (!gave) Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
+        }
+
+        _tradeCounts = Gifts.Counts(gave, received);
+        _tradeGift = !gave && theirItems;
+        if (gave) return;
+        // A gift of items is taken only while AcceptGifts is on and the partner is under MaxGiftsReceivedPerHour; otherwise the window is cancelled (gold alone is always taken).
+        if (theirItems && Gifts.Judge(_tradePartner.Value) != BotSocial.PlayerbotGiftVerdict.Accept)
+        {
+            _tradeGift = false;
+            _tradeCounts = false;
+            Act(WorldOpcode.CmsgCancelTrade, [], budgeted: false);
+            return;
+        }
+
+        Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
     }
 
     private void Execute(Player player, Player master, PlayerbotPartyCommand command, bool acknowledge = true)
