@@ -11,7 +11,7 @@ public sealed partial class MapCombat
     /// priest <paramref name="attacker"/> under <see cref="SpellSystem.SpiritOfRedemptionSpell"/> deals nothing ("Pas de degats sous esprit
     /// de redemption"). The whole <paramref name="damage"/> is then added to <paramref name="absorb"/>, so the log shows it absorbed, and
     /// <paramref name="damage"/> becomes 0. The aura is asked of <see cref="SpellMitigation"/>: without a spell system it never applies.
-    /// Environmental damage calls this (Player::EnvironmentalDamage, Player.cpp:756, where the player is both sides).
+    /// Environmental damage calls this (Player::EnvironmentalDamage, Player.cpp:756, where the player is both sides) and so does a periodic damage tick (Aura::PeriodicTick, SpellAuras.cpp:5900), with the amount left after absorb added to the absorb.
     /// </summary>
     public void DealDamageMods(Unit attacker, Unit victim, ref uint damage, ref uint absorb)
     {

@@ -1188,6 +1188,14 @@ public sealed partial class SpellSystem
         uint original = amount + resisted;
         uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell, periodic: true);
         amount -= absorbed;
+        // vmangos Aura::PeriodicTick runs pCaster->DealDamageMods(target, pdamage, &absorb) after the absorb step and before the procs and the log
+        // (SpellAuras.cpp:5900, :5975): a dead, taxi-flying or evading victim, or a priest caster under Spirit of Redemption, takes nothing and the
+        // log shows the whole tick absorbed. Only with a live caster: a tick whose caster is gone has no pCaster to run it.
+        if (resolvedCaster is not null && target.Map?.FindUpdater<Combat.MapCombat>() is { } mapCombat)
+        {
+            mapCombat.DealDamageMods(caster, target, ref amount, ref absorbed);
+        }
+
         if (ResolveAuraCaster(holder) is { } procCaster)
         {
             FirePeriodicDamageProcs(procCaster, target, holder.Spell, amount, original); // SpellAuras.cpp:5902-5917, before the damage
