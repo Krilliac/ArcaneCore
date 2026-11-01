@@ -49,6 +49,8 @@ public static class WorkerTransferHosting
         }
 
         services.TryAddSingleton(sp => Build(sp, handoffOn, transfersOn));
+        // C11 (section 3.5): resumes or retires what a dead gateway left this worker holding. The container disposes it; the endpoint installs it as the link host's control handler.
+        services.TryAddSingleton(WorkerSelfHealService.Resolve);
         return services;
     }
 

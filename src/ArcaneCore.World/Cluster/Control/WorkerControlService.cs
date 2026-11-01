@@ -97,6 +97,12 @@ public sealed class WorkerControlService(
     /// <summary>Whether the worker's transfer key is on.</summary>
     public bool TransfersEnabled => transfersEnabled;
 
+    /// <summary>The handoff journal and participants this service runs against (null: none); read by <see cref="WorkerSelfHealService"/>.</summary>
+    public WorkerControlHandoff? Handoff => handoff;
+
+    /// <summary>The transfer journal and participants this service runs against (null: none); read by <see cref="WorkerSelfHealService"/>.</summary>
+    public WorkerControlTransfer? Transfers => transfers;
+
     /// <summary>How many repeats of a single-shot verb joined an identical request that was still running or already answered (instead of calling the participant again). A test seam and a diagnostic.</summary>
     public int JoinedRepeats => Volatile.Read(ref _joinedRepeats);
 
