@@ -528,20 +528,26 @@ public sealed class ManagedPlayerbotLifecycleTests
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
-        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultback", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the quarantine", 20);
+        // Game time, not wall time: the backoff and the checkpoints that act on it run on the manual world clock.
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Faulted, null, "the quarantine");
         Assert.StartsWith("quarantined (fault 1/3): action: fixture-action-fault", (await owners.FindAsync(id))!.ErrorCode);
 
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Running, "the retry", 30);
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Running, null, "the retry");
 
         ManagedPlayerbot record = (await owners.FindAsync(id))!;
         Assert.True(record.DesiredEnabled);
         Assert.Null(record.ErrorCode);
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Faultback") is not null, "the bot is back in the world");
+        for (int tick = 0; tick < 2_000 && !await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultback") is not null); tick++)
+        {
+            await host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.NotNull(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultback")));
         Assert.False(feature.IsScripted(id)); // the scenario controller that faulted is gone; the brain runs it
     }
 
@@ -551,18 +557,24 @@ public sealed class ManagedPlayerbotLifecycleTests
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
-        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 1; });
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 1; });
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultout", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
 
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault", 20);
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Faulted, null, "the fault");
         ManagedPlayerbot record = (await owners.FindAsync(id))!;
         Assert.False(record.DesiredEnabled);
         Assert.StartsWith("disabled after 1 faults: action: fixture-action-fault", record.ErrorCode);
 
-        await Task.Delay(TimeSpan.FromSeconds(7)); // past the next checkpoint and the backoff
+        // 7 s of game time: past the next checkpoint and the backoff.
+        for (int tick = 0; tick < 140; tick++)
+        {
+            await host.World.AdvanceClockAsync(50);
+            await (await host.World.InvokeAsync(() => feature.LastCheckpoint)).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
         Assert.Equal(ManagedPlayerbotState.Faulted, (await owners.FindAsync(id))!.State);
         Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultout")));
     }
