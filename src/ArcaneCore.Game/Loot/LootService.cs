@@ -207,7 +207,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         IItemRandomPropertySource? properties = null;
-        if (normal.Count > 0 || quest.Count > 0))
+        if (normal.Count > 0 || quest.Count > 0)
         {
             properties = RandomProperties;
             for (int i = 0; properties is null && i < recipients.Count; i++)
