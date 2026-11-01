@@ -180,7 +180,7 @@ public sealed class ClusterCommands : ICommandGroup
     internal static bool Restart(CommandContext context, string args)
     {
         string worker = args.Trim();
-        if (worker.Length == 0 || worker.Contains(' '))
+        if (worker.Length == 0 || worker.Any(char.IsWhiteSpace))
         {
             return false;
         }
@@ -202,13 +202,14 @@ public sealed class ClusterCommands : ICommandGroup
         AccountSecurity security = context.Security;
         string invoker = context.InvokerName;
         ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        CancellationToken lifetime = context.Lifetime;
         IDisposable hold = context.Defer();
         _ = Task.Run(async () =>
         {
             string reply;
             try
             {
-                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker).ConfigureAwait(false);
+                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker, lifetime).ConfigureAwait(false);
                 reply = result.Message;
             }
             catch (OperationCanceledException)
