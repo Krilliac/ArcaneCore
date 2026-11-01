@@ -575,6 +575,11 @@ public sealed partial class SpellSystem
         uint? itemCategory = null, bool itemEquipCast = false, bool itemTriggeredCast = false,
         IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false)
     {
+        if (!StackGuard.TryEnter("spell.cast-chain"))
+        {
+            return SpellCastResult.Error; // a trigger chain too deep for the stack: the nested cast is dropped (the fault is recorded)
+        }
+
         if (castItem is not null && (IsQuestSettlementPending(caster) || IsInTransit(caster)
             || (caster is Player player && !player.IsInWorld)))
         {
