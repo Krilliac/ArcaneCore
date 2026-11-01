@@ -283,12 +283,13 @@ internal sealed class SpellSweepRig : IDisposable
         }
     }
 
-    public Creature AddCreature(bool hostile, byte level, float dx, float dy)
+    public Creature AddCreature(bool hostile, byte level, float dx, float dy, uint creatureType = 0)
     {
         var template = new CreatureTemplate
         {
             Entry = hostile ? HostileEntry : FriendlyEntry, Name = hostile ? "Sweep Hostile" : "Sweep Friendly", MinLevel = level, MaxLevel = level,
             MinLevelHealth = 1_000_000, MaxLevelHealth = 1_000_000, MinLevelMana = 5000, MaxLevelMana = 5000, Faction = hostile ? HostileFaction : FriendlyFaction, Civilian = false,
+            CreatureType = creatureType,
         };
         return Creatures.SpawnTemporary(template, BaseX + dx, BaseY + dy, BaseZ, 0f);
     }

@@ -498,11 +498,14 @@ internal sealed class SpellSweepRunner
     /// After expiry the unit's stat block must equal a fresh, identical unit's: a second scene casts nothing, so its caster/target is
     /// the "before" picture (stat changes of the spell's non-aura effects are rare and land in the baseline).
     /// </summary>
+    /// <summary>Spells a DUMMY aura casts when it ends (vmangos HandleAuraDummy): Hex of Jammal'an (12479) casts the Hex Reward transform 12480 and charm 12483 at its end, auras with a lifetime of their own that are taken off before the swept spell's restore is judged.</summary>
+    private static readonly Dictionary<uint, uint[]> DummyFollowUps = new() { [12479] = [12480, 12483] };
+
     private void CheckRestored(SweepScene scene, SpellInfo spell, Unit unit)
     {
         // An aura of a spell this one triggers (Food's Well Fed, a growth stack) has a lifetime of its own and rightly outlives the
         // swept aura. Take those off through the production removal first, so the picture is this spell's own restore, and theirs.
-        foreach (uint triggered in spell.Effects.Select(e => e.TriggerSpell).Where(id => id != 0 && id != spell.Id).Distinct())
+        foreach (uint triggered in spell.Effects.Select(e => e.TriggerSpell).Concat(DummyFollowUps.GetValueOrDefault(spell.Id, [])).Where(id => id != 0 && id != spell.Id).Distinct())
         {
             if (_probe.Holders(_rig.System, unit, triggered).Count > 0)
             {

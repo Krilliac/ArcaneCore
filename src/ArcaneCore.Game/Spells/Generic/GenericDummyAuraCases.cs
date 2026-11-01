@@ -27,6 +27,9 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
     public const uint BabyMurloc = 24984, BabyMurlocDance = 25165, Cologne = 26681, Perfume = 26682, PermanentFeignDeath = 29266;
     public const uint CurseOfTheBleakheart = 6946, ForsakenSkills = 7054, HauntingSpirits = 7057, HauntingPhantoms = 16336, GargoyleStoneform = 29153;
 
+    public const uint CurseOfIdiocy = 1010, CreatureWhirlwind = 29851;
+    private const int StatIntellect = 3, StatSpirit = 4;
+
     public const uint SummonElementalTotem = 13909, DetectAmore = 26802, Disarm = 8379, FallDown = 6869, BleakheartCurse = 6945;
     public const uint SummonHauntingSpirit = 7067, SummonSpitefulPhantom = 16334, SummonWrathPhantom = 16335;
     public const int NetGuardThreatPercent = -50;
@@ -228,6 +231,68 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
             AuraEvents.SetStandState(target, apply ? StoneformStandState : StandState.Stand);
             target.UnitFlags = apply ? target.UnitFlags | UnitFlags.NotSelectable : target.UnitFlags & ~UnitFlags.NotSelectable;
         });
+
+        // Auras whose periodic trigger casts the aura's own spell again (Curse of Idiocy and the creature Whirlwind): the cast refreshes the holder
+        // (or adds a stack), so the aura would never run out. The tick keeps the cast and its stacking but not the longer duration.
+        system.RegisterPeriodicTriggerScript(CurseOfIdiocy, TickSelfRetrigger);
+        system.RegisterPeriodicTriggerScript(CreatureWhirlwind, TickSelfRetrigger);
+    }
+
+    /// <summary>mangos-classic stops Curse of Idiocy's stacking once both the intellect and the spirit loss reach 90 (SpellAuras.cpp:1174-1210, Aura::TriggerSpell).</summary>
+    private const int CurseOfIdiocyStopLoss = -90;
+
+    /// <summary>
+    /// Periodic trigger of a spell that triggers itself (Spell.dbc 1010 effect 3 and 29851 effect 1 name their own id). vmangos Aura::TriggerSpell casts the
+    /// trigger from the aura's caster; for 1010 mangos-classic stops once the stacked loss is 90 or more. The remaining time of the holder is kept across the cast,
+    /// so the retrigger neither refreshes the duration nor extends it: the aura ends when its own Spell.dbc duration is over (1010 after 120 s, 29851 after 2 s).
+    /// </summary>
+    private static void TickSelfRetrigger(SpellSystem spells, SpellAuraHolder holder, SpellAura aura)
+    {
+        uint trigger = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
+        if (trigger == 0 || spells.Store.Get(trigger) is null)
+        {
+            return;
+        }
+
+        if (holder.Spell.Id == CurseOfIdiocy && CurseLossReached(holder))
+        {
+            return;
+        }
+
+        int remaining = holder.Duration;
+        Unit target = holder.Target;
+        Unit caster = AuraEvents.CasterOf(holder) ?? target;
+        spells.CastSpellTriggeredByAura(caster, trigger, SpellCastTargets.ForUnit(target.Guid), holder.Spell);
+        if (remaining < 0)
+        {
+            return;
+        }
+
+        foreach (SpellAuraHolder held in spells.GetAuras(target))
+        {
+            if (held.Spell.Id == trigger && !held.IsRemoved && !held.IsPermanent && held.Duration > remaining)
+            {
+                held.Duration = remaining;
+            }
+        }
+    }
+
+    private static bool CurseLossReached(SpellAuraHolder holder)
+    {
+        int intellect = 0, spirit = 0;
+        foreach (SpellAura? stat in holder.Auras)
+        {
+            if (stat is { Type: AuraType.ModStat })
+            {
+                switch (stat.MiscValue)
+                {
+                    case StatIntellect: intellect += stat.Amount; break;
+                    case StatSpirit: spirit += stat.Amount; break;
+                }
+            }
+        }
+
+        return intellect <= CurseOfIdiocyStopLoss && spirit <= CurseOfIdiocyStopLoss;
     }
 
     /// <summary>The tick of the Frostwolf and Alterac Ram auras (vmangos SpellAuras.cpp:6475-6512): leash the mount to the player or end the aura.</summary>
