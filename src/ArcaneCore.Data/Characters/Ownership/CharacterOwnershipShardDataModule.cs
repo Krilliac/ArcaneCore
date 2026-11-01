@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Characters.Ownership;
 
 /// <summary>
-/// Characters schema 72 (renumber at merge): per-worker-shard ownership. Adds <c>character_ownership.owned_maps</c> and <c>heartbeat_at_ms</c>
+/// Characters schema 72: per-worker-shard ownership. Adds <c>character_ownership.owned_maps</c> and <c>heartbeat_at_ms</c>
 /// (worker rows are inserted when a shard first claims, not seeded), and seeds the id-range rows (<c>pet</c>, <c>gm_ticket</c>, <c>petition</c>)
 /// and realm-lease rows (<c>maintenance</c>, <c>worldstate</c>) the later writer-lock steps use. Released modules (v60, v61, v67) are frozen,
 /// so the new rows are seeded here and not added to <see cref="IdRangeScopes"/>.All or <see cref="RealmAuthorityLeaseDataModule.Scopes"/>.
