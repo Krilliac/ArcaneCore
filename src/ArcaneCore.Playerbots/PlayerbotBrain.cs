@@ -282,6 +282,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
+            _trainers.Home = value;
+            _town.Home = value;
             _crafting.Home = value;
             DropIntent();
         }
@@ -297,6 +299,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotHomeArea? active = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId ? home : null;
         _quests.Home = active;
         _destinations.Home = active;
+        _trainers.Home = active;
+        _town.Home = active;
         _crafting.Home = active;
     }
 
