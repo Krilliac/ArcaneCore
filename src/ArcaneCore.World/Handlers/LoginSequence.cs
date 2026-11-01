@@ -23,9 +23,20 @@ public static class LoginSequence
     /// lists, MOTD lines. The verify-world packet carries the player's final map and position, so
     /// the login relocation (instance entrance, bind point) has already run.
     /// </summary>
-    public static void SendLoginPackets(WorldSession session, WorldRuntime world, Player player, byte[] accountDataMd5)
+    public static void SendLoginPackets(WorldSession session, WorldRuntime world, Map map, Player player, byte[] accountDataMd5)
     {
-        session.Send(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(player.MapId, player.X, player.Y, player.Z, player.Orientation));
+        // vmangos HandlePlayerLogin (CharacterHandler.cpp:515-517): a player LoadFromDB put aboard a ship is verified at its
+        // transport-relative position, not at the world position stored at the last save.
+        if (ArcaneCore.Game.Transports.TransportSystem.Of(world) is { } transports
+            && transports.TryGetLoginVerifyOffset(map, player, out float tx, out float ty, out float tz, out float to))
+        {
+            session.Send(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(player.MapId, tx, ty, tz, to));
+        }
+        else
+        {
+            session.Send(WorldOpcode.SmsgLoginVerifyWorld, CharacterPackets.BuildLoginVerifyWorld(player.MapId, player.X, player.Y, player.Z, player.Orientation));
+        }
+
         session.Send(WorldOpcode.SmsgAccountDataMd5, accountDataMd5);
         session.Send(WorldOpcode.SmsgFriendList, LoginPackets.BuildEmptyFriendList());
         session.Send(WorldOpcode.SmsgIgnoreList, LoginPackets.BuildEmptyIgnoreList());

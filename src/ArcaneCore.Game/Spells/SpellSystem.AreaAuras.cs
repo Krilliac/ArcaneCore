@@ -1,4 +1,6 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -122,7 +124,17 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                UpdateAreaAuraSource(state, source, map);
+                // One throwing source must not stop the next source's tick (the caller's catch would abort the whole pass).
+                // The phase stays "UpdateAuras", the fault names this source's spell.
+                try
+                {
+                    UpdateAreaAuraSource(state, source, map);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("spell.script", ex);
+                    RecordSpellScriptFault("UpdateAuras", ex, source.Spell, state.Unit, state.Unit);
+                }
             }
         }
         finally
@@ -143,7 +155,7 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellEffectInfo> effects = source.Spell.Effects;
         for (int i = 0; i < effects.Count; i++)
         {
-            if (effects[i].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
+            if (effects[i].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy or SpellEffectName.ApplyAreaAuraPet && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
             {
                 radius = effects[i].Radius;
                 anyRadius = true;
@@ -153,6 +165,7 @@ public sealed partial class SpellSystem
         // vmangos AreaAura::AreaAura (SpellAuras.cpp:420-422): SPELLMOD_RADIUS of the caster on the area radius.
         bool enemyArea = source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraEnemy);
         bool friendArea = !enemyArea && source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraFriend);
+        bool petArea = !enemyArea && !friendArea && !source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraParty) && source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraPet);
         radius = radius > 0 ? ModFloat(state.Unit, source.Spell, SpellModOp.Radius, radius) : radius;
         bool inRangeOwned = !_areaInRangeScratchInUse;
         HashSet<ObjectGuid> inRange = inRangeOwned ? _areaInRangeScratch : [];
@@ -188,6 +201,14 @@ public sealed partial class SpellSystem
                             }
                         }
                     }
+                    else if (petArea)
+                    {
+                        // vmangos AreaAura::Update, AREA_AURA_PET (SpellAuras.cpp:702-708): the pet's owner only, while within the radius of the pet.
+                        if (state.Unit.GetOwner() is { } petOwner && !ReferenceEquals(petOwner, state.Unit))
+                        {
+                            members.Add(petOwner.Guid);
+                        }
+                    }
                     else
                     {
                         Groups.AppendGroupMembers(state.Unit, raid: false, members);
@@ -218,7 +239,7 @@ public sealed partial class SpellSystem
 
                         // vmangos AreaAura::Update (SpellAuras.cpp:750-790): a member gets the rank its level allows (SelectAuraRankForLevel), with
                         // that rank's simple effect value, and nothing when even the first rank is too high or the aura is for players only.
-                        if ((enemyArea ? source.Spell : SelectAuraRankForLevel(source.Spell, member.Level)) is not { } actual
+                        if ((enemyArea || petArea ? source.Spell : SelectAuraRankForLevel(source.Spell, member.Level)) is not { } actual
                             || ((actual.AttributesEx3 & AreaAuraOnlyOnPlayer) != 0 && member is not Player))
                         {
                             continue;
@@ -248,7 +269,7 @@ public sealed partial class SpellSystem
                         };
                         foreach (SpellAura? aura in source.AuraSpan)
                         {
-                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy)
+                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy or SpellEffectName.ApplyAreaAuraPet)
                             {
                                 if (enemyArea)
                                 {

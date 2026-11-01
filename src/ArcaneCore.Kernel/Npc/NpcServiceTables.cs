@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using ArcaneCore.Kernel.Skills;
 
 namespace ArcaneCore.Kernel.Npc;
 
@@ -61,6 +62,15 @@ public sealed class SkillLineAbilityCatalog
         foreach ((uint rank, uint before) in PreviousRankSupplement)
         {
             previous.TryAdd(rank, before);
+        }
+
+        HashSet<uint> withRows = all.Select(r => r.SpellId).ToHashSet();
+        foreach ((uint rank, uint before) in TalentAbilityRankLinks.Links)
+        {
+            if (withRows.Contains(rank) && withRows.Contains(before))
+            {
+                previous.TryAdd(rank, before);
+            }
         }
 
         _previousRank = previous.ToFrozenDictionary();

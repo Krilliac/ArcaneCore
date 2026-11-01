@@ -72,6 +72,31 @@ public sealed class ItemLootWorldTests
     }
 
     [Fact]
+    public async Task PickLock_CastTriggeredOnCommit_SkipsTheOrangeRoll_WhileAPlayerCastStillRollsIt()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("TRADEPICK", "Tradepick");
+        Player player = await host.PlayerAsync("Tradepick");
+        await host.WaitForWorldAsync(() => player.Skills is not null, "skills attached");
+        // Skill 1 against a lock needing 1 is orange; the forced roll of 0 against irand(-24, 38) always fails it.
+        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Lockpicking, 1, 300, 1));
+        Game.Spells.SpellSystem spells = host.WorldServices.GetRequiredService<global::ArcaneCore.World.Spells.SpellFeature>().System;
+        spells.Random = new Skills.GatheringWorldTests.FixedRandom(0);
+        Item box = await GiveAsync(host, player, Lockbox);
+        await client.CollectAsync();
+
+        // A cast the player makes is its caster's current spell, so the roll fails it (vmangos Spell.cpp:6050-6052).
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastOn(box));
+        byte[] failure = await client.ReadUntilAsync(WorldOpcode.SmsgCastResult);
+        Assert.Equal((byte)SpellCastResult.TryAgain, failure[5]);
+        Assert.False(await host.OnWorldAsync(() => (box.DynamicFlags & ItemDynFlags.Unlocked) != 0));
+
+        // The cast a trade commit makes is triggered and not channelled: never the current spell, so it never rolls.
+        await host.OnWorldAsync(() => spells.CastSpell(player, PickLockCast, new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = box.Guid }, triggered: true));
+        await host.WaitForWorldAsync(() => (box.DynamicFlags & ItemDynFlags.Unlocked) != 0, "the triggered pick opens the box despite the failing roll");
+    }
+
+    [Fact]
     public async Task OpenItem_OnALocklessClam_ShowsItsLoot_AndTheUntakenLootStaysOnTheItem()
     {
         await using WorldTestHost host = Start();

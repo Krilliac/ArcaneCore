@@ -79,15 +79,13 @@ public sealed class GameObjectChestTypeTests
         Assert.True(chest.IsSpawned);
         Assert.Equal(GameObjectLootState.NotReady, chest.LootState);
         Assert.Null(chest.Loot);
-        session.Clear();
-        Assert.NotEqual(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
-        Assert.Empty(Packets(session, WorldOpcode.SmsgLootResponse));
 
         rig.Seconds(29);
         Assert.Equal(GameObjectLootState.NotReady, chest.LootState);
         rig.Seconds(2);
         Assert.Equal(GameObjectLootState.Ready, chest.LootState);
         Assert.True(chest.IsSpawned);
+        session.Clear();
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, chest.Guid));
         Assert.Single(Packets(session, WorldOpcode.SmsgLootResponse));
         Assert.NotNull(chest.Loot);

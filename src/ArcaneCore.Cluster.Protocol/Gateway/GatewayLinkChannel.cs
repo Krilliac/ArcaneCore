@@ -6,7 +6,7 @@ using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Cluster.Gateway;
 
 /// <summary>
-/// One gateway-worker TCP link: the length-prefixed frames of <see cref="LoopbackGatewayWorkerHost"/>, a single writer task
+/// One gateway-worker TCP link: the length-prefixed frames of the loopback host, a single writer task
 /// that batches queued frames into one write, and a byte bound on what is queued. Frames are sent in the order
 /// <see cref="TryEnqueue"/> accepted them, which is the order the session protocol relies on (open reply before the first
 /// server packet, sequence numbers ascending). Thread-safe enqueue; one reader (the owner's receive loop).
@@ -45,9 +45,9 @@ internal sealed class GatewayLinkChannel : IAsyncDisposable
     /// <summary>Queue one frame (type byte first). False when the link is closed or would exceed <see cref="MaxQueuedBytes"/> (it is then closed).</summary>
     public bool TryEnqueue(byte[] frame)
     {
-        if (frame.Length > LoopbackGatewayWorkerHost.MaxFrameBytes)
+        if (frame.Length > GatewayLinkFraming.MaxFrameBytes)
         {
-            throw new InvalidOperationException($"frame of {frame.Length} B exceeds MaxFrameBytes ({LoopbackGatewayWorkerHost.MaxFrameBytes} B)");
+            throw new InvalidOperationException($"frame of {frame.Length} B exceeds MaxFrameBytes ({GatewayLinkFraming.MaxFrameBytes} B)");
         }
 
         if (_closed.IsCancellationRequested)
@@ -72,7 +72,7 @@ internal sealed class GatewayLinkChannel : IAsyncDisposable
 
     /// <summary>The next frame, or null at end of stream. Throws on a malformed length prefix.</summary>
     public ValueTask<byte[]?> ReadFrameAsync(CancellationToken cancellationToken) =>
-        LoopbackGatewayWorkerHost.ReadFrameAsync(_stream, cancellationToken);
+        GatewayLinkFraming.ReadFrameAsync(_stream, cancellationToken);
 
     /// <summary>Stop accepting frames, let the writer send what is queued (at most <paramref name="bound"/>), then close.</summary>
     public async Task FlushAndCloseAsync(TimeSpan bound)

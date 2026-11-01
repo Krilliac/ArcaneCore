@@ -6,40 +6,41 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
-/// The spell DB scripts (<c>dbscripts_on_spell</c>, <see cref="DbScriptKind.Spell"/>): the database fallback at the end of cmangos
-/// Spell::EffectDummy and Spell::EffectScriptEffect (Spells/SpellEffects.cpp:1517-1532 and :4176-4191) and of vmangos
+/// The spell DB scripts (<c>dbscripts_on_spell</c>, <see cref="DbScriptKind.Spell"/>): the database fallback at the end of vmangos
 /// Spell::EffectScriptEffect (SpellEffects.cpp:4565-4571), run through the map's DB script executor
-/// (<see cref="CreatureMapSystem.StartDbScript"/>).
+/// (<see cref="CreatureMapSystem.StartDbScript"/>). SCRIPT_EFFECT starts it (retail); a DUMMY-only spell no code claims does too (fallback, see <see cref="CanEffectStartDbScript"/>).
 /// </summary>
 public sealed partial class SpellSystem
 {
     /// <summary>
-    /// cmangos GetSpellStartDBScriptPriority (DBScripts/ScriptMgr.cpp:67-85): SCRIPT_EFFECT 10, DUMMY 9. The trigger effects that name a spell
-    /// missing from the table (5 and 4 there) are not hooked: no imported row needs them, and vmangos starts the table from SCRIPT_EFFECT only.
-    /// </summary>
-    private static int DbScriptPriority(SpellEffectInfo effect) => effect.Effect switch
-    {
-        SpellEffectName.ScriptEffect => 10,
-        SpellEffectName.Dummy => 9,
-        _ => 0,
-    };
-
-    /// <summary>
-    /// cmangos ScriptMgr::CanSpellEffectStartDBScript (ScriptMgr.cpp:88-106): only the effect of the highest priority starts the script, and of
-    /// two with the same priority the lower index, so a spell with two DUMMY effects runs its script once per target, not twice.
+    /// vmangos starts the <c>spell_scripts</c> table from SPELL_EFFECT_SCRIPT_EFFECT: Spell::EffectScriptEffect's trailing "normal DB scripted
+    /// effect" (SpellEffects.cpp:4565-4571), once per SCRIPT_EFFECT effect that hits a target. vmangos EffectDummy never does, because its
+    /// DUMMY spells are hard-coded in C++. ArcaneCore has not ported every one of those cases, so a DUMMY effect is the documented fallback
+    /// (cmangos starts the table from DUMMY as well, ScriptMgr.cpp:67-106): it starts the row from the FIRST DUMMY effect of a spell that has no
+    /// SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>). Of the DUMMY-only ids with imported rows,
+    /// 11886-11889 (CaptureDespawnScript) and 25716 (ForceBowScript) are claimed by an <see cref="ISpellScript"/>, so their rows never run;
+    /// 9096, 11365, 11885, 16378, 19250, 21052, 21914, 21917 and 23359 have no code claim, so their rows are the only implementation. 29182 and
+    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Every SCRIPT_EFFECT effect starts the row (vmangos runs the trailing block once
+    /// per effect); the cmangos priority rule let only the first of several SCRIPT_EFFECT effects start it.
+    /// A spell with both a DUMMY and a SCRIPT_EFFECT effect starts its row from the SCRIPT_EFFECT only.
     /// </summary>
     internal static bool CanEffectStartDbScript(SpellInfo spell, int effectIndex)
     {
-        int priority = DbScriptPriority(spell.Effects[effectIndex]);
-        if (priority == 0)
+        SpellEffectName effect = spell.Effects[effectIndex].Effect;
+        if (effect == SpellEffectName.ScriptEffect)
+        {
+            return true;
+        }
+
+        if (effect != SpellEffectName.Dummy)
         {
             return false;
         }
 
         for (int i = 0; i < spell.Effects.Count; i++)
         {
-            int other = DbScriptPriority(spell.Effects[i]);
-            if (other > priority || (other == priority && i < effectIndex))
+            SpellEffectName other = spell.Effects[i].Effect;
+            if (other == SpellEffectName.ScriptEffect || (other == SpellEffectName.Dummy && i < effectIndex))
             {
                 return false;
             }
@@ -47,6 +48,9 @@ public sealed partial class SpellSystem
 
         return true;
     }
+
+    /// <summary>The DUMMY effect: no generic behaviour (spell scripts hook it); the spell's DB script is the fallback, see <see cref="CanEffectStartDbScript"/>.</summary>
+    private void EffectDummy(SpellEffectContext context) => StartDbSpellScript(context);
 
     /// <summary>
     /// Start the spell's DB script for this effect and target when the spell has one and no spell script in code claims the spell (an

@@ -135,6 +135,12 @@ public sealed partial class TransportSystem
         // vmangos loads the continents at startup and their ships with them; this base creates maps on first use.
         foreach (TransportTemplate template in _templates)
         {
+            // A ship whose path starts on a map another worker owns (Cluster:Worker:OwnedMaps) is that worker's: skipped here, not an error.
+            if (!template.InInstance && template.KeyFrames.Count > 0 && !_world.Owns(template.KeyFrames[0].Node.MapId))
+            {
+                continue;
+            }
+
             if (!template.InInstance && !template.Spawned && template.KeyFrames.Count > 0)
             {
                 _world.GetMap(template.KeyFrames[0].Node.MapId);
@@ -276,6 +282,42 @@ public sealed partial class TransportSystem
     }
 
     /// <summary>
+    /// The position SMSG_LOGIN_VERIFY_WORLD carries for a player whose stored seat <see cref="RestoreSeat"/> will put aboard when it
+    /// enters <paramref name="map"/>: the transport-relative offset (vmangos <c>HandlePlayerLogin</c>, CharacterHandler.cpp:515-517,
+    /// sends <c>m_movementInfo.GetTransportPos()</c> when <c>GetTransport()</c> is set, because <c>Player::LoadFromDB</c> has already
+    /// boarded the player). Reads only; the seat itself is restored by <see cref="OnPlayerAdding"/>. Same conditions as the
+    /// restore: the ship sails on <paramref name="map"/>, the offset is within bounds and the resulting world position is valid.
+    /// False (the plain position goes out) otherwise. World thread.
+    /// </summary>
+    public bool TryGetLoginVerifyOffset(Map map, Player player, out float x, out float y, out float z, out float orientation)
+    {
+        x = y = z = orientation = 0f;
+        if (player.LoginTransportSeat is not { } seat || !IsOffsetWithinBounds(seat.X, seat.Y, seat.Z))
+        {
+            return false;
+        }
+
+        ShipTransport? ship = _ships.FirstOrDefault(s => s.Guid.Low == seat.Guid && s.CurrentMap is not null);
+        if (ship is null || !ReferenceEquals(ship.CurrentMap, map))
+        {
+            return false;
+        }
+
+        float wx = seat.X, wy = seat.Y, wz = seat.Z, wo = seat.Orientation;
+        ship.CalculatePassengerPosition(ref wx, ref wy, ref wz, ref wo);
+        if (!Maps.Grid.GridDefines.IsValidMapCoord(wx, wy, wz, wo))
+        {
+            return false;
+        }
+
+        x = seat.X;
+        y = seat.Y;
+        z = seat.Z;
+        orientation = seat.Orientation;
+        return true;
+    }
+
+    /// <summary>
     /// vmangos <c>Map::SendInitTransports</c> (Map.cpp:1720-1734): every ship of the map but the player's own, before its own
     /// create block. The player's own ship goes into the self packet (<see cref="OnWritingSelf"/>).
     /// </summary>
@@ -399,9 +441,17 @@ public sealed partial class TransportSystem
 
     // --- map change (ShipTransport::TeleportTransport, Transport.cpp:120-200) ---------------------------------------
 
-    internal void TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
+    /// <summary>Returns false when the ship was held because <paramref name="newMapId"/> is owned by another worker (nothing changed).</summary>
+    internal bool TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
     {
         Map? oldMap = ship.CurrentMap;
+        if ((oldMap is null || oldMap.MapId != newMapId) && !_world.Owns(newMapId))
+        {
+            // The next frame is on a map another worker owns: the caller holds the ship where it is (no far transfer between workers yet)
+            // instead of creating the map. It is asked again each tick; this is cheap and silent.
+            return false;
+        }
+
         Map newMap = oldMap is not null && oldMap.MapId == newMapId ? oldMap : _world.GetMap(newMapId);
         RemoveFromMap(ship);
         ship.CurrentMap = newMap;
@@ -450,6 +500,8 @@ public sealed partial class TransportSystem
             _logger.LogDebug("Transport {Entry} sailed from map {OldMap} to map {NewMap} with {Passengers} passenger(s)", ship.Entry,
                 oldMap?.MapId, newMapId, ship.Passengers.Count);
         }
+
+        return true;
     }
 
     // vmangos: "Units teleport on transport not implemented": a creature stays on the old map; one whose owner is not

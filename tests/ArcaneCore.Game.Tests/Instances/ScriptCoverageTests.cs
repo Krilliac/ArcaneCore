@@ -33,7 +33,7 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
     /// </summary>
     private static readonly (uint Map, uint Entry, string Script)[] KnownMissing =
     [
-        (230, 9500, "npc_mistress_nagmara"), (230, 9503, "npc_rocknot"), (230, 16079, "npc_theldren_trigger"),
+        (230, 16079, "npc_theldren_trigger"),
         // Doom'rel has his gossip (DoomrelGossip, an INpcGossipScript registered by DungeonEventFeature) but no AI; the catalogue answers for AIs.
         (230, 9039, "boss_doomrel"),
     ];

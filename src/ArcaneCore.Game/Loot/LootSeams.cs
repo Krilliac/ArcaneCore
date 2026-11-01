@@ -24,6 +24,19 @@ public interface ILootQuestJournal
 
     /// <summary>A game object was used (vmangos CastedCreatureOrGO with spell 0 for goobers).</summary>
     void GameObjectUsed(Player player, uint entry, ObjectGuid guid);
+
+    /// <summary>
+    /// A group member's share of a game object use (vmangos RewardPlayerAndGroupAtCast, Player.cpp:20019-20040, calling
+    /// CastedCreatureOrGO(..., original_caster)): <paramref name="originalCaster"/> is true only for the user, and a member that did not
+    /// use the object only progresses sharable quests. The default credits the user alone, as <see cref="GameObjectUsed(Player, uint, ObjectGuid)"/>.
+    /// </summary>
+    void GameObjectUsed(Player member, uint entry, ObjectGuid guid, bool originalCaster)
+    {
+        if (originalCaster)
+        {
+            GameObjectUsed(member, entry, guid);
+        }
+    }
 }
 
 /// <summary>The player's group, when the groups area is present. World thread.</summary>

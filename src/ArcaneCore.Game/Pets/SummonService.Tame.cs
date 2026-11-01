@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Protocol;
@@ -49,6 +50,10 @@ public sealed partial class SummonService
         spells.RegisterEffect(SpellEffectName.FeedPet, EffectFeedPet);
         spells.RegisterEffectCheck(SpellEffectName.LearnPetSpell, CheckLearnPetSpell);
         spells.RegisterEffect(SpellEffectName.LearnPetSpell, EffectLearnPetSpell);
+        // vmangos Spell::CheckCast SPELL_EFFECT_LEARN_SPELL (Spell.cpp:5806-5833): a learn spell aimed at the caster's pet (Warlock Grimoires) has the
+        // LEARN_PET_SPELL checks; its effect reaches EffectLearnPetSpell through SpellSystem.EffectLearnSpell.
+        spells.RegisterEffectCheck(SpellEffectName.LearnSpell,
+            context => context.Effect.TargetA == SpellImplicitTarget.UnitCasterPet ? CheckLearnPetSpell(context) : SpellCastResult.CastOk);
     }
 
     /// <summary>vmangos Spell::CheckTamingSpell: the failure reason, or null when the target can be tamed.</summary>
@@ -176,6 +181,17 @@ public sealed partial class SummonService
     private Creature? LivePet(Player player)
         => player.Map?.FindObject(player.PetGuid) is Creature { Summon.Kind: SummonKind.Pet } pet && pet.OwnerGuid == player.Guid ? pet : null;
 
+    /// <summary>vmangos Spell::EffectFeedPet: the pet must be within the spell's range of its owner (OutOfRange), then in the owner's line of sight (LineOfSight).</summary>
+    private static SpellCastResult CheckFeedReach(Player player, Creature pet, SpellInfo spell)
+    {
+        if (SpellSystem.CheckRange(player, spell, pet, strict: false) != SpellCastResult.CastOk)
+        {
+            return SpellCastResult.OutOfRange;
+        }
+
+        return player.Map?.Collision.IsWithinLineOfSight(pet, player) ?? true ? SpellCastResult.CastOk : SpellCastResult.LineOfSight;
+    }
+
     private SpellCastResult CheckFeedPet(SpellEffectCheckContext context)
     {
         if (context.Caster is not Player player || FoodItem(player, context.Targets) is not { } food)
@@ -186,6 +202,12 @@ public sealed partial class SummonService
         if (LivePet(player) is not { } pet)
         {
             return SpellCastResult.NoPet;
+        }
+
+        SpellCastResult reach = CheckFeedReach(player, pet, context.Spell);
+        if (reach != SpellCastResult.CastOk)
+        {
+            return reach;
         }
 
         if (!HaveInDiet(pet, food))
@@ -206,6 +228,12 @@ public sealed partial class SummonService
     {
         if (context.Caster is not Player player || FoodItem(player, context.Cast.Targets) is not { } food
             || LivePet(player) is not { IsAlive: true } pet)
+        {
+            return;
+        }
+
+        // vmangos Spell::EffectFeedPet: the pet out of range or out of sight feeds nothing and costs no food (SpellEffects.cpp:5108-5118).
+        if (CheckFeedReach(player, pet, context.Spell) != SpellCastResult.CastOk)
         {
             return;
         }

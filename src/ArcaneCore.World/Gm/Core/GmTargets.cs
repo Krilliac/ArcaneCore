@@ -121,6 +121,7 @@ public static class GmTargets
                 {
                     if (unknownAccountIsNotFound && owners.Contains(null))
                     {
+                        context.Fail("player-not-found");
                         context.Reply(GmStrings.PlayerNotFound);
                     }
                     else if (owners.Any(owner => owner is { } security

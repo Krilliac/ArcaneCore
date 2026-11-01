@@ -15,6 +15,12 @@ internal sealed record QaKindInfo(QaSignalKind Kind, string Label, string Slug, 
 {
     /// <summary>The kind's GitHub label (added to the configured labels when <see cref="PlayerbotQaGitHubOptions.KindLabels"/> is on).</summary>
     public string GitHubLabel => "bot-qa:" + Slug;
+
+    /// <summary>
+    /// The finding is the server's own fault (an exception, a hang), not what a bot did: it is published ahead of every other kind and counts against
+    /// <see cref="PlayerbotQaGitHubOptions.MaxServerFaultIssuesPerHour"/> instead of the shared hourly cap.
+    /// </summary>
+    public bool ServerSide => Kind is QaSignalKind.ServerFault or QaSignalKind.TickHang;
 }
 
 /// <summary>

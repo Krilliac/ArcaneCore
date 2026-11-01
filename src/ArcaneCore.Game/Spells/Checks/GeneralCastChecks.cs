@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -22,6 +23,8 @@ public static class GeneralCastChecks
         spells.RegisterCastCheck(new FacingCastCheck());
         spells.RegisterCastCheck(new TargetLevelCastCheck());
         spells.RegisterCastCheck(new TargetCreatureTypeCastCheck());
+        spells.RegisterCastCheck(new OnlyOnPlayerCastCheck());
+        spells.RegisterCastCheck(new OnlyPeacefulTargetCastCheck());
     }
 }
 
@@ -167,4 +170,38 @@ public sealed class TargetCreatureTypeCastCheck : ISpellCastCheck
 
         return target is Player ? SpellCastResult.TargetIsPlayer : SpellCastResult.BadTargets;
     }
+}
+
+/// <summary>
+/// vmangos Spell.cpp:5509-5510: a strict, non-triggered cast of a spell with ONLY_ON_PLAYER (AttributesEx3 bit 8) on a unit target
+/// other than the caster that is not a player fails BAD_TARGETS, unless the spell is an area spell (Soulstone Resurrection, Cupid's Dart).
+/// </summary>
+public sealed class OnlyOnPlayerCastCheck : ISpellCastCheck
+{
+    public SpellCheckPhase Phase => SpellCheckPhase.Target;
+
+    public int Order => SpellCastCheckOrder.TargetCreatureType + 10;
+
+    public SpellCastResult Check(in SpellCastCheckContext context)
+        => !context.Triggered && context.Strict && context.Target is { } target && !ReferenceEquals(target, context.Caster)
+            && target is not Player && context.Spell.HasAttribute(SpellAttributesEx3Combat.OnlyOnPlayer) && !context.Spell.IsAreaEffect()
+            ? SpellCastResult.BadTargets
+            : SpellCastResult.CastOk;
+}
+
+/// <summary>
+/// vmangos Spell.cpp:5487-5488: a strict, non-triggered cast of a spell with ONLY_PEACEFUL_TARGETS (AttributesEx bit 8: Sap, Distract,
+/// Duel) on a unit other than the caster that is in combat fails TARGET_AFFECTING_COMBAT.
+/// </summary>
+public sealed class OnlyPeacefulTargetCastCheck : ISpellCastCheck
+{
+    public SpellCheckPhase Phase => SpellCheckPhase.Target;
+
+    public int Order => SpellCastCheckOrder.TargetCreatureType + 20;
+
+    public SpellCastResult Check(in SpellCastCheckContext context)
+        => !context.Triggered && context.Strict && context.Target is { } target && !ReferenceEquals(target, context.Caster)
+            && context.Spell.HasAttribute(SpellAttributesExCombat.OnlyPeacefulTargets) && target.Combat.IsInCombat
+            ? SpellCastResult.TargetAffectingCombat
+            : SpellCastResult.CastOk;
 }

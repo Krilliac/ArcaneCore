@@ -80,6 +80,35 @@ public sealed partial class BlackrockDepthsInstance
     internal Creature? Princess => GetSingleCreatureFromStorage(NpcPrincess);
     internal Creature? Emperor => GetSingleCreatureFromStorage(NpcEmperor);
 
+    /// <summary>Trap behind the keg Rocknot shoots (GO_BAR_KEG_TRAP); the keg itself is 170607 (GO_BAR_KEG_SHOT).</summary>
+    public const uint GoBarKegTrap = 171941;
+
+    /// <summary>GO_BAR_KEG_SHOT.</summary>
+    public const uint GoBarKegShot = 170607;
+
+    /// <summary>The creature of <paramref name="entry"/> the instance stored (npc_rocknot and npc_mistress_nagmara find each other this way).</summary>
+    internal Creature? StoredCreature(uint entry) => GetSingleCreatureFromStorage(entry);
+
+    /// <summary>npc_rocknotAI case 17: the bar back door is opened (used) unless it already is, and the instance remembers it (SetBarDoorIsOpen).</summary>
+    internal void OpenBarDoorOnce()
+    {
+        if (_barDoorOpen) return;
+        DoUseDoorOrButton(GoBarDoor);
+        _barDoorOpen = true;
+    }
+
+    /// <summary>npc_rocknotAI DoGo: the stored object of <paramref name="entry"/> takes <paramref name="state"/> directly.</summary>
+    internal void SetDepthsObjectState(uint entry, GameObjectState state)
+    {
+        if (GetSingleGameObjectFromStorage(entry) is { } go) go.State = state;
+    }
+
+    /// <summary>npc_rocknotAI: wake Phalanx (his escort) when the bar reacts to the broken door.</summary>
+    internal void StartPhalanx()
+    {
+        if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start(instantRespawn: true);
+    }
+
     public override void Initialize()
     {
         base.Initialize();
@@ -136,6 +165,8 @@ public sealed partial class BlackrockDepthsInstance
             creatures.RegisterEntryAi(HurleyBlackbreathAI.Entry, c => new HurleyBlackbreathAI(c));
             creatures.RegisterEntryAi(NpcPhalanx, c => new PhalanxAI(c, this));
             creatures.RegisterEntryAi(10096, c => new GrimstoneAI(c, this));
+            creatures.RegisterEntryAi(NpcRocknot, c => new RocknotAI(c, this));
+            creatures.RegisterEntryAi(NpcNagmara, c => new NagmaraAI(c, this));
         }
     }
 
@@ -164,7 +195,7 @@ public sealed partial class BlackrockDepthsInstance
             mugObjects.RegisterAi(165739, new BarMugAI(this));
         }
         if (go.Entry is GoBarDoor or GoArenaSpoils or GoGolemRoomNorth or GoGolemRoomSouth or GoThroneRoom
-            or GoSecretDoor or GoSecretSafe or 170607
+            or GoSecretDoor or GoSecretSafe or GoBarKegShot or GoBarKegTrap
             || go.Entry is >= 161522 and <= 161525 || go.Entry is >= GoFirstRune and <= GoFirstRune + 6)
             StoreGameObject(go);
         if (go.Entry == GoBarDoor)
@@ -371,7 +402,7 @@ public sealed partial class BlackrockDepthsInstance
             && GetData(TypePlugger) is not (EncounterState.InProgress or EncounterState.Done)) SetData(TypeBar, EncounterState.InProgress);
         else if (entry == NpcPlugger)
         {
-            if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start();
+            if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start(instantRespawn: true);
             MakeBarHostile();
             SetData(TypePlugger, EncounterState.InProgress);
         }

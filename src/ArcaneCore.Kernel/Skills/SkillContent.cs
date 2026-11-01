@@ -69,6 +69,105 @@ public sealed class SpellLearnSkillTable
 }
 
 /// <summary>
+/// Rank links the client DBC lacks for the trainer-sold higher ranks of single-rank talent abilities (Pyroblast, Holy Shield, ...).
+/// Talent.dbc lists one spell for these talents and SkillLineAbility.dbc has forward_spellid 0 on these ranks, so the DBC chain stops
+/// at rank 1 (Nature's Grasp is DBC-linked only from rank 1 to 2). The reference servers keep the link in spell_chain prev_spell (mangos-classic sql/archive/0.6/2875_spell_chain.sql,
+/// e.g. <c>('12505','11366','11366','2')</c>; vmangos SpellMgr::LoadSpellChains merges those rows over the DBC chains). With the link a
+/// trainer refuses the rank until the player knows the talent spell (Player::GetTrainerSpellState) and a respec walks up to the
+/// purchased ranks. A link the DBC provides always wins; Mortal Strike, Bloodthirst, Shield Slam and Hemorrhage are chained by the DBC already.
+/// </summary>
+public static class TalentAbilityRankLinks
+{
+    /// <summary>(rank spell, previous rank spell) pairs, lowest rank first within each ability.</summary>
+    public static IReadOnlyList<(uint Rank, uint Previous)> Links { get; } = Build();
+
+    private static (uint Rank, uint Previous)[] Build() =>
+    [
+        // Pyroblast
+        (12505, 11366), (12522, 12505), (12523, 12522), (12524, 12523), (12525, 12524), (12526, 12525), (18809, 12526),
+        // Blast Wave
+        (13018, 11113), (13019, 13018), (13020, 13019), (13021, 13020),
+        // Ice Barrier
+        (13031, 11426), (13032, 13031), (13033, 13032),
+        // Aimed Shot
+        (20900, 19434), (20901, 20900), (20902, 20901), (20903, 20902), (20904, 20903),
+        // Shadowburn
+        (18867, 17877), (18868, 18867), (18869, 18868), (18870, 18869), (18871, 18870),
+        // Conflagrate
+        (18930, 17962), (18931, 18930), (18932, 18931),
+        // Siphon Life
+        (18879, 18265), (18880, 18879), (18881, 18880),
+        // Holy Shock
+        (20929, 20473), (20930, 20929),
+        // Seal of Command
+        (20915, 20375), (20918, 20915), (20919, 20918), (20920, 20919),
+        // Insect Swarm
+        (24974, 5570), (24975, 24974), (24976, 24975), (24977, 24976),
+        // Faerie Fire (Feral)
+        (17390, 16857), (17391, 17390), (17392, 17391),
+        // Wyvern Sting
+        (24132, 19386), (24133, 24132),
+        // Counterattack
+        (20909, 19306), (20910, 20909),
+        // Mind Flay
+        (17311, 15407), (17312, 17311), (17313, 17312), (17314, 17313), (18807, 17314),
+        // Holy Nova
+        (15430, 15237), (15431, 15430), (27799, 15431), (27800, 27799), (27801, 27800),
+        // Divine Spirit
+        (14818, 14752), (14819, 14818), (27841, 14819),
+        // Prayer of Spirit (mangos-classic spell_chain: ('27681','14752','14752','2'))
+        (27681, 14752),
+        // Lightwell
+        (27870, 724), (27871, 27870),
+        // Dark Pact
+        (18937, 18220), (18938, 18937),
+        // Trueshot Aura
+        (20905, 19506), (20906, 20905),
+        // Blessing of Sanctuary
+        (20912, 20911), (20913, 20912), (20914, 20913),
+        // Holy Shield
+        (20927, 20925), (20928, 20927),
+        // Consecration
+        (20116, 26573), (20922, 20116), (20923, 20922), (20924, 20923),
+        // Nature's Grasp (the DBC only links rank 1 -> 2)
+        (16811, 16810), (16812, 16811), (16813, 16812), (17329, 16813),
+        // Mana Tide Totem (vmangos-db spell_chain: (17354,16190,16190,2), (17359,17354,16190,3))
+        (17354, 16190), (17359, 17354),
+    ];
+}
+
+/// <summary>
+/// The spell_chain req_spell column for the trainer-sold spells that carry one: the 14 non-zero req_spell rows of mangos-classic
+/// sql/base/mangos.sql spell_chain (identical in vmangos-db for build 5875). Greater Blessing of Kings (25898) needs Blessing of Kings,
+/// Greater Blessing of Sanctuary (25899) needs Blessing of Sanctuary rank 4, the other Greater Blessings, Nature's Grasp ranks 1-6 need
+/// the matching Entangling Roots rank. Trainers refuse the spell until the player knows the required spell in addition to prev_spell
+/// (Player::GetTrainerSpellState; vmangos Player.cpp:4267) and send it as the first chain node of the trainer list.
+/// </summary>
+public static class SpellChainRequirements
+{
+    private static readonly FrozenDictionary<uint, uint> Required = new Dictionary<uint, uint>
+    {
+        [25898] = 20217,
+        [25899] = 20914,
+        [25782] = 19838,
+        [25916] = 25291,
+        [25895] = 1038,
+        [25890] = 19979,
+        [25894] = 19854,
+        [25918] = 25290,
+        [16689] = 339,
+        [16810] = 1062,
+        [16811] = 5195,
+        [16812] = 5196,
+        [16813] = 9852,
+        [17329] = 9853,
+    }.ToFrozenDictionary();
+
+    /// <summary>The spell the player must know before <paramref name="spellId"/> is trainable, 0 when none.</summary>
+    public static uint RequiredFor(uint spellId) => Required.GetValueOrDefault(spellId);
+}
+
+/// <summary>
 /// Ranks of ranked spells derived from SkillLineAbility.dbc forward links (vmangos SpellMgr::LoadSpellChains,
 /// Spells/SpellMgr.cpp:1543-1650 and LoadSpellChains_AbilityHelper :1440-1503), with the two reference patches:
 /// Herb Gathering Apprentice (2366) forwards to 2368 although the 1.12 client has no link for it
@@ -156,6 +255,15 @@ public sealed class SpellRankChains
 
             // Conflicting data (two spells forwarding to one) asserts in the reference; the lowest spell id is kept.
             previous.TryAdd(forward, spell);
+        }
+
+        // vmangos merges spell_chain rows over the DBC chains; the link is kept only when both ranks are real abilities and the DBC gave none.
+        foreach ((uint rankSpell, uint before) in TalentAbilityRankLinks.Links)
+        {
+            if (withAbilities.Contains(rankSpell) && withAbilities.Contains(before) && spellExists(rankSpell) && spellExists(before))
+            {
+                previous.TryAdd(rankSpell, before);
+            }
         }
 
         var prev = new Dictionary<uint, uint>();

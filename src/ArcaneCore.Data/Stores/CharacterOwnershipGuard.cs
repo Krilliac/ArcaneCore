@@ -168,7 +168,7 @@ internal static class CharacterOwnershipGuard
             .ConfigureAwait(false);
     }
 
-    private static async Task<bool> LockSharedAsync(DbContext db, DbConnection connection, DbTransaction? transaction, CharacterOwnershipToken? token, CancellationToken cancellationToken)
+    internal static async Task<bool> LockSharedAsync(DbContext db, DbConnection connection, DbTransaction? transaction, CharacterOwnershipToken? token, CancellationToken cancellationToken)
     {
         ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
         string table = sql.DelimitIdentifier(CharacterOwnershipDataModule.Table);
@@ -207,7 +207,7 @@ internal static class CharacterOwnershipGuard
             Add("@incarnation", token.Incarnation.ToString("D"));
         }
 
-        await DbConnectionOpen.EnsureOpenAsync(command.Connection!, cancellationToken).ConfigureAwait(false);
+        await DbConnectionOpen.EnsureOpenAsync(db.Database, cancellationToken).ConfigureAwait(false);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 }

@@ -18,8 +18,9 @@ public sealed class QuestGreetingWireTests
     [InlineData(388, 9)]
     public async Task RealGreeting_MalformedGuidBodyDisconnectsWithoutOpeningQuestUi(int opcode, int length)
     {
+        // The fixture starts under its own hang bound; the scenario deadline is armed afterwards (TestDeadlines).
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await using GreetingClient client = await LoginAsync(server, deadline.Token);
         await client.Connection.SendAsync((WorldOpcode)opcode, new byte[length], deadline.Token);
         await AssertDisconnectedAsync(client.Connection, deadline.Token);
@@ -33,8 +34,8 @@ public sealed class QuestGreetingWireTests
     [InlineData(388, true)]
     public async Task RealGreeting_UnknownCreatureOrPlayerGuidDoesNotOpenQuestUi(int opcode, bool playerGuid)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await using GreetingClient client = await LoginAsync(server, deadline.Token);
         ulong source = playerGuid ? client.Guid : SyntheticArcaneServer.NpcGuid + 1;
         await client.Connection.SendAsync((WorldOpcode)opcode, ScenarioWire.Guid(source), deadline.Token);
@@ -63,8 +64,8 @@ public sealed class QuestGreetingWireTests
     [InlineData(388)]
     public async Task RealGreeting_NeutralCreatureWithoutQuestFlagReturnsEmptyClassicGossip(int opcode)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await using GreetingClient client = await LoginAsync(server, deadline.Token);
         await client.Connection.SendAsync((WorldOpcode)opcode, ScenarioWire.Guid(SyntheticArcaneServer.FirstTargetGuid), deadline.Token);
         MockGossipMessage gossip = ScenarioWire.GossipMessage(await client.Connection.ReadUntilAsync(WorldOpcode.SmsgGossipMessage, deadline.Token));

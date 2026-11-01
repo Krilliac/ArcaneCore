@@ -33,6 +33,8 @@ public sealed partial class DireMaulInstance
 
     public override void OnCreatureCreate(Creature creature)
     {
+        CreateWestCreature(creature);
+
         if (creature.Template.Entry is NpcKingGordok or NpcKromcrush or NpcChorush or NpcSlipkik or NpcJeevee or NpcWarlockDummyInfernal)
         {
             StoreCreature(creature);
@@ -47,6 +49,11 @@ public sealed partial class DireMaulInstance
 
     public override void OnCreatureDeath(Creature creature)
     {
+        if (WestCreatureDied(creature))
+        {
+            return;
+        }
+
         uint type = creature.Template.Entry switch
         {
             NpcKingGordok => TypeKingGordok,

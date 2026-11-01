@@ -9,6 +9,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
@@ -274,26 +275,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 break;
 
             case ChatType.Afk:
-                // vmangos: no AFK in combat; a message sets the reply, an empty one (or going
-                // AFK) toggles; going AFK ends DND.
-                if ((player.UnitFlags & UnitFlags.InCombat) != 0)
-                {
-                    break;
-                }
-
-                if (message.Length > 0 || !player.IsAfk)
-                {
-                    player.AfkMessage = message;
-                }
-
-                if (message.Length == 0 || !player.IsAfk)
-                {
-                    if (player.ToggleAfk() && player.IsDnd)
-                    {
-                        player.ToggleDnd();
-                    }
-                }
-
+                ApplyAfkChat(player, message, session.Services.GetService<BattlegroundFeature>());
                 break;
 
             case ChatType.Dnd:
@@ -314,6 +296,37 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
             default:
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The ChatType.Afk path of CMSG_MESSAGECHAT, after the text was sanitised. vmangos: no AFK in combat; a message sets the reply, an
+    /// empty one (or going AFK) toggles; going AFK ends DND. Going AFK also runs the battleground leave sequence
+    /// (vmangos Player::ToggleAFK, Player.cpp:1742-1743: an AFK player is not allowed in a battleground; deserter rules included).
+    /// </summary>
+    internal static void ApplyAfkChat(Player player, string message, BattlegroundFeature? battlegrounds)
+    {
+        if ((player.UnitFlags & UnitFlags.InCombat) != 0)
+        {
+            return;
+        }
+
+        if (message.Length > 0 || !player.IsAfk)
+        {
+            player.AfkMessage = message;
+        }
+
+        if (message.Length == 0 || !player.IsAfk)
+        {
+            if (player.ToggleAfk())
+            {
+                if (player.IsDnd)
+                {
+                    player.ToggleDnd();
+                }
+
+                battlegrounds?.OnPlayerWentAfk(player);
+            }
         }
     }
 

@@ -100,6 +100,37 @@ public sealed class CrystalPrisonScript : ISpellScript
     }
 }
 
+/// <summary>
+/// Muglash's Brazier Trap 20863 (vmangos SpellEffects.cpp:340-358): the creature target (Muglash) continues his escort (vmangos sets EventAI phase
+/// 2; here his <see cref="ArcaneCore.Game.Creatures.Scripts.MuglashAI"/> takes the brazier-out event unless it already has), and the Naga Brazier (178247) within
+/// 30 yd of the caster can no longer be used.
+/// </summary>
+[SpellScript(20863)]
+public sealed class MuglashBrazierTrapScript : ISpellScript
+{
+    public const uint NagaBrazier = 178247;
+    public const float BrazierRange = 30f;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Target is not Creature target)
+        {
+            return;
+        }
+
+        if (target.AI is ArcaneCore.Game.Creatures.Scripts.MuglashAI { BrazierExtinguished: false } muglash)
+        {
+            muglash.OnBrazierUsed();
+        }
+
+        if (WorldDummyHelpers.NearestObject(context.Caster, NagaBrazier, BrazierRange) is { } brazier)
+        {
+            brazier.Flags |= GameObjectFlags.NoInteract;
+        }
+    }
+}
+
 /// <summary>Forgiveness 28697 (vmangos SpellEffects.cpp:1329-1345, SM Ashbringer event): the caster kills the living target.</summary>
 [SpellScript(28697)]
 public sealed class ForgivenessScript : ISpellScript
@@ -202,12 +233,15 @@ public sealed class RazelikhGroupTeleportScript : ISpellScript
 /// Love is in the Air: city guards (Valentine (Guards) 26923) and citizens (26663, 27541, 27547-27550) answer a player (vmangos
 /// SpellEffects.cpp:4078-4193). One time in six the player is Heartbroken (26898); otherwise Adored (26680) and a faction pledge/gift, Adoration
 /// for the first one and Friendship once already Adored, then Amorous is removed (26879). Guards need a Love Token (21815) and ignore the
-/// Heartbroken.
+/// Heartbroken. The Undercity Guardian 26924 is a guard like 26923 (mangos-classic SpellEffects.cpp:4003-4042, the guard Valentine handler): after
+/// the pledge (or Heartbroken) it removes Love is in the Air 27741 from the guard and destroys one Love Token. The guards 26923 and 26924 both do so.
 /// </summary>
-[SpellScript(26923, 26663, 27541, 27547, 27548, 27549, 27550)]
+[SpellScript(26923, 26924, 26663, 27541, 27547, 27548, 27549, 27550)]
 public sealed class ValentineAnswerScript : ISpellScript
 {
-    public const uint Heartbroken = 26898, Adored = 26680, LoveToken = 21815, RemoveAmorous = 26879;
+    public const uint Heartbroken = 26898, Adored = 26680, LoveToken = 21815, RemoveAmorous = 26879, LoveInTheAir = 27741;
+
+    private static bool IsGuardSpell(uint spellId) => spellId is 26923 or 26924;
 
     private static readonly Dictionary<uint, (uint Friendship, uint Adoration)> s_guards = new()
     {
@@ -223,7 +257,7 @@ public sealed class ValentineAnswerScript : ISpellScript
     };
 
     public static (uint Friendship, uint Adoration)? GiftsFor(uint spellId, uint factionTemplate)
-        => (spellId == 26923 ? s_guards : s_citizens).TryGetValue(factionTemplate, out var gifts) ? gifts : null;
+        => (IsGuardSpell(spellId) ? s_guards : s_citizens).TryGetValue(factionTemplate, out var gifts) ? gifts : null;
 
     public void OnEffectExecute(SpellEffectContext context)
     {
@@ -233,8 +267,8 @@ public sealed class ValentineAnswerScript : ISpellScript
             return;
         }
 
-        if (context.Spell.Id == 26923
-            && (context.System.HasAura(player, Heartbroken) || player.Inventory.GetItemCount(LoveToken) < 1))
+        bool guard = IsGuardSpell(context.Spell.Id);
+        if (guard && (context.System.HasAura(player, Heartbroken) || player.Inventory.GetItemCount(LoveToken) < 1))
         {
             return;
         }
@@ -247,13 +281,20 @@ public sealed class ValentineAnswerScript : ISpellScript
         if (GadgetCasts.Roll(context, 6) == 0)
         {
             GadgetCasts.Cast(context, player, player, Heartbroken);
-            return;
+        }
+        else
+        {
+            uint gift = context.System.HasAura(player, Adored) ? gifts.Friendship : gifts.Adoration;
+            GadgetCasts.Cast(context, player, player, Adored);
+            GadgetCasts.Cast(context, player, player, gift);
+            GadgetCasts.Cast(context, player, player, RemoveAmorous);
         }
 
-        uint gift = context.System.HasAura(player, Adored) ? gifts.Friendship : gifts.Adoration;
-        GadgetCasts.Cast(context, player, player, Adored);
-        GadgetCasts.Cast(context, player, player, gift);
-        GadgetCasts.Cast(context, player, player, RemoveAmorous);
+        if (guard)
+        {
+            context.System.RemoveAuras(context.Caster, LoveInTheAir);
+            player.Inventory.DestroyItemCount(LoveToken, 1);
+        }
     }
 }
 

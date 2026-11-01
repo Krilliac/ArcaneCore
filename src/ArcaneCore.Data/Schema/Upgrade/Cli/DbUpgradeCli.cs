@@ -5,6 +5,7 @@ using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.Schema.Upgrade.Copy;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -26,7 +27,7 @@ namespace ArcaneCore.Data.Schema.Upgrade.Cli;
 /// <see cref="ConnectionStringRedactor"/>: a password never reaches the output.
 /// </para>
 /// </summary>
-public static class DbUpgradeCli
+public static partial class DbUpgradeCli
 {
     public const string Usage = """
         usage: arcane-db <command> [options]
@@ -44,6 +45,8 @@ public static class DbUpgradeCli
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
           dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC with WoWDBDefs signedness (no database connection)
+          copy          move a component's rows to another database (SQLite to PostgreSQL or MariaDB, or any pair): creates the target schema, copies every
+                        table, resets the key counters, verifies row counts and content, then runs check on the target
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -53,10 +56,15 @@ public static class DbUpgradeCli
           --apply                                 migrate-codex: migrate (without it the command is a read-only dry run)
           --confirm-backup                        upgrade, migrate-codex: you have a backup of every database with pending steps
           --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there
-          --allow-active-sessions                 upgrade, migrate-codex: do not refuse when other sessions are connected
-          --lock-timeout <seconds>                upgrade, migrate-codex: how long to wait for another process's schema lock (default 60)
+          --allow-active-sessions                 upgrade, migrate-codex, copy: do not refuse when other sessions are connected
+          --lock-timeout <seconds>                upgrade, migrate-codex, copy: how long to wait for another process's schema lock (default 60)
           --dbc-dir <directory>                   dbc: the build-5875 DBC directory (default ClientData:DbcDirectory)
           --out <directory>                       export-updates: the update root to write (normally sql/updates)
+          --source-provider sqlite|mariadb|mysql|postgresql   copy: the source engine (default: the configured Database section); with --source-connection
+          --source-connection <connection string> copy: the source database (one component only; prefer the configured Database section, a flag shows in the process list)
+          --target-provider <engine>              copy: the target engine (or ARCANE_DB_TARGET_PROVIDER)
+          --target-connection <connection string> copy: the target database (one component only; or ARCANE_DB_TARGET_<AUTH|CHARACTERS|WORLD>_CONNECTION, ARCANE_DB_TARGET_CONNECTION)
+          --replace                               copy: empty the target component's tables first (without it a target that holds rows is refused)
 
         configuration: the Database section (appsettings.json, environment variables such as
         Database__Characters__ConnectionString); a host option --config <file> names another JSON file.
@@ -64,7 +72,7 @@ public static class DbUpgradeCli
 
         exit codes: 0 ok, 1 unexpected failure, 2 usage or configuration, 3 upgrade pending (status, plan),
         4 refused (newer database, unknown state, blocker, active sessions), 5 drift (dbc: a dangling id or bad DBC), 6 database unreachable,
-        7 schema lock timeout, 8 backup not confirmed
+        7 schema lock timeout, 8 backup not confirmed, 9 copy verification failed
         """;
 
     /// <summary>The commands the tool accepts (the closed set the argument parser enforces; the runbook must name each).</summary>
@@ -79,8 +87,16 @@ public static class DbUpgradeCli
         => RunAsync(args, database, output, error, dbcDirectory: null, cancellationToken);
 
     /// <summary>Run one command line; <paramref name="dbcDirectory"/> is <c>ClientData:DbcDirectory</c>, the default of <c>dbc --dbc-dir</c>.</summary>
-    public static async Task<int> RunAsync(
+    public static Task<int> RunAsync(
         string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, CancellationToken cancellationToken)
+        => RunAsync(args, database, output, error, dbcDirectory, environment: null, cancellationToken);
+    /// <summary>As above, with the environment lookup <c>copy</c> reads its ARCANE_DB_TARGET_* variables through (null: the process environment); a seam for tests.</summary>
+    public static Task<int> RunAsync(
+        string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, Func<string, string?>? environment, CancellationToken cancellationToken)
+        => RunAsync(args, database, output, error, dbcDirectory, environment, hooks: null, cancellationToken);
+
+    internal static async Task<int> RunAsync(
+        string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, Func<string, string?>? environment, DbCopyHooks? hooks, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(database);
@@ -101,7 +117,7 @@ public static class DbUpgradeCli
         if (args.Length >= 2 && args[0] == "dbc" && args[1] == "dump")
             return await DbcDump.RunAsync(args[2..], dbcDirectory, output, error).ConfigureAwait(false);
 
-        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory };
+        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory, Environment = environment ?? System.Environment.GetEnvironmentVariable, Hooks = hooks };
         try
         {
             DbUpgradeArguments arguments = DbUpgradeArguments.Parse(args);
@@ -115,6 +131,7 @@ public static class DbUpgradeCli
                 "backup-info" => run.BackupInfo(arguments),
                 "export-updates" => await run.ExportUpdatesAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "dbc" => await run.DbcAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "copy" => await run.CopyAsync(arguments, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
@@ -136,6 +153,15 @@ public static class DbUpgradeCli
         }
     }
 
+    /// <summary>Test seam: the exit code and scrubbed message <paramref name="exception"/> from <paramref name="component"/> maps to (the private classifier of a run over <paramref name="database"/>).</summary>
+    internal static (int ExitCode, string Message) ClassifyFailure(DatabaseOptions database, string component, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(exception);
+        ComponentFailure failure = new Run(database, TextWriter.Null, TextWriter.Null).Classify(component, exception);
+        return (failure.ExitCode, failure.Message);
+    }
+
     /// <summary>A failure already phrased for the operator with the exit code it maps to.</summary>
     private sealed class ComponentFailure(int exitCode, string message) : Exception(message)
     {
@@ -153,7 +179,7 @@ public static class DbUpgradeCli
 
     private sealed record Target(Spec Spec, DatabaseConnectionOptions Connection, string Description);
 
-    private sealed class Run
+    private sealed partial class Run
     {
         private static readonly Spec[] s_specs =
         [
@@ -165,7 +191,7 @@ public static class DbUpgradeCli
         private readonly DatabaseOptions _database;
         private readonly TextWriter _out;
         private readonly TextWriter _err;
-        private readonly string[] _secrets;
+        private string[] _secrets;
 
         public Run(DatabaseOptions database, TextWriter output, TextWriter error)
         {
@@ -733,13 +759,64 @@ public static class DbUpgradeCli
             }
         }
 
-        private ComponentFailure Classify(string component, Exception ex)
+        // SQLSTATE values (DbException.SqlState): 40001 serialization failure/deadlock, 40P01 PostgreSQL deadlock, 55P03 PostgreSQL lock_not_available.
+        private static readonly string[] LockWaitSqlStates = ["40001", "40P01", "55P03"];
+
+        // 28xxx invalid authorization (MySQL/MariaDB access denied 28000, PostgreSQL 28P01 bad password), 3D000 PostgreSQL invalid_catalog_name.
+        private static readonly string[] ConnectionRefusedSqlStates = ["28000", "28P01", "28001", "3D000"];
+
+        private static bool HasSqlState(Exception exception, string[] states)
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is DbException { SqlState: { } state } && Array.IndexOf(states, state) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // MySQL/MariaDB server error numbers (MySqlException.ErrorCode): 1205 lock wait timeout (SQLSTATE HY000, so SQLSTATE alone cannot see it),
+        // 1049 unknown database (SQLSTATE 42000, shared with syntax errors, so it is matched by number).
+        private const int MySqlLockWaitTimeout = 1205;
+        private const int MySqlUnknownDatabase = 1049;
+
+        private static bool HasMySqlError(Exception exception, int number)
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is MySqlException mysql && (int)mysql.ErrorCode == number)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        internal ComponentFailure Classify(string component, Exception ex)
         {
             string message = Scrub(ex.Message);
             if (ex is SchemaMismatchException mismatch)
             {
                 int code = mismatch.Reason == SchemaMismatchReason.LockTimeout ? DbUpgradeExitCodes.LockTimeout : DbUpgradeExitCodes.Refused;
                 return new ComponentFailure(code, $"{component}: {message}");
+            }
+
+            // A lock wait the database itself gave up on (deadlock, lock_not_available, SQLite BUSY/LOCKED) is a wait that ran out, not an unreachable
+            // server: supervisors restart on exit 6 but the operator must see 7 and retry once the other process is done.
+            if (Resilience.DatabaseTransience.IsBusy(ex) || HasSqlState(ex, LockWaitSqlStates) || HasMySqlError(ex, MySqlLockWaitTimeout))
+            {
+                return new ComponentFailure(DbUpgradeExitCodes.LockTimeout, $"{component}: the wait for a database lock ended (lock wait timeout, deadlock or busy database): {message}");
+            }
+
+            // A connection the server answered and refused for good (bad credentials, no such database) is configuration: restarting never helps,
+            // so it must not map to 6 (supervisors restart on it) nor to the catch-all 1.
+            if (HasSqlState(ex, ConnectionRefusedSqlStates) || HasMySqlError(ex, MySqlUnknownDatabase))
+            {
+                return new ComponentFailure(DbUpgradeExitCodes.Usage, $"{component}: the database refused the credentials or the database name: {message}");
             }
 
             for (Exception? inner = ex; inner is not null; inner = inner.InnerException)

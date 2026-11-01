@@ -109,6 +109,9 @@ public enum SpellAttributesEx : uint
     IsChanneled = 0x00000004,
     IsSelfChanneled = 0x00000040,
 
+    /// <summary>vmangos SPELL_ATTR_EX_FAILURE_BREAKS_STEALTH (SpellDefines.h:882, bit 12): a miss or resist of the spell removes the caster's stealth (Pick Pocket).</summary>
+    FailureBreaksStealth = 0x00001000,
+
     /// <summary>vmangos SPELL_ATTR_EX_NO_AUTOCAST_AI (SpellDefines.h:887).</summary>
     NoAutocastAi = 0x00020000,
 

@@ -24,6 +24,8 @@ public sealed class ServerProbeTests : IAsyncLifetime
 
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
+    public static IEnumerable<object[]> ServerProviders() => TestDatabases.AvailableProviders().Where(p => (DatabaseProvider)p[0] != DatabaseProvider.Sqlite);
+
     [Theory]
     [InlineData(Maria, "10.11.6-MariaDB-1:10.11.6+maria~ubu2204", "MariaDB", true)]
     [InlineData(Maria, "11.4.2-MariaDB", "MariaDB", true)]
@@ -137,6 +139,33 @@ public sealed class ServerProbeTests : IAsyncLifetime
         await other.OpenAsync();
 
         Assert.Equal(baseline + 1, await ServerProbe.CountOtherSessionsAsync(db));
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task SessionsJustClosed_AreNotCounted_AsOtherSessions(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        var unpooled = new DatabaseConnectionOptions
+        {
+            Provider = provider,
+            ConnectionString = connection.ConnectionString + ";Pooling=false",
+        };
+        await SchemaProbe.EnsureCurrentAsync("auth", unpooled);
+        await using AuthDbContext db = TestContexts.Create<AuthDbContext>(unpooled);
+
+        for (int round = 0; round < 20; round++)
+        {
+            for (int i = 0; i < 20; i++)
+            {
+                await using DbConnection closing = provider == DatabaseProvider.PostgreSql
+                    ? new NpgsqlConnection(unpooled.ConnectionString)
+                    : new MySqlConnection(unpooled.ConnectionString);
+                await closing.OpenAsync();
+            }
+
+            Assert.Equal(0, await ServerProbe.CountOtherSessionsAsync(db));
+        }
     }
 
     [Theory]

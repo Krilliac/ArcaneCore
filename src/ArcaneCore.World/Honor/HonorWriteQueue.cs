@@ -673,7 +673,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
     {
         for (int attempt = 1; ; attempt++)
         {
-            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } refused)
             {
                 throw refused; // retained by the caller; never a verdict (see StopDrainBudget)
             }

@@ -49,7 +49,7 @@ public sealed partial class SpellSystem
     private void SendNextMeleeSpellAttackerStateUpdate(
         Unit caster, Unit target, SpellInfo spell, bool eligible, uint dealt, uint absorbed,
         uint resisted, bool critical, SpellCast? cast = null, SpellMissInfo miss = SpellMissInfo.None,
-        IReadOnlyList<MeleeSpellDamageComponent>? components = null)
+        IReadOnlyList<MeleeSpellDamageComponent>? components = null, uint blocked = 0)
     {
         if (!eligible || !spell.IsNextMeleeSwing)
         {
@@ -96,7 +96,7 @@ public sealed partial class SpellSystem
                 checked((uint)school.Sum(component => (long)component.Absorbed)),
                 checked((int)school.Sum(component => (long)component.Resisted))))];
         CombatPackets.SendToSet(caster, WorldOpcode.SmsgAttackerstateupdate,
-            CombatPackets.AttackerStateUpdate(hitInfo, caster.Guid, target.Guid, dealt, subDamage, victimState, blocked: 0, meleeSpellId: spell.Id));
+            CombatPackets.AttackerStateUpdate(hitInfo, caster.Guid, target.Guid, dealt, subDamage, victimState, blocked: blocked, meleeSpellId: spell.Id));
     }
 
     private static (HitInfo HitInfo, VictimState VictimState) NextMeleeSpellOutcome(SpellMissInfo miss)

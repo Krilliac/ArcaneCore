@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Instances;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Spells;
@@ -98,10 +99,22 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
     /// <summary>vmangos HandleBattleFieldPortOpcode (BattleGroundHandler.cpp:453-464): a dead player is resurrected at full health before the port.</summary>
     public void PrepareToPortIn(ObjectGuid player)
     {
-        if (Online(player) is { Map: { } map } p && !p.IsAlive)
+        if (Online(player) is not { } p)
+        {
+            return;
+        }
+
+        if (p.Map is { } map && !p.IsAlive)
         {
             map.Combat.ResurrectPlayer(p, 1.0f, applySickness: false);
             map.Combat.SpawnCorpseBones(p);
+        }
+
+        // vmangos BattleGroundHandler.cpp:461-464: a player on a taxi flight has its destinations cleared and its movement expired
+        // before the port; Abort ends the flight where the player is (clears the taxi flag and mount display and raises FlightEnded; subscribers such as NpcServicesFeature clear the persisted route).
+        if (feature.Services.GetService<NpcServicesFeature>()?.Flights is { } flights && flights.IsFlying(p))
+        {
+            flights.Abort(p);
         }
     }
 

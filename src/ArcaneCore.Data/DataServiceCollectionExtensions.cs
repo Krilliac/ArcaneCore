@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Data.Schema;
@@ -68,10 +69,16 @@ public static class DataServiceCollectionExtensions
         // Unpooled, each one rebuilt its options (WarningsConfiguration and extension copies) and EF's internal service scope, about a fifth
         // of the save path's allocations. The options are built once from the root provider (every input above is a singleton or IOptions),
         // and EF resets a returned context (change tracker, AutoTransactionBehavior the write fence sets, adopted transactions) before reuse.
+        // The writer-lock fence (CharacterDatabaseWriterFence) is registered here whatever Cluster:Fencing:Enabled says, and its interceptor goes in FIRST, ahead of the SQLite
+        // write gate, so a refused call never queues for the gate. Tripped by WorldWriterGuard when another world holds the writer lock; until then it costs one volatile read per call.
+        services.TryAddSingleton<CharacterDatabaseWriterFence>();
         services.AddDbContextPool<CharacterDbContext>((provider, builder) =>
+        {
+            builder.AddInterceptors(new CharacterDatabaseWriterFenceInterceptor(provider.GetRequiredService<CharacterDatabaseWriterFence>()));
             ConfigureProvider(builder, ResolveGuarded(provider, DatabaseComponent.Characters), provider.GetRequiredService<SlowTransactionInterceptor>(),
                 provider.GetRequiredService<IOptions<DatabaseOptions>>().Value.SqliteWriteTimeoutMs,
-                provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider), WriteGate(provider)));
+                provider.GetRequiredService<SlowCommandInterceptor>(), PragmaLogger(provider), CheckpointOptions(provider), WriteGate(provider));
+        });
 
         AddCharacterWriteFence(services, configuration);
         services.AddScoped<ICharacterStore, EfCharacterStore>();

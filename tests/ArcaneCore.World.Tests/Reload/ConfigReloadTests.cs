@@ -2,9 +2,11 @@ using System.Reflection;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
@@ -167,6 +169,261 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal("original", _options.Motd);
         Assert.False(_options.Respawn.Dynamic.Enabled);
         Assert.Empty(_options.Respawn.Dynamic.Problems());
+    }
+
+    [Fact]
+    public async Task WarMode_TheSwitchAndBothCosts_AreAppliedLive_AndTheSharedObjectIsTheOneTheWorldReads()
+    {
+        WarModeOptions warMode = WorldStateHooks.For(_world).WarMode;
+        Assert.False(warMode.Enabled);
+        string path = Write("""{ "World": { "WarMode": { "Enabled": true, "HonorMultiplier": 2.5, "PvpDeathDurabilityLoss": 0.3 } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Same(warMode, WorldStateHooks.For(_world).WarMode);
+        Assert.True(warMode.Enabled);
+        Assert.Equal(2.5f, warMode.HonorMultiplier);
+        Assert.Equal(0.3f, warMode.PvpDeathDurabilityLoss);
+
+        // and back off, live
+        File.WriteAllText(path, """{ "World": { "WarMode": { "Enabled": false, "HonorMultiplier": 1, "PvpDeathDurabilityLoss": 0 } } }""");
+        ReloadResult off = await coordinator.ReloadAsync("config");
+        Assert.Equal(ReloadStatus.Applied, off.Status);
+        Assert.False(warMode.Enabled);
+        Assert.Equal(1f, warMode.HonorMultiplier);
+        Assert.Equal(0f, warMode.PvpDeathDurabilityLoss);
+    }
+
+    [Theory]
+    [InlineData("HonorMultiplier", "0.5")]
+    [InlineData("HonorMultiplier", "11")]
+    [InlineData("PvpDeathDurabilityLoss", "-0.1")]
+    [InlineData("PvpDeathDurabilityLoss", "1.5")]
+    public async Task WarMode_OutOfRangeValue_RejectsTheWholeReload(string key, string value)
+    {
+        WarModeOptions warMode = WorldStateHooks.For(_world).WarMode;
+        string path = Write($$"""{ "World": { "Motd": "Rejected", "WarMode": { "Enabled": true, "{{key}}": {{value}} } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Rejected, result.Status);
+        Assert.Equal("original", _options.Motd);
+        Assert.False(warMode.Enabled);
+        warMode.Validate();
+    }
+
+    [Fact]
+    public void WarMode_TheKeysBindFromConfiguration_AndTheOldMemoryLayerSwitchIsNoKeyAnyMore()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:WarMode:Enabled"] = "true",
+            ["World:WarMode:HonorMultiplier"] = "3",
+            ["World:WarMode:PvpDeathDurabilityLoss"] = "0.25",
+            ["World:Playerbots:Social:WarMode:HuntRadiusYards"] = "80",
+        }).Build();
+        var warMode = new WarModeOptions();
+        configuration.GetSection(WarModeOptions.SectionName).Bind(warMode);
+        var hunt = new PlayerbotWarModeOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Social:WarMode").Bind(hunt);
+
+        Assert.True(warMode.Enabled);
+        Assert.Equal(3f, warMode.HonorMultiplier);
+        Assert.Equal(0.25f, warMode.PvpDeathDurabilityLoss);
+        Assert.Equal(80, hunt.HuntRadiusYards);
+        warMode.Validate();
+        hunt.Validate();
+
+        // The memory layer no longer has its own switch: the old key is unknown to the catalog (the loader warns, "not a key the world daemon reads"; it fails start-up only under Startup:Strict).
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:WarMode:Enabled", ConfigDaemon.World).Status);
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Social:WarMode:HuntRadiusYards", ConfigDaemon.World).Status);
+        Assert.Equal(ConfKeyStatus.Unknown, ConfCatalog.Embedded.Classify("World:Playerbots:Social:WarMode:Enabled", ConfigDaemon.World).Status);
+        Assert.DoesNotContain(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Social:WarMode:Enabled");
+    }
+
+    [Theory]
+    [InlineData(9)]
+    [InlineData(151)]
+    [InlineData(-5)]
+    public void TheHuntRadius_OutsideTenToOneFifty_IsRejected(int yards)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotWarModeOptions { HuntRadiusYards = yards }.Validate());
+
+    [Fact]
+    public void WarModeExemptAreas_IsALiveKey_WhoseValueMustBeAListOfAreaIds()
+    {
+        WorldConfigKey key = Assert.Single(WorldConfigKeys.All, k => k.Path == "World:WarMode:ExemptAreas");
+        Assert.True(key.Live);
+        Assert.Null(key.Check!("35,392"));
+        Assert.Null(key.Check!(""));
+        Assert.NotNull(key.Check!("35,Booty Bay"));
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:WarMode:ExemptAreas", ConfigDaemon.World).Status);
+    }
+
+    [Fact]
+    public void PvpInitiate_DefaultsAreOffWithTheSpecifiedWindow_BindAndAreLiveKeys()
+    {
+        var defaults = new PlayerbotPvpInitiateOptions();
+        Assert.False(defaults.Enabled);
+        Assert.Equal((30, 5, 3, 60), (defaults.RadiusYards, defaults.MaxLevelBelow, defaults.MaxLevelAbove, defaults.MinHealthPct));
+        new PlayerbotPvpOptions().Validate();
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:Playerbots:Pvp:Initiate:Enabled"] = "true",
+            ["World:Playerbots:Pvp:Initiate:RadiusYards"] = "45",
+            ["World:Playerbots:Pvp:Initiate:MaxLevelBelow"] = "2",
+            ["World:Playerbots:Pvp:Initiate:MaxLevelAbove"] = "1",
+            ["World:Playerbots:Pvp:Initiate:MinHealthPct"] = "80",
+        }).Build();
+        var pvp = new PlayerbotPvpOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Pvp").Bind(pvp);
+        Assert.True(pvp.Initiate.Enabled);
+        Assert.Equal((45, 2, 1, 80), (pvp.Initiate.RadiusYards, pvp.Initiate.MaxLevelBelow, pvp.Initiate.MaxLevelAbove, pvp.Initiate.MinHealthPct));
+
+        foreach (string key in new[] { "Enabled", "RadiusYards", "MaxLevelBelow", "MaxLevelAbove", "MinHealthPct" })
+        {
+            Assert.Contains(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Initiate:" + key && k.Live);
+            Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Initiate:" + key, ConfigDaemon.World).Status);
+        }
+    }
+
+    [Theory]
+    [InlineData(4, 0, 0, 0)]
+    [InlineData(101, 0, 0, 0)]
+    [InlineData(30, -1, 0, 0)]
+    [InlineData(30, 0, 61, 0)]
+    [InlineData(30, 0, 0, 101)]
+    [InlineData(30, 0, 0, -1)]
+    public void PvpInitiate_OutOfRangeValues_AreRejected(int radius, int below, int above, int health)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotPvpOptions
+        {
+            Initiate = new PlayerbotPvpInitiateOptions { RadiusYards = radius, MaxLevelBelow = below, MaxLevelAbove = above, MinHealthPct = health },
+        }.Validate());
+
+    [Fact]
+    public void PvpDefense_DefaultsAreOffWithTheSpecifiedLimits_BindAndAreLiveKeysExceptTheDbcPath()
+    {
+        var defaults = new PlayerbotPvpDefenseOptions();
+        Assert.False(defaults.Enabled);
+        Assert.True(defaults.Announce);
+        Assert.False(defaults.BothSides);
+        Assert.Equal((300, 4, 5, 5), (defaults.RespondRadiusYards, defaults.MaxRespondersPerSide, defaults.MaxLevelBelow, defaults.MaxLevelAbove));
+        Assert.Equal((60, 30, 2, 16, 30), (defaults.CallerCooldownSeconds, defaults.ZoneAnnounceSeconds, defaults.MaxActiveCallsPerZone, defaults.MaxOpenCallsPerMap, defaults.ProvokeThrottleSeconds));
+        Assert.Equal("", defaults.WorldMapAreaDbcPath);
+        new PlayerbotPvpOptions().Validate();
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:Playerbots:Pvp:Defense:Enabled"] = "true",
+            ["World:Playerbots:Pvp:Defense:Announce"] = "false",
+            ["World:Playerbots:Pvp:Defense:BothSides"] = "true",
+            ["World:Playerbots:Pvp:Defense:RespondRadiusYards"] = "500",
+            ["World:Playerbots:Pvp:Defense:MaxRespondersPerSide"] = "7",
+            ["World:Playerbots:Pvp:Defense:MaxLevelBelow"] = "2",
+            ["World:Playerbots:Pvp:Defense:MaxLevelAbove"] = "9",
+            ["World:Playerbots:Pvp:Defense:CallerCooldownSeconds"] = "90",
+            ["World:Playerbots:Pvp:Defense:ZoneAnnounceSeconds"] = "45",
+            ["World:Playerbots:Pvp:Defense:MaxActiveCallsPerZone"] = "3",
+            ["World:Playerbots:Pvp:Defense:MaxOpenCallsPerMap"] = "40",
+            ["World:Playerbots:Pvp:Defense:ProvokeThrottleSeconds"] = "20",
+            ["World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath"] = "maps.dbc",
+        }).Build();
+        var pvp = new PlayerbotPvpOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Pvp").Bind(pvp);
+        Assert.True(pvp.Defense.Enabled);
+        Assert.False(pvp.Defense.Announce);
+        Assert.True(pvp.Defense.BothSides);
+        Assert.Equal((500, 7, 2, 9), (pvp.Defense.RespondRadiusYards, pvp.Defense.MaxRespondersPerSide, pvp.Defense.MaxLevelBelow, pvp.Defense.MaxLevelAbove));
+        Assert.Equal((90, 45, 3, 40, 20), (pvp.Defense.CallerCooldownSeconds, pvp.Defense.ZoneAnnounceSeconds, pvp.Defense.MaxActiveCallsPerZone, pvp.Defense.MaxOpenCallsPerMap, pvp.Defense.ProvokeThrottleSeconds));
+        Assert.Equal("maps.dbc", pvp.Defense.WorldMapAreaDbcPath);
+        pvp.Validate();
+
+        foreach (string key in new[]
+        {
+            "Enabled", "Announce", "BothSides", "RespondRadiusYards", "MaxRespondersPerSide", "MaxLevelBelow", "MaxLevelAbove",
+            "CallerCooldownSeconds", "ZoneAnnounceSeconds", "MaxActiveCallsPerZone", "MaxOpenCallsPerMap", "ProvokeThrottleSeconds",
+        })
+        {
+            Assert.Contains(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Defense:" + key && k.Live);
+            Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Defense:" + key, ConfigDaemon.World).Status);
+        }
+
+        // The DBC path is restart-only: known to the catalog, never a reload key.
+        Assert.DoesNotContain(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath" && k.Live);
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath", ConfigDaemon.World).Status);
+    }
+
+    [Theory]
+    [InlineData(49, 4, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(1001, 4, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, -1, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 21, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, -1, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 61, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, -1, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 61, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 9, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 3601, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 4, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 601, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 0, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 21, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 0, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 257, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 16, 0)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 16, 3601)]
+    public void PvpDefense_OutOfRangeValues_AreRejected(int radius, int responders, int below, int above, int cooldown, int announce, int perZone, int perMap, int throttle)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotPvpOptions
+        {
+            Defense = new PlayerbotPvpDefenseOptions
+            {
+                RespondRadiusYards = radius,
+                MaxRespondersPerSide = responders,
+                MaxLevelBelow = below,
+                MaxLevelAbove = above,
+                CallerCooldownSeconds = cooldown,
+                ZoneAnnounceSeconds = announce,
+                MaxActiveCallsPerZone = perZone,
+                MaxOpenCallsPerMap = perMap,
+                ProvokeThrottleSeconds = throttle,
+            },
+        }.Validate());
+
+    [Theory]
+    [InlineData(50, 0, 0, 10, 5, 1, 1, 1)]
+    [InlineData(1000, 20, 60, 3600, 600, 20, 256, 3600)]
+    public void PvpDefense_RangeEdges_AreAccepted(int radius, int responders, int levels, int cooldown, int announce, int perZone, int perMap, int throttle)
+        => new PlayerbotPvpOptions
+        {
+            Defense = new PlayerbotPvpDefenseOptions
+            {
+                RespondRadiusYards = radius,
+                MaxRespondersPerSide = responders,
+                MaxLevelBelow = levels,
+                MaxLevelAbove = levels,
+                CallerCooldownSeconds = cooldown,
+                ZoneAnnounceSeconds = announce,
+                MaxActiveCallsPerZone = perZone,
+                MaxOpenCallsPerMap = perMap,
+                ProvokeThrottleSeconds = throttle,
+            },
+        }.Validate();
+
+    [Fact]
+    public void TheBotsReadTheOneSwitch_ThroughTheSharedWarModeOptions()
+    {
+        var shared = new WarModeOptions();
+        var bots = new PlayerbotWarModeOptions();
+        Assert.False(bots.Enabled);
+
+        bots.Link(shared);
+        shared.Enabled = true;
+        Assert.True(bots.Enabled);
+        shared.Enabled = false;
+        Assert.False(bots.Enabled);
     }
 
     [Fact]
@@ -805,6 +1062,19 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Combat)}:{nameof(PlayerbotCombatOptions.Kite)}:{property.Name}");
         }
 
+        // Bots starting PvP fights are live key by key (docs/areas/playbots-combat.md, Starting a PvP fight).
+        foreach (PropertyInfo property in typeof(PlayerbotPvpInitiateOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Pvp)}:{nameof(PlayerbotPvpOptions.Initiate)}:{property.Name}");
+        }
+
+        // Defense calls are live key by key except the WorldMapArea.dbc path, which is read once when the bot feature attaches.
+        foreach (PropertyInfo property in typeof(PlayerbotPvpDefenseOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.Name != nameof(PlayerbotPvpDefenseOptions.WorldMapAreaDbcPath)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Pvp)}:{nameof(PlayerbotPvpOptions.Defense)}:{property.Name}");
+        }
+
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions)
@@ -887,6 +1157,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotOpportunityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Opportunities)}:{property.Name}");
+        }
+
+        // The world PvP objectives (Silithyst) are live key by key (docs/areas/playbots-social.md, World PvP: Silithyst).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotSilithystOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:WorldPvp:Silithyst:{property.Name}");
         }
 
         // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).
@@ -1019,6 +1295,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chaos.PlayerbotChaosOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chaos)}:{property.Name}");
+        }
+
+        // War Mode: the switch and its two costs are live key by key (docs/areas/world-state.md, War Mode).
+        foreach (PropertyInfo property in typeof(WarModeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{WarModeOptions.SectionName}:{property.Name}");
         }
 
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).

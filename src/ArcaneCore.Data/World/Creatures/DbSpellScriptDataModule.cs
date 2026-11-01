@@ -8,7 +8,7 @@ namespace ArcaneCore.Data.World.Creatures;
 /// World schema step 65: <c>dbscripts_on_spell</c>, the spell DB scripts (cmangos ScriptMgr::LoadScriptMap(SCRIPT_TYPE_SPELL),
 /// DBScripts/ScriptMgr.cpp:1001-1060; vmangos ScriptMgr::LoadSpellScripts, ScriptMgr.cpp:1510-1556). The rows have the
 /// <c>dbscripts_on_relay</c> layout (<see cref="DbScriptRow"/>) and run on the same map executor as the other DB script tables; a spell's
-/// DUMMY or SCRIPT_EFFECT effect starts them (SpellSystem.DbSpellScripts.cs).
+/// SCRIPT_EFFECT effect starts them (SpellSystem.DbSpellScripts.cs).
 /// <para>
 /// <b>World version 65</b>, after the tuning tables (63) and the playerbot ladder (64). Tests read <see cref="Version"/>, never a
 /// literal.

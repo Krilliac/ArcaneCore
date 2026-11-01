@@ -73,6 +73,9 @@ public static class CreatureAiServicesBinder
             QuestEvents = new EventAiQuestEvents(services),
             ScriptQuests = new ScriptQuestEvents(services),
             ItemTemplateOf = services.GetService<ArcaneCore.World.Items.ItemsFeature>() is { } items ? entry => items.Templates.Find(entry) : null,
+            // The teleport service attaches after the creature feature, so it is resolved when a script step first needs it.
+            Teleports = services.GetService<ArcaneCore.World.Teleport.TeleportFeature>() is { } teleportFeature
+                ? new ArcaneCore.World.Spells.WorldSpellTeleportSink(() => teleportFeature.Teleports) : null,
         };
 
         foreach (PropertyInfo property in Bindable)

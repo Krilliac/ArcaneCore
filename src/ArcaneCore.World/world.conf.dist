@@ -1701,7 +1701,12 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #    Cluster.Fencing.Enabled
 #        Description: Enable durable character ownership fencing at world startup; disabled by
 #                     default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with
-#                     fencing off refuses to start.
+#                     fencing off refuses to start. Also required (startup check, exit 78) with
+#                     Cluster:Node:Role other than Combined and for every world child of a
+#                     Cluster:Supervisor that runs more than one world: an unfenced world skips the
+#                     durable id allocator priming and collides on in-memory id counters. Each world
+#                     of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a
+#                     PostgreSQL or MariaDB characters database.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1713,7 +1718,8 @@ Cluster.Fencing.Enabled = false
 #
 #    Cluster.Fencing.OwnerNode
 #        Description: The durable owner identity; defaults to the current machine name and must be
-#                     stable while the world owns the database.
+#                     stable while the world owns the database. Must be distinct for each world of a
+#                     multi-world cluster (the supervisor check refuses a duplicate).
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -1861,11 +1867,14 @@ Cluster.Supervisor.CrashLoopWindowSeconds = 300
 
 #
 #    Cluster.Supervisor.DumpGraceSeconds
-#        Description: How long a child that announced dumping (its own crash dump,
+#        Description: The cap on how long a child that announced dumping (its own crash dump,
 #                     Diagnostics:CrashDump) is exempt from the hang timeout and from a hang capture
 #                     of the supervisor's own, in seconds (default 420: three times the default dump
-#                     timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the
-#                     child's Diagnostics:CrashDump:TimeoutSeconds.
+#                     timeout of 120 s, plus a minute; 1 to 3600). The exemption is min(announced
+#                     max + 60, this): the child's own max= from its authenticated line, bounded by
+#                     this value. Keep it above three times the child's
+#                     Diagnostics:CrashDump:TimeoutSeconds plus a minute, or the cap cuts a long
+#                     dump short.
 #        Type: int
 #        Default: 420
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -3414,7 +3423,10 @@ Database.Auth.Provider = MariaDb
 #                     default postgres). PostgreSQL scopes advisory locks to the database a session
 #                     is connected to, so every world must take the lock in the same database, and
 #                     it must exist before the characters database does. The login needs CONNECT on
-#                     it. MariaDB, MySQL and SQLite ignore it.
+#                     it. Only the characters database takes the single-writer lock, so this key has
+#                     an effect under Database:Characters only and the realm daemon ignores it;
+#                     under Database:Auth and Database:World it does nothing. MariaDB, MySQL and
+#                     SQLite ignore it.
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -3484,7 +3496,10 @@ Database.Characters.Provider = MariaDb
 #                     default postgres). PostgreSQL scopes advisory locks to the database a session
 #                     is connected to, so every world must take the lock in the same database, and
 #                     it must exist before the characters database does. The login needs CONNECT on
-#                     it. MariaDB, MySQL and SQLite ignore it.
+#                     it. Only the characters database takes the single-writer lock, so this key has
+#                     an effect under Database:Characters only and the realm daemon ignores it;
+#                     under Database:Auth and Database:World it does nothing. MariaDB, MySQL and
+#                     SQLite ignore it.
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -3783,7 +3798,10 @@ Database.World.Provider = MariaDb
 #                     default postgres). PostgreSQL scopes advisory locks to the database a session
 #                     is connected to, so every world must take the lock in the same database, and
 #                     it must exist before the characters database does. The login needs CONNECT on
-#                     it. MariaDB, MySQL and SQLite ignore it.
+#                     it. Only the characters database takes the single-writer lock, so this key has
+#                     an effect under Database:Characters only and the realm daemon ignores it;
+#                     under Database:Auth and Database:World it does nothing. MariaDB, MySQL and
+#                     SQLite ignore it.
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -3798,9 +3816,11 @@ Database.World.Provider = MariaDb
 #                     the world takes its single-writer advisory lock. PostgreSQL scopes advisory
 #                     locks to the database the session is connected to, so all worlds of one
 #                     characters database must lock in the same database, one that exists before the
-#                     characters database is created. The login needs CONNECT on it. Each component
-#                     may override it with a Database:Characters WriterLockDatabase key. MariaDB,
-#                     MySQL and SQLite ignore it (docs/guide/operations.md).
+#                     characters database is created. The login needs CONNECT on it. Only the
+#                     characters database takes the single-writer lock, so the world uses this value
+#                     (or the Database:Characters WriterLockDatabase key that overrides it) for the
+#                     characters database alone; the realm daemon and the Auth and World components
+#                     ignore it. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).
 #        Type: string
 #        Default: "postgres"
 #        Allowed: text
@@ -4841,8 +4861,9 @@ HotReload.NegativeNumbers = Retail
 #        Description: mangos DurabilityLossChance.Absorb (mangos-classic World.cpp:460, mangoszero
 #                     WorldConfig.cpp:233; mangos default 0.5): the percent chance that a player
 #                     whose absorb effects take part of a melee swing loses a durability point on
-#                     one worn armor piece (the hit-taken pool). Default 0 (off), as vmangos has no
-#                     absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
+#                     one worn armor piece (drawn from the worn armor pieces that have a durability
+#                     maximum, a shield included and a weapon not). Default 0 (off), as vmangos has
+#                     no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
 #        Type: double
 #        Default: 0
 #        Allowed: a number, '.' is the decimal point
@@ -4873,8 +4894,8 @@ Items.DurabilityLossChanceBlock = 0
 #                     or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per
 #                     damage event by MapCombat (MapCombat.Durability.cs): a player victim that
 #                     survives loses a point on a uniformly random equipment slot, and a player's
-#                     connecting melee swing wears the weapon of the swinging hand. Zero or less
-#                     never rolls; DurabilityLossEnable false overrides it.
+#                     connecting melee swing likewise wears one of the 19 equipment slots chosen
+#                     uniformly. Zero or less never rolls; DurabilityLossEnable false overrides it.
 #        Type: double
 #        Default: 0.5
 #        Allowed: a number, '.' is the decimal point
@@ -19479,6 +19500,55 @@ World.Playerbots.Travel.TransitBackoffSeconds = 60
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Travel.Zeppelins = true
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.Enabled
+#        Description: Let bots pick up and deliver silithyst (on by default). Off: bots ignore the
+#                     geysers; a bot already carrying finishes its trip.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.Enabled = true
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser
+#        Description: The most bots that go for one geyser or mound at the same time (1..8; default
+#                     1).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number from 1 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser = 1
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.ParticipationChance
+#        Description: The chance (0..1; default 0.5) that an eligible bot takes part in a given
+#                     two-minute window: each bot rolls once per window from its guid, so a crowd of
+#                     bots in Silithus is not all on the geysers at once.
+#        Type: float
+#        Default: 0.5
+#        Allowed: a number from 0 to 1, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.ParticipationChance = 0.5
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance
+#        Description: The chance (0..1; default 0.9) of the same roll while
+#                     World:Playerbots:Social:WarMode:Enabled is on.
+#        Type: float
+#        Default: 0.9
+#        Allowed: a number from 0 to 1, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance = 0.9
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa

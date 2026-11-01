@@ -53,7 +53,16 @@ public sealed class RecordingPlayerSession(int accountId = 1, AccountSecurity se
     {
     }
 
+    /// <summary>The reason of the last <see cref="Kick(string)"/>; null when the session was kicked without one.</summary>
+    public string? KickReason { get; private set; }
+
     public void Kick() => Kicked = true;
+
+    public void Kick(string reason)
+    {
+        KickReason = reason;
+        Kicked = true;
+    }
 
     public void OnLoggedOut() => LoggedOutCount++;
 

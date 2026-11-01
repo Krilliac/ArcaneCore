@@ -140,8 +140,29 @@ public sealed partial class SpellModEngine : ISpellModEngine
     public ulong ClassMask(SpellInfo spell, int effectIndex)
     {
         ArgumentNullException.ThrowIfNull(spell);
-        return MaskSource?.TryGetMask(spell.Id, effectIndex) ?? spell.Effects[effectIndex].ItemType;
+        if (MaskSource?.TryGetMask(spell.Id, effectIndex) is { } overlay)
+        {
+            return overlay;
+        }
+
+        ulong mask = spell.Effects[effectIndex].ItemType;
+        return mask != 0 || effectIndex != 0 || !BuiltInClassMasks.TryGetValue(spell.Id, out ulong fixup) ? mask : fixup;
     }
+
+    /// <summary>
+    /// Class masks of ADD_TARGET_TRIGGER talents whose client Spell.dbc EffectItemType is empty (the mask lives in vmangos' / mangos-classic's
+    /// spell_affect, SpellMgr::GetSpellAffectMask), all on effect 0: Improved Sprint 13743 / 13875 (Sprint, family flag 0x40) and Initiative
+    /// 13976 / 13979 / 13980 (Garrote 0x100, Ambush 0x200, Cheap Shot 0x400). Without them the talents never trigger (mangos-classic
+    /// sql/archive/0.7/3763_spell_affect.sql:92-99). The class-mask overlay, when it names the effect, wins; so does a mask the spell data holds.
+    /// </summary>
+    private static readonly Dictionary<uint, ulong> BuiltInClassMasks = new()
+    {
+        [13743] = 0x40,
+        [13875] = 0x40,
+        [13976] = 0x700,
+        [13979] = 0x700,
+        [13980] = 0x700,
+    };
 
     public IReadOnlyList<SpellMod> ModsOf(Unit owner, SpellModOp op)
     {

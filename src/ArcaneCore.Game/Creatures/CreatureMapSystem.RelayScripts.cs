@@ -109,6 +109,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// cmangos Map::ScriptsStart(SCRIPT_TYPE_RELAY, id, source, target): run relay <paramref name="relayId"/> with
     /// <paramref name="source"/> and <paramref name="target"/>. False when the relay does not exist or already runs for the pair.
+    /// The source is any <see cref="WorldObject"/>, not only a creature: cmangos Map::ScriptsStart takes an <c>Object*</c> source (Maps/Map.cpp:2166-2178,
+    /// asserting only that it is not null), so a player, game object or item may start a script; each command then checks its own source kind
+    /// (a TALK or EMOTE by a non-creature is reported and skipped, see <c>RunRelayCommand</c>).
     /// </summary>
     public bool StartRelayScript(uint relayId, WorldObject source, WorldObject? target)
     {
@@ -448,6 +451,10 @@ public sealed partial class CreatureMapSystem
 
             case 3: // SCRIPT_COMMAND_MOVE_TO (:1843-1897)
                 RelayMoveTo(step, source, target);
+                return false;
+
+            case 6: // SCRIPT_COMMAND_TELEPORT_TO (CreatureMapSystem.RelaySeams.cs)
+                RelayTeleportTo(step, source, target);
                 return false;
 
             case 7: // SCRIPT_COMMAND_QUEST_EXPLORED (cmangos ScriptMgr.cpp:1934-1966; the player: GetPlayerTargetOrSourceAndLog, :1685-1694)
@@ -794,6 +801,10 @@ public sealed partial class CreatureMapSystem
 
             case 37: // SCRIPT_COMMAND_MOVE_DYNAMIC (CreatureMapSystem.RelayCommandsExtra.cs)
                 RelayMoveDynamic(step, source, target);
+                return false;
+
+            case 38: // SCRIPT_COMMAND_SEND_MAIL (CreatureMapSystem.RelaySeams.cs)
+                RelaySendMail(step, source, target);
                 return false;
 
             case 39: // SCRIPT_COMMAND_SET_HOVER

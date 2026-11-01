@@ -385,7 +385,25 @@ public sealed partial class EconomyFeature
         {
             if (plan is null || recipient.Player.Inventory.GetItemByGuid(ObjectGuid.Item(plan.UpdatedRecipientItem.Guid)) is not { } item)
                 return;
-            _services.GetRequiredService<SpellFeature>().System.PublishCommittedTradeEnchantment(publicationId, caster.Player, item, plan);
+            SpellSystem spells = _services.GetRequiredService<SpellFeature>().System;
+            if (plan.CastOnCommit && plan.SpellSnapshot is { } spell)
+            {
+                // A spell with no enchantment image (Pick Lock on the partner's lockbox) is cast for real on the committed item
+                // (vmangos TradeHandler.cpp:347-416 casts the stored spell on the trade-slot item once the trade completes).
+                if (caster.Player.IsInWorld)
+                {
+                    spells.CastSpell(caster.Player, spell.Id, new SpellCastTargets
+                    {
+                        Mask = SpellCastTargetFlags.TradeItem,
+                        Item = item.Guid,
+                        ServerValidatedTradeItem = item,
+                    }, triggered: true);
+                }
+
+                return;
+            }
+
+            spells.PublishCommittedTradeEnchantment(publicationId, caster.Player, item, plan);
         }
     }
 

@@ -24,6 +24,50 @@ public sealed class AppearanceHandlersTests
     }
 
     [Fact]
+    public async Task HelmAndCloakToggles_SurviveARelog()
+    {
+        // vmangos 0e3ff01 Player::SaveToDB stores the hide bits in characters.character_flags (Player.cpp:16339-16340) and
+        // Player::LoadFromDB sets them back on PLAYER_FLAGS (Player.cpp:14678-14681). Disconnect and relog as DeathDurabilityWorldTests.
+        const string account = "HELMRELOG";
+        const string name = "Helmrelog";
+        await using var host = WorldTestHost.Start();
+        byte[] key = await host.AddAccountAsync(account);
+        await using (WorldTestClient client = await host.ConnectAsync())
+        {
+            await client.AuthenticateAsync(account, key);
+            await client.CreateCharacterAsync(name);
+            await client.LoginAsync(1);
+            Player player = await host.PlayerAsync(name);
+            await client.SendAsync(WorldOpcode.CmsgToggleHelm, []);
+            await client.SendAsync(WorldOpcode.CmsgToggleCloak, []);
+            await host.WaitForWorldAsync(() => (player.Flags & (PlayerFlags.HideHelm | PlayerFlags.HideCloak)) == (PlayerFlags.HideHelm | PlayerFlags.HideCloak),
+                "the helm and cloak are hidden");
+        }
+
+        await WorldTestHost.WaitForAsync(() => host.World.OnlinePlayerCount == 0, "player disconnected");
+        await WorldTestHost.WaitForAsync(() => host.SaveQueue.Pending == 0, "hidden flags saved");
+
+        await using (WorldTestClient relog = await host.ConnectAsync())
+        {
+            await relog.AuthenticateAsync(account, key);
+            await relog.LoginAsync(1);
+            Assert.Equal(PlayerFlags.HideHelm | PlayerFlags.HideCloak,
+                await host.PlayerStateAsync(name, p => p.Flags & (PlayerFlags.HideHelm | PlayerFlags.HideCloak)));
+            await relog.SendAsync(WorldOpcode.CmsgToggleHelm, []);
+            Player player = await host.PlayerAsync(name);
+            await host.WaitForWorldAsync(() => (player.Flags & PlayerFlags.HideHelm) == 0, "the helm shows again");
+        }
+
+        await WorldTestHost.WaitForAsync(() => host.World.OnlinePlayerCount == 0, "player disconnected again");
+        await WorldTestHost.WaitForAsync(() => host.SaveQueue.Pending == 0, "shown helm saved");
+
+        await using WorldTestClient third = await host.ConnectAsync();
+        await third.AuthenticateAsync(account, key);
+        await third.LoginAsync(1);
+        Assert.Equal(PlayerFlags.HideCloak, await host.PlayerStateAsync(name, p => p.Flags & (PlayerFlags.HideHelm | PlayerFlags.HideCloak)));
+    }
+
+    [Fact]
     public async Task MountSpecialAnim_ReachesAnObserver_WithTheRidersGuid()
     {
         await using var host = WorldTestHost.Start();

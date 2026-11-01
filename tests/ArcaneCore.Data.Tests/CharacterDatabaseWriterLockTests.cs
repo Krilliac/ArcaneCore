@@ -171,25 +171,14 @@ public sealed class CharacterDatabaseWriterLockTests
         Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => CharacterDatabaseWriterLock.TryAcquire(options));
     }
 
+    /// <summary>The server providers available in this environment (MariaDB, PostgreSQL); empty when neither variable is set, which <see cref="ServerProviderTheoryAttribute"/> reports as Skipped.</summary>
     public static IEnumerable<object[]> ServerProviders()
-    {
-        bool any = false;
-        foreach (object[] row in TestDatabases.AvailableProviders())
-        {
-            if ((DatabaseProvider)row[0] == DatabaseProvider.Sqlite) continue;
-            any = true;
-            yield return row;
-        }
+        => TestDatabases.AvailableProviders().Where(row => (DatabaseProvider)row[0] != DatabaseProvider.Sqlite);
 
-        // Without a server in the environment the theory has no data; hand it SQLite, whose case returns at once (the SQLite lock has no connection to lose).
-        if (!any) yield return [DatabaseProvider.Sqlite];
-    }
-
-    [Theory]
+    [ServerProviderTheory]
     [MemberData(nameof(ServerProviders))]
     public async Task ALostLockConnection_IsDetectedByTheHealthCheck_AndReportedOnce(DatabaseProvider provider)
     {
-        if (provider == DatabaseProvider.Sqlite) return;
         await using var databases = new TestDatabases();
         DatabaseConnectionOptions options = await databases.CreateAsync(provider);
         string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
@@ -207,11 +196,10 @@ public sealed class CharacterDatabaseWriterLockTests
         string reason = await lost.Task.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Contains(held.Description, reason);
         await Task.Delay(700);
-        Assert.Equal(1, Volatile.Read(ref reports));
-        Assert.False(held.IsHeld());
+        Assert.Equal(1, Volatile.Read(ref reports)); // one loss, one report, however many ticks follow (the lock is then re-taken: CharacterDatabaseWriterLockHardeningTests)
     }
 
-    private static async Task KillLockSessionAsync(DatabaseConnectionOptions options, string databaseName)
+    internal static async Task KillLockSessionAsync(DatabaseConnectionOptions options, string databaseName)
     {
         if (options.Provider == DatabaseProvider.PostgreSql)
         {

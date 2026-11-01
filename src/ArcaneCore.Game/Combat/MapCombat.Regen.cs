@@ -243,10 +243,9 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// vmangos Creature::RegenerateAll every 5 s (Objects/Creature.cpp:1087-1100). Health returns out of combat, while polymorphed and in the
-    /// unreachable-target soft evade (RegenerateHealth :1127-1162): a third of the maximum, or a tenth for a polymorphed creature a player
-    /// charms or owns. Mana returns on every tick (RegenerateMana :1102-1125): a third of the maximum out of combat, else (in combat, the soft
+    /// unreachable-target soft evade (RegenerateHealth :1127-1162): a third of the maximum, but for a creature a player charms or owns a tenth while polymorphed
+    /// and otherwise <see cref="CreatureHealthRegenPerTick"/> (RegenerateHealth :1139-1150). Mana returns on every tick (RegenerateMana :1102-1125): a third of the maximum out of combat, else (in combat, the soft
     /// evade included, or player controlled) <see cref="CreatureManaRegenPerTick"/> unless mana was spent in the last five seconds.
-    /// Not delivered: a player-controlled creature's health out of polymorph still returns a third, not GetRegenHPPerSpirit x 4.
     /// </summary>
     private void UpdateCreatureRegen(Unit unit, uint diff)
     {
@@ -273,7 +272,7 @@ public sealed partial class MapCombat
         bool softEvade = inCombat && unit is ICombatCreature { IsInEvadeMode: true };
         if ((!inCombat || polymorphed || softEvade) && (unit is not ICombatCreature creature || creature.RegeneratesHealth))
         {
-            uint heal = playerControlled && polymorphed ? unit.MaxHealth / 10 : unit.MaxHealth / 3;
+            uint heal = !playerControlled ? unit.MaxHealth / 3 : polymorphed ? unit.MaxHealth / 10 : CreatureHealthRegenPerTick(unit, environment);
             unit.Health = Math.Min(unit.MaxHealth, unit.Health + heal);
         }
 
@@ -295,6 +294,17 @@ public sealed partial class MapCombat
         }
 
         SetPower(unit, PowerType.Mana, Math.Min(maxMana, mana + add));
+    }
+
+    /// <summary>
+    /// vmangos Creature::RegenerateHealth for a creature a player charms or owns, not polymorphed (Creature.cpp:1141-1150):
+    /// <c>uint32(GetRegenHPPerSpirit() * Rate.Health) * 4</c> per 5 s tick (the reference's comment says the timer ticks every 4 seconds).
+    /// The class and spirit are the unit's own (a pet's spirit comes from its level stats).
+    /// </summary>
+    internal static uint CreatureHealthRegenPerTick(Unit unit, CombatEnvironment environment)
+    {
+        float spirit = unit.GetUInt32(UpdateFields.UnitFieldStat0 + 4);
+        return (uint)(RegenHealthPerSpirit(unit.Class, spirit) * environment.Options.RateHealth) * 4;
     }
 
     private readonly Random _regenRandom = new();

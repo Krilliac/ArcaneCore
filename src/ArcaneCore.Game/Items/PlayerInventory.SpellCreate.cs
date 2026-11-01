@@ -31,9 +31,19 @@ public sealed partial class PlayerInventory
     /// </para>
     /// </summary>
     public InventoryResult CreateItemFromSpell(uint entry, int amount, out Item? item, out uint created)
+        => CreateItemFromSpell(entry, amount, out item, out created, out _, battlegroundMark: false);
+
+    /// <summary>
+    /// <see cref="CreateItemFromSpell(uint,int,out Item?,out uint)"/> that also reports <paramref name="noSpace"/>, the amount the bags
+    /// could not take when the reason is a full inventory or a unique-count limit (0 otherwise; vmangos Spell::DoCreateItem keeps it to
+    /// mail the rest of a battleground mark, SpellEffects.cpp:1972-1977). <paramref name="battlegroundMark"/> sends the push result
+    /// without the created flag (<c>SendNewItem(item, count, true, bgType == 0)</c>, SpellEffects.cpp:1962-1966).
+    /// </summary>
+    public InventoryResult CreateItemFromSpell(uint entry, int amount, out Item? item, out uint created, out uint noSpace, bool battlegroundMark)
     {
         item = null;
         created = 0;
+        noSpace = 0;
         if (Player is { CanMutateQuestSettlementState: false })
         {
             return InventoryResult.CantDoRightNow;
@@ -47,7 +57,7 @@ public sealed partial class PlayerInventory
 
         uint numToAdd = (uint)Math.Min(Math.Max(amount, 1), (int)template.MaxStackSize());
         var dest = new List<ItemPosCount>();
-        InventoryResult msg = CanStoreNewItem(entry, numToAdd, dest, out uint noSpace);
+        InventoryResult msg = CanStoreNewItem(entry, numToAdd, dest, out noSpace);
         if (msg != InventoryResult.Ok)
         {
             if (msg is InventoryResult.InventoryFull or InventoryResult.CantCarryMoreOfThis)
@@ -56,6 +66,7 @@ public sealed partial class PlayerInventory
             }
             else
             {
+                noSpace = 0;
                 SendEquipError(msg, null, null, 0, entry);
                 return msg;
             }
@@ -76,7 +87,7 @@ public sealed partial class PlayerInventory
         {
             player.Session.Send(
                 ArcaneCore.Protocol.WorldOpcode.SmsgItemPushResult,
-                ItemPackets.ItemPushResult(player.Guid, item, numToAdd, received: true, created: true, showInChat: true));
+                ItemPackets.ItemPushResult(player.Guid, item, numToAdd, received: true, created: !battlegroundMark, showInChat: true));
         }
 
         created = numToAdd;

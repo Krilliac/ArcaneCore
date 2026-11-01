@@ -27,9 +27,9 @@ public sealed class InactiveQueueWireTests
     [Fact]
     public async Task BattlefieldStatus_EncryptedEmptyRequestStaysQuietAndKeepsWorldOperationsUsable()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using QueueClient client = await LoginAsync(server, token);
         PlayerObservation before = await ObservePlayerAsync(server, client.Guid, token);
         CharacterQuestStatus journalBefore = await LoadJournalAsync(server, client.Guid, token);
@@ -49,9 +49,9 @@ public sealed class InactiveQueueWireTests
     [Fact]
     public async Task MeetingStoneInfo_EncryptedEmptyQueriesReturnExactInactiveLiteralWithoutMutatingPlayer()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using QueueClient client = await LoginAsync(server, token);
         PlayerObservation before = await ObservePlayerAsync(server, client.Guid, token);
         CharacterQuestStatus journalBefore = await LoadJournalAsync(server, client.Guid, token);
@@ -79,9 +79,9 @@ public sealed class InactiveQueueWireTests
     [InlineData(662)]
     public async Task QueueQuery_BeforeAuthenticationDisconnectsWithoutInactiveQueueReply(int opcode)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using WorldClient client = await WorldClient.ConnectAsync(server.WorldEndpoint, token);
         WorldFrame challenge = await client.ReadAsync(token);
         Assert.Equal((ushort)WorldOpcode.SmsgAuthChallenge, challenge.Opcode);
@@ -96,9 +96,9 @@ public sealed class InactiveQueueWireTests
     [InlineData(662)]
     public async Task QueueQuery_EncryptedSurplusByteFollowsStrictEmptyBodyDisconnectPolicy(int opcode)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using QueueClient client = await LoginAsync(server, token);
         // ArcaneCore requires exactly the documented empty request body. The vanilla
         // NullClientPacket reader may ignore surplus bytes; this is our validation policy.
@@ -243,6 +243,7 @@ public sealed class InactiveQueueWireTests
         }
     }
 
+    // Armed after the fixture has started: the scenario budget does not cover startup (TestDeadlines).
     private static CancellationTokenSource TestDeadline() => new(TimeSpan.FromSeconds(20));
 
     private sealed record PlayerObservation(Player Player, uint Map, uint Zone, float X, float Y, float Z, float Orientation,

@@ -16,8 +16,9 @@ namespace ArcaneCore.Game.Loot;
 /// build 5875 (Spell.cpp:5466-5470).
 /// </summary>
 /// <remarks>
-/// Not modelled: a missed Pick Pocket breaking stealth and starting combat (vmangos Spell.cpp:1225-1243) needs the stealth and threat primitives of
-/// the rogue and combat lanes; <c>LOOT_ERROR_ALREADY_PICKPOCKETED</c> is never sent (vmangos does not send it either).
+/// A missed or resisted Pick Pocket breaks stealth and engages the target (vmangos Spell.cpp:1225-1244): that is the spell system's miss path
+/// (<c>SpellSystem.ApplyMissedTarget</c>, keyed on <see cref="SpellAttributesEx.FailureBreaksStealth"/>), not this class's. Not modelled:
+/// <c>LOOT_ERROR_ALREADY_PICKPOCKETED</c> is never sent (vmangos does not send it either).
 /// </remarks>
 public sealed class PickpocketLoot(LootService loot, Random? random = null) : ILootReleaseHandler
 {

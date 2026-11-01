@@ -29,7 +29,7 @@ Both daemons initialise their databases through `DatabaseStartup.InitializeAsync
 
 ## `arcane-db`
 
-The `arcane-db` codes (0-8) are documented in one place, the table of the [database upgrade runbook](../ops/database-upgrade.md); a test keeps that table complete.
+The `arcane-db` codes (0-9) are documented in one place, the table of the [database upgrade runbook](../ops/database-upgrade.md); a test keeps that table complete.
 
 ## `arcane-content-importer`
 

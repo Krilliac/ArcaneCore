@@ -195,6 +195,19 @@ inert default.
     Lokholar (13256), Ivus (13419), the Frostwolf Shaman (13284), the Druid of the Grove (13443) and the war riders (14943, 14946) cast their
     vmangos script spells instead of the classic-db sets (for example the war riders no longer Throw Liquid Fire, 23969, and Renferal no
     longer casts Thorns or Moonfire 22206).
+  - **The generals** (`AvGeneralAIs.cs`, battleground_alterac.cpp:71-1148): `AvVanndarAI` (11948), `AvDrekTharAI` (11946), `AvBalindaAI` (11949),
+    `AvGalvangarAI` (11947) and `AvWarMasterAI` (marshals and warmasters 14762-14777, including the Dun Baldar North and South warmasters 14770 and 14771), registered by entry because classic-db has
+    no script names. Inside a match these entry scripts replace classic-db EventAI for the same creatures. Each general holds its room by a
+    leash from the room's centre (Vanndar 35 yd, Drek'Thar 33, the captains 45) that heals it fully and evades; Vanndar and Drek'Thar say the
+    reset line after a leash and the raid-wipe line after a lost fight, the captains say their reset line at every evade. Vanndar's (13333 and the
+    war masters) and Drek'Thar's (his two dogs and the war masters) linked mobs within 100 yd copy the general's threat list when they are
+    idle, scanned four times a second where vmangos scans every update; Drek'Thar's reset respawns dead dogs. Abilities: Vanndar Avatar,
+    Stormbolt and Thunderclap; Drek'Thar Whirlwind (rooted two seconds), Knockdown and Frenzy at 30% health; Balinda the mage set; Galvangar
+    Whirlwind, Frightening Shout, Cleave and Mortal Strike; war masters Charge, Cleave, Whirlwind, Enrage and Demoralizing Shout. The
+    integer-division roll of vmangos' Arcane Explosion and Whirlwind (`3 / (n + 1)`) is kept: they go off with three or more enemies within
+    6 yd. Balinda's Frostbolt branch resets the Cone of Cold timer as vmangos does. A war master that died is removed at its first update
+    after it respawned. Text ids without a broadcast text row are logged once and stay silent. The captains' bowmen (13358, 13359) are not
+    ported yet.
   - **Deviations.** The creature groups the scripts form (JoinCreatureGroup with OPTION_FORMATION_MOVE, AGGRO_TOGETHER and
     EVADE_TOGETHER) are a follow of the leader at the member's slot, a group that enters a fight together, and a member that takes its place
     again after a fight. The slot is vmangos' (`AvScript.FormationSlot`): the angle from the leader to the member less the member's facing

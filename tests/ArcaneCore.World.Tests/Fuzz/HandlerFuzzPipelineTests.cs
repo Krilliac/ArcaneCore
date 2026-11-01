@@ -61,6 +61,25 @@ public sealed class HandlerFuzzPipelineTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public async Task AKickOnAKickAllowlistedOpcode_DoesNotTripTheRecoveryCap()
+    {
+        var table = new OpcodeTable();
+        table.OnWorld(Kicks, (session, _, _) => session.Kick("planted kick"));
+        var options = new HandlerFuzzOptions
+        {
+            Table = table,
+            KickAllowlist = new Dictionary<WorldOpcode, string> { [Kicks] = "planted: every case disconnects the sender" },
+        };
+        var run = new HandlerFuzzRun(output, new HandlerFuzzSettings(HandlerFuzzSettings.DefaultRandomIterations, HandlerFuzzSettings.DefaultBaseSeed, null), options);
+
+        List<HandlerFuzzFinding> findings = await run.ExecuteAsync();
+        output.WriteLine(run.FormatFindings());
+
+        Assert.DoesNotContain(findings, f => f.Opcode == Kicks && f.Kind == "recovery-capped");
+        Assert.DoesNotContain(findings, f => f.Opcode == Kicks && f.Kind == "unexpected-kick");
+    }
+
+    [Fact]
     public async Task AFilterThatSelectsNothing_IsAFinding_NotAPass()
     {
         var table = new OpcodeTable();

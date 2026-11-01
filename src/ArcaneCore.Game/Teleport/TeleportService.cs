@@ -334,6 +334,23 @@ public sealed partial class TeleportService
             return false;
         }
 
+        // Cluster:Worker:OwnedMaps: a destination another worker owns is refused here, before TRANSFER_PENDING / NEW_WORLD reach the client
+        // (a loading screen for a map this worker cannot serve). A far transfer to the owner replaces this refusal later.
+        if (!_world.Owns(mapId, target.Instanceable ? 1u : 0u))
+        {
+            if (log)
+            {
+                _logger.LogWarning("teleport of {Player} to map {MapId} refused: the map is owned by another worker", player.Name, mapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "map-not-owned",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport refused: map {mapId} is not owned by this worker (destination {x:F1},{y:F1},{z:F1})"));
+            }
+
+            return false;
+        }
+
         // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
         // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
         if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
@@ -590,6 +607,17 @@ public sealed partial class TeleportService
                     pending.Destination.MapId, pending.Destination.X, pending.Destination.Y, pending.Destination.Z, elapsedMs);
             }
 
+            // vmangos Player::SaveToDB (Player.cpp:16408-16424): while IsBeingTeleported the destination is saved instead of the
+            // current position, so the next login lands where the teleport was going. The final snapshot follows this handler
+            // (WorldRuntime.RemovePlayer); a location already chosen (a spirit's graveyard) wins.
+            // A passenger that stays aboard through the teleport (a ship's map change) keeps its seat instead: the snapshot
+            // drops the seat for a relocated player, and the next login must put it back on the ship.
+            if (player.Transport is null && player.LogoutTransportSeat is null)
+            {
+                player.LogoutLocation ??= (pending.Destination.MapId, pending.Destination.X, pending.Destination.Y,
+                    pending.Destination.Z, pending.Destination.Orientation);
+            }
+
             pending.SourceMap.EndTransit(player);
         }
     }
@@ -780,7 +808,28 @@ public sealed partial class TeleportService
         // The map resolver picks (or creates) the instance and binds the player or its group
         // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry.
         IMapResolver? resolver = _world.MapResolver;
-        Map? map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+        Map? map;
+        try
+        {
+            if (resolver is null)
+            {
+                // The typed answer is the seam the redirect / far transfer to the owning worker hooks into.
+                if (_world.TryGetMap(dest.MapId, 0, out map) == MapAccessResult.NotOwned)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                map = resolver.ResolveEntry(player, dest.MapId);
+            }
+        }
+        catch (MapNotOwnedException)
+        {
+            // Another worker owns the destination (Cluster:Worker:OwnedMaps): refuse cleanly until a far transfer to the owner exists.
+            return false;
+        }
+
         if (map is null || map.FindObject(player.Guid) is not null)
         {
             return false;

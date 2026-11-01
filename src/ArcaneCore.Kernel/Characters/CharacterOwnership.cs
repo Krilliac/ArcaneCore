@@ -21,10 +21,24 @@ public interface ICharacterOwnershipStore
     Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default);
 }
 
-/// <summary>A save carrying an ownership token was rejected by the durable fence.</summary>
-public sealed class CharacterOwnershipRejectedException(string scope, long epoch)
-    : InvalidOperationException($"character ownership token for scope '{scope}' at epoch {epoch} is no longer active")
+/// <summary>
+/// A save carrying an ownership token was rejected by the durable fence, or the process fenced itself off the characters database
+/// (a subclass, <c>CharacterDatabaseFencedException</c>). Every writer that treats this as terminal treats both alike.
+/// </summary>
+public class CharacterOwnershipRejectedException : InvalidOperationException
 {
-    public string Scope { get; } = scope;
-    public long Epoch { get; } = epoch;
+    public CharacterOwnershipRejectedException(string scope, long epoch)
+        : this(scope, epoch, $"character ownership token for scope '{scope}' at epoch {epoch} is no longer active")
+    {
+    }
+
+    protected CharacterOwnershipRejectedException(string scope, long epoch, string message)
+        : base(message)
+    {
+        Scope = scope;
+        Epoch = epoch;
+    }
+
+    public string Scope { get; }
+    public long Epoch { get; }
 }

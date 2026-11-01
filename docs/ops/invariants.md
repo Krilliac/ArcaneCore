@@ -108,9 +108,9 @@ The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names t
 
 While the dump is written the daemon publishes the heartbeat state `dumping` and stops beating (file, stdout and systemd sinks; systemd also gets
 `WATCHDOG_USEC` raised), so a supervisor that kills a process for a stale heartbeat does not truncate the dump. `tools/ops/diag/server-status.ps1
--Supervise` and the cluster host supervisor (`Cluster:Supervisor:DumpGraceSeconds`, default 420) treat `dumping` like `stopping`: a grace of 420 s
-(three times the default `TimeoutSeconds` plus a minute) instead of the stale-heartbeat kill, and no hang capture of their own meanwhile. Raise the
-grace if you raise `TimeoutSeconds`. The tick watchdog's fatal path and the invariant `FailFast` write the dump the same way. See
+-Supervise` and the cluster host supervisor (`Cluster:Supervisor:DumpGraceSeconds`, default 420) treat `dumping` like `stopping`: a grace of `min(announced max + 60, cap)` s
+(the cap defaults to 420: three times the default `TimeoutSeconds` plus a minute) instead of the stale-heartbeat kill, and no hang capture of their own meanwhile. Raise the
+cap (`DumpGraceSeconds`, `-DumpGraceSeconds`) if you raise `TimeoutSeconds` beyond a third of it. The tick watchdog's fatal path and the invariant `FailFast` write the dump the same way. See
 [watchdog.md](watchdog.md#4-heartbeat-opswatchdogheartbeat).
 
 Security: a dump holds everything in memory, session keys and passwords included. It stays on the local disk; on Linux and macOS the directory is

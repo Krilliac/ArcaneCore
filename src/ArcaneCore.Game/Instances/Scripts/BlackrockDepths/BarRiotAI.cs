@@ -93,6 +93,9 @@ public sealed class PhalanxAI(Creature creature, BlackrockDepthsInstance instanc
 {
     private uint _thunderMs, _blowMs, _volleyMs, _patrolMs;
 
+    /// <summary>His script path ends at point 2, where he pauses and guards the bar door; the reference escort does not end the path while paused.</summary>
+    protected override bool HoldAtEndWhilePaused => true;
+
     protected override void Reset()
     {
         if (HasEscortState(EscortState.Escorting | EscortState.Paused))

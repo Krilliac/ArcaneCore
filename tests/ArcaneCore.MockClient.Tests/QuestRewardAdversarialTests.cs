@@ -36,9 +36,9 @@ public sealed class QuestRewardAdversarialTests
     [InlineData(WorldOpcode.CmsgQuestgiverChooseReward, 17)]
     public async Task MalformedRewardRequest_DisconnectsWithoutChangingTheAcceptedQuest(WorldOpcode opcode, int length)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using OwnedCharacterClient owned = await CreateAcceptedQuestAsync(server, token);
         byte[] valid = opcode == WorldOpcode.CmsgQuestgiverChooseReward
             ? ScenarioWire.GuidQuestChoice(SyntheticArcaneServer.NpcGuid, SyntheticArcaneServer.RewardQuestId, 1)
@@ -61,9 +61,9 @@ public sealed class QuestRewardAdversarialTests
     [Fact]
     public async Task CompleteAndChooseBeforeCombat_CannotCreditObjectivesOrGrantRewards()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using OwnedCharacterClient owned = await CreateAcceptedQuestAsync(server, token);
 
         await owned.Connection.SendAsync(WorldOpcode.CmsgQuestgiverCompleteQuest,
@@ -94,9 +94,9 @@ public sealed class QuestRewardAdversarialTests
     [InlineData(4)]
     public async Task WrongCreatureStaleGuidOrInvalidChoice_DoesNotSettleACompletedQuest(int rejection)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
         ulong npc = rejection switch
         {
@@ -124,9 +124,9 @@ public sealed class QuestRewardAdversarialTests
     [Fact]
     public async Task FullBackpack_PreservesEveryItemMoneyAndCompletedQuestAcrossRelog()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
         CancellationToken token = deadline.Token;
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
         await LogoutAfterCombatAsync(server, owned, token);
         await owned.Client.DisposeAsync();
@@ -167,11 +167,11 @@ public sealed class QuestRewardAdversarialTests
     [Fact]
     public async Task FailedCommit_DoesNotGrantAnythingAndRetryCommitsExactlyOnce()
     {
-        using var deadline = TestDeadline();
-        CancellationToken token = deadline.Token;
         var fault = new RewardCommitFault(afterCommit: false);
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(
-            services => ReplaceRewardStore(services, fault), token);
+            services => ReplaceRewardStore(services, fault));
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
 
         await MockScenarios.ChooseRewardAsync(owned.Connection, 1, token);
@@ -209,11 +209,11 @@ public sealed class QuestRewardAdversarialTests
     [Fact]
     public async Task LostCommitAcknowledgement_RelogLoadsDurableRewardAndDuplicateCannotGrantAgain()
     {
-        using var deadline = TestDeadline();
-        CancellationToken token = deadline.Token;
         var fault = new RewardCommitFault(afterCommit: true);
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(
-            services => ReplaceRewardStore(services, fault), token);
+            services => ReplaceRewardStore(services, fault));
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
 
         await MockScenarios.ChooseRewardAsync(owned.Connection, 1, token);
@@ -243,15 +243,15 @@ public sealed class QuestRewardAdversarialTests
     [Fact]
     public async Task UnreadableCommitOutcome_BlocksStaleAutosaveAndDisconnectUntilAuthoritativeRelog()
     {
-        using var deadline = TestDeadline();
-        CancellationToken token = deadline.Token;
         var fault = new RewardCommitFault(afterCommit: true, failReconciliationRead: true);
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
         {
             ReplaceRewardStore(services, fault);
             services.AddScoped<ICharacterStore>(provider => new ReconciliationFaultCharacterStore(
                 new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()), fault));
-        }, token);
+        });
+        using var deadline = TestDeadline();
+        CancellationToken token = deadline.Token;
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
         CharacterSaveQueue saves = server.Services.GetRequiredService<CharacterSaveQueue>();
         int id = checked((int)owned.Guid);
@@ -610,5 +610,6 @@ public sealed class QuestRewardAdversarialTests
         public ValueTask DisposeAsync() => Client.DisposeAsync();
     }
 
+    // Armed after the fixture has started: the scenario budget does not cover startup (TestDeadlines).
     private static CancellationTokenSource TestDeadline() => new(TimeSpan.FromSeconds(40));
 }

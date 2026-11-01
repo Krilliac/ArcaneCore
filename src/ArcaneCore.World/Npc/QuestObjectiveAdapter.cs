@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Progression;
@@ -49,6 +50,7 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
         if (_spells.Add(spells))
         {
             spells.SpellHitTarget += OnSpellHit;
+            spells.SpellHitGameObject += OnSpellHitGameObject;
         }
     }
 
@@ -62,6 +64,7 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
         foreach (SpellSystem spells in _spells)
         {
             spells.SpellHitTarget -= OnSpellHit;
+            spells.SpellHitGameObject -= OnSpellHitGameObject;
         }
 
         _combat.Clear();
@@ -155,6 +158,49 @@ public sealed class QuestObjectiveAdapter(IQuestObjectiveEvents objectives, Func
             else if (ReferenceEquals(member, player))
             {
                 objectives.CastedCreatureOrGo(member, creature.Entry, creature.Guid, true, spellId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// vmangos Spell::DoAllEffectOnTarget(GOTargetInfo) (Spell.cpp:1845-1851): the cast's charmer, owner or caster player gets
+    /// CastedCreatureOrGo for the object, with his group members within reward range (Player::RewardPlayerAndGroupAtCast,
+    /// Player.cpp:20019-20040); a dead member only while his body is not released, and only the caster counts as the original caster.
+    /// </summary>
+    internal void OnSpellHitGameObject(Unit caster, GameObject go, uint spellId)
+    {
+        Player? player = KillRewards.CreditedPlayer(caster);
+        if (player is not { IsInWorld: true } || player.Map is not { } map || !ReferenceEquals(map.FindPlayer(player.Guid), player)
+            || !go.IsInWorld || !ReferenceEquals(go.Map, map))
+        {
+            return;
+        }
+
+        RewardGroup? group = groups?.Invoke(player);
+        if (group is null || !group.Members.Contains(player.Guid))
+        {
+            if (KillRewards.CanReceiveQuestCredit(player))
+            {
+                objectives.CastedCreatureOrGo(player, go.Entry, go.Guid, false, spellId);
+            }
+
+            return;
+        }
+
+        foreach (Player member in KillRewards.Recipients(player, go, group, rewardDistance))
+        {
+            if (!KillRewards.CanReceiveQuestCredit(member))
+            {
+                continue;
+            }
+
+            if (objectives is QuestNpcServices quests)
+            {
+                quests.CastedCreatureOrGo(member, go.Entry, go.Guid, false, spellId, ReferenceEquals(member, player));
+            }
+            else if (ReferenceEquals(member, player))
+            {
+                objectives.CastedCreatureOrGo(member, go.Entry, go.Guid, false, spellId);
             }
         }
     }

@@ -81,7 +81,7 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotGroupGoal goal = waiting.Goal;
         if (goal.InInstance)
         {
-            (Guid BotId, Waiting Waiting) anchor = sameGoal.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs).FirstOrDefault();
+            (Guid BotId, Waiting Waiting) anchor = sameGoal.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs, PlayerbotGroupContent.SinceOrder).FirstOrDefault();
             if (anchor.Waiting is null) return new(PlayerbotVolunteerOutcome.CannotPlace);
             goal = anchor.Waiting.Goal;
         }
@@ -150,7 +150,7 @@ public sealed partial class PlayerbotGroupCoordinator
         var withPlayer = new List<PlayerbotGroupCandidate>(bots.Count + 1);
         withPlayer.AddRange(bots);
         withPlayer.Add(asked);
-        if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups, goal.InInstance) is not { } plan || !plan.Members.Any(m => m.Bot.BotId == Guid.Empty)) return null;
+        if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups, goal.InInstance, needAnchoring: goal.InInstance) is not { } plan || !plan.Members.Any(m => m.Bot.BotId == Guid.Empty)) return null;
 
         // The plan names the player by the candidate that was asked (a damage dealer first); the member is the player. A real player never
         // leads a bot group: when the player's own class took the only tank slot the longest-waiting bot leads, the player keeps the role.

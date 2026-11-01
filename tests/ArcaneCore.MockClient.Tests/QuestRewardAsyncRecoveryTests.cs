@@ -540,7 +540,13 @@ public sealed class QuestRewardAsyncRecoveryTests
                 Id = LearnedSpellId, Effects = [new SpellEffectInfo { Effect = SpellEffectName.Heal, TargetA = SpellImplicitTarget.UnitCaster }],
             }], [], []);
             // Prove the permanent-grant policy also holds after the later spell branch installs its adapter.
-            if (effect == SpellEffectName.CreateItem) system.RegisterEffect(effect, static _ => { });
+            // The no-op deliberately drops the installed handler and any spell script hooks chained on it (the grant must not depend on
+            // them); RegisterEffect requires the caller to read the current handler before replacing a script chain.
+            if (effect == SpellEffectName.CreateItem)
+            {
+                _ = system.GetEffectHandler(effect);
+                system.RegisterEffect(effect, static _ => { });
+            }
             return true;
         }).WaitAsync(token);
 

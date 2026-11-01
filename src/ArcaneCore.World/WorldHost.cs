@@ -84,6 +84,15 @@ public sealed class WorldHost(
         _fencing.Validate();
         if (_worker is { Enabled: false, Standby: true })
             throw new InvalidOperationException("Cluster:Worker:Standby requires Cluster:Worker:Enabled = true: a standby world is a gateway worker");
+        if (_worker is { Enabled: true })
+        {
+            if (!_worker.TryGetOwnership(out MapOwnership ownedMaps, out string? ownedError))
+                throw new InvalidOperationException($"Cluster:Worker:OwnedMaps is not a map list: {ownedError}");
+            world.Ownership = ownedMaps;
+            if (!ownedMaps.OwnsEverything)
+                logger.LogInformation("Worker owns maps: {Maps}", ownedMaps);
+        }
+
         bool acquiredHere = false;
         try
         {

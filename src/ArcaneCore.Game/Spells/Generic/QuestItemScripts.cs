@@ -73,3 +73,17 @@ public sealed class CurseOfTheEyeScript : ISpellScript
         GadgetCasts.Cast(context, context.Caster, context.Target, context.Target.Gender == Gender.Male ? 10651u : 10653u);
     }
 }
+
+/// <summary>
+/// Basilisk 11759, Hyena 11760 and Scorpid 11761 Sample (vmangos spell_item.cpp TanarisFieldSamplingScript): effect 0, the item creation, succeeds on
+/// half of the casts; the Untested sample is used up either way.
+/// </summary>
+[SpellScript(11759, 11760, 11761, ExecuteEffects = [SpellEffectName.CreateItem])]
+public sealed class TanarisFieldSamplingScript : ISpellScript
+{
+    public bool OnEffectExecute(SpellEffectContext context, bool runByDefault)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return context.EffectIndex != 0 ? runByDefault : GadgetCasts.Roll(context, 100) < 50;
+    }
+}

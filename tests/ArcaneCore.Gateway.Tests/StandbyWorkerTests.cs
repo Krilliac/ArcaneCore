@@ -52,6 +52,48 @@ public sealed class StandbyWorkerTests
         }
     }
 
+    private sealed class StopCounter : IHostApplicationLifetime
+    {
+        public int Stops;
+
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+
+        public void StopApplication() => Interlocked.Increment(ref Stops);
+    }
+
+    [Fact]
+    public void AStandbysGuard_StopsTheHost_AndSkipsTheShutdownSaves_WhenItsLockIsTakenOver()
+    {
+        // The standby's guard is built by AddGatewayWorker, not by AddWorld: it must still be wired to the host lifetime and the shutdown lanes, or a promoted standby that finds its lock held by
+        // another world would only log.
+        var lifetime = new StopCounter();
+        var drain = new ArcaneCore.World.Persistence.ShutdownDrain();
+        var services = new ServiceCollection();
+        services.AddOptions();
+        services.AddLogging();
+        services.AddSingleton<IHostApplicationLifetime>(lifetime);
+        services.AddSingleton(drain);
+        services.AddSingleton<WorldWriterGuard>();
+        services.AddHostedService<WorldServer>();
+        services.AddGatewayWorker(new ConfigurationBuilder().AddInMemoryCollection(Worker(standby: true)).Build());
+        using ServiceProvider provider = services.BuildServiceProvider();
+        int exitCode = ArcaneCore.Kernel.Ops.ExitCodes.Current;
+        try
+        {
+            provider.GetRequiredService<WorldWriterGuard>().OnLockConflict("PostgreSQL advisory lock 1: held by another session");
+
+            Assert.Equal(1, lifetime.Stops);
+            Assert.NotNull(drain.Saves.SuppressedReason);
+            Assert.NotNull(drain.Features.SuppressedReason);
+            Assert.NotNull(drain.Saves.Refuse());
+        }
+        finally { ArcaneCore.Kernel.Ops.ExitCodes.Current = exitCode; }
+    }
+
     [Fact]
     public async Task StandbyWithoutWorkerMode_IsRefusedAtStart()
     {
@@ -310,6 +352,12 @@ public sealed class StandbyWorkerTests
                 services.GetRequiredService<ILoggerFactory>(),
                 admission);
         await endpoint.StartAsync(token);
+        // A worker-mode server holds a Warden manifest verifier, so the gateway must prove the same posture (realm and Warden options) or its sessions are refused.
+        int realmId = services.GetService<IOptions<GatewayWorkerOptions>>()?.Value.RealmId ?? new GatewayWorkerOptions().RealmId;
+        var warden = new GatewayWarden(
+            realmId,
+            services.GetService<IOptions<ArcaneCore.World.Warden.WardenOptions>>()?.Value ?? new ArcaneCore.World.Warden.WardenOptions(),
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<GatewayWarden>());
         var gateway = new GatewayServer(
             server.Services.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new GatewayOptions
@@ -321,7 +369,8 @@ public sealed class StandbyWorkerTests
                 LinkSecret = Secret,
                 LinkRetryDelay = TimeSpan.FromMilliseconds(100),
             }),
-            server.Services.GetRequiredService<ILoggerFactory>());
+            server.Services.GetRequiredService<ILoggerFactory>(),
+            warden: warden);
         await gateway.StartAsync(token);
         await gateway.WaitForLinkAsync(token);
         return new Linked(endpoint, gateway);

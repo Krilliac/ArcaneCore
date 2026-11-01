@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Creatures.AI;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
@@ -5,6 +7,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -130,6 +133,11 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             service.AddListener(listener);
         }
 
+        service.SetMailSender(new GameEventMailDelivery(
+            () => _world?.OnlinePlayers ?? [],
+            () => services.GetService<IScriptMailSink>(),
+            QuestRewarded,
+            logger));
         _service = service;
         _initialiseWith = options.Enabled ? activeAtShutdown : null;
         _elapsedMs = 0;
@@ -181,6 +189,10 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     }
 
     private readonly List<IGameEventListener> _listeners = [];
+
+    private bool QuestRewarded(Player player, uint questId)
+        => services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is { } state
+            && state.Quests.Get(questId) is { Rewarded: true };
 
     /// <summary>What loading <paramref name="content"/> now would give (dialect, definitions, the issues found), without touching the running service.</summary>
     public GameEventLoadResult Preview(GameEventContent content)
@@ -287,6 +299,51 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     {
         public void Announce(string description)
             => world.BroadcastToAll(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage($"|cffff0000[Event Message]: {description}|r"));
+    }
+}
+
+/// <summary>
+/// Delivers <c>game_event_mail</c> rows to the online characters (vmangos <c>SendEventMails</c>, GameEventMgr.cpp:1038-1061: a mass mail of
+/// <c>MailDraft(mailTemplateId)</c> from creature <c>senderEntry</c> to the characters whose race bit <c>1 &lt;&lt; (race - 1)</c> is in the
+/// row's race mask, and with a quest only to those who finished it). The letter goes through the <see cref="IScriptMailSink"/> (the
+/// server-mail pipeline the DB script SEND_MAIL step uses): template, no extra money, no extra delay. Characters that are offline when
+/// the event starts are not mailed (vmangos' mass mail also reaches them from the database; this tree has no offline sender). With no
+/// sink registered the row is reported once and skipped. World thread.
+/// </summary>
+public sealed class GameEventMailDelivery(
+    Func<IEnumerable<Player>> online, Func<IScriptMailSink?> sink, Func<Player, uint, bool> questRewarded, ILogger logger) : IGameEventMailSender
+{
+    private bool _reportedNoSink;
+
+    public void Send(int signedEvent, GameEventMailRecord mail)
+    {
+        ArgumentNullException.ThrowIfNull(mail);
+        if (sink() is not { } mailer)
+        {
+            if (!_reportedNoSink)
+            {
+                _reportedNoSink = true;
+                logger.LogWarning("game event {Event} has mail rows but no mail service is registered; they are not delivered", signedEvent);
+            }
+
+            return;
+        }
+
+        foreach (Player player in online().ToArray())
+        {
+            int race = (int)player.Race;
+            if (race is < 1 or > 32 || (mail.RaceMask & (1u << (race - 1))) == 0)
+            {
+                continue;
+            }
+
+            if (mail.Quest != 0 && !questRewarded(player, mail.Quest))
+            {
+                continue;
+            }
+
+            mailer.Send(player, mail.SenderEntry, mail.MailTemplateId, 0, 0);
+        }
     }
 }
 

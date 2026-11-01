@@ -75,6 +75,55 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
     }
 
     /// <summary>
+    /// The team a team condition names (vmangos ConditionEntry::GetTeam, Conditions.h:330-333: only a <see cref="ConditionType.Team"/> row
+    /// names one), or null for every other row, a missing row or a team id that is neither faction (cross-faction).
+    /// </summary>
+    public Team? TeamOf(uint conditionId)
+        => Table.Find(conditionId) is { Type: ConditionType.Team } condition
+            ? condition.Value1 == Alliance ? (Team?)Team.Alliance : condition.Value1 == Horde ? (Team?)Team.Horde : null
+            : null;
+
+    /// <summary>
+    /// vmangos ConditionEntry::CanBeUsedWithoutPlayer (Conditions.cpp:1363-1381): NOT/AND/OR when every operand can, any other row when its
+    /// type needs no player, unit or position subject. A missing row cannot. This repo also counts the unit and position types
+    /// (<c>ParametersMet</c>) and the per-player instance types as needing a subject, so a row decided by the viewer is never pre-decided.
+    /// </summary>
+    public bool CanBeUsedWithoutPlayer(uint conditionId)
+    {
+        if (Table.Find(conditionId) is not { } condition)
+        {
+            return false;
+        }
+
+        switch (condition.Type)
+        {
+            case ConditionType.Not:
+                return CanBeUsedWithoutPlayer(condition.Value1);
+            case ConditionType.And or ConditionType.Or:
+                foreach (uint operand in OperandIds(condition))
+                {
+                    if (!CanBeUsedWithoutPlayer(operand))
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            default:
+                return !NeedsSubject(condition.Type);
+        }
+    }
+
+    private static bool NeedsSubject(ConditionType type) => type is ConditionType.Aura or ConditionType.Level or ConditionType.Gender
+        or ConditionType.IsInCombat or ConditionType.RaceClass or ConditionType.Item or ConditionType.ItemEquipped or ConditionType.Team
+        or ConditionType.Skill or ConditionType.QuestRewarded or ConditionType.QuestTaken or ConditionType.AdCommissionAura
+        or ConditionType.Spell or ConditionType.QuestAvailable or ConditionType.QuestNone or ConditionType.ItemWithBank
+        or ConditionType.LearnableAbility or ConditionType.SkillBelow or ConditionType.ReputationRankMin or ConditionType.ReputationRankMax
+        or ConditionType.PvpRank or ConditionType.AreaId or ConditionType.AreaFlag or ConditionType.LastWaypoint
+        or ConditionType.CreatureInRange or ConditionType.DeadOrAway or ConditionType.InstanceScript or ConditionType.CompletedEncounter
+        or ConditionType.SpawnCount;
+
+    /// <summary>
     /// Count the rows that can and cannot be decided with the collaborators this evaluator has, so a
     /// startup log can say how much of the data is dead.
     /// </summary>

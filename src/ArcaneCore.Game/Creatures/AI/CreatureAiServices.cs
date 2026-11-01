@@ -106,6 +106,15 @@ public enum CreatureCastResult
     AlreadyCasting,
     AuraPresent,
     Failed,
+
+    /// <summary>The cast failed for lack of mana, rage or energy (cmangos CAST_FAIL_POWER).</summary>
+    NoPower,
+
+    /// <summary>The target is inside the spell's minimum range (cmangos CAST_FAIL_TOO_CLOSE).</summary>
+    TooClose,
+
+    /// <summary>The caster is silenced or pacified for this spell (cmangos CAST_FAIL_CAST_PREVENTED).</summary>
+    Prevented,
 }
 
 /// <summary>
@@ -129,6 +138,12 @@ public interface ICreatureSpellCaster
     /// then resolve to that unit, not to the scripted creature. <see cref="CreatureCastResult.NoSpellSystem"/> by default.
     /// </summary>
     CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.NoSpellSystem;
+
+    /// <summary>
+    /// cmangos UnitAI::IsEligibleForDistancing and !IsMainSpellPrevented for <paramref name="spellId"/> (UnitAI.cpp:1126-1147): the spell is ready, the
+    /// caster is not silenced or pacified for it and a mana user has more than twice its cost. True by default.
+    /// </summary>
+    bool CanCastMainSpell(Creature caster, uint spellId) => true;
 
     bool IsCasting(Creature caster);
 
@@ -713,6 +728,28 @@ public sealed class CreatureAiServices
     /// such a step can only empty slots. Bound by the world to its item store.
     /// </summary>
     public Func<uint, ArcaneCore.Kernel.Items.ItemTemplate?>? ItemTemplateOf { get; init; }
+
+    /// <summary>
+    /// Moves the player of a DB script TELEPORT_TO step (6, cmangos Player::TeleportTo); null: that step is reported and skipped. Bound by the
+    /// world to the shared teleport service.
+    /// </summary>
+    public ArcaneCore.Game.Spells.ITeleportSink? Teleports { get; init; }
+
+    /// <summary>
+    /// Sends the letter of a DB script SEND_MAIL step (38, cmangos MailDraft(template).SetMoney().SendMailTo); null: that step is reported
+    /// and skipped. The creature binder binds any registered <see cref="IScriptMailSink"/>.
+    /// </summary>
+    public IScriptMailSink? ScriptMail { get; init; }
+}
+
+/// <summary>The mail a DB script SEND_MAIL step sends (cmangos ScriptMgr.cpp:2851-2866). World thread only.</summary>
+public interface IScriptMailSink
+{
+    /// <summary>
+    /// Mails <paramref name="receiver"/> the mail template <paramref name="templateId"/> plus <paramref name="money"/> copper, from creature
+    /// <paramref name="senderEntry"/>, delivered after <paramref name="delaySeconds"/> (0: no extra delay), with the has-body check mask.
+    /// </summary>
+    void Send(Player receiver, uint senderEntry, uint templateId, uint money, uint delaySeconds);
 }
 
 /// <summary>The quest credit EventAI actions give (cmangos Player methods called from CreatureEventAI::ProcessAction).</summary>

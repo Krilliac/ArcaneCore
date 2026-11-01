@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Skills;
 
 namespace ArcaneCore.Game.Talents;
 
@@ -16,8 +17,8 @@ public interface IRankChain
 
 /// <summary>
 /// <see cref="IRankChain"/> over SkillLineAbility.dbc forward links (<see cref="SkillLineAbilityCatalog.PreviousRank"/>).
-/// vmangos reads spell_chain instead; the two agree for trainer-learnable ranks (the only ranks a player can hold above a
-/// talent), but a rank outside SkillLineAbility.dbc is not seen here and would stay learned after a respec.
+/// vmangos reads spell_chain instead; the catalog merges the spell_chain prev_spell links the DBC lacks
+/// (<see cref="TalentAbilityRankLinks"/>), so the trainer-sold higher ranks of single-rank talent abilities are seen here too.
 /// </summary>
 public sealed class SkillLineRankChain(SkillLineAbilityCatalog abilities) : IRankChain
 {

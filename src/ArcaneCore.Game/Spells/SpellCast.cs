@@ -30,6 +30,8 @@ public sealed class SpellCast
             Mask = targets.Mask, Unit = targets.Unit, GameObject = targets.GameObject,
             Item = targets.Item, Corpse = targets.Corpse, Source = targets.Source,
             Dest = targets.Dest, Text = targets.Text, FromClient = targets.FromClient,
+            // A trade-slot target lives in the other player's inventory; the server-resolved item must survive the copy.
+            ServerValidatedTradeItem = targets.ServerValidatedTradeItem,
         };
         IsTriggered = triggered;
         TriggeringSpell = triggeringSpell;

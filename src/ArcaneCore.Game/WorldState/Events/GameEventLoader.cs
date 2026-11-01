@@ -24,7 +24,7 @@ public sealed class GameEventRows
     /// <summary>Quest ids by event id.</summary>
     public IReadOnlyDictionary<ushort, IReadOnlyList<uint>> Quests { get; init; } = new Dictionary<ushort, IReadOnlyList<uint>>();
 
-    /// <summary>Mails by signed event number (read, not delivered: the system-mail primitive is another lane's).</summary>
+    /// <summary>Mails by signed event number (sent by <see cref="GameEventService"/> through its <see cref="IGameEventMailSender"/>).</summary>
     public IReadOnlyDictionary<int, IReadOnlyList<GameEventMailRecord>> Mails { get; init; } = new Dictionary<int, IReadOnlyList<GameEventMailRecord>>();
 }
 

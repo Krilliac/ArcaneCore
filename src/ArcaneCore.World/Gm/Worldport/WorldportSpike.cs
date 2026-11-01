@@ -161,7 +161,7 @@ public sealed class WorldportSpike : IDisposable
         _logger = logger ?? NullLogger.Instance;
         AckTimeout = ackTimeout ?? TimeSpan.FromSeconds(60);
         ObserveWindow = observeWindow ?? TimeSpan.FromSeconds(15);
-        AbandonAfter = abandonAfter ?? AckTimeout * 10;
+        AbandonAfter = abandonAfter ?? (AckTimeout * 10);
     }
 
     public TimeSpan AckTimeout { get; }

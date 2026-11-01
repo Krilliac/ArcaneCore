@@ -71,8 +71,8 @@ public sealed class EndToEndTests
     public async Task RealmAuthentication_RejectsBadPasswordUnknownAccountAndWrongBuild(
         string account, string password, int build, int expectedResult)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await server.AddAccountAsync("KNOWN", "PASSWORD", deadline.Token);
 
         MockAuthException rejection = await Assert.ThrowsAsync<MockAuthException>(() =>
@@ -91,8 +91,8 @@ public sealed class EndToEndTests
     public async Task WorldAuthentication_RejectsIncorrectProofAndWrongBuildWithPlaintextReply(
         bool corruptKey, int build, int expectedResult)
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await server.AddAccountAsync("WORLDTEST", "PASSWORD", deadline.Token);
         LogonResult logon = await LogonClient.AuthenticateAsync(server.RealmEndpoint, "WORLDTEST", "PASSWORD", deadline.Token);
         byte[] key = (byte[])logon.SessionKey.Clone();
@@ -110,8 +110,8 @@ public sealed class EndToEndTests
     [Fact]
     public async Task CharacterEnumeration_BeforeAuthenticationDisconnectsTheOwnedClient()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await using WorldClient client = await WorldClient.ConnectAsync(server.WorldEndpoint, deadline.Token);
         WorldFrame challenge = await client.ReadAsync(deadline.Token);
         Assert.Equal((ushort)WorldOpcode.SmsgAuthChallenge, challenge.Opcode);
@@ -124,8 +124,8 @@ public sealed class EndToEndTests
     [Fact]
     public async Task ForeignCharacterLogin_FailsWithoutEnteringTheWorld()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await server.AddAccountAsync("OWNER", "PASSWORD", deadline.Token);
         await server.AddAccountAsync("OTHER", "PASSWORD", deadline.Token);
         await using WorldClient owner = await AuthenticateWorldAsync(server, "OWNER", deadline.Token);
@@ -145,8 +145,8 @@ public sealed class EndToEndTests
     [Fact]
     public async Task QuestQuery_WithThreeBytesWhileLoggedInDisconnectsAndRemovesThePlayer()
     {
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = TestDeadline();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(deadline.Token);
         await server.AddAccountAsync("QUERYTEST", "PASSWORD", deadline.Token);
         await using WorldClient client = await AuthenticateWorldAsync(server, "QUERYTEST", deadline.Token);
         var session = new ScenarioConnection(client);
@@ -203,5 +203,6 @@ public sealed class EndToEndTests
         Assert.Fail("Owned server did not disconnect the client within 128 frames.");
     }
 
+    // Armed after the fixture has started: the scenario budget does not cover startup (TestDeadlines).
     private static CancellationTokenSource TestDeadline() => new(TimeSpan.FromSeconds(20));
 }

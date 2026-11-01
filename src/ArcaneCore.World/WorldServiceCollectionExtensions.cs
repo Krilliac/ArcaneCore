@@ -85,6 +85,7 @@ public static class WorldServiceCollectionExtensions
         services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
         services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
         services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
+        services.AddSingleton(sp => new WorldLoginAdmission(sp, sp.GetRequiredService<IOptions<RealmList.RealmStatusOptions>>(), sp.GetRequiredService<ILogger<WorldLoginAdmission>>())); // .server plimit: the player limit and the realm lock checked at CMSG_AUTH_SESSION
         services.TryAddSingleton<WorldWriterGuard>(); // the characters database's single-writer file lock (WorldStartup takes it before the schema initializers)
         services.TryAddSingleton<ShutdownDrain>(); // the stall-only shutdown lanes of the write queues (WorldHost begins them)
         services.AddSingleton<CharacterSaveQueue>();

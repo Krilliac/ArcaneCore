@@ -117,8 +117,8 @@ once at start. Legacy mode does not check appearance. 1.12.1 has no barber shop.
 Each of these needs data or a primitive this lane does not have; none is stubbed.
 
 * ChrRaces.dbc/ChrClasses.dbc: race/class existence and NOT_PLAYABLE come from the vanilla masks
-  (SharedDefines.h:60-110, `RaceClassRules`), `race_taxi_start` still has no writer so new characters get no
-  starting flight paths. (cc04.)
+  (SharedDefines.h:60-110, `RaceClassRules`). Not a limit any more: `race_taxi_start` is filled from ChrRaces.dbc field 14 by `import-dbc` and
+  `refresh` (all eight playable races have a starting flight mask), so a new character starts with its race's flight paths (`QuestNpcServices`). (cc04.)
 * Starting outfit: classic-db has 0 `playercreateinfo_item` rows and the outfit lives in CharStartOutfit.dbc
   (mangos-classic Player.cpp:857-911); a classic-db realm still creates characters without starting items until
   that reader lands. (cc08; it also edits `ItemsFeature`, which the wave-2 items lane owns.)

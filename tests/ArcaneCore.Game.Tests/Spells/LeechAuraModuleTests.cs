@@ -17,6 +17,7 @@ public sealed class LeechAuraModuleTests
     private const uint DrainLifeDefaultMultiplier = 930402;
     private const uint DrainMana = 930403;
     private const uint Sleep = 930404;
+    private const uint ShadowShield = 930405;
 
     [Fact]
     public void ModuleIsDiscovered_AndTheAuraTypesHaveHandlers()
@@ -52,6 +53,25 @@ public sealed class LeechAuraModuleTests
         kit.Advance(3000);
         Assert.Equal(40u, target.Health);
         Assert.Equal(60u, caster.Health); // capped at the maximum
+    }
+
+    [Fact]
+    public void LeechAbsorbShield_SoaksTheTickAndCutsTheHeal()
+    {
+        using var kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        caster.Health = 30;
+        kit.System.CastSpell(target, ShadowShield, SpellCastTargets.ForSelf(), triggered: true);
+
+        kit.System.CastSpell(caster, DrainLife, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        kit.Advance(3000);
+
+        // vmangos PERIODIC_LEECH: the shield takes the tick (25 absorb > 10 damage), nothing reaches health, the heal is based on the dealt damage.
+        Assert.Equal(60u, target.Health);
+        Assert.Equal(30u, caster.Health);
+        SpellAura shield = kit.System.GetAuras(target).Single(h => h.Spell.Id == ShadowShield).Auras.OfType<SpellAura>().Single();
+        Assert.Equal(15, shield.Amount);
     }
 
     [Fact]
@@ -176,6 +196,13 @@ public sealed class LeechAuraModuleTests
             Channel(DrainLife, Effect(SpellEffectName.ApplyAura, 10, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicLeech, amplitude: 3000) with { MultipleValue = 1.5f }),
             Channel(DrainLifeDefaultMultiplier, Effect(SpellEffectName.ApplyAura, 10, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicLeech, amplitude: 3000)),
             Channel(DrainMana, Effect(SpellEffectName.ApplyAura, 30, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicManaLeech, amplitude: 1000, misc: (int)PowerType.Mana) with { MultipleValue = 0.5f }),
+            Spell(ShadowShield, Effect(SpellEffectName.ApplyAura, 25, SpellImplicitTarget.UnitCaster, AuraType.SchoolAbsorb, misc: 0x7F)) with
+            {
+                Duration = new SpellDuration(60_000, 0, 60_000),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
             Channel(Sleep, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
             {
                 AuraInterruptFlags = SpellAuraInterruptFlags.Damage,

@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Playerbots.BotSocial;
+using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
 using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
 
@@ -132,10 +133,20 @@ internal sealed partial class PlayerbotBrain
 
                 bool mayFlag = PlayerbotHelpRules.MayFlag(player, _options.Social.WarMode.Enabled);
                 int groupSize = _session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid)?.MemberCount ?? 1;
-                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag, groupSize) is not { } attacker)
+                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag, groupSize, _options.Social.WarMode.Enabled) is not { } found)
                 {
                     ClearHelp();
                     return 0;
+                }
+
+                // A flagged enemy player or bot attacking the victim: the bot takes it on with the PvP fight (PlayerbotBrain.Hunt.cs; the next think's
+                // TryFightPlayer fights it), not as a creature target. No help is credited: there is no threat list to read it off.
+                if (found is not Creature attacker)
+                {
+                    _contention.ReleaseClaim();
+                    Engage((Player)found, PlayerbotEngageReason.Help);
+                    DoneHelp(PlayerbotHelpKind.Assist, targetGuid);
+                    return 1;
                 }
 
                 // The same state DropIfSomeoneElses leaves when it decides to help a tagger: the mob is held as an assist-only target.

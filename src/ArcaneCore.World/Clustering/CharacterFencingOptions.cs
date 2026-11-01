@@ -5,10 +5,10 @@ public sealed class CharacterFencingOptions
 {
     public const string SectionName = "Cluster:Fencing";
 
-    /// <summary>Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start.</summary>
+    /// <summary>Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>The durable owner identity; defaults to the current machine name and must be stable while the world owns the database.</summary>
+    /// <summary>The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. Must be distinct for each world of a multi-world cluster (the supervisor check refuses a duplicate).</summary>
     public string OwnerNode { get; set; } = Environment.MachineName;
 
     /// <summary>The positive ownership epoch to compare and swap during an explicit takeover; pair with <see cref="TakeoverIncarnation"/>.</summary>

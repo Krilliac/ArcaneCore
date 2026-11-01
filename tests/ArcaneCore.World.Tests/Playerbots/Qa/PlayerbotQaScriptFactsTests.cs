@@ -73,8 +73,8 @@ public sealed class PlayerbotQaScriptFactsTests
     [Fact]
     public void AKnownMissingEntry_IsStillReportedMissing()
     {
-        CatalogFacts facts = Facts(9503, "npc_rocknot", 230); // Blackrock Depths: no AI for Private Rocknot
-        Assert.False(facts.HasScript(9503, 230));
-        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(9503, 230), facts).Cause);
+        CatalogFacts facts = Facts(16079, "npc_theldren_trigger", 230); // Blackrock Depths: no reference script for the Theldren trigger
+        Assert.False(facts.HasScript(16079, 230));
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(16079, 230), facts).Cause);
     }
 }

@@ -9,12 +9,13 @@ namespace ArcaneCore.Data.Schema.Upgrade.Cli;
 /// </summary>
 internal sealed class DbUpgradeArguments
 {
-    internal static readonly string[] ValueOptions = ["--component", "--lock-timeout", "--backup-dir", "--dbc-dir", "--out"];
+    internal static readonly string[] ValueOptions =
+        ["--component", "--lock-timeout", "--backup-dir", "--dbc-dir", "--out", "--source-provider", "--source-connection", "--target-provider", "--target-connection"];
 
     internal static readonly string[] Flags =
-        ["--confirm-backup", "--allow-active-sessions", "--script", "--json", "--no-fail-on-pending", "--apply"];
+        ["--confirm-backup", "--allow-active-sessions", "--script", "--json", "--no-fail-on-pending", "--apply", "--replace"];
 
-    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "migrate-codex", "backup-info", "dbc", "export-updates"];
+    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "migrate-codex", "backup-info", "dbc", "export-updates", "copy"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
@@ -26,6 +27,7 @@ internal sealed class DbUpgradeArguments
         ["backup-info"] = ["--component"],
         ["dbc"] = ["--dbc-dir", "--json"],
         ["export-updates"] = ["--component", "--out"],
+        ["copy"] = ["--component", "--source-provider", "--source-connection", "--target-provider", "--target-connection", "--replace", "--lock-timeout", "--allow-active-sessions"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

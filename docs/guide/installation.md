@@ -57,7 +57,7 @@ The realm daemon only needs the auth database. The shipped `src/ArcaneCore.Realm
 
 **Schema.** On first start each daemon creates the missing schema and upgrades an older one, because `Database:Upgrade:Policy` defaults to `Always`.
 For production, switch to `CreateOnly` (create an empty database, refuse to upgrade an existing one) or `Never` (verify only) once the databases
-exist, and apply upgrades deliberately with `arcane-db`; see the [upgrade runbook](../ops/database-upgrade.md). The version table is in the
+exist, and apply upgrades deliberately with `arcane-db`; see the [upgrade runbook](../ops/database-upgrade.md). To move an existing SQLite install to PostgreSQL or MariaDB, use `arcane-db copy` ([runbook](../ops/database-upgrade.md#moving-from-sqlite-to-postgresql-or-mariadb)). The version table is in the
 [schema reference](../reference/schema.md).
 
 ## 4. Configure the realm list

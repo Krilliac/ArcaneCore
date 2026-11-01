@@ -208,9 +208,8 @@ internal sealed record PlayerbotRivalrySend(Guid Bot, ulong Target, bool TargetI
 /// <item>Up to <see cref="BotsPerPass"/> autonomous, idle bots a pass, round robin; the cursor moves by the bots looked at, never by what was sent.</item>
 /// <item>A target is of the other team, alive, out of combat, on the bot's map, within <c>min(RangeYards, World:ListenRangeTextEmote)</c> (read each
 /// pass) and not ignoring the bot. A bot target is only emoted at when <c>BotToBot</c> is on and a real player is within the listen range of the bot.</item>
-/// <item>Toward a bot only the normal layer of the memory decides. Toward a real player the layer every memory decision reads does (the war layer
-/// under War Mode). Limiters and budgets are kept apart for the two kinds of target, and every emote is a direct, unbudgeted CMSG_TEXT_EMOTE, so
-/// nothing the war layer does here can change what a bot sends or says to another bot.</item>
+/// <item>The layer every memory decision reads decides, toward a bot as toward a real player (the war layer under War Mode, <c>World:WarMode:Enabled</c>).
+/// Limiters and budgets are kept apart for the two kinds of target, and every emote is a direct, unbudgeted CMSG_TEXT_EMOTE.</item>
 /// <item>A rude emote needs the Rival stance, <c>RivalEmotes</c>, no opt-out of the player (<c>rivals off</c>; with <c>RudeRequiresOptIn</c> a
 /// <c>rivals on</c>), <c>RudeAtBots</c> for a bot, and neither character in a capital, a safe area or a place the zone table cannot place. It is
 /// limited per pair, per bot (ten minutes) and per target from all bots together.</item>
@@ -374,8 +373,8 @@ internal sealed class PlayerbotRivalryLane(PlayerbotRivalryOptOut optOut)
             if (!isBot && yards <= _listen) watched = true;
             if (other.Team == self.Team || !other.IsAlive || other.Combat.IsInCombat || other.Duel is not null || yards > _range) continue;
             if (_pass.Social.IsIgnoring(other, self.Guid)) continue;
-            // Toward a bot the normal layer decides, War Mode or not; toward a real player the layer every memory decision reads.
-            PlayerbotRivalryLayer layer = !isBot && _warMode ? PlayerbotRivalryLayer.War : PlayerbotRivalryLayer.Normal;
+            // The layer every memory decision reads, toward a bot as toward a real player: War Mode on means the war layer.
+            PlayerbotRivalryLayer layer = _warMode ? PlayerbotRivalryLayer.War : PlayerbotRivalryLayer.Normal;
             PlayerbotRelation? relation = _recorder is not null && _recorder.Memory.TryGet(bot.Id, other.Guid.Value, out PlayerbotRelation row) ? row : null;
             PlayerbotStance stance = PlayerbotRivalryRules.StanceOf(relation, layer, _rivalry.Emotes.FriendlyAffinity);
             (isBot ? _botCandidates : _playerCandidates).Add(new Candidate(other, yards, stance, PlayerbotRivalryRules.IsKnown(relation, layer)));

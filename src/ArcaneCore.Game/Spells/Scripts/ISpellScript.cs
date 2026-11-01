@@ -12,8 +12,8 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// other effects have no script hook), and <see cref="OnSuccessfulDispel"/> after a DISPEL effect that removed at least
 /// one aura.
 /// </para>
-/// <see cref="OnSummon"/> follows a creature summon of the spell: only SPELL_EFFECT_SUMMON_WILD raises it here (vmangos also calls it from the
-/// pet, guardian, possessed, totem, critter, demon and game object summons, SpellEffects.cpp:2432-5818, which no script of this code base needs yet).
+/// <see cref="OnSummon"/> follows a creature summon of the spell: SPELL_EFFECT_SUMMON_WILD, SUMMON_GUARDIAN and SUMMON_DEMON raise it here (vmangos also calls it from the
+/// pet, possessed, totem, critter and game object summons, SpellEffects.cpp:2432-5818, which no script of this code base needs yet).
 /// </summary>
 public interface ISpellScript
 {
@@ -31,6 +31,18 @@ public interface ISpellScript
     /// <summary>A DUMMY, SCRIPT_EFFECT or declared effect of the spell is about to run on a target (vmangos OnEffectExecute).</summary>
     void OnEffectExecute(SpellEffectContext context)
     {
+    }
+
+    /// <summary>
+    /// The cancelling form of <see cref="OnEffectExecute(SpellEffectContext)"/> (vmangos <c>bool SpellScript::OnEffectExecute</c>, whose false return skips
+    /// the effect, Spell.cpp:5254-5257): return false to stop the effect from running on this target, true to let it run.
+    /// <paramref name="runByDefault"/> is true on every call (the effect runs unless the script says otherwise). The dispatcher calls only this
+    /// overload; its default body runs the void hook and lets the effect run, so a script overrides whichever form it needs.
+    /// </summary>
+    bool OnEffectExecute(SpellEffectContext context, bool runByDefault)
+    {
+        OnEffectExecute(context);
+        return runByDefault;
     }
 
     /// <summary>A DISPEL effect of the spell removed <paramref name="removedStacks"/> aura stacks (at least one) from its target.</summary>

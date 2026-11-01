@@ -71,8 +71,9 @@ public sealed class PetAuraDummyEffectScript : ISpellScript
 /// SPELL_EFFECT_APPLY_AREA_AURA_PET (119; vmangos Spell::EffectApplyAreaAura and AreaAura::Update, SpellAuras.cpp:690-706): the caster carries the
 /// aura as its source and its owner, within the effect radius (100 yards for the pet auras), gets the same aura from it.
 /// <para>
-/// LIMITS: the owner's copy is decided when the source is applied and goes with the source (when the pet loses it, dies or is unsummoned, or leaves the
-/// owner's map); vmangos re-checks the radius every update, which is not done here.
+/// The owner's copy is first given when the source is applied; afterwards the periodic area-aura pass (<see cref="SpellAuraHolder.IsAreaSource"/>) re-checks
+/// the owner every update like vmangos AreaAura::Update: it drops the copy once the pet is beyond the radius and gives it back when the owner is within it
+/// again. The copy also goes with the source (when the pet loses it, dies or is unsummoned, or leaves the owner's map).
 /// </para>
 /// </summary>
 public static class PetAreaAura

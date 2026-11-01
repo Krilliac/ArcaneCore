@@ -74,7 +74,14 @@ public sealed class GmTargetRankTests
         await gm.CollectAsync();
 
         // Below full health, so .replenish has something to restore and .revive something to change.
-        await host.OnWorldAsync(() => host.World.FindOnlinePlayer(Boss)!.Health = 10);
+        // Energy at its maximum, so the 2 s energy-regen tick cannot change the snapshot while the command runs on a loaded host
+        // (a refused .deplenish or .modify energy would still show as a change).
+        await host.OnWorldAsync(() =>
+        {
+            Player target = host.World.FindOnlinePlayer(Boss)!;
+            target.Health = 10;
+            target.SetUInt32(UpdateFields.UnitFieldPower1 + 3, target.GetUInt32(UpdateFields.UnitFieldMaxpower1 + 3));
+        });
         await SelectAsync(host, Gm, Boss);
         uint[] before = await SnapshotAsync(host, Boss);
 

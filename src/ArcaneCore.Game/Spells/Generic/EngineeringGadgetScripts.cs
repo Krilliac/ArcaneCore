@@ -275,3 +275,28 @@ public sealed class GiftOfLifeScript : ISpellScript
         context.System.CastCustomSpell(context.Caster, GiftOfLifeAura, SpellCastTargets.ForSelf(), health);
     }
 }
+
+/// <summary>
+/// Goblin Jumper Cables 8342 and XL 22999 (vmangos spell_item.cpp GoblinJumperCablesScript, GoblinJumperCablesXLScript): effect 0 (the resurrect) works
+/// only 33% of the time on 8342 and 50% on 22999. A failed roll has the caster cast the shock, 8338 or 23055, on itself with the item and cancels the resurrect.
+/// </summary>
+[SpellScript(8342, 22999, ExecuteEffects = [SpellEffectName.Resurrect])]
+public sealed class GoblinJumperCablesScript : ISpellScript
+{
+    public const uint Shock = 8338, ShockXl = 23055;
+
+    /// <summary>Failure chance in percent (<c>roll_chance_i</c>: a draw of 0 to 99 below it fails).</summary>
+    public static int FailChance(uint spellId) => spellId == 8342 ? 67 : 50;
+
+    public bool OnEffectExecute(SpellEffectContext context, bool runByDefault)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.EffectIndex != 0 || GadgetCasts.Roll(context, 100) >= FailChance(context.Spell.Id))
+        {
+            return runByDefault;
+        }
+
+        GadgetCasts.Cast(context, context.Caster, context.Caster, context.Spell.Id == 8342 ? Shock : ShockXl, context.Cast.CastItem);
+        return false;
+    }
+}

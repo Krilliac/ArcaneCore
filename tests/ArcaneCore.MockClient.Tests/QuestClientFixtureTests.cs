@@ -28,6 +28,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.MockClient.Tests;
@@ -61,6 +62,50 @@ public sealed class QuestClientFixtureTests : IDisposable
             deadline.Token));
         await AssertSeedAsync(db, profile, deadline.Token);
         await AssertBaselineAsync(db, deadline.Token);
+    }
+
+    [Theory]
+    [InlineData(SyntheticQuestProfile.SelfTest)]
+    [InlineData(SyntheticQuestProfile.ManualClient)]
+    public async Task Seed_AfterWorldDbInitializerAcceptsEveryTableTheInitializerFilled(SyntheticQuestProfile profile)
+    {
+        using var deadline = TestDeadline();
+        string path = NewPath("world") + ".sqlite";
+        var options = Options<WorldDbContext>(path);
+        var services = new ServiceCollection();
+        services.AddScoped(_ => new WorldDbContext(options));
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        await new WorldDbInitializer(provider, NullLogger<WorldDbInitializer>.Instance).InitializeAsync(deadline.Token);
+
+        // Every mapped table the initializer left with rows; the seed must not treat these as existing content.
+        var filled = new List<string>();
+        await using (WorldDbContext probe = WorldContext(path))
+        {
+            Microsoft.EntityFrameworkCore.Storage.ISqlGenerationHelper sql =
+                Microsoft.EntityFrameworkCore.Infrastructure.AccessorExtensions
+                    .GetService<Microsoft.EntityFrameworkCore.Storage.ISqlGenerationHelper>(probe);
+            await probe.Database.OpenConnectionAsync(deadline.Token);
+            foreach ((string? table, string? schema) in probe.Model.GetEntityTypes()
+                .Select(entity => (entity.GetTableName(), entity.GetSchema())).Distinct())
+            {
+                if (table is null) continue;
+                await using var command = probe.Database.GetDbConnection().CreateCommand();
+                command.CommandText = $"SELECT 1 FROM {sql.DelimitIdentifier(table, schema)} LIMIT 1";
+                if (await command.ExecuteScalarAsync(deadline.Token) is not null) filled.Add(table);
+            }
+        }
+        Assert.NotEmpty(filled);
+
+        await using (WorldDbContext seed = WorldContext(path))
+        {
+            await SyntheticQuestContent.SeedAsync(seed, profile, deadline.Token);
+            Assert.Empty(seed.ChangeTracker.Entries());
+            Assert.Null(seed.Database.CurrentTransaction);
+        }
+
+        await using WorldDbContext db = WorldContext(path);
+        await AssertSeedAsync(db, profile, deadline.Token);
+        Assert.NotEmpty(await db.PlayerCreateInfo.AsNoTracking().ToListAsync(deadline.Token));
     }
 
     [Theory]

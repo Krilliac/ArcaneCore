@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Content.Transports;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -189,6 +190,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         foreach (uint mapId in Content.MapsWithSpawns)
         {
+            if (!world.Owns(mapId))
+            {
+                continue; // a map another worker owns (Cluster:Worker:OwnedMaps) spawns there
+            }
+
             GetOrCreateSystem(mapId);
         }
     }
@@ -251,6 +257,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Groups = _socialGroups ??= new SocialGroups(services),
             // LootMgr.cpp:370-377 evaluates each row's condition against the viewer (resolved at use time, fails closed without the feature).
             Conditions = (_lootConditions ??= new LootConditions(services)).IsSatisfied,
+            // The group pre-filter reads the team and player-free conditions of the table loaded now (LootMgr.cpp:403-433).
+            ConditionRules = _lootConditions!.Rules,
             CreatureOptions = CreatureFeature?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
@@ -386,6 +394,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         public bool IsSatisfied(Player player, uint conditionId)
             => (_conditions ??= services.GetService<ConditionFeature>())?.IsSatisfied(conditionId, player, null) ?? false;
+
+        public ConditionEvaluator? Rules() => ((IConditionTableEvaluator?)(_conditions ??= services.GetService<ConditionFeature>()))?.Current;
     }
 
     private sealed class SocialGroups(IServiceProvider services) : ILootGroups
