@@ -155,9 +155,13 @@ internal sealed class TestDatabases : IAsyncDisposable
                 var builder = new MySqlConnectionStringBuilder(options.ConnectionString);
                 string name = builder.Database;
                 builder.Database = string.Empty;
+                builder.Pooling = false;
 
-                // Pooled on purpose: every drop shares one admin pool, so a parallel suite does not open an extra
-                // server session per drop (an unpooled connection per drop hit "Too many connections" on a full run).
+                // The EF drop this replaces (Pomelo's MySqlDatabaseCreator.Delete) closed every idle pooled MariaDB
+                // session first. A full parallel Data run leaves thousands of idle pooled sessions (one pool per test
+                // database) and exhausts max_connections ("Too many connections") without it. Idle sessions only:
+                // MySqlConnector closes a session that is in use when it is returned.
+                MySqlConnection.ClearAllPools();
                 await using var connection = new MySqlConnection(builder.ConnectionString);
                 await connection.OpenAsync();
                 await using MySqlCommand command = connection.CreateCommand();
