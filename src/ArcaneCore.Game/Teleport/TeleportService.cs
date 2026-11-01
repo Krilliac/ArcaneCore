@@ -515,6 +515,27 @@ public sealed partial class TeleportService
         return true;
     }
 
+    /// <summary>
+    /// Hands the player to the cluster far transfer whatever this worker's own map ownership is: for a destination a coordinator has already
+    /// placed on another node (a battleground match the holder created and whose invitation it consumed), where a worker that owns instance
+    /// copies (Cluster:Worker AllowInstanceMaps) would otherwise keep the teleport local and fail the battleground entry gate. Returns false,
+    /// changing nothing, without a <see cref="ClusterFarRouter"/>, for non-finite coordinates, a player in no map, a far teleport already
+    /// under way, or a refusal of the router. World thread.
+    /// </summary>
+    public bool TeleportToClusterMap(Player player, TeleportDestination destination, TeleportOptions options = TeleportOptions.None)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (ClusterFarRouter is null
+            || !float.IsFinite(destination.X) || !float.IsFinite(destination.Y) || !float.IsFinite(destination.Z) || !float.IsFinite(destination.Orientation)
+            || player.Map is null
+            || IsBeingTeleportedFar(player))
+        {
+            return false;
+        }
+
+        return TeleportToRemoteMap(player, destination, options);
+    }
+
     // A destination another worker owns: the transfer replaces the local map change. This worker sends no loading-screen packet; the target
     // worker's BeginClusterArrival sends SMSG_TRANSFER_PENDING then SMSG_NEW_WORLD, and the arrival completes on MSG_MOVE_WORLDPORT_ACK.
     private bool TeleportToRemoteMap(Player player, TeleportDestination destination, TeleportOptions options)
