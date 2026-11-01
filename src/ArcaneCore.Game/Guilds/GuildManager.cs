@@ -1064,7 +1064,7 @@ public sealed partial class GuildManager(SocialContext context)
 
         if (Options.KickOnOversizedText)
         {
-            player.Session.Kick();
+            player.Session.Kick("guild packet oversized");
         }
 
         return true;
