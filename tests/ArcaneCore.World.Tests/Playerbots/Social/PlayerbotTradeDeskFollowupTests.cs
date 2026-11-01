@@ -5,6 +5,7 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
@@ -25,7 +26,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Social;
 /// </summary>
 public sealed class PlayerbotTradeDeskFollowupTests
 {
-    private const uint BuyEntry = 995_001, FillerEntry = 995_002, QuiverEntry = 995_003, ArrowEntry = 995_004, Price = 1000;
+    private const uint BuyEntry = 995_001, FillerEntry = 995_002, QuiverEntry = 995_003, ArrowEntry = 995_004, SoulBagEntry = 995_005, ShardEntry = 995_006, Price = 1000;
     private const string BotName = "Followbot", CustomerName = "Followcustomer";
 
     private static ItemTemplate Plain(uint entry, string name, uint stackable = 20)
@@ -37,6 +38,8 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Plain(FillerEntry, "Followitem Filler", stackable: 1),
         new() { Entry = QuiverEntry, Class = 11, SubClass = 2, Name = "Followitem Quiver", DisplayId = 1, Quality = 1, InventoryType = 18, ContainerSlots = 4, BagFamily = 1 },
         new() { Entry = ArrowEntry, Class = 6, SubClass = 2, Name = "Followitem Arrow", DisplayId = 1, Quality = 1, InventoryType = 24, SellPrice = Price, Stackable = 20, BagFamily = 1 },
+        new() { Entry = SoulBagEntry, Class = 1, SubClass = 1, Name = "Followitem Soul Bag", DisplayId = 1, Quality = 1, InventoryType = 18, ContainerSlots = 4, BagFamily = 3 },
+        new() { Entry = ShardEntry, Class = 15, SubClass = 0, Name = "Followitem Shard", DisplayId = 1, Quality = 1, SellPrice = Price, Stackable = 20, BagFamily = 3 },
     ];
 
     private sealed class Scene : IAsyncDisposable
@@ -223,6 +226,31 @@ public sealed class PlayerbotTradeDeskFollowupTests
 
         Assert.Equal(PlayerbotDealRefusal.NoSpace, (await scene.QuoteBuyerAsync(BuyEntry)).Refusal);
         Assert.True((await scene.QuoteBuyerAsync(ArrowEntry)).Ok);
+    }
+
+    /// <summary>The soul bag half of the probe: a buyer whose only free room is a soul bag slot takes shards and refuses other goods.</summary>
+    [Fact]
+    public async Task Quote_BuyerWithOnlyASoulBagSlotFree_TakesShardsAndRefusesOtherGoods()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(SoulBagEntry, 1, out Item? soulBag));
+            Assert.True(bot.Inventory.AutoEquipItem(soulBag!.BagSlot, soulBag.Slot));
+            return true;
+        });
+        Assert.True(await scene.FillBackpackAsync() > 0);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.NotEqual(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(FillerEntry, 1, [], out _));
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ShardEntry, 1, [], out _));
+            return true;
+        });
+
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, (await scene.QuoteBuyerAsync(BuyEntry)).Refusal);
+        Assert.True((await scene.QuoteBuyerAsync(ShardEntry)).Ok);
     }
 
     // --- TradeSession.Completed ---------------------------------------------------------------------------------------------------
