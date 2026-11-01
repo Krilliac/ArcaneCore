@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -91,8 +92,42 @@ public class CombatHooks
     /// same team are friendly; everything else is not.
     /// </summary>
     public virtual bool IsFriendly(Unit a, Unit b)
+    {
+        // Always friendly to a charmer, an owner or a unit they control, and between units with the same charmer or owner
+        // (vmangos GetReactionTo, Object.cpp:3614-3617, before the duel clause).
+        if (a.CharmerOrOwnerOrOwnGuid == b.CharmerOrOwnerOrOwnGuid)
+        {
+            return true;
+        }
+
         // Duel opponents are hostile before any team rule (vmangos Object.cpp:3650-3652, "duel - always hostile to opponent").
-        => !DuelRules.IsOpponentHostile(a, b) && a is Player pa && b is Player pb && pa.Team == pb.Team;
+        return !DuelRules.IsOpponentHostile(a, b) && a is Player pa && b is Player pb && PlayersFriendly(pa, pb);
+    }
+
+    /// <summary>True when either unit is under another unit's charm (UNIT_FIELD_CHARMEDBY set): the native-team shortcut no longer holds for it.</summary>
+    internal static bool EitherCharmed(Unit a, Unit b) => !a.CharmerGuid.IsEmpty || !b.CharmerGuid.IsEmpty;
+
+    /// <summary>
+    /// True when each side of a charmed player pair resolves to a player (<see cref="DuelRules.ControllingPlayer"/>); a side
+    /// charmed by a creature resolves to none, and the pair then goes by faction template or is not friendly.
+    /// </summary>
+    internal static bool BothResolveToPlayers(Unit a, Unit b) => DuelRules.ControllingPlayer(a) is not null && DuelRules.ControllingPlayer(b) is not null;
+
+    /// <summary>
+    /// Player pair friendliness. Uncharmed players share a team (<c>Player.Team</c> never changes under charm, so it is not trusted
+    /// for a charmed one). When either is charmed, each side is resolved to the player controlling it (vmangos GetAffectingPlayer)
+    /// and those players' teams are compared; a side with no controlling player (charmed by a creature) is not friendly.
+    /// vmangos adds same group or raid (IsInRaidWith, Object.cpp:3654-3664); no group resolver is reachable from the hooks, so teams stand in.
+    /// </summary>
+    private static bool PlayersFriendly(Player pa, Player pb)
+    {
+        if (!EitherCharmed(pa, pb))
+        {
+            return pa.Team == pb.Team;
+        }
+
+        return DuelRules.ControllingPlayer(pa) is { } ca && DuelRules.ControllingPlayer(pb) is { } cb && ca.Team == cb.Team;
+    }
 
     /// <summary>
     /// vmangos Unit::IsHostileTo (GetReactionTo(target) &lt;= REP_HOSTILE): the FACTION reaction, which unlike

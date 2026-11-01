@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Npc;
 
 namespace ArcaneCore.Game.Combat;
@@ -54,6 +55,12 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return true;
         }
 
+        // Same charmer or owner is always friendly (vmangos Object.cpp:3614-3617), before the duel clause.
+        if (a.CharmerOrOwnerOrOwnGuid == b.CharmerOrOwnerOrOwnGuid)
+        {
+            return true;
+        }
+
         // Duel opponents (and their pets, totems and charmed units, through the affecting player) are hostile before any faction
         // rule (vmangos Object.cpp:3650-3652); a pet copies its owner's template, so the template reaction would say friendly.
         if (DuelRules.IsOpponentHostile(a, b))
@@ -61,7 +68,9 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return false;
         }
 
-        if (a is Player && b is Player)
+        // A charmed player pair where a side has no controlling player (charmed by a creature) goes to the template reaction below:
+        // the charm copied the charmer's template onto the target (CharmService.Charm).
+        if (a is Player && b is Player && (!EitherCharmed(a, b) || BothResolveToPlayers(a, b)))
         {
             return base.IsFriendly(a, b);
         }
@@ -81,7 +90,8 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return false;
         }
 
-        if (attacker is Player && victim is Player)
+        // Uncharmed player pairs are the base rule (team, PvP flag, duel); a charmed one goes through the reaction checks.
+        if (attacker is Player && victim is Player && !EitherCharmed(attacker, victim))
         {
             return true;
         }
@@ -109,7 +119,8 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
     /// GetReactionTo are not modelled (see the class remarks).
     /// </summary>
     public override bool IsHostileTo(Unit a, Unit b)
-        => DuelRules.IsOpponentHostile(a, b) || ReactionTo(a, b) == Reaction.Hostile; // GetReactionTo duel clause first (Object.cpp:3650-3652)
+        => a.CharmerOrOwnerOrOwnGuid != b.CharmerOrOwnerOrOwnGuid // never hostile to a charmer, owner or co-controlled unit (Object.cpp:3614-3617)
+            && (DuelRules.IsOpponentHostile(a, b) || ReactionTo(a, b) == Reaction.Hostile); // GetReactionTo duel clause next (Object.cpp:3650-3652)
 
     // WorldObject::GetFactionReactionTo, template part only (Object.cpp:3701-3741).
     private Reaction ReactionTo(Unit from, Unit to)
