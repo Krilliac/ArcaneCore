@@ -108,6 +108,9 @@ public sealed partial class CharmInfo
     /// <summary>vmangos Pet::m_trainingPoints: minus the training points spent, plus those earned (shown through UNIT_TRAINING_POINTS).</summary>
     public int TrainingPoints { get; internal set; }
 
+    /// <summary>vmangos Pet::m_focusTimer: milliseconds to the next focus regeneration (4 s period).</summary>
+    internal int FocusTimerMs { get; set; } = PetPower.FocusPeriodMs;
+
     /// <summary>vmangos Pet::m_happinessTimer: milliseconds to the next happiness loss (7.5 s period).</summary>
     internal int HappinessTimerMs { get; set; } = SummonService.HappinessPeriodMs;
 
