@@ -30,7 +30,7 @@ the auras do not grant, as before. No dump rows are committed.
 
 World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link. The standard deploy migrates with `arcane-db upgrade` first and then runs `refresh` without `--migrate` (which refuses an older schema); `refresh --migrate` upgrades and refreshes in one step. Refresh replaces the shared stock and updates the links without replacing direct `npc_vendor` rows, and reports the number of links it changed. An `npc_vendor_template` table missing a required column (for example `slot` or `condition_id`) is skipped with a warning, not an abort. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
 
-`points_of_interest` (the gossip map markers a guard option shows through `action_poi_id`) is read by the NPC importer from the same dump as the gossip tables; coordinates may be negative, and a row with entry 0 is skipped with a warning. The table already existed in the world schema, so there is no schema step. `import` writes it (`replace` clears it first); `refresh` does not touch it.
+`points_of_interest` (the gossip map markers a guard option shows through `action_poi_id`) is read by the NPC importer from the same dump as the gossip tables; coordinates may be negative, and a row with entry 0 is skipped with a warning. The table already existed in the world schema, so there is no schema step. `import` writes it (`replace` clears it first); `refresh` replaces the whole table from a dump that carries it (rows outside the map are skipped and reported).
 
 ## Delivered
 
@@ -56,8 +56,8 @@ Sources, in `refresh` (and `import`, through the creature importer):
 Operator flow: `refresh` with the classic-db dump and a vmangos extract that holds only `spell_scripts`, `spell_effect_mod` and
 `conditions` (the spell script importer tells the vmangos `conditions` rows apart by their missing `comments` column; `refresh` never writes
 `conditions`). Give the vmangos extract to `refresh` only: `import` would also hand its `conditions` rows to the conditions importer,
-whose vmangos guard looks for missing `value3`/`value4` columns that current vmangos dumps have, so they would be written with their
-vmangos ids. The vmangos dump is GPL data and is never committed.
+whose vmangos guard refuses `conditions` rows that have no `comments` column (the vmangos layout), so the import would stop rather
+than write them with their vmangos ids. The vmangos dump is GPL data and is never committed.
 
 **`spell_effect_mod` (world 66).** vmangos corrects Spell.dbc effects column by column (`SpellModMgr::LoadSpellMods`,
 `Spells/SpellModMgr.cpp:195-262`; -1 keeps a value, `:48-70`). `SpellStoreFactory` applies the rows when it builds the spell table, but

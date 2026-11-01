@@ -216,7 +216,7 @@ public sealed class ImporterFollowupTests : IDisposable
     [InlineData("INSERT INTO exploration_basexp VALUES (1,5);")]
     [InlineData("INSERT IGNORE INTO game_weather VALUES (12,1,2,3,4,5,6,7,8,9,10,11,12);")]
     [InlineData("REPLACE exploration_basexp (level,basexp) VALUES (1,5);")]
-    public void AnUnbackticked_InsertOfATheTableItReads_IsRefused_NotSilentlyDropped(string line)
+    public void AnUnbackticked_InsertOfTheTableItReads_IsRefused_NotSilentlyDropped(string line)
         => Assert.Throws<InvalidDataException>(() => WorldStateDumpImporter.Parse(new StringReader(line)));
 
     [Fact]

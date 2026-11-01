@@ -16,7 +16,8 @@ public sealed record GraveyardImportReport(int SafeLocs, int Links, int SkippedL
 /// <c>game_graveyard_zone</c> (cmangos <c>id, ghost_loc, link_kind, faction</c>; vmangos
 /// <c>id, ghost_zone, faction, patch_min, patch_max</c>) and vmangos' <c>world_safe_locs_facing</c> (<c>id, orientation</c>,
 /// ObjectMgr.cpp:7669-7704). vmangos keeps the safe locations in <c>WorldSafeLocs.dbc</c>, so a vmangos import adds
-/// them with <see cref="ReadSafeLocs"/> (<see cref="WorldSafeLocsDbcReader"/>).
+/// the ones the dumps lack with <see cref="AddMissingSafeLocs"/> (<see cref="WorldSafeLocsDbcReader"/>); a dump row wins over
+/// the DBC one, and the DBC supplies no facing.
 /// <para>
 /// Load rules follow vmangos <c>ObjectMgr::LoadGraveyardZones</c> (ObjectMgr.cpp:7453-7510): a link whose team is not 0, 67
 /// or 469 is skipped; a second link for the same (graveyard, zone) is skipped (the first stays); vmangos rows are kept only
