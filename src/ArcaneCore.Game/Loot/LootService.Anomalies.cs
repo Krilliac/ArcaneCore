@@ -147,7 +147,7 @@ public sealed partial class LootService
     }
 
     private bool ConditionPasses(Player player, uint conditionId)
-        => conditionId == 0 || Conditions?.Invoke(player, conditionId) == true;
+        => conditionId == 0 || Conditions?.Invoke(player, null, conditionId) == true;
 
     /// <summary>The row's item is known and some recipient passes its condition (and, for a quest row, needs the item).</summary>
     private bool CanYield(LootStoreRow row, IReadOnlyList<Player> recipients)
