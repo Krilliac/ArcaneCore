@@ -207,6 +207,7 @@ public sealed class GenericDummyAuraCasesTests
         SpellEffectInfo area = Effect(SpellEffectName.ApplyAreaAuraEnemy, 10, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000) with { Radius = 20f };
         using SpellTestKit kit = Kit(Instant(Spell(sam, area) with { Duration = new SpellDuration(-1, 0, -1) }));
         (Player caster, _) = kit.AddPlayer(1);
+        SpellTestKit.FlagForPvp(caster); // an unflagged caster does not hit another player (CanAttackWithoutEnablingPvP)
         (Player near, _) = kit.AddHostilePlayer(2, 5, 0);
         (Player far, _) = kit.AddHostilePlayer(3, 60, 0);
 
