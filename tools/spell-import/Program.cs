@@ -17,6 +17,19 @@ if (args.Length < 1 || args[0] is "-h" or "--help")
     return 1;
 }
 
+// A top-level Database:Provider / Database:ConnectionString override is shadowed by the shipped Database:World section and
+// would be silently ignored: refuse it so the import never runs against a database the operator did not mean.
+foreach (string arg in args[1..])
+{
+    string key = arg.TrimStart('-', '/');
+    if (key.StartsWith("Database:Provider", StringComparison.OrdinalIgnoreCase)
+        || key.StartsWith("Database:ConnectionString", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine($"'{arg.Split('=')[0]}' is ignored here (Database:World:* wins); use --Database:World:Provider / --Database:World:ConnectionString");
+        return 1;
+    }
+}
+
 string directory = args[0];
 if (!Directory.Exists(directory))
 {

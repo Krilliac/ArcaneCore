@@ -93,12 +93,12 @@ database older than the baseline reaches it through `arcane-db upgrade` are in [
 |---|---|---|
 | 0 | ok: current, upgraded, or drift clean | upgrade: yes |
 | 1 | unexpected failure (a bug, or an input the tool did not anticipate) | maybe: read the message |
-| 2 | usage or configuration: unknown command or option, missing value, no connection string | no |
+| 2 | usage or configuration: unknown command or option, missing value, no connection string; the server refused the credentials or the database name (SQLSTATE 28xxx, 3D000, MySQL/MariaDB error 1049): restarting never helps | no |
 | 3 | `status`, `plan`: an upgrade is pending (a normal report; `--no-fail-on-pending` makes it 0 for `set -e` scripts) | no |
 | 4 | refused: database newer than the code, unknown state, blocker (duplicate rows, conflicting index, mismatching table), other sessions connected; the world daemon also exits 4 when another world process holds the characters database writer lock (`<database>.world.lock`) or the lock file cannot be created | no |
 | 5 | drift: the database differs from the model (`check`, or the check at the end of `upgrade`); for `dbc`, a DBC with another layout or a world id no DBC row has | no |
-| 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
-| 7 | the wait for another process's schema lock ran out | no |
+| 6 | the database server could not be reached (connection-level or transient failure; message scrubbed): supervisors may restart | no |
+| 7 | a lock wait ran out: another process's schema lock, a server lock wait timeout (MySQL/MariaDB 1205, PostgreSQL 55P03), a deadlock or serialization failure (40001, 40P01), or a busy SQLite database: retry once the other process is done | no |
 | 8 | `upgrade` with pending steps and no confirmed backup, or a backup that could not be made | no |
 | 9 | `copy`: a table differed from its source when read back through the model column types (row count or a value); the component's copy was rolled back and its target is as it was (PostgreSQL key counters unchanged: `setval` runs only after every table verified); with `--component all` earlier components stay committed and the message names them | no |
 
