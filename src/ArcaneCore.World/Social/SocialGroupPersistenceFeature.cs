@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -30,6 +32,9 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private readonly ILogger _logger = loggers.CreateLogger<SocialGroupPersistenceFeature>();
     private readonly Dictionary<uint, GroupRecord> _written = [];
     private GroupManager? _groups;
+    private GroupAuthority? _authority;
+    private ArcaneCore.Game.Social.ICharacterLookup? _characters;
+    private bool _holding;
     private WorldRuntime? _world;
     private TimeProvider _clock = TimeProvider.System;
     private long _lastSweep = long.MinValue;
@@ -62,10 +67,31 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         _world = world;
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
         _groups = social.Context.Groups;
+        _characters = social.Context.Characters;
+
+        // Cluster mode (S3a): the Social lease holder's group authority owns the groups, so that is what is restored and written, and only while this node holds the lease.
+        _authority = _groups.Authority is not null ? services.GetService<PresenceHolderService>()?.Groups : null;
         Writes = new KeyedStoreWriteQueue<IGroupStore>(scopes, loggers.CreateLogger<KeyedStoreWriteQueue<IGroupStore>>(), "group", services.GetService<ShutdownDrain>()?.Features);
         Writes.Start();
 
-        Restored = _groups.Restore(stored);
+        if (_authority is not null)
+        {
+            _holding = HoldsSocial();
+            if (_holding)
+            {
+                Restored = _authority.Restore(stored, _characters);
+            }
+            else
+            {
+                Restored = new GroupRestoreResult([], []);
+                stored = [];
+            }
+        }
+        else
+        {
+            Restored = _groups.Restore(stored);
+        }
+
         Dictionary<uint, GroupRecord> byId = stored.ToDictionary(r => r.Id);
         foreach (uint id in Restored.Restored)
         {
@@ -125,18 +151,40 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             return;
         }
 
-        var seen = new HashSet<uint>();
-        foreach (Group group in _groups.Groups)
+        IReadOnlyList<GroupRecord> current;
+        if (_authority is { } authority)
         {
-            seen.Add(group.Id);
-            GroupRecord snapshot = GroupManager.Snapshot(group);
-            if (_written.TryGetValue(group.Id, out GroupRecord? before) && snapshot.SameAs(before))
+            if (!HoldsSocial())
+            {
+                _holding = false; // another node owns the table now; it writes
+                return;
+            }
+
+            if (!_holding)
+            {
+                ReloadAuthority(authority);
+                _holding = true;
+            }
+
+            current = authority.Snapshots();
+        }
+        else
+        {
+            current = [.. _groups.Groups.Select(GroupManager.Snapshot)];
+        }
+
+        var seen = new HashSet<uint>();
+        foreach (GroupRecord snapshot in current)
+        {
+            seen.Add(snapshot.Id);
+            if (_written.TryGetValue(snapshot.Id, out GroupRecord? before) && snapshot.SameAs(before))
             {
                 continue;
             }
 
-            _written[group.Id] = snapshot;
-            Writes.Save(Key(group.Id), store => store.SaveGroupAsync(snapshot));
+            _written[snapshot.Id] = snapshot;
+            GroupRecord toWrite = snapshot;
+            Writes.Save(Key(snapshot.Id), store => store.SaveGroupAsync(toWrite));
         }
 
         foreach (uint gone in _written.Keys.Where(id => !seen.Contains(id)).ToArray())
@@ -144,6 +192,45 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             _written.Remove(gone);
             Writes.Save(Key(gone), store => store.DeleteGroupAsync(gone));
         }
+    }
+
+    /// <summary>Whether this node holds the Social lease (always true without a lease keeper).</summary>
+    private bool HoldsSocial()
+        => services.GetService<RealmAuthorityLeaseKeeper>() is not { } keeper || keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
+
+    /// <summary>
+    /// The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover
+    /// continues from storage. Runs on the world thread once per gain.
+    /// </summary>
+    private void ReloadAuthority(GroupAuthority authority)
+    {
+        IReadOnlyList<GroupRecord> stored;
+        using (IServiceScope scope = scopes.CreateScope())
+        {
+            if (scope.ServiceProvider.GetService<IGroupStore>() is not { } store)
+            {
+                return;
+            }
+
+            stored = store.LoadGroupsAsync().GetAwaiter().GetResult();
+        }
+
+        authority.Reset();
+        GroupRestoreResult result = authority.Restore(stored, _characters!);
+        Restored = result;
+        _written.Clear();
+        Dictionary<uint, GroupRecord> byId = stored.ToDictionary(r => r.Id);
+        foreach (uint id in result.Restored)
+        {
+            _written[id] = byId[id];
+        }
+
+        foreach (uint id in result.Dropped)
+        {
+            Writes?.Save(Key(id), store => store.DeleteGroupAsync(id));
+        }
+
+        _logger.LogInformation("Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped)", result.Restored.Count, result.Dropped.Count);
     }
 
     private static string Key(uint groupId) => "group:" + groupId;
