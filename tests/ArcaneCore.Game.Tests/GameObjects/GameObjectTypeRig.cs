@@ -120,6 +120,7 @@ internal sealed class GameObjectTypeRig
     public const uint InUseEventGoober = 325; // the same with a 5 s auto-close time (data3), in use until it runs out
     public const uint EventRestockChest = 326; // a restocking chest (30 s) with a chest.eventId (data6), as the Stones of Binding
     public const uint Lever295 = 327;         // a button with display 295, the Scarlet Monastery levers
+    public const uint KeyRestockChest = 391;  // a key-locked (expendable key) restocking chest (30 s)
     public const uint ChestEvent = 9043;
     public const uint ChestQuest = 696;
 
@@ -207,6 +208,7 @@ internal sealed class GameObjectTypeRig
             GoTemplate(EventChest, GameObjectType.Chest, (0, PlainKeyLock), (1, ChestLoot), (6, ChestEvent)),
             GoTemplate(QuestEventChest, GameObjectType.Chest, (1, ChestLoot), (6, ChestEvent), (8, ChestQuest)),
             GoTemplate(EventRestockChest, GameObjectType.Chest, (1, ChestLoot), (2, 30), (6, ChestEvent)),
+            GoTemplate(KeyRestockChest, GameObjectType.Chest, (0, ExpendableKeyLock), (1, ChestLoot), (2, 30)),
             GoTemplate(Lever295, GameObjectType.Button) with { DisplayId = 295 },
             GoTemplate(EventGoober, GameObjectType.Goober, (2, ChestEvent)),
             GoTemplate(InUseEventGoober, GameObjectType.Goober, (2, ChestEvent), (3, 5 * 0x10000)),
