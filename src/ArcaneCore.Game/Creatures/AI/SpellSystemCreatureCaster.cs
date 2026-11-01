@@ -100,10 +100,18 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         SpellCastTargets targets = target is null || ReferenceEquals(target, caster)
             ? SpellCastTargets.ForSelf()
             : SpellCastTargets.ForUnit(target.Guid);
-        return spells.CastSpell(caster, spellId, targets, triggered) == SpellCastResult.CastOk
-            ? CreatureCastResult.Ok
-            : CreatureCastResult.Failed;
+        return Map(spells.CastSpell(caster, spellId, targets, triggered));
     }
+
+    /// <summary>The creature-facing outcome of a spell result; power, too-close and silence or pacify are told apart for the EventAI main spell.</summary>
+    private static CreatureCastResult Map(SpellCastResult result) => result switch
+    {
+        SpellCastResult.CastOk => CreatureCastResult.Ok,
+        SpellCastResult.NoPower => CreatureCastResult.NoPower,
+        SpellCastResult.TooClose => CreatureCastResult.TooClose,
+        SpellCastResult.Silenced or SpellCastResult.Pacified => CreatureCastResult.Prevented,
+        _ => CreatureCastResult.Failed,
+    };
 
     public CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered)
     {

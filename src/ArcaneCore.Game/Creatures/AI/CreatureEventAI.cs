@@ -34,15 +34,20 @@ public class CreatureEventAI : AggressorAI
     public const int CastInterruptPrevious = CastAction.InterruptPrevious;
     public const int CastTriggered = CastAction.Triggered;
     public const int CastAuraNotPresent = CastAction.AuraNotPresent;
+    public const int CastMainSpell = CastAction.MainSpell;
 
     /// <summary>cmangos MAX_PHASE: phases 0..31.</summary>
     public const int MaxPhase = 32;
+
+    /// <summary>cmangos UnitAI::UpdateAI: yards past melee reach before a proximity or distancer creature returns to ranged mode.</summary>
+    private const float ReturnThreshold = 3f;
 
     private readonly EventAiEngine _engine;
     private bool _rangedMode;
     private bool _currentRangedMode;
     private float _chaseDistance;
     private int _rangedModeType;
+    private readonly HashSet<uint> _mainSpells = [];
 
     /// <summary>
     /// EventAI on the live handler registry, <see cref="EventAiRegistry.Default"/>: the registry object is the swappable holder (its table is
@@ -60,6 +65,7 @@ public class CreatureEventAI : AggressorAI
         ArgumentNullException.ThrowIfNull(registry);
         AiContent = content;
         _engine = new EventAiEngine(this, registry, creature.System?.Options.EventAi ?? new EventAiOptions());
+        RebuildMainSpells();
     }
 
     public EventAiEngine Engine => _engine;
@@ -136,22 +142,63 @@ public class CreatureEventAI : AggressorAI
     }
 
     /// <summary>
+    /// cmangos UnitAI::AddMainSpell as the EventAI constructor feeds it (CreatureEventAI.cpp:139-140): the spell ids of the creature's
+    /// ACTION_T_CAST rows that carry CAST_MAIN_SPELL (0x100). Rebuilt with the rows, which a respawn re-reads.
+    /// </summary>
+    private void RebuildMainSpells()
+    {
+        _mainSpells.Clear();
+        foreach (EventAiHolder holder in _engine.Holders)
+        {
+            foreach (CreatureAiAction action in holder.Event.Actions)
+            {
+                if (action.Type == (byte)EventAiActionType.Cast && (action.Param3 & CastMainSpell) != 0 && action.Param1 > 0)
+                {
+                    _mainSpells.Add((uint)action.Param1);
+                }
+            }
+        }
+    }
+
+    /// <summary>Whether <paramref name="spellId"/> is one of this creature's main spells (cmangos m_mainSpells).</summary>
+    internal bool IsMainSpell(uint spellId) => _mainSpells.Contains(spellId);
+
+    /// <summary>
+    /// cmangos UnitAI::HandleSpellCastResult (UnitAI.cpp:838-858): a main spell that fails for lack of power, because the victim is too close
+    /// or because the cast is prevented (silence, pacify) ends ranged mode so the creature closes to melee. Not delivered: the
+    /// full-caster return to ranged mode on the main spell's cooldown (OnSpellCooldownAdded) is approximated by a main spell that was cast,
+    /// and the interrupt fallback (OnSpellInterrupt) has no hook in this AI.
+    /// </summary>
+    internal void HandleMainSpellCastResult(uint spellId, CreatureCastResult result)
+    {
+        if (!_rangedMode || !_mainSpells.Contains(spellId))
+        {
+            return;
+        }
+
+        if (_currentRangedMode)
+        {
+            if (result is CreatureCastResult.NoPower or CreatureCastResult.TooClose or CreatureCastResult.Prevented)
+            {
+                SetCurrentRangedMode(false);
+            }
+        }
+        else if (_rangedModeType == 1 && result == CreatureCastResult.Ok)
+        {
+            SetCurrentRangedMode(true);
+        }
+    }
+
+    /// <summary>
     /// ACTION_T_SET_RANGED_MODE (57). The types are cmangos UnitAI RangedModeType: 0 none, 1 full caster, 2 proximity,
     /// 3 no melee mode (keeps the creature in ranged mode even when the victim is inside melee reach) and 4 distancer.
     /// Types 2 and 4 leave ranged mode while the victim is inside melee reach and return once it is 3 yd past it
-    /// (cmangos UnitAI::UpdateAI, UnitAI.cpp:1096-1110; <see cref="UpdateRangedModeByReach"/>). Type 1 (7 creatures) leaves ranged mode
-    /// when its main spell is blocked (UnitAI::OnSpellInterrupt), which needs the main-spell registry this AI does not have; it is
-    /// refused and reported as an unsupported script action instead of silently behaving as type 3. Movement selection remains owned by
+    /// (cmangos UnitAI::UpdateAI, UnitAI.cpp:1096-1110; <see cref="UpdateRangedModeByReach"/>); every type leaves it when a main spell
+    /// (CAST_MAIN_SPELL) fails for power, range or prevention (<see cref="HandleMainSpellCastResult"/>). Movement selection remains owned by
     /// CreatureMapSystem; this state is the contract consumed by EventAI gates and melee control.
     /// </summary>
     internal bool SetRangedMode(bool enabled, float chaseDistance, int type)
     {
-        if (type == 1)
-        {
-            CreatureAnomalies.ReportScriptActionUnsupported(Me, $"EventAI action 57 ranged mode type 1 (full caster) on entry {Me.Entry}: the main-spell fallback to melee is not implemented");
-            return false;
-        }
-
         if (type is < 0 or > 4 || !float.IsFinite(chaseDistance) || chaseDistance < 0)
         {
             return false;
@@ -180,7 +227,67 @@ public class CreatureEventAI : AggressorAI
     /// </summary>
     private void UpdateRangedModeByReach()
     {
-        if (!_rangedMode || _rangedModeType is not (2 or 4) || Victim is not { } victim || !CombatMovement || !_engine.Context.CanExecuteCombatAction)
+        if (!_rangedMode || _rangedModeType is not (2 or 4) || Victim is not { } victim || !_engine.Context.CanExecuteCombatAction)
+        {
+            return;
+        }
+
+        if (_currentRangedMode)
+        {
+            if (MapCombat.CanReachWithMeleeAutoAttack(Me, victim))
+            {
+                SetCurrentRangedMode(false);
+            }
+
+            return;
+        }
+
+        // cmangos CanReachWithMeleeAttack(victim, 3.f): the 3 yd is added to the reach before the minimum (ATTACK_DISTANCE) clamp.
+        if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim, ReturnThreshold))
+        {
+            SetCurrentRangedMode(true);
+        }
+    }
+
+    /// <summary>
+    /// ACTION_T_SET_RANGED_MODE (57). The types are cmangos UnitAI RangedModeType: 0 none, 1 full caster, 2 proximity,
+    /// 3 no melee mode (keeps the creature in ranged mode even when the victim is inside melee reach) and 4 distancer.
+    /// Types 2 and 4 leave ranged mode while the victim is inside melee reach and return once it is 3 yd past it
+    /// (cmangos UnitAI::UpdateAI, UnitAI.cpp:1096-1110; <see cref="UpdateRangedModeByReach"/>); every type leaves it when a main spell
+    /// (CAST_MAIN_SPELL) fails for power, range or prevention (<see cref="HandleMainSpellCastResult"/>). Movement selection remains owned by
+    /// CreatureMapSystem; this state is the contract consumed by EventAI gates and melee control.
+    /// </summary>
+    internal bool SetRangedMode(bool enabled, float chaseDistance, int type)
+    {
+        if (type is < 0 or > 4 || !float.IsFinite(chaseDistance) || chaseDistance < 0)
+        {
+            return false;
+        }
+
+        _rangedMode = enabled;
+        _chaseDistance = chaseDistance;
+        AttackDistance = chaseDistance;
+        _rangedModeType = type;
+        _currentRangedMode = enabled;
+        return true;
+    }
+
+    /// <summary>cmangos UnitAI::SetCurrentRangedMode for the proximity and distancer types: ranged back on chases at the chase distance, off closes in.</summary>
+    private void SetCurrentRangedMode(bool state)
+    {
+        _currentRangedMode = state;
+        AttackDistance = state ? _chaseDistance : 0f;
+        System?.ApplyCombatMovement(Me);
+    }
+
+    /// <summary>
+    /// cmangos UnitAI::UpdateAI for TYPE_PROXIMITY and TYPE_DISTANCER (UnitAI.cpp:1096-1110): in ranged mode a victim inside melee reach ends
+    /// it; out of ranged mode it returns once the victim is more than 3 yd past melee reach. Not delivered: the distancing step away from an
+    /// immobilised victim (DistanceYourself) and the main-spell-prevented conditions.
+    /// </summary>
+    private void UpdateRangedModeByReach()
+    {
+        if (!_rangedMode || _rangedModeType is not (2 or 4) || Victim is not { } victim || !_engine.Context.CanExecuteCombatAction)
         {
             return;
         }
@@ -223,6 +330,7 @@ public class CreatureEventAI : AggressorAI
         AttackDistance = _chaseDistance; // cmangos JustRespawned/Reset: m_attackDistance = m_chaseDistance, so action 29 of the last life does not carry over
         SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.Respawn();
+        RebuildMainSpells();
     }
 
     public override void OnAggro(Unit target) => _engine.EnterCombat(target);

@@ -106,6 +106,15 @@ public enum CreatureCastResult
     AlreadyCasting,
     AuraPresent,
     Failed,
+
+    /// <summary>The cast failed for lack of mana, rage or energy (cmangos CAST_FAIL_POWER).</summary>
+    NoPower,
+
+    /// <summary>The target is inside the spell's minimum range (cmangos CAST_FAIL_TOO_CLOSE).</summary>
+    TooClose,
+
+    /// <summary>The caster is silenced or pacified for this spell (cmangos CAST_FAIL_CAST_PREVENTED).</summary>
+    Prevented,
 }
 
 /// <summary>
