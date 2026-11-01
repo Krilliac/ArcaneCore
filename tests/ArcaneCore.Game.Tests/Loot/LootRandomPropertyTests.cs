@@ -193,4 +193,27 @@ public sealed class LootRandomPropertyTests
         LootBag bag = plain.Generate(Corpse, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, CorpseEntry, [player]);
         Assert.Equal(0, Assert.Single(bag.Items).RandomPropertyId);
     }
+
+    [Fact]
+    public void DurableChestRecord_RoundTripsTheProperty_AndTheTakeGrantCarriesIt()
+    {
+        var bag = new LootBag(Corpse, LootSourceKind.GameObject, LootType.Corpse);
+        bag.Add(new LootItem(0, Sword, 1, false, false, 7) { RandomPropertyId = (int)PropertyX });
+        bag.Add(new LootItem(1, Sword, 1, false, false, 7) { RandomPropertyId = -(int)PropertyY });
+
+        ArcaneCore.Kernel.Loot.LootStateRecord record = bag.ToRecord(new ArcaneCore.Kernel.Loot.LootStateKey(5, 6), 3000, 1, 0);
+        Assert.Equal([(int)PropertyX, -(int)PropertyY], record.Items.OrderBy(i => i.Slot).Select(i => i.RandomPropertyId));
+
+        LootBag restored = LootBag.FromRecord(Corpse, LootType.Corpse, record, _ => 7u)!;
+        Assert.Equal([(int)PropertyX, -(int)PropertyY], restored.Items.OrderBy(i => i.Slot).Select(i => i.RandomPropertyId));
+    }
+
+    [Fact]
+    public void DurableChestGeneration_RollsTheProperty_LikeAnyOtherBag()
+    {
+        (LootService loot, Player player) = Rig(PropertyY);
+        LootBag bag = loot.Generate(Corpse, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.Creature, CorpseEntry, [player]);
+        Assert.Equal((int)PropertyY, Assert.Single(bag.Items).RandomPropertyId);
+        Assert.Equal((int)PropertyY, Assert.Single(bag.ToRecord(new ArcaneCore.Kernel.Loot.LootStateKey(5, 6), 3000, 1, 0).Items).RandomPropertyId);
+    }
 }

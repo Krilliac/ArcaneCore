@@ -10,7 +10,8 @@ public readonly record struct LootStateKey(uint InstanceId, uint SpawnGuid);
 
 /// <summary>
 /// One stack of a stored chest (a LootItem without its client display id, which is recomputed
-/// from the item template). The looter lists are character ids, compared as sets.
+/// from the item template). The looter lists are character ids, compared as sets. <see cref="RandomPropertyId"/> is the property
+/// or suffix rolled at generation (0 none; positive = item_random_properties id, negative = -item_random_suffix id), so the window and the taken item agree.
 /// </summary>
 public sealed record LootStateItem(
     byte Slot,
@@ -20,12 +21,13 @@ public sealed record LootStateItem(
     bool IsPerPlayer,
     bool IsLooted,
     IReadOnlyList<int> AllowedLooters,
-    IReadOnlyList<int> LootedBy)
+    IReadOnlyList<int> LootedBy,
+    int RandomPropertyId = 0)
 {
     public bool Equals(LootStateItem? other)
         => other is not null && Slot == other.Slot && ItemId == other.ItemId && Count == other.Count
             && IsQuest == other.IsQuest && IsPerPlayer == other.IsPerPlayer && IsLooted == other.IsLooted
-            && LootStateRules.SameSet(AllowedLooters, other.AllowedLooters) && LootStateRules.SameSet(LootedBy, other.LootedBy);
+            && RandomPropertyId == other.RandomPropertyId && LootStateRules.SameSet(AllowedLooters, other.AllowedLooters) && LootStateRules.SameSet(LootedBy, other.LootedBy);
 
     public override int GetHashCode() => HashCode.Combine(Slot, ItemId, Count, IsQuest, IsPerPlayer, IsLooted);
 }

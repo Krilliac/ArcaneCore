@@ -246,7 +246,7 @@ public sealed class LootBag
         return new LootStateRecord(key, sourceEntry, CharacterIdOf(Owner), generation, consumed, consumed ? respawnAtUnix : 0,
             [.. Recipients.Select(CharacterIdOf).Order()],
             [.. _items.Select(i => new LootStateItem(i.Slot, i.ItemId, i.Count, i.IsQuestItem, i.IsPerPlayer, i.IsLooted,
-                [.. i.AllowedLooters.Select(CharacterIdOf).Order()], [.. i.LootedBy.Select(CharacterIdOf).Order()]))]);
+                [.. i.AllowedLooters.Select(CharacterIdOf).Order()], [.. i.LootedBy.Select(CharacterIdOf).Order()], i.RandomPropertyId))]);
     }
 
     /// <summary>
@@ -273,6 +273,7 @@ public sealed class LootBag
             var item = new LootItem(stored.Slot, stored.ItemId, stored.Count, stored.IsQuest, stored.IsPerPlayer, display)
             {
                 IsLooted = stored.IsLooted,
+                RandomPropertyId = stored.RandomPropertyId,
             };
             foreach (int id in stored.AllowedLooters)
             {
