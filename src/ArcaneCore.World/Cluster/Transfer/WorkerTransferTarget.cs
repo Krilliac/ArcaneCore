@@ -259,7 +259,7 @@ internal sealed class DelegateTransferInstanceAllocator(Func<uint, ObjectGuid, u
 /// </list>
 /// Deferred shadow load (design _wf/handoff-control-DESIGN.md section 4.4; only with a <c>sessionReady</c> probe, which production passes): the coordinator's stage 3 runs before stage 4, where the gateway opens the client's
 /// session on this worker, and the production loader needs that session. So <see cref="InstallPassiveShadowAsync"/> answers at once while the account's session is not open here (the bundle is remembered as install-requested),
-/// <see cref="OnSessionOpened"/> starts the load when the session opens, and the install after the commit joins that running load before the activation. A load failure then surfaces at that second install (after the commit, where recovery repeats it).
+/// <see cref="OnSessionOpened"/> starts the load when the session opens, and the install after the commit joins that running load before the activation. A load failure then surfaces at that second install (after the commit, where recovery repeats it). If the session never opens, that second install is a no-op too (it answers Ok without loading) and the failure surfaces at the activation, which requires the session (design R6/Q7).
 /// Without the probe (every test double and Combined mode) an install loads at once, as before.
 /// After a target restart the reservation is gone, so install and activate adopt the transfer from the bundle (the roll-forward of a committed transfer must complete).
 /// Thread affinity: the interface methods may be called from any thread; world mutation runs through <see cref="WorldRuntime.InvokeAsync{T}"/>; the slot table is guarded by a lock.
