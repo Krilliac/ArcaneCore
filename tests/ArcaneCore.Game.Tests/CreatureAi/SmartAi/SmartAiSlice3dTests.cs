@@ -297,7 +297,7 @@ public sealed class SmartAiSlice3dTests
             Make(Wolf, 0, 1, 20, 50, 1, a1: SmartRig.ObjectEntry),
             Make(Wolf, 0, 2, 20, 34, 1, a1: 5, a2: 1, a3: 1),
             Make(Wolf, 0, 3, 20, 34, 1, a3: 2),
-            Make(Wolf, 0, 4, 40, 22, 1, a1: 1),
+            Make(Wolf, 0, 4, 40, 22, 1, e2: 7, a1: 1),
             Make(Wolf, 0, 5, 20, 22, 1, e2: 5, e3: 1, a1: 1),
             Make(50000, 1, 0, 64, 50, 1, a1: SmartRig.ObjectEntry2),
             Make(50000, 1, 1, 64, 34, 1, a1: 5, a2: 1),
