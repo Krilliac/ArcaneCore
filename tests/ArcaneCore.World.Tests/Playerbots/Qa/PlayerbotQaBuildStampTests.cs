@@ -219,6 +219,13 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
 
         public Task Run(PlayerbotQaPublisher publisher, PlayerbotQaAggregator aggregator) => publisher.RunAsync(aggregator.Snapshot(), CancellationToken.None);
 
+        /// <summary>Move the publisher clock up to <paramref name="utc"/> (the time of the latest restart): a finding dated after the clock is future-dated and never fresh.</summary>
+        public void CatchUp(DateTime utc)
+        {
+            TimeSpan behind = utc - Time.GetUtcNow().UtcDateTime;
+            if (behind > TimeSpan.Zero) Time.Advance(behind);
+        }
+
         public string[] CommentBodies() => [.. GitHub.Http.Requests
             .Where(r => r.Method == HttpMethod.Post && r.PathAndQuery.Split('?')[0].EndsWith("/comments", StringComparison.Ordinal))
             .Select(r => (string)JsonNode.Parse(r.Body)!["body"]!)];
@@ -357,6 +364,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         string id = Occurs(a1, 3);
         (PlayerbotQaAggregator b, QaLedgerState ledgerB) = Restart(a1, new QaLedgerState([], []), "build-B");
         Occurs(b, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
         int issue = rig.GitHub.Add(PlayerbotQaIssueComposer.MarkerOf(id), open: false);
         PlayerbotQaPublisher onB = rig.Publisher(b, "build-B", ledgerB);
         await rig.Run(onB, b);
@@ -364,6 +372,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
 
         (PlayerbotQaAggregator a2, QaLedgerState ledgerA) = Restart(b, onB.Ledger.Export(), "build-A"); // rolled back to A
         Occurs(a2, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
         PlayerbotQaPublisher onA = rig.Publisher(a2, "build-A", ledgerA);
         await rig.Run(onA, a2);
 
@@ -373,6 +382,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
 
         (PlayerbotQaAggregator c, QaLedgerState ledgerC) = Restart(a2, onA.Ledger.Export(), "build-C"); // a genuinely newer build
         Occurs(c, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
         await rig.Run(rig.Publisher(c, "build-C", ledgerC), c);
 
         Assert.Equal(1, rig.GitHub.Patches);
@@ -546,6 +556,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         rig.Options.GitHub.MaxCommentsPerHour = 0;
         (PlayerbotQaAggregator two, QaLedgerState l2) = Restart(one, ledger, "build-2");
         Occurs(two, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
 
         await rig.Run(rig.Publisher(two, "build-2", l2), two);
 
@@ -744,6 +755,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         string id = Occurs(a, 3);
         (PlayerbotQaAggregator b, QaLedgerState lb) = Restart(a, new QaLedgerState([], []), "build-B");
         Occurs(b, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
         rig.GitHub.Add(PlayerbotQaIssueComposer.MarkerOf(id), open: false);
         PlayerbotQaPublisher onB = rig.Publisher(b, "build-B", lb);
         await rig.Run(onB, b);
@@ -756,6 +768,7 @@ public sealed class PlayerbotQaBuildStampTests : IDisposable
         (PlayerbotQaAggregator rolledBack, QaLedgerState l2) = Restart(churned, l1, "build-A");
         Assert.False(rolledBack.IsBuildNewer("build-A", "build-B")); // not re-registered at "now"
         Occurs(rolledBack, 3);
+        rig.CatchUp(QaData.T0.AddHours(_restarts));
         await rig.Run(rig.Publisher(rolledBack, "build-A", l2), rolledBack);
 
         Assert.Equal(0, rig.GitHub.Patches);

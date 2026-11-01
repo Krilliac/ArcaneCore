@@ -517,7 +517,11 @@ public sealed class WorldConsoleTests
     {
         var provider = new CapturingLoggerProvider();
         using ILoggerFactory loggers = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(provider));
-        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(loggers));
+        await using var host = WorldTestHost.Start(configureServices: s =>
+        {
+            s.AddSingleton(loggers);
+            s.AddSingleton(new ArcaneCore.World.Net.WorldLoginAdmission(0, 1)); // the test host does not register the one the real host adds (.server plimit needs it)
+        });
         await using WorldTestClient bystander = await host.EnterWorldAsync("BYSTANDER", "Bystander");
         var output = new RecordingWriter(host.World);
         await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();

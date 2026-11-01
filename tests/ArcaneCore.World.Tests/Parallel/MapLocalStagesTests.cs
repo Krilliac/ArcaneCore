@@ -94,14 +94,14 @@ public sealed class MapLocalStagesTests
         stage.Run(items, compute, apply, 0);
         stage.Run(items, compute, apply, 0);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
+        Action window = () =>
         {
-            stage.Run(items, compute, apply, 0);
-        }
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+            for (int i = 0; i < 100; i++)
+            {
+                stage.Run(items, compute, apply, 0);
+            }
+        };
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "MapLocalStage.Run steady state");
         Assert.True(sum > 0);
     }
 
