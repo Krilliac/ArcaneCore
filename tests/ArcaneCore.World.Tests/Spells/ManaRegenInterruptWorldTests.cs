@@ -14,7 +14,7 @@ public sealed class ManaRegenInterruptWorldTests
     [Fact]
     public async Task Aura134_AppliesThroughTheSocketCastAndExposesTheConfiguredPercentage()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
         await using WorldTestClient client = await host.EnterWorldAsync("MANAINT", "Manaint");
         uint manaAtAuraApplication = uint.MaxValue;
         await host.OnWorldAsync(() =>
@@ -55,37 +55,38 @@ public sealed class ManaRegenInterruptWorldTests
         });
 
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(998106));
+        await host.StepAsync();
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
         Assert.Equal(10u, await host.OnWorldAsync(() => manaAtAuraApplication));
         Assert.InRange(await host.PlayerStateAsync("Manaint", player => player.Combat.LastManaUseTimer), 1u, 5000u);
         Assert.Equal(998106u, await host.PlayerStateAsync("Manaint", player => player.Combat.LastManaUseSpellId));
-        await host.WaitForWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasAura(
-            host.World.FindOnlinePlayer("Manaint")!, 998106), "mana interruption aura");
+        Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.HasAura(
+            host.World.FindOnlinePlayer("Manaint")!, 998106)));
         Assert.Equal(50f, await host.PlayerStateAsync("Manaint", player =>
             Math.Min(100f, (float)new SpellSystemPowerAuras(host.WorldServices.GetRequiredService<SpellFeature>().System)
                 .GetTotalAuraModifier(player, AuraType.ModManaRegenInterrupt))));
-        // Wait for the mana to change (10 after the cast) and capture it inside the predicate: re-reading it afterwards raced the next
+        // Run the manual game clock until the mana changes (10 after the cast) and capture it inside the predicate: re-reading it afterwards raced the next
         // regen tick (48 -> 86), and a ">= 48" wait could not tell a halved per-tick amount (10, 29, 48) from the right one.
         uint manaAtFirstTick = 0;
-        await host.WaitForWorldAsync(() =>
+        await host.RunUntilAsync(() =>
         {
             manaAtFirstTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
             return manaAtFirstTick != 10;
-        }, "interrupted mana tick");
+        }, "interrupted mana tick", maxGameMs: 10_000);
         Assert.Equal(48u, manaAtFirstTick);
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Manaint")!
-            .Combat.LastManaUseTimer == 0, "five-second mana interruption window");
+        await host.RunUntilAsync(() => host.World.FindOnlinePlayer("Manaint")!
+            .Combat.LastManaUseTimer == 0, "five-second mana interruption window", maxGameMs: 10_000);
         await host.OnWorldAsync(() =>
         {
             Player player = host.World.FindOnlinePlayer("Manaint")!;
             player.SetUInt32(UpdateFields.UnitFieldPower1, 0);
         });
         uint manaAtNormalTick = 0;
-        await host.WaitForWorldAsync(() =>
+        await host.RunUntilAsync(() =>
         {
             manaAtNormalTick = host.World.FindOnlinePlayer("Manaint")!.GetUInt32(UpdateFields.UnitFieldPower1);
             return manaAtNormalTick != 0;
-        }, "normal mana tick");
+        }, "normal mana tick", maxGameMs: 10_000);
         Assert.Equal(66u, manaAtNormalTick);
         await client.CollectAsync();
     }
