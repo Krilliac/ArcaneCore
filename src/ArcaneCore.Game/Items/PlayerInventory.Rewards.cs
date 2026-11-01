@@ -3,8 +3,11 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Items;
 
-/// <summary>One item grant; <paramref name="Created"/> marks a spell-created item (vmangos Spell::DoCreateItem reports it as created).</summary>
-public readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false);
+/// <summary>
+/// One item grant; <paramref name="Created"/> marks a spell-created item (vmangos Spell::DoCreateItem reports it as created).
+/// <paramref name="RandomPropertyId"/> null lets the new item roll its random property; a value (0 = none) is applied as given.
+/// </summary>
+public readonly record struct InventoryRewardGrant(uint Entry, uint Count, bool Created = false, int? RandomPropertyId = null);
 
 /// <summary>A detached reward inventory. Preparation consumes GUIDs, but never changes the owner's fields or sends packets.</summary>
 internal sealed class InventoryRewardStage(
@@ -107,7 +110,7 @@ public sealed partial class PlayerInventory
                 return result;
             }
 
-            Item item = shadow.StoreNewItem(destinations, template, grant.Count);
+            Item item = shadow.StoreNewItem(destinations, template, grant.Count, grant.RandomPropertyId);
             stored.Add((grant, item.Guid.Low));
         }
 

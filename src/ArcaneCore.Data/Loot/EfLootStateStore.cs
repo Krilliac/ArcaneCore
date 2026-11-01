@@ -204,7 +204,8 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
             [.. named.Where(p => p.Role == LootStatePlayerRow.RoleRecipient).Select(p => p.CharacterId).Order()],
             [.. items.OrderBy(i => i.Slot).Select(i => new LootStateItem(i.Slot, i.ItemId, i.Count, i.IsQuest, i.IsPerPlayer, i.IsLooted,
                 [.. named.Where(p => p.Slot == i.Slot && p.Role == LootStatePlayerRow.RoleAllowed).Select(p => p.CharacterId).Order()],
-                [.. named.Where(p => p.Slot == i.Slot && p.Role == LootStatePlayerRow.RoleLootedBy).Select(p => p.CharacterId).Order()]))]);
+                [.. named.Where(p => p.Slot == i.Slot && p.Role == LootStatePlayerRow.RoleLootedBy).Select(p => p.CharacterId).Order()],
+                i.RandomPropertyId))]);
     }
 
     private async Task DeleteStateAsync(LootStateKey key, CancellationToken cancellationToken)
@@ -239,6 +240,7 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
             {
                 InstanceId = instanceId, SpawnGuid = spawn, Slot = item.Slot, ItemId = item.ItemId, Count = item.Count,
                 IsQuest = item.IsQuest, IsPerPlayer = item.IsPerPlayer, IsLooted = item.IsLooted,
+                RandomPropertyId = item.RandomPropertyId,
             });
             foreach (int character in item.AllowedLooters.Distinct())
             {

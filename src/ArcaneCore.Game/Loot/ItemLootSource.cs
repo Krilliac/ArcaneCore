@@ -92,7 +92,10 @@ public sealed class ItemLootSource(LootService loot, ItemLootOptions? options = 
         bag.Recipients.Add(player.Guid);
         foreach (ItemLootEntry entry in stored.Items)
         {
-            var rebuilt = new LootItem(entry.Slot, entry.ItemId, entry.Count, entry.IsQuest, isPerPlayer: false, loot.Items?.Find(entry.ItemId)?.DisplayId ?? 0);
+            var rebuilt = new LootItem(entry.Slot, entry.ItemId, entry.Count, entry.IsQuest, isPerPlayer: false, loot.Items?.Find(entry.ItemId)?.DisplayId ?? 0)
+            {
+                RandomPropertyId = entry.RandomPropertyId,
+            };
             if (entry.IsQuest)
             {
                 rebuilt.AllowedLooters.Add(player.Guid);
@@ -108,7 +111,7 @@ public sealed class ItemLootSource(LootService loot, ItemLootOptions? options = 
     public static ItemLootData Snapshot(LootBag bag)
     {
         ArgumentNullException.ThrowIfNull(bag);
-        return new ItemLootData(bag.Gold, [.. bag.Items.Where(i => !i.IsLooted).Select(i => new ItemLootEntry(i.Slot, i.ItemId, i.Count, i.IsQuestItem))]);
+        return new ItemLootData(bag.Gold, [.. bag.Items.Where(i => !i.IsLooted).Select(i => new ItemLootEntry(i.Slot, i.ItemId, i.Count, i.IsQuestItem, i.RandomPropertyId))]);
     }
 
     /// <summary>The window closed: nothing left destroys the item, leftovers stay for the next open.</summary>
