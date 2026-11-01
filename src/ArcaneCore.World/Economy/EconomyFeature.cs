@@ -227,6 +227,19 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
     }
 
+    /// <summary>When true (Worker mode) a mail, auction or item text id is never taken from the in-memory counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    private void ThrowIfDurableRequired(string scope)
+    {
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                scope,
+                $"Economy id allocator for scope '{scope}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+    }
+
     public DurableIdBlockAllocator? MailIdAllocator { get; set; }
 
     public DurableIdBlockAllocator? AuctionIdAllocator { get; set; }
@@ -242,6 +255,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.Mail);
         return Interlocked.Increment(ref _lastMailId);
     }
 
@@ -255,6 +269,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.Auction);
         return Interlocked.Increment(ref _lastAuctionId);
     }
 
@@ -271,6 +286,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.ItemText);
         return Interlocked.Increment(ref _lastTextId);
     }
 

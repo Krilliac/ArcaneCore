@@ -458,7 +458,9 @@ public sealed class WorldHost(
             handOver += () =>
             {
                 social.Context.Groups.IdBlockAllocator = groupAlloc;
+                social.Context.Groups.RequireDurableIds = requireDurableIds;
                 social.Context.Guilds.IdBlockAllocator = guildAlloc;
+                social.Context.Guilds.RequireDurableIds = requireDurableIds;
                 social.Context.Petitions.IdBlockAllocator = petitionAlloc;
                 social.Context.Petitions.RequireDurableIds = requireDurableIds;
             };
@@ -468,7 +470,11 @@ public sealed class WorldHost(
         {
             var instanceAlloc = new DurableIdBlockAllocator(IdRangeScopes.Instance, blockSize, lowWatermark, reserveAsync);
             await instanceAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            handOver += () => instances.Instances.IdBlockAllocator = instanceAlloc;
+            handOver += () =>
+            {
+                instances.Instances.IdBlockAllocator = instanceAlloc;
+                instances.Instances.RequireDurableIds = requireDurableIds;
+            };
         }
 
         if (services.GetService<Economy.EconomyFeature>() is { } economy)
@@ -476,6 +482,7 @@ public sealed class WorldHost(
             var mailAlloc = new DurableIdBlockAllocator(IdRangeScopes.Mail, blockSize, lowWatermark, reserveAsync);
             await mailAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
             economy.MailIdAllocator = mailAlloc;
+            economy.RequireDurableIds = requireDurableIds;
 
             var auctionAlloc = new DurableIdBlockAllocator(IdRangeScopes.Auction, blockSize, lowWatermark, reserveAsync);
             await auctionAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
