@@ -74,6 +74,8 @@ public sealed partial class SummonService
             return true;
         }
 
+        PetPower.TickFocus(pet, charm, diffMs, _spells);
+
         charm.HappinessTimerMs -= (int)diffMs;
         if (charm.HappinessTimerMs <= 0)
         {
