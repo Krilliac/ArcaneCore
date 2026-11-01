@@ -152,6 +152,18 @@ public sealed class PlayerbotQaSignalParserTests
     }
 
     [Fact]
+    public void Parses_RelayFormationStep_AsRelayDataMissing()
+    {
+        // CreatureMapSystem.ReportFormationStep: command 51 (spawn group) formation subcommands the server cannot run.
+        QaSignal s = QaData.Parse("relay script 4021 command 51 subcommand 3: formation member 12 has no leader; that step does nothing");
+        Assert.Equal(QaSignalKind.RelayDataMissing, s.Kind);
+        Assert.Equal(4021u, s.Relay);
+        Assert.Equal("command 51 subcommand 3: formation member 12 has no leader", s.Detail);
+        Assert.False(s.HasPosition);
+        Assert.Null(s.BotKey);
+    }
+
+    [Fact]
     public void StallReport_FromRealStallWatch_RoundTrips()
     {
         Player player = NewPlayer(-5608.8f, -439.4f, 401.2f);
@@ -227,6 +239,8 @@ public sealed class PlayerbotQaSignalParserTests
         string relay = RepoRoot.ReadText("src/ArcaneCore.Game/Creatures/CreatureMapSystem.RelayScripts.cs");
         Assert.Contains("\"relay script {Relay} uses unsupported {What}; that step is skipped\"", relay, StringComparison.Ordinal);
         Assert.Contains("\"relay script {Relay} does not exist (dbscripts_on_relay); not started\"", relay, StringComparison.Ordinal);
+        string formation = RepoRoot.ReadText("src/ArcaneCore.Game/Creatures/CreatureMapSystem.RelayFormation.cs");
+        Assert.Contains("\"relay script {Relay} command 51 subcommand {Sub}: {What}; that step does nothing\"", formation, StringComparison.Ordinal);
         string commands = RepoRoot.ReadText("src/ArcaneCore.Game/Creatures/CreatureMapSystem.RelayCommands.cs");
         Assert.Contains("$\"MOVEMENT waypoint path {step.DataLong2} missing for entry {mover.Template.Entry}\"", commands, StringComparison.Ordinal);
     }
