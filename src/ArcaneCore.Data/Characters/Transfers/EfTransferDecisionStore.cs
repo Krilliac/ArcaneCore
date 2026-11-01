@@ -69,6 +69,141 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         return row is null ? null : OwnerToken(row);
     }
 
+    // ---------------------------------------------------------------- per-character claim (design _wf/writer-lock-DESIGN.md section 1b)
+
+    /// <summary>
+    /// The login claim: a compare-and-swap on the character's <c>cluster_transfer_owner</c> row that makes <paramref name="token"/> (a worker-shard token)
+    /// the holder. Allowed when the row is missing, when its scope is the presented scope (this shard, possibly a restarted incarnation), or when its
+    /// (scope, incarnation) is not the active incarnation of that scope in <c>character_ownership</c> (the owner is dead or was reclaimed). Refused while
+    /// <c>active_transfer</c> is set (coordinator recovery resolves that first). When a live-looking owner refuses and <paramref name="reapPolicy"/> is passed,
+    /// the login-time reap (design section 5.4) runs: only if the shard's advisory lock is free (<see cref="CharacterClaimReapPolicy.IsShardLockFree"/>) and
+    /// its heartbeat is older than <see cref="CharacterClaimReapPolicy.ReapAfter"/> is the shard row set inactive with its epoch bumped, and the claim then
+    /// taken over. A realm-scope token yields <see cref="CharacterClaimOutcome.NotWorkerScope"/> and issues no SQL.
+    /// <para>
+    /// Everything after the probe runs in one transaction (fence-exempt: the claim table is the claim's own fence). A concurrent first claim of the same
+    /// character loses on the primary key and the exception propagates to the login, which is refused.
+    /// </para>
+    /// </summary>
+    public async Task<CharacterClaimResult> TryClaimCharacterAsync(
+        ulong characterGuid, CharacterOwnershipToken token, CharacterClaimReapPolicy? reapPolicy = null, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (characterGuid == 0)
+            throw new ArgumentOutOfRangeException(nameof(characterGuid), "CharacterGuid must be non-zero.");
+        ArgumentNullException.ThrowIfNull(token);
+        if (!CharacterOwnershipScopes.IsWorker(token.Scope))
+            return new CharacterClaimResult(CharacterClaimOutcome.NotWorkerScope, null, null);
+
+        return await InTransactionAsync(async (db, ct) =>
+        {
+            long guid = (long)characterGuid;
+            string incarnation = token.Incarnation.ToString("D");
+            long now = _clock();
+            ClusterTransferOwnerRow? row = await db.Set<ClusterTransferOwnerRow>().AsNoTracking()
+                .SingleOrDefaultAsync(r => r.CharacterGuid == guid, ct).ConfigureAwait(false);
+
+            if (row is null)
+            {
+                db.Set<ClusterTransferOwnerRow>().Add(new ClusterTransferOwnerRow
+                {
+                    CharacterGuid = guid,
+                    Scope = token.Scope,
+                    Epoch = token.Epoch,
+                    Incarnation = incarnation,
+                    UpdatedAtUtcMs = now,
+                });
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                return new CharacterClaimResult(CharacterClaimOutcome.Claimed, token, null);
+            }
+
+            if (row.ActiveTransfer is not null)
+                return new CharacterClaimResult(CharacterClaimOutcome.RefusedTransferInFlight, null, row.Scope);
+
+            if (OwnerToken(row) == token)
+                return new CharacterClaimResult(CharacterClaimOutcome.AlreadyHeld, token, null);
+
+            CharacterClaimOutcome outcome = CharacterClaimOutcome.Claimed;
+            string? previousScope = null;
+            if (!string.Equals(row.Scope, token.Scope, StringComparison.Ordinal))
+            {
+                string heldScope = row.Scope;
+                string heldIncarnation = row.Incarnation;
+                CharacterOwnershipRow? holder = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+                    .SingleOrDefaultAsync(o => o.Scope == heldScope && o.Active && o.OwnerIncarnation == heldIncarnation, ct).ConfigureAwait(false);
+                if (holder is not null)
+                {
+                    // A live-looking owner. Only the login-time reap can still free the claim.
+                    if (reapPolicy is null || !CharacterOwnershipScopes.IsWorker(heldScope))
+                        return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope);
+                    if (!await reapPolicy.IsShardLockFree(heldScope, ct).ConfigureAwait(false))
+                        return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope);
+
+                    long newestReapable = now - (long)reapPolicy.ReapAfter.TotalMilliseconds;
+                    long holderEpoch = holder.Epoch;
+                    int reaped = await db.Set<CharacterOwnershipRow>()
+                        .Where(o => o.Scope == heldScope && o.Active && o.Epoch == holderEpoch && o.Epoch < long.MaxValue
+                            && o.WriteSequence < long.MaxValue && o.OwnerIncarnation == heldIncarnation
+                            && o.HeartbeatAtMs != null && o.HeartbeatAtMs <= newestReapable)
+                        .ExecuteUpdateAsync(s => s
+                            .SetProperty(o => o.OwnerNode, (string?)null)
+                            .SetProperty(o => o.OwnerIncarnation, (string?)null)
+                            .SetProperty(o => o.Active, false)
+                            .SetProperty(o => o.Epoch, o => o.Epoch + 1)
+                            .SetProperty(o => o.WriteSequence, o => o.WriteSequence + 1)
+                            .SetProperty(o => o.OwnedMaps, (string?)null), ct)
+                        .ConfigureAwait(false);
+                    if (reaped == 0)
+                        return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope);
+                }
+
+                outcome = CharacterClaimOutcome.TookOverDeadOwner;
+                previousScope = row.Scope;
+            }
+
+            string rowScope = row.Scope;
+            long rowEpoch = row.Epoch;
+            string rowIncarnation = row.Incarnation;
+            int claimed = await db.Set<ClusterTransferOwnerRow>()
+                .Where(r => r.CharacterGuid == guid && r.ActiveTransfer == null && r.Scope == rowScope && r.Epoch == rowEpoch && r.Incarnation == rowIncarnation)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Scope, token.Scope)
+                    .SetProperty(r => r.Epoch, token.Epoch)
+                    .SetProperty(r => r.Incarnation, incarnation)
+                    .SetProperty(r => r.UpdatedAtUtcMs, now), ct)
+                .ConfigureAwait(false);
+            // The row moved between the read and the swap (another login, or a transfer began): the other party won.
+            return claimed == 0
+                ? new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, rowScope)
+                : new CharacterClaimResult(outcome, token, previousScope);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drops this worker's claim on the character (logout, after the final save is durable). True when a claim row held by exactly
+    /// <paramref name="token"/> with no transfer in flight was deleted; false when there was none, another holder has it, or the token is not a worker
+    /// token (no SQL is issued then).
+    /// </summary>
+    public async Task<bool> ReleaseCharacterClaimAsync(ulong characterGuid, CharacterOwnershipToken token, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (characterGuid == 0)
+            throw new ArgumentOutOfRangeException(nameof(characterGuid), "CharacterGuid must be non-zero.");
+        ArgumentNullException.ThrowIfNull(token);
+        if (!CharacterOwnershipScopes.IsWorker(token.Scope))
+            return false;
+
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        using IDisposable exempt = CharacterWriteFence.Exempt();
+        long guid = (long)characterGuid;
+        string claimScope = token.Scope;
+        string incarnation = token.Incarnation.ToString("D");
+        int deleted = await db.Set<ClusterTransferOwnerRow>()
+            .Where(r => r.CharacterGuid == guid && r.Scope == claimScope && r.Incarnation == incarnation && r.ActiveTransfer == null)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        return deleted > 0;
+    }
+
     // ---------------------------------------------------------------- ITransferDecisionStore
 
     /// <inheritdoc />

@@ -636,10 +636,14 @@ public abstract class CharacterKeyedWriteQueue<TValue>
 
             if (failure is CharacterClaimRejectedException lostClaim)
             {
-                // The snapshot is durably superseded: drop it (a newer write for this character would be refused the same way), so nothing retries it forever.
+                // The snapshot that failed is durably superseded: drop it so nothing retries it forever. A newer snapshot queued during the attempt is kept;
+                // it is attempted on its own and dropped the same way if the claim is still missing.
                 lock (_gate)
                 {
-                    _characters.Remove(characterId);
+                    if (_characters.TryGetValue(characterId, out Unsaved? lost) && lost.Version == version && !lost.Queued)
+                    {
+                        _characters.Remove(characterId);
+                    }
                 }
 
                 if (!sweep)
