@@ -185,6 +185,43 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task Rebuild_refill_lists_at_most_RebuildMaxInFlight_while_a_plain_sell_pass_is_not_capped()
+    {
+        // Many eligible templates and a house cap far above the economy's 16 transaction slots: only the rebuild cap can hold the refill down.
+        ItemTemplate[] templates = [.. Enumerable.Range(0, 100).Select(i => new ItemTemplate
+        {
+            Entry = 5000u + (uint)i, Name = $"Bot cap item {i}", Quality = 2, Class = 4, BuyPrice = 1000, SellPrice = 250, Stackable = 1,
+            RequiredLevel = 10, ItemLevel = 15, MaxDurability = 30,
+        })];
+        await using var fixture = await Fixture.CreateAsync(persist: true, templateSource: new Templates(templates), extra: new()
+        {
+            ["AuctionHouseBot:SellChance"] = "0",
+            ["AuctionHouseBot:BuyChance"] = "0",
+            ["AuctionHouseBot:MaxAuctionsPerHouse"] = "500",
+            ["AuctionHouseBot:DailyItemBudget"] = "1000",
+            ["AuctionHouseBot:TemplatesPerSellMin"] = "200",
+            ["AuctionHouseBot:TemplatesPerSellMax"] = "200",
+        });
+
+        (int Expired, int Listed, int Pending) rebuilt = await fixture.OnWorld(() =>
+        {
+            (int expired, int listed) = fixture.Bot.Rebuild(false);
+            return (expired, listed, fixture.Bot.Ledger.Pending.Count());
+        });
+
+        Assert.True(rebuilt.Listed > 0, "the refill listed nothing, so the cap was not exercised");
+        Assert.True(rebuilt.Listed <= AuctionBotFeature.RebuildMaxInFlight, $"rebuild listed {rebuilt.Listed}");
+        Assert.True(rebuilt.Pending <= AuctionBotFeature.RebuildMaxInFlight, $"{rebuilt.Pending} custody listings pending");
+        Assert.True(rebuilt.Pending < EconomySettlements.MaxConcurrentOperations);
+
+        await fixture.TickUntilAsync(() => !fixture.Bot.Ledger.Pending.Any() && !fixture.Bot.HasUnsavedChanges);
+
+        // The same setup without the cap lists more than the 16 slots in one pass.
+        int uncapped = await fixture.OnWorld(() => fixture.Bot.Sell(House));
+        Assert.True(uncapped > EconomySettlements.MaxConcurrentOperations, $"a plain sell pass listed only {uncapped}");
+    }
+
+    [Fact]
     public async Task Replaying_a_committed_listing_operation_mints_nothing()
     {
         await using var fixture = await Fixture.CreateAsync();

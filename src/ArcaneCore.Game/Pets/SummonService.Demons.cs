@@ -73,6 +73,12 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, caster.Guid, spellId, TotemSlots.None, 0);
             ApplyOwner(creature, caster, spellId);
             InitPet(creature, SummonKind.Pet, caster, petNumber);
+            if (caster is Player)
+            {
+                // CharmInfo::SetPetNumber(petNumber, true) for a player-owned summon (SpellEffects.cpp:3269): the client's pet frame, name query and stat window need it
+                creature.SetUInt32(UpdateFields.UnitFieldPetnumber, petNumber);
+            }
+
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, 1000);
             creature.NpcFlags = 0;
@@ -90,7 +96,7 @@ public sealed partial class SummonService
         // Player::PetSpellInitialize; the spirit healer's re-summon remembers the pet (m_petEntry, m_petSpell, SpellEffects.cpp:3317-3324)
         if (caster is Player owner)
         {
-            owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+            SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
             RememberPetForSpiritHealer(owner, pet);
         }
 

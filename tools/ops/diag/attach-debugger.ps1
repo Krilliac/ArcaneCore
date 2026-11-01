@@ -392,63 +392,69 @@ public sealed class LiveWin32DebuggerV2
 Add-Type -TypeDefinition $code -Language CSharp
 [LiveWin32DebuggerV2]::DisableQuickEdit()
 $debugLog = [LiveWin32DebuggerV2]::new($LogPath)   # per run: its own queues, writer threads, log file and drop counters
-$threads = @()
-if ($RealmPid) { $threads += $debugLog.AttachAsync($RealmPid, "Realm:$RealmPid") }
-if ($WorldPid) { $threads += $debugLog.AttachAsync($WorldPid, "World:$WorldPid") }
-if ($SupervisorPid) {
-    # Watch mode. $attached maps a pid to its debug thread; a thread that ended while its process still runs (the attach was refused) is
-    # retried a few times, then left alone so a refusal does not spam the log every poll.
-    $attached = @{}
-    $attempts = @{}
-    # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
-    # A reused PID is not the supervisor: remember its start time and treat a different one as gone.
-    function Get-ProcessStartTime($Process) { try { $Process.StartTime } catch { $null } }
-    $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
-    if (-not $supervisorProcess) {
-        $debugLog.Shutdown(1000)
-        throw "The supervisor (pid $SupervisorPid) exited before the debugger started."
-    }
-    $supervisorStart = Get-ProcessStartTime $supervisorProcess
-    if ($null -eq $supervisorStart) { $debugLog.Note('watch', "cannot read the start time of supervisor pid $SupervisorPid (an elevated process?); PID-reuse protection is off") }
-    while ($true) {
+try {
+    $threads = @()
+    if ($RealmPid) { $threads += $debugLog.AttachAsync($RealmPid, "Realm:$RealmPid") }
+    if ($WorldPid) { $threads += $debugLog.AttachAsync($WorldPid, "World:$WorldPid") }
+    if ($SupervisorPid) {
+        # Watch mode. $attached maps a pid to its debug thread; a thread that ended while its process still runs (the attach was refused) is
+        # retried a few times, then left alone so a refusal does not spam the log every poll.
+        $attached = @{}
+        $attempts = @{}
+        # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
+        # A reused PID is not the supervisor: remember its start time and treat a different one as gone.
+        function Get-ProcessStartTime($Process) { try { $Process.StartTime } catch { $null } }
         $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
-        $supervisorUp = $null -ne $supervisorProcess -and ($null -eq $supervisorStart -or (Get-ProcessStartTime $supervisorProcess) -eq $supervisorStart)
-        foreach ($gonePid in @($attempts.Keys) + @($attached.Keys) | Select-Object -Unique) {
-            if (-not $attached.ContainsKey($gonePid) -or -not $attached[$gonePid].IsAlive) {
-                if (-not (Get-Process -Id $gonePid -ErrorAction SilentlyContinue)) { $attempts.Remove($gonePid); $attached.Remove($gonePid) }
-            }
+        if (-not $supervisorProcess) {
+            throw "The supervisor (pid $SupervisorPid) exited before the debugger started."
         }
-        if ($supervisorUp) {
-            $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$SupervisorPid" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'ArcaneCore.*' })
-            foreach ($child in $children) {
-                $childPid = [int]$child.ProcessId
-                if ($childPid -eq $SupervisorPid) { continue }
-                $known = $attached.ContainsKey($childPid)
-                if ($known -and $attached[$childPid].IsAlive) { continue }
-                # A debug thread that ended on the target's exit: the pid may already belong to a relaunched child, which gets fresh retries.
-                if ($known -and ($debugLog.ProcessExited($childPid) -or -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue))) {
-                    $attached.Remove($childPid); $attempts.Remove($childPid); $known = $false
+        $supervisorStart = Get-ProcessStartTime $supervisorProcess
+        if ($null -eq $supervisorStart) { $debugLog.Note('watch', "cannot read the start time of supervisor pid $SupervisorPid (an elevated process?); PID-reuse protection is off") }
+        while ($true) {
+            $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
+            # A start time that cannot be read (now or at the start) proves nothing about reuse, so it counts as the same, live supervisor: only a
+            # start time that was read and differs means the PID now belongs to another process.
+            $currentStart = if ($supervisorProcess) { Get-ProcessStartTime $supervisorProcess } else { $null }
+            $supervisorUp = $null -ne $supervisorProcess -and ($null -eq $supervisorStart -or $null -eq $currentStart -or $currentStart -eq $supervisorStart)
+            foreach ($gonePid in @($attempts.Keys) + @($attached.Keys) | Select-Object -Unique) {
+                if (-not $attached.ContainsKey($gonePid) -or -not $attached[$gonePid].IsAlive) {
+                    if (-not (Get-Process -Id $gonePid -ErrorAction SilentlyContinue)) { $attempts.Remove($gonePid); $attached.Remove($gonePid) }
                 }
-                $tries = if ($attempts.ContainsKey($childPid)) { $attempts[$childPid] } else { 0 }
-                if ($known -and $tries -ge 3) { continue }
-                $attempts[$childPid] = $tries + 1
-                $label = ($child.Name -replace '^ArcaneCore\.', '' -replace '\.exe$', '') + ":$childPid"
-                $attached[$childPid] = $debugLog.AttachAsync($childPid, $label)
-                $debugLog.Note('watch', "supervisor child $($child.Name) pid ${childPid}: attaching")
             }
+            if ($supervisorUp) {
+                $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$SupervisorPid" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like 'ArcaneCore.*' })
+                foreach ($child in $children) {
+                    $childPid = [int]$child.ProcessId
+                    if ($childPid -eq $SupervisorPid) { continue }
+                    $known = $attached.ContainsKey($childPid)
+                    if ($known -and $attached[$childPid].IsAlive) { continue }
+                    # A debug thread that ended on the target's exit: the pid may already belong to a relaunched child, which gets fresh retries.
+                    if ($known -and ($debugLog.ProcessExited($childPid) -or -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue))) {
+                        $attached.Remove($childPid); $attempts.Remove($childPid); $known = $false
+                    }
+                    $tries = if ($attempts.ContainsKey($childPid)) { $attempts[$childPid] } else { 0 }
+                    if ($known -and $tries -ge 3) { continue }
+                    $attempts[$childPid] = $tries + 1
+                    $label = ($child.Name -replace '^ArcaneCore\.', '' -replace '\.exe$', '') + ":$childPid"
+                    $attached[$childPid] = $debugLog.AttachAsync($childPid, $label)
+                    $debugLog.Note('watch', "supervisor child $($child.Name) pid ${childPid}: attaching")
+                }
+            }
+            $live = @($attached.Values | Where-Object IsAlive)
+            if (-not $supervisorUp -and $live.Count -eq 0) { break }
+            Start-Sleep -Seconds $PollSeconds
         }
-        $live = @($attached.Values | Where-Object IsAlive)
-        if (-not $supervisorUp -and $live.Count -eq 0) { break }
-        Start-Sleep -Seconds $PollSeconds
+        $debugLog.Note('watch', 'the supervisor and every attached process are gone; detached.')
+    } else {
+        while (@($threads | Where-Object IsAlive).Count -gt 0) {
+            Start-Sleep -Seconds 5
+        }
     }
-    $debugLog.Note('watch', 'the supervisor and every attached process are gone; detached.')
-} else {
-    while (@($threads | Where-Object IsAlive).Count -gt 0) {
-        Start-Sleep -Seconds 5
-    }
+} finally {
+    # Runs on a normal end, a throw and Ctrl-C: the writer threads drain and the drop totals reach the log file.
+    $debugLog.Shutdown(3000)
 }
-$debugLog.Shutdown(3000)
 if ($debugLog.ConsoleLinesDropped -gt 0 -or $debugLog.FileLinesDropped -gt 0) {
     Write-Host "$($debugLog.ConsoleLinesDropped) console lines and $($debugLog.FileLinesDropped) log-file lines dropped in total (a queue was full)." -ForegroundColor Yellow
 }

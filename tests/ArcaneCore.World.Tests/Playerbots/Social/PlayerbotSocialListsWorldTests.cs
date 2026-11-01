@@ -219,6 +219,35 @@ public sealed class PlayerbotSocialListsWorldTests
         Assert.Equal(0, world.Log.Count("Hleader", WorldOpcode.CmsgGuildInvite));
     }
 
+    /// <summary>"invites off" (S4): a liked, guildless real player who opted out gets no affinity invitation; lifted, the same player is asked at once.</summary>
+    [Fact]
+    public async Task AnOptedOutPlayer_GetsNoAffinityGuildInvite_UntilTheyWhisperInvitesOn()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(options => options.Social.Guilds.TargetSize = 10, frozen: true);
+        await using WorldTestClient player = await world.AddPlayerAsync("Optedout");
+        await world.AddBotAsync("Oleader");
+        await world.FoundGuildAsync("Oleader", "Opt Guild");
+        await RememberAsync(world, "Oleader", "Optedout", 90, 12);
+        var store = new PlayerbotInviteOptOut();
+        var membership = new PlayerbotGuildMembership(NullLogger.Instance) { InviteOptOut = store };
+        (ulong guid, int account) = await world.Host.OnWorldAsync(() =>
+        {
+            Player real = world.Host.World.FindOnlinePlayer("Optedout")!;
+            return (real.Guid.Value, real.AccountId);
+        });
+        var options = new PlayerbotSocialInviteOptions();
+        Assert.NotNull(store.Handle(guid, account, "invites off", 0, options).Answer);
+
+        await world.Host.OnWorldAsync(() => membership.InviteByAffinity(SocialTestKit.BotPass(world.Host, 1_000)));
+        Assert.Equal(0, world.Log.Count("Oleader", WorldOpcode.CmsgGuildInvite));
+        await world.Host.OnWorldAsync(() => membership.InviteByAffinity(SocialTestKit.BotPass(world.Host, 600_000)));
+        Assert.Equal(0, world.Log.Count("Oleader", WorldOpcode.CmsgGuildInvite));
+
+        Assert.NotNull(store.Handle(guid, account, "invites on", 700_000, options).Answer);
+        await world.Host.OnWorldAsync(() => membership.InviteByAffinity(SocialTestKit.BotPass(world.Host, 1_200_000)));
+        Assert.Equal(1, world.Log.Count("Oleader", WorldOpcode.CmsgGuildInvite)); // the control: the same player, asked once the opt-out is lifted
+    }
+
     [Fact]
     public async Task ABotOfficer_InAGuildLedByARealPlayer_InvitesNobodyByAffinity()
     {

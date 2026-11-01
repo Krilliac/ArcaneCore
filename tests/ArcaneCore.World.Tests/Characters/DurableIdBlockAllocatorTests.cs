@@ -169,6 +169,72 @@ public sealed class DurableIdBlockAllocatorTests
     }
 
     [Fact]
+    public async Task Allocator_ExhaustedWithDeadStore_BacksOffRetriesUntilTheIntervalPasses()
+    {
+        int calls = 0;
+        var clock = new ManualTimeProvider();
+        var allocator = new DurableIdBlockAllocator(
+            IdRangeScopes.Item,
+            blockSize: 4,
+            lowWatermark: 2,
+            reserveBlockAsync: (scope, count, ct) =>
+            {
+                if (Interlocked.Increment(ref calls) > 1)
+                    throw new InvalidOperationException("db down");
+                return Task.FromResult(new IdRangeBlock(scope, 500, 500 + count - 1));
+            },
+            timeProvider: clock,
+            retryBackoff: TimeSpan.FromSeconds(30));
+
+        await allocator.ReserveAndEnqueueAsync();
+        for (int i = 0; i < 4; i++)
+        {
+            allocator.Next();
+            await allocator.WaitForPendingPrefetchAsync();
+        }
+
+        // Exhausted: the first call starts one retry, the calls right after it must not.
+        int before = Volatile.Read(ref calls);
+        Assert.Throws<IdRangeExhaustedException>(() => allocator.Next());
+        await allocator.WaitForPendingPrefetchAsync();
+        Assert.Equal(before + 1, Volatile.Read(ref calls));
+
+        for (int i = 0; i < 5; i++)
+        {
+            var ex = Assert.Throws<IdRangeExhaustedException>(() => allocator.Next());
+            Assert.IsType<InvalidOperationException>(ex.InnerException);
+            await allocator.WaitForPendingPrefetchAsync();
+        }
+
+        Assert.Equal(before + 1, Volatile.Read(ref calls));
+
+        // Once the interval has passed the next exhausted call retries again.
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.Throws<IdRangeExhaustedException>(() => allocator.Next());
+        await allocator.WaitForPendingPrefetchAsync();
+        Assert.Equal(before + 2, Volatile.Read(ref calls));
+    }
+
+    [Fact]
+    public void Allocator_ExhaustedWithoutAnyPrefetchError_ThrowsWithoutInnerException()
+    {
+        var allocator = new DurableIdBlockAllocator(IdRangeScopes.Item, blockSize: 4, lowWatermark: 2);
+        var ex = Assert.Throws<IdRangeExhaustedException>(() => allocator.Next());
+        Assert.Null(ex.InnerException);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _ticks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref _ticks, by.Ticks);
+    }
+
+    [Fact]
     public async Task WorldHost_PrimeDurableIdAllocatorsAsync_ReservesDisjointBlocksAcrossRestarts()
     {
         var sharedStore = new InMemoryIdRangeReservationStore();

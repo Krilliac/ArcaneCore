@@ -17,6 +17,9 @@ public enum ClusterRole
 /// Versioned identity and compatibility manifest advertised when a node joins or registers with a peer
 /// (<c>docs/CLUSTERING_DESIGN.md</c> §3.2, §9.1). Nodes with mismatched realm, contract version, database
 /// schema versions, or static content revision are deterministically rejected before any session traffic flows.
+/// <paramref name="OwnedMaps"/> and <paramref name="AllowInstanceMaps"/> announce which maps a worker owns (<c>Cluster:Worker:OwnedMaps</c>, e.g.
+/// <c>0,1,30-40</c>; empty means every map) and are informational: admission does not compare them. They are appended to the HelloRegister
+/// frame; a peer that sends none reads as the defaults.
 /// </summary>
 public sealed record ClusterNodeManifest(
     int RealmId,
@@ -26,7 +29,9 @@ public sealed record ClusterNodeManifest(
     int ContractVersion,
     int CharactersSchemaVersion,
     int WorldSchemaVersion,
-    string ContentRevision)
+    string ContentRevision,
+    string OwnedMaps = "",
+    bool AllowInstanceMaps = true)
 {
     /// <summary>Current wire/RPC contract version for gateway–worker and coordinator handshakes.</summary>
     public const int CurrentContractVersion = 1;

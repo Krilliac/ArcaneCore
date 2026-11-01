@@ -223,7 +223,7 @@ public static class DaemonCommandLine
         sb.Append("      never standard output) writes them unmasked\n\n");
         sb.Append("Options:\n");
         sb.Append("  --config <file>             read this .conf file instead of ").Append(file).Append(" (relative paths are from the working directory)\n");
-        sb.Append("  --Section:Key=value         set one configuration key, for example --").Append(daemon == ConfigDaemon.Realm ? "Auth:Port=3724" : "World:Port=8085").Append('\n');
+        sb.Append("  --Section:Key=value         set one configuration key, for example --").Append(daemon switch { ConfigDaemon.Realm => "Auth:Port=3724", ConfigDaemon.Gateway => "Gateway:Port=8086", _ => "World:Port=8085" }).Append('\n');
         sb.Append("  --environment <name>        the host environment (Development, Production)\n");
         sb.Append("  --contentRoot <dir>         the directory appsettings.json and ").Append(file).Append(" are read from\n");
         sb.Append("  --help, -h, -?, /?          print this text and exit (exit code 64)\n\n");
@@ -234,7 +234,12 @@ public static class DaemonCommandLine
         return sb.ToString();
     }
 
-    public static string ProgramName(ConfigDaemon daemon) => daemon == ConfigDaemon.Realm ? "ArcaneCore.Realm" : "ArcaneCore.World";
+    public static string ProgramName(ConfigDaemon daemon) => daemon switch
+    {
+        ConfigDaemon.Realm => "ArcaneCore.Realm",
+        ConfigDaemon.Gateway => "ArcaneCore.Gateway",
+        _ => "ArcaneCore.World",
+    };
 
     private static DaemonCommand Error(string message) => new(DaemonCommandKind.UsageError, [], Message: message);
 
@@ -253,7 +258,7 @@ public static class DaemonCommandLine
             case ConfKeyStatus.Known or ConfKeyStatus.ChildOfCollection or ConfKeyStatus.Framework:
                 return null;
             case ConfKeyStatus.OtherDaemon:
-                return $"the option '{key}' belongs to the {(daemon == ConfigDaemon.Realm ? "world" : "realm")} daemon, not this one.";
+                return $"the option '{key}' belongs to the {(daemon switch { ConfigDaemon.Realm => "world", ConfigDaemon.Gateway => "world or realm", _ => "realm" })} daemon, not this one.";
             case ConfKeyStatus.Section:
                 return $"the option '{key}' is a section, not a key; name the key below it (see docs/reference/configuration.md).";
             default:

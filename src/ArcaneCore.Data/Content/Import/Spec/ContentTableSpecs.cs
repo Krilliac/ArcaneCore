@@ -31,6 +31,8 @@ public static class ContentTableSpecs
         "display_id1", "display_id2", "display_id3", "display_id4",
         "DisplayIdProbability1", "DisplayIdProbability2", "DisplayIdProbability3", "DisplayIdProbability4",
         "display_probability1", "display_probability2", "display_probability3", "display_probability4",
+        // vmangos immunity_flags: the TAUNT bit becomes creature_immunities rows (CreatureDumpImporter.ApplyVMangosImmunityFlags); the other bits are not mapped
+        "immunity_flags",
         "Scale", "display_scale1", "display_scale2", "display_scale3", "display_scale4", "Faction", "FactionAlliance", "faction", "NpcFlags", "npc_flags",
         // CreatureNpcMetadataDataModule (vmangos CreatureDefines.h:242,272-275)
         "GossipMenuId", "gossip_menu_id", "TrainerType", "trainer_type", "TrainerClass", "trainer_class",

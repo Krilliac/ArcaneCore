@@ -1,5 +1,9 @@
+using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
+using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Warden;
 
 namespace ArcaneCore.World.Cluster.Auxiliary;
 
@@ -10,6 +14,15 @@ namespace ArcaneCore.World.Cluster.Auxiliary;
 public sealed class GatewayWardenManifestVerifier
 {
     public const int RequiredRc4KeyLength = 16;
+
+    /// <summary>The only client build Warden scans (the build of the embedded module).</summary>
+    public const uint WardenBuild = WardenModuleProfile.Build;
+
+    /// <summary>
+    /// The revision of the scan protocol a gateway and the worker agree on. Raise it whenever the handshake, the scan encoding or the
+    /// meaning of a verdict changes, so a gateway on an older build is refused rather than trusted.
+    /// </summary>
+    public const int CurrentCheckRevision = 1;
 
     // Replay guard. Session generations are only monotonic within one gateway process: GatewayServer counts from 1 per
     // process and never persists the counter, and a realm may run several gateways. So replay state is kept per
@@ -33,6 +46,63 @@ public sealed class GatewayWardenManifestVerifier
     }
 
     public GatewayWardenManifest Manifest { get; }
+
+    /// <summary>
+    /// The manifest of the Warden that the gateway and the worker both derive from <c>Warden</c> options (so every gateway of a realm
+    /// presents the same one). When Warden is enabled and the options are valid and the embedded module resource is intact, it holds that
+    /// module with its pinned SHA-256; otherwise the module list is empty and <see cref="EvaluateReadiness"/> says not ready.
+    /// <c>Warden:LoadFromDatabase</c> is deliberately not part of the summary: the gateway has no world database and runs the configured
+    /// <c>Warden:Checks</c> only.
+    /// </summary>
+    public static GatewayWardenManifest BuildManifest(int realmId, WardenOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        string digest = string.Empty;
+        List<WardenModuleDescriptor> modules = [];
+        if (options.Enabled && options.Validate().Count == 0 && WardenModuleProfile.Module is { } module)
+        {
+            digest = Convert.ToHexStringLower(WardenModuleProfile.ModuleSha256);
+            modules.Add(new WardenModuleDescriptor("win-" + WardenModuleProfile.Build.ToString(CultureInfo.InvariantCulture), module, WardenModuleProfile.ModuleKey, digest));
+        }
+
+        return new GatewayWardenManifest(realmId, options.Enabled, digest, SummarizeOptions(options), CurrentCheckRevision, modules);
+    }
+
+    /// <summary>A short deterministic line of every option that changes what a gateway scans for or what a verdict does.</summary>
+    internal static string SummarizeOptions(WardenOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var checks = new StringBuilder();
+        foreach (WardenCheckOptions check in options.Checks.OrderBy(c => c.Id))
+        {
+            checks.Append(CultureInfo.InvariantCulture,
+                $"{check.Id}|{(int)check.Kind}|{check.Module}|{check.Address}|{check.Expected}|{check.Path}|{check.Pattern}|{check.DriverName}|{check.DriverPath}|{check.Wanted}|{(check.Action is { } a ? (int)a : -1)};");
+        }
+
+        string fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(checks.ToString())).AsSpan(0, 8));
+        return string.Create(CultureInfo.InvariantCulture,
+            $"enabled={(options.Enabled ? 1 : 0)};action={(int)options.Action};protocol={(int)options.ProtocolAction};strikes={options.MaxProtocolFailures};report={options.ProtocolReportIntervalSeconds};exempt={(int)options.ExemptSecurity};timeout={options.ResponseTimeoutSeconds};scan={options.ScanIntervalMinSeconds}-{options.ScanIntervalMaxSeconds};perRequest={options.ScansPerRequest};chunk={options.ChunkSize};ban={options.BanSeconds};checks={options.Checks.Count}:{fingerprint}");
+    }
+
+    /// <summary>The posture a gateway sends with its verdicts: this manifest without its module bytes.</summary>
+    public GatewayWardenPosture ToPosture() => new(Manifest.Enabled, Manifest.ModuleDigestHex, Manifest.OptionsSummary, Manifest.CheckRevision);
+
+    /// <summary>
+    /// Compares a gateway's <paramref name="posture"/> with this manifest (<see cref="VerifyPeerGatewayManifest"/>); the realm is this
+    /// manifest's own (the link manifest already proved both ends agree on it).
+    /// </summary>
+    public bool VerifyPeerPosture(GatewayWardenPosture? posture, out string? mismatchReason)
+    {
+        if (posture is null)
+        {
+            mismatchReason = "peer Warden posture is null";
+            return false;
+        }
+
+        return VerifyPeerGatewayManifest(
+            new GatewayWardenManifest(Manifest.RealmId, posture.Enabled, posture.ModuleDigestHex, posture.OptionsSummary, posture.CheckRevision, []),
+            out mismatchReason);
+    }
 
     /// <summary>
     /// In cluster mode, a gateway with <c>Warden:Enabled</c> true is NOT ready unless its module manifest is usable

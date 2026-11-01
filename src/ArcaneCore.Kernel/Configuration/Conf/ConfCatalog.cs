@@ -112,10 +112,28 @@ public sealed class ConfCatalog
     public static string Display(string path) => path.Contains('.', StringComparison.Ordinal) ? path : path.Replace(':', '.');
 
     /// <summary>The conf file of the daemon.</summary>
-    public static string FileName(ConfigDaemon daemon) => daemon == ConfigDaemon.Realm ? "realm.conf" : "world.conf";
+    public static string FileName(ConfigDaemon daemon) => daemon switch
+    {
+        ConfigDaemon.Realm => "realm.conf",
+        ConfigDaemon.Gateway => "gateway.conf",
+        _ => "world.conf",
+    };
+
+    /// <summary>The conf file(s) of the other daemon(s), for "this key belongs there" messages.</summary>
+    public static string OtherFiles(ConfigDaemon daemon) => daemon switch
+    {
+        ConfigDaemon.Realm => "world.conf",
+        ConfigDaemon.Gateway => "world.conf or realm.conf",
+        _ => "realm.conf",
+    };
 
     /// <summary>The daemon's lower-case name.</summary>
-    public static string DaemonName(ConfigDaemon daemon) => daemon == ConfigDaemon.Realm ? "realm" : "world";
+    public static string DaemonName(ConfigDaemon daemon) => daemon switch
+    {
+        ConfigDaemon.Realm => "realm",
+        ConfigDaemon.Gateway => "gateway",
+        _ => "world",
+    };
 
     public ConfKeyClass Classify(string path, ConfigDaemon daemon)
     {

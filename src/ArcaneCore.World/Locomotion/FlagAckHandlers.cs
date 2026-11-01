@@ -51,8 +51,10 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
         // The anticheat checks the acknowledgement's clock (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
+        session.SessionTrace?.Ack(session, player, opcode, ack.Movement.Time, knockback: false);
         MovementHandlers.ApplyObserved(session, player, opcode, ack.Movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         MovementControl.ApplyReal(player, type, ack.Apply);
         MovementControl.RelayToObservers(player, type, ack.Apply);
     }

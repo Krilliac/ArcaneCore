@@ -218,6 +218,11 @@ public sealed class TalentPersistence : IAsyncDisposable
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<ICharacterTalentStore>() is not { } store)
         {
+            // Nothing can be written, but the failed set must not vanish silently: report it once, with the characters whose talent state is lost.
+            _logger.LogFault("writequeue.talent-shutdown-no-store",
+                new InvalidOperationException("no ICharacterTalentStore could be resolved at shutdown"),
+                "Talent shutdown reconcile skipped, no store available; unwritten talent state of {Count} character(s): {CharacterIds}",
+                failed.Length, string.Join(',', failed));
             return;
         }
 

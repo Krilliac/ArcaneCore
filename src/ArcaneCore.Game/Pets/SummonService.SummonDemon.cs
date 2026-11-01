@@ -17,10 +17,12 @@ public sealed partial class SummonService
     /// after the spell duration (an hour without one), TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN. It is a <see cref="SummonKind.Wild"/> summon with no
     /// owner fields, so nothing takes it away with its summoner (vmangos WorldObject::SummonCreature).
     /// <para>
-    /// LIMITS: a dead summon is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual game object as the
-    /// destination (Ritual of Doom) is not modelled. The spell script's <c>OnSummon</c> (Inferno's Enslave Demon) runs after the summon is registered
-    /// (vmangos SpellEffects.cpp:5818).
+    /// A summoning ritual game object as the spell's object target (Ritual of Doom, cast by the ritual itself through
+    /// <c>GameObjectMapSystem.UseRitual</c>) is the destination instead (vmangos SpellEffects.cpp:5802-5805, spell_warlock.cpp:244-255 for the
+    /// scripts), so the demon appears at the ritual. The spell script's <c>OnSummon</c> (Inferno's Enslave Demon) runs after the summon is
+    /// registered (vmangos SpellEffects.cpp:5818).
     /// </para>
+    /// <para>LIMITS: a dead summon is left to its corpse decay (vmangos restarts its timer for the corpse).</para>
     /// </summary>
     private void EffectSummonDemon(SpellEffectContext context)
     {
@@ -46,6 +48,12 @@ public sealed partial class SummonService
 
         SpellCastTargets targets = context.Cast.Targets;
         (float x, float y, float z) = targets.HasDest ? targets.Dest : (caster.X, caster.Y, caster.Z);
+        if (targets.GameObject is { IsEmpty: false } ritualGuid
+            && caster.Map?.FindObject(ritualGuid) is GameObjects.GameObject { Type: GameObjects.GameObjectType.SummoningRitual } ritual)
+        {
+            (x, y, z) = (ritual.X, ritual.Y, ritual.Z);
+        }
+
         int duration = context.Cast.Duration > 0 ? context.Cast.Duration : SummonDemonDefaultDurationMs;
         float orientation = caster.Orientation;
         Creature summon = creatures.SpawnSummoned(template, HighGuid.Unit, creature =>

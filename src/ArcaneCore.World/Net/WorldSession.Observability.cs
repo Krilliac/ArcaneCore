@@ -85,11 +85,15 @@ public sealed partial class WorldSession
                 Interlocked.Increment(ref _rejectionsSent);
                 rejections.LogOutbound(_rejectionGate, ref _rejectionBucket, LogContext(), opcode, rejection);
                 NoteRejectionForStorm(opcode, rejection);
+                NoteServerErrorRejection(opcode, rejection);
+                NoteRejectionSpike(rejection);
             }
         }
         else if (ClientRejectionDecoder.IsCandidate(opcode) && ClientRejectionDecoder.TryDecode(opcode, payload, out ClientRejection unlogged))
         {
             NoteRejectionForStorm(opcode, unlogged);
+            NoteServerErrorRejection(opcode, unlogged);
+            NoteRejectionSpike(unlogged);
         }
 
         if (_duplicates is { } detector && (!_managed || detector.IncludeBots))
@@ -128,6 +132,89 @@ public sealed partial class WorldSession
             "rejection-storm",
             AnomalySubject,
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} client refusals within {RejectionStormTracker.WindowMs} ms; latest {rejection.Kind} {rejection.ReasonName} for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    /// <summary>
+    /// Outcome check <c>client/rejection-server-error</c>: a refusal whose reason says the server itself failed (<see cref="ClientRejectionDecoder.IsServerError"/>:
+    /// a mail or auction internal error, an unknown cast failure, an item or vendor the server cannot find), not that the player asked for something not allowed.
+    /// A synthetic chaos probe is expected to be refused and is not reported. Cost on the hot path: one table load per decoded refusal; the text is built only when it reports.
+    /// </summary>
+    private void NoteServerErrorRejection(WorldOpcode opcode, in ClientRejection rejection)
+    {
+        if (!ClientRejectionDecoder.IsServerError(rejection) || IsInChaosProbe)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "client",
+            "rejection-server-error",
+            AnomalySubject,
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{rejection.Kind} {rejection.ReasonName} sent for {WorldOpcodeNames.GetName(opcode)} (entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    private static readonly ClientRejectionRateTracker RejectionRates = new(static () => Environment.TickCount64);
+
+    /// <summary>
+    /// Outcome check <c>client/rejection-spike</c>: one (kind, reason) refusal sent at least <see cref="ClientRejectionRateTracker.Threshold"/> times to at least
+    /// <see cref="ClientRejectionRateTracker.MinAccounts"/> accounts within <see cref="ClientRejectionRateTracker.WindowMs"/> ms is a server-wide defect, not one client.
+    /// Chaos probes and sessions without an account are not counted. Cost: two interlocked operations per decoded refusal; the text is built only when it reports.
+    /// </summary>
+    private void NoteRejectionSpike(in ClientRejection rejection)
+    {
+        if (AccountId == 0 || IsInChaosProbe || !RejectionRates.Note(rejection.Kind, rejection.Reason, (uint)AccountId, out long count, out int accounts))
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "client",
+            "rejection-spike",
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{rejection.Kind} {rejection.ReasonName}"),
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{count} refusals sent to at least {accounts} accounts within {ClientRejectionRateTracker.WindowMs / 60_000} minutes (latest entry {rejection.Entry}, bot {IsPlayerbot})"));
+    }
+
+    /// <summary>Opcode values (by index) that are never reported as unhandled: obsolete opcodes (a name that says so) and values with no reference name.</summary>
+    private static readonly bool[] UnhandledNotReported = BuildUnhandledTables(gameplay: false);
+
+    /// <summary>Opcode values (by index) that are real gameplay requests: an unhandled one is a Warning, any other reported opcode an Info.</summary>
+    private static readonly bool[] UnhandledGameplay = BuildUnhandledTables(gameplay: true);
+
+    private static bool[] BuildUnhandledTables(bool gameplay)
+    {
+        WorldOpcode[] known = Enum.GetValues<WorldOpcode>();
+        var table = new bool[known.Max(o => (int)o) + 1];
+        WorldOpcode[] gameplayOpcodes = [WorldOpcode.CmsgOpeningCinematic, WorldOpcode.CmsgGmsurveySubmit, WorldOpcode.CmsgStoreLootInSlot, WorldOpcode.CmsgSkillBuyStep];
+        foreach (WorldOpcode opcode in known)
+        {
+            table[(int)opcode] = gameplay
+                ? Array.IndexOf(gameplayOpcodes, opcode) >= 0
+                : WorldOpcodeNames.GetName(opcode).Contains("OBSOLETE", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return table;
+    }
+
+    /// <summary>
+    /// Outcome check <c>session/opcode-unhandled</c>: a client packet reached the session with no registered handler and was dropped. Warning for a real gameplay
+    /// request (the client feature silently does nothing), Info for any other named opcode; obsolete opcodes and unnamed values are not reported. A stripped developer
+    /// opcode has a (stripped) handler and never gets here. The subject is the opcode name, so the ledger's subject count says how many opcodes are missing.
+    /// Cost: two table loads, then the ledger call (no allocation of its own: the subject is the tracker's label).
+    /// </summary>
+    private static void NoteUnhandledOpcode(WorldOpcode opcode)
+    {
+        int index = (ushort)opcode;
+        if (index >= UnhandledNotReported.Length || UnhandledNotReported[index] || UnhandledOpcodeTracker.LabelOf(opcode) == UnhandledOpcodeTracker.UnknownLabel)
+        {
+            return;
+        }
+
+        ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Report(
+            "session",
+            "opcode-unhandled",
+            UnhandledOpcodeTracker.LabelOf(opcode),
+            "a client packet had no registered handler and was dropped",
+            UnhandledGameplay[index] ? ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Warning : ArcaneCore.Kernel.Diagnostics.AnomalySeverity.Info);
     }
 
     /// <summary>

@@ -320,6 +320,10 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Outbound(opcode, payload);
+        }
 
         if (opcode == WorldOpcode.SmsgNewWorld)
         {
@@ -474,6 +478,11 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     return;
                 }
+            }
+
+            if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
             }
         }
     }
@@ -837,7 +846,13 @@ public sealed partial class WorldSession : IPlayerSession
                 return true;
             }
 
+            long traceStart = Volatile.Read(ref _sessionTrace) is null ? 0 : Stopwatch.GetTimestamp();
             await handler.Session!(this, payload).ConfigureAwait(false);
+            if (traceStart != 0 && Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(opcode, traceStart, 0);
+            }
+
             return true;
         }
         catch (Exception ex) when (IsMalformed(ex))
@@ -947,6 +962,7 @@ public sealed partial class WorldSession : IPlayerSession
     private void ReportUnhandled(WorldOpcode opcode, int length)
     {
         long count = _unhandled.Record(opcode);
+        NoteUnhandledOpcode(opcode);
         if (count == 1)
         {
             string label = UnhandledOpcodeTracker.LabelOf(opcode);
@@ -1223,6 +1239,10 @@ public sealed partial class WorldSession : IPlayerSession
         // The 1.12 client uploads its changed settings in a burst as it logs out: the last session of the account queues what the throttle
         // still holds (the feature writes from a scope of its own, so this session's scope ending does not matter).
         Interlocked.Exchange(ref _accountDataFeature, null)?.EndSession(_accountDataAccountId);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Disconnected(this);
+        }
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing

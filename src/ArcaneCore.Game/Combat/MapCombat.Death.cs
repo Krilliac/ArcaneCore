@@ -877,8 +877,10 @@ public sealed partial class MapCombat
     /// </remarks>
     private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim, bool touchOnly = false)
     {
-        // Duel opponents do not pulse each other (vmangos Unit.cpp:6047, !IsInDuelWith).
-        if (DuelRules.ControllingPlayer(victim) is { } victimPlayer && DuelRules.IsInDuelWith(attacker, victimPlayer))
+        // vmangos Unit.cpp:6042-6053: the pulse needs a victim that is not the attacker's own (the player behind the victim, its owner or charmer,
+        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith).
+        Player? victimPlayer = DuelRules.ControllingPlayer(victim);
+        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)))
         {
             return;
         }
@@ -889,7 +891,7 @@ public sealed partial class MapCombat
             UpdatePvp(attacker, true);
 
             // Attacking another player (or a player's pet) marks the attacker contested: neutral-town guards attack it (Unit.cpp:6052-6053).
-            if (DuelRules.ControllingPlayer(victim) is { } victimOwner && !ReferenceEquals(victimOwner, attacker))
+            if (victimPlayer is not null)
             {
                 UpdatePvpContested(attacker, true);
             }
