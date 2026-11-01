@@ -36,6 +36,17 @@ public sealed class PlayerbotSiegeStatusTests
         return (gm, world.Coordinator.Siege!);
     }
 
+    /// <summary>Says <paramref name="line"/> and returns the one system reply, skipping the watcher lines of <paramref name="siege"/> that arrive first.</summary>
+    private static async Task<List<string>> SayPastWatchLinesAsync(WorldTestClient gm, PlayerbotSiege siege, string line)
+    {
+        await gm.SendChatAsync(ChatType.Say, Language.Common, line);
+        while (true)
+        {
+            ChatMessage message = await gm.ReadChatAsync();
+            if (message.Type == ChatType.System && !message.Text.StartsWith($"Siege {siege.Id} raid ", StringComparison.Ordinal)) return [message.Text];
+        }
+    }
+
     [Fact]
     public async Task Status_AndWatch_WithoutASiege_SaySoAndTouchNothing()
     {
@@ -94,7 +105,8 @@ public sealed class PlayerbotSiegeStatusTests
         Assert.Contains(heard, line => line.StartsWith($"Siege {siege.Id} raid 1 (", StringComparison.Ordinal));
         Assert.Contains(heard, line => line.StartsWith($"Siege {siege.Id} raid 2 (", StringComparison.Ordinal));
 
-        Assert.Equal(["Playerbot siege: watching off."], await FleetWorld.SayAsync(gm, ".playerbot siege watch off"));
+        // The raids' orders go on changing while the GM watches: a further watcher line queued ahead of the reply is not the reply.
+        Assert.Equal(["Playerbot siege: watching off."], await SayPastWatchLinesAsync(gm, siege, ".playerbot siege watch off"));
         Assert.Empty(siege.Watchers);
         Assert.Equal(["Playerbot siege: you are not watching."], await FleetWorld.SayAsync(gm, ".playerbot siege watch"));
         List<string> bad = await FleetWorld.SayAsync(gm, ".playerbot siege watch maybe", lines: 2);
