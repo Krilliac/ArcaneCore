@@ -13,55 +13,74 @@ internal sealed class GroupMemberStatsSnapshot
 {
     private const int AuraSlots = 48; // vmangos MAX_AURAS; SpellSystem.MaxAuras
 
-    public required ObjectGuid Guid { get; init; }
-    public required GroupMemberStatus Status { get; init; }
-    public required uint Hp { get; init; }
-    public required uint MaxHp { get; init; }
-    public required PowerType Power { get; init; }
-    public required uint CurrentPower { get; init; }
-    public required uint MaxPower { get; init; }
-    public required byte Level { get; init; }
-    public required uint Zone { get; init; }
-    public required short X { get; init; }
-    public required short Y { get; init; }
-    public required uint[] Auras { get; init; }
-    public required ObjectGuid PetGuid { get; init; }
-    public required string PetName { get; init; }
-    public required uint PetDisplayId { get; init; }
-    public required uint PetHp { get; init; }
-    public required uint PetMaxHp { get; init; }
-    public required PowerType PetPower { get; init; }
-    public required uint PetCurrentPower { get; init; }
-    public required uint PetMaxPower { get; init; }
-    public required uint[] PetAuras { get; init; }
+    public ObjectGuid Guid { get; private set; }
+    public GroupMemberStatus Status { get; private set; }
+    public uint Hp { get; private set; }
+    public uint MaxHp { get; private set; }
+    public PowerType Power { get; private set; }
+    public uint CurrentPower { get; private set; }
+    public uint MaxPower { get; private set; }
+    public byte Level { get; private set; }
+    public uint Zone { get; private set; }
+    public short X { get; private set; }
+    public short Y { get; private set; }
+    public uint[] Auras { get; } = new uint[AuraSlots];
+    public ObjectGuid PetGuid { get; private set; }
+    public string PetName { get; private set; } = string.Empty;
+    public uint PetDisplayId { get; private set; }
+    public uint PetHp { get; private set; }
+    public uint PetMaxHp { get; private set; }
+    public PowerType PetPower { get; private set; }
+    public uint PetCurrentPower { get; private set; }
+    public uint PetMaxPower { get; private set; }
+    public uint[] PetAuras { get; } = new uint[AuraSlots];
 
+    /// <summary>A fresh snapshot of <paramref name="player"/>; the aura arrays are owned by the result.</summary>
     public static GroupMemberStatsSnapshot Capture(Player player)
     {
+        var snapshot = new GroupMemberStatsSnapshot();
+        snapshot.CaptureFrom(player);
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Overwrites every field of this instance (including the aura arrays, in place) with the current values of
+    /// <paramref name="player"/>. The group stats pass keeps two instances per member and refills the spare one,
+    /// so a steady pass allocates nothing. Nothing outside the caller may hold this instance across the refill:
+    /// packet builders copy values into the packet and do not retain the snapshot.
+    /// World-thread only.
+    /// </summary>
+    public void CaptureFrom(Player player)
+    {
         var pet = player.GetPet();
-        return new GroupMemberStatsSnapshot
+        Guid = player.Guid;
+        Status = GroupPackets.StatusOf(player);
+        Hp = player.Health;
+        MaxHp = player.MaxHealth;
+        Power = player.PowerType;
+        CurrentPower = ReadPower(player, UpdateFields.UnitFieldPower1);
+        MaxPower = ReadPower(player, UpdateFields.UnitFieldMaxpower1);
+        Level = player.Level;
+        Zone = player.ZoneId;
+        X = (short)player.X;
+        Y = (short)player.Y;
+        ReadAuras(player, Auras);
+        PetGuid = pet?.Guid ?? ObjectGuid.Empty;
+        PetName = pet is null ? string.Empty : pet.Summon?.Charm?.Name ?? pet.Template.Name; // the name the pet name query answers
+        PetDisplayId = pet?.DisplayId ?? 0;
+        PetHp = pet?.Health ?? 0;
+        PetMaxHp = pet?.MaxHealth ?? 0;
+        PetPower = pet?.PowerType ?? 0;
+        PetCurrentPower = pet is null ? 0 : ReadPower(pet, UpdateFields.UnitFieldPower1);
+        PetMaxPower = pet is null ? 0 : ReadPower(pet, UpdateFields.UnitFieldMaxpower1);
+        if (pet is null)
         {
-            Guid = player.Guid,
-            Status = GroupPackets.StatusOf(player),
-            Hp = player.Health,
-            MaxHp = player.MaxHealth,
-            Power = player.PowerType,
-            CurrentPower = ReadPower(player, UpdateFields.UnitFieldPower1),
-            MaxPower = ReadPower(player, UpdateFields.UnitFieldMaxpower1),
-            Level = player.Level,
-            Zone = player.ZoneId,
-            X = (short)player.X,
-            Y = (short)player.Y,
-            Auras = ReadAuras(player),
-            PetGuid = pet?.Guid ?? ObjectGuid.Empty,
-            PetName = pet is null ? string.Empty : pet.Summon?.Charm?.Name ?? pet.Template.Name, // the name the pet name query answers
-            PetDisplayId = pet?.DisplayId ?? 0,
-            PetHp = pet?.Health ?? 0,
-            PetMaxHp = pet?.MaxHealth ?? 0,
-            PetPower = pet?.PowerType ?? 0,
-            PetCurrentPower = pet is null ? 0 : ReadPower(pet, UpdateFields.UnitFieldPower1),
-            PetMaxPower = pet is null ? 0 : ReadPower(pet, UpdateFields.UnitFieldMaxpower1),
-            PetAuras = pet is null ? new uint[AuraSlots] : ReadAuras(pet),
-        };
+            Array.Clear(PetAuras);
+        }
+        else
+        {
+            ReadAuras(pet, PetAuras);
+        }
     }
 
     /// <summary>vmangos@0e3ff01 src/game/Handlers/GroupHandler.cpp:757-773: changed fields, including vacated aura slots.</summary>
@@ -109,15 +128,12 @@ internal sealed class GroupMemberStatsSnapshot
         return unit.GetUInt32(firstField + index);
     }
 
-    private static uint[] ReadAuras(Unit unit)
+    private static void ReadAuras(Unit unit, uint[] auras)
     {
-        var auras = new uint[AuraSlots];
         for (int i = 0; i < auras.Length; i++)
         {
             auras[i] = unit.GetUInt32(UpdateFields.UnitFieldAura + i);
         }
-
-        return auras;
     }
 
     private static bool AuraChanged(uint[] current, uint[] previous, int start, int count)
