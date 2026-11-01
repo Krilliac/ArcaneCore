@@ -405,6 +405,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     case GatewayWorkerFrameType.WardenVerdict:
                         OnWardenVerdict(link, body.Span);
                         break;
+                    case GatewayWorkerFrameType.TransferAck:
+                        OnTransferAck(GatewayTransferWire.DecodeAck(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (link.Sessions.TryGetValue(generation, out LinkSession? closing) && closing.AccountId == accountId)
@@ -448,6 +451,42 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
             await link.Channel.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Raised on a link's receive loop for every TransferAck frame (the gateway's answer to a transfer control frame). The handler must not block and
+    /// must not throw. Set once, before the first transfer.
+    /// </summary>
+    public Action<GatewayTransferAck>? TransferAckReceived { get; set; }
+
+    private void OnTransferAck(GatewayTransferAck ack)
+    {
+        try
+        {
+            TransferAckReceived?.Invoke(ack);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "The transfer ack handler failed");
+        }
+    }
+
+    /// <summary>
+    /// Sends a transfer control frame on the admitted link that carries the session <paramref name="sessionGeneration"/>. False when no admitted link has
+    /// that session (the gateway restarted or the client left) or the link is down.
+    /// </summary>
+    public bool TrySendTransferControl(long sessionGeneration, GatewayTransferControl control)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        foreach (Link link in _links.Values)
+        {
+            if (link.Admitted && link.Sessions.ContainsKey(sessionGeneration))
+            {
+                return link.Channel.TryEnqueue(GatewayTransferWire.Encode(control));
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Open admitted links of one (node, incarnation); 0 when none. For tests and diagnostics.</summary>
