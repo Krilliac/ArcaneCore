@@ -199,7 +199,7 @@ auction house bot) are decided in [auxiliary services](#auxiliary-services).
 Status of the roles in the executable: a World process hosts `Combined` and `MapWorker` only (`Cluster:Node:Role`, see
 [gateway.md](areas/gateway.md#node-role-and-realm-authority-leases)). On a map worker the realm singletons (auction house bot, AutoBroadcast) attach under
 characters-database leases (`realm_authority_lease`); the dedicated social and economy authorities above are not built, and a World process configured as
-one refuses to start. Storage writes are not yet checked against the fencing token at commit.
+one refuses to start. The economy, social and instance store writes are checked against the fencing token at commit (`LeaseFencedWrite`), so a partitioned former holder is refused by the database; other stores are not fenced.
 
 Instances lease (S1): the `instances` scope gates only the realm-wide durable writes of the instance reset schedule (raid reset time rows, durable save deletion in the sweep); every map worker runs the schedule itself for its in-memory state and its own loaded maps. The `group_instance` bind writer is deliberately not gated and is undelivered as a single-writer: gating it would drop binds made on a non-holder. See [instances.md](areas/instances.md) for the remaining cross-node risks. In short: the holder's sweep can durably delete a save that is occupied on another worker (it cannot see re-entry); a save a non-holder creates after attach and resets unloaded is durably deleted by no node until a restart; local respawn cleanup is skipped for it; and the lease is never re-acquired, so after the holder stops, nobody writes the schedule rows until a restart.
 
