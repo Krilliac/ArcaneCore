@@ -93,7 +93,9 @@ internal static class PlayerbotCombatView
             {
                 if (slot.Guid == player.Guid) continue;
                 grouped = true;
-                if (map.FindObject(slot.Guid) is Player member && member.IsInWorld)
+                // A charmed member is not assistable (vmangos Unit::IsFriendlyTo/CanAssist treat a charmed unit by its charmer), so a heal or buff
+                // aimed at it would be refused and put that spell into PlayerbotCombatSpells.RefusalBackoffMs. It stays out of the party view.
+                if (map.FindObject(slot.Guid) is Player member && member.IsInWorld && member.CharmerGuid.IsEmpty)
                 {
                     units[member.Guid] = member;
                     party.Add(Describe(system, player, member, groups));
