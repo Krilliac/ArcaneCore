@@ -51,10 +51,20 @@ public sealed partial class SpellSystem
         if (applicable != 1)
             return SpellCastResult.ItemNotReady;
 
-        SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell,
-            out ItemInstanceData? updatedRecipientItem);
-        if (imageResult != SpellCastResult.CastOk)
-            return imageResult;
+        // vmangos Spell.cpp:6455-6477: a pure open-lock item spell (a lockpick on a partner's lockbox) has no enchantment image;
+        // it is cast for real once the trade committed, exactly like the spellbook path (TryPlanTradeEnchantment).
+        bool castOnCommit = IsOpenLockOnly(spell);
+        ItemInstanceData? updatedRecipientItem;
+        if (castOnCommit)
+        {
+            updatedRecipientItem = target.ToData();
+        }
+        else
+        {
+            SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell, out updatedRecipientItem);
+            if (imageResult != SpellCastResult.CastOk)
+                return imageResult;
+        }
 
         SpellCastTargets targets = new()
         {
@@ -87,13 +97,20 @@ public sealed partial class SpellSystem
         TradeItemCastContext context = new(castItem.Guid, castItem.Entry, clientSpellIndex, selected,
             castItem.BagSlot, castItem.Slot, overlapsCastItem,
             overlapsCastItem ? null : ItemUsePaymentPlan.Create(castItem));
+        // The commit-time cast needs the live cast item (vmangos TradeHandler.cpp:362 SetCastItem). The staged payment runs before it, so a
+        // plan whose payment removes the item (last charge of an expendable single item, or a reagent entry equal to the item) cannot be
+        // cast with its item and stays refused.
+        if (castOnCommit && (overlapsCastItem || context.Payment is not { After: not null }))
+            return SpellCastResult.ItemNotReady;
+
         plan = new TradeEnchantmentPlan(
             updatedRecipientItem!,
             Array.AsReadOnly(reagents.ToArray()),
             CasterLifeAfter: null,
             PowerCost: 0,
             SpellSnapshot: spell with { },
-            ItemCast: context);
+            ItemCast: context,
+            CastOnCommit: castOnCommit);
         return SpellCastResult.CastOk;
     }
 }

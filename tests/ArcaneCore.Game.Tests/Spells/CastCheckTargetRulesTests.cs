@@ -19,6 +19,8 @@ public sealed class CastCheckTargetRulesTests
     private const uint Soulstone = 971001;
     private const uint Sap = 971002;
     private const uint AreaOnlyPlayer = 971003;
+    private const uint SapHumanoid = 971004;
+    private const uint AreaPlain = 971005;
 
     private static SpellInfo[] Spells() =>
     [
@@ -44,6 +46,24 @@ public sealed class CastCheckTargetRulesTests
             targetB: SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc) with { Radius = 20 }) with
         {
             AttributesEx3 = 0x100,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        },
+        // Sap with a humanoid-only TargetCreatureType mask (bit = CreatureType.dbc id - 1: humanoid 7 -> 0x40).
+        Spell(SapHumanoid, Effect(SpellEffectName.ApplyAura, 1, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
+        {
+            AttributesEx = (SpellAttributesEx)0x100,
+            TargetCreatureType = 0x40,
+            Duration = new SpellDuration(60_000, 0, 60_000),
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        },
+        // The control: the same area spell without ONLY_ON_PLAYER.
+        Spell(AreaPlain, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.LocationCasterSrc,
+            targetB: SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc) with { Radius = 20 }) with
+        {
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
         },
@@ -78,13 +98,13 @@ public sealed class CastCheckTargetRulesTests
 
         public Player Caster { get; }
 
-        public Creature AddCreature(float x)
+        public Creature AddCreature(float x, uint creatureType = 0)
         {
             uint entry = ++_next;
             var template = new CreatureTemplate
             {
                 Entry = entry, Name = $"Target {entry}", MinLevel = 20, MaxLevel = 20,
-                MinLevelHealth = 100, MaxLevelHealth = 100, DisplayIds = [1], Faction = 14,
+                MinLevelHealth = 100, MaxLevelHealth = 100, DisplayIds = [1], Faction = 14, CreatureType = creatureType,
             };
             var creature = new Creature(entry, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
             Map map = Kit.World.GetMap(0);
@@ -126,12 +146,26 @@ public sealed class CastCheckTargetRulesTests
     }
 
     [Fact]
-    public void OnlyOnPlayer_AreaSpell_IsNotRefusedByTheExplicitTargetRule()
+    public void OnlyOnPlayer_AreaSpell_SelectionDropsCreatures_ButKeepsPlayers()
     {
         using var s = new Scene();
         Creature npc = s.AddCreature(3);
+        Creature control = s.AddCreature(4);
+        Player enemy = s.Kit.AddPlayer(2, 5).Player;
+        enemy.MaxHealth = enemy.Health = 100;
+        s.Relations.Hostile.Add(npc.Guid);
+        s.Relations.Hostile.Add(control.Guid);
+        s.Relations.Hostile.Add(enemy.Guid);
+        s.Kit.World.RunTick(0);
 
-        Assert.NotEqual(SpellCastResult.BadTargets, s.Cast(AreaOnlyPlayer, npc));
+        // vmangos Spell::CheckTarget :7695-7697: ONLY_ON_PLAYER drops every non-player candidate of an area selection.
+        Assert.Equal(SpellCastResult.CastOk, s.Kit.System.CastSpell(s.Caster, AreaOnlyPlayer, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(npc.MaxHealth, npc.Health);
+        Assert.True(enemy.Health < enemy.MaxHealth);
+
+        // The same area spell without the attribute does reach a creature (the selection really ran).
+        Assert.Equal(SpellCastResult.CastOk, s.Kit.System.CastSpell(s.Caster, AreaPlain, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.True(control.Health < control.MaxHealth);
     }
 
     [Fact]
@@ -146,6 +180,21 @@ public sealed class CastCheckTargetRulesTests
 
         Assert.Equal(SpellCastResult.TargetAffectingCombat, s.Cast(Sap, busy));
         Assert.Equal(SpellCastResult.CastOk, s.Cast(Sap, idle));
+    }
+
+    [Fact]
+    public void OnlyPeacefulTargets_WrongTypeCreatureInCombat_AnswersTargetAffectingCombatBeforeBadTargets()
+    {
+        using var s = new Scene();
+        Creature busy = s.AddCreature(3, creatureType: 1);
+        Creature idle = s.AddCreature(4, creatureType: 1);
+        s.Relations.Hostile.Add(busy.Guid);
+        s.Relations.Hostile.Add(idle.Guid);
+        busy.UnitFlags |= UnitFlags.InCombat;
+
+        // vmangos Spell.cpp:5487 (peaceful) runs before :5580 (creature type): a beast is the wrong type for a humanoid-only Sap.
+        Assert.Equal(SpellCastResult.TargetAffectingCombat, s.Cast(SapHumanoid, busy));
+        Assert.Equal(SpellCastResult.BadTargets, s.Cast(SapHumanoid, idle));
     }
 
     [Fact]
