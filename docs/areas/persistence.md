@@ -238,6 +238,10 @@ the rest crash-ledger copies), 37 save-backlog warnings (peak 1000 characters, o
 the gate (first 6 min): 1700-3800 writes a minute on characters.db, 0.5-2.5% queued, max wait 383 ms and longest hold 535 ms during
 the startup burst, then waits under 100 ms and holds under 200 ms; no timeouts, no locked errors.
 
+## Worker-scope writers (Split topology)
+
+With `Cluster:Fencing:Scope=Worker` several worlds write one PostgreSQL (or MariaDB) characters database at once: each holds its own shard advisory lock and ownership row, every id comes from a durable reserved block (`RequireDurableIds`), and a character is written only by the worker that holds its claim. `arcane-db copy` for the characters component refuses while an ownership row is active or a worker shard lock is held (stop every world first). SQLite supports Worker scope only for in-process tests (`Cluster:Fencing:AllowSqliteWorkerScope`). See [gateway.md](gateway.md) and `_wf/writer-lock-DESIGN.md`.
+
 ## Spellbook learn batching
 
 `SpellbookCache` writes spell changes on one background task. Each learn used to be its own store call and transaction, so a character

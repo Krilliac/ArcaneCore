@@ -343,6 +343,9 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         if (_options.WorkerCount > 1)
         {
             env["Cluster__Worker__OwnedMaps"] = string.Join(',', worker.OwnedMaps);
+            // Several workers write one characters database: each takes its own shard lock and ownership scope (design _wf/writer-lock-DESIGN.md, C8), as start-cluster -Topology Split runs them.
+            env["Cluster__Fencing__Scope"] = "Worker";
+            env["Cluster__Node__Role"] = "MapWorker";
         }
 
         AddDatabase(env, "Auth", _authConnection);

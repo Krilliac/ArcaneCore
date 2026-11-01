@@ -569,13 +569,35 @@ public sealed class LiveLaunchScriptTests : IDisposable
     }
 
     [PwshFact]
-    public void StartCluster_Split_WithoutPlan_IsRefused_BeforeAnythingStarts()
+    public void StartCluster_Split_RealStart_IsAllowed_ButNeedsThePostgreSqlSecretFile_BeforeAnythingStarts()
     {
         BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        // The blanket "can only be planned" refusal is gone (design _wf/writer-lock-DESIGN.md step C8): a real start is refused only for what it is missing, here the PostgreSQL secret file.
         (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Topology", "Split", "-PgSecretFile", $"'{Q(Path.Combine(_root, "no-such-secret.json"))}'"], Secret);
         Assert.NotEqual(0, code);
-        Assert.Contains("can only be planned", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("can only be planned", output, StringComparison.Ordinal);
+        Assert.Contains("PostgreSQL secret file", output, StringComparison.Ordinal);
         Assert.False(started);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_RunsEveryWorldInWorkerScope_AndOnlyTheLeaseHolderRunsSchemaDdl()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-LeaseHolder", "Kalimdor", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+        Assert.Equal(0, code);
+
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        Assert.Equal(3, worlds.Count);
+        foreach ((string key, string arguments) in worlds)
+        {
+            Assert.Contains("--Cluster:Fencing:Scope=Worker", arguments, StringComparison.Ordinal);
+            Assert.Equal(key == "worker-Kalimdor", !arguments.Contains("--Database:Upgrade:ValidateOnly=true", StringComparison.Ordinal));
+        }
+
+        // The lease holder (which runs the DDL) starts before the validate-only worlds.
+        Assert.Contains("      Cluster__Supervisor__Processes__worker-Kalimdor__StartOrder=1", output, StringComparison.Ordinal);
+        Assert.Contains("      Cluster__Supervisor__Processes__gateway__StartOrder=4", output, StringComparison.Ordinal);
     }
 
     [PwshFact]

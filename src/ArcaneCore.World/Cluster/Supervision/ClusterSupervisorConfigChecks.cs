@@ -67,6 +67,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         bool several = worlds.Count > 1;
         var ownerNodes = new Dictionary<string, string>(StringComparer.Ordinal);
         var nodeIds = new Dictionary<string, string>(StringComparer.Ordinal);
+        var shards = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig process) in worlds)
         {
             string path = $"{ClusterSupervisorOptions.SectionName}:Processes:{key}";
@@ -110,6 +111,24 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 else
                 {
                     nodeIds[nodeId] = key;
+                }
+
+                // Worker fencing scope: the durable scope and the shard advisory lock are named after the shard, compared without regard to case, so two shard ids that differ only in case are one shard.
+                string scopeText = args.GetValueOrDefault("Cluster:Fencing:Scope") ?? configuration["Cluster:Fencing:Scope"] ?? string.Empty;
+                if (string.Equals(scopeText, "Worker", StringComparison.OrdinalIgnoreCase))
+                {
+                    string shardText = args.GetValueOrDefault("Cluster:Fencing:Shard") ?? configuration["Cluster:Fencing:Shard"] ?? string.Empty;
+                    string shard = (string.IsNullOrWhiteSpace(shardText) ? nodeId : shardText).Trim();
+                    if (shards.TryGetValue(shard, out other))
+                    {
+                        yield return new ConfigIssue(ConfigSeverity.Error, $"{path}:Arguments",
+                            $"world children '{other}' and '{key}' share the Cluster:Fencing:Scope=Worker shard '{shard}' (shard ids are compared ignoring case), so they would claim the same durable scope and shard lock.",
+                            "give each world child its own --Cluster:Worker:NodeId=<name> (or --Cluster:Fencing:Shard=<name>) that differs by more than letter case");
+                    }
+                    else
+                    {
+                        shards[shard] = key;
+                    }
                 }
             }
         }

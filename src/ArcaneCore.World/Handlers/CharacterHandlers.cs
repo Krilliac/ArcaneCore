@@ -516,7 +516,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             session.AbortLogin();
             // The character is online under an older login that keeps its claim: this login's ticket must not invalidate that login's release.
             if (session.Services.GetService<CharacterClaimService>() is { } duplicateClaims)
-                duplicateClaims.AbandonTicket(character.Id, duplicateClaims.TicketOf(player));
+                duplicateClaims.AbandonTicket(character.Id, duplicateClaims.TicketOf(player), session.World.CharacterOwnership,
+                    () => session.World.IsOnline(ObjectGuid.Player((uint)character.Id)));
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginDuplicateCharacter));
             return;
         }

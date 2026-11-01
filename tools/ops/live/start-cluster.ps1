@@ -38,14 +38,15 @@
   Instead, with Diagnostics:CrashDialog on for the SUPERVISOR (e.g. Diagnostics__CrashDialog=true in its console), the supervisor opens
   the crash dialog itself when a child exits unexpectedly with a nonzero code (SupervisorCrashDialog; docs/ops/invariants.md).
   Children inherit the console environment, so the same variable makes each child write its crash-report file (no box) for the supervisor to show.
-  A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
-  writer lock (WorldWriterGuard; on PostgreSQL a session advisory lock named after the characters database), and every non-standby
-  world takes it at start, so a second one refuses to start. The fencing proof covers a takeover from one host to the next, not
-  concurrent writers.
+  A second World in a Combined or Gateway topology (a standby worker, a second map worker) is not started: those worlds share one characters
+  database and one realm-wide writer lock (WorldWriterGuard; on PostgreSQL a session advisory lock named after the characters database),
+  and every non-standby world takes it at start, so a second one refuses to start. Concurrent map workers exist only in -Topology Split,
+  where every world runs Cluster:Fencing:Scope=Worker: one durable ownership scope and one shard lock per world instead of the realm-wide lock.
 
   -Topology Split (implies the gateway; needs the link secret and the PostgreSQL secret file)
-    PLAN ONLY for now: a real (non -Plan) start is refused with a message, because concurrent fenced map workers are not supported yet
-    (the writer lock above would refuse the second and third world and the supervisor would stop the cluster). -Plan prints the layout.
+    A real start needs PostgreSQL (the secret file below; a real start refuses without it). Every world runs Cluster:Fencing:Scope=Worker, so
+    the three worlds write the one characters database concurrently, each under its own shard lock and ownership scope. The world named by
+    -LeaseHolder starts first and runs the schema DDL; the other worlds get Database:Upgrade:ValidateOnly=true. -Plan prints the layout.
     Starts the realm (order 0), three fenced worker worlds (orders 1 to 3) and the gateway (order 4, Gateway:Workers lists the three):
         worker-EK         node worker:EK         map 0 (Eastern Kingdoms)              no instance copies
         worker-Kalimdor   node worker:Kalimdor   map 1 (Kalimdor)                      no instance copies
@@ -158,7 +159,8 @@ $bin = Join-Path $LiveHome 'bin'
 $split = $Topology -eq 'Split'
 if ($split) {
     if ($MapWorker) { throw '-MapWorker does not combine with -Topology Split: every Split world is a map worker.' }
-    if (-not $planOnly) { throw '-Topology Split can only be planned (-Plan) for now: concurrent fenced map workers are not supported yet. Every non-standby world takes the characters-database writer lock at start (WorldWriterGuard), so the second and third world would refuse to start and the supervisor would stop the cluster.' }
+    # A real start is allowed: every Split world runs Cluster:Fencing:Scope=Worker (one durable ownership scope and one shard advisory lock per world), and the
+    # databases are PostgreSQL by construction (the secret file below; a real start refuses without it).
     $Gateway = $true
 } elseif ($PSBoundParameters.ContainsKey('LeaseHolder') -or $PSBoundParameters.ContainsKey('PgSecretFile')) {
     throw '-LeaseHolder and -PgSecretFile only mean something with -Topology Split.'
@@ -303,15 +305,18 @@ if ($Gateway) {
 if ($split) {
     $heartbeatDirectory = Split-Path -Parent $HeartbeatPath
     $order = 1
-    foreach ($world in $splitWorlds) {
+    # The lease holder starts first so its schema DDL is done before the validate-only worlds check the schema.
+    foreach ($world in @($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }) + @($splitWorlds | Where-Object { $_.Slug -ne $LeaseHolder })) {
         # Fenced with its own OwnerNode and NodeId (the supervisor check needs both distinct); the same text for both.
         $heartbeatFile = if ($world.Slug -eq 'EK') { $HeartbeatPath } else { Join-Path $heartbeatDirectory "world-$($world.Slug).heartbeat" }
         $splitArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$heartbeatFile",
-            "--World:Port=$($world.ClientPort)", '--Cluster:Fencing:Enabled=true', "--Cluster:Fencing:OwnerNode=$($world.NodeId)",
+            "--World:Port=$($world.ClientPort)", '--Cluster:Fencing:Enabled=true', '--Cluster:Fencing:Scope=Worker', "--Cluster:Fencing:OwnerNode=$($world.NodeId)",
             '--Cluster:Worker:Enabled=true', "--Cluster:Worker:BindAddress=$WorkerAddress", "--Cluster:Worker:Port=$($world.WorkerPort)",
             "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($world.NodeId)",
             "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())")
         $isLeaseHolder = $world.Slug -eq $LeaseHolder
+        # One designated world runs the schema DDL (the lease holder, started first below); every other world only validates the schema.
+        if (-not $isLeaseHolder) { $splitArgs += '--Database:Upgrade:ValidateOnly=true' }
         # Every world is a MapWorker so ClusterRoleFeatureFilter lets the realm authority lease choose the one singleton runner.
         $splitArgs += '--Cluster:Node:Role=MapWorker'
         Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true

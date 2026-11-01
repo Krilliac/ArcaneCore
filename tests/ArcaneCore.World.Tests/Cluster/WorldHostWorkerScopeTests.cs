@@ -292,6 +292,50 @@ public sealed class WorldHostWorkerScopeTests
         handOver(); // nothing deferred without social and instance features: a no-op that must not throw
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task HandOver_SetsRequireDurableIds_OnGroupsGuildsPetitionsInstancesAndEconomy_OnlyInWorkerScope(bool workerScope)
+    {
+        // Groups, guilds, petitions and instances exist only once their feature attached, so the hand-over action carries the flag; the economy takes it at once.
+        // A regression that stops wiring the flag lets a worker fall back to a local counter and hand out an id another worker already used.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IIdRangeReservationStore>(new CountingReservations());
+        services.AddSingleton<CharacterDirectory>(); // SocialFeature's constructor takes it, with no default
+        services.AddSingleton<ArcaneCore.World.Social.SocialFeature>();
+        services.AddSingleton<ArcaneCore.World.Instances.InstanceFeature>();
+        services.AddSingleton<EconomyFeature>();
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        IServiceScopeFactory scopes = provider.GetRequiredService<IServiceScopeFactory>();
+
+        Action handOver = await WorldHost.PrepareDurableIdAllocatorsAsync(provider, scopes, blockSize: 10, lowWatermark: 2, requireDurableIds: workerScope);
+        Assert.Equal(workerScope, provider.GetRequiredService<EconomyFeature>().RequireDurableIds);
+
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance), NullLogger<WorldRuntime>.Instance);
+        var social = provider.GetRequiredService<ArcaneCore.World.Social.SocialFeature>();
+        var instances = provider.GetRequiredService<ArcaneCore.World.Instances.InstanceFeature>();
+        try
+        {
+            social.Attach(world);
+            instances.Attach(world);
+            handOver();
+
+            Assert.Equal(workerScope, social.Context.Groups.RequireDurableIds);
+            Assert.Equal(workerScope, social.Context.Guilds.RequireDurableIds);
+            Assert.Equal(workerScope, social.Context.Petitions.RequireDurableIds);
+            Assert.Equal(workerScope, instances.Instances.RequireDurableIds);
+            Assert.NotNull(social.Context.Groups.IdBlockAllocator);
+            Assert.NotNull(social.Context.Guilds.IdBlockAllocator);
+            Assert.NotNull(instances.Instances.IdBlockAllocator);
+        }
+        finally
+        {
+            await social.StopAsync();
+            await instances.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task AWorkerHost_PrimesTheItemIdAllocator_BeforeTheFeaturesAttach_WithRequireDurableIdsSet()
     {

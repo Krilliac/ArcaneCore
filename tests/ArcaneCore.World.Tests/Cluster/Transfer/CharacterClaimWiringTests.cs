@@ -298,6 +298,57 @@ public sealed class CharacterClaimWiringTests
     }
 
     [Fact]
+    public async Task AnAbandonedLoginsTicket_ReleasesTheClaim_WhenNoOtherLoginIsLive_AndNobodyIsOnline()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long older) = await claims.ClaimWithTicketAsync(39, a);
+        (_, long duplicate) = await claims.ClaimWithTicketAsync(39, a); // a second login of the character, claimed while the first was online
+        claims.ScheduleRelease(39, a, () => false, older); // the first login logged out: its release is skipped, the duplicate's ticket is newer
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(39));
+
+        claims.AbandonTicket(39, duplicate, a, () => false); // EnterWorld refused the duplicate and nobody is online: nothing else would ever release the claim
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(39));
+    }
+
+    [Fact]
+    public async Task AnAbandonedLoginsTicket_KeepsTheClaim_WhileTheOlderLoginIsLive_OrTheCharacterIsOnline()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long older) = await claims.ClaimWithTicketAsync(40, a);
+        (_, long duplicate) = await claims.ClaimWithTicketAsync(40, a);
+        claims.AbandonTicket(40, duplicate, a, () => true); // the older login is still live: its logout owns the release
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(40));
+
+        claims.ScheduleRelease(40, a, () => false, older);
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(40));
+
+        (_, long first) = await claims.ClaimWithTicketAsync(41, a);
+        (_, long second) = await claims.ClaimWithTicketAsync(41, a);
+        claims.ScheduleRelease(41, a, () => false, first); // skipped: a newer ticket exists
+        claims.AbandonTicket(41, second, a, () => true); // no live ticket is left but the character is online: the claim stays
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(41));
+    }
+
+    [Fact]
     public async Task TheClaimTicket_IsBoundToThePlayerObject_ForTheLogoutPath()
     {
         var services = new ServiceCollection();
