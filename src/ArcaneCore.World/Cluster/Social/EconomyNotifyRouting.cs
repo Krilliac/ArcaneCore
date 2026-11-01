@@ -27,6 +27,12 @@ public enum EconomyNotifyStatus
 
     /// <summary>The recipient is not online: nothing to notify (the mail or auction state is read on login).</summary>
     RecipientOffline = 1,
+
+    /// <summary>
+    /// The letter is not deliverable yet (its deliver time is in the future): nothing was queued. The holder notifies later through
+    /// <c>EconomyCommitNotifier.MailDelivered</c> when the letter becomes due, like the local path's NotifyDeliveredMail.
+    /// </summary>
+    Deferred = 2,
 }
 
 /// <summary>
@@ -35,14 +41,25 @@ public enum EconomyNotifyStatus
 /// fetch their queue with a drain request over the peer link (<see cref="Handle"/> on the holder, <see cref="EconomyNotifyClient"/> on the worker): the peer link
 /// is request/answer towards the lease holder, so delivery is pull-based exactly like <c>IClusterSocialRouter.DrainWorkerDeliveries</c>.
 /// Delivery is best effort (a notification is only a client refresh hint): each worker queue holds at most <see cref="MaxQueuedPerWorker"/> entries and drops the oldest.
+/// A drain request carries no idempotency id and is not retried: the batch is removed before the reply is sent, so a reply lost to a timeout loses that batch
+/// (acceptable for a refresh hint; the mail and auction state is re-read on the next list or login).
 /// Thread-safe: queues are guarded by one lock; the directory is the caller's thread-safe presence directory.
 /// </summary>
 public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
 {
     public const int MaxQueuedPerWorker = 1024;
 
-    /// <summary>Most notifications one drain returns (keeps the reply inside the peer link payload limit).</summary>
+    /// <summary>Most notifications one drain returns.</summary>
     public const int MaxDrainBatch = 256;
+
+    /// <summary>Longest worker id (chars) the router queues for or drains; bounds the encoded size of one item.</summary>
+    public const int MaxWorkerIdLength = 64;
+
+    /// <summary>
+    /// Most encoded bytes one drain reply may hold: the peer link echo limit minus a 1 KB margin. With <see cref="EconomyNotifyWire.MaxPayloadLength"/> and
+    /// <see cref="MaxWorkerIdLength"/> one item is at most 1248 B, so at least one item always fits.
+    /// </summary>
+    public const int MaxDrainReplyBytes = PeerLinkWire.MaxPayloadBytes - 1024;
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, List<EconomyNotification>> _queues = new(StringComparer.Ordinal);
@@ -57,7 +74,7 @@ public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
             throw new ArgumentException($"notification payload of {payload.Length} B exceeds {EconomyNotifyWire.MaxPayloadLength} B", nameof(payload));
         }
 
-        if (directory.FindByGuid(recipientGuid) is not { } entry || string.IsNullOrEmpty(entry.WorkerId))
+        if (directory.FindByGuid(recipientGuid) is not { } entry || string.IsNullOrEmpty(entry.WorkerId) || entry.WorkerId.Length > MaxWorkerIdLength)
         {
             return EconomyNotifyStatus.RecipientOffline;
         }
@@ -80,10 +97,13 @@ public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
         return EconomyNotifyStatus.Queued;
     }
 
-    /// <summary>Removes and returns up to <see cref="MaxDrainBatch"/> queued notifications of <paramref name="workerId"/>, oldest first.</summary>
+    /// <summary>
+    /// Removes and returns queued notifications of <paramref name="workerId"/>, oldest first: at most <see cref="MaxDrainBatch"/> and at most
+    /// <see cref="MaxDrainReplyBytes"/> of encoded reply, so the reply always fits one peer link frame. The rest stays queued for the next drain.
+    /// </summary>
     public IReadOnlyList<EconomyNotification> DrainWorker(string workerId)
     {
-        if (string.IsNullOrWhiteSpace(workerId))
+        if (string.IsNullOrWhiteSpace(workerId) || workerId.Length > MaxWorkerIdLength)
         {
             return [];
         }
@@ -95,7 +115,19 @@ public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
                 return [];
             }
 
-            int take = Math.Min(queue.Count, MaxDrainBatch);
+            int take = 0;
+            int bytes = EconomyNotifyWire.ReplyHeaderBytes;
+            while (take < queue.Count && take < MaxDrainBatch)
+            {
+                bytes += EconomyNotifyWire.EncodedItemBytes(queue[take]);
+                if (take > 0 && bytes > MaxDrainReplyBytes)
+                {
+                    break;
+                }
+
+                take++;
+            }
+
             List<EconomyNotification> batch = queue.GetRange(0, take);
             queue.RemoveRange(0, take);
             return batch;
@@ -105,6 +137,7 @@ public sealed class EconomyNotifyRouter(IRealmPresenceDirectory directory)
     /// <summary>Number of notifications waiting for <paramref name="workerId"/>.</summary>
     public int PendingCount(string workerId)
     {
+        ArgumentNullException.ThrowIfNull(workerId);
         lock (_gate)
         {
             return _queues.TryGetValue(workerId, out List<EconomyNotification>? queue) ? queue.Count : 0;
@@ -155,12 +188,12 @@ public sealed class EconomyNotifyClient(Func<byte[], CancellationToken, Task<byt
 /// </summary>
 public sealed class EconomyNotifyReceiver(Func<ulong, long?> currentSessionGeneration, Action<EconomyNotification> deliver)
 {
-    /// <summary>Delivers the still-valid notifications in sequence order and returns how many were delivered.</summary>
+    /// <summary>Delivers the still-valid notifications in the order given (the router drains in sequence order) and returns how many were delivered.</summary>
     public int Apply(IReadOnlyList<EconomyNotification> notifications)
     {
         ArgumentNullException.ThrowIfNull(notifications);
         int delivered = 0;
-        foreach (EconomyNotification n in notifications.OrderBy(x => x.Sequence))
+        foreach (EconomyNotification n in notifications)
         {
             if (currentSessionGeneration(n.RecipientGuid) is { } generation && generation == n.RecipientSessionGeneration)
             {
@@ -186,8 +219,19 @@ internal static class EconomyNotifyWire
     public const int MaxListCount = 4096;
     public const int MaxPayloadLength = 1024;
 
+    /// <summary>Bytes before the first item of an ok reply: status byte and int32 count.</summary>
+    public const int ReplyHeaderBytes = 5;
+
     private const byte StatusOk = 0;
     private const byte StatusError = 1;
+
+    /// <summary>Exact encoded size of one reply item (BinaryWriter string: 7-bit length prefix then UTF-8).</summary>
+    public static int EncodedItemBytes(EconomyNotification n)
+    {
+        int idBytes = Encoding.UTF8.GetByteCount(n.TargetWorkerId);
+        int prefix = idBytes < 0x80 ? 1 : idBytes < 0x4000 ? 2 : 3;
+        return 2 + 4 + n.Payload.Length + 8 + 8 + prefix + idBytes + 8;
+    }
 
     public static bool IsEconomyNotifyRequest(ReadOnlySpan<byte> request) => request.Length > 0 && request[0] == OpDrainWorker;
 
