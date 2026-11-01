@@ -28,6 +28,8 @@ internal enum PresenceOp : byte
     ChannelState = 20,
     GroupCommand = 21,
     GroupDrain = 22,
+    GuildForward = 23,
+    GuildDrain = 24,
 }
 
 /// <summary>
@@ -633,6 +635,20 @@ internal static class PresenceWireCodec
             {
                 IReadOnlyList<ArcaneCore.Game.Groups.GroupEvent> events = service.Groups.Drain(r.ReadString());
                 return EncodeReply(w => GroupWireCodec.WriteEvents(w, events));
+            }
+
+            case PresenceOp.GuildForward:
+            {
+                string worker = r.ReadString();
+                long requestId = r.ReadInt64();
+                service.Guilds.Submit(worker, requestId, GuildWireCodec.ReadRequest(r));
+                return EncodeReply();
+            }
+
+            case PresenceOp.GuildDrain:
+            {
+                IReadOnlyList<GuildLinkEvent> events = service.Guilds.Drain(r.ReadString());
+                return EncodeReply(w => GuildWireCodec.WriteEvents(w, events));
             }
 
             default:
