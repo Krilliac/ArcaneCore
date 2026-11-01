@@ -80,7 +80,8 @@ public sealed partial class WorldRuntime
 
     /// <summary>
     /// Manual clock only: how long, in wall time, the world thread holds an advancing tick for pending work before it fails the
-    /// advances with a <see cref="PendingWorkHangException"/> naming the work. Default 60 s.
+    /// advances that want game time (those with game time remaining; a zero-length barrier is left to complete) with a
+    /// <see cref="PendingWorkHangException"/> naming the work. Default 60 s.
     /// </summary>
     public TimeSpan PendingWorkHangGuard { get; set; } = TimeSpan.FromSeconds(60);
 
@@ -106,12 +107,17 @@ public sealed partial class WorldRuntime
         {
             var failure = new PendingWorkHangException(
                 $"pending work did not finish within {PendingWorkHangGuard.TotalSeconds:F1} s of wall time while the manual clock waited at {Clock.ElapsedMs} ms (tick {Clock.TickNumber}): {string.Join(", ", PendingWork.Names())}");
-            foreach (ManualAdvance advance in _manualAdvances)
+            // Only advances that want game time are failed: a zero-length barrier needs no pending work and completes in the zero-diff tick below.
+            for (int i = _manualAdvances.Count - 1; i >= 0; i--)
             {
-                advance.Done.TrySetException(failure);
+                ManualAdvance advance = _manualAdvances[i];
+                if (advance.Remaining > 0)
+                {
+                    advance.Done.TrySetException(failure);
+                    _manualAdvances.RemoveAt(i);
+                }
             }
 
-            _manualAdvances.Clear();
             _heldSinceTimestamp = 0;
             return 0;
         }

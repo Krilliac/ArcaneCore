@@ -74,7 +74,7 @@ public static class BotRuleIds
 /// section 11). One definition: the world schema step seeds the rows from it (<c>PlayerbotLadderDataModule</c>), and a brain on a database
 /// without them (no rule store) runs from it.
 /// <para>
-/// Catalogue ids: 0-17 are <c>PlayerbotGoalKind</c> values (a custom rule that proposes one runs the kind's default rung, when it has
+/// Catalogue ids: 0-18 are <c>PlayerbotGoalKind</c> values (a custom rule that proposes one runs the kind's default rung, when it has
 /// one); 101-116 are the ladder rungs (100 + <see cref="PlayerbotLadderRung"/>), including those with no goal kind of their own; 1000 and up
 /// are server-defined goals. Rung weights are 100 apart in today's order; the policy rung's weight sits between the urgent town errand and
 /// the quests. <c>base_priority</c> equals the weight and breaks a tie between equal weights (higher wins).
@@ -150,7 +150,7 @@ public static class PlayerbotLadderContent
         _ => PlayerbotLadderRung.None,
     };
 
-    /// <summary>The shipped <c>playerbot_goal</c> rows: the 18 goal kinds, then the 16 ladder rungs.</summary>
+    /// <summary>The shipped <c>playerbot_goal</c> rows: the 19 goal kinds, then the 16 ladder rungs.</summary>
     public static IReadOnlyList<PlayerbotGoalRecord> Goals { get; } =
     [
         .. Enum.GetValues<Characters.PlayerbotGoalKind>().Select(kind => new PlayerbotGoalRecord

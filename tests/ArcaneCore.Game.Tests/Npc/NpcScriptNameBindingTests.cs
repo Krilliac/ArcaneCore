@@ -8,7 +8,7 @@ using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
-using Microsoft.Extensions.Logging;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.Game.Tests.Npc.QuestFlowTestKit;
 
@@ -55,18 +55,6 @@ public sealed class NpcScriptNameBindingTests
             QuestStatusData data = kit.State.Quests.Get(questId)!;
             log.Add($"hook rewarded={data.Rewarded} emote={kit.Creature.GetUInt32(UpdateFields.UnitNpcEmotestate)}");
         }
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
     }
 
     private static QuestFlowTestKit ChainKit(string scriptName = "", uint completeScript = 0)
@@ -238,7 +226,7 @@ public sealed class NpcScriptNameBindingTests
         Assert.Equal([First], laterSubscriber); // so did the other subscribers
         Assert.Contains(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails); // and the next quest was offered
         AssertFaultRecorded(Message);
-        string line = Assert.Single(logger.Lines, l => l.Contains(nameof(ThrowingAi), StringComparison.Ordinal));
+        string line = Assert.Single(logger.Messages, l => l.Contains(nameof(ThrowingAi), StringComparison.Ordinal));
         Assert.Contains(First.ToString(), line);
         Assert.Contains(QuestFlowTestKit.CreatureEntry.ToString(), line);
     }
@@ -263,7 +251,7 @@ public sealed class NpcScriptNameBindingTests
         Assert.Equal(13u, Emote(kit));
         Assert.Contains(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails);
         AssertFaultRecorded(Message);
-        Assert.Contains(logger.Lines, l => l.Contains(Script, StringComparison.Ordinal) && l.Contains(First.ToString(), StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, l => l.Contains(Script, StringComparison.Ordinal) && l.Contains(First.ToString(), StringComparison.Ordinal));
     }
 
     private static void AssertFaultRecorded(string message)

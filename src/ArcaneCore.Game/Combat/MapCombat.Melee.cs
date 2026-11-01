@@ -1152,6 +1152,7 @@ public sealed partial class MapCombat
         c.LastCombatSetBy = caller;
         c.LastCombatSetVia = via;
         c.CombatSetsSinceClear++;
+        c.CombatSetSerial++;
         Track(unit);
     }
 

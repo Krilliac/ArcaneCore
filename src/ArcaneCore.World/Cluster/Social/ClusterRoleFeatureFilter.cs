@@ -49,8 +49,9 @@ public sealed class ClusterRoleFeatureFilter
         => ShouldAttachFeature(featureType, role, nodeId, _ => fencingToken, nowUtc);
 
     /// <summary>
-    /// The lease scope whose holder runs <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
-    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is not a realm singleton.
+    /// The lease scope whose holder <em>attaches</em> <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
+    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is attached on every node.
+    /// <see cref="Instances.InstanceFeature"/> is attached on every map worker and gates its own schedule on <see cref="RealmAuthorityScopes.Instances"/>, so it has no scope here.
     /// </summary>
     public static string? LeaseScopeFor(Type featureType)
     {
@@ -60,7 +61,12 @@ public sealed class ClusterRoleFeatureFilter
             return RealmAuthorityScopes.Social;
         }
 
-        return featureType == typeof(AuctionBotFeature) ? RealmAuthorityScopes.Economy : null;
+        if (featureType == typeof(AuctionBotFeature))
+        {
+            return RealmAuthorityScopes.Economy;
+        }
+
+        return null;
     }
 
     /// <summary>

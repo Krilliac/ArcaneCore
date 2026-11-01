@@ -45,21 +45,21 @@ public sealed class WorldMetricsFeatureTests
         Assert.Equal("http://+:9600/metrics/", provider2.GetRequiredService<MetricsHost>().ConfiguredPrometheusPrefix);
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task Enabled_RecordsTicksMapsAndPerMapSamples()
     {
         using var store = new MetricsStore();
         store.Start();
+        // The manual clock: the world runs exactly the ticks the test steps, so no wall-clock wait decides how many were recorded. A sample is
+        // due after MapSampleIntervalSeconds of tick time (each tick counts at least TickIntervalMs), so 250 ticks cover the 1 s interval.
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s =>
-            s.AddSingleton(new MetricsOptions { Enabled = true, MapSampleIntervalSeconds = 1 }));
+            s.AddSingleton(new MetricsOptions { Enabled = true, MapSampleIntervalSeconds = 1 }), clock: TestClock.Manual());
         var feature = host.WorldServices.GetRequiredService<WorldMetricsFeature>();
         host.World.Post(() => host.World.GetMap(0));
-        await WorldTestHost.WaitForAsync(() => feature.Samples.Any(s => s.MapId == 0), "a sample of map 0");
+        await host.StepAsync(250);
 
-        await WorldTestHost.WaitForAsync(
-            () => store.Collect().Any(m => m.Name == "arcanecore.world.tick.duration" && m.Series.Any(s => s.Count >= 20)),
-            "twenty recorded ticks");
+        Assert.Contains(feature.Samples, s => s.MapId == 0);
+        Assert.Contains(store.Collect(), m => m.Name == "arcanecore.world.tick.duration" && m.Series.Any(s => s.Count >= 20));
         IReadOnlyList<MetricSnapshot> metrics = store.Collect();
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.map_update.duration");
         Assert.Contains(metrics, m => m.Name == "arcanecore.world.ticks" && m.Series.Any(s => s.Value >= 20));

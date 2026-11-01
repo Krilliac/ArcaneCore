@@ -4,9 +4,12 @@ using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Quests;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.MockClient.Hosting;
 
@@ -63,21 +66,8 @@ public static class SyntheticQuestContent
         try
         {
             ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
-            var baseline = new HashSet<string>(StringComparer.Ordinal)
-            {
-                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49), the bot holiday flavours
-                // (world 62) and the shipped tuning rows (auction bot values and loot, bot ship routes, lift regions, the tram network;
-                // world 63) included.
-                "player_create_info", "race_info", "class_info", ArcaneCore.Data.World.Warden.WardenDataModule.Table,
-                ArcaneCore.Data.World.WorldState.HolidayFlavourDataModule.Table,
-                ArcaneCore.Data.World.Tuning.TuningDataModule.ValueTable, ArcaneCore.Data.World.Tuning.TuningDataModule.LootTable,
-                ArcaneCore.Data.World.Tuning.TuningDataModule.ShipTable, ArcaneCore.Data.World.Tuning.TuningDataModule.ElevatorTable,
-                ArcaneCore.Data.World.Tuning.TuningDataModule.TramTable,
-                // The shipped bot goal ladder (PlayerbotLadderSeed): goals, rules and their actions.
-                ArcaneCore.Data.World.Rules.PlayerbotGoalDataModule.Table, ArcaneCore.Data.World.Rules.RuleDataModule.RuleTable,
-                ArcaneCore.Data.World.Rules.RuleDataModule.ActionTable,
-                WorldDbContext.Schema.VersionTable,
-            };
+            // Tables WorldDbInitializer fills on every fresh world database are left alone; the set is derived from the initializer.
+            IReadOnlySet<string> baseline = await InitializerBaselineAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
             var tables = db.Model.GetEntityTypes()
                 .Select(entity => (Table: entity.GetTableName(), Schema: entity.GetSchema()))
                 .Where(table => table.Table is not null && !baseline.Contains(table.Table))
@@ -156,6 +146,61 @@ public static class SyntheticQuestContent
         finally
         {
             db.ChangeTracker.Clear();
+        }
+    }
+
+    private static readonly object BaselineLock = new();
+    private static Task<IReadOnlySet<string>>? _baseline;
+
+    /// <summary>
+    /// The tables a freshly initialized world database already has rows in: <see cref="WorldDbInitializer"/> runs once against a
+    /// throwaway SQLite database and every mapped table it leaves non-empty is recorded. Cached for the process; a failed
+    /// attempt is not cached. Table names do not depend on the provider, so the result holds for any world database.
+    /// </summary>
+    private static Task<IReadOnlySet<string>> InitializerBaselineAsync()
+    {
+        lock (BaselineLock)
+        {
+            if (_baseline is null || _baseline.IsFaulted || _baseline.IsCanceled)
+            {
+                _baseline = Task.Run(DeriveInitializerBaselineAsync);
+            }
+            return _baseline;
+        }
+    }
+
+    private static async Task<IReadOnlySet<string>> DeriveInitializerBaselineAsync()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"arcane-seed-baseline-{Guid.NewGuid():N}.sqlite");
+        try
+        {
+            var options = new DbContextOptionsBuilder<WorldDbContext>().UseSqlite(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false, Cache = SqliteCacheMode.Private, DefaultTimeout = 5 }.ToString()).Options;
+            var services = new ServiceCollection();
+            services.AddScoped(_ => new WorldDbContext(options));
+            await using ServiceProvider provider = services.BuildServiceProvider();
+            await new WorldDbInitializer(provider, NullLogger<WorldDbInitializer>.Instance).InitializeAsync().ConfigureAwait(false);
+
+            await using var db = new WorldDbContext(options);
+            ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
+            var populated = new HashSet<string>(StringComparer.Ordinal);
+            await db.Database.OpenConnectionAsync().ConfigureAwait(false);
+            foreach ((string? table, string? schema) in db.Model.GetEntityTypes()
+                .Select(entity => (entity.GetTableName(), entity.GetSchema())).Distinct())
+            {
+                if (table is null) continue;
+                await using var command = db.Database.GetDbConnection().CreateCommand();
+                command.CommandText = $"SELECT 1 FROM {sql.DelimitIdentifier(table, schema)} LIMIT 1";
+                if (await command.ExecuteScalarAsync().ConfigureAwait(false) is not null) populated.Add(table);
+            }
+            return populated;
+        }
+        finally
+        {
+            foreach (string file in new[] { path, path + "-wal", path + "-shm", path + "-journal" })
+            {
+                try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
         }
     }
 

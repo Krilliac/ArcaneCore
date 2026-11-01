@@ -26,6 +26,8 @@ public sealed class ItemLootTests
     private const uint KeyLock = 6;
     private const uint Dagger = 2092;
     private const uint Hide = 91004;
+    private const uint PropertySword = 94301;
+    private const uint PropertyBox = 5524;
 
     private static readonly ItemTemplateStore Store = new(
     [
@@ -37,6 +39,8 @@ public sealed class ItemLootTests
         new ItemTemplate { Entry = UnknownLockBox, Class = 15, Name = "Odd Chest", DisplayId = 305, Flags = LootService.ItemFlagLootable, LockId = 999 },
         new ItemTemplate { Entry = EmptyBox, Class = 15, Name = "Empty Box", DisplayId = 306, Flags = LootService.ItemFlagLootable },
         new ItemTemplate { Entry = Hide, Class = 7, Name = "Test Hide", DisplayId = 204, Stackable = 20 },
+        new ItemTemplate { Entry = PropertySword, Class = 2, SubClass = 7, Name = "Test Property Sword", DisplayId = 207, InventoryType = 13, Stackable = 1, Quality = 2, RandomProperty = 5 },
+        new ItemTemplate { Entry = PropertyBox, Class = 15, Name = "Property Box", DisplayId = 307, Flags = LootService.ItemFlagLootable },
     ], ItemTestData.StartingItems);
 
     private static readonly Dictionary<uint, LockEntry> Locks = new()
@@ -222,6 +226,39 @@ public sealed class ItemLootTests
         ParsedLoot again = rig.Window();
         Assert.Equal(first.Items.Skip(1).Select(i => (i.Slot, i.ItemId, i.Count)), again.Items.Select(i => (i.Slot, i.ItemId, i.Count)));
         Assert.NotNull(rig.Player.Inventory.GetItemByGuid(box.Guid)); // loot is left: the item stays
+    }
+
+    private static ItemRandomProperties PropertySource(uint id)
+        => new(
+            new ItemRandomPropertyCatalog([new ItemRandomPropertyRecord(id, "of Test", [74, 75, 0])], [new ItemEnchantmentChance(5, id, 100f)]),
+            () => 10f);
+
+    [Fact]
+    public void APartlyLootedContainer_ReopensWithTheRolledProperty_AndTheTakenItemKeepsIt()
+    {
+        // item_loot keeps the property (vmangos Item.cpp:350), so the rebuilt window shows it and the take stores it instead of "none" or a fresh roll.
+        var rig = new Rig(rows: [(LootTableKind.Item, Row(PropertyBox, Hide, 100)), (LootTableKind.Item, Row(PropertyBox, PropertySword, 100))]);
+        rig.Player.Inventory.RandomProperties = PropertySource(1001);
+        Item box = rig.Give(PropertyBox);
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(rig.Player, box));
+        LootBag first = Assert.IsType<LootBag>(rig.Loot.OpenLootOf(rig.Player));
+        Assert.Equal(1001, Assert.Single(first.Items, i => i.ItemId == PropertySword).RandomPropertyId);
+
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(rig.Player, Assert.Single(first.Items, i => i.ItemId == Hide).Slot));
+        rig.Loot.Release(rig.Player, box.Guid);
+        Assert.Equal(1001, Assert.Single(box.Loot!.Items).RandomPropertyId); // the persistent state carries it
+
+        // A different source from here on: only the stored property can still produce 1001.
+        rig.Player.Inventory.RandomProperties = PropertySource(2002);
+        Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(rig.Player, box));
+        LootBag again = Assert.IsType<LootBag>(rig.Loot.OpenLootOf(rig.Player));
+        LootItem shown = Assert.Single(again.Items);
+        Assert.Equal(PropertySword, shown.ItemId);
+        Assert.Equal(1001, shown.RandomPropertyId);
+
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(rig.Player, shown.Slot));
+        Item taken = Assert.Single(rig.Player.Inventory.AllItems, i => i.Entry == PropertySword);
+        Assert.Equal(1001, taken.RandomPropertyId);
     }
 
     [Fact]

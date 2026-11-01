@@ -375,10 +375,6 @@ public sealed partial class SpellSystem
     /// <summary>vmangos <c>IsWithinDistInMap(dynObject, radius)</c>: the 3D distance less both bounding radii.</summary>
     private static bool WithinObjectRadius(DynamicObject dynamic, Unit unit)
     {
-        float dx = unit.X - dynamic.X;
-        float dy = unit.Y - dynamic.Y;
-        float dz = unit.Z - dynamic.Z;
-        float reach = dynamic.Radius + dynamic.BoundingRadius + unit.BoundingRadius;
-        return (dx * dx) + (dy * dy) + (dz * dz) <= reach * reach;
+        return WorldGeometry.IsWithinDist(dynamic, unit, dynamic.Radius, inclusive: true, addRadii: true, MapCheck.None);
     }
 }

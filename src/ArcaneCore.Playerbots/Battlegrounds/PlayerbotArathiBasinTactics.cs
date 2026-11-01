@@ -85,6 +85,20 @@ internal static class PlayerbotArathiBasinTactics
     /// <summary>An enemy this close to a node is at it (attacking or defending it).</summary>
     internal const float DefendYards = 40f;
 
+    /// <summary>A body this close to a node counts as lying at it.</summary>
+    internal const float BodyNodeYards = DefendYards;
+
+    /// <summary>Whether a node within <paramref name="yards"/> (3D) of <paramref name="at"/> is contested: an assault under way, about to be capped or lost.</summary>
+    internal static bool ContestedNodeNear(IReadOnlyList<PlayerbotAbNode> nodes, Vector3 at, float yards)
+    {
+        foreach (PlayerbotAbNode node in nodes)
+        {
+            if ((node.Status is ArathiBasin.StatusAllianceContested or ArathiBasin.StatusHordeContested) && Vector3.Distance(node.At, at) <= yards) return true;
+        }
+
+        return false;
+    }
+
     /// <summary>A bot below this share of its health may retreat.</summary>
     internal const float RetreatHealth = 0.25f;
 

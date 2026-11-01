@@ -5,7 +5,8 @@ namespace ArcaneCore.Kernel.Items;
 /// <param name="ItemId">The item entry.</param>
 /// <param name="Count">The stack size.</param>
 /// <param name="IsQuest">A quest drop (negative chance): only the owner, and only while a quest needs it.</param>
-public sealed record ItemLootEntry(byte Slot, uint ItemId, uint Count, bool IsQuest);
+/// <param name="RandomPropertyId">The random property rolled at generation (vmangos <c>item_loot.property</c>, Item.cpp:350); 0 for none. Kept so the window and the item taken later agree across reopens and relogs.</param>
+public sealed record ItemLootEntry(byte Slot, uint ItemId, uint Count, bool IsQuest, int RandomPropertyId = 0);
 
 /// <summary>
 /// The loot a container item (a lockbox, a clam) generated and the owner has not taken yet. Its presence on <see cref="ItemInstanceData.Loot"/> is

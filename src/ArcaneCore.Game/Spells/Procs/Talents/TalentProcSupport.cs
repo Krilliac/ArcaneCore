@@ -83,11 +83,7 @@ internal static class TalentProcSupport
     /// <summary>vmangos WorldObject::IsWithinDistInMap (3D): the centres within the range plus both bounding radii.</summary>
     private static bool IsWithinDistance(Unit a, Unit b, float range)
     {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        float reach = range + a.BoundingRadius + b.BoundingRadius;
-        return (dx * dx) + (dy * dy) + (dz * dz) <= reach * reach;
+        return WorldGeometry.IsWithinDist(a, b, range, inclusive: true, addRadii: true, MapCheck.None);
     }
 
     /// <summary>

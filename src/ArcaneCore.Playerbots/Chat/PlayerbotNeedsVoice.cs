@@ -1047,7 +1047,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (found is null && !quoted) return false;
         if (player.Session is not WorldSession session || session.World.FindOnlinePlayer(line.SenderGuid) is not { } asker) return false;
         BotSpeech reply = BotSpeech.WhisperTo(line.SenderName, line.SenderGuid, string.Empty, "voice-reply", BotSpeechPriority.High) with { IsReply = true };
-        if (quoted && desk is not null && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } answered) return answered;
+        if (quoted && desk is not null && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text, player), chat, line, player, party, reply, asker) is { } answered) return answered;
         if (found is not { } post) return false;
         switch (post.Kind)
         {
@@ -1089,7 +1089,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                     PlayerbotDealQuote quote = desk.Quote(line.BotId, player, asker, PlayerbotDealRole.Seller, post.ItemEntry, count);
                     if (!quote.Ok) return DealRefused(chat, line, player, party, reply, asker);
                     if (PlayerbotDealRules.ParsePrice(line.Text) is not null
-                        && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } countered) return countered;
+                        && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text, player), chat, line, player, party, reply, asker) is { } countered) return countered;
                     string goods = count > 1 ? Number(count) + " " + item : item;
                     return Say(chat, line.BotId, player, party, reply, "voice.reply.wts", $"{asker.Name} asks about the {goods} you sell for {quote.PriceText}.",
                         $"Tell {asker.Name} the price of {goods} is {quote.PriceText} and that you are in {place}.", persona,
@@ -1107,7 +1107,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 PlayerbotDealQuote quote = desk.Quote(line.BotId, player, asker, PlayerbotDealRole.Buyer, post.ItemEntry, count);
                 if (!quote.Ok) return DealRefused(chat, line, player, party, reply, asker);
                 if (PlayerbotDealRules.ParsePrice(line.Text) is not null
-                    && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } countered) return countered;
+                    && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text, player), chat, line, player, party, reply, asker) is { } countered) return countered;
                 return Say(chat, line.BotId, player, party, reply, "voice.reply.wtb", $"{asker.Name} offers the {wanted} you want to buy for {quote.PriceText}.",
                     $"Tell {asker.Name} you pay {quote.PriceText} for {Number(count)} {wanted}.", null,
                     ("item", wanted), ("count", Number(count)), ("price", quote.PriceText));

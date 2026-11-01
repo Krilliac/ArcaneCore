@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -30,7 +31,7 @@ public sealed class RepeatedChallengeTests
     private static NetGuard Guard(int burst)
         // A frozen clock: the failure budget refills with time, so a real clock made the exact token counts below
         // drift by a few milliseconds' refill (1.00027 instead of 1) on a loaded machine.
-        => new(new NetProtectionOptions { AuthFailureBurstPerIp = burst, AuthFailuresPerMinutePerIp = 1 }, () => 0, () => 0, new NetGuardTests.CapturingLogger(), clock: () => 0);
+        => new(new NetProtectionOptions { AuthFailureBurstPerIp = burst, AuthFailuresPerMinutePerIp = 1 }, () => 0, () => 0, new CapturingLogger(), clock: () => 0);
 
     private static async Task<(CountingAccountStore Accounts, byte[] Salt)> SeedAsync(byte[]? sessionKey = null)
     {

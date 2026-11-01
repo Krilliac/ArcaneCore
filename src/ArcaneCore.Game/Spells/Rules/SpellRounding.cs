@@ -34,4 +34,20 @@ public static class SpellRounding
     /// Does not null-check <paramref name="random"/>.
     /// </summary>
     public static uint DitherUnsignedSingle(float value, Random random) => (uint)MathF.Floor(Math.Max(value, 0f) + random.NextSingle());
+
+    /// <summary>
+    /// <c>floor(max(v, 0) + rand[0,1))</c> computed in double with one <see cref="Random.NextDouble"/> draw (vmangos rand_ditheru,
+    /// Random.cpp:80-88): a value of 0 or below returns 0 without a draw, and a result at or above <see cref="uint.MaxValue"/> saturates to it.
+    /// Does not null-check <paramref name="random"/>.
+    /// </summary>
+    public static uint DitherUnsignedDouble(float value, Random random)
+    {
+        if (value <= 0f)
+        {
+            return 0;
+        }
+
+        double dithered = Math.Floor(value + random.NextDouble());
+        return dithered >= uint.MaxValue ? uint.MaxValue : (uint)dithered;
+    }
 }

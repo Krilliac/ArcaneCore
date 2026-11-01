@@ -362,12 +362,25 @@ public sealed partial class ShipTransport : WorldObject
                 break; // between this frame and the next
             }
 
+            int heldCurrent = _current;
+            int heldNext = _next;
             MoveToNextWayPoint();
             current = frames[_current];
             if (current.Node.MapId != MapId || current.Teleport)
             {
                 TransportKeyFrame next = frames[_next];
-                _system.TeleportTransport(this, next.Node.MapId, next.Node.X, next.Node.Y, next.Node.Z, next.InitialOrientation);
+                if (!_system.TeleportTransport(this, next.Node.MapId, next.Node.X, next.Node.Y, next.Node.Z, next.InitialOrientation))
+                {
+                    // Held: the next map belongs to another worker. Step the frame back so the ship neither advances along the path nor
+                    // evaluates a spline of the unowned map; it stays at its position with its passengers until the map is owned.
+                    _current = heldCurrent;
+                    _next = heldNext;
+                    IsMoving = false;
+                    _stalledMovingMs = 0;
+                    _stallReported = false;
+                    return;
+                }
+
                 _stalledMovingMs = 0;
                 _stallReported = false;
                 return;

@@ -11,6 +11,7 @@ using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
 
@@ -254,17 +255,8 @@ public sealed class BlackwingLairTargetingTests
         Assert.Equal((12f, 4f), (bones.X, bones.Y));
 
         Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(nefarian, 23362, SpellCastTargets.ForSelf(), triggered: true));
-        Assert.DoesNotContain(log.Lines, line => line.Contains("implicit target", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Messages, line => line.Contains("implicit target", StringComparison.Ordinal));
         Assert.Equal(1, bwl.Raid.RaiseBones(nefarian));
         Assert.Single(bwl.Creatures.Creatures, c => c.Entry == 14605);
-    }
-
-    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
-    {
-        public List<string> Lines { get; } = [];
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
-        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
-            Exception? exception, Func<TState, Exception?, string> formatter) => Lines.Add(formatter(state, exception));
     }
 }

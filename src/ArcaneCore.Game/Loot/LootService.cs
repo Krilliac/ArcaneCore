@@ -97,6 +97,12 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>Item templates (display ids, party-loot and lootable flags). Unknown items are not generated.</summary>
     public IItemTemplateStore? Items { get; set; }
 
+    /// <summary>
+    /// The random property source loot items roll from at generation (<see cref="LootItem.RandomPropertyId"/>). Null falls back to the first
+    /// recipient's inventory source (<see cref="PlayerInventory.RandomProperties"/>, set at login), then to no property.
+    /// </summary>
+    public IItemRandomPropertySource? RandomProperties { get; set; }
+
     // vmangos LootStoreItem::Roll(rate) (LootMgr.cpp:256-268): Rate.Drop.Item.Referenced for a reference row, else the quality rate of the
     // item, 1 when the item is unknown ("pProto && rate ? ... : 1.0f"). Read from the shared options at every roll.
     private float DropRate(LootStoreRow row)
@@ -200,10 +206,23 @@ public sealed partial class LootService : IViewerFieldFilter
             }
         }
 
+        IItemRandomPropertySource? properties = null;
+        if (normal.Count > 0 || quest.Count > 0)
+        {
+            properties = RandomProperties;
+            for (int i = 0; properties is null && i < recipients.Count; i++)
+            {
+                properties = recipients[i].Inventory.RandomProperties;
+            }
+        }
+
         byte slot = 0;
         foreach ((RolledLoot roll, ItemTemplate template, List<Player>? allowed) in normal)
         {
-            var item = new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId);
+            var item = new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId)
+            {
+                RandomPropertyId = properties?.Generate(template) ?? 0, // LootItem ctor: Item::GenerateItemRandomPropertyId (LootMgr.cpp:343-344)
+            };
             if (allowed is not null)
             {
                 foreach (Player player in allowed)
@@ -217,7 +236,10 @@ public sealed partial class LootService : IViewerFieldFilter
 
         foreach ((RolledLoot roll, ItemTemplate template, List<Player> needing) in quest)
         {
-            var item = new LootItem(slot++, roll.ItemId, roll.Count, true, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId);
+            var item = new LootItem(slot++, roll.ItemId, roll.Count, true, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId)
+            {
+                RandomPropertyId = properties?.Generate(template) ?? 0,
+            };
             foreach (Player p in needing)
             {
                 item.AllowedLooters.Add(p.Guid);
@@ -906,7 +928,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return RefuseTake(player, item);
         }
 
-        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count)],
+        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count, RandomPropertyId: item.RandomPropertyId)],
             out InventoryRewardStage? stage, out _);
         if (staged != InventoryResult.Ok || stage is null)
         {
@@ -1255,7 +1277,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return InventoryResult.AlreadyLooted;
         }
 
-        InventoryResult result = recipient.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
+        InventoryResult result = recipient.Inventory.AddLootItem(item.ItemId, item.Count, item.RandomPropertyId, out _);
         if (result != InventoryResult.Ok)
         {
             return result;

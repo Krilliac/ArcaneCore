@@ -82,4 +82,26 @@ public sealed class SpellRoundingSingleVariantsCharacterisationTests
             Assert.Equal((uint)MathF.Floor(Math.Max(v, 0f) + unsignedTwin.NextSingle()), SpellRounding.DitherUnsignedSingle(v, unsignedActual));
         Assert.Equal(unsignedTwin.NextSingle(), unsignedActual.NextSingle());
     }
+
+    [Theory]
+    [InlineData(2.5f, 0.5, 3u)]
+    [InlineData(2.5f, 0.25, 2u)]
+    [InlineData(33.5f, 0.0, 33u)]
+    [InlineData(33.5f, 0.999, 34u)]
+    [InlineData(-4f, 0.75, 0u)]
+    [InlineData(3f, 0.75, 3u)]
+    [InlineData(4.3e9f, 0.5, uint.MaxValue)] // saturates instead of wrapping
+    public void SpellRounding_DitherUnsignedDouble_ClampsAndSaturatesAndDrawsOneDouble(float value, double draw, uint expected)
+    {
+        var random = new DoubleRandom(draw);
+        Assert.Equal(expected, SpellRounding.DitherUnsignedDouble(value, random));
+        Assert.Equal(value > 0f ? 1 : 0, random.Draws); // a value of 0 or below draws nothing
+    }
+
+    private sealed class DoubleRandom(double value) : Random
+    {
+        public int Draws { get; private set; }
+
+        public override double NextDouble() { Draws++; return value; }
+    }
 }

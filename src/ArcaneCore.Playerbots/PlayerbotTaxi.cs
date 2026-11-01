@@ -85,6 +85,9 @@ internal sealed class TaxiTrip(uint mapId, uint[] nodes, uint fare, uint masterE
     public string? Failure { get; set; }
     public PlayerbotRoute? Route { get; set; }
 
+    /// <summary>The crowd rule at the flight master (<see cref="PlayerbotCrowdSpread"/>): created on the first think the bot is in reach of the master, dropped with the trip.</summary>
+    public PlayerbotCrowdSpread? Spread { get; set; }
+
     /// <summary>The wait for navigation tiles still being read when the way to the master is planned.</summary>
     public TileWait Tiles;
     public float Best { get; set; } = float.PositiveInfinity;
@@ -937,7 +940,16 @@ internal static partial class PlayerbotTaxi
         TaxiIndex index = TaxiIndex.Of(services.Npcs);
         PlayerbotThinkProbe.Phase("taxi");
         if (VisibleMaster(player, services, index, trip.Nodes[0], session.Services.GetService<CreatureWorldFeature>()?.Content) is { } master)
+        {
+            // Bots that reach the master the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+            if ((trip.Spread ??= new PlayerbotCrowdSpread(session, options)).Step(player, master, elapsedMs))
+            {
+                failure = null;
+                return TaxiStep.Traveling;
+            }
+
             return Board(session, player, trip, options, state, index, master, now, out failure);
+        }
 
         Vector3 here = new(player.X, player.Y, player.Z);
         if (Vector3.Distance(here, trip.Master) <= AtSpawnYards)

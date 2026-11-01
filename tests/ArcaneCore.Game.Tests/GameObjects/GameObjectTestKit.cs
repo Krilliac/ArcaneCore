@@ -82,6 +82,7 @@ internal static class GameObjectTestKit
     public const uint Lockbox = 91002;
     public const uint LockedBox = 91003;
     public const uint Hide = 91004;
+    public const uint RandomPropertySword = 91005;
 
     /// <summary>Item content: the shared test items plus loot-specific ones.</summary>
     public static ItemTemplateStore ItemStore { get; } = new(
@@ -92,6 +93,7 @@ internal static class GameObjectTestKit
         new ItemTemplate { Entry = Lockbox, Class = 15, Name = "Test Clam", DisplayId = 202, Flags = LootService.ItemFlagLootable },
         new ItemTemplate { Entry = LockedBox, Class = 15, Name = "Test Lockbox", DisplayId = 203, Flags = LootService.ItemFlagLootable, LockId = 5 },
         new ItemTemplate { Entry = Hide, Class = 7, Name = "Test Hide", DisplayId = 204, Stackable = 20 },
+        new ItemTemplate { Entry = RandomPropertySword, Class = 2, SubClass = 7, Name = "Test Random Sword", DisplayId = 205, InventoryType = 13, Stackable = 1, Quality = 2, RandomProperty = 5 },
     ], ItemTestData.StartingItems);
 
     public static GameObjectTemplate GoTemplate(uint entry, GameObjectType type, params (int Index, uint Value)[] data)

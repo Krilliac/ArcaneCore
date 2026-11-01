@@ -313,6 +313,45 @@ public sealed partial class WorldRuntime : IDisposable
         }
     }
 
+    private MapOwnership _ownership = MapOwnership.All;
+
+    /// <summary>
+    /// The maps this process owns (Cluster:Worker:OwnedMaps). <see cref="MapOwnership.All"/>, the default, is the combined behaviour. A map outside
+    /// the set is never created here: <see cref="GetMap(uint, uint)"/> throws <see cref="MapNotOwnedException"/> and <see cref="TryGetMap"/> answers
+    /// <see cref="MapAccessResult.NotOwned"/>, which the login path (kick, until a redirect exists) and the teleport path (refusal, until a far
+    /// transfer exists) turn into a clean refusal. Set before <see cref="Start"/>; maps that already exist stay reachable.
+    /// </summary>
+    public MapOwnership Ownership
+    {
+        get => Volatile.Read(ref _ownership);
+        set => Volatile.Write(ref _ownership, value ?? throw new ArgumentNullException(nameof(value)));
+    }
+
+    /// <summary>Whether this process owns the map copy (see <see cref="Ownership"/>); safe from any thread.</summary>
+    public bool Owns(uint mapId, uint instanceId = 0) => Ownership.Owns(mapId, instanceId);
+
+    /// <summary>
+    /// <see cref="GetMap(uint, uint)"/> that refuses instead of throwing when the map is not owned here (world thread).
+    /// <paramref name="map"/> is null unless the result is <see cref="MapAccessResult.Granted"/>.
+    /// </summary>
+    public MapAccessResult TryGetMap(uint mapId, uint instanceId, out Map? map)
+    {
+        if (FindMap(mapId, instanceId) is { } existing)
+        {
+            map = existing;
+            return MapAccessResult.Granted;
+        }
+
+        if (!Owns(mapId, instanceId))
+        {
+            map = null;
+            return MapAccessResult.NotOwned;
+        }
+
+        map = GetMap(mapId, instanceId);
+        return MapAccessResult.Granted;
+    }
+
     /// <summary>
     /// The map with the given id (instance 0: continents and other shared maps), created on
     /// first use with its default per-map systems (<see cref="DefaultMapUpdaters"/>; world thread).
@@ -333,6 +372,11 @@ public sealed partial class WorldRuntime : IDisposable
 
         if (!_maps.TryGetValue((mapId, instanceId), out Map? map))
         {
+            if (!Owns(mapId, instanceId))
+            {
+                throw new MapNotOwnedException(mapId, instanceId);
+            }
+
             map = new Map(mapId, instanceId, this, _logger);
             DefaultMapUpdaters.AttachTo(map, this);
             _maps[(mapId, instanceId)] = map;
@@ -365,6 +409,11 @@ public sealed partial class WorldRuntime : IDisposable
             {
                 return map;
             }
+        }
+
+        if (!Owns(mapId, instanceId))
+        {
+            throw new MapNotOwnedException(mapId, instanceId);
         }
 
         map = new Map(mapId, instanceId, this, _logger);

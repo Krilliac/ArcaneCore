@@ -361,6 +361,7 @@ public sealed partial class PlayerInventory
         }
 
         _items[slot] = item;
+        BumpLayout();
         SetSlotField(slot, item.Guid);
         item.ContainedIn = _ownerGuid;
         item.OwnerGuid = _ownerGuid;
@@ -387,6 +388,7 @@ public sealed partial class PlayerInventory
         }
 
         _items[slot] = null;
+        BumpLayout();
         SetSlotField(slot, ObjectGuid.Empty);
         int index = slot - InventorySlots.BuybackStart;
         Player?.SetUInt32(UpdateFields.PlayerFieldBuybackPrice1 + index, 0);
