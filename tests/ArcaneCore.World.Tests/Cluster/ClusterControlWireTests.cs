@@ -236,10 +236,28 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     [Fact]
     public void ControlReply_TargetDescribe_GoldenBytes()
     {
-        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(12, ControlKind.PlayerTransfer, Op, ControlVerb.TargetDescribe, ControlStatus.Ok, "", new ControlTargetDescribePayload(Inc, "worker:b", true, 12)));
+        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(12, ControlKind.PlayerTransfer, Op, ControlVerb.TargetDescribe, ControlStatus.Ok, "", new ControlTargetDescribePayload(Inc, "worker:b", true, 12, 1)));
         Assert.Equal(
-            Concat([29], [12, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [17], [1], [0, 0, 0, 0], Inc.ToByteArray(), [8, 0, 0, 0], "worker:b"u8.ToArray(), [1], [12, 0, 0, 0]),
+            Concat([29], [12, 0, 0, 0, 0, 0, 0, 0], [2], Op.ToByteArray(), [17], [1], [0, 0, 0, 0], Inc.ToByteArray(), [8, 0, 0, 0], "worker:b"u8.ToArray(), [1], [12, 0, 0, 0], [1, 0, 0, 0]),
             frame);
+    }
+
+    [Fact]
+    public void ControlReply_TargetDescribe_AdmittedGatewayCount_RoundTripsAndIsChecked()
+    {
+        byte[] frame = ClusterControlWire.EncodeReply(new ControlReply(3, ControlKind.PlayerTransfer, Op, ControlVerb.TargetDescribe, ControlStatus.Ok, "", new ControlTargetDescribePayload(Inc, "worker:b", false, 0, 2)));
+        var decoded = Assert.IsType<ControlTargetDescribePayload>(ClusterControlWire.DecodeReply(frame.AsSpan(1)).Payload);
+        Assert.Equal(2, decoded.AdmittedGateways);
+
+        // A negative count is refused on both ends: the last four bytes of the frame are the count.
+        byte[] negative = [.. frame];
+        negative[^1] = 0x80;
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeReply(negative.AsSpan(1)));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeReply(
+            new ControlReply(3, ControlKind.PlayerTransfer, Op, ControlVerb.TargetDescribe, ControlStatus.Ok, "", new ControlTargetDescribePayload(Inc, "w", true, 0, -1))));
+
+        // A frame of the old shape (no count) is truncated, so the link closes.
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeReply(frame.AsSpan(1, frame.Length - 5)));
     }
 
     [Fact]
@@ -317,7 +335,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
             ControlPayload payload = verb switch
             {
                 ControlVerb.Describe => new ControlDescribePayload("world-a", false, Inc, "node-1", "world", [0u, 1u, 530u], Token, 1, true),
-                ControlVerb.TargetDescribe => new ControlTargetDescribePayload(Inc, "worker:b", true, 12),
+                ControlVerb.TargetDescribe => new ControlTargetDescribePayload(Inc, "worker:b", true, 12, 2),
                 ControlVerb.Reserve => new ControlReservePayload(true, 77),
                 ControlVerb.Suspend => new ControlSuspendPayload([1, 2, 3, 4]),
                 _ => ControlNoPayload.Instance,

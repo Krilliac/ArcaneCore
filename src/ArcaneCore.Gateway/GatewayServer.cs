@@ -78,6 +78,37 @@ public sealed class GatewayServer : BackgroundService
 
     private void RaiseWorkerLinkUp(string nodeId) => WorkerLinkUp?.Invoke(nodeId);
 
+    /// <summary>
+    /// Takes the <see cref="ControlSubmit"/> frames workers send (design _wf/handoff-control-DESIGN.md section 2.3, commit C10): the worker whose link carried the frame and the request. Set by the gateway's transfer
+    /// service while it runs; the handler answers on the worker's link itself (<see cref="GatewayWorkerLink.Link"/>). With none set every request is answered with a refusal.
+    /// </summary>
+    internal Func<GatewayWorkerLink, ControlSubmit, Task>? ControlSubmitHandler { get; set; }
+
+    private void RouteControlSubmit(GatewayWorkerLink worker, ControlSubmit submit)
+    {
+        Func<GatewayWorkerLink, ControlSubmit, Task>? handler = ControlSubmitHandler;
+        if (handler is null)
+        {
+            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway hosts no player transfers (Gateway:Transfers:Enabled is off)"));
+            return;
+        }
+
+        _ = AnswerControlSubmitAsync(handler, worker, submit);
+    }
+
+    private async Task AnswerControlSubmitAsync(Func<GatewayWorkerLink, ControlSubmit, Task> handler, GatewayWorkerLink worker, ControlSubmit submit)
+    {
+        try
+        {
+            await handler(worker, submit).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogError(ex, "The control submit {RequestId} of worker {Node} failed", submit.RequestId, worker.NodeId);
+            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request"));
+        }
+    }
+
     /// <summary>This gateway process's link incarnation (the manifest every link it opens advertises, so a worker counts all of them as one gateway).</summary>
     internal Guid Incarnation => _incarnation;
 
@@ -554,7 +585,7 @@ public sealed class GatewayServer : BackgroundService
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers, ControlTimeouts, RaiseWorkerLinkUp);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers, ControlTimeouts, RaiseWorkerLinkUp, RouteControlSubmit);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
@@ -703,6 +734,7 @@ public sealed class GatewayWorkerLink
     private volatile string? _lastError;
     private readonly Lock _statusGate = new();
     private readonly Action<string>? _linkUpObserver;
+    private readonly Action<GatewayWorkerLink, ControlSubmit>? _controlSubmit;
     private StatusBox? _lastReport;
     private int _status;
     private long _failures;
@@ -724,8 +756,10 @@ public sealed class GatewayWorkerLink
         GatewayRealmLiveness? realmLiveness = null,
         GatewayTransferRouter? transfers = null,
         ArcaneCore.World.Cluster.Control.LinkControlTimeouts? controlTimeouts = null,
-        Action<string>? linkUpObserver = null)
+        Action<string>? linkUpObserver = null,
+        Action<GatewayWorkerLink, ControlSubmit>? controlSubmit = null)
     {
+        _controlSubmit = controlSubmit;
         ArgumentNullException.ThrowIfNull(routes);
         _controlTimeouts = controlTimeouts;
         _linkUpObserver = linkUpObserver;
@@ -861,6 +895,12 @@ public sealed class GatewayWorkerLink
             {
                 // The worker's coordinator drives staged transfers over this link; each frame is answered with an ack on the same link.
                 link.TransferControlReceived = control => _ = transfers.HandleControlAsync(control, link.SendTransferAck, stoppingToken);
+            }
+
+            if (_controlSubmit is { } routeSubmit)
+            {
+                // A worker's request to start an operation (a far teleport): answered on this link by the gateway's transfer service.
+                link.ControlSubmitReceived = submit => routeSubmit(this, submit);
             }
 
             try

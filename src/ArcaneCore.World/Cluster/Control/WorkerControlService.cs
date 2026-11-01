@@ -116,7 +116,7 @@ public sealed class WorkerControlService(
         {
             return handoffKind
                 ? await HandoffAsync(request, context, cancellationToken).ConfigureAwait(false)
-                : await TransferAsync(request, cancellationToken).ConfigureAwait(false);
+                : await TransferAsync(request, context, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
         {
@@ -298,7 +298,7 @@ public sealed class WorkerControlService(
 
     // ------------------------------------------------------------------ transfer (kind 2)
 
-    private async Task<ControlReply> TransferAsync(ControlRequest request, CancellationToken ct)
+    private async Task<ControlReply> TransferAsync(ControlRequest request, GatewayControlContext context, CancellationToken ct)
     {
         if (transfers is not { } t)
         {
@@ -313,7 +313,7 @@ public sealed class WorkerControlService(
             }
 
             return Reply(request, ControlStatus.Ok, string.Empty,
-                new ControlTargetDescribePayload(target.Incarnation, target.OwnershipScope ?? string.Empty, t.AdmissionOpen(), Math.Max(0, t.FreeReservations())));
+                new ControlTargetDescribePayload(target.Incarnation, target.OwnershipScope ?? string.Empty, t.AdmissionOpen(), Math.Max(0, t.FreeReservations()), context.AdmittedGateways));
         }
 
         if (request.Verb is not (ControlVerb.Discard or ControlVerb.ResumeSource) && IsEnded(request))

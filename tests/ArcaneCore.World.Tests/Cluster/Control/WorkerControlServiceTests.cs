@@ -406,6 +406,7 @@ public sealed class WorkerControlServiceTests
         Assert.Equal("worker:east", describe.OwnershipScope);
         Assert.True(describe.AdmissionOpen);
         Assert.Equal(12, describe.FreeReservations);
+        Assert.Equal(1, describe.AdmittedGateways); // the rig has one gateway link
     }
 
     // ------------------------------------------------------------------ opt-in keys

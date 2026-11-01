@@ -1,0 +1,386 @@
+using System.Buffers.Binary;
+using System.Net;
+using System.Text;
+using ArcaneCore.Data.Characters.Transfers;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Teleport;
+using ArcaneCore.Gateway.Transfers;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.MockClient.Hosting;
+using ArcaneCore.MockClient.Protocol;
+using ArcaneCore.Protocol;
+using ArcaneCore.World;
+using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Cluster.Transfer;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Xunit;
+
+namespace ArcaneCore.Gateway.Tests;
+
+/// <summary>
+/// Commit C10 of _wf/handoff-control-DESIGN.md (sections 4.3 and 4.5), end to end and through the production hosting on both worlds. Two real worlds on one set of databases (node "w-east" owns map 0, node
+/// "w-kalimdor" owns map 1) behind one real gateway with transfers on, a real mock client in the world on the Eastern Kingdoms worker, and the real <see cref="GatewayTransferService"/>. Nothing here builds a
+/// transfer request by hand: the player's teleport (<see cref="TeleportService.TeleportTo(Player, uint, float, float, float, float)"/>, the call the <c>.tele</c> command makes) reaches the worker's
+/// <see cref="GatewayClusterFarTeleportRouter"/> that <see cref="ClusterFarTeleportFeature"/> installed, which sends a <see cref="ControlSubmit"/> over the gateway link; the gateway's service coordinates the six
+/// stages and the client sees the retail far-teleport sequence from the Kalimdor worker.
+/// </summary>
+public sealed class GatewayCrossWorkerTeleportTests
+{
+    private const string Secret = "cross-worker-teleport-link-secret-0123456789";
+    private const string EastNode = "w-east";
+    private const string KalimdorNode = "w-kalimdor";
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(150);
+    private static readonly TeleportDestination Landing = new(1, -1196.22f, 29.0f, 176.949f, 3.1f);
+
+    [Fact]
+    public async Task ATeleportToKalimdor_OnTheEasternKingdomsWorker_MovesThePlayerToTheKalimdorWorker_AndTheJournalSaysCompleted()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELEGREEN", "Telegreen", cts.Token);
+        GatewayClusterFarTeleportRouter router = cluster.Router;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        // The worker's feature assigned its router to the teleport service once the world ran.
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+
+        // The retail far-teleport sequence, sent by the Kalimdor worker (the east worker sends no loading-screen packet of its own).
+        WorldFrame pending = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token);
+        Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(pending.Payload));
+        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
+        Assert.True(await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is not null, cts.Token));
+        Assert.False(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is not null, cts.Token));
+
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, [], cts.Token);
+
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+        Guid transferId = router.LastTransferId;
+        Assert.NotEqual(Guid.Empty, transferId);
+        await Cluster.WaitUntilAsync(
+            async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token); // the outcome notice reached the source
+        Assert.False(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is not null, cts.Token));
+        Assert.Equal(0, cluster.Gateway.Transfers.StagedCount);
+        await Cluster.WaitUntilAsync(
+            () => Task.FromResult(cluster.Gateway.Workers[1].Link!.SessionCount == 1 && cluster.Gateway.Workers[0].Link!.SessionCount == 0), cts.Token);
+    }
+
+    [Fact]
+    public async Task ATeleportToAFullKalimdorWorker_LeavesThePlayerOnTheEasternKingdomsWorker_AndTellsThem()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        // A second player fills the Kalimdor worker, then its player limit is 1: the gateway's placement answers worker-at-player-capacity.
+        await using WorldClient filler = await cluster.EnterKalimdorAsync("TELEFILL", "Telefill", cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELEFULL", "Telefull", cts.Token);
+        GatewayClusterFarTeleportRouter router = cluster.Router;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+        cluster.Kalimdor.Services.GetRequiredService<WorldLoginAdmission>().SetLimit(1);
+        cluster.KalimdorWorker.Host!.BroadcastWorkerStatus();
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.Gateway.Workers[1].LastStatus is { PlayerLimit: 1, Sessions: >= 1 }), cts.Token);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing)); // the worker queued the request; the refusal comes back from the gateway
+
+        WorldFrame aborted = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferAborted, cts.Token);
+        Assert.Equal(new[] { (byte)TransferAbortReason.MaxPlayers }, aborted.Payload);
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgMessagechat, cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token);
+        Assert.True(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is { Map.MapId: 0 }, cts.Token));
+        Assert.False(await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is not null, cts.Token));
+        Assert.Null(await cluster.Store.GetDecisionAsync(router.LastTransferId, cts.Token)); // refused before anything was journalled
+    }
+
+    [Fact]
+    public async Task ATransferRefusedBecauseAWorkerSeesTwoGateways_IsToldToThePlayer_AndNothingIsJournalled()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELETWOGW", "Teletwogw", cts.Token);
+        GatewayClusterFarTeleportRouter router = cluster.Router;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+        // A second gateway process is admitted by the Kalimdor worker: one gateway per realm is the contract, so the coordinator refuses.
+        GatewaySessionLinkHost kalimdorHost = cluster.KalimdorWorker.Host!;
+        await using var secondGateway = new GatewaySessionLinkClient(
+            new GatewayOptions { NodeId = "gateway-b" }.ToManifest(Guid.NewGuid()), kalimdorHost.BoundEndPoint, Secret);
+        await secondGateway.ConnectAsync(cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(kalimdorHost.AdmittedGatewayCount == 2), cts.Token);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+
+        WorldFrame told = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgMessagechat, cts.Token);
+        Assert.Contains("admitted gateways", Encoding.UTF8.GetString(told.Payload));
+        await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token);
+        Assert.True(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is { Map.MapId: 0 }, cts.Token));
+        Assert.Null(await cluster.Store.GetDecisionAsync(router.LastTransferId, cts.Token));
+    }
+
+    [Fact]
+    public async Task InACombinedWorld_TheFeatureBuildsNoRouter_SoTheTeleportServiceKeepsItsRefusalOfAnUnownedMap()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer combined = await SyntheticArcaneServer.StartAsync(cts.Token);
+
+        // No Cluster:Worker keys: the feature attached and built nothing, and no router stands behind the refusal of TeleportService (map-not-owned), which FarTeleportRoutingTests and
+        // WorkerOwnershipRefusalTests pin and which this lane leaves untouched.
+        Assert.Null(combined.Services.GetRequiredService<ClusterFarTeleportFeature>().Router);
+        Assert.Null(combined.Services.GetRequiredService<TeleportFeature>().Teleports.ClusterFarRouter);
+    }
+
+    private static MapOwnership ParseOwnership(string maps)
+    {
+        Assert.True(MapOwnership.TryParse(maps, allowInstanceMaps: false, out MapOwnership ownership, out string? error), error);
+        return ownership;
+    }
+
+    /// <summary>Two real worlds on one set of databases behind one real gateway with transfers on, and the gateway's real transfer service. Both worker ends are the production hosting.</summary>
+    private sealed class Cluster : IAsyncDisposable
+    {
+        public required SyntheticArcaneServer Eastern { get; init; }
+
+        public required SyntheticArcaneServer Kalimdor { get; init; }
+
+        public required GatewayWorkerEndpoint EastWorker { get; init; }
+
+        public required GatewayWorkerEndpoint KalimdorWorker { get; init; }
+
+        public required GatewayServer Gateway { get; init; }
+
+        public required EfTransferDecisionStore Store { get; init; }
+
+        public required GatewayTransferService Service { get; init; }
+
+        public int CharacterId { get; private set; }
+
+        public TeleportService EastTeleports => Eastern.Services.GetRequiredService<TeleportFeature>().Teleports;
+
+        /// <summary>The east worker's far-teleport router, built by the production feature.</summary>
+        public GatewayClusterFarTeleportRouter Router =>
+            Eastern.Services.GetRequiredService<ClusterFarTeleportFeature>().Router
+            ?? throw new InvalidOperationException("the east worker built no far-teleport router");
+
+        public static async Task<Cluster> StartAsync(CancellationToken token)
+        {
+            SyntheticArcaneServer eastern = await SyntheticArcaneServer.StartAsync(
+                new SyntheticServerOptions { Configuration = WorkerScopeConfiguration(EastNode, "0") }, configureServices: null, token);
+            SyntheticArcaneServer? kalimdor = null;
+            GatewayWorkerEndpoint? eastWorker = null;
+            GatewayWorkerEndpoint? kalimdorWorker = null;
+            GatewayServer? gateway = null;
+            GatewayTransferService? service = null;
+            try
+            {
+                kalimdor = await SyntheticArcaneServer.StartAsync(
+                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory, Configuration = WorkerScopeConfiguration(KalimdorNode, "1") },
+                    configureServices: null,
+                    token);
+                eastern.World.Ownership = Owns("0");
+                kalimdor.World.Ownership = Owns("1");
+                eastWorker = await StartWorkerAsync(eastern, token);
+                kalimdorWorker = await StartWorkerAsync(kalimdor, token);
+                gateway = new GatewayServer(
+                    eastern.Services.GetRequiredService<IServiceScopeFactory>(),
+                    Options.Create(new GatewayOptions
+                    {
+                        BindAddress = IPAddress.Loopback.ToString(),
+                        Port = 0,
+                        LinkSecret = Secret,
+                        LinkRetryDelay = TimeSpan.FromMilliseconds(100),
+                        Workers =
+                        [
+                            new GatewayWorkerEntry { NodeId = EastNode, Address = IPAddress.Loopback.ToString(), Port = eastWorker.Host!.BoundEndPoint.Port, Maps = [0] },
+                            new GatewayWorkerEntry { NodeId = KalimdorNode, Address = IPAddress.Loopback.ToString(), Port = kalimdorWorker.Host!.BoundEndPoint.Port, Maps = [1] },
+                        ],
+                        LoginWorker = EastNode,
+                    }),
+                    eastern.Services.GetRequiredService<ILoggerFactory>(),
+                    transfers: Options.Create(new GatewayTransferOptions { Enabled = true }));
+                await gateway.StartAsync(token);
+                await gateway.WaitForAllLinksAsync(token);
+                EfTransferDecisionStore store = eastern.Services.GetRequiredService<EfTransferDecisionStore>();
+                service = new GatewayTransferService(
+                    gateway, store, store, new GatewayTransferOptions { Enabled = true }, loggers: eastern.Services.GetRequiredService<ILoggerFactory>());
+                return new Cluster
+                {
+                    Eastern = eastern, Kalimdor = kalimdor, EastWorker = eastWorker, KalimdorWorker = kalimdorWorker, Gateway = gateway, Store = store, Service = service,
+                };
+            }
+            catch
+            {
+                if (service is not null)
+                {
+                    await service.DisposeAsync();
+                }
+
+                if (gateway is not null)
+                {
+                    await gateway.StopAsync(CancellationToken.None);
+                    gateway.Dispose();
+                }
+
+                if (kalimdorWorker is not null)
+                {
+                    await kalimdorWorker.StopAsync(CancellationToken.None);
+                }
+
+                if (eastWorker is not null)
+                {
+                    await eastWorker.StopAsync(CancellationToken.None);
+                }
+
+                if (kalimdor is not null)
+                {
+                    await kalimdor.DisposeAsync();
+                }
+
+                await eastern.DisposeAsync();
+                throw;
+            }
+        }
+
+        /// <summary>A client of a fresh account whose character is saved in Eastern Kingdoms (map 0) and is now in the world on the east worker (the login worker). <see cref="CharacterId"/> is its character.</summary>
+        public async Task<WorldClient> EnterEastAsync(string account, string character, CancellationToken token)
+        {
+            (WorldClient client, int id) = await ConnectAsync(account, character, mapId: 0, token);
+            try
+            {
+                CharacterId = id;
+                await WaitUntilAsync(async () => await Eastern.World.InvokeAsync(() => Eastern.World.FindOnlinePlayer(ObjectGuid.Player((uint)id)) is not null, token), token);
+                await WaitUntilAsync(() => Task.FromResult(Gateway.Workers[0].Link!.SessionCount >= 1), token);
+                return client;
+            }
+            catch
+            {
+                await client.DisposeAsync();
+                throw;
+            }
+        }
+
+        /// <summary>A client whose character is saved in Kalimdor (map 1); the login redirect moved it to the Kalimdor worker.</summary>
+        public async Task<WorldClient> EnterKalimdorAsync(string account, string character, CancellationToken token)
+        {
+            (WorldClient client, int id) = await ConnectAsync(account, character, mapId: 1, token);
+            try
+            {
+                await WaitUntilAsync(async () => await Kalimdor.World.InvokeAsync(() => Kalimdor.World.FindOnlinePlayer(ObjectGuid.Player((uint)id)) is not null, token), token);
+                await WaitUntilAsync(() => Task.FromResult(Gateway.Workers[1].Link!.SessionCount >= 1), token);
+                // The login worker's own session of this account must be gone on the worker side too.
+                await WaitUntilAsync(() => Task.FromResult(EastWorker.Acceptor!.Sessions.IsEmpty), token);
+                return client;
+            }
+            catch
+            {
+                await client.DisposeAsync();
+                throw;
+            }
+        }
+
+        /// <summary>The teleport call a <c>.tele</c> command makes, on the east world thread.</summary>
+        public Task<bool> TeleportAsync(ObjectGuid guid, TeleportDestination destination) => Eastern.World.InvokeAsync(
+            () => Eastern.World.FindOnlinePlayer(guid) is { } player
+                && EastTeleports.TeleportTo(player, destination.MapId, destination.X, destination.Y, destination.Z, destination.Orientation));
+
+        public async ValueTask DisposeAsync()
+        {
+            await Service.DisposeAsync();
+            await Gateway.StopAsync(CancellationToken.None);
+            Gateway.Dispose();
+            await KalimdorWorker.StopAsync(CancellationToken.None);
+            await EastWorker.StopAsync(CancellationToken.None);
+            await Kalimdor.DisposeAsync();
+            await Eastern.DisposeAsync();
+        }
+
+        public static async Task WaitUntilAsync(Func<Task<bool>> condition, CancellationToken token)
+        {
+            while (!await condition())
+            {
+                await Task.Delay(20, token);
+            }
+        }
+
+        private async Task<(WorldClient Client, int CharacterId)> ConnectAsync(string account, string character, uint mapId, CancellationToken token)
+        {
+            await Eastern.AddAccountAsync(account, "PASSWORD", token);
+            LogonResult logon = await LogonClient.AuthenticateAsync(Eastern.RealmEndpoint, account, "PASSWORD", token);
+            WorldClient client = await WorldClient.ConnectAsync(Gateway.ListenEndPoint, token);
+            try
+            {
+                Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync(account, logon.SessionKey, token));
+                int id = await CreateCharacterOnMapAsync(client, character, mapId, token);
+                byte[] login = new byte[8];
+                BinaryPrimitives.WriteUInt64LittleEndian(login, (ulong)id);
+                await client.SendAsync((ushort)WorldOpcode.CmsgPlayerLogin, login, token);
+                await client.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, token);
+                return (client, id);
+            }
+            catch
+            {
+                await client.DisposeAsync();
+                throw;
+            }
+        }
+
+        private async Task<int> CreateCharacterOnMapAsync(WorldClient client, string name, uint mapId, CancellationToken token)
+        {
+            byte[] text = Encoding.ASCII.GetBytes(name);
+            byte[] create = new byte[text.Length + 10];
+            text.CopyTo(create, 0);
+            create[text.Length + 1] = 1; // human
+            create[text.Length + 2] = 1; // warrior
+            await client.SendAsync((ushort)WorldOpcode.CmsgCharCreate, create, token);
+            WorldFrame created = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharCreate, token);
+            Assert.Equal(new byte[] { 0x2E }, created.Payload);
+            await client.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, token);
+            WorldFrame list = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, token);
+            Assert.Equal(1, list.Payload[0]);
+            int id = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(list.Payload.AsSpan(1, 8)));
+
+            await using AsyncServiceScope scope = Eastern.Services.CreateAsyncScope();
+            ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
+            // The worlds run on Worker scope with fencing on: a tokenless write is refused while any ownership row is active, so write under the login world's own token.
+            CharacterOwnershipToken? owner = Eastern.Services.GetRequiredService<ICharacterOwnershipContext>().Current;
+            await store.SaveStateAsync(new CharacterState(id, mapId, 1, 100f, 100f, 50f, 0f, 1, 0, Ownership: owner), token);
+            CharacterRecord saved = Assert.IsType<CharacterRecord>(await store.GetByIdAsync(id, token));
+            Assert.Equal(mapId, saved.MapId);
+            return id;
+        }
+
+        private static Dictionary<string, string?> WorkerScopeConfiguration(string nodeId, string ownedMaps) => new()
+        {
+            ["Cluster:Fencing:Enabled"] = "true",
+            ["Cluster:Fencing:Scope"] = "Worker",
+            ["Cluster:Fencing:OwnerNode"] = nodeId,
+            ["Cluster:Fencing:AllowSqliteWorkerScope"] = "true",
+            ["Cluster:Worker:Enabled"] = "true",
+            ["Cluster:Worker:NodeId"] = nodeId,
+            ["Cluster:Worker:OwnedMaps"] = ownedMaps,
+            ["Cluster:Worker:AllowInstanceMaps"] = "false",
+            ["Cluster:Worker:Port"] = "0",
+            ["Cluster:Worker:LinkSecret"] = Secret,
+            ["Cluster:Worker:Transfers:Enabled"] = "true",
+            ["Cluster:Node:Role"] = "MapWorker",
+        };
+
+        private static MapOwnership Owns(string maps) => ParseOwnership(maps);
+
+        /// <summary>The container's own endpoint (the production registration), started the way the host would start it.</summary>
+        private static async Task<GatewayWorkerEndpoint> StartWorkerAsync(SyntheticArcaneServer server, CancellationToken token)
+        {
+            GatewayWorkerEndpoint endpoint = server.Services.GetRequiredService<GatewayWorkerEndpoint>();
+            await endpoint.StartAsync(token);
+            return endpoint;
+        }
+    }
+}
