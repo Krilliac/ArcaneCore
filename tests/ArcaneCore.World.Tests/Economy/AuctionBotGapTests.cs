@@ -157,6 +157,7 @@ public sealed class AuctionBotGapTests
     {
         await using var fixture = await BidFixture.CreateAsync(botBid: 0);
         var raised = new List<(uint, bool)>();
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(BidFixture.AuctionId)));
         await fixture.OnWorld(() =>
         {
             fixture.Economy.BotBidSettled += (id, won) => raised.Add((id, won));

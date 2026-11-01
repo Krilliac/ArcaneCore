@@ -257,6 +257,8 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// World thread: cMaNGOS AuctionHouseBot::Rebuild (<c>.ahbot rebuild [all]</c>): the bot's auctions without a bid (all of them with
     /// <paramref name="all"/>, which sells those with a player bid to that player) expire now, then sell passes refill every house
     /// (without buying) until a pass lists nothing, the room or the day's item budget is spent, or the cMaNGOS pass count is reached.
+    /// A call starts at most <see cref="RebuildMaxInFlight"/> listings in total (less those already in flight, split across the houses),
+    /// so it cannot take every economy transaction slot; the rest of a large refill follows on the normal sell ticks.
     /// Returns (auctions expired, listings reserved).
     /// </summary>
     public (int Expired, int Listed) Rebuild(bool all)
@@ -268,13 +270,16 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         int expired = economy.ExpireBotAuctions(all);
         int listed = 0;
-        int share = RebuildRefillShare(_inFlight.Count);
+        int total = RebuildRefillShare(_inFlight.Count);
         int passes = (int)(((Options.TimeMaxHours - Options.TimeMinHours) / 2) + Options.TimeMinHours) * 90;
-        foreach (uint house in Options.HouseIds())
+        IReadOnlyList<uint> houses = [.. Options.HouseIds()];
+        for (int h = 0; h < houses.Count; h++)
         {
+            // Each house gets its own part of what is left, so the first house cannot take the whole share.
+            int share = (total - listed + (houses.Count - h) - 1) / (houses.Count - h);
             for (int i = 0; i < passes && share > 0; i++)
             {
-                int pass = Sell(economy, planner, house, Now, share);
+                int pass = Sell(economy, planner, houses[h], Now, share);
                 listed += pass;
                 share -= pass;
                 if (pass == 0)
