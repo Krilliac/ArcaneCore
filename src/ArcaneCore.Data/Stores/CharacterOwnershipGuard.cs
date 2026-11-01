@@ -189,6 +189,10 @@ internal static class CharacterOwnershipGuard
             _ => throw new NotSupportedException($"no ownership fence lock for provider {db.Database.ProviderName}"),
         };
 
+        // The tokenless path runs a second statement (any active row?) after the 'world' row share lock is held. On PostgreSQL that
+        // statement is a plain read: under READ COMMITTED it gets a fresh snapshot, which is what makes it correct. Under REPEATABLE
+        // READ or SERIALIZABLE it would not, but then statement 1 (FOR SHARE on a 'world' row a concurrent claim updated) raises a
+        // serialization failure, so the outcome is still a refusal. On MariaDB the statement is a locking read (a current read).
         bool isMariaDb = db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql";
         await using DbCommand command = connection.CreateCommand();
         command.Transaction = transaction;

@@ -456,15 +456,6 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         return text;
     }
 
-    internal static IEnumerable<uint> ParseMaps(string stored)
-    {
-        foreach (string part in stored.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (uint.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out uint map))
-                yield return map;
-        }
-    }
-
     private static long NowUnixMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     private static CharacterOwnershipToken Token(CharacterOwnershipRow row)

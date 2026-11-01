@@ -32,6 +32,19 @@ public sealed class CharacterOwnershipShardDataModule : IDataModule, ICharacterD
     [
         new AddColumnChange(CharacterOwnershipDataModule.Table, "owned_maps"),
         new AddColumnChange(CharacterOwnershipDataModule.Table, "heartbeat_at_ms"),
+        // The v60 HasData('world') seed now also covers the two new mapped columns, so the model differ emits an 8-column
+        // InsertDataOperation; SchemaChangeDecider.IsDeclaredSeed needs a declared seed with exactly those columns.
+        // Idempotent (INSERT ... WHERE NOT EXISTS), so it does nothing on databases that already have the row.
+        new EnsureRowChange(CharacterOwnershipDataModule.Table, "scope", "world", new Dictionary<string, object?>
+        {
+            ["owner_node"] = null,
+            ["owner_incarnation"] = null,
+            ["epoch"] = 0L,
+            ["write_sequence"] = 0L,
+            ["active"] = false,
+            ["owned_maps"] = null,
+            ["heartbeat_at_ms"] = null,
+        }),
         .. NewIdRangeScopes.Select(scope => new EnsureRowChange(CharacterIdRangeDataModule.Table, "scope", scope, new Dictionary<string, object?>
         {
             ["next_id"] = 0L,
