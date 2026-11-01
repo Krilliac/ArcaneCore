@@ -967,6 +967,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         var stopped = new List<PlayerbotStatus>();
         var orphans = new HashSet<Guid>();
+        // A worker restores only the bots whose character stands on a map it owns (writer-lock design section 4, row 7, decision Q2): the bots of another worker's maps are that worker's to log in,
+        // and restoring them here too would run every bot on every worker. They still list as stopped here (the registry is shared) but are not started.
+        var otherWorkersBots = new HashSet<Guid>();
         foreach (ManagedPlayerbot bot in registered)
         {
             CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
@@ -986,6 +989,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 orphans.Add(bot.BotId);
                 continue;
             }
+            if (_world is { } ownerWorld && !ownerWorld.Owns(character.MapId))
+                otherWorkersBots.Add(bot.BotId);
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
                 bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode, Home: StoppedHome(bot.BotId)));
         }
@@ -996,7 +1001,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
-            foreach (ManagedPlayerbot[] chunk in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId)).Take(_options.MaxBots).Chunk(32))
+            foreach (ManagedPlayerbot[] chunk in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId) && !otherWorkersBots.Contains(b.BotId)).Take(_options.MaxBots).Chunk(32))
                 await Task.WhenAll(chunk.Select(bot => StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore))).ConfigureAwait(false);
     }
 

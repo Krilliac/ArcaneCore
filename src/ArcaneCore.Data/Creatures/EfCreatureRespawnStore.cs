@@ -21,7 +21,13 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db, IRealmLeaseFen
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
 
         // vmangos keeps only times in the future (t > GetGameTime, MapPersistentStateMgr.cpp:90): the others are deleted, not just skipped.
-        await db.Set<CreatureRespawnRow>().Where(r => r.RespawnTime <= nowUnixSeconds).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        // A worker owns only its maps (Cluster:Worker:OwnedMaps): another worker's rows are its to expire (writer-lock design section 4, row 3), so the delete is limited to the owned maps. Realm and
+        // Combined own every map and the delete is unchanged.
+        IQueryable<CreatureRespawnRow> expired = db.Set<CreatureRespawnRow>().Where(r => r.RespawnTime <= nowUnixSeconds);
+        OwnedMapSet owned = leaseFences?.OwnedMaps ?? OwnedMapSet.All;
+        if (!owned.OwnsEverything)
+            expired = expired.Where(owned.RowFilter<CreatureRespawnRow>(nameof(CreatureRespawnRow.MapId), nameof(CreatureRespawnRow.InstanceId)));
+        await expired.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
         // A dungeon instance that no longer exists must not hand its timers to a later instance that reuses the id (the same guard
         // EfLootStateStore applies to chest loot). In a cluster only the Instances lease holder deletes orphans (writer-lock design section 4, row 3): another

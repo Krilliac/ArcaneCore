@@ -1,4 +1,5 @@
 using System.Data.Common;
+using System.Linq.Expressions;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
@@ -24,6 +25,81 @@ public interface IRealmLeaseFenceSource
     /// it, because it keeps a lost lease's old token in <see cref="FenceFor"/> (so the commit fence refuses the write) while the node is no longer the holder.
     /// </summary>
     bool Holds(string scope) => FenceFor(scope) is not null;
+
+    /// <summary>
+    /// The maps this process owns (Cluster:Worker:OwnedMaps). A worker's per-map sweeps (the expired respawn deletes) touch only rows of these maps, because another worker owns the rest
+    /// (writer-lock design section 4, row 3). The default is every map, which is the Combined and Realm behaviour.
+    /// </summary>
+    OwnedMapSet OwnedMaps => OwnedMapSet.All;
+}
+
+/// <summary>
+/// The set of maps one worker owns, as inclusive map id ranges, for the data layer (which cannot see the game layer's map ownership type). An empty list owns every map; a non-empty list owns the listed
+/// maps, plus any instance copy (instance id other than 0) while <see cref="AllowInstanceMaps"/> is set. Immutable, so safe from any thread.
+/// </summary>
+public sealed class OwnedMapSet
+{
+    /// <summary>Every map: the Combined and Realm behaviour.</summary>
+    public static OwnedMapSet All { get; } = new([], allowInstanceMaps: true);
+
+    private readonly (uint First, uint Last)[] _ranges;
+
+    public OwnedMapSet(IEnumerable<(uint First, uint Last)> ranges, bool allowInstanceMaps)
+    {
+        ArgumentNullException.ThrowIfNull(ranges);
+        _ranges = [.. ranges];
+        AllowInstanceMaps = allowInstanceMaps;
+    }
+
+    /// <summary>True when no map is listed, so every map is owned.</summary>
+    public bool OwnsEverything => _ranges.Length == 0;
+
+    /// <summary>Whether instance copies of maps outside the list are owned too (only meaningful for a non-empty list).</summary>
+    public bool AllowInstanceMaps { get; }
+
+    /// <summary>Whether this process owns the map copy: everything for an empty list; else a listed map, or any instance copy while <see cref="AllowInstanceMaps"/>.</summary>
+    public bool Owns(uint mapId, uint instanceId)
+    {
+        if (OwnsEverything || (instanceId != 0 && AllowInstanceMaps))
+            return true;
+        foreach ((uint first, uint last) in _ranges)
+        {
+            if (mapId >= first && mapId <= last)
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// A row filter equal to <see cref="Owns"/> for an entity whose map id is a <see cref="uint"/> property named <paramref name="mapIdProperty"/> and whose instance id is an <see cref="int"/>
+    /// property named <paramref name="instanceIdProperty"/>, built as a plain comparison tree so EF translates it to SQL. For <see cref="OwnsEverything"/> it is the constant true.
+    /// </summary>
+    public Expression<Func<TRow, bool>> RowFilter<TRow>(string mapIdProperty, string instanceIdProperty)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(mapIdProperty);
+        ArgumentException.ThrowIfNullOrEmpty(instanceIdProperty);
+        ParameterExpression row = Expression.Parameter(typeof(TRow), "r");
+        if (OwnsEverything)
+            return Expression.Lambda<Func<TRow, bool>>(Expression.Constant(true), row);
+
+        MemberExpression map = Expression.Property(row, mapIdProperty);
+        Expression? any = null;
+        foreach ((uint first, uint last) in _ranges)
+        {
+            Expression term = first == last
+                ? Expression.Equal(map, Expression.Constant(first, typeof(uint)))
+                : Expression.AndAlso(
+                    Expression.GreaterThanOrEqual(map, Expression.Constant(first, typeof(uint))),
+                    Expression.LessThanOrEqual(map, Expression.Constant(last, typeof(uint))));
+            any = any is null ? term : Expression.OrElse(any, term);
+        }
+
+        if (AllowInstanceMaps)
+            any = Expression.OrElse(any!, Expression.NotEqual(Expression.Property(row, instanceIdProperty), Expression.Constant(0, typeof(int))));
+
+        return Expression.Lambda<Func<TRow, bool>>(any!, row);
+    }
 }
 
 /// <summary>
