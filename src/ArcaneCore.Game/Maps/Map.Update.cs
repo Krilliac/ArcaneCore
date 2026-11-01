@@ -313,6 +313,7 @@ public sealed partial class Map
                 _movedObjects.Clear();
             }
 
+            // Ends the dedupe before the values and flush phases; the finally below repeats it for an escaping exception.
             EndVisibilityPairStage();
             _newObjects.Clear();
 
