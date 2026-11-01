@@ -481,6 +481,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
 
             if (_sessions.TryRemove(new KeyValuePair<long, ClientSession>(session.Generation, session)))
             {
+                // The worker keeps a session that asked for a redirect open (LinkSession.TryRedirect), so a refused redirect must tell it to close
+                // the session; otherwise its LinkSession and WorldSession stay at the character screen until the link drops.
+                _channel?.TryEnqueue(GatewaySessionWire.EncodeClose(session.Generation, session.AccountId, ClusterSessionDetachReason.ClientDisconnect));
                 NotifyClosed(session, ClusterSessionDetachReason.WorkerClosed);
             }
         }

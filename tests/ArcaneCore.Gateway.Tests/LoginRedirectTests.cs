@@ -7,11 +7,13 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.Protocol;
+using ArcaneCore.World;
 using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -240,7 +242,16 @@ public sealed class LoginRedirectTests
             GatewayServer? gateway = null;
             try
             {
-                kalimdor = await SyntheticArcaneServer.StartAsync(new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory }, configureServices: null, token);
+                // The characters database has one writer-lock file: the Eastern world holds it, so the second world's guard defers it (never promoted
+                // here), as a standby's does. Both worlds then use the one set of databases without a second lock object on the file.
+                kalimdor = await SyntheticArcaneServer.StartAsync(
+                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory },
+                    services =>
+                    {
+                        services.RemoveAll<WorldWriterGuard>();
+                        services.AddSingleton(new WorldWriterGuard(deferUntilPromotion: true));
+                    },
+                    token);
                 eastern.World.Ownership = Owns("0");
                 kalimdor.World.Ownership = Owns("1");
                 easternWorker = await StartWorkerAsync(eastern, "0", token);
