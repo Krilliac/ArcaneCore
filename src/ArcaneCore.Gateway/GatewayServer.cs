@@ -264,7 +264,7 @@ public sealed class GatewayServer : BackgroundService
     {
         ArgumentNullException.ThrowIfNull(worker);
         GatewayWorkerLink[] workers = _workers;
-        if (workers.Length == 0 || workers[0].Link is null || Equals(workers[0].ConnectedEndPoint, worker))
+        if (workers.Length == 0 || (workers[0].Link is null && !HasFlushedHold(workers[0])) || Equals(workers[0].ConnectedEndPoint, worker))
         {
             await RetargetWorkerAsync(worker, cancellationToken).ConfigureAwait(false);
             return;
@@ -290,7 +290,7 @@ public sealed class GatewayServer : BackgroundService
             _worker = worker;
         }
 
-        if (slot.Link is null || Equals(slot.ConnectedEndPoint, worker))
+        if ((slot.Link is null && !HasFlushedHold(slot)) || Equals(slot.ConnectedEndPoint, worker))
         {
             _logger.LogInformation("Worker link {Node} retargeted to {Worker}", slot.NodeId, worker);
             while (true)
@@ -317,7 +317,7 @@ public sealed class GatewayServer : BackgroundService
         {
             try
             {
-                moved.TrySetResult(await MoveSessionsAsync(previous, next, token).ConfigureAwait(false));
+                moved.TrySetResult(await MoveSessionsAsync(previous, next, slot, token).ConfigureAwait(false));
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -341,19 +341,19 @@ public sealed class GatewayServer : BackgroundService
         throw new ArgumentException($"'{nodeId}' is not a configured gateway worker", nameof(nodeId));
     }
 
-    private async Task<int> MoveSessionsAsync(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, CancellationToken cancellationToken)
+    private async Task<int> MoveSessionsAsync(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, GatewayWorkerLink slot, CancellationToken cancellationToken)
     {
-        if (previous is null)
-        {
-            return 0;
-        }
-
         var moves = new List<Task<bool>>();
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            if (connection.IsForwardingOn(previous))
+            if (previous is not null && connection.IsForwardingOn(previous))
             {
                 moves.Add(connection.HandOffAsync(previous, next, cancellationToken));
+            }
+            else if (connection.FlushedHoldLinkOf(slot) is { } lost && connection.IsForwardingOn(lost))
+            {
+                // The source died after the handoff flushed (its link is gone, the old session with it): the hold survived, so the connection moves from the link its hold began on.
+                moves.Add(connection.HandOffAsync(lost, next, cancellationToken));
             }
         }
 
@@ -364,7 +364,7 @@ public sealed class GatewayServer : BackgroundService
         // Keyed on the link the hold began on, not the link the connection forwards on now: another worker's connections may be holding for a handoff of their own.
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            connection.EndHandoffHold(previous);
+            connection.EndHandoffHold(previous, slot);
         }
 
         int moved = results.Count(result => result);
@@ -435,6 +435,50 @@ public sealed class GatewayServer : BackgroundService
         {
             connection.EndHandoffHold(link, slot);
         }
+    }
+
+    /// <summary>
+    /// The handoff of the first configured worker reached Flushed (the source's saves are durable): from now on a connection this worker's hold took keeps its hold, and its
+    /// client, when the source's link is lost (the source crashed); the reroute then moves it to the promoted world. Before this call the loss of the link disconnects the client.
+    /// Returns how many connections it marked. Idempotent.
+    /// </summary>
+    public int MarkHandoffFlushed()
+    {
+        GatewayWorkerLink[] workers = _workers;
+        return workers.Length == 0 ? 0 : MarkFlushed(workers[0]);
+    }
+
+    /// <summary>
+    /// The node-keyed form of <see cref="MarkHandoffFlushed()"/>: marks the connections the hold of the worker whose node id is <paramref name="nodeId"/> took.
+    /// Throws <see cref="ArgumentException"/> for a node id that is not a configured worker.
+    /// </summary>
+    public int MarkHandoffFlushed(string nodeId) => MarkFlushed(RequireWorker(nodeId));
+
+    private int MarkFlushed(GatewayWorkerLink slot)
+    {
+        int marked = 0;
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.MarkHandoffFlushed(slot))
+            {
+                marked++;
+            }
+        }
+
+        return marked;
+    }
+
+    private bool HasFlushedHold(GatewayWorkerLink slot)
+    {
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.FlushedHoldLinkOf(slot) is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The handoff aborted: every connection that holds replays its held packets to the world it is still on and forwards again. Idempotent.</summary>
@@ -962,7 +1006,7 @@ public sealed class GatewayWorkerLink
                 retarget.TrySetResult(); // retargeted while this attempt was connecting
             }
 
-            if (Interlocked.Exchange(ref _migrate, null) is { } migrate)
+            if (Equals(_target, worker) && Interlocked.Exchange(ref _migrate, null) is { } migrate)
             {
                 // A seamless retarget: the old link (kept open below) hands its sessions to this one, then closes.
                 GatewaySessionLinkClient? previous = Interlocked.Exchange(ref _draining, null);
@@ -1017,8 +1061,12 @@ public sealed class GatewayWorkerLink
 
             if (retarget.Task.IsCompleted && Volatile.Read(ref _migrate) is not null)
             {
-                Volatile.Write(ref _draining, link); // kept open: the next registration moves its sessions, then closes it
-                continue;
+                if (Interlocked.Exchange(ref _draining, link) is { } superseded && !ReferenceEquals(superseded, link))
+                {
+                    await superseded.DisposeAsync().ConfigureAwait(false); // an earlier kept link nobody moved: never leaked
+                }
+
+                continue; // the link is kept open: the next registration moves its sessions, then closes it
             }
 
             await link.DisposeAsync().ConfigureAwait(false);

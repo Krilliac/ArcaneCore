@@ -70,6 +70,9 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     // began inside HandOffAsync). A release keys on these, not on the link the connection forwards on now, which a per-player transfer or a redirect may have changed.
     private GatewaySessionLinkClient? _handoffHoldLink;
     private object? _handoffHoldOwner;
+    // True once the source's saves are durable (the handoff reached Flushed, guarded by _redirectGate): from then on the hold survives the loss of the source's link, because the
+    // promoted world loads the character from those saves and the held input follows it. Before that the loss of the link ends the session (the character's state is not safe).
+    private bool _handoffFlushed;
     private volatile bool _inWorld;
 
     /// <summary>CMSG_PLAYER_LOGIN was forwarded and the worker has not answered it yet (neither SMSG_LOGIN_VERIFY_WORLD nor SMSG_CHARACTER_LOGIN_FAILED).</summary>
@@ -593,9 +596,41 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
             _redirectHeld = [];
             _handoffHolding = true;
+            _handoffFlushed = false;
             _handoffHoldLink = link;
             _handoffHoldOwner = owner;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Whole-World handoff, after Flushed: the source's saves are durable, so this connection's hold now survives the loss of the source's link (the session on the source
+    /// closing with LinkLost no longer disconnects the client; the handoff's reroute moves it to the promoted world, or an abort kicks it when the link is gone). True when the connection holds
+    /// for the handoff asked for by <paramref name="owner"/> (the worker slot) and is marked now.
+    /// </summary>
+    internal bool MarkHandoffFlushed(object owner)
+    {
+        lock (_redirectGate)
+        {
+            if (!_handoffHolding || !ReferenceEquals(_handoffHoldOwner, owner))
+            {
+                return false;
+            }
+
+            _handoffFlushed = true;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The link a flushed hold of <paramref name="owner"/> began on (it may have been lost since), or null when this connection holds no flushed hold of that worker slot.
+    /// The reroute of a handoff whose source died moves the connection from this link.
+    /// </summary>
+    internal GatewaySessionLinkClient? FlushedHoldLinkOf(object owner)
+    {
+        lock (_redirectGate)
+        {
+            return _handoffHolding && _handoffFlushed && ReferenceEquals(_handoffHoldOwner, owner) && _state == ConnectionState.Forwarding ? _handoffHoldLink : null;
         }
     }
 
@@ -607,6 +642,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     internal void EndHandoffHold(GatewaySessionLinkClient? holdLink = null, object? holdOwner = null)
     {
         bool delivered = true;
+        bool wasFlushed = false;
         lock (_redirectGate)
         {
             if (!_handoffHolding)
@@ -621,7 +657,9 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 return;
             }
 
+            wasFlushed = _handoffFlushed;
             _handoffHolding = false;
+            _handoffFlushed = false;
             _handoffHoldLink = null;
             _handoffHoldOwner = null;
             List<HeldPacket>? held = _redirectHeld;
@@ -637,6 +675,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                         break;
                     }
                 }
+            }
+
+            if (wasFlushed && _state == ConnectionState.Forwarding && _link is not { IsConnected: true })
+            {
+                delivered = false; // a flushed hold survived the loss of its link; the abort leaves nothing to forward to
             }
         }
 
@@ -678,6 +721,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             {
                 _handoffHoldLink = from;
                 _handoffHoldOwner = null;
+                _handoffFlushed = false;
             }
 
             _handoffHolding = true;
@@ -748,6 +792,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
                 _redirectHeld = null;
                 _handoffHolding = false;
+                _handoffFlushed = false;
                 _handoffHoldLink = null;
                 _handoffHoldOwner = null;
             }
@@ -798,6 +843,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         lock (_redirectGate)
         {
             _handoffHolding = false;
+            _handoffFlushed = false;
             _handoffHoldLink = null;
             _handoffHoldOwner = null;
         }
@@ -965,6 +1011,20 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
     void IGatewaySessionSink.OnClosed(ClusterSessionDetachReason reason)
     {
+        if (reason == ClusterSessionDetachReason.LinkLost)
+        {
+            // The source of a whole-World handoff lost its link after Flushed: its saves are durable and the promoted world adopts the character from them, so the client stays
+            // connected and the hold goes on. The generation is kept: HandOffAsync closes it on the old link (a no-op there) and replaces it. A lost link before Flushed ends the session.
+            lock (_redirectGate)
+            {
+                if (_handoffHolding && _handoffFlushed && _state == ConnectionState.Forwarding)
+                {
+                    _logger.LogWarning("[{Endpoint}] the source world's link was lost after the handoff flushed; keeping the client for the promoted world", RemoteEndpoint);
+                    return;
+                }
+            }
+        }
+
         Interlocked.Exchange(ref _generation, 0); // the worker already forgot it: no SessionClose back
         Kick("the worker closed the session (" + reason + ")");
     }
