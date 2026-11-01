@@ -138,7 +138,8 @@ The `Gateway` section:
 | `MaxConnectionsPerIp` | `0` | Most simultaneous connections from one address; 0 means no cap of the gateway's own |
 | `PreAuthTimeout` | `00:00:10` | A connection without a valid `CMSG_AUTH_SESSION` by then is closed |
 | `MaxOutboundBytes` | `8388608` | A client with more unsent bytes than this is disconnected |
-| `WorkerAddress` / `WorkerPort` | `127.0.0.1` / `8095` | The worker's `Cluster:Worker` listener |
+| `Workers` | empty | One entry per world worker: `NodeId`, `Address`, `Port`, optional `Maps` (map ids it owns, informational). The gateway keeps one link per entry, each with its own reconnect backoff and state; a new login goes to the ready link with the fewest sessions, and a worker that goes away drops only its own sessions |
+| `WorkerAddress` / `WorkerPort` | `127.0.0.1` / `8095` | The single-worker form, used only while `Workers` is empty (one entry named `worker`): the worker's `Cluster:Worker` listener |
 | `LinkSecret` | empty | Must equal the worker's link secret; at least 16 characters, or the gateway refuses to start |
 | `LinkRetryDelay` | `00:00:01` | First wait before reconnecting the link; doubles up to 30 s |
 | `NodeId` | `gateway` | Node id in the link manifest |
@@ -163,7 +164,7 @@ The same validation runs at every start (exit 78 when invalid).
 
 The gateway records `System.Diagnostics.Metrics` instruments on the meter `ArcaneCore.Gateway` (collected by a `MetricsStore` when a host
 registers one; with no listener each is a single enabled check). Every series carries `node` (`Gateway:NodeId`):
-`arcanecore.gateway.link_state` (1 up, 0 down), `arcanecore.gateway.sessions` (sessions open on the link),
+`arcanecore.gateway.link_state` (links up), `arcanecore.gateway.worker_link_state` (1 up, 0 down; extra tags `worker_node`, `worker`), `arcanecore.gateway.sessions` (sessions open across the links),
 `arcanecore.gateway.connections` (client connections), `arcanecore.gateway.link_reconnects`, `arcanecore.gateway.link_failures`,
 `arcanecore.gateway.forwarded_packets` and `arcanecore.gateway.forwarded_bytes` (tag `direction`: `to_worker`, `to_client`),
 `arcanecore.gateway.session_opens` (tag `result`: `accepted`, `refused`, `no_link`) and `arcanecore.gateway.link_latency`
