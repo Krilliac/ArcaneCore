@@ -257,6 +257,10 @@ internal sealed class DelegateTransferInstanceAllocator(Func<uint, ObjectGuid, u
 /// MSG_MOVE_WORLDPORT_ACK arrives. The activation completes once the arrival is registered, not when the client has finished loading. A repeat for the same transfer id is a no-op.</description></item>
 /// <item><description><see cref="DiscardPassiveShadowAsync"/>: drops the reservation and the shadow (undoing its shared registrations through <see cref="ITransferShadowLoader.Release"/>) and frees the slot; a discarded transfer id can never be installed or activated afterwards. A discard after or during activation does nothing.</description></item>
 /// </list>
+/// Deferred shadow load (design _wf/handoff-control-DESIGN.md section 4.4; only with a <c>sessionReady</c> probe, which production passes): the coordinator's stage 3 runs before stage 4, where the gateway opens the client's
+/// session on this worker, and the production loader needs that session. So <see cref="InstallPassiveShadowAsync"/> answers at once while the account's session is not open here (the bundle is remembered as install-requested),
+/// <see cref="OnSessionOpened"/> starts the load when the session opens, and the install after the commit joins that running load before the activation. A load failure then surfaces at that second install (after the commit, where recovery repeats it). If the session never opens, that second install is a no-op too (it answers Ok without loading) and the failure surfaces at the activation, which requires the session (design R6/Q7).
+/// Without the probe (every test double and Combined mode) an install loads at once, as before.
 /// After a target restart the reservation is gone, so install and activate adopt the transfer from the bundle (the roll-forward of a committed transfer must complete).
 /// Thread affinity: the interface methods may be called from any thread; world mutation runs through <see cref="WorldRuntime.InvokeAsync{T}"/>; the slot table is guarded by a lock.
 /// </summary>
@@ -273,6 +277,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     private readonly int _maxReservations;
     private readonly ILogger _logger;
     private readonly ITransferInstanceAllocator? _instances;
+    private readonly Func<PlayerTransferBundle, bool>? _sessionReady;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, Slot> _slots = [];
     private readonly Dictionary<ulong, Guid> _byCharacter = [];
@@ -289,7 +294,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         Guid? incarnation = null,
         ILogger<WorkerTransferTarget>? logger = null,
         Func<uint, ObjectGuid, uint>? allocateInstance = null,
-        ITransferInstanceAllocator? instances = null)
+        ITransferInstanceAllocator? instances = null,
+        Func<PlayerTransferBundle, bool>? sessionReady = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
@@ -304,6 +310,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         Incarnation = incarnation ?? Guid.NewGuid();
         _logger = logger ?? NullLogger<WorkerTransferTarget>.Instance;
         _instances = instances ?? (allocateInstance is null ? null : new DelegateTransferInstanceAllocator(allocateInstance));
+        _sessionReady = sessionReady;
     }
 
     public WorkerNodeId WorkerId => _workerId;
@@ -471,13 +478,62 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ArgumentNullException.ThrowIfNull(bundle);
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBundle(transferId, bundle);
-        Slot? slot = TryBeginInstall(transferId, bundle, out Task<Player>? load);
-        if (slot is null)
+        Slot? slot = TryBeginInstall(transferId, bundle, deferUntilSession: _sessionReady is not null, out Task<Player>? load);
+        if (slot is null || load is null)
         {
-            return; // already activated
+            return; // already activated, or deferred until the account's session opens here (OnSessionOpened starts the load)
         }
 
-        await AwaitLoadAsync(slot, load!, cancellationToken).ConfigureAwait(false);
+        await AwaitLoadAsync(slot, load, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The account's gateway session was opened on this worker (stage 4 of a transfer): starts the shadow load of every transfer whose install was deferred for it (section 4.4). Any thread; never throws. A load that fails is
+    /// recorded and forgotten, so the install after the commit (or the activation) loads again and reports the failure to its caller.
+    /// </summary>
+    public void OnSessionOpened(int accountId)
+    {
+        if (_sessionReady is null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            foreach (Slot slot in _slots.Values)
+            {
+                if (slot.DeferredBundle is not { } bundle || bundle.AccountId != accountId || slot.Loading is not null || slot.Activating || !SessionReady(bundle))
+                {
+                    continue;
+                }
+
+                Task<Player> load = StartLoad(slot, bundle);
+                _ = load.ContinueWith(done => ObserveDeferredLoad(slot, done), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+        }
+    }
+
+    private void ObserveDeferredLoad(Slot slot, Task<Player> done)
+    {
+        if (!done.IsFaulted)
+        {
+            return;
+        }
+
+        Exception? error = done.Exception?.GetBaseException();
+        lock (_gate)
+        {
+            if (ReferenceEquals(slot.Loading, done))
+            {
+                slot.Loading = null; // the next install or activate loads again
+            }
+        }
+
+        if (error is not null)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target", error);
+            _logger.LogWarning(error, "The deferred shadow load of character {Guid} for transfer {TransferId} failed; the install after the commit repeats it", slot.CharacterGuid, slot.TransferId);
+        }
     }
 
     public async Task DiscardPassiveShadowAsync(Guid transferId, ulong characterGuid, string abortReason, CancellationToken cancellationToken = default)
@@ -567,7 +623,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ArgumentNullException.ThrowIfNull(targetOwnershipToken);
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBundle(transferId, bundle);
-        Slot? slot = TryBeginInstall(transferId, bundle, out Task<Player>? load);
+        Slot? slot = TryBeginInstall(transferId, bundle, deferUntilSession: false, out Task<Player>? load);
         if (slot is null)
         {
             return; // a duplicate activate: no-op
@@ -732,7 +788,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     }
 
     /// <summary>Finds or adopts the slot of a transfer and starts (or joins) its shadow load; null when the transfer is already activated.</summary>
-    private Slot? TryBeginInstall(Guid transferId, PlayerTransferBundle bundle, out Task<Player>? load)
+    private Slot? TryBeginInstall(Guid transferId, PlayerTransferBundle bundle, bool deferUntilSession, out Task<Player>? load)
     {
         lock (_gate)
         {
@@ -768,11 +824,38 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 throw new InvalidOperationException($"transfer '{transferId}' reserved character {slot.CharacterGuid}, the bundle carries {bundle.CharacterGuid}");
             }
 
+            if (slot.Loading is null && deferUntilSession && !SessionReady(bundle))
+            {
+                slot.DeferredBundle = bundle; // install-requested: OnSessionOpened starts the load once the gateway opens the client's session here
+                return slot;
+            }
+
             // One shared load per transfer; it does not take the first caller's cancellation, which only abandons its own wait.
-            slot.Loading ??= Task.Run(() => _loader.LoadAsync(bundle, CancellationToken.None)); // on the pool: the loader's synchronous prefix does not run under the gate
-            load = slot.Loading;
+            load = slot.Loading ?? StartLoad(slot, bundle);
             return slot;
         }
+    }
+
+    private bool SessionReady(PlayerTransferBundle bundle)
+    {
+        try
+        {
+            return _sessionReady!(bundle);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target", ex);
+            return false;
+        }
+    }
+
+    /// <summary>Starts the slot's shadow load. Under the gate; <see cref="Slot.Loading"/> is null.</summary>
+    private Task<Player> StartLoad(Slot slot, PlayerTransferBundle bundle)
+    {
+        slot.DeferredBundle = null;
+        Task<Player> load = Task.Run(() => _loader.LoadAsync(bundle, CancellationToken.None)); // on the pool: the loader's synchronous prefix does not run under the gate
+        slot.Loading = load;
+        return load;
     }
 
     private async Task<Player> AwaitLoadAsync(Slot slot, Task<Player> load, CancellationToken cancellationToken)
@@ -857,6 +940,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         /// <summary>Whether this worker's allocator reserved <see cref="InstanceId"/> for the slot: it is bound at activation and released on discard.</summary>
         public bool Allocated { get; init; }
+
+        /// <summary>The bundle of an install that waits for the account's session (deferred load); null otherwise. Guarded by the target's gate.</summary>
+        public PlayerTransferBundle? DeferredBundle { get; set; }
 
         /// <summary>The shadow load (null until the first install; guarded by the target's gate).</summary>
         public Task<Player>? Loading { get; set; }
