@@ -236,7 +236,7 @@ public sealed class ConfirmTokenFlowTests
         string code = store.Issue("Gm", "a", "x").Code;
         var results = new ConcurrentBag<ConfirmResult>();
 
-        Parallel.For(0, 32, _ => results.Add(store.TryRedeem("Gm", "a", "x", code)));
+        System.Threading.Tasks.Parallel.For(0, 32, _ => results.Add(store.TryRedeem("Gm", "a", "x", code)));
 
         Assert.Equal(1, results.Count(r => r == ConfirmResult.Accepted));
         Assert.Equal(31, results.Count(r => r == ConfirmResult.NoPreview));
@@ -247,7 +247,7 @@ public sealed class ConfirmTokenFlowTests
     {
         var store = new ConfirmTokenStore(new ManualClock());
 
-        Parallel.For(0, 8, w =>
+        System.Threading.Tasks.Parallel.For(0, 8, w =>
         {
             for (int i = 0; i < 200; i++) store.Issue("G" + w + "_" + i, "a", "x");
         });

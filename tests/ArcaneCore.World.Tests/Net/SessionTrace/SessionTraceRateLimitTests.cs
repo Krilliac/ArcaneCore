@@ -134,7 +134,7 @@ public sealed class SessionTraceRateLimitTests
         long linesBefore = trace.Lines, droppedBefore = trace.Dropped;
 
         int admitted = 0;
-        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, _ =>
         {
             for (int i = 0; i < 2_500; i++)
             {

@@ -295,7 +295,7 @@ public sealed class GatewayEndToEndTests
             await using WorldClient first = await LoginAsync(server, gateway, "LOGINONE", cts.Token);
             await using WorldClient second = await LoginAsync(server, gateway, "LOGINTWO", cts.Token);
             await WaitUntilAsync(() => Task.FromResult(workerB.Acceptor!.Sessions.Count == 2), cts.Token);
-            Assert.Equal(0, workerA.Acceptor!.Sessions.Count);
+            Assert.Empty(workerA.Acceptor!.Sessions);
             Assert.Equal(2, gateway.Workers[1].Link!.SessionCount);
             Assert.Equal(0, gateway.Workers[0].Link!.SessionCount);
 

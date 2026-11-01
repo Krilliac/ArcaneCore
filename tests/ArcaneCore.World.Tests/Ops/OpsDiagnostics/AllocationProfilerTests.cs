@@ -81,7 +81,7 @@ public sealed class AllocationProfilerTests(ITestOutputHelper output)
     public void ManyThreadsAddingAtOnce_LoseNothing()
     {
         var aggregator = new AllocationAggregator(maxTypes: 4);
-        Parallel.For(0, 8, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
         {
             for (int i = 0; i < 20_000; i++)
             {

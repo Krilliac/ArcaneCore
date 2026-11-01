@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.WorldData;

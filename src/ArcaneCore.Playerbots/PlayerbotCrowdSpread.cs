@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.World.Net;
 
