@@ -68,8 +68,10 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 
 ## Limits (documented, not stubbed)
 
-* **Pets, guardians, totems, charmed units.** There is none on this base. The seam is `IPlayerControlledUnit`: the clamp, the hostility rule and the PvP-pulse
-  exemption already read it, so the pets lane only has to implement it. Not done: `CombatStopWithPets` over controlled units, pet hostility through the owner on the `CanAttack` path of creatures, copying `PLAYER_DUEL_TEAM` to a charmed player.
+* **Pets, guardians, totems, charmed units.** They exist: the clamp, the hostility rule and the PvP-pulse exemption resolve a unit to its
+  player through `GetAffectingPlayer` (the summoned-by / charmed-by fields), with `IPlayerControlledUnit` as the fallback for a stand-in that publishes neither.
+  Not done: `CombatStopWithPets` still only stops the unit it is given, not its controlled units; pet hostility through the owner on the `CanAttack` path of
+  creatures; copying `PLAYER_DUEL_TEAM` to a charmed player.
 * **Transports** are delivered with the transport lane (see [transports](transports.md)): `SPELL_FAILED_NOT_ON_TRANSPORT` unless both stand on the same
   ship, `DuelInfo.TransportGuid`, and leaving the ship is leaving the duel area.
 * **Helpful spells on duelists** (vmangos `Spell::CheckTarget` drops a positive spell aimed at a started-duel player from a non-opponent, `IsValidHelpfulTarget`

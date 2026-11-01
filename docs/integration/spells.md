@@ -62,6 +62,10 @@ CharacterHandlers, WorldRuntime, DbContexts, WorldTestHost).
    real-store `SpellbookCache.DeleteCharacter` now retires an earlier failed-write recovery marker when
    no replacement cached book exists. Failed deletes, missing stores and replacement-book races retain
    recovery. See [the bounded follow-up](faction-spellbook-cleanup-20261005.md).
+   At shutdown the cache's writer drains first, then every character whose write failed is retried once against its cached book
+   (`SpellbookCache.ReconcileFailedAtShutdownAsync`). A character that still cannot be written is logged and reported in an
+   `AggregateException` from the stop, and when no `ICharacterSpellStore` can be resolved the failed set is logged once with the
+   affected character ids instead of vanishing; the cache is not authoritative after the process exits.
 4. **Combat, creature lookup, and teleports are connected.** `WorldSpellSinks` resolves units
    through `Map.FindObject`, deals damage through `MapCombat`, and sends player teleports
    through `TeleportService` including far transfer and acknowledgement. Healing distributes
