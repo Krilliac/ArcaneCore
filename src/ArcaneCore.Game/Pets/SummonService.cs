@@ -150,6 +150,24 @@ public sealed partial class SummonService : ISpellSummonSink
     }
 
     /// <summary>
+    /// Send SMSG_PET_SPELLS only after the owner has the pet's create block and its own UNIT_FIELD_SUMMON. vmangos adds the pet to the map (which
+    /// sends the create block at once), sets the pet link and only then runs <c>Player::PetSpellInitialize</c> (SpellEffects.cpp:3306-3321). Here
+    /// <c>SpawnSummoned</c> only queues the create block for the end-of-tick flush, so without this the client got the pet bar for a unit it did not
+    /// know yet and its pet frame (UNIT_PET / PET_BAR_UPDATE) never refreshed. The visibility of the pet and the owner's queued values are pushed
+    /// now, in that order, into the owner's update buffer, which is flushed before the packet is queued. World thread; no I/O.
+    /// </summary>
+    internal static void SendPetSpellsAfterCreate(Player owner, Creature pet, byte[] payload)
+    {
+        if (pet.Map is { } map && ReferenceEquals(owner.Map, map))
+        {
+            map.RefreshVisibility(pet);
+            map.FlushPlayerValuesNow(owner);
+        }
+
+        owner.Session.Send(WorldOpcode.SmsgPetSpells, payload);
+    }
+
+    /// <summary>
     /// The owner side of Pet::Unsummon: Player::RemovePetActionBar for a controlled pet (Pet.cpp:1085)
     /// and clearing the owner's pet GUID (UNIT_FIELD_SUMMON) when it still points at this pet.
     /// </summary>
@@ -220,7 +238,7 @@ public sealed partial class SummonService : ISpellSummonSink
         // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)
         if (caster is Player owner)
         {
-            owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+            SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
         }
 
         return pet;
