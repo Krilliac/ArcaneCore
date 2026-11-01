@@ -552,7 +552,12 @@ internal sealed class HandlerFuzzRun
             if (stop != Stop.None)
             {
                 stats.Recoveries++;
-                if (stats.Recoveries > MaxRecoveriesPerOpcode)
+                if (stop == Stop.Kicked && _options.KickAllowlist.ContainsKey(handler.Opcode))
+                {
+                    stats.AllowlistedKickRecoveries++;
+                }
+
+                if (stats.Recoveries - stats.AllowlistedKickRecoveries > MaxRecoveriesPerOpcode)
                 {
                     stats.RecoveryCapped = true;
                     return;
@@ -772,6 +777,7 @@ internal sealed class HandlerFuzzRun
             source.Report(sink, thrown);
 
             bool consumed;
+            bool caseKicked;
             if (inWorld)
             {
                 // One world round trip per case: it checks the invariants and proves the tick is alive (it only returns from a tick).
@@ -800,6 +806,7 @@ internal sealed class HandlerFuzzRun
                 }
 
                 consumed = check.gone;
+                caseKicked = check.kicked;
                 known = check.after;
             }
             else
@@ -810,6 +817,7 @@ internal sealed class HandlerFuzzRun
                     NoteKick(stats, fuzzCase, index, slot.Session);
                 }
 
+                caseKicked = kicked;
                 consumed = kicked || !await SelectHealthyAsync();
                 if (!consumed && stats.Cases % 32 == 0 && !await TickAdvancedAsync(Interlocked.Read(ref _ticks)))
                 {
@@ -821,7 +829,12 @@ internal sealed class HandlerFuzzRun
             if (consumed || hung)
             {
                 stats.Recoveries++;
-                if (stats.Recoveries > MaxRecoveriesPerOpcode)
+                if (caseKicked && _options.KickAllowlist.ContainsKey(handler.Opcode))
+                {
+                    stats.AllowlistedKickRecoveries++;
+                }
+
+                if (stats.Recoveries - stats.AllowlistedKickRecoveries > MaxRecoveriesPerOpcode)
                 {
                     stats.RecoveryCapped = true;
                     return;
