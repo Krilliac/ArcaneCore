@@ -1006,11 +1006,13 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   (`TravelJourney.SpentCopper`), and a portal leg begun again after a fight asks the mage it already paid, without a second trade. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
   the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
   the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
-  used at most once. Ties: fewer legs, then less copper.
+  used at most once; a ship is never taken straight back the way it came (the same entry with the ends reversed, right after). Ties: fewer legs,
+  then less copper.
 - **Facts** (`PlayerbotTravel.BuildFacts`, from the bot's real state): faction, level, money; the hearthstone when it is ready (switch on,
   carried, off cooldown); the bot's own Teleports (spell known, rune carried, off cooldown); the portals of listed mages of its faction within
   `MageServiceRadiusYards` on its map; the ship routes the bot may ride (faction, the Boats and Zeppelins switches, a route with a backed-off
-  dock left out). Two places are walkable when they are on one map and, where the map's walking region graph answers, in one walkable
+  dock left out). Two places are walkable when they are on one map, not separated by the water of Teldrassil (`PopulationTownProgression.SeparatedByWater`,
+  whatever the mesh has loaded: the mainland never walks to Teldrassil) and, where the map's walking region graph answers, in one walkable
   component (the check `IsUnreachableOnFoot` makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a point
   at sea such as a port, a small fragment) counts as joined, and the walk's own failure then replans. A flight needs a known departure node
   within `MaxWalkToMasterYards` of the stretch's start, a stretch of at least `MinRouteYards`, and a known landing node the fare to which fits
@@ -1019,7 +1021,10 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   `PlayerbotHearthstone.Drive`, `PlayerbotMageService.Drive` (the bot's own mage leg), `PlayerbotMageService.DriveMage` (a mage serving the
   board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
   its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
-  of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
+  of that leg's start (the next driver walks the last yards to its dock or mage). A bot that stands on the dock floor (within 40 yards of the resolved floor and 8 of
+  its height) within 48 yards of the port when the plans to the floor are refused counts as docked (`ShipTrip.DockReach`). After a plan that
+  found no route, the same destination (map and 64-yard cell) is not planned again for 10 s (`JourneyPlanCooldownMs`; the GM command plans
+  at once). Within 10 yards of the goal the journey has arrived. A fight
   makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight before the bot is aboard (on the way to the
   dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
   teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%
