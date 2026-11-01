@@ -63,6 +63,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private long _enqueued;
     private long _attempted;
 
+    private const string QueueName = "InstanceWriteQueue";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
     private enum KeyKind
     {
         PlayerBind,
@@ -402,6 +407,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(logger, QueueName);
         string[] left;
         Exception? first;
         Exception? terminal;
@@ -458,6 +464,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private void EnqueueWriteCore(Key key, Payload value)
     {
+        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        {
+            return; // the character belongs to another world now: nothing is enqueued, retained or reported
+        }
+
         if (_stopped)
         {
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is stopped; the change was not persisted");
@@ -920,6 +931,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
+        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        {
+            return null; // retired since it was queued (or retained): dropped, which the caller records as drained
+        }
+
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
@@ -991,6 +1007,10 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
                 progress.Succeeded();
                 return null;
+            }
+            catch (CharacterOwnershipRejectedException) when (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+            {
+                return null; // refused because the character moved to another world: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {

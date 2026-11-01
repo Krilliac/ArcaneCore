@@ -40,6 +40,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per character, stopping at the first locked one; tests shorten it).</summary>
     public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
 
+    private const string QueueName = "ReputationWriteQueue";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
     private readonly Channel<Work> _channel = Channel.CreateUnbounded<Work>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly Lock _gate = new();
@@ -107,6 +112,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     public void SaveFactions(int characterId, IReadOnlyList<CharacterReputationRow> rows, CharacterOwnershipToken? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -126,6 +136,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// <summary>Merge the watched slot; the ownership token is captured and isolated per token exactly as <see cref="SaveFactions"/> does.</summary>
     public void SaveWatchedFaction(int characterId, int watched, CharacterOwnershipToken? ownership = null)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -144,6 +159,11 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     /// </summary>
     public void DeleteCharacter(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         string? dropped;
         lock (_gate)
         {
@@ -247,6 +267,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(logger, QueueName);
         int[] failed;
         Exception? first;
         lock (_gate)
@@ -479,6 +500,12 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                 unsaved.Queued = false;
             }
 
+            if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                _characters.Remove(characterId); // retired since it was queued (or retained): dropped, so it counts as drained
+                return null;
+            }
+
             deleteRequested = unsaved.DeleteRequested;
             deleteGen = unsaved.DeleteRequested > unsaved.DeleteDone && (!onlyIfFailed || unsaved.DeleteFailure is not null)
                 ? unsaved.DeleteRequested
@@ -535,6 +562,16 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 bool rejected = IsOwnershipRejection(ex);
+                if (rejected && CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                {
+                    lock (_gate)
+                    {
+                        _characters.Remove(characterId); // refused because the character moved to another world: counted, neither logged nor terminal
+                    }
+
+                    return null;
+                }
+
                 bool newEpisode = true;
                 lock (_gate)
                 {

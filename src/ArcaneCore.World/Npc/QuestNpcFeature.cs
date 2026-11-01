@@ -21,6 +21,7 @@ using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.Configuration;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -53,7 +54,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
         _scopes = scopes;
         _logger = logger;
         _clock = timeProvider ?? TimeProvider.System;
-        Persistence = new QuestNpcPersistence(scopes, logger);
+        Persistence = new QuestNpcPersistence(scopes, logger) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         Persistence.FatalFailure += OnPersistenceFatalFailure;
         Services = BuildServices(QuestStore.Empty, NpcStore.Empty);
     }

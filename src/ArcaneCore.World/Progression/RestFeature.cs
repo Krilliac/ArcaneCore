@@ -48,7 +48,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         _services = services ?? throw new ArgumentNullException(nameof(services));
         ArgumentNullException.ThrowIfNull(loggers);
         _logger = loggers.CreateLogger<RestFeature>();
-        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
+        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>(), services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         Writes.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("rest.writes-fatal", ex);

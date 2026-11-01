@@ -233,7 +233,8 @@ public static class WorldHandoffHosting
             sp.GetRequiredService<CharacterSaveQueue>(),
             sp.GetRequiredService<WorkerAdmission>(),
             sp.GetRequiredService<WorldWriterGuard>(),
-            sp.GetService<CharacterPersistenceBarrier>()));
+            sp.GetService<CharacterPersistenceBarrier>(),
+            sp.GetService<CharacterRetirementRegistry>()));
         services.TryAddSingleton<WorldHandoffInFlight>();
         services.TryAddSingleton(sp => new WorldHandoffCoordinatorProvider(sp));
         services.AddHostedService(sp => new WorldHandoffRecoveryService(

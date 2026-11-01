@@ -138,7 +138,7 @@ public sealed class SocialFeature(
         configuration?.GetSection(SocialOptions.SectionName).Bind(Options);
         configuration?.GetSection(GuildOptions.SectionName).Bind(GuildOptions);
         configuration?.GetSection(SocialOptions.SectionName + ":WriteQueue").Bind(WriteQueueOptions);
-        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions, services?.GetService<ShutdownDrain>()?.Features);
+        _writes = new SocialWriteQueue(scopes, loggers.CreateLogger<SocialWriteQueue>(), WriteQueueOptions, services?.GetService<ShutdownDrain>()?.Features) { Retirement = services?.GetService<CharacterRetirementRegistry>() };
         _writes.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("social.writes-fatal", ex);
