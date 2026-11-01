@@ -139,7 +139,7 @@ public sealed class TableSpecDriftTests
             loot.Read(new StringReader(sql));
             var totems = new TotemSpellDumpImporter();
             totems.Read(new StringReader(sql));
-            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, loot.BuildReport(), totems.Resolve().Rows }, json);
+            return JsonSerializer.Serialize(new object[] { snapshot.Templates, snapshot.Spawns, snapshot.Movement, snapshot.Models, snapshot.Addons, creature.ImmunitySnapshot(), loot.BuildReport(), totems.Resolve().Rows }, json);
         }
 
         var importer = new GameObjectLootDumpImporter();

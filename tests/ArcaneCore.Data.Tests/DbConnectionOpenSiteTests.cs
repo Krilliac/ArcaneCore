@@ -62,7 +62,10 @@ public sealed class DbConnectionOpenSiteTests
         protected override DbCommand CreateDbCommand() => new ScalarCommand(this);
     }
 
-    /// <summary>A command with no parameters that answers every scalar query with 1.</summary>
+    /// <summary>
+    /// A command with no parameters that answers every scalar query with 1, except the tokenless fence's "is any ownership row active" probe
+    /// (<c>... = TRUE</c>), which finds none.
+    /// </summary>
     private sealed class ScalarCommand(BrokenAwareConnection connection) : DbCommand
     {
         [System.Diagnostics.CodeAnalysis.AllowNull]
@@ -88,9 +91,9 @@ public sealed class DbConnectionOpenSiteTests
 
         public override int ExecuteNonQuery() => throw new NotSupportedException();
 
-        public override object? ExecuteScalar() => 1L;
+        public override object? ExecuteScalar() => CommandText.Contains("= TRUE", StringComparison.Ordinal) ? null : 1L;
 
-        public override Task<object?> ExecuteScalarAsync(CancellationToken cancellationToken) => Task.FromResult<object?>(1L);
+        public override Task<object?> ExecuteScalarAsync(CancellationToken cancellationToken) => Task.FromResult(ExecuteScalar());
 
         public override void Prepare()
         {
