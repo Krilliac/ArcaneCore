@@ -178,7 +178,10 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     private readonly ILogger _logger;
     private readonly Dictionary<Guid, DateTime> _firstSeen = [];
     private readonly HashSet<Guid> _reported = [];
+    private readonly OwnedJournalScan _scan;
+    private readonly GatewayServer? _server;
     private int _stopped;
+    private int _linkUpWired;
 
     /// <summary>
     /// Builds the production service for <paramref name="server"/> (its worker links must carry control channels: <c>Gateway:Transfers:Enabled</c>). When <paramref name="handoffs"/> is given it is coordinated with: its handoffs
@@ -200,6 +203,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
             throw new InvalidOperationException("the gateway transfer service needs Gateway:Transfers:Enabled");
         }
 
+        _server = server;
         if (handoffs is not null)
         {
             handoffs.Guard = this;
@@ -231,9 +235,16 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         _machine = new GatewaySlotStateMachine(wiring.SlotNodes);
         _coordinator = new PlayerTransferCoordinator(wiring.MapRouter, store, wiring.GatewayRouter, wiring.Sources, wiring.Targets);
         _host = new PlayerTransferCoordinatorHost(_coordinator, store, factory.CreateLogger<PlayerTransferCoordinatorHost>());
+        _scan = new OwnedJournalScan(this);
         _recovery = new TransferRecoveryService(
-            _coordinator, store, new OwnedJournalScan(this), wiring.GatewayRouter, factory.CreateLogger<TransferRecoveryService>());
+            _coordinator, store, _scan, wiring.GatewayRouter, factory.CreateLogger<TransferRecoveryService>());
     }
+
+    /// <summary>
+    /// Raised when a worker link of the gateway comes up (design section 6: transfer recovery also runs then, not only on its interval). Raised on the link's supervisor task between <see cref="StartAsync"/>
+    /// and <see cref="StopAsync"/>; handlers must only signal. Never raised for a service built without a server (tests).
+    /// </summary>
+    internal event Action? LinkUp;
 
     /// <summary>The slots transfers can involve (every <c>Gateway:Workers:N:NodeId</c>).</summary>
     public IReadOnlyCollection<string> Slots => _slotSet;
@@ -247,7 +258,23 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     /// <summary>Whether this service is running transfer <paramref name="transferId"/> right now.</summary>
     public bool IsRunning(Guid transferId) => _running.ContainsKey(transferId);
 
-    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        if (_server is not null && Interlocked.Exchange(ref _linkUpWired, 1) == 0)
+        {
+            _server.WorkerLinkUp += OnWorkerLinkUp;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void OnWorkerLinkUp(string nodeId)
+    {
+        if (_slotSet.Contains(nodeId))
+        {
+            LinkUp?.Invoke();
+        }
+    }
 
     /// <summary>
     /// Cancels the transfers that have not committed (they abort and resume their source), waits for every running transfer (bounded by <paramref name="cancellationToken"/>; one past its commit that did not finish is
@@ -258,6 +285,11 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         if (Interlocked.Exchange(ref _stopped, 1) != 0)
         {
             return;
+        }
+
+        if (_server is not null)
+        {
+            _server.WorkerLinkUp -= OnWorkerLinkUp;
         }
 
         await _runs.CancelAsync().ConfigureAwait(false);
@@ -333,6 +365,13 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
                 return Refused(request, $"transfer {request.TransferId} is already running");
             }
 
+            if (Volatile.Read(ref _stopped) != 0)
+            {
+                // StopAsync ran between the first check and the registration above: it may already have seen the service idle, so this transfer must not start.
+                _running.TryRemove(request.TransferId, out _);
+                return Refused(request, "the gateway is stopping");
+            }
+
             PlayerTransferRequest pinned = request with { ExplicitTargetWorkerId = target };
             IDisposable held = lease!;
             Task<PlayerTransferOutcome> completion = _inFlight.Track(Task.Run(() => RunAsync(pinned, held), CancellationToken.None));
@@ -384,8 +423,21 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     /// </summary>
     public async Task<TransferRecoverySummary> RecoverOnceAsync(CancellationToken cancellationToken)
     {
-        TransferRecoverySummary summary = await _recovery.RecoverUnresolvedAsync(null, "gateway-recovery", cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<TransferDecisionRecord> open = await new OwnedJournalScan(this).ListUnresolvedAsync(cancellationToken).ConfigureAwait(false);
+        // One journal scan per pass: the recovery reads it, the anomaly check below reuses it. A transfer that resolved during the pass is therefore still in it and is dropped from the
+        // bookkeeping on the next pass; one that sat unresolved past AnomalyAfter and resolved just now is reported once, which is accurate (it was stuck that long).
+        TransferRecoverySummary summary;
+        IReadOnlyList<TransferDecisionRecord> open;
+        _scan.BeginPass();
+        try
+        {
+            summary = await _recovery.RecoverUnresolvedAsync(null, "gateway-recovery", cancellationToken).ConfigureAwait(false);
+            open = await _scan.ListUnresolvedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _scan.EndPass();
+        }
+
         DateTime now = DateTime.UtcNow;
         var ids = new HashSet<Guid>();
         foreach (TransferDecisionRecord record in open)
@@ -479,7 +531,39 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     /// </summary>
     private sealed class OwnedJournalScan(GatewayTransferService owner) : ITransferJournalScan
     {
+        private IReadOnlyList<TransferDecisionRecord>? _pass;
+        private bool _inPass;
+
+        /// <summary>From now until <see cref="EndPass"/> the first scan is kept and answers every later call (one pass of <see cref="RecoverOnceAsync"/>, which never runs concurrently with itself).</summary>
+        public void BeginPass()
+        {
+            _pass = null;
+            _inPass = true;
+        }
+
+        public void EndPass()
+        {
+            _inPass = false;
+            _pass = null;
+        }
+
         public async Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default)
+        {
+            if (_inPass && _pass is { } cached)
+            {
+                return cached;
+            }
+
+            IReadOnlyList<TransferDecisionRecord> scanned = await ScanAsync(cancellationToken).ConfigureAwait(false);
+            if (_inPass)
+            {
+                _pass = scanned;
+            }
+
+            return scanned;
+        }
+
+        private async Task<IReadOnlyList<TransferDecisionRecord>> ScanAsync(CancellationToken cancellationToken)
         {
             IReadOnlyList<TransferDecisionRecord> all = await owner._journal.ListUnresolvedAsync(cancellationToken).ConfigureAwait(false);
             if (all.Count == 0)
@@ -529,22 +613,40 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 public sealed class GatewayTransferRecoveryService(
     GatewayTransferService transfers,
     GatewayTransferOptions options,
-    ILogger<GatewayTransferRecoveryService>? logger = null) : IHostedService
+    ILogger<GatewayTransferRecoveryService>? logger = null) : IHostedService, IDisposable
 {
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(60);
 
     private readonly ILogger _logger = logger ?? NullLogger<GatewayTransferRecoveryService>.Instance;
     private readonly CancellationTokenSource _stopping = new();
+    private readonly RecoveryWake _wake = new();
     private Task _loop = Task.CompletedTask;
+    private int _wired;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _wired, 1) == 0)
+        {
+            transfers.LinkUp += OnLinkUp;
+        }
+
         _loop = Task.Run(() => RunAsync(_stopping.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
+    /// <summary>Releases the stop token source and the wake signal; call it after <see cref="StopAsync"/>.</summary>
+    public void Dispose()
+    {
+        transfers.LinkUp -= OnLinkUp;
+        _wake.Dispose();
+        _stopping.Dispose();
+    }
+
+    private void OnLinkUp() => _wake.Signal();
+
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        transfers.LinkUp -= OnLinkUp;
         await _stopping.CancelAsync().ConfigureAwait(false);
         try
         {
@@ -584,7 +686,10 @@ public sealed class GatewayTransferRecoveryService(
 
             try
             {
-                await Task.Delay(wait, stoppingToken).ConfigureAwait(false);
+                if (await _wake.WaitAsync(wait, stoppingToken).ConfigureAwait(false))
+                {
+                    failedPasses = 0; // a worker link came up: the pass that follows is not held back by the backoff of the failures before it
+                }
             }
             catch (OperationCanceledException)
             {

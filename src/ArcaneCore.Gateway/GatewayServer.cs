@@ -70,6 +70,14 @@ public sealed class GatewayServer : BackgroundService
     /// <summary>The reply timeouts of the control channels (<c>Gateway:Control:*</c>), or null when <c>Gateway:Handoff:Enabled</c> and <c>Gateway:Transfers:Enabled</c> are both off and the worker links carry no channel.</summary>
     internal ArcaneCore.World.Cluster.Control.LinkControlTimeouts? ControlTimeouts { get; }
 
+    /// <summary>
+    /// Raised, with the worker's node id (<c>Gateway:Workers:N:NodeId</c>), each time a worker link is registered (the first time and after every reconnect or retarget). It runs on the link's supervisor task:
+    /// handlers must only signal (the recovery loops wake a pass), never block.
+    /// </summary>
+    internal event Action<string>? WorkerLinkUp;
+
+    private void RaiseWorkerLinkUp(string nodeId) => WorkerLinkUp?.Invoke(nodeId);
+
     /// <summary>This gateway process's link incarnation (the manifest every link it opens advertises, so a worker counts all of them as one gateway).</summary>
     internal Guid Incarnation => _incarnation;
 
@@ -546,7 +554,7 @@ public sealed class GatewayServer : BackgroundService
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers, ControlTimeouts);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers, ControlTimeouts, RaiseWorkerLinkUp);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
@@ -693,7 +701,9 @@ public sealed class GatewayWorkerLink
     private volatile IPEndPoint? _connected;
     private volatile GatewaySessionLinkClient? _link;
     private volatile string? _lastError;
-    private volatile StatusBox? _lastReport;
+    private readonly Lock _statusGate = new();
+    private readonly Action<string>? _linkUpObserver;
+    private StatusBox? _lastReport;
     private int _status;
     private long _failures;
     private long _reconnects;
@@ -713,10 +723,12 @@ public sealed class GatewayWorkerLink
         GatewayRouteTable routes,
         GatewayRealmLiveness? realmLiveness = null,
         GatewayTransferRouter? transfers = null,
-        ArcaneCore.World.Cluster.Control.LinkControlTimeouts? controlTimeouts = null)
+        ArcaneCore.World.Cluster.Control.LinkControlTimeouts? controlTimeouts = null,
+        Action<string>? linkUpObserver = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
         _controlTimeouts = controlTimeouts;
+        _linkUpObserver = linkUpObserver;
         _transfers = transfers;
         _routes = routes;
         _realmLiveness = realmLiveness;
@@ -755,7 +767,16 @@ public sealed class GatewayWorkerLink
     public ArcaneCore.World.Cluster.Control.LinkControlChannel? ControlChannel => _control is { IsConnected: true } channel ? channel : null;
 
     /// <summary>The latest <c>WorkerStatus</c> report of the registered link, or null while the link is down or no report has arrived on it yet.</summary>
-    public WorkerStatusReport? LastStatus => _lastReport is { } box ? box.Report : null;
+    public WorkerStatusReport? LastStatus
+    {
+        get
+        {
+            lock (_statusGate)
+            {
+                return _lastReport is { } box ? box.Report : null;
+            }
+        }
+    }
 
     private sealed record StatusBox(WorkerStatusReport Report);
 
@@ -822,9 +843,17 @@ public sealed class GatewayWorkerLink
             var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
             string node = NodeId;
             GatewayRealmLiveness? liveness = _realmLiveness;
+            bool linkEnded = false; // guarded by _statusGate: a report that arrives after this link went down must not repopulate _lastReport
             link.WorkerStatusReceived = report =>
             {
-                _lastReport = new StatusBox(report); // the transfer map router reads readiness and load from the latest report
+                lock (_statusGate)
+                {
+                    if (!linkEnded)
+                    {
+                        _lastReport = new StatusBox(report); // the transfer map router reads readiness and load from the latest report
+                    }
+                }
+
                 liveness?.OnWorkerStatus(node, report); // the realm-list row of the realm is written from these reports
             };
 
@@ -887,6 +916,7 @@ public sealed class GatewayWorkerLink
 
             _logger.LogInformation("Worker link {Node} to {Worker} registered", NodeId, worker);
             Volatile.Read(ref _linkUp).TrySetResult();
+            _linkUpObserver?.Invoke(NodeId);
             if (!Equals(_target, worker))
             {
                 retarget.TrySetResult(); // retargeted while this attempt was connecting
@@ -926,7 +956,12 @@ public sealed class GatewayWorkerLink
             _link = null;
             _control = null;
             _connected = null;
-            _lastReport = null;
+            lock (_statusGate)
+            {
+                linkEnded = true;
+                _lastReport = null;
+            }
+
             _routes.LinkDown(NodeId);
             if (retarget.Task.IsCompleted)
             {

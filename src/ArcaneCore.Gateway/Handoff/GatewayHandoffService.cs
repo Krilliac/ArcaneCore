@@ -28,6 +28,7 @@ internal sealed class GatewayStandbyLink
     private volatile IPEndPoint _target;
     private volatile GatewaySessionLinkClient? _client;
     private volatile LinkControlChannel? _channel;
+    private readonly Lock _publish = new();
     private TaskCompletionSource _up = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _retarget;
 
@@ -41,6 +42,9 @@ internal sealed class GatewayStandbyLink
 
     /// <summary>The endpoint the link connects to.</summary>
     public IPEndPoint EndPoint => _target;
+
+    /// <summary>Raised each time the link is connected and published (not for a connection that was retargeted while it was being established). Runs on the link's loop task: handlers must only signal.</summary>
+    public event Action? Up;
 
     /// <summary>The control channel of the connected link, or null while it is down.</summary>
     public LinkControlChannel? Channel => _channel is { IsConnected: true } channel ? channel : null;
@@ -72,10 +76,15 @@ internal sealed class GatewayStandbyLink
     public void Retarget(IPEndPoint endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        _target = endpoint;
         // Drop the channel synchronously: the run loop clears it only after several thread-pool hops, and until then a verb meant for the
-        // process that just became the other role would be sent over the old connection to the wrong process.
-        _channel = null;
+        // process that just became the other role would be sent over the old connection to the wrong process. The run loop publishes a new
+        // channel under the same lock only while the target is unchanged, so a connection to the old endpoint cannot be published after this.
+        lock (_publish)
+        {
+            _target = endpoint;
+            _channel = null;
+        }
+
         Volatile.Read(ref _retarget)?.TrySetResult();
     }
 
@@ -123,14 +132,28 @@ internal sealed class GatewayStandbyLink
                 nextDelay = delay;
                 var retarget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 Volatile.Write(ref _retarget, retarget);
-                _client = client;
-                _channel = new LinkControlChannel(client, timeouts, _server.Loggers.CreateLogger<LinkControlChannel>());
-                Volatile.Read(ref _up).TrySetResult();
-                _logger.LogInformation("Standby link of slot {Slot} registered with {Endpoint}", _slotNode, endpoint);
-                if (!Equals(_target, endpoint))
+                var channel = new LinkControlChannel(client, timeouts, _server.Loggers.CreateLogger<LinkControlChannel>());
+                bool published;
+                lock (_publish)
                 {
-                    _channel = null; // retargeted while this attempt was connecting
-                    retarget.TrySetResult();
+                    // Publish only while the target is still the endpoint this connection was made to; Retarget changes the target and clears the channel under the same lock.
+                    published = Equals(_target, endpoint);
+                    if (published)
+                    {
+                        _client = client;
+                        _channel = channel;
+                    }
+                }
+
+                if (published)
+                {
+                    Volatile.Read(ref _up).TrySetResult();
+                    _logger.LogInformation("Standby link of slot {Slot} registered with {Endpoint}", _slotNode, endpoint);
+                    Up?.Invoke();
+                }
+                else
+                {
+                    retarget.TrySetResult(); // retargeted while this attempt was connecting: never published
                 }
 
                 try
@@ -167,7 +190,7 @@ internal sealed class GatewayStandbyLink
 /// One handoff slot: a <c>Gateway:Workers:N</c> entry with a standby, the standby's control link, and which process (by its Cluster:Worker:NodeId) is the active one and which the
 /// standby. After a handoff the roles swap (<see cref="PromoteStandby"/>): the promoted standby is the slot's link target and the old active is the next standby. Thread-safe.
 /// </summary>
-internal sealed class GatewayHandoffSlot
+internal sealed class GatewayHandoffSlot : IDisposable
 {
     private readonly Lock _gate = new();
     private string _activeNode;
@@ -186,8 +209,36 @@ internal sealed class GatewayHandoffSlot
 
     public GatewayStandbyLink Standby { get; }
 
-    /// <summary>One handoff or recovery at a time per slot.</summary>
+    /// <summary>One handoff or recovery at a time per slot. Use <see cref="TryEnter"/> and <see cref="Exit"/>; the semaphore is disposed with the slot.</summary>
     public SemaphoreSlim Busy { get; } = new(1, 1);
+
+    /// <summary>Takes the slot without waiting; false when a handoff or recovery holds it or the slot is disposed.</summary>
+    public bool TryEnter()
+    {
+        try
+        {
+            return Busy.Wait(0);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Gives the slot back; a no-op once the slot is disposed (a run that outlived the service's stop).</summary>
+    public void Exit()
+    {
+        try
+        {
+            Busy.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The service was disposed while this run finished.
+        }
+    }
+
+    public void Dispose() => Busy.Dispose();
 
     public string ActiveNode
     {
@@ -257,6 +308,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     private readonly CancellationTokenSource _links = new();
     private readonly List<Task> _linkLoops = [];
     private int _stopped;
+    private int _linkUpWired;
 
     /// <summary>
     /// Builds the slots from <c>Gateway:Workers:N:StandbyNodeId</c>. Throws <see cref="InvalidOperationException"/> when <c>Gateway:Handoff:Enabled</c> is off for <paramref name="server"/>
@@ -314,6 +366,21 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     /// <summary>The handoffs running on this service (the host's stop waits for them).</summary>
     public WorldHandoffInFlight InFlight => _inFlight;
 
+    /// <summary>
+    /// Raised, with the slot's key, when the worker link or the standby link of a slot comes up (design section 6: recovery also runs then). Raised on a link's supervisor task between
+    /// <see cref="StartAsync"/> and <see cref="StopAsync"/>; handlers must only signal.
+    /// </summary>
+    internal event Action<string>? LinkUp;
+
+    /// <summary>The slot object of <paramref name="slotNode"/> (its names, standby link and busy gate), or null for an unknown slot.</summary>
+    internal GatewayHandoffSlot? SlotOf(string slotNode) => _slots.GetValueOrDefault(slotNode);
+
+    /// <summary>Whether this service is running handoff <paramref name="handoffId"/> right now.</summary>
+    internal bool IsRunning(Guid handoffId) => _running.ContainsKey(handoffId);
+
+    /// <summary>Whether <paramref name="record"/> names two processes of one of this gateway's slots (a record that is not ours is left to its owner).</summary>
+    internal bool Owns(WorldHandoffRecord record) => FindSlot(record) is not null;
+
     /// <summary>The control channel of the slot's active worker (its gateway link), or null while that link is down or the slot is unknown.</summary>
     public LinkControlChannel? ActiveChannel(string slotNode) =>
         _slots.ContainsKey(slotNode) ? _server.FindWorker(slotNode)?.ControlChannel : null;
@@ -330,6 +397,16 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     /// <summary>Starts the standby links. The gateway server must have started (its worker links exist). Idempotent per instance only once.</summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _linkUpWired, 1) == 0)
+        {
+            _server.WorkerLinkUp += OnWorkerLinkUp;
+            foreach (GatewayHandoffSlot slot in _slots.Values)
+            {
+                string slotNode = slot.SlotNode;
+                slot.Standby.Up += () => LinkUp?.Invoke(slotNode);
+            }
+        }
+
         foreach (GatewayHandoffSlot slot in _slots.Values)
         {
             GatewayStandbyLink link = slot.Standby;
@@ -338,6 +415,14 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
         _logger.LogInformation("Gateway handoff service started: {Count} slot(s) with a standby", _slots.Count);
         return Task.CompletedTask;
+    }
+
+    private void OnWorkerLinkUp(string nodeId)
+    {
+        if (_slots.ContainsKey(nodeId))
+        {
+            LinkUp?.Invoke(nodeId);
+        }
     }
 
     /// <summary>
@@ -362,6 +447,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         }
 
         await _links.CancelAsync().ConfigureAwait(false);
+        _server.WorkerLinkUp -= OnWorkerLinkUp;
         try
         {
             await Task.WhenAll(_linkLoops).ConfigureAwait(false);
@@ -377,6 +463,10 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         _runs.Dispose();
         _links.Dispose();
+        foreach (GatewayHandoffSlot slot in _slots.Values)
+        {
+            slot.Dispose();
+        }
     }
 
     /// <summary>
@@ -389,9 +479,9 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         string slotNode, Func<WorldHandoffStage, CancellationToken, Task>? afterStage = null, CancellationToken cancellationToken = default)
     {
         GatewayHandoffSlot slot = RequireSlot(slotNode);
-        if (!await slot.Busy.WaitAsync(TimeSpan.Zero, CancellationToken.None).ConfigureAwait(false))
+        if (!slot.TryEnter())
         {
-            throw new InvalidOperationException($"slot '{slotNode}' already has a handoff or a recovery running");
+            throw new InvalidOperationException($"slot '{slotNode}' already has a handoff or a recovery running (or the service is disposed)");
         }
 
         try
@@ -428,7 +518,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         }
         finally
         {
-            slot.Busy.Release();
+            slot.Exit();
         }
     }
 
@@ -446,7 +536,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
             return null;
         }
 
-        if (!await slot.Busy.WaitAsync(TimeSpan.Zero, CancellationToken.None).ConfigureAwait(false))
+        if (!slot.TryEnter())
         {
             return null;
         }
@@ -474,7 +564,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         }
         finally
         {
-            slot.Busy.Release();
+            slot.Exit();
         }
     }
 
@@ -486,7 +576,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     {
         foreach (GatewayHandoffSlot slot in _slots.Values)
         {
-            if (!await slot.Busy.WaitAsync(TimeSpan.Zero, CancellationToken.None).ConfigureAwait(false))
+            if (!slot.TryEnter())
             {
                 continue;
             }
@@ -497,7 +587,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
             }
             finally
             {
-                slot.Busy.Release();
+                slot.Exit();
             }
         }
     }
@@ -584,20 +674,65 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
             return;
         }
 
-        if (!a.IsStandby && b.IsStandby)
+        // The active process is the one that does not report Standby (design 3.3; Describe's flag is the one WorkerStatus carries). A retired source is not a Standby either, so after a gateway restart
+        // that followed a completed handoff, or a crash between MarkRerouted and Retire, both processes can report "not standby": the promoted standby is then the one that never held a source world
+        // (a standby has no handoff source, so its HeldSourceToken is always null) while the retired source still names the ownership it held.
+        ActiveSide side = ChooseActive(a, b);
+        if (side == ActiveSide.Worker)
         {
             slot.SetNames(a.WorkerId, b.WorkerId);
         }
-        else if (a.IsStandby && !b.IsStandby)
+        else if (side == ActiveSide.Standby)
         {
-            // The configured active endpoint is the standby now: an earlier handoff swapped the roles. Follow the active process.
+            // The configured active endpoint is no longer the active process: an earlier handoff swapped the roles. Follow the active process.
+            GatewayWorkerLink? worker = _server.FindWorker(slot.SlotNode);
             IPEndPoint newActive = slot.Standby.EndPoint;
-            IPEndPoint oldActive = _server.FindWorker(slot.SlotNode)?.EndPoint ?? newActive;
+            IPEndPoint oldActive = worker?.ConnectedEndPoint ?? worker?.EndPoint ?? newActive;
             _logger.LogInformation("Slot {Slot}: {Active} is the active process; moving the worker link from {Old} to {New}", slot.SlotNode, b.WorkerId, oldActive, newActive);
             slot.SetNames(b.WorkerId, a.WorkerId);
             await _server.RetargetWorkerSeamlessAsync(slot.SlotNode, newActive, cancellationToken).ConfigureAwait(false);
             slot.Standby.Retarget(oldActive);
         }
+        else
+        {
+            _logger.LogDebug("Slot {Slot}: {A} and {B} cannot be told apart by their standby flags; the roles are left as they are (the journal decides)", slot.SlotNode, a.WorkerId, b.WorkerId);
+        }
+    }
+
+    private enum ActiveSide
+    {
+        Undecided,
+        Worker,
+        Standby,
+    }
+
+    /// <summary>Which side of a slot is the active process: <paramref name="worker"/> answered on the slot's worker link, <paramref name="standby"/> on its standby link.</summary>
+    private static ActiveSide ChooseActive(ControlDescribePayload worker, ControlDescribePayload standby)
+    {
+        if (!worker.IsStandby && standby.IsStandby)
+        {
+            return ActiveSide.Worker;
+        }
+
+        if (worker.IsStandby && !standby.IsStandby)
+        {
+            return ActiveSide.Standby;
+        }
+
+        if (!worker.IsStandby && !standby.IsStandby)
+        {
+            if (worker.HeldSourceToken is not null && standby.HeldSourceToken is null)
+            {
+                return ActiveSide.Standby;
+            }
+
+            if (worker.HeldSourceToken is null && standby.HeldSourceToken is not null)
+            {
+                return ActiveSide.Worker;
+            }
+        }
+
+        return ActiveSide.Undecided;
     }
 
     private static async Task<ControlDescribePayload> DescribeAsync(LinkControlChannel channel, CancellationToken cancellationToken)

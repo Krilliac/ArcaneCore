@@ -39,23 +39,37 @@ public static class GatewayServiceCollectionExtensions
         // The realm-list row of the clustered realm (no world writes it in worker mode): registered before the server so it starts first (Starting) and stops last (Stopped).
         services.AddSingleton<GatewayRealmLiveness>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayRealmLiveness>());
-        services.AddOptions<GatewayHandoffOptions>().Bind(configuration.GetSection(GatewayHandoffOptions.SectionName)).ValidateOnStart();
-        services.AddOptions<GatewayControlOptions>().Bind(configuration.GetSection(GatewayControlOptions.SectionName)).ValidateOnStart();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayHandoffOptions>, GatewayHandoffOptionsValidator>());
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayControlOptions>, GatewayControlOptionsValidator>());
+        bool handoffEnabled = configuration.GetSection(GatewayHandoffOptions.SectionName).GetValue<bool>(nameof(GatewayHandoffOptions.Enabled));
+        bool transfersEnabled = configuration.GetSection(GatewayTransferOptions.SectionName).GetValue<bool>(nameof(GatewayTransferOptions.Enabled));
+        // Gateway:Handoff:* and Gateway:Control:* are validated (at host start and whenever the options are read) only while the feature that reads them is on: an invalid value under a key
+        // that is off must not stop a gateway that never uses it. Gateway:Control:* are the reply timeouts of every control channel, so the transfer hosting needs them valid too.
+        OptionsBuilder<GatewayHandoffOptions> handoffOptions = services.AddOptions<GatewayHandoffOptions>().Bind(configuration.GetSection(GatewayHandoffOptions.SectionName));
+        OptionsBuilder<GatewayControlOptions> controlOptions = services.AddOptions<GatewayControlOptions>().Bind(configuration.GetSection(GatewayControlOptions.SectionName));
+        if (handoffEnabled)
+        {
+            handoffOptions.ValidateOnStart();
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayHandoffOptions>, GatewayHandoffOptionsValidator>());
+        }
+
+        if (handoffEnabled || transfersEnabled)
+        {
+            controlOptions.ValidateOnStart();
+            services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayControlOptions>, GatewayControlOptionsValidator>());
+        }
+
         services.AddOptions<GatewayTransferOptions>().Bind(configuration.GetSection(GatewayTransferOptions.SectionName)).ValidateOnStart();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayTransferOptions>, GatewayTransferOptionsValidator>());
         services.AddSingleton<GatewayServer>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayServer>());
-        if (configuration.GetSection(GatewayHandoffOptions.SectionName).GetValue<bool>(nameof(GatewayHandoffOptions.Enabled)))
+        if (handoffEnabled)
         {
             AddHandoff(services, configuration);
         }
 
-        if (configuration.GetSection(GatewayTransferOptions.SectionName).GetValue<bool>(nameof(GatewayTransferOptions.Enabled)))
+        if (transfersEnabled)
         {
             // After the handoff hosting: the transfer service coordinates with the handoff service when both are on.
-            AddTransfers(services, configuration, handoffEnabled: configuration.GetSection(GatewayHandoffOptions.SectionName).GetValue<bool>(nameof(GatewayHandoffOptions.Enabled)));
+            AddTransfers(services, configuration, handoffEnabled);
         }
 
         return services;
