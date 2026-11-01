@@ -51,6 +51,14 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
     public void Attach(WorldRuntime world)
     {
         _world = world;
+
+        // In a cluster the cluster hosting registers the link to the Social lease holder: guild and charter operations are then served by the holder and
+        // this worker keeps a replica (GuildManager.Link). Without one every rule runs here, as in a single process. Set before the guilds load.
+        if (services.GetService<IGuildHolderLink>() is { } link)
+        {
+            Social.Context.Guilds.Link = link;
+        }
+
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
         _loading = Task.Run(LoadAsync);

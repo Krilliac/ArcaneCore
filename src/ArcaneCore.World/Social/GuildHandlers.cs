@@ -50,6 +50,7 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
     /// CMSG_GUILD_CREATE: CString name (vmangos HandleGuildCreateOpcode: ignored when already
     /// guilded, a name over 24 characters disconnects, a failed Guild::Create sends nothing).
     /// Honoured unless <see cref="GuildOptions.AllowClientGuildCreate"/> (World:Guild; default on, as vmangos) is switched off.
+    /// In a cluster the guild is founded by the Social holder (<see cref="GuildManager.RequestCreate"/> forwards it from any other worker).
     /// </summary>
     private static void HandleCreate(WorldSession session, Player player, byte[] payload)
     {
@@ -58,19 +59,7 @@ public sealed class GuildHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        GuildManager guilds = Guilds(session);
-        if (!guilds.Options.AllowClientGuildCreate || guilds.GetGuildOf(player) is not null)
-        {
-            return;
-        }
-
-        string name = Text(payload);
-        if (guilds.RejectOversized(player, name, Guild.MaxNameLength))
-        {
-            return;
-        }
-
-        guilds.Create(player.Guid.Low, name, out _);
+        Guilds(session).RequestCreate(player, Text(payload));
     }
 
     /// <summary>CMSG_GUILD_SET_PUBLIC_NOTE / CMSG_GUILD_SET_OFFICER_NOTE: CString name, CString note.</summary>

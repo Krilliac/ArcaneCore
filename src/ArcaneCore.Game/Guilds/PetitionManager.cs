@@ -240,7 +240,7 @@ public sealed class PetitionManager
 
         var petition = new Petition(id, player.Guid.Low, charter.Guid.Low, name, player.Team);
         _petitions[id] = petition;
-        Persistence?.SavePetition(petition.ToData());
+        Persist(petition);
         // The push result last: the send can reach the client before this handler returns, and a client (or a test) that saw the
         // charter arrive must find its petition already queued for the store.
         player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, charter, 1, received: true, created: false, showInChat: true));
@@ -295,7 +295,7 @@ public sealed class PetitionManager
         }
 
         petition.Name = newName;
-        Persistence?.SavePetition(petition.ToData());
+        Persist(petition);
         player.Session.Send(WorldOpcode.MsgPetitionRename, PetitionPackets.BuildRenameResult(itemGuid, newName));
     }
 
@@ -306,6 +306,18 @@ public sealed class PetitionManager
     /// </summary>
     public void Sign(Player player, ObjectGuid itemGuid)
     {
+        if (_context.Guilds.Link is { IsHolder: false } link)
+        {
+            // The petition and the signer's guild state are the holder's: it checks, signs and answers the signer and the owner wherever they are online.
+            link.Forward(new GuildRequest(GuildRequestKind.PetitionSign, player.Guid, Item: itemGuid.Value), null);
+            return;
+        }
+
+        Sign(GuildActor.Of(player), itemGuid);
+    }
+
+    private void Sign(GuildActor player, ObjectGuid itemGuid)
+    {
         if (GetByCharter(itemGuid) is not { } petition || IsComplete(petition))
         {
             return;
@@ -313,7 +325,7 @@ public sealed class PetitionManager
 
         if (petition.OwnerId == player.Guid.Low)
         {
-            player.Session.Send(WorldOpcode.SmsgPetitionSignResults, PetitionPackets.BuildSignResults(itemGuid, player.Guid, PetitionResult.CantSignOwn));
+            player.Send(WorldOpcode.SmsgPetitionSignResults, PetitionPackets.BuildSignResults(itemGuid, player.Guid, PetitionResult.CantSignOwn));
             return;
         }
 
@@ -323,8 +335,16 @@ public sealed class PetitionManager
             return;
         }
 
-        if (!CheckGuildState(player, player, signer: player))
+        // CheckGuildState for the signer itself (guilded, then invited), reported to the signer by its own name.
+        if (_context.Guilds.GetGuildOf(player.Guid.Low) is not null)
         {
+            SendResult(player, GuildCommand.Invite, player.Name, GuildCommandError.AlreadyInGuildS);
+            return;
+        }
+
+        if (_context.Guilds.InvitedTo(player.Guid) != 0)
+        {
+            SendResult(player, GuildCommand.Invite, player.Name, GuildCommandError.AlreadyInvitedToGuildS);
             return;
         }
 
@@ -333,24 +353,21 @@ public sealed class PetitionManager
             return;
         }
 
-        int account = player.Session.AccountId;
+        int account = player.AccountId;
         if (petition.ForAccount(account) is not null || petition.ForPlayer(player.Guid.Low) is not null)
         {
-            player.Session.Send(WorldOpcode.SmsgPetitionSignResults, PetitionPackets.BuildSignResults(itemGuid, player.Guid, PetitionResult.AlreadySigned));
-            if (_context.World.FindOnlinePlayer(petition.OwnerGuid) is { } duplicateOwner)
-            {
-                SendResult(duplicateOwner, GuildCommand.Invite, player.Name, GuildCommandError.AlreadyInvitedToGuildS);
-            }
-
+            player.Send(WorldOpcode.SmsgPetitionSignResults, PetitionPackets.BuildSignResults(itemGuid, player.Guid, PetitionResult.AlreadySigned));
+            _context.Guilds.SendTo(petition.OwnerGuid, WorldOpcode.SmsgGuildCommandResult,
+                GuildPackets.BuildCommandResult(GuildCommand.Invite, player.Name, GuildCommandError.AlreadyInvitedToGuildS));
             return;
         }
 
         petition.Add(new PetitionSignature(player.Guid.Low, account));
-        Persistence?.SavePetition(petition.ToData());
+        Persist(petition);
 
         byte[] ok = PetitionPackets.BuildSignResults(itemGuid, player.Guid, PetitionResult.Ok);
-        player.Session.Send(WorldOpcode.SmsgPetitionSignResults, ok);
-        _context.World.FindOnlinePlayer(petition.OwnerGuid)?.Session.Send(WorldOpcode.SmsgPetitionSignResults, ok);
+        player.Send(WorldOpcode.SmsgPetitionSignResults, ok);
+        _context.Guilds.SendTo(petition.OwnerGuid, WorldOpcode.SmsgPetitionSignResults, ok);
     }
 
     /// <summary>MSG_PETITION_DECLINE (vmangos HandlePetitionDeclineOpcode, PetitionsHandler.cpp:321-338): an online owner is told who declined.</summary>
@@ -361,7 +378,7 @@ public sealed class PetitionManager
             return;
         }
 
-        _context.World.FindOnlinePlayer(petition.OwnerGuid)?.Session.Send(WorldOpcode.MsgPetitionDecline, PetitionPackets.BuildDeclineResult(player.Guid));
+        _context.Guilds.SendTo(petition.OwnerGuid, WorldOpcode.MsgPetitionDecline, PetitionPackets.BuildDeclineResult(player.Guid));
     }
 
     /// <summary>
@@ -433,16 +450,52 @@ public sealed class PetitionManager
             return;
         }
 
-        if (_context.Guilds.CreateFromPetition(player.Guid.Low, petition.Name, petition.Signatures.Select(s => s.PlayerId), petition.Id) is not { } guild)
+        if (_context.Guilds.Link is { IsHolder: false } link)
+        {
+            // The holder founds the guild and drops the petition; the charter is destroyed and the answer sent here once it did.
+            var request = new GuildRequest(GuildRequestKind.PetitionTurnIn, player.Guid, Item: itemGuid.Value, Id: petition.Id);
+            link.Forward(request, founded =>
+            {
+                if (founded)
+                {
+                    FinishTurnIn(player, itemGuid);
+                }
+            });
+            return;
+        }
+
+        if (!Complete(petition, player.Guid.Low))
         {
             return;
         }
 
+        FinishTurnIn(player, itemGuid);
+    }
+
+    /// <summary>
+    /// The founding itself (authority only): the guild from the petition, the petition gone and both stored in one transaction, then published to the other workers.
+    /// False when the guild could not be created.
+    /// </summary>
+    private bool Complete(Petition petition, uint ownerId)
+    {
+        if (_context.Guilds.CreateFromPetition(ownerId, petition.Name, petition.Signatures.Select(s => s.PlayerId), petition.Id) is not { } guild)
+        {
+            return false;
+        }
+
         _petitions.Remove(petition.Id);
         Persistence?.CompletePetition(guild.ToData(), petition.Id);
+        _context.Guilds.Publish(guild);
+        Publish(petition.Id, null);
+        return true;
+    }
 
-        // "Deleting the charter deletes the petition if it still exists, so we do not want to do it before
-        // the guild is created" (PetitionsHandler.cpp:462-464): the petition is already gone here.
+    /// <summary>
+    /// "Deleting the charter deletes the petition if it still exists, so we do not want to do it before
+    /// the guild is created" (PetitionsHandler.cpp:462-464): the petition is already gone here.
+    /// </summary>
+    private static void FinishTurnIn(Player player, ObjectGuid itemGuid)
+    {
         if (player.Inventory.GetItemByGuid(itemGuid) is { } charter)
         {
             player.Inventory.DestroyItem(charter.BagSlot, charter.Slot);
@@ -498,11 +551,17 @@ public sealed class PetitionManager
             if (petition.OwnerId == characterId)
             {
                 _petitions.Remove(petition.Id);
+                Publish(petition.Id, null);
             }
-            else
+            else if (petition.RemoveSigner(characterId))
             {
-                petition.RemoveSigner(characterId);
+                Publish(petition.Id, petition.ToData());
             }
+        }
+
+        if (_context.Guilds.Link is { IsHolder: false } link)
+        {
+            link.Forward(new GuildRequest(GuildRequestKind.PetitionCharacterDeleted, ObjectGuid.Player(characterId)), null);
         }
     }
 
@@ -526,8 +585,162 @@ public sealed class PetitionManager
             }
             else if (petition.RemoveSigner(characterId))
             {
-                Persistence?.SavePetition(petition.ToData());
+                Persist(petition);
             }
+        }
+    }
+
+    // --- cluster: the holder is authoritative, the other workers keep a replica ---------------------
+
+    /// <summary>
+    /// Run a petition request forwarded by another worker, on the holder (called by <see cref="GuildManager.Serve"/>). True when a turn-in founded the guild.
+    /// </summary>
+    public bool Serve(GuildRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        switch (request.Kind)
+        {
+            case GuildRequestKind.PetitionPut:
+                if (request.Petition is { } data)
+                {
+                    Store(data);
+                }
+
+                return true;
+            case GuildRequestKind.PetitionDelete:
+                if (Get(request.Id) is { } gone)
+                {
+                    Delete(gone);
+                }
+
+                return true;
+            case GuildRequestKind.PetitionCharacterDeleted:
+                OnCharacterDeleted(request.Actor.Low);
+                return true;
+        }
+
+        if (_context.Characters.Find(request.Actor.Low) is not { } info)
+        {
+            return false;
+        }
+
+        ObjectGuid guid = request.Actor;
+        var actor = new GuildActor(guid, info.Name, info.Team, info.AccountId, (opcode, payload) => _context.Guilds.SendTo(guid, opcode, payload));
+        switch (request.Kind)
+        {
+            case GuildRequestKind.PetitionSign:
+                Sign(actor, new ObjectGuid(request.Item));
+                return true;
+            case GuildRequestKind.PetitionTurnIn:
+                return ServeTurnIn(actor, request);
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>The holder's half of <see cref="TurnIn"/> for an owner on another worker: the same checks against the authoritative state, then the founding.</summary>
+    private bool ServeTurnIn(GuildActor owner, GuildRequest request)
+    {
+        if (Get(request.Id) is not { } petition || petition.CharterGuid.Value != request.Item || petition.OwnerId != owner.Guid.Low)
+        {
+            return false;
+        }
+
+        if (_context.Guilds.GetGuildOf(owner.Guid.Low) is not null)
+        {
+            owner.Send(WorldOpcode.SmsgTurnInPetitionResults, PetitionPackets.BuildTurnInResult(PetitionResult.AlreadyInGuild));
+            return false;
+        }
+
+        if (!IsComplete(petition))
+        {
+            owner.Send(WorldOpcode.SmsgTurnInPetitionResults, PetitionPackets.BuildTurnInResult(PetitionResult.NeedMore));
+            return false;
+        }
+
+        if (_context.Guilds.GetByName(petition.Name) is not null)
+        {
+            SendResult(owner, GuildCommand.Create, petition.Name, GuildCommandError.NameExistsS);
+            return false;
+        }
+
+        return Complete(petition, owner.Guid.Low);
+    }
+
+    /// <summary>
+    /// Install a petition bought or renamed on another worker (holder only): a known petition takes the new name, which is all a rename changes (the signatures stay
+    /// the holder's); an unknown one is installed whole. Stored and published.
+    /// </summary>
+    private void Store(PetitionData data)
+    {
+        if (Get(data.Id) is { } existing)
+        {
+            existing.Name = data.Name;
+            Persist(existing);
+            return;
+        }
+
+        if (Install(data) is { } installed)
+        {
+            Persist(installed);
+        }
+    }
+
+    private Petition? Install(PetitionData data)
+    {
+        if (_context.Characters.Find((uint)data.OwnerId) is not { } owner)
+        {
+            return null;
+        }
+
+        var petition = new Petition(data.Id, (uint)data.OwnerId, (uint)data.CharterItemId, data.Name, owner.Team);
+        foreach (PetitionSignatureData signature in data.Signatures)
+        {
+            petition.Add(new PetitionSignature((uint)signature.PlayerId, signature.AccountId));
+        }
+
+        _petitions[petition.Id] = petition;
+        return petition;
+    }
+
+    /// <summary>
+    /// Install the holder's published state of a petition on a worker that is not the holder (<paramref name="data"/> null: gone). Ignored on the holder.
+    /// World thread.
+    /// </summary>
+    public void ApplyReplica(int petitionId, PetitionData? data)
+    {
+        if (_context.Guilds.IsAuthority)
+        {
+            return;
+        }
+
+        _petitions.Remove(petitionId);
+        if (data is not null)
+        {
+            Install(data);
+        }
+    }
+
+    /// <summary>The petition changed: the holder (or a single process) stores it and publishes it; any other worker sends the whole petition to the holder.</summary>
+    private void Persist(Petition petition)
+    {
+        PetitionData data = petition.ToData();
+        if (_context.Guilds.Link is { IsHolder: false } link)
+        {
+            link.Forward(new GuildRequest(GuildRequestKind.PetitionPut, ObjectGuid.Player(petition.OwnerId), Petition: data), null);
+            return;
+        }
+
+        Persistence?.SavePetition(data);
+        _context.Guilds.Link?.ReplicatePetition(petition.Id, data);
+    }
+
+    /// <summary>The holder publishes a petition change to the other workers; a single process and a replica publish nothing.</summary>
+    private void Publish(int petitionId, PetitionData? data)
+    {
+        if (_context.Guilds.Link is { IsHolder: true } link)
+        {
+            link.ReplicatePetition(petitionId, data);
         }
     }
 
@@ -551,7 +764,14 @@ public sealed class PetitionManager
     private void Delete(Petition petition)
     {
         _petitions.Remove(petition.Id);
+        if (_context.Guilds.Link is { IsHolder: false } link)
+        {
+            link.Forward(new GuildRequest(GuildRequestKind.PetitionDelete, ObjectGuid.Player(petition.OwnerId), Id: petition.Id), null);
+            return;
+        }
+
         Persistence?.DeletePetition(petition.Id);
+        Publish(petition.Id, null);
     }
 
     /// <summary>The petition of a charter in the player's own bags, bound by item guid AND petition id.</summary>
@@ -591,4 +811,7 @@ public sealed class PetitionManager
 
     private static void SendResult(Player player, GuildCommand command, string text, GuildCommandError error)
         => player.Session.Send(WorldOpcode.SmsgGuildCommandResult, GuildPackets.BuildCommandResult(command, text, error));
+
+    private static void SendResult(GuildActor player, GuildCommand command, string text, GuildCommandError error)
+        => player.Send(WorldOpcode.SmsgGuildCommandResult, GuildPackets.BuildCommandResult(command, text, error));
 }
