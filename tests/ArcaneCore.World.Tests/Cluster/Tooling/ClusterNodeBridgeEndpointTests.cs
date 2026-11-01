@@ -73,11 +73,10 @@ public sealed class ClusterNodeBridgeEndpointTests
 
         IReadOnlyList<ConnectedClusterNodeStatus> nodes = await SnapshotAsync(configuration);
 
-        Assert.Equal(["gateway", "worker:EK", "worker:Kalimdor"], nodes.Select(n => n.NodeId).OrderBy(n => n, StringComparer.Ordinal).ToArray());
+        Assert.Equal(["worker:EK", "worker:Kalimdor"], nodes.Select(n => n.NodeId).OrderBy(n => n, StringComparer.Ordinal).ToArray());
         Assert.Equal(8095, nodes.Single(n => n.NodeId == "worker:EK").EndPoint.Port);
         Assert.Equal(8096, nodes.Single(n => n.NodeId == "worker:Kalimdor").EndPoint.Port);
-        Assert.Equal(8086, nodes.Single(n => n.NodeId == "gateway").EndPoint.Port);
-        Assert.Equal("Gateway", nodes.Single(n => n.NodeId == "gateway").RoleLabel);
+        Assert.DoesNotContain(nodes, n => n.NodeId == "gateway" || n.EndPoint.Port == 8086);
         Assert.DoesNotContain(nodes, n => n.NodeId is "supervisor" or "worker:instances" or "social" or "coordinator" or "realm");
         Assert.DoesNotContain(nodes, n => n.EndPoint.Port is >= 19081 and <= 19087);
     }

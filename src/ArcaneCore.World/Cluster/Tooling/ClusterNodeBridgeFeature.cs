@@ -245,8 +245,8 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
     /// <summary>
     /// The endpoint spec for the nodes the cluster supervisor is configured to start (<c>Cluster:Supervisor:Processes</c>, which the supervisor
     /// console's <c>Cluster__Supervisor__...</c> environment variables carry and the world child inherits): one entry per worker child (port from
-    /// its <c>--Cluster:Worker:Port</c> argument, maps from <c>Maps</c> or <c>--Cluster:Worker:OwnedMaps</c>) and per gateway child (port from
-    /// <c>--Gateway:Port</c>). Children of other roles, and children with no port in their arguments, are not monitored. Null when no supervisor
+    /// its <c>--Cluster:Worker:Port</c> argument, maps from <c>Maps</c> or <c>--Cluster:Worker:OwnedMaps</c>). Gateway children are not
+    /// monitored (their port is the client listener, not a worker-link endpoint). Children of other roles, and children with no port in their arguments, are not monitored. Null when no supervisor
     /// children are configured (the caller then uses the default); an empty string when some are configured but none is a monitorable node
     /// (a combined world), so the bridge does not monitor nodes nobody started.
     /// </summary>
@@ -276,40 +276,36 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         foreach (SupervisedProcessConfig process in supervisor.Processes.Values.OrderBy(p => p.Name, StringComparer.Ordinal))
         {
             bool isWorker = string.Equals(process.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
-            bool isGateway = string.Equals(process.Role, SupervisedRoles.Gateway, StringComparison.OrdinalIgnoreCase);
-            if (!isWorker && !isGateway)
+            if (!isWorker)
             {
+                // Gateway children are deliberately not monitored: their --Gateway:Port is the WoW client listener, not a
+                // worker-link endpoint, and the monitor speaks the worker-link handshake to every node it lists.
                 continue;
             }
 
-            string? portText = ArgumentValue(process.Arguments, isWorker ? "Cluster:Worker:Port" : "Gateway:Port");
+            string? portText = ArgumentValue(process.Arguments, "Cluster:Worker:Port");
             if (!int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
             {
                 continue;
             }
 
-            string nodeId = (isWorker ? ArgumentValue(process.Arguments, "Cluster:Worker:NodeId") : null) ?? process.Name;
+            string nodeId = ArgumentValue(process.Arguments, "Cluster:Worker:NodeId") ?? process.Name;
             if (string.IsNullOrWhiteSpace(nodeId) || nodeId.AsSpan().IndexOfAny('|', ';') >= 0)
             {
                 continue;
             }
 
             string host = "127.0.0.1";
-            if (isWorker
-                && IPAddress.TryParse(ArgumentValue(process.Arguments, "Cluster:Worker:BindAddress"), out IPAddress? bind)
+            if (IPAddress.TryParse(ArgumentValue(process.Arguments, "Cluster:Worker:BindAddress"), out IPAddress? bind)
                 && !bind.Equals(IPAddress.Any) && !bind.Equals(IPAddress.IPv6Any))
             {
                 host = bind.ToString();
             }
 
-            string maps = "-";
-            if (isWorker)
-            {
-                maps = ExpandMapList(!string.IsNullOrWhiteSpace(process.Maps) ? process.Maps : ArgumentValue(process.Arguments, "Cluster:Worker:OwnedMaps"));
-            }
+            string maps = ExpandMapList(!string.IsNullOrWhiteSpace(process.Maps) ? process.Maps : ArgumentValue(process.Arguments, "Cluster:Worker:OwnedMaps"));
 
             string endpoint = host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
-            entries.Add(string.Create(CultureInfo.InvariantCulture, $"{nodeId.Trim()}|{(isWorker ? "Worker" : "Gateway")}|{endpoint}:{port}|{maps}"));
+            entries.Add(string.Create(CultureInfo.InvariantCulture, $"{nodeId.Trim()}|Worker|{endpoint}:{port}|{maps}"));
         }
 
         return string.Join(';', entries);
