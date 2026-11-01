@@ -512,6 +512,8 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
         else if (isReady)
         {
+            // No announcement this time: drop maps a previous announcement left assigned before applying the spec's.
+            Placement.ReleaseStaticMaps(workerId);
             foreach (uint mapId in node.AssignedMaps)
             {
                 if (mapId is 0 or 1)

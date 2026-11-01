@@ -143,6 +143,79 @@ public sealed class GatewayRouteTableTests
         Assert.False(table.TryResolve(409, 3, out _)); // instances refused
     }
 
+    // The HelloAck layout before map routing: type, accepted flag, reason (int32 LE length + UTF-8). "ok" as the reason.
+    private static readonly byte[] HelloAckOriginalLayout = [(byte)GatewayWorkerFrameType.HelloAck, 0x01, 0x02, 0x00, 0x00, 0x00, 0x6F, 0x6B];
+
+    [Fact]
+    public void HelloAckGolden_ChangesOnlyByTheAppendedTail()
+    {
+        Assert.Equal((byte)2, (byte)GatewayWorkerFrameType.HelloAck);
+
+        // No maps: an empty list (length 0) and the instance flag.
+        byte[] without = LoopbackGatewayWorkerHost.BuildHelloAckFrame(true, "ok");
+        Assert.Equal([.. HelloAckOriginalLayout, 0x00, 0x00, 0x00, 0x00, 0x01], without);
+        Assert.Equal(HelloAckOriginalLayout, without[..HelloAckOriginalLayout.Length]);
+
+        // With maps "0,30-40" (7 bytes) and instances refused.
+        byte[] with = LoopbackGatewayWorkerHost.BuildHelloAckFrame(true, "ok", "0,30-40", allowInstanceMaps: false);
+        Assert.Equal(
+            [.. HelloAckOriginalLayout, 0x07, 0x00, 0x00, 0x00, 0x30, 0x2C, 0x33, 0x30, 0x2D, 0x34, 0x30, 0x00],
+            with);
+        Assert.Equal(HelloAckOriginalLayout, with[..HelloAckOriginalLayout.Length]);
+
+        // A refusal keeps the same prefix shape.
+        byte[] refused = LoopbackGatewayWorkerHost.BuildHelloAckFrame(false, "ok");
+        Assert.Equal((byte)0, refused[1]);
+    }
+
+    private static async Task<GatewaySessionLinkClient> ConnectAgainstAckAsync(byte[] ack, CancellationToken token, Func<Task, Task> assertOutcome)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var client = new GatewaySessionLinkClient(
+                GatewayLinkManifest.Create(ClusterRole.Gateway, "gateway", Guid.NewGuid(), 1, "dev", 1, 1), (IPEndPoint)listener.LocalEndpoint, Secret);
+            Task connect = client.ConnectAsync(token);
+            using TcpClient raw = await listener.AcceptTcpClientAsync(token);
+            await using var worker = new GatewayLinkChannel(raw);
+            worker.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkChallenge, new byte[GatewaySessionWire.NonceBytes]));
+            Assert.Equal((byte)GatewayWorkerFrameType.LinkProof, (await worker.ReadFrameAsync(token))![0]);
+            Assert.Equal((byte)GatewayWorkerFrameType.HelloRegister, (await worker.ReadFrameAsync(token))![0]);
+            worker.TryEnqueue(ack);
+            await assertOutcome(connect);
+            return client;
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task LinkClient_AcceptsALegacyHelloAckWithoutTheTail_AsOwnsEverything()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await using GatewaySessionLinkClient client = await ConnectAgainstAckAsync(HelloAckOriginalLayout, cts.Token, connect => connect);
+
+        Assert.Equal(string.Empty, client.WorkerOwnedMaps);
+        Assert.True(client.WorkerAllowsInstanceMaps);
+    }
+
+    [Fact]
+    public async Task LinkClient_RejectsAHelloAckWithATruncatedMapTail()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        // The reason is intact but the tail holds 3 bytes, fewer than the 5 a length and flag need: the decoder throws InvalidDataException,
+        // the receive loop closes the link and the connect fails.
+        byte[] truncated = [.. HelloAckOriginalLayout, 0x01, 0x00, 0x00];
+        await using GatewaySessionLinkClient client = await ConnectAgainstAckAsync(
+            truncated, cts.Token, async connect => await Assert.ThrowsAsync<InvalidOperationException>(() => connect));
+
+        Assert.Equal(string.Empty, client.WorkerOwnedMaps);
+        Assert.False(client.IsConnected);
+    }
+
     [Fact]
     public void HelloAck_WithoutTheMapTail_ReadsAsNoAnnouncement_AndWithItRoundTrips()
     {
