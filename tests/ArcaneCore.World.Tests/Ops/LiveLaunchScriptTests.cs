@@ -5,6 +5,7 @@ using System.Text;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Configuration.Validation;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Supervision;
 using Microsoft.Extensions.Configuration;
@@ -415,6 +416,168 @@ public sealed class LiveLaunchScriptTests : IDisposable
 
         // The parser is not vacuous: a mistyped key is refused.
         Assert.Equal(DaemonCommandKind.UsageError, DaemonCommandLine.Parse(["--Cluster:Supervisor:Enabeld=false"], ConfigDaemon.World, ConfCatalog.Embedded).Kind);
+    }
+
+    // ---- start-cluster -Topology Split ------------------------------------------------------------------------------------------------
+
+    private const string PgPassword = "pgPassSentinel-9876543210";
+
+    private string WritePgSecretFile()
+    {
+        string path = Path.Combine(_root, "pg-secret.json");
+        File.WriteAllText(path, $$"""{"Host":"db.example.invalid","Port":"5432","Username":"arcane_sentinel_user","Password":"{{PgPassword}}"}""", new UTF8Encoding(false));
+        return path;
+    }
+
+    private static Dictionary<string, string> SplitWorldArguments(string output)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+                line.TrimEnd('\r'), "^ {6}Cluster__Supervisor__Processes__(worker-[A-Za-z0-9]+)__Arguments=(.*)$");
+            if (match.Success)
+            {
+                result[match.Groups[1].Value] = match.Groups[2].Value;
+            }
+        }
+
+        return result;
+    }
+
+    private static string ArgumentValue(string arguments, string key)
+    {
+        System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(arguments, "--" + System.Text.RegularExpressions.Regex.Escape(key) + "=(\\S+)");
+        Assert.True(match.Success, $"{key} is not in: {arguments}");
+        return match.Groups[1].Value;
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_ListsOneGatewayAndThreeWorlds_WithDisjointOwnedMaps_AndNoSecretValues()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Assert.False(started, "the plan started a process");
+        Assert.DoesNotContain(Secret, output, StringComparison.Ordinal);
+        Assert.DoesNotContain(PgPassword, output, StringComparison.Ordinal);
+        Assert.DoesNotContain("arcane_sentinel_user", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("db.example.invalid", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Password=", output, StringComparison.Ordinal);
+        Assert.Contains("      Database__Characters__Provider=PostgreSql", output, StringComparison.Ordinal);
+        Assert.Contains("      Cluster__Supervisor__MinClusterProcesses=5", output, StringComparison.Ordinal);
+        Assert.Contains("topology:   split: realm + gateway + 3 workers", output, StringComparison.Ordinal);
+
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(output, "^ {6}Cluster__Supervisor__Processes__gateway__Role=gateway\\r?$", System.Text.RegularExpressions.RegexOptions.Multiline).Count);
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        Assert.Equal(3, worlds.Count);
+        Assert.True(worlds.ContainsKey("worker-EK") && worlds.ContainsKey("worker-Kalimdor") && worlds.ContainsKey("worker-instances"));
+
+        var maps = new HashSet<uint>();
+        var nodeIds = new HashSet<string>(StringComparer.Ordinal);
+        var ports = new HashSet<string>(StringComparer.Ordinal);
+        foreach ((string key, string arguments) in worlds)
+        {
+            Assert.True(MapOwnership.TryParse(ArgumentValue(arguments, "Cluster:Worker:OwnedMaps"), true, out MapOwnership ownership, out string? error), error);
+            Assert.False(ownership.OwnsEverything, key);
+            foreach (MapOwnership.Range range in ownership.Ranges)
+            {
+                for (uint map = range.First; map <= range.Last; map++)
+                {
+                    Assert.True(maps.Add(map), $"map {map} is owned by two worlds");
+                }
+            }
+
+            Assert.True(nodeIds.Add(ArgumentValue(arguments, "Cluster:Worker:NodeId")), $"{key}: NodeId is shared");
+            Assert.Equal(ArgumentValue(arguments, "Cluster:Worker:NodeId"), ArgumentValue(arguments, "Cluster:Fencing:OwnerNode"));
+            Assert.True(ports.Add(ArgumentValue(arguments, "Cluster:Worker:Port")), $"{key}: link port is shared");
+            Assert.True(ports.Add(ArgumentValue(arguments, "World:Port")), $"{key}: client port is shared");
+            Assert.Equal("true", ArgumentValue(arguments, "Cluster:Fencing:Enabled"));
+        }
+
+        // Only the lease holder is the map worker.
+        Assert.Contains("--Cluster:Node:Role=MapWorker", worlds["worker-EK"], StringComparison.Ordinal);
+        Assert.DoesNotContain("--Cluster:Node:Role", worlds["worker-Kalimdor"], StringComparison.Ordinal);
+        Assert.DoesNotContain("--Cluster:Node:Role", worlds["worker-instances"], StringComparison.Ordinal);
+        Assert.Contains("--Gateway:Workers:2:NodeId=worker:instances", output, StringComparison.Ordinal);
+        Assert.Contains("--Gateway:LoginWorker=worker:EK", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_OwnedMapsAreTheBridgeDefaults_AndTheEnvironmentValidates()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-LeaseHolder", "Kalimdor", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+        Assert.Equal(0, code);
+
+        // One table: the script's node ids and maps are the worker entries of the node bridge's default endpoints.
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        int checkedWorkers = 0;
+        foreach (string entry in ArcaneCore.World.Cluster.Tooling.ClusterNodeBridgeFeature.DefaultEndpointsSpec.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            string[] parts = entry.Split('|');
+            if (parts[1] != "Worker")
+            {
+                continue;
+            }
+
+            string arguments = worlds.Values.Single(a => ArgumentValue(a, "Cluster:Worker:NodeId") == parts[0]);
+            Assert.Equal(parts[3], ArgumentValue(arguments, "Cluster:Worker:OwnedMaps"));
+            checkedWorkers++;
+        }
+
+        Assert.Equal(3, checkedWorkers);
+        Assert.Contains("--Gateway:LoginWorker=worker:Kalimdor", output, StringComparison.Ordinal);
+        Assert.Contains("MapWorker on worker:Kalimdor", output, StringComparison.Ordinal);
+
+        // The supervisor accepts the environment: strict bind, per-child validation, and its own start-up checks (distinct owners, disjoint maps).
+        var settings = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(line.TrimEnd('\r'), "^ {6}(Cluster__[A-Za-z0-9_-]+)=(.*)$");
+            if (match.Success)
+            {
+                settings[match.Groups[1].Value.Replace("__", ":", StringComparison.Ordinal)] = match.Groups[2].Value;
+            }
+        }
+
+        IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var options = new ClusterSupervisorOptions();
+        configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(options, binder => binder.ErrorOnUnknownConfiguration = true);
+        Assert.Equal(5, options.Processes.Count);
+        Assert.Equal(5, options.MinClusterProcesses);
+        Assert.Empty(options.Validate());
+        Assert.All(options.Processes.Values, process => process.Validate());
+        Assert.DoesNotContain(new ClusterSupervisorConfigChecks().Check(configuration), issue => issue.Severity == ConfigSeverity.Error);
+        Assert.Equal(1, options.Processes["worker-Kalimdor"].RealmId);
+        Assert.Equal(0, options.Processes["worker-EK"].RealmId);
+    }
+
+    [PwshTheory]
+    [InlineData("-Topology Split -MapWorker", "does not combine with -Topology Split")]
+    [InlineData("-LeaseHolder EK", "only mean something with -Topology Split")]
+    [InlineData("-Topology Split -LeaseHolder Nowhere", "Nowhere")]
+    [InlineData("-Topology Split -WorkerPort 8086", "both 8086")]
+    public void StartCluster_Split_RefusesBadParameters(string arguments, string message)
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", .. arguments.Split(' ')], Secret);
+        Assert.NotEqual(0, code);
+        Assert.Contains(message, output, StringComparison.Ordinal);
+        Assert.False(started);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_WarnsAboutAMissingPgSecretFile_WithoutPrintingAnything()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        string missing = Path.Combine(_root, "no-such-secret.json");
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-PgSecretFile", $"'{Q(missing)}'"], Secret);
+        Assert.Equal(0, code);
+        Assert.False(started);
+        Assert.Contains("WARNING: the PostgreSQL secret file", output, StringComparison.Ordinal);
+        Assert.Contains("a real run would refuse", output, StringComparison.Ordinal);
     }
 
     // ---- waiting for a supervised child that is relaunched during startup ---------------------------------------------------------------

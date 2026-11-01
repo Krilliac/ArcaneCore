@@ -38,8 +38,25 @@
   Instead, with Diagnostics:CrashDialog on for the SUPERVISOR (e.g. Diagnostics__CrashDialog=true in its console), the supervisor opens
   the crash dialog itself when a child exits unexpectedly with a nonzero code (SupervisorCrashDialog; docs/ops/invariants.md).
   Children inherit the console environment, so the same variable makes each child write its crash-report file (no box) for the supervisor to show.
-  A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
-  writer lock, so only a worker, the standby handoff target, can coexist, and that is not hosted by a launcher yet.
+  Without -Topology Split a second World (a standby worker, several map workers) is not started: all worlds of a realm share one
+  characters database and one writer lock, so they can coexist only on PostgreSQL with fencing, which -Topology Split sets up.
+
+  -Topology Split (implies the gateway; needs the link secret and the PostgreSQL secret file)
+    Starts the realm (order 0), three fenced worker worlds (orders 1 to 3) and the gateway (order 4, Gateway:Workers lists the three):
+        worker-EK         node worker:EK         map 0 (Eastern Kingdoms)              no instance copies
+        worker-Kalimdor   node worker:Kalimdor   map 1 (Kalimdor)                      no instance copies
+        worker-instances  node worker:instances  the dungeon, raid and battleground maps, instance copies allowed
+    The node ids and map lists are the three worker entries of ClusterNodeBridgeFeature.DefaultEndpointsSpec (a test pins the two tables
+    together). Every world gets its own Cluster:Worker:NodeId, Cluster:Fencing:OwnerNode (the same text), link port (-WorkerPort + index),
+    client port (-WorldPort + 100 * index) and heartbeat file; OwnedMaps lists are disjoint and are also given to the supervisor as
+    Processes:<name>:Maps. The world named by -LeaseHolder (default EK) gets Cluster:Node:Role=MapWorker, so the realm-wide singletons run
+    only while it holds their lease, and is the gateway's login worker and the child with the supervisor RealmId (-RealmId; the supervisor
+    needs unique ids, so the other worlds have none and are not addressed by a cross-world .server command).
+    The characters, auth and world databases are PostgreSQL: host, port, user, password and database names come from the secret file of
+    the user profile (<profile>\.arcanecore\pg-cutover.json, or ARCANECORE_PG_SECRET_FILE, or -PgSecretFile: a path, never a value; the
+    same file pg-cutover.ps1 reads). They reach the children only as Database__<Component>__Provider / __ConnectionString variables of the
+    supervisor console, never a command line, and -Plan prints neither them nor the file's contents. The link secret is read as for -Gateway.
+    There is no separate peer secret: gateway and workers share the one link secret.
 
   What it waits for: the supervisor process stays alive, then each child (a child of the supervisor) listens on its port (Auth:Port, World:Port,
   gateway port) and stays up a few seconds. A child that exits while it starts is relaunched by the supervisor, so the wait follows the
@@ -109,6 +126,12 @@ param(
     [ValidateRange(1, 65535)][int]$WorkerPort = 8095,
     [string]$WorkerAddress = '127.0.0.1',
     [switch]$MapWorker,
+    # Combined: realm + one world (+ gateway with -Gateway). Split: realm + gateway + three fenced worker worlds on PostgreSQL (see the help).
+    [ValidateSet('Combined', 'Split')][string]$Topology = 'Combined',
+    # Split only: the world that holds the realm-wide leases (Cluster:Node:Role MapWorker), takes the gateway's logins and the supervisor RealmId.
+    [ValidateSet('EK', 'Kalimdor', 'instances')][string]$LeaseHolder = 'EK',
+    # Split only: a path to the PostgreSQL secret file (default: ARCANECORE_PG_SECRET_FILE, else <profile>\.arcanecore\pg-cutover.json).
+    [string]$PgSecretFile,
     # Prefer the environment variable: a parameter value shows in this shell's history.
     [string]$LinkSecret,
     [string]$HeartbeatPath,
@@ -127,6 +150,13 @@ $WhatIfPreference = $false
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
 $bin = Join-Path $LiveHome 'bin'
+$split = $Topology -eq 'Split'
+if ($split) {
+    if ($MapWorker) { throw '-MapWorker does not combine with -Topology Split: the -LeaseHolder world is the map worker.' }
+    $Gateway = $true
+} elseif ($PSBoundParameters.ContainsKey('LeaseHolder') -or $PSBoundParameters.ContainsKey('PgSecretFile')) {
+    throw '-LeaseHolder and -PgSecretFile only mean something with -Topology Split.'
+}
 $images = @('Realm', 'World')
 if ($Gateway) { $images += 'Gateway' }
 foreach ($name in $images) {
@@ -149,13 +179,33 @@ $profilePorts = Get-LiveProfilePorts -LiveProfile $LiveProfile
 $authPortValue = if ($PSBoundParameters.ContainsKey('AuthPort')) { $AuthPort } else { $profilePorts.Auth }
 $worldPortValue = if ($PSBoundParameters.ContainsKey('WorldPort')) { $WorldPort } else { $profilePorts.World }
 $portMap = [ordered]@{ Auth = $authPortValue; World = $worldPortValue }
-if ($Gateway) { $portMap['Gateway'] = $GatewayPort; $portMap['Worker link'] = $WorkerPort }
+if ($split) {
+    # One row per split world: the table is the three Worker entries of ClusterNodeBridgeFeature.DefaultEndpointsSpec (node id and maps).
+    # Instance copies are allowed only on the instances world.
+    $splitWorlds = @(
+        [pscustomobject]@{ Slug = 'EK'; NodeId = 'worker:EK'; Maps = @(0); AllowInstanceMaps = $false }
+        [pscustomobject]@{ Slug = 'Kalimdor'; NodeId = 'worker:Kalimdor'; Maps = @(1); AllowInstanceMaps = $false }
+        [pscustomobject]@{ Slug = 'instances'; NodeId = 'worker:instances'; AllowInstanceMaps = $true
+            Maps = @(33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 389, 409, 429, 469, 489, 509, 529, 531, 533) }
+    )
+    $portMap.Remove('World')
+    for ($i = 0; $i -lt $splitWorlds.Count; $i++) {
+        $world = $splitWorlds[$i]
+        $world | Add-Member -NotePropertyName WorkerPort -NotePropertyValue ($WorkerPort + $i)
+        $world | Add-Member -NotePropertyName ClientPort -NotePropertyValue ($worldPortValue + 100 * $i)
+        $world | Add-Member -NotePropertyName Key -NotePropertyValue "worker-$($world.Slug)"
+        $portMap["World $($world.Slug)"] = $world.ClientPort
+    }
+    $portMap['Gateway'] = $GatewayPort
+    foreach ($world in $splitWorlds) { $portMap["Worker link $($world.Slug)"] = $world.WorkerPort }
+    if (@($portMap.Values | Where-Object { $_ -gt 65535 }).Count -gt 0) { throw '-WorldPort / -WorkerPort leave a split port above 65535.' }
+} elseif ($Gateway) { $portMap['Gateway'] = $GatewayPort; $portMap['Worker link'] = $WorkerPort }
 $seenPorts = @{}
 foreach ($entry in $portMap.GetEnumerator()) {
     if ($seenPorts.ContainsKey([int]$entry.Value)) { throw "the $($entry.Key) port and the $($seenPorts[[int]$entry.Value]) port are both $($entry.Value): each listener needs its own port." }
     $seenPorts[[int]$entry.Value] = $entry.Key
 }
-$childCount = if ($Gateway) { 3 } else { 2 }
+$childCount = if ($split) { 5 } elseif ($Gateway) { 3 } else { 2 }
 if (-not $PSBoundParameters.ContainsKey('MinClusterProcesses')) { $MinClusterProcesses = $childCount }
 if ($MinClusterProcesses -gt $childCount) { throw "-MinClusterProcesses $MinClusterProcesses is more than the $childCount process(es) this launch configures: the supervisor would refuse to start." }
 $captureDirs = Get-LiveDiagnosticsDirectories -LiveHome $LiveHome
@@ -166,6 +216,49 @@ if ($HangCapture -eq 'Stacks') {
     if (-not $stackTool) { throw '-HangCapture Stacks needs dotnet-stack (dotnet tool install -g dotnet-stack); it was not found under DOTNET_ROOT\tools or the user profile .dotnet\tools.' }
 }
 if (-not $HeartbeatPath) { $HeartbeatPath = Join-Path (Join-Path $LiveHome 'logs') 'world.heartbeat' }
+
+# Split: PostgreSQL settings from the secret file of the user profile (the file pg-cutover.ps1 reads). A plan reads it when it exists and only
+# warns when it does not; a real start refuses. Values are never printed.
+$pgEnvironment = [ordered]@{}
+$pgSecrets = @()
+$pgPlanWarnings = @()
+$pgSecretPath = $null
+if ($split) {
+    $pgSecretPath = if ($PgSecretFile) { $PgSecretFile } elseif (Get-OpsEnv 'ARCANECORE_PG_SECRET_FILE') { Get-OpsEnv 'ARCANECORE_PG_SECRET_FILE' } else {
+        $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+        if (-not $userHome) { throw 'no user profile directory: pass -PgSecretFile or set ARCANECORE_PG_SECRET_FILE' }
+        Join-Path (Join-Path $userHome '.arcanecore') 'pg-cutover.json'
+    }
+    $pgProblem = $null
+    $pg = $null
+    if (-not (Test-Path -LiteralPath $pgSecretPath -PathType Leaf)) {
+        $pgProblem = "the PostgreSQL secret file '$pgSecretPath' does not exist (keys: Host, Port, Username, Password; see pg-cutover.ps1)"
+    } else {
+        try { $pgJson = Get-Content -Raw -LiteralPath $pgSecretPath | ConvertFrom-Json } catch { $pgJson = $null; $pgProblem = "the PostgreSQL secret file '$pgSecretPath' is not valid JSON" }
+        if (-not $pgProblem) {
+            $readPg = { param([string]$Key, [string]$Default) $p = $pgJson.PSObject.Properties[$Key]; if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { [string]$p.Value } else { $Default } }
+            $pg = [ordered]@{
+                Host = & $readPg 'Host' ''; Port = & $readPg 'Port' '5432'; Username = & $readPg 'Username' ''; Password = & $readPg 'Password' ''
+                SslMode = & $readPg 'SslMode' ''
+                Auth = & $readPg 'AuthDatabase' 'arcane_auth'; Characters = & $readPg 'CharactersDatabase' 'arcane_characters'; World = & $readPg 'WorldDatabase' 'arcane_world'
+            }
+            foreach ($pgKey in 'Host', 'Username', 'Password') {
+                if (-not $pg[$pgKey]) { $pgProblem = "the PostgreSQL secret file '$pgSecretPath' has no $pgKey"; break }
+            }
+        }
+    }
+    if ($pgProblem -and -not $planOnly) { throw $pgProblem }
+    if ($pgProblem) { $pgPlanWarnings += "WARNING: $pgProblem; a real run would refuse." }
+    if ($pg -and -not $pgProblem) { $pgSecrets += $pg.Password }
+    foreach ($component in 'Auth', 'Characters', 'World') {
+        $pgEnvironment["Database__${component}__Provider"] = 'PostgreSql'
+        $pgEnvironment["Database__${component}__ConnectionString"] = if ($planOnly -or -not $pg) { "<PostgreSQL $component settings from the secret file>" } else {
+            $cs = "Host=$($pg.Host);Port=$($pg.Port);Database=$($pg[$component]);Username=$($pg.Username);Password=$($pg.Password)"
+            if ($pg.SslMode) { $cs += ";SSL Mode=$($pg.SslMode)" }
+            $cs
+        }
+    }
+}
 
 # ---- the plan ------------------------------------------------------------------------------------------------------------------------
 $build = Get-LiveBuildConfiguration -BinDir $bin
@@ -178,17 +271,18 @@ $debuggerScript = Join-Path $diagDir 'attach-debugger.ps1'
 # One entry per supervised child: key -> settings. Arguments are command-line tokens of that child (a daemon's command line beats its
 # environment, so each child gets its own log file and the World children switch the inherited Cluster:Supervisor:Enabled off).
 $children = [ordered]@{}
-function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId) {
+function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId, [int]$Port = 0, [string]$Maps = '', [bool]$Capture = $false) {
     $log = Get-LiveLogSettings -LiveHome $LiveHome -LiveProfile $LiveProfile -LogStem $Key
     $children[$Key] = [pscustomobject]@{
         Key = $Key; Role = $Role; Executable = (Join-Path $bin $Image); Order = $Order; RealmId = $ChildRealmId
+        Port = $Port; Maps = $Maps; Capture = ($Capture -or $ChildRealmId -gt 0)
         Arguments = ConvertTo-LiveArgumentString (@(ConvertTo-LiveConfigArguments $log) + @($ExtraArguments))
         LogFile = Join-Path (Join-Path $LiveHome 'logs') "$Key.console.log"
     }
 }
 $realmArgs = @()
 if ($PSBoundParameters.ContainsKey('AuthPort')) { $realmArgs += "--Auth:Port=$AuthPort" }
-Add-Child 'realm' 'realm' 'ArcaneCore.Realm.exe' 0 $realmArgs 0
+Add-Child 'realm' 'realm' 'ArcaneCore.Realm.exe' 0 $realmArgs 0 $authPortValue
 
 $worldArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$HeartbeatPath")
 if ($PSBoundParameters.ContainsKey('WorldPort')) { $worldArgs += "--World:Port=$WorldPort" }
@@ -200,11 +294,37 @@ if ($Gateway) {
         "--Cluster:Worker:RealmId=$RealmId")
     if ($MapWorker) { $worldArgs += '--Cluster:Node:Role=MapWorker' }
 }
-Add-Child 'world' $(if ($Gateway) { 'worker' } else { 'combined' }) 'ArcaneCore.World.exe' 1 $worldArgs $RealmId
+if ($split) {
+    $heartbeatDirectory = Split-Path -Parent $HeartbeatPath
+    $order = 1
+    foreach ($world in $splitWorlds) {
+        # Fenced with its own OwnerNode and NodeId (the supervisor check needs both distinct); the same text for both.
+        $heartbeatFile = if ($world.Slug -eq 'EK') { $HeartbeatPath } else { Join-Path $heartbeatDirectory "world-$($world.Slug).heartbeat" }
+        $splitArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$heartbeatFile",
+            "--World:Port=$($world.ClientPort)", '--Cluster:Fencing:Enabled=true', "--Cluster:Fencing:OwnerNode=$($world.NodeId)",
+            '--Cluster:Worker:Enabled=true', "--Cluster:Worker:BindAddress=$WorkerAddress", "--Cluster:Worker:Port=$($world.WorkerPort)",
+            "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($world.NodeId)",
+            "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())")
+        $isLeaseHolder = $world.Slug -eq $LeaseHolder
+        if ($isLeaseHolder) { $splitArgs += '--Cluster:Node:Role=MapWorker' }
+        Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true
+        $order++
+    }
+    $loginNode = ($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }).NodeId
+    $gatewayArgs = @("--Gateway:Port=$GatewayPort", "--Gateway:RealmId=$RealmId", "--Gateway:LoginWorker=$loginNode")
+    for ($i = 0; $i -lt $splitWorlds.Count; $i++) {
+        $world = $splitWorlds[$i]
+        $gatewayArgs += @("--Gateway:Workers:${i}:NodeId=$($world.NodeId)", "--Gateway:Workers:${i}:Address=$WorkerAddress", "--Gateway:Workers:${i}:Port=$($world.WorkerPort)")
+        for ($m = 0; $m -lt $world.Maps.Count; $m++) { $gatewayArgs += "--Gateway:Workers:${i}:Maps:${m}=$($world.Maps[$m])" }
+    }
+    Add-Child 'gateway' 'gateway' 'ArcaneCore.Gateway.exe' $order $gatewayArgs 0 $GatewayPort
+} else {
+    Add-Child 'world' $(if ($Gateway) { 'worker' } else { 'combined' }) 'ArcaneCore.World.exe' 1 $worldArgs $RealmId $worldPortValue
 
-if ($Gateway) {
-    Add-Child 'gateway' 'gateway' 'ArcaneCore.Gateway.exe' 2 @("--Gateway:Port=$GatewayPort", "--Gateway:WorkerAddress=$WorkerAddress",
-        "--Gateway:WorkerPort=$WorkerPort", "--Gateway:RealmId=$RealmId") 0
+    if ($Gateway) {
+        Add-Child 'gateway' 'gateway' 'ArcaneCore.Gateway.exe' 2 @("--Gateway:Port=$GatewayPort", "--Gateway:WorkerAddress=$WorkerAddress",
+            "--Gateway:WorkerPort=$WorkerPort", "--Gateway:RealmId=$RealmId") 0 $GatewayPort
+    }
 }
 
 # The supervisor console's environment: launch-daemon.ps1 sets its own (diagnostics, logging, GC) inside the console; these are what start
@@ -221,10 +341,9 @@ foreach ($child in $children.Values) {
     $clusterEnvironment[$prefix + 'Console'] = $ChildConsole
     $clusterEnvironment[$prefix + 'StartOrder'] = [string]$child.Order
     $clusterEnvironment[$prefix + 'HangTimeoutSeconds'] = [string]$HangTimeoutSeconds
-    if ($child.RealmId -gt 0) {
-        $clusterEnvironment[$prefix + 'RealmId'] = [string]$child.RealmId
-        $clusterEnvironment[$prefix + 'HangCapture'] = $HangCapture
-    }
+    if ($child.RealmId -gt 0) { $clusterEnvironment[$prefix + 'RealmId'] = [string]$child.RealmId }
+    if ($child.Capture) { $clusterEnvironment[$prefix + 'HangCapture'] = $HangCapture }
+    if ($child.Maps) { $clusterEnvironment[$prefix + 'Maps'] = $child.Maps }
 }
 if ($HangCapture -ne 'None') {
     $clusterEnvironment['Cluster__Supervisor__HangCaptureDirectory'] = $captureDirectory
@@ -235,6 +354,7 @@ if ($Gateway) {
     $clusterEnvironment['Cluster__Worker__LinkSecret'] = $secret
     $clusterEnvironment['Gateway__LinkSecret'] = $secret
 }
+foreach ($entry in $pgEnvironment.GetEnumerator()) { $clusterEnvironment[$entry.Key] = $entry.Value }
 
 function New-SupervisorStep {
     $environment = Get-LiveDaemonEnvironmentPlan -Role World -LiveHome $LiveHome -LiveProfile $LiveProfile -Diagnostics $Diagnostics -GCHighMemPercent $GCHighMemPercent -LogStem 'supervisor'
@@ -285,18 +405,17 @@ function New-DebuggerStep([string]$SupervisorPid) {
 
 $steps = @(New-SupervisorStep)
 foreach ($child in $children.Values) {
-    $port = switch ($child.Key) { 'realm' { $authPortValue } 'world' { $worldPortValue } default { $GatewayPort } }
-    $steps += New-ChildStep $child $port
+    $steps += New-ChildStep $child $child.Port
 }
 if (-not $NoStatus) { $steps += New-StatusStep }
 if (-not $NoDebugger) { $steps += New-DebuggerStep '<supervisor pid>' }
 
-$launchWarnings = @()
+$launchWarnings = @($pgPlanWarnings)
 if ($HangCapture -eq 'Dump' -and $HangCaptureTimeoutSeconds -lt 120) {
     $launchWarnings += "WARNING: -HangCapture Dump with -HangCaptureTimeoutSeconds $HangCaptureTimeoutSeconds (under 120): a full dump of the World usually takes longer, so the supervisor kills the child before the dump is complete."
 }
 $crashDumpPattern = (New-SupervisorStep).Environment['DOTNET_DbgMiniDumpName']
-$secrets = if ($secret) { @($secret) } else { @() }
+$secrets = @(@($secret) + $pgSecrets | Where-Object { $_ })
 if ($planOnly) {
     $problems = @(Get-LiveLaunchProblems -Ports $portMap -ExtraImages $(if ($Gateway) { @('ArcaneCore.Gateway') } else { @() }))
     $header = @(
@@ -304,7 +423,7 @@ if ($planOnly) {
         "profile:    $LiveProfile",
         "build:      $configuration ($($build.Detail))",
         "ports:      $(($portMap.GetEnumerator() | ForEach-Object { "$($_.Key) $($_.Value)" }) -join ', ')",
-        "topology:   $(if ($Gateway) { "realm + gateway + worker$(if ($MapWorker) { ' (MapWorker)' })" } else { 'realm + combined world' }), MinClusterProcesses $MinClusterProcesses, RealmId $RealmId, hang timeout $HangTimeoutSeconds s, child console $ChildConsole",
+        "topology:   $(if ($split) { "split: realm + gateway + 3 workers ($(($splitWorlds | ForEach-Object { "$($_.NodeId) maps $($_.Maps -join ',')" }) -join '; ')), MapWorker on worker:$LeaseHolder, PostgreSQL from $pgSecretPath" } elseif ($Gateway) { "realm + gateway + worker$(if ($MapWorker) { ' (MapWorker)' })" } else { 'realm + combined world' }), MinClusterProcesses $MinClusterProcesses, RealmId $RealmId, hang timeout $HangTimeoutSeconds s, child console $ChildConsole",
         "heartbeat:  $HeartbeatPath",
         $(if ($HangCapture -eq 'None') { 'hang capture: None (a supervisor kill leaves no evidence)' } else { "hang capture: $HangCapture of the world child into $captureDirectory (timeout $HangCaptureTimeoutSeconds s)" }),
         $(if ($crashDumpPattern) { "crash dumps: inherited by every child from the supervisor console (DOTNET_DbgEnableMiniDump=1), file pattern $crashDumpPattern shared by all children; the pid tells them apart" } else { 'crash dumps: not set by this launch (-Diagnostics Standard, or kept from the environment)' }),
@@ -329,7 +448,7 @@ $supervisor = Wait-LiveDaemonUp -Label 'the cluster supervisor (ArcaneCore.World
 Write-Host "supervisor is up: pid $($supervisor.Id)"
 $running = @($supervisor)
 foreach ($child in $children.Values) {
-    $port = switch ($child.Key) { 'realm' { $authPortValue } 'world' { $worldPortValue } default { $GatewayPort } }
+    $port = $child.Port
     $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -FollowRelaunch
     Write-Host "child '$($child.Key)' is up: pid $($process.Id), port $port"
     $running += $process
