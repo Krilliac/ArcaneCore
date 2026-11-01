@@ -31,20 +31,22 @@ public sealed record ConnectedClusterNodeStatus(
 /// World feature that, only when <c>Cluster:NodeBridge:Enabled</c> is true (off by default; with it off the feature does nothing),
 /// connects the running <c>ArcaneCore.World</c> server to the cluster node processes (by default the local
 /// <c>worker:EK</c> on 19081, <c>worker:Kalimdor</c> on 19082, <c>worker:instances</c> on 19083, <c>gateway</c> on 19084,
-/// <c>social</c> on 19085, <c>coordinator</c> on 19086, <c>supervisor</c> on 19087), logs node connection events and
+/// <c>supervisor</c> on 19087; no process listens as social or coordinator, so they are not monitored), logs node connection events and
 /// periodic topology heartbeats in the WorldServer console, and synchronizes live worker placement in
 /// <see cref="Placement"/>.
 /// </summary>
 public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<ClusterNodeBridgeFeature> logger)
     : IWorldFeature, IDisposable
 {
+    /// <summary>
+    /// The nodes a full split cluster started by <c>start-cluster.ps1</c> runs: the three map workers, the gateway and the supervisor. A launcher
+    /// that starts fewer (or other) nodes passes its own list through <c>Cluster:NodeBridge:Endpoints</c> or <c>ARCANECORE_CLUSTER_ENDPOINTS</c>.
+    /// </summary>
     public const string DefaultEndpointsSpec =
         "worker:EK|Worker|127.0.0.1:19081|0;" +
         "worker:Kalimdor|Worker|127.0.0.1:19082|1;" +
         "worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;" +
         "gateway|Gateway|127.0.0.1:19084|-;" +
-        "social|Social|127.0.0.1:19085|-;" +
-        "coordinator|Coordinator|127.0.0.1:19086|-;" +
         "supervisor|Supervisor|127.0.0.1:19087|-";
 
     private sealed class MonitoredNode(
