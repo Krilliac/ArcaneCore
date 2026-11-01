@@ -258,6 +258,42 @@ public sealed class ClusterHostSupervisorRecoveryTests
     }
 
     [Fact]
+    public async Task Hang_ChildThatAnnouncedDumping_GetsTheDumpGrace_ThenIsTreatedAsHung()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess dumping = launcher.Last;
+        dumping.Beat();
+        dumping.Beat(SupervisorProtocol.FormatDumpingState(360, dumping.Token));
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(300)); // 300 s of silence: far past the 120 s hang timeout, inside the 420 s dump grace
+        await rig.Delays.PulseAsync();
+        await rig.Delays.PulseAsync();
+        Assert.Equal(0, dumping.Drains);
+        Assert.Equal(0, dumping.Kills);
+        Assert.Equal(SupervisedProcessState.Running, Snap(rig).State);
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(130)); // 430 s since the announcement: the grace is spent, the child is wedged in its dump
+        await rig.Delays.ReleaseUntilAsync(() => dumping.Drains == 1, "the hang watch to act once the dump grace is spent");
+    }
+
+    [Fact]
+    public async Task Hang_UnauthenticatedDumpingLine_GetsNoDumpGrace()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess forged = launcher.Last;
+        forged.Beat();
+        forged.Beat(SupervisorProtocol.FormatDumpingState(360, "not-the-token"));
+        forged.Beat("dumping max=360"); // no token at all
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(130)); // past the 120 s hang timeout, far inside the 420 s dump grace a real announcement would earn
+        await rig.Delays.ReleaseUntilAsync(() => forged.Drains == 1, "the hang watch to act at once: a forged dumping line earns no grace");
+    }
+
+    [Fact]
     public async Task Hang_SlowButBeating_NeverActs()
     {
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), holdAllDelays: true);
@@ -338,6 +374,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         launcher.Last.Beat();
 
         rig.Clock.Advance(Seconds121);
+        // The FATAL line is routed before Faulted is published, so a poll that sees the state may read the console text at once.
         await rig.Delays.ReleaseUntilAsync(() => Snap(rig).State == SupervisedProcessState.Faulted, "the unkillable hung child to be faulted");
 
         Assert.Equal(1, launcher.Launches);
@@ -353,10 +390,11 @@ public sealed class ClusterHostSupervisorRecoveryTests
         ClusterSupervisorOptions options = SupervisorRig.OneProcess(configure: c => c.HangCapture = SupervisedHangCaptureMode.Stacks, options: o => o.StackCaptureTool = "dotnet-stack");
         await using var rig = new SupervisorRig(options, launcher, holdAllDelays: true, capture: capture);
         await rig.Supervisor.StartProcessAsync("world");
-        launcher.Last.Beat();
+        ScriptedProcess hung = launcher.Last;
+        hung.Beat();
 
         rig.Clock.Advance(Seconds121);
-        await rig.Delays.ReleaseUntilAsync(() => launcher.Last.Kills == 1, "the hung child to be killed");
+        await rig.Delays.ReleaseUntilAsync(() => hung.Kills == 1, "the hung child to be killed");
 
         Assert.Equal(["capture:world", "drain:world", "kill:world"], launcher.Journal.ToArray());
         Assert.True(capture.Requests.TryPeek(out SupervisedHangCaptureRequest? request));
@@ -374,10 +412,11 @@ public sealed class ClusterHostSupervisorRecoveryTests
         var capture = new RecordingHangCapture(launcher.Journal) { Hangs = true };
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.HangCapture = SupervisedHangCaptureMode.Dump), launcher, holdAllDelays: true, capture: capture);
         await rig.Supervisor.StartProcessAsync("world");
-        launcher.Last.Beat();
+        ScriptedProcess hung = launcher.Last;
+        hung.Beat();
 
         rig.Clock.Advance(Seconds121);
-        await rig.Delays.ReleaseUntilAsync(() => launcher.Last.Kills == 1, "the child to be killed although its capture never finished");
+        await rig.Delays.ReleaseUntilAsync(() => hung.Kills == 1, "the child to be killed although its capture never finished");
 
         Assert.Equal(["capture:world", "drain:world", "kill:world"], launcher.Journal.ToArray());
         Assert.Contains(TimeSpan.FromSeconds(300), rig.Delays.Requested); // HangCaptureTimeoutSeconds bounded the capture

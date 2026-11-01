@@ -101,7 +101,7 @@ public sealed class TeleportRequirementWorldTests
         await without.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(QuestTrigger));
 
         // The reference sends no text for an unfinished quest: nothing at all, and no transfer.
-        Assert.Empty(await without.CollectAsync(Quiet));
+        await without.AssertNoPacketsAsync(WorldOpcode.SmsgAreaTriggerMessage, WorldOpcode.SmsgTransferPending, WorldOpcode.MsgMoveTeleportAck, WorldOpcode.SmsgNewWorld);
 
         var done = new QuestJournalFixture { Templates = [Quest(AttunementQuest)] };
         await using WorldTestHost host = Start(done);
@@ -127,7 +127,7 @@ public sealed class TeleportRequirementWorldTests
 
         await player.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(QuestTrigger));
 
-        Assert.Empty(await player.CollectAsync(Quiet));
+        await player.AssertNoPacketsAsync(WorldOpcode.SmsgAreaTriggerMessage, WorldOpcode.SmsgTransferPending, WorldOpcode.MsgMoveTeleportAck, WorldOpcode.SmsgNewWorld);
     }
 
     [Fact]
@@ -140,7 +140,7 @@ public sealed class TeleportRequirementWorldTests
 
         await player.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(ConditionTrigger));
 
-        Assert.Empty(await player.CollectAsync(Quiet));
+        await player.AssertNoPacketsAsync(WorldOpcode.SmsgAreaTriggerMessage, WorldOpcode.SmsgTransferPending, WorldOpcode.MsgMoveTeleportAck, WorldOpcode.SmsgNewWorld);
         Assert.Equal(0u, await host.PlayerStateAsync("Tpcond", p => p.MapId));
     }
 

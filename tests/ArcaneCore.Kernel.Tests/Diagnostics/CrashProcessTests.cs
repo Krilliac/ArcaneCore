@@ -187,6 +187,127 @@ public sealed class CrashProcessTests
         Assert.Contains("==== end of crash report ====", written, StringComparison.Ordinal);
     }
 
+    // ---- the in-process crash dump (Diagnostics:CrashDump). Mode=Mini keeps every case small and fast. ----
+
+    [Fact]
+    public async Task CrashDump_Mini_UnderFailFast_WritesADumpNamedByDaemonPidAndTime()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "failfast", "Mini", directory.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.NotEqual(ExitCodes.UnhandledException, result.ExitCode);
+        string dump = Assert.Single(DumpFiles(directory.Path));
+        Assert.Matches(@"^ArcaneCore\.Kernel\.Tests-\d+-\d{8}-\d{6}\.dmp$", Path.GetFileName(dump));
+        Assert.True(new FileInfo(dump).Length > 0, "the dump file is empty");
+        Assert.Contains("[crash dump]\n  written in-process by ArcaneCore (Diagnostics:CrashDump:Mode = Mini)", result.StandardError.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("crash dump: written " + dump, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDump_Mini_ForAnInvariantFailFast_WritesADumpBeforeTheProcessAborts()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "invariant", "Mini", directory.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.NotEqual(ExitCodes.UnhandledException, result.ExitCode);
+        string dump = Assert.Single(DumpFiles(directory.Path));
+        Assert.True(new FileInfo(dump).Length > 0, "the dump file is empty");
+        Assert.Contains("Invariant violated at", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("crash dump: written " + dump, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDump_Mini_UnderExitPolicy_WritesADump_AndStillExits70()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "exit", "Mini", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        string dump = Assert.Single(DumpFiles(directory.Path));
+        Assert.True(new FileInfo(dump).Length > 0, "the dump file is empty");
+        Assert.Contains("crash dump: written " + dump, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDump_Mini_ForAnUnobservedTaskThatEndsTheProcess_WritesADump()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "unobserved-exit", "Mini", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        Assert.Single(DumpFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task CrashDump_ModeOff_WritesNoDump()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "exit", "Off", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        Assert.Empty(DumpFiles(directory.Path));
+        Assert.Contains("[crash dump]\n  none (Diagnostics:CrashDump:Mode = Off", result.StandardError.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDump_UnderFailFast_IsSkipped_WhenTheRuntimeWritesItsOwn()
+    {
+        using var directory = new TempDirectory();
+        string runtimeDump = Path.Combine(directory.Path, "runtime.dmp");
+        ProbeResult result = await RunProbeAsync(
+            new Dictionary<string, string> { ["DOTNET_DbgEnableMiniDump"] = "1", ["DOTNET_DbgMiniDumpType"] = "1", ["DOTNET_DbgMiniDumpName"] = runtimeDump },
+            "dump", "failfast", "Mini", directory.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Empty(DumpFiles(directory.Path));
+        Assert.Contains("written by the runtime (DOTNET_DbgEnableMiniDump=1", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("crash dump: skipped, the runtime writes one at FailFast", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrashDump_UnderExit_IsStillWritten_EvenWhenTheRuntimeDumpIsEnabled()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync(
+            new Dictionary<string, string> { ["DOTNET_DbgEnableMiniDump"] = "1", ["DOTNET_DbgMiniDumpName"] = Path.Combine(directory.Path, "runtime.dmp") },
+            "dump", "exit", "Mini", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        Assert.Single(DumpFiles(directory.Path));
+    }
+
+    [Fact]
+    public async Task CrashDump_PrunesTheOldestOwnFilesBeyondMaxFiles_AndLeavesOtherFilesAlone()
+    {
+        using var directory = new TempDirectory();
+        DateTime now = DateTime.UtcNow;
+        string[] old = ["ArcaneCore.Kernel.Tests-1-20200101-000000.dmp", "ArcaneCore.Kernel.Tests-2-20200102-000000.dmp", "ArcaneCore.Kernel.Tests-3-20200103-000000.dmp"];
+        for (int i = 0; i < old.Length; i++)
+        {
+            string path = Path.Combine(directory.Path, old[i]);
+            File.WriteAllText(path, "old");
+            File.SetLastWriteTimeUtc(path, now.AddDays(-30 + i));
+        }
+
+        string foreign = Path.Combine(directory.Path, "world-99-1234.dmp"); // the launcher's pattern, not ours
+        File.WriteAllText(foreign, "launcher");
+        File.SetLastWriteTimeUtc(foreign, now.AddDays(-60));
+
+        ProbeResult result = await RunProbeAsync("dump", "exit", "Mini", directory.Path, "2");
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        string[] kept = [.. DumpFiles(directory.Path).Select(Path.GetFileName).Order(StringComparer.Ordinal)!];
+        Assert.Equal(2, kept.Length);
+        Assert.Contains(old[2], kept); // the newest old one survives next to the fresh dump
+        Assert.DoesNotContain(old[0], kept);
+        Assert.DoesNotContain(old[1], kept);
+        Assert.True(File.Exists(foreign), "a file outside the pattern must never be pruned");
+    }
+
+    private static string[] DumpFiles(string directory) => [.. Directory.GetFiles(directory, "ArcaneCore.Kernel.Tests-*.dmp")];
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

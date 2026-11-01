@@ -29,6 +29,15 @@ internal static class PlayerbotRunMeters
     internal static string OutcomeOf(bool complete, string? reason)
         => complete ? Completed : reason is not null && reason.Contains("timeout", StringComparison.Ordinal) ? Timeout : GivenUp;
 
+    /// <summary>The slot of <paramref name="outcome"/> in a per-coordinator tally (<see cref="Completed"/>, <see cref="GivenUp"/>, <see cref="Timeout"/>).</summary>
+    internal static int IndexOf(string outcome) => outcome switch
+    {
+        Completed => 0,
+        GivenUp => 1,
+        Timeout => 2,
+        _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "not a run outcome label"),
+    };
+
     internal static void Count(string outcome)
     {
         if (Runs.Enabled) Runs.Add(1, new KeyValuePair<string, object?>("outcome", outcome));

@@ -33,16 +33,29 @@ public sealed class SupervisedChildDrainTests
     private sealed class BlockingReader : TextReader
     {
         private readonly BlockingCollection<string?> _lines = [];
+        private int _posted;
+        private int _readCalls;
 
-        public void Post(string? line) => _lines.Add(line);
+        public void Post(string? line)
+        {
+            Interlocked.Increment(ref _posted);
+            _lines.Add(line);
+        }
 
         public int Pending => _lines.Count;
+
+        /// <summary>
+        /// True once the reader thread has taken every posted line AND come back for the next one, i.e. each posted line has been fully handled
+        /// (the reader loop handles a line before it calls ReadLine again). Only meaningful while no end-of-input line is posted.
+        /// </summary>
+        public bool Settled => Volatile.Read(ref _readCalls) > Volatile.Read(ref _posted);
 
         /// <summary>Called with each line the reader thread took (null = end of input); lets a test timestamp the moment the line was read.</summary>
         public Action<string?>? OnTaken { get; set; }
 
         public override string? ReadLine()
         {
+            Interlocked.Increment(ref _readCalls);
             string? line = _lines.Take();
             OnTaken?.Invoke(line);
             return line;
@@ -189,8 +202,7 @@ public sealed class SupervisedChildDrainTests
         reader.Post("lifecycle result realm=4 status=unknown-realm by=Admin");
         reader.Post("lifecycle restart delay=notanumber code=2 by=Admin");
 
-        await WaitForAsync(() => handler.Requests.Count >= 1 && handler.Results.Count >= 1);
-        await Task.Delay(50);
+        await WaitForAsync(() => reader.Settled); // all three lines handled, the malformed one included
         SupervisorLifecycleRequest request = Assert.Single(handler.Requests);
         Assert.Equal(SupervisorLifecycleAction.Restart, request.Action);
         Assert.Equal(30u, request.DelaySeconds);
@@ -216,7 +228,7 @@ public sealed class SupervisedChildDrainTests
 
         await drain.StartAsync(CancellationToken.None);
         reader.Post("lifecycle shutdown delay=0 code=0 by=Admin");
-        await Task.Delay(100);
+        await WaitForAsync(() => reader.Settled);
 
         Assert.Equal(0, lifetime.Stops);
         reader.Post(null);
@@ -226,14 +238,35 @@ public sealed class SupervisedChildDrainTests
     private static ConsoleInputSource Source(TextReader reader, bool supervised, bool redirected = true)
         => new(reader, new StringWriter(), IsInputRedirected: redirected, IsUserInteractive: true, IsSupervisedChild: supervised);
 
-    private static async Task WaitForAsync(Func<bool> condition)
+    private static Task WaitForAsync(Func<bool> condition)
     {
-        DateTime deadline = DateTime.UtcNow + Bound;
-        while (!condition())
+        // A dedicated thread polls with a count bound: a starved thread pool cannot trip a wall-clock deadline while the condition is about to hold.
+        const int MaxPasses = 10_000;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        new Thread(() =>
         {
-            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for a condition");
-            await Task.Delay(5);
-        }
+            try
+            {
+                for (int i = 0; i < MaxPasses; i++)
+                {
+                    if (condition())
+                    {
+                        done.SetResult();
+                        return;
+                    }
+
+                    Thread.Sleep(2);
+                }
+
+                done.SetException(new Xunit.Sdk.XunitException("gave up waiting for a condition"));
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        })
+        { IsBackground = true, Name = "drain-test-wait" }.Start();
+        return done.Task;
     }
 
     [Theory]
@@ -277,7 +310,7 @@ public sealed class SupervisedChildDrainTests
         await drain.StartAsync(CancellationToken.None);
         reader.Post("server shutdown 5");
         reader.Post("drains");
-        await Task.Delay(100);
+        await WaitForAsync(() => reader.Settled);
 
         Assert.Equal(0, lifetime.Stops);
         reader.Post(null);
@@ -296,8 +329,8 @@ public sealed class SupervisedChildDrainTests
         await drain.StartAsync(CancellationToken.None);
         reader.Post("drain");
         reader.Post(null);
-        await Task.Delay(100);
 
+        // No reader thread was started (StartAsync returned without one), so nothing can ever take these lines: no wait is needed.
         Assert.Null(drain.ReaderThread);
         Assert.Equal(0, lifetime.Stops);
         await drain.StopAsync(CancellationToken.None);
@@ -317,13 +350,18 @@ public sealed class SupervisedChildDrainTests
         using IHost host = builder.Build();
 
         IHostApplicationLifetime hostLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-        hostLifetime.ApplicationStarted.Register(() => Mark("host started"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        hostLifetime.ApplicationStarted.Register(() =>
+        {
+            Mark("host started");
+            started.TrySetResult();
+        });
         hostLifetime.ApplicationStopping.Register(() => Mark("StopApplication observed (ApplicationStopping)"));
         hostLifetime.ApplicationStopped.Register(() => Mark("host stopped (StopAsync of all services done)"));
         reader.OnTaken = line => Mark($"reader took {(line is null ? "EOF" : $"'{line}'")}");
         Mark("RunAsync called");
         Task run = host.RunAsync();
-        await Task.Delay(100);
+        await started.Task.WaitAsync(TimeSpan.FromMinutes(2)); // the hosted services (the reader) are started; a backstop, not a pacing wait
         Mark("drain line posted");
         reader.Post("drain");
 

@@ -285,7 +285,7 @@ public sealed class FaultLedgerTests
     public void AnUnobservedTaskException_IsRecordedByTheCrashHandler()
     {
         bool created = CrashHandler.Current is null;
-        CrashHandler handler = CrashHandler.Install(new DiagnosticsOptions(), new NullSink());
+        CrashHandler handler = CrashHandler.Install(DumpFree.Options(), new NullSink());
         try
         {
             bool recorded = false;

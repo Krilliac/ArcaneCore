@@ -19,15 +19,14 @@ public sealed class PlayerbotImmunityGuardTests
     private static string? WarriorNext(RotationUnit victim, string spell)
         => Next(Warrior.InCombat(State(Warrior, [Hostile(spell)], Self(1), victim, PlayerbotRole.MeleeDps)));
 
-    [Theory]
-    [InlineData(4u)]
-    [InlineData(9u)]
-    public void SerpentSting_SkipsElementalsAndMechanicals(uint creatureType) => Assert.Null(HunterNext(creatureType));
-
+    // The poison immunity of elementals and mechanicals is server data now (CreatureDataImmunities), so the rotation has no type list and
+    // the immunity reaches it through CanCast like the bleed immunity below.
     [Theory]
     [InlineData(1u)]
+    [InlineData(4u)]
     [InlineData(6u)]
-    public void SerpentSting_IsCastOnOtherTypes(uint creatureType) => Assert.Equal("Serpent Sting", HunterNext(creatureType));
+    [InlineData(9u)]
+    public void SerpentSting_IsCastOnEveryTypeTheViewLetsThrough(uint creatureType) => Assert.Equal("Serpent Sting", HunterNext(creatureType));
 
     // Bleed immunity is data (mechanic_immune_mask, the totem override) and reaches the rotation through CanCast, not a type list.
     [Theory]

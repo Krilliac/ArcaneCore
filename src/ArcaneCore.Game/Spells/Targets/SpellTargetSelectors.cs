@@ -37,6 +37,15 @@ public static class SpellTargetSelectors
     /// <summary>TARGET_LOCATION_CASTER_RIGHT (orientation - pi/2).</summary>
     public const uint LocationCasterRight = 50;
 
+    /// <summary>Implicit target 11: no vmangos SetTargetMap case (SpellDefines.h:66), nothing is selected.</summary>
+    public const uint UnusedTarget11 = 11;
+
+    /// <summary>Implicit target 58: no vmangos SetTargetMap case (SpellDefines.h:113), nothing is selected.</summary>
+    public const uint UnusedTarget58 = 58;
+
+    /// <summary>Implicit target 62: no vmangos SetTargetMap case (SpellDefines.h:117), nothing is selected.</summary>
+    public const uint UnusedTarget62 = 62;
+
     /// <summary>TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60 (vmangos Spell.cpp:2702-2740): the spell_script_target units in the frontal cone.</summary>
     public const uint UnitsScriptInCone = 60;
 

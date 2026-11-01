@@ -35,11 +35,12 @@ def optional(name: str) -> str | None:
     return value or None
 
 
-def require(name: str, purpose: str) -> str:
-    """The value of an environment variable, or exit with a message naming it and what it is for."""
+def require(name: str, purpose: str, option: str | None = None) -> str:
+    """The value of an environment variable, or exit with a message naming it and what it is for (and the command-line option that supplies it, when given)."""
     value = optional(name)
     if value is None:
-        sys.exit(f"{name} is not set ({purpose}). Set it, or pass the matching command-line option; see docs/ops/tooling.md.")
+        instead = f"Set it, or pass {option}" if option else "Set it"
+        sys.exit(f"{name} is not set ({purpose}). {instead}; see docs/ops/tooling.md.")
     return value
 
 

@@ -38,9 +38,9 @@ public sealed class DiagnosticsOptions
     /// What ends the process after an unhandled exception (<c>AppDomain.UnhandledException</c>): the
     /// report is always written first. <c>FailFast</c> (default): <c>Environment.FailFast</c>, which is
     /// what the runtime does on its own; the process aborts (exit status 134, SIGABRT, on Linux;
-    /// 0x80131623 / Watson on Windows) and a dump is written when <c>DOTNET_DbgEnableMiniDump=1</c>.
-    /// <c>Exit</c>: <c>Environment.Exit(70)</c> (<c>ExitCodes.UnhandledException</c>, sysexits
-    /// EX_SOFTWARE), an exit code a supervisor can match; no dump.
+    /// 0x80131623 / Watson on Windows). <c>Exit</c>: <c>Environment.Exit(70)</c> (<c>ExitCodes.UnhandledException</c>, sysexits
+    /// EX_SOFTWARE), an exit code a supervisor can match. Under both, the daemon writes a dump of itself first
+    /// (<c>Diagnostics:CrashDump</c>); the runtime's own <c>DOTNET_DbgEnableMiniDump=1</c> dump covers a FailFast too, and then this one is skipped.
     /// </summary>
     public UnhandledExceptionPolicy OnUnhandled { get; set; } = UnhandledExceptionPolicy.FailFast;
 
@@ -108,6 +108,79 @@ public sealed class DiagnosticsOptions
     /// fault storm of new signatures still means one box after another.
     /// </summary>
     public bool FaultDialog { get; set; }
+
+    /// <summary>
+    /// The dump the daemon writes of itself when an unhandled exception (or an unobserved task exception under an <c>OnUnobservedTask</c>
+    /// policy that ends the process, or a world tick hang the watchdog ends) is about to end it, so a crash leaves a <c>.dmp</c> even when
+    /// the executable was started by hand (<c>Diagnostics:CrashDump</c>).
+    /// </summary>
+    public CrashDumpOptions CrashDump { get; } = new();
+}
+
+/// <summary>What <c>Diagnostics:CrashDump:Mode</c> writes when the process crashes.</summary>
+public enum CrashDumpMode
+{
+    /// <summary>No in-process crash dump (the runtime's <c>DOTNET_DbgEnableMiniDump</c> dump still applies when set).</summary>
+    Off = 0,
+
+    /// <summary>Threads, modules and stacks without the heap (<c>DumpType.Normal</c>). Small and fast.</summary>
+    Mini = 1,
+
+    /// <summary>Managed heap and what it needs (<c>DumpType.WithHeap</c>). Some hosts refuse it with E_INVALIDARG, then the dump falls back to Mini.</summary>
+    Heap = 2,
+
+    /// <summary>All memory (<c>DumpType.Full</c>); about the size of the working set (about 7 GB and a minute on a loaded world).</summary>
+    Full = 3,
+}
+
+/// <summary>
+/// The <c>Diagnostics:CrashDump</c> section. On a terminating crash, after the crash report is written and before the process ends, the daemon
+/// asks its own runtime for a dump (the same mechanism as <c>.debug dump</c>), trying Full, then Heap, then Mini until one is written. A dump is
+/// skipped when <c>DOTNET_DbgEnableMiniDump=1</c> is set and the process ends by FailFast (the runtime writes that one), but is still written
+/// under the <c>Exit</c> policy, where the runtime writes none. SECURITY: a dump holds everything in the process memory, session keys and
+/// password material in flight included. It stays on the local disk in the daemon's own directory, like the launcher's dumps; keep the directory
+/// private, do not attach a dump to a public issue, and delete the files after the analysis (<c>MaxFiles</c> bounds how many are kept).
+/// LIMITS: native and fatal runtime errors (an access violation in native code, a stack overflow, an out-of-memory abort of the runtime) never
+/// reach a managed handler, so only the runtime's own <c>DOTNET_DbgEnableMiniDump=1</c> (with <c>DOTNET_DbgMiniDumpName</c> and
+/// <c>DOTNET_DbgMiniDumpType</c>) covers them; keep that launcher setting as well. Read once when the daemon starts.
+/// </summary>
+public sealed class CrashDumpOptions
+{
+    /// <summary>
+    /// What to write: <c>Off</c>, <c>Mini</c>, <c>Heap</c> or <c>Full</c>. Default <c>Full</c>: it only acts when the process is already
+    /// crashing, so it changes nothing for a healthy server. A failure of the chosen type falls back Full, Heap, Mini and is logged.
+    /// </summary>
+    public CrashDumpMode Mode { get; set; } = CrashDumpMode.Full;
+
+    /// <summary>
+    /// The directory the dump files are written to, named <c>&lt;daemon&gt;-&lt;pid&gt;-&lt;yyyyMMdd-HHmmss&gt;.dmp</c> (UTC). Empty (default)
+    /// means <c>dumps</c> beside the log file (the resolved <c>Logging:ArcaneCore:File:Path</c>, so <c>logs/dumps</c> by default, the directory
+    /// <c>.debug dump</c> uses), or <c>dumps</c> in the daemon's own directory when file logging is off. Created on the first dump, readable by
+    /// the daemon's account only on Linux and macOS.
+    /// </summary>
+    public string Directory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// How many of this feature's dump files are kept in the directory: after a dump is written the oldest beyond this count are deleted. Only files
+    /// named by the pattern above are touched. 0 keeps every file. Default 5.
+    /// </summary>
+    public int MaxFiles { get; set; } = 5;
+
+    /// <summary>
+    /// Free space, in GiB, the dump volume must have for a Full dump; below it Full falls back to Heap. Default 16, the launcher's threshold
+    /// (<c>tools/ops/live/LiveDiagnostics.ps1</c>). 0 never falls back for space.
+    /// </summary>
+    public int FullMinFreeGB { get; set; } = 16;
+
+    /// <summary>
+    /// How long the daemon waits for its own diagnostics server to start a dump before it gives up and ends the process anyway; it bounds an
+    /// unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is
+    /// still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an
+    /// unreachable diagnostics endpoint (<c>DOTNET_EnableDiagnostics=0</c>), is not retried with a smaller type; a type the runtime refuses is.
+    /// While it dumps the daemon publishes the heartbeat state <c>dumping</c>, which supervisors honour for a grace of this long plus a margin.
+    /// Default 120.
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 120;
 }
 
 /// <summary>What a failed release-mode invariant does after it is logged and counted.</summary>

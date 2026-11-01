@@ -7,6 +7,7 @@ using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
 using ArcaneCore.Protocol.Versioning;
@@ -43,6 +44,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     private long _outboundBytes;
     private uint _serverSeed;
     private volatile ConnectionState _state = ConnectionState.Connected;
+    // True from sending SMSG_NEW_WORLD until the read loop parses the client's MSG_MOVE_WORLDPORT_ACK: bad-header diagnostics only.
+    private volatile bool _worldportPending;
     private GatewaySessionLinkClient? _link;
     private long _generation;
     private int _accountId;
@@ -135,6 +138,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     {
         NetworkStream stream = _stream!;
         byte[] header = new byte[_crypt.IncomingHeaderLength];
+        byte[] cipherHeader = new byte[header.Length]; // the header as received, kept for the bad-header diagnostics
+        var trail = new ClientFrameTrail();
         NetProtectionOptions protection = _guard.Options;
         using var deadline = new ReadDeadline(token, protection.FrameReadTimeout);
         while (true)
@@ -148,13 +153,17 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             deadline.Arm();
             byte[] payload;
             uint rawOpcode;
+            bool cipherEngaged;
             try
             {
                 await stream.ReadExactlyAsync(header.AsMemory(1), deadline.Token).ConfigureAwait(false);
+                header.CopyTo(cipherHeader, 0);
+                (byte Index, byte Previous) position = _crypt.ReceivePosition;
+                cipherEngaged = _crypt.IsInitialized;
                 _crypt.DecryptHeader(header);
                 if (!WorldFrameCodec.TryParseClientHeader(header, out ushort size, out rawOpcode))
                 {
-                    _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting", RemoteEndpoint, size, rawOpcode);
+                    LogBadHeader(size, rawOpcode, cipherHeader, header, position, trail);
                     return;
                 }
 
@@ -173,12 +182,22 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             deadline.Disarm();
             ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(header.Length + payload.Length);
             WorldOpcode opcode = _protocol.Opcodes.FromWire(rawOpcode);
+            trail.Record(opcode, header.Length + payload.Length, Clock.Milliseconds(), cipherEngaged);
+            if (opcode == WorldOpcode.MsgMoveWorldportAck)
+            {
+                _worldportPending = false;
+            }
+
             if (!await DispatchAsync(opcode, payload, token).ConfigureAwait(false))
             {
                 return;
             }
         }
     }
+
+    /// <summary>One WARN for a rejected client header (see <see cref="BadClientHeader"/>). Read loop only.</summary>
+    private void LogBadHeader(ushort size, uint rawOpcode, ReadOnlySpan<byte> cipherHeader, ReadOnlySpan<byte> plainHeader, (byte Index, byte Previous) position, ClientFrameTrail trail)
+        => _logger.LogWarning("{Diagnostic}", BadClientHeader.FormatWarning(RemoteEndpoint, size, rawOpcode, cipherHeader, plainHeader, position, trail, Clock.Milliseconds(), _state.ToString(), _worldportPending));
 
     private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload, CancellationToken token)
     {
@@ -352,7 +371,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         _logger.LogInformation("[{Endpoint}] '{Account}' authenticated; forwarding to the worker (generation {Generation}, epoch {Epoch})",
             RemoteEndpoint, pending.Account, SessionGeneration, reply.OwnerEpoch);
         SendAuthResponse(AuthResponseCode.Ok);
-        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(pending.AddonBlock));
+        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(pending.AddonBlock, _logger, RemoteEndpoint));
     }
 
     void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
@@ -372,6 +391,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         {
             _logger.LogWarning("[{Endpoint}] {Opcode} payload of {Length} bytes exceeds the SMSG size field; dropped", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), payload.Length);
             return;
+        }
+
+        if (opcode == WorldOpcode.SmsgNewWorld)
+        {
+            _worldportPending = true;
         }
 
         int headerLength = _crypt.OutgoingHeaderLength;

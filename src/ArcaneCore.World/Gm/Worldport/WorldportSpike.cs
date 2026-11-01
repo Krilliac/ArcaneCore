@@ -151,7 +151,8 @@ public sealed class WorldportSpike : IDisposable
     /// <param name="logger">Where the steps are written.</param>
     /// <param name="ackTimeout">How long a far run waits for MSG_MOVE_WORLDPORT_ACK before it reports a timeout (default 60 s).</param>
     /// <param name="observeWindow">How long a run stays open after the player is back in its map, to catch a client that drops then (default 15 s).</param>
-    public WorldportSpike(WorldRuntime world, Func<TeleportFeature> teleports, ILogger? logger = null, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null)
+    /// <param name="abandonAfter">How long a run that was never re-added stays open before it is abandoned (default ten times <paramref name="ackTimeout"/>).</param>
+    public WorldportSpike(WorldRuntime world, Func<TeleportFeature> teleports, ILogger? logger = null, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null, TimeSpan? abandonAfter = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(teleports);
@@ -160,11 +161,15 @@ public sealed class WorldportSpike : IDisposable
         _logger = logger ?? NullLogger.Instance;
         AckTimeout = ackTimeout ?? TimeSpan.FromSeconds(60);
         ObserveWindow = observeWindow ?? TimeSpan.FromSeconds(15);
+        AbandonAfter = abandonAfter ?? (AckTimeout * 10);
     }
 
     public TimeSpan AckTimeout { get; }
 
     public TimeSpan ObserveWindow { get; }
+
+    /// <summary>Age of a never-re-added run at which it is abandoned.</summary>
+    public TimeSpan AbandonAfter { get; }
 
     /// <summary>The open runs first (oldest first), then the finished ones, newest last. World thread.</summary>
     public IReadOnlyList<WorldportTrace> Recent => [.. _active.Values.OrderBy(t => t.Id), .. _recent];
@@ -415,7 +420,7 @@ public sealed class WorldportSpike : IDisposable
                     $"not back in the world after {AckTimeout.TotalSeconds:F0} s (teleport stage {(stage?.ToString() ?? "none")}); the client never acknowledged or the entry failed. The run stays open for a late ack."));
             }
 
-            if (elapsed >= AckTimeout.TotalMilliseconds * 10)
+            if (elapsed >= AbandonAfter.TotalMilliseconds)
             {
                 Finish(trace, "failed: never re-added (abandoned)");
             }

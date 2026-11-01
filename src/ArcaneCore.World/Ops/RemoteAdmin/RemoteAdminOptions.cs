@@ -29,8 +29,8 @@ public sealed class RemoteAdminOptions
 
     /// <summary>
     /// A file the daemon writes a fresh random token to at start; <c>@token &lt;token&gt;</c> logs in as the console (Administrator)
-    /// without an account, for automation running as the same OS user (the file is readable by whoever can read the daemon's
-    /// directory). Relative paths are under the daemon's base directory. Empty: token login off.
+    /// without an account, for automation running as the same OS user. The file is created owner-only (Windows: an ACL for the daemon's account and SYSTEM, no
+    /// inheritance; Unix: mode 600), so other local users cannot read it. Relative paths are under the daemon's base directory. Empty: token login off.
     /// </summary>
     public string AgentLoginFile { get; set; } = "ra-token.txt";
 

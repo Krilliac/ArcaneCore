@@ -55,7 +55,7 @@ public static class CrashReport
         "Release";
 #endif
 
-    public static string Render(CrashKind kind, Exception? exception, IReadOnlyList<ICrashContextProvider> providers, DateTime nowUtc)
+    public static string Render(CrashKind kind, Exception? exception, IReadOnlyList<ICrashContextProvider> providers, DateTime nowUtc, string? dumpPlan = null)
     {
         var sb = new StringBuilder(4096);
         sb.Append("==== ArcaneCore crash report: ").Append(Title(kind)).Append(" at ")
@@ -68,6 +68,11 @@ public static class CrashReport
         AppendInvariants(sb);
         AppendFaults(sb);
         AppendLatencies(sb);
+        if (dumpPlan is { Length: > 0 })
+        {
+            sb.Append("[crash dump]\n  ").Append(dumpPlan).Append('\n');
+        }
+
         foreach (ICrashContextProvider provider in providers)
         {
             AppendProvider(sb, provider);

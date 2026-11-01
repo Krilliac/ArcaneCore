@@ -100,6 +100,12 @@ public sealed partial class SpellSystem
             return SelectScriptAoeAtDestination(cast, effect, effectIndex, unitTarget);
         }
 
+        // A spell-specific selector (Destroy Egg's, BlackwingLairTargetModule) keeps precedence over the generic 46 selector.
+        if (selector == SpellImplicitTarget.LocationScriptNearCaster && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, selector)))
+        {
+            return SelectScriptLocationTarget(cast, effect, effectIndex, unitTarget);
+        }
+
         bool unitScriptTarget = selector is SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc or SpellImplicitTarget.UnitScriptNearCaster;
         if (unitScriptTarget && Store.GetScriptTargets(cast.Spell.Id).Count > 0)
         {
@@ -140,7 +146,7 @@ public sealed partial class SpellSystem
     /// <summary>The implicit targets the built-in switch of <c>SelectEffectTargets</c> (and its script-target defaults) answers with a list, never null.</summary>
     private static readonly HashSet<uint> s_builtInTargets =
     [
-        0, 1, 6, 7, 8, 9, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 33, 34, 35, 36, 37, 38, 39, 45, 53, 54, 56, 57,
+        0, 1, 6, 7, 8, 9, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 33, 34, 35, 36, 37, 38, 39, 45, 46, 53, 54, 56, 57,
         2, 3, 4, SpellTargetSelectors.UnitsScriptInCone,
     ];
 
@@ -188,6 +194,11 @@ public sealed partial class SpellSystem
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterLeft] = Location(0.5f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterRight] = Location(-0.5f),
         [(SpellImplicitTarget)SpellTargetSelectors.UnitRaidAndClass] = new(SpellTargetSelectors.SelectRaidAndClass, LocationOnly: false),
+        // Targets 11, 58 and 62 have no SetTargetMap case in vmangos (SpellDefines.h:66 TARGET_PLAYER_NYI, :113 TARGET_UNIT_RAID_NEAR_CASTER and
+        // :117 TARGET_PLAYER_RAID_NYI), so a spell using one selects no unit from them; an explicit empty selector says that on purpose.
+        [(SpellImplicitTarget)SpellTargetSelectors.UnusedTarget11] = new(static (_, _, _, _) => [], LocationOnly: false),
+        [(SpellImplicitTarget)SpellTargetSelectors.UnusedTarget58] = new(static (_, _, _, _) => [], LocationOnly: false),
+        [(SpellImplicitTarget)SpellTargetSelectors.UnusedTarget62] = new(static (_, _, _, _) => [], LocationOnly: false),
     };
 
     private static TargetSelectorEntry Location(float piMultiple)

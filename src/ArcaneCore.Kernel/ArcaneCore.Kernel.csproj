@@ -17,6 +17,8 @@
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Physical" />
+    <!-- The in-process crash dump (Diagnostics/CrashDumpService): DiagnosticsClient.WriteDump against the process's own endpoint, the mechanism behind .debug dump. -->
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" />
   </ItemGroup>
 
   <ItemGroup>

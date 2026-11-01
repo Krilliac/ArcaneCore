@@ -366,12 +366,12 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Game/WorldState/Weather/MapWeather.cs:148` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/WorldState/Zones/ZoneAreaUpdater.cs:129` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.Game/WorldState/Zones/ZoneAreaUpdater.cs:269` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:96` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "torn down" |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:122` | Exception | by-design | documented in place: "disconnect, kick or shutdown" |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:167` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:470` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:483` | TimeoutException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
-| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:497` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:99` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "torn down" |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:125` | Exception | by-design | documented in place: "disconnect, kick or shutdown" |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:176` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:494` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:507` | TimeoutException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
+| `src/ArcaneCore.Gateway/GatewayClientConnection.cs:521` | Exception | by-design | inferred from the exception type; no comment at the site |
 | `src/ArcaneCore.Gateway/GatewayServer.cs:159` | Exception | by-design | inferred from the exception type; no comment at the site |
 | `src/ArcaneCore.Gateway/GatewayServer.cs:171` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "stopping" |
 | `src/ArcaneCore.Gateway/GatewayServer.cs:196` | Exception | logged | logs the exception object |
@@ -1038,7 +1038,7 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Items/ItemHandlers.cs:86` | ArgumentOutOfRangeException | by-design | documented in place: "Reject malformed or wrong-version payloads without touching inventory." |
 | `src/ArcaneCore.World/Items/ItemHandlers.cs:90` | IndexOutOfRangeException | by-design | documented in place: "PacketReader.ReadByte uses direct span indexing for short payloads." |
 | `src/ArcaneCore.World/Items/ItemsFeature.cs:187` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Net/AddonInfo.cs:136` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.World/Net/AddonInfo.cs:150` | Exception | by-design | inferred from the exception type; no comment at the site |
 | `src/ArcaneCore.World/Net/ManagedWorldSession.cs:160` | Exception | propagated | rethrows (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.World/Net/ManagedWorldSession.cs:476` | Exception | propagated | carried to a caller / observer that logs or rethrows it (not checked per site) |
 | `src/ArcaneCore.World/Net/PacketCapture.cs:126` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
@@ -1055,16 +1055,16 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Net/WorldSession.PacketTools.cs:182` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "The session's own kick cancelled the handler: the session is already ending, which is not a fault and needs no second kick." |
 | `src/ArcaneCore.World/Net/WorldSession.PacketTools.cs:187` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Net/WorldSession.Remote.cs:214` | Exception | by-design | documented in place: "gateway close, kick or shutdown" |
-| `src/ArcaneCore.World/Net/WorldSession.cs:289` | Exception | by-design | documented in place: "disconnect, kick or shutdown" |
-| `src/ArcaneCore.World/Net/WorldSession.cs:447` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Net/WorldSession.cs:459` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Net/WorldSession.cs:525` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "already torn down" |
-| `src/ArcaneCore.World/Net/WorldSession.cs:677` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.World/Net/WorldSession.cs:836` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.World/Net/WorldSession.cs:844` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.World/Net/WorldSession.cs:1087` | Exception | by-design | documented in place: "the socket is already gone" |
-| `src/ArcaneCore.World/Net/WorldSession.cs:1106` | TimeoutException | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.World/Net/WorldSession.cs:1181` | Exception | by-design | documented in place: "stop reading too" (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.World/Net/WorldSession.cs:292` | Exception | by-design | documented in place: "disconnect, kick or shutdown" |
+| `src/ArcaneCore.World/Net/WorldSession.cs:455` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.World/Net/WorldSession.cs:467` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.World/Net/WorldSession.cs:533` | ObjectDisposedException | by-design | cancellation / shutdown / disposed: expected control flow; "already torn down" |
+| `src/ArcaneCore.World/Net/WorldSession.cs:690` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.World/Net/WorldSession.cs:862` | Exception | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.World/Net/WorldSession.cs:870` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.World/Net/WorldSession.cs:1113` | Exception | by-design | documented in place: "the socket is already gone" |
+| `src/ArcaneCore.World/Net/WorldSession.cs:1132` | TimeoutException | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.World/Net/WorldSession.cs:1207` | Exception | by-design | documented in place: "stop reading too" (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.World/Npc/ConditionFeature.cs:68` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Npc/ConditionFeature.cs:104` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Npc/ConditionFeature.cs:133` | Exception | logged | logs the exception object |

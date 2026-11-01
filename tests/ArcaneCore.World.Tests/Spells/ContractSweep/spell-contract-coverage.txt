@@ -9124,7 +9124,7 @@
 11819	CastOk
 11820	CastOk	b c:melee-hit-taken,melee-swing,mount d g
 11821	CastOk	g
-11822	CastOk
+11822	BadTargets
 11823	CastOk
 11824	CastOk	e f g
 11825	CastOk	e g

@@ -79,7 +79,7 @@ public sealed class WorldportSpikeTests
         }
     }
 
-    private static async Task<Rig> StartAsync(string tag, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null, int fillerCharacters = 0)
+    private static async Task<Rig> StartAsync(string tag, TimeSpan? ackTimeout = null, TimeSpan? observeWindow = null, int fillerCharacters = 0, TimeSpan? abandonAfter = null)
     {
         WorldTestHost host = WorldTestHost.Start();
         for (int i = 0; i < fillerCharacters; i++)
@@ -91,7 +91,7 @@ public sealed class WorldportSpikeTests
         WorldTestClient admin = await host.EnterWorldAsync("WPA" + tag, "Wpa" + tag.ToLowerInvariant(), AccountSecurity.Administrator);
         var log = new ListLogger();
         TeleportFeature feature = host.WorldServices.GetRequiredService<TeleportFeature>();
-        var spike = new WorldportSpike(host.World, () => feature, log, ackTimeout, observeWindow ?? TimeSpan.FromMilliseconds(100));
+        var spike = new WorldportSpike(host.World, () => feature, log, ackTimeout, observeWindow ?? TimeSpan.FromMilliseconds(100), abandonAfter);
         Assert.True(host.WorldServices.GetRequiredService<CommandTableSource>().TryAdd([WorldportSpikeCommands.Create(spike, audit: null)]).Applied);
         await admin.CollectAsync(Quiet);
         return new Rig { Host = host, Admin = admin, Spike = spike, Log = log };
@@ -206,7 +206,7 @@ public sealed class WorldportSpikeTests
     [Fact]
     public async Task Far_WithoutAnAck_ReportsTheTimeout_AndAClientThatLeavesIsRecorded()
     {
-        await using Rig rig = await StartAsync("NOACK", ackTimeout: TimeSpan.FromMilliseconds(200));
+        await using Rig rig = await StartAsync("NOACK", ackTimeout: TimeSpan.FromMilliseconds(200), abandonAfter: TimeSpan.FromSeconds(60)); // the default (10 x the ack timeout = 2 s) would abandon the run on a loaded box before the assertions
 
         await rig.Admin.SendChatAsync(ChatType.Say, Language.Common, ".worldport far");
         await rig.Admin.ReadUntilAsync(WorldOpcode.SmsgNewWorld);

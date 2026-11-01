@@ -10,7 +10,10 @@
         }
       },
       "arcanecore.kernel": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Diagnostics.NETCore.Client": "[0.2.750501, )"
+        }
       },
       "arcanecore.protocol": {
         "type": "Project",
@@ -26,6 +29,12 @@
         "dependencies": {
           "DotRecast.Core": "[1.0.0, )"
         }
+      },
+      "Microsoft.Diagnostics.NETCore.Client": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.750501, )",
+        "resolved": "0.2.750501",
+        "contentHash": "XVOWyjoikpjTecPv8fYWspgNGhXtOeMX3K3wq9kXftU9U04V6IwCY4NQuVrY/BIBwmui6lF8z7pNP64cwFvUNQ=="
       }
     }
   }

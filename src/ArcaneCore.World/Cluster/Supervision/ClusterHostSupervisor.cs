@@ -1142,6 +1142,14 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 return;
             }
 
+            // The dumping announcement is authenticated like the stop announcement: an unauthenticated one could be forged from logged text to keep
+            // a hung child from being drained for the whole dump grace, so a token-less or wrong-token line is ordinary output.
+            if (SupervisorProtocol.TryParseDumping(line, out _, out string dumpingToken) && TokenMatches(dumpingToken))
+            {
+                RecordDumping(entry, process);
+                return;
+            }
+
             // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
             // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
             if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
@@ -1169,11 +1177,31 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // A heartbeat is liveness only, whatever state it names: the authenticated stopping line is what suspends the hang watch.
             entry.LastBeatTimestamp = _time.GetTimestamp();
+            if (beat == SupervisorHeartbeatState.Alive)
+            {
+                entry.DumpingTimestamp = null;
+            }
+
             if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
             {
                 entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
                 entry.WakeWatcher();
             }
+        }
+    }
+
+    // An authenticated dumping line: the child is writing its own crash dump and is about to end. Give it the dump grace instead of draining and killing it
+    // for the silence that follows, which would truncate the dump (and a second capture of ours would only compete with it).
+    private void RecordDumping(ManagedEntry entry, ISupervisedProcess process)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process))
+                return; // a line from an incarnation that has been replaced
+
+            entry.LastBeatTimestamp = _time.GetTimestamp();
+            entry.DumpingTimestamp ??= entry.LastBeatTimestamp;
+            entry.WakeWatcher();
         }
     }
 
@@ -1349,7 +1377,15 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                     {
                         silence = _time.GetElapsedTime(entry.LastBeatTimestamp ?? entry.LaunchTimestamp, now);
                         TimeSpan left = TimeSpan.FromSeconds(config.HangTimeoutSeconds) - silence;
-                        if (left <= TimeSpan.Zero)
+                        TimeSpan graceLeft = entry.DumpingTimestamp is { } dumpingSince
+                            ? TimeSpan.FromSeconds(_options.DumpGraceSeconds) - _time.GetElapsedTime(dumpingSince, now)
+                            : TimeSpan.Zero;
+                        if (graceLeft > TimeSpan.Zero)
+                        {
+                            // Dump grace: the silence of a child that announced its crash dump is not a hang until the grace has run out.
+                            wait = graceLeft;
+                        }
+                        else if (left <= TimeSpan.Zero)
                         {
                             action = WatchAction.Hang;
                             entry.KillKind = SupervisorKillKind.Hang;
@@ -1439,7 +1475,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-hang", config.Name, $"pid={process.ProcessId} silent={silence.TotalSeconds:0}s", AnomalySeverity.Error);
 
-        if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null)
+        bool dumpingItself;
+        lock (_gate)
+        {
+            dumpingItself = entry.DumpingTimestamp is not null;
+        }
+
+        if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null && !dumpingItself)
         {
             await CaptureHangAsync(entry, process, ct).ConfigureAwait(false);
         }
@@ -1538,15 +1580,25 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
                 return;
+        }
+
+        // The line goes out before the state is published: whoever sees Faulted (a status poll, a test) can rely on the FATAL text being routed already.
+        // RouteLine stays outside _gate (as elsewhere in this class), so the entry can be relaunched or start draining between the two checks; then the
+        // line has been printed and the entry is deliberately not faulted. A line for a child that is still alive is the lesser harm than a lock held over console I/O.
+        _multiplexer.RouteLine(
+            entry.Config,
+            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
+            isStdErr: true);
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                return;
 
             entry.State = SupervisedProcessState.Faulted;
             entry.LastDisposition = SupervisedExitDisposition.Fault;
         }
 
-        _multiplexer.RouteLine(
-            entry.Config,
-            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
-            isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-kill-failed", entry.Config.Name, $"pid={process.ProcessId}", AnomalySeverity.Error);
         NotifyIfBelowMinimum();
     }
@@ -1915,6 +1967,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public int ConsecutiveFailures { get; set; }
         public SupervisedExitDisposition? LastDisposition { get; set; }
         public long? LastBeatTimestamp { get; set; }
+        public long? DumpingTimestamp { get; set; }
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
@@ -1944,6 +1997,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             EndIncarnation();
             LaunchTimestamp = now;
             LastBeatTimestamp = null;
+            DumpingTimestamp = null;
             Armed = false;
             GraceWarned = false;
             StopAnnouncedTimestamp = null;

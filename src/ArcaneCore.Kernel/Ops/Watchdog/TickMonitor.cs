@@ -39,7 +39,10 @@ public sealed class RuntimeTickHangActuator(IHostApplicationLifetime? lifetime =
             Console.Error.WriteLine(report);
             Console.Error.Flush();
 
-            // Opt-in (Diagnostics:CrashDialog); returns at once when off or headless, never throws, and the exit below still runs.
+            // This process ends by Environment.Exit below, so the runtime writes no dump of its own whatever DOTNET_DbgEnableMiniDump says:
+            // ShowFatalDialog first writes the in-process crash dump (Diagnostics:CrashDump, announced to the supervisors as the
+            // heartbeat state "dumping"), then shows the opt-in dialog (Diagnostics:CrashDialog). Both return at once when off or
+            // headless and never throw; the exit below still runs.
             handler?.ShowFatalDialog(CrashKind.Unhandled, timeout, failFast: false, "the world tick watchdog: Ops:Watchdog:TickMonitor:Action = FailFast", report);
         }
         catch

@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace ArcaneCore.Kernel.Ops.ServerConsole;
 
-/// <summary>The three states of a <c>heartbeat</c> line (<see cref="Watchdog.Heartbeat.TextWriterHeartbeatSink"/>).</summary>
+/// <summary>The states of a plain <c>heartbeat</c> line (<see cref="Watchdog.Heartbeat.TextWriterHeartbeatSink"/>).</summary>
 public enum SupervisorHeartbeatState
 {
     /// <summary>The process finished starting.</summary>
@@ -101,6 +101,9 @@ public static partial class SupervisorProtocol
     [GeneratedRegex(@"^heartbeat \S+ pid=\d+ (ready|alive|stopping)\z", RegexOptions.CultureInvariant)]
     private static partial Regex HeartbeatPattern();
 
+    [GeneratedRegex(@"^heartbeat \S+ pid=\d+ dumping max=(\d{1,9}) token=(\S+)\z", RegexOptions.CultureInvariant)]
+    private static partial Regex DumpingPattern();
+
     /// <summary>Whether <paramref name="environment"/> turns the protocol on (<see cref="EnvironmentVariable"/> is exactly <c>1</c>).</summary>
     public static bool IsEnabled(Func<string, string?> environment)
     {
@@ -131,6 +134,36 @@ public static partial class SupervisorProtocol
         state = line.EndsWith(" ready", StringComparison.Ordinal) ? SupervisorHeartbeatState.Ready
             : line.EndsWith(" alive", StringComparison.Ordinal) ? SupervisorHeartbeatState.Alive
             : SupervisorHeartbeatState.Stopping;
+        return true;
+    }
+
+    /// <summary>
+    /// The state text of the heartbeat line a process writes just before its in-process crash dump: <c>dumping max=&lt;seconds&gt; token=&lt;token&gt;</c>
+    /// (<paramref name="token"/> is the supervisor's per-run secret, the same one the <c>lifecycle stopping</c> line carries; without one, no token is written and
+    /// no supervisor accepts the line). <paramref name="maxSeconds"/> is the longest the dump can take.
+    /// </summary>
+    public static string FormatDumpingState(int maxSeconds, string? token)
+    {
+        string state = string.Create(CultureInfo.InvariantCulture, $"dumping max={Math.Max(1, maxSeconds)}");
+        return string.IsNullOrEmpty(token) ? state : state + " token=" + Sanitize(token);
+    }
+
+    /// <summary>
+    /// Parses a <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; dumping max=&lt;seconds&gt; token=&lt;token&gt;</c> line; the caller must still compare <paramref name="token"/>
+    /// with the supervisor's. A dumping announcement that is not authenticated like the stopping line could be forged from logged text to keep a hung child alive
+    /// for the whole dump grace. A line holding any control character is rejected.
+    /// </summary>
+    public static bool TryParseDumping(string line, out int maxSeconds, out string token)
+    {
+        maxSeconds = 0;
+        token = string.Empty;
+        if (line is null || HasControl(line) || DumpingPattern().Match(line) is not { Success: true } match
+            || !int.TryParse(match.Groups[1].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture, out maxSeconds))
+        {
+            return false;
+        }
+
+        token = match.Groups[2].Value;
         return true;
     }
 

@@ -2,7 +2,6 @@ using ArcaneCore.Kernel.Diagnostics;
 using System.Diagnostics;
 using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
-using Microsoft.Diagnostics.NETCore.Client;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Ops.Diagnostics;
@@ -27,19 +26,21 @@ public interface IProcessDumpWriter
     void Write(DumpKind kind, string path);
 }
 
-/// <summary>The real writer: <see cref="DiagnosticsClient.WriteDump(DumpType, string, bool)"/> against this process's own diagnostics endpoint.</summary>
+/// <summary>The real writer: the Kernel's <see cref="DiagnosticsClientCrashDumpWriter"/> (the one the crash dump uses) against this process's own diagnostics endpoint.</summary>
 internal sealed class DiagnosticsClientDumpWriter : IProcessDumpWriter
 {
+    private readonly DiagnosticsClientCrashDumpWriter _inner = new();
+
     public void Write(DumpKind kind, string path)
     {
-        DumpType type = kind switch
+        CrashDumpMode mode = kind switch
         {
-            DumpKind.Full => DumpType.Full,
-            DumpKind.Heap => DumpType.WithHeap,
-            DumpKind.Mini => DumpType.Normal,
+            DumpKind.Full => CrashDumpMode.Full,
+            DumpKind.Heap => CrashDumpMode.Heap,
+            DumpKind.Mini => CrashDumpMode.Mini,
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
-        new DiagnosticsClient(Environment.ProcessId).WriteDump(type, path, logDumpGeneration: false);
+        _inner.Write(mode, path);
     }
 }
 
@@ -150,7 +151,8 @@ public sealed class ProcessDumpService
 
             try
             {
-                System.IO.Directory.CreateDirectory(_directory);
+                // The same owner-only creation as the crash dump (a dump holds every secret in memory).
+                CrashDumpService.EnsureDirectory(_directory, (level, message) => _logger.Log(level, "{Message}", message));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
             {

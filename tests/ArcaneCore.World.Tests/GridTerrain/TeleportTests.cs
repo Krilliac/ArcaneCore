@@ -171,7 +171,7 @@ public sealed class TeleportTests
         // Out of the trigger (more than 5 yards outside the box): ignored.
         await host.PlaceAsync("Tptriggm", -8980f, -132.5f, 83.5f);
         await gm.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(InMemoryMapDataStore.DeadminesTrigger));
-        Assert.Empty(await gm.CollectAsync(Quiet));
+        await gm.AssertNoPacketsAsync(WorldOpcode.SmsgAreaTriggerMessage, WorldOpcode.SmsgTransferPending, WorldOpcode.MsgMoveTeleportAck, WorldOpcode.SmsgNewWorld);
 
         // In it at level 1: SMSG_AREA_TRIGGER_MESSAGE with mangos_string 49.
         await host.PlaceAsync("Tptriggm", -8962f, -130f, 84f);
@@ -216,7 +216,7 @@ public sealed class TeleportTests
 
         await player.SendAsync(WorldOpcode.CmsgAreatrigger, AreaTrigger(4242));
 
-        Assert.Empty(await player.CollectAsync(Quiet));
+        await player.AssertNoPacketsAsync(WorldOpcode.SmsgAreaTriggerMessage, WorldOpcode.SmsgTransferPending, WorldOpcode.MsgMoveTeleportAck, WorldOpcode.SmsgNewWorld);
         Assert.True(await host.PlayerStateAsync("Tptrignone", p => p.Map is not null));
     }
 }

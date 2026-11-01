@@ -102,6 +102,25 @@ public sealed class ProcessDumpServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Enabled_CreatesTheDirectoryOwnerOnly_ThroughTheCrashDumpHelper()
+    {
+        // A dump holds every secret in memory: the directory is made by the same helper the crash dump uses (protected DACL on Windows, mode 700 on Unix).
+        var writer = new FakeWriter();
+        DumpRequestResult result = Create(writer).Request(DumpKind.Mini);
+        Assert.True(result.Started);
+        await result.Completion!.WaitAsync(TimeSpan.FromSeconds(20));
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(new DirectoryInfo(_dir).GetAccessControl().AreAccessRulesProtected, "the dump directory must not inherit its parent's ACL");
+        }
+        else
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(_dir));
+        }
+    }
+
+    [Fact]
     public async Task Enabled_WritesOffTheCallingThread_AndReportsPathSizeAndDuration()
     {
         var writer = new FakeWriter();

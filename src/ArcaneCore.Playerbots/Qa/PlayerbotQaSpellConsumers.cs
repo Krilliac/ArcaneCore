@@ -45,7 +45,7 @@ internal sealed record QaSpellConsumer(uint SpellId, QaSpellConsumerKind Kind, s
 /// </summary>
 internal static partial class QaSpellConsumers
 {
-    private static readonly FrozenDictionary<uint, QaSpellConsumer> s_byId = Index([.. Build(), .. BuildResearched()]);
+    private static readonly FrozenDictionary<uint, QaSpellConsumer> s_byId = Index([.. Build(), .. BuildResearched(), .. BuildNaxxramas(), .. BuildAhnQiraj(), .. BuildBlackrockRaids(), .. BuildDungeons(), .. BuildWorldEvents()]);
 
     /// <summary>Every entry.</summary>
     internal static IReadOnlyCollection<QaSpellConsumer> All => s_byId.Values;

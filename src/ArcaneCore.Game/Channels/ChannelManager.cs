@@ -201,10 +201,15 @@ public sealed class ChannelManager(SocialContext context)
         return set;
     }
 
-    /// <summary>vmangos ChannelMgr::LeftChannel: empty non-constant channels are deleted.</summary>
+    /// <summary>
+    /// vmangos ChannelMgr::LeftChannel deletes only empty non-constant channels (ChannelMgr.cpp:107),
+    /// but any client can name a new "built-in" channel (substring match), so keeping constants
+    /// leaks one Channel per name forever. Every empty channel is deleted here; a built-in is
+    /// recreated on demand by the next join and holds no state worth keeping.
+    /// </summary>
     private void RemoveIfEmpty(Team team, Channel channel)
     {
-        if (channel.MemberCount != 0 || channel.IsConstant)
+        if (channel.MemberCount != 0)
         {
             return;
         }
