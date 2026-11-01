@@ -207,6 +207,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("      Cluster__Supervisor__Processes__world__Console=Merged", output, StringComparison.Ordinal);
         Assert.Contains("      Cluster__Supervisor__Processes__realm__HangTimeoutSeconds=120", output, StringComparison.Ordinal);
         Assert.Contains("--Cluster:Supervisor:Enabled=false", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cluster:Fencing", output, StringComparison.Ordinal); // the single combined world stays unfenced: a crashed fenced world cannot be restarted
         Assert.Contains("supervisor.debug.", output, StringComparison.Ordinal);
         Assert.Contains("world.heartbeat", output, StringComparison.Ordinal);
         Assert.Contains("status: server-status.ps1 (read-only; the cluster supervisor owns restarts)", output, StringComparison.Ordinal);
