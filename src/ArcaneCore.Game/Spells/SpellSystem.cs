@@ -959,9 +959,21 @@ public sealed partial class SpellSystem
             // vmangos SpellCaster::SendSpellMiss; a missed hostile spell still starts combat (zero damage).
             SendToSet(caster, WorldOpcode.SmsgSpelllogmiss, SpellPackets.BuildSpellLogMiss(spell.Id, caster.Guid, target.Guid, entry.Miss), includeSelf: true);
             InterruptTargetOfHostileSpell(cast, target, hit: false, dealsDamage: false); // rogue lane (vmangos Spell.cpp:1893-1897)
+            // vmangos Spell::DoSpellHitOnUnit miss branch (Spell.cpp:1225-1244): a spell with FAILURE_BREAKS_STEALTH (Pick Pocket) strips the
+            // caster's stealth auras and forces the combat start even when it has EX_NO_THREAT: the target gets a zero-threat entry.
+            bool breaksStealth = spell.HasAttribute(SpellAttributesEx.FailureBreaksStealth) && !ReferenceEquals(caster, target);
+            if (breaksStealth)
+            {
+                RemoveAurasByType(caster, AuraType.ModStealth);
+            }
+
             if (!IsQuestSettlementPending(caster) && !IsQuestSettlementPending(target) && target.IsAlive && Relations.IsHostile(caster, target))
             {
                 Damage.DealSpellDamage(caster, target, spell, 0, periodic: false, startsCombat: StartsCombat(caster, target));
+                if (breaksStealth)
+                {
+                    target.Combat.Threat.AddThreat(caster, 0f);
+                }
             }
 
             HandleItemSpecialProc(cast, target, entry.Miss);

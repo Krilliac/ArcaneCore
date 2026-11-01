@@ -109,6 +109,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// cmangos Map::ScriptsStart(SCRIPT_TYPE_RELAY, id, source, target): run relay <paramref name="relayId"/> with
     /// <paramref name="source"/> and <paramref name="target"/>. False when the relay does not exist or already runs for the pair.
+    /// The source is any <see cref="WorldObject"/>, not only a creature: cmangos Map::ScriptsStart takes an <c>Object*</c> source (Maps/Map.cpp:2166-2178,
+    /// asserting only that it is not null), so a player, game object or item may start a script; each command then checks its own source kind
+    /// (a TALK or EMOTE by a non-creature is reported and skipped, see <c>RunRelayCommand</c>).
     /// </summary>
     public bool StartRelayScript(uint relayId, WorldObject source, WorldObject? target)
     {
