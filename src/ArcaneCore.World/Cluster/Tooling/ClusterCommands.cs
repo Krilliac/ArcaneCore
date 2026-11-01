@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Cluster.Supervision;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Commands;
@@ -48,7 +49,7 @@ public sealed class ClusterCommands : ICommandGroup
         new ChatCommand(
             "cluster",
             AccountSecurity.GameMaster,
-            "Syntax: .cluster [status|node|routes|nodes|leases|social|diag]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
+            "Syntax: .cluster [status|node|routes|nodes|leases|social|diag|restart]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
             RootOrStatus,
             Children:
             [
@@ -87,6 +88,12 @@ public sealed class ClusterCommands : ICommandGroup
                     AccountSecurity.Administrator,
                     "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered.",
                     Diag),
+                new ChatCommand(
+                    "restart",
+                    AccountSecurity.Administrator,
+                    "Syntax: .cluster restart $worker
+Drain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing.",
+                    Restart),
             ]),
     ];
 
@@ -153,7 +160,78 @@ public sealed class ClusterCommands : ICommandGroup
             return Diag(context, rest);
         }
 
+        if ("restart".Equals(sub, StringComparison.OrdinalIgnoreCase))
+        {
+            if (context.Security < AccountSecurity.Administrator)
+            {
+                context.Reply(GmStrings.CommandUnavailable);
+                return true;
+            }
+
+            return Restart(context, rest);
+        }
+
         return false;
+    }
+
+    /// <summary>
+    /// <c>.cluster restart $worker</c>: hand the worker's players off (sessions survive), then ask the supervisor to restart it
+    /// (<see cref="ClusterRestartOrchestration"/>). The handoff runs on the thread pool; the command stays open until the result was replied on the world thread.
+    /// </summary>
+    internal static bool Restart(CommandContext context, string args)
+    {
+        string worker = args.Trim();
+        if (worker.Length == 0 || worker.Contains(' '))
+        {
+            return false;
+        }
+
+        if (context.Security < AccountSecurity.Administrator)
+        {
+            context.Reply(GmStrings.CommandUnavailable);
+            return true;
+        }
+
+        IServiceProvider services = context.Session.Services;
+        if (services.GetService<ClusterRestartOrchestration>() is not { } orchestration)
+        {
+            context.Reply("Cluster restart is unavailable: this node has no worker handoff driver and supervisor link configured; nothing was done.");
+            return true;
+        }
+
+        WorldRuntime world = context.World;
+        AccountSecurity security = context.Security;
+        string invoker = context.InvokerName;
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        IDisposable hold = context.Defer();
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            try
+            {
+                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker).ConfigureAwait(false);
+                reply = result.Message;
+            }
+            catch (OperationCanceledException)
+            {
+                reply = "Cluster restart was cancelled.";
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.operator-restart", ex, "cluster restart could not run");
+                reply = "Cluster restart failed unexpectedly; see the log.";
+            }
+
+            try
+            {
+                PostAndRelease(world, hold, () => context.Reply(reply));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.operator-restart-post", ex, "cluster restart could not post its reply to the world thread");
+            }
+        });
+        return true;
     }
 
     /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say instead of a node list while the node bridge is switched off.</summary>
@@ -925,7 +1003,7 @@ public sealed class ClusterArcaneCommands : ICommandExtension
         new ChatCommand(
             "cluster",
             AccountSecurity.GameMaster,
-            "Syntax: .arcane cluster [status|node|routes|nodes|leases|social|diag]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
+            "Syntax: .arcane cluster [status|node|routes|nodes|leases|social|diag|restart]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
             ClusterCommands.DispatchFromArcane),
     ];
 }
