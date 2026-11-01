@@ -123,6 +123,28 @@ Limits: SUMMON_GO's summonType (param4) is ignored, as in the AzerothCore action
 (`GameObjectMapSystem.Summon` returns null); the catalog does not check object entries. AzerothCore logs a SET_INST_DATA without an instance script;
 this script has no logger, so it does nothing silently.
 
+## Followups (2026-10-31)
+
+- **Runnable rows, recounted.** Same method as slice 3d (AzerothCore `smart_scripts.sql`, creature rows with `source_type` 0, positive entry, not
+  DEBUG_ONLY, entry present in `creature_template`; the entry list comes from the ClassicDB z2815 dump the live DB is built from, which reproduces
+  the slice 3d figures exactly: 12,448 rows over 4,224 entries; 9,285 runnable before slice 3d). With today's creature sets (events
+  `0-9, 11, 14, 17, 20, 21, 22, 25, 34, 38, 52, 59-62, 64`; actions with 34 and 50 added; same targets) **9,977 rows can run in full (80.1 % of
+  12,448) and 3,225 entries are fully runnable** (3,087 after slice 3d). Row-level only: parameter-level refusals (event 9 layout, event 64 filter,
+  escort-only forms) are not modelled, so the true figure is slightly lower.
+- **Largest rejected groups (2,471 rows).** Events: 40 (317), 54 (118), 106 (98), 19 (93), 105 (84), 74 (48), 37 (45), 58 (27). Actions: 72 (229),
+  45 (137), 134 (125), 53 (102), 66 (83), 54 (79), 64 (63), 70 (46). Targets: 10 (126), 12 (60), 20 (55), 14 (20), 15 (15), 16 (13), 26 (6), 13 (3).
+  A row counts once, however many of its parts are refused, so the groups overlap.
+- **Game object AIName.** AzerothCore opts a game object in through `gameobject_template.AIName 'SmartGameObjectAI'`. ArcaneCore's template has no
+  such column, and `SmartGameObjectAi` already runs an object's source type 1 rows (its spawn's, else its entry's) as the fallback AI of every map,
+  so an object with rows behaves as if flagged. Nothing is left to add short of a schema change, which would only duplicate what the rows say.
+- **Area-trigger handler ends.** `SmartAreaTriggerFeature` now implements `IAreaTriggerPreemptor` (new, `IAreaTriggerListener.cs`): `TeleportHandlers`
+  asks preemptors right after the volume check, and a script that ran ends the handler before quest exploration, tavern, dungeon listeners and the
+  teleport, as AzerothCore does. Dead players and game masters still run nothing and so do not end it.
+- **Spirit guide hello hook.** Only a battleground spirit guide (spirit-guide flag on a battleground map) skips `OnGossipHello`; a creature carrying
+  the flag anywhere else runs its AI hello like any gossip NPC.
+- **Not done in this pass.** No new events, actions or targets were added (each needs a production hook and tests that cannot be built in this lane);
+  the list above is what remains, led by event 40 / action 53 (escorts) and action 72 / 45.
+
 ## Still open (slice 3f and later)
 
 By the same count, the largest single blockers left are 40 ESCORT_REACHED (160, needs action 53 and an escort), 106 and 105

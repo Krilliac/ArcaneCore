@@ -45,6 +45,8 @@ public sealed class SmartScriptCatalogTests
         { "creature target 13", [Make(Wolf, 0, 0, 4, 11, 13, a1: 5)], "target 13 is not supported for source type 0" },
         { "GOSSIP_HELLO filter 2", [Make(Wolf, 1, 0, 64, 22, e1: 2, a1: 1)], "GOSSIP_HELLO filter 2" },
         { "GOSSIP_HELLO filter 3", [Make(Wolf, 1, 0, 64, 22, e1: 3, a1: 1)], "GOSSIP_HELLO filter 3 is not 0 or 1" },
+        { "creature GOSSIP_HELLO filter 2", [Make(Wolf, 0, 0, 64, 22, e1: 2, a1: 1)], "GOSSIP_HELLO filter 2" },
+        { "creature GOSSIP_HELLO filter 3", [Make(Wolf, 0, 0, 64, 22, e1: 3, a1: 1)], "GOSSIP_HELLO filter 3 is not 0 or 1" },
         { "80 with target 0", [Make(Wolf, 0, 0, 4, 80, 0, a1: 50), ListRow(50, 0, SmartAction.SetEventPhase, a1: 1)], "needs a target" },
         { "80 with allowOverride 2", [Make(Wolf, 0, 0, 4, 80, 1, a1: 50, a3: 2), ListRow(50, 0, SmartAction.SetEventPhase, a1: 1)], "allowOverride 2" },
         { "87 with every list 0", [Make(Wolf, 0, 0, 4, 87, 1)], "names no timed action list" },
@@ -98,6 +100,22 @@ public sealed class SmartScriptCatalogTests
         Assert.Equal(2, catalog.GameObjectRowCount);
         Assert.Equal(1, catalog.AreaTriggerRowCount);
         Assert.Equal(1, catalog.TimedActionListRowCount);
+    }
+
+    [Fact]
+    public void Catalog_AcceptsCreatureGossipEvents62And64_WithNothingRejected()
+    {
+        // Source type 0 (creature): GOSSIP_SELECT (62, menu id and option id) and GOSSIP_HELLO (64, filters 0 and 1) load and reach the creature index.
+        var catalog = new SmartScriptCatalog(
+        [
+            CreatureRow(Wolf, 0, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: 7, e2: 1, a1: 5),
+            CreatureRow(Wolf, 1, SmartEvent.GossipHello, SmartAction.Cast, SmartTarget.ActionInvoker, e1: 0, a1: 5),
+            CreatureRow(Wolf, 2, SmartEvent.GossipHello, SmartAction.Cast, SmartTarget.ActionInvoker, e1: 1, a1: 5),
+        ]);
+
+        Assert.Empty(catalog.Rejected);
+        Assert.Equal(3, catalog.Count);
+        Assert.Equal<byte>([62, 64, 64], catalog.For(Wolf, 0).Select(r => r.EventType).Order());
     }
 
     [Fact]
