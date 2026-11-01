@@ -125,8 +125,8 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
 
     /// <summary>
     /// Reads <paramref name="wanted"/> from the directory, replaces the cache and returns the real online/offline transitions of friends that were already
-    /// watched in the previous refresh. A zone, level, class or away change updates the cache silently, and a friend newly added to the watched set is not
-    /// announced (the friend list shows it). Runs on the thread pool because the directory may block on the peer link; never call the directory on the
+    /// watched in the previous refresh. A zone, level, class or away change updates the cache silently. A friend found online when first watched is reported with
+    /// <see cref="RemotePresenceChange.Announce"/> false (the listers get a corrected friend list, no "has come online" line). Runs on the thread pool because the directory may block on the peer link; never call the directory on the
     /// world thread. A directory failure propagates and leaves the previous cache in place.
     /// </summary>
     public Task<IReadOnlyList<RemotePresenceChange>> RefreshAsync(IReadOnlyCollection<ulong> wanted)
@@ -150,20 +150,17 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
             var changes = new List<RemotePresenceChange>();
             foreach (ulong guid in wanted)
             {
-                if (!watched.Contains(guid))
-                {
-                    continue;
-                }
-
+                bool isWatched = watched.Contains(guid);
                 bool was = previous.TryGetValue(guid, out RemoteFriendInfo old);
                 if (next.TryGetValue(guid, out RemoteFriendInfo now))
                 {
                     if (!was)
                     {
-                        changes.Add(new RemotePresenceChange(guid, true, now));
+                        // Not watched before: the lister's list was built from an empty cache, so she only needs the corrected list (Announce false).
+                        changes.Add(new RemotePresenceChange(guid, true, now, isWatched));
                     }
                 }
-                else if (was)
+                else if (was && isWatched)
                 {
                     changes.Add(new RemotePresenceChange(guid, false, old));
                 }
@@ -203,10 +200,7 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
             world.Post(() =>
             {
                 Volatile.Write(ref _busy, 0);
-                foreach (RemotePresenceChange change in changes)
-                {
-                    context.Friends.NotifyRemotePresence(change);
-                }
+                context.Friends.NotifyRemotePresence(changes);
             });
         });
     }
