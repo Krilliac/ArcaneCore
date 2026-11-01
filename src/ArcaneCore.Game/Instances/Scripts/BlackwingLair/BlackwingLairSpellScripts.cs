@@ -7,7 +7,7 @@ using ArcaneCore.Game.Spells.Scripts;
 namespace ArcaneCore.Game.Instances.Scripts.BlackwingLair;
 
 /// <summary>
-/// The four Random Aggro spells of the Blackrock raids' creature spell lists (22913, 23878, 28388, 30215), siblings of Random Aggro 25680 whose
+/// The four Random Aggro spells used by raid creature spell lists (22913, 23878, 28388, 30215; the cited rows belong to Blackwing Lair, Ahn'Qiraj and Naxxramas creatures), siblings of Random Aggro 25680 whose
 /// handler is vmangos SpellEffects.cpp:380-402: the casting creature picks a random attacker from its threat list, adds 100 threat on it and
 /// attacks it. The spell lists cast them on the creature itself (vmangos migration 20250802133158 creature_spells rows 156210, 161540, 170550, castTarget 1),
 /// while the DBC targets are every enemy in 100 yd (A 22 / B 15), so the DUMMY effect would run once per enemy: one cast picks one target, the

@@ -10,10 +10,10 @@ public static partial class DeliberatelyInertSpells
 
     private static InertSpell[] BuildBlackrockRaids() =>
     [
-        new(16404, R.Visual, "Banishment of Scale: only the channel visual of Lord Victor Nefarius's beam at Vaelastrasz; the aura is never applied for any effect",
-            "vmangos boss_vaelastrasz.cpp:53 SPELL_BANISHEMENT_OF_SCALE, used at :239 only as SetUInt32Value(UNIT_CHANNEL_SPELL) on the summoned Nefarius; no core handles the aura"),
-        new(16354, R.NeverCast, "Vaelastrasz Spawn: a self-cast despawn marker of azerothcore's Vaelastrasz and Nefarian scripts; ArcaneCore's Vaelastrasz intro and Nefarian use no such cast",
-            "no vmangos, mangos-classic or mangoszero source or world DB script casts it; azerothcore boss_nefarian.cpp:135 and instance_blackrock_spire.cpp:825 name it"),
+        new(16404, R.Visual, "Banishment of Scale: in the UBRS Seal of Ascension event Lord Victor Nefarius casts it at Vaelastrasz the Red (channel beam); Vaelastrasz's EventAI reacts to being hit by it (passive, update entry, cast Vaelastrasz Spawn, despawn); the aura itself has no reader",
+            "vmangos migration 20230924151636_world.sql: event_scripts 4623 (line 80) Lord Victor Nefarius casts 16404; spell_script_target (16404,1,10538) line 96; creature_ai_events 1034001 on creature 10340 (line 23, hit by spell 16404) runs script 4625; no core handles the aura; also vmangos boss_vaelastrasz.cpp:53/:239 uses it as the channel spell"),
+        new(16354, R.Marker, "Vaelastrasz Spawn: a self-cast by Vaelastrasz the Red in the UBRS Seal of Ascension event right before it despawns (Call of Vaelastrasz script and the Banishment of Scale EventAI reaction); its effect has no handler in any core",
+            "vmangos migration 20230924151636_world.sql: generic_scripts 4624 (line 62, 'Call of Vaelastrasz OOC: Vaelastrasz the Red - Cast Spell Vaelstrasz Spawn') and generic_scripts 4625 (line 91, run from creature_ai_events 1034001 on creature 10340) cast 16354; no core handles the effect"),
         new(16047, R.ScriptCarrier, "Emberseer Full Strength: Pyroguard Emberseer's AI casts it on himself when the twentieth growing stack lands; the DUMMY effect has no handler in any core",
             "mangos-classic boss_pyroguard_emberseer.cpp:44 SPELL_FULL_STRENGHT, cast in the growing handler; no core handles the effect"),
         new(15281, R.ScriptCarrier, "Encage Emberseer: the Blackhand Incarcerators cast it on Pyroguard Emberseer for the cage channel; the DUMMY aura has no reader",

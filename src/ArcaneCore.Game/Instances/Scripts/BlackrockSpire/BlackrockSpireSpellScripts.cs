@@ -36,5 +36,5 @@ public sealed class DominionOfSoulScript : ISpellScript
 
     /// <summary>GetClosestCreatureWithEntry(player, 10321, 20): the nearest living creature of the entry within range (3D).</summary>
     private static Creature? ClosestEmberstrife(Player caster)
-        => caster.Map?.FindUpdater<CreatureMapSystem>()?.CreaturesOfEntryInRange(caster, Emberstrife, SearchRange).FirstOrDefault();
+        => caster.Map?.FindUpdater<CreatureMapSystem>()?.CreaturesOfEntryInRange(caster, Emberstrife, SearchRange).FirstOrDefault(c => c.IsAlive);
 }

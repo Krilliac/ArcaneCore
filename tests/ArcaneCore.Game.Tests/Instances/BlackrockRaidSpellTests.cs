@@ -87,6 +87,30 @@ public sealed class BlackrockRaidSpellTests
         Assert.Contains(boss.Combat.Victim, new Unit?[] { first, second });
     }
 
+    [Theory]
+    [InlineData(22913u)]
+    [InlineData(30215u)]
+    public void RandomAggro_WithTheRealAreaTargetsTheHundredThreatIsAddedOnlyOncePerCast(uint spell)
+    {
+        // The DBC targets are A 22 / B 15 (every enemy within 100 yd) on effect 0: the DUMMY effect runs once per enemy, the guard keeps it to one pick.
+        SpellInfo area = Instant(SpellTestKit.Spell(spell,
+            SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterSrc, targetB: SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc) with { Radius = 100f }));
+        using SpellTestKit kit = Kit(area);
+        (Player first, _) = kit.AddPlayer(1);
+        (Player second, _) = kit.AddPlayer(2, 2, 0);
+        (Player third, _) = kit.AddPlayer(3, 3, 0);
+        Creature boss = SpawnCreatures(kit, (CreatureTestKit.WolfEntry, 4))[0];
+        Assert.True(kit.World.GetMap(0).Combat.Attack(boss, first));
+        boss.Combat.Threat.AddThreat(second, 1f);
+        boss.Combat.Threat.AddThreat(third, 1f);
+        float before = boss.Combat.Threat.GetThreat(first) + boss.Combat.Threat.GetThreat(second) + boss.Combat.Threat.GetThreat(third);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(boss, spell, SpellCastTargets.ForSelf(), triggered: true));
+
+        float after = boss.Combat.Threat.GetThreat(first) + boss.Combat.Threat.GetThreat(second) + boss.Combat.Threat.GetThreat(third);
+        Assert.Equal(before + 100f, after, 1);
+    }
+
     [Fact]
     public void RandomAggro_ACasterWithoutAThreatListDoesNothing()
     {
