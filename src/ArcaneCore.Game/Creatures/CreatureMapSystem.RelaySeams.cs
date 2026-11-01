@@ -6,15 +6,22 @@ namespace ArcaneCore.Game.Creatures;
 /// <summary>DB script commands that reach services outside the creature system through <see cref="CreatureAiServices"/> seams.</summary>
 public sealed partial class CreatureMapSystem
 {
+    /// <summary>The <c>datalong2</c> teleport option bit this server honours: TELE_TO_NOT_LEAVE_COMBAT (vmangos UnitDefines.h:773).</summary>
+    private const uint RelayTeleportKeepCombat = 0x04;
+
     /// <summary>
-    /// SCRIPT_COMMAND_TELEPORT_TO (6, cmangos ScriptMgr.cpp:1925-1933): the player is the target, or the source when the target is not a
-    /// player (GetPlayerTargetOrSourceAndLog); it is teleported to map <c>datalong</c>, point (x, y, z), facing o. Without a player
-    /// nothing happens. The step is reported and skipped when the world bound no teleport service.
+    /// SCRIPT_COMMAND_TELEPORT_TO (6, vmangos ScriptCommands.cpp:273-295; cmangos ScriptMgr.cpp:1925-1933): a player (the target, or the source
+    /// when the target is not a player) is teleported to map <c>datalong</c>, point (x, y, z), facing o. Any other unit source is moved
+    /// by Unit::NearTeleportTo (Unit.cpp:9801-9825): it stays on its own map, so <c>datalong</c> does not apply and a unit that is not on a map
+    /// is skipped. <c>datalong2</c> is the teleport options mask: TELE_TO_NOT_LEAVE_COMBAT (0x04) keeps a player's combat on a same-map
+    /// teleport (default: it leaves combat, Player.cpp:2016-2017); a creature never stops combat on a near teleport. Other set bits are
+    /// reported once and ignored. Without a unit source nothing happens. The step is reported and skipped when the world bound no
+    /// teleport service.
     /// </summary>
     private void RelayTeleportTo(RelayScriptStep step, WorldObject? source, WorldObject? target)
     {
-        Player? player = target as Player ?? source as Player;
-        if (player is null)
+        Unit? unit = target as Player ?? source as Unit;
+        if (unit is null)
         {
             return;
         }
@@ -25,9 +32,26 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        // cmangos ScriptMgr.cpp:1931 calls TeleportTo with the default options (0), so a same-map teleport leaves combat
-        // (Player.cpp:2016-2017 CombatStop unless TELE_TO_NOT_LEAVE_COMBAT): keepCombat is false, unlike spell teleports.
-        teleports.Teleport(player, step.DataLong, step.X, step.Y, step.Z, step.Orientation, keepCombat: false);
+        uint unsupported = step.DataLong2 & ~RelayTeleportKeepCombat;
+        if (unsupported != 0)
+        {
+            ReportRelay(step, $"TELEPORT_TO option bits 0x{unsupported:X}");
+        }
+
+        bool keepCombat = (step.DataLong2 & RelayTeleportKeepCombat) != 0;
+        if (unit is Player)
+        {
+            teleports.Teleport(unit, step.DataLong, step.X, step.Y, step.Z, step.Orientation, keepCombat);
+            return;
+        }
+
+        if (unit.Map is null)
+        {
+            return;
+        }
+
+        // Unit::NearTeleportTo: a non-player never changes map, whatever datalong says.
+        teleports.Teleport(unit, unit.MapId, step.X, step.Y, step.Z, step.Orientation, keepCombat);
     }
 
     /// <summary>
