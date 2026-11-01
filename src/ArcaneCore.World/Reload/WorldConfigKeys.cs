@@ -171,6 +171,8 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("MaxBulkCommand", o => o.MaxBulkCommand, (o, v) => o.MaxBulkCommand = v,
             v => v is >= 1 and <= PlayerbotOptions.MaxBotsCeiling ? null : $"must be 1..{PlayerbotOptions.MaxBotsCeiling}"),
 
+        // Quest-goal choice: PlayerbotQuestGoals reads the shared options on every think.
+        LivePlayerbots("DropGreyQuests", o => o.DropGreyQuests, (o, v) => o.DropGreyQuests = v),
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
