@@ -730,8 +730,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
                     return false;
                 }
 
-                // Not once the fallback went back to this body (ResumeCorpseRun): the healer could not be had, as for the unsafe body above.
-                if (_corpseRunResumedFor != campBody.Guid && HealerOutcomeKnown(player, campBody)) _preferSpiritHealer = true;
+                // Spec section 3: a give-up always takes the spirit healer, unconditionally (never a reclaim among the campers).
+                _preferSpiritHealer = true;
             }
         }
 
