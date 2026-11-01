@@ -554,6 +554,9 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     private readonly HashSet<Guid> _forwardedDone = [];
     private readonly Queue<Guid> _forwardedDoneOrder = new();
 
+    // Operation ids whose commit is running now (world thread). A resend of one is answered Unknown: the first attempt may still commit.
+    private readonly HashSet<Guid> _forwardedInFlight = [];
+
     /// <summary>Most committed forwarded operation ids remembered, so a retry after a lost answer is answered Ok without a second write.</summary>
     private const int ForwardedDoneLimit = 1024;
 
@@ -685,6 +688,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return;
         }
 
+        if (_forwardedInFlight.Contains(commit.OperationId))
+        {
+            Answer(EconomyForwardStatus.Unknown);
+            return;
+        }
+
         var auctionIds = new HashSet<uint>();
         var mailIds = new HashSet<uint>();
         foreach (EconomyChange change in commit.Changes)
@@ -714,7 +723,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
         if (auctionIds.Any(_busyAuctions.Contains) || mailIds.Any(_busyMails.Contains))
         {
-            Answer(EconomyForwardStatus.Busy);
+            RefuseForwarded(request, commit.OperationId, EconomyForwardStatus.Busy, done);
             return;
         }
 
@@ -731,10 +740,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             };
             if (stale)
             {
-                Answer(EconomyForwardStatus.Conflict);
+                RefuseForwarded(request, commit.OperationId, EconomyForwardStatus.Conflict, done);
                 return;
             }
         }
+
+        _forwardedInFlight.Add(commit.OperationId);
 
         foreach (uint id in auctionIds)
         {
@@ -748,6 +759,15 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
         CommitForwarded(request, commit, [.. auctionIds], [.. mailIds], world, done);
     }
+
+    /// <summary>
+    /// A write refused from the cache (Busy or Conflict) may be a resend of one that did commit (a holder restart or an evicted replay id), so the store
+    /// is asked first: a committed operation is answered Ok, an unreadable store Unknown, and only an operation not in the store gets the refusal.
+    /// </summary>
+    private void RefuseForwarded(EconomyForwardRequest request, Guid operationId, EconomyForwardStatus refusal, TaskCompletionSource<EconomyForwardResult> done)
+        => Read((store, ct) => store.IsCommittedAsync(operationId, ct),
+            committed => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, committed ? EconomyForwardStatus.Ok : refusal)),
+            failed: () => done.TrySetResult(EconomyForwardResult.Of(request.RequestId, EconomyForwardStatus.Unknown)));
 
     private bool CachedAuctionIs(AuctionRecord expected)
         => _auctions.TryGetValue(expected.Id, out AuctionView? cached) && cached.Auction == expected && !_auctionRecoveries.ContainsKey(expected.Id);
@@ -804,6 +824,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         {
             EconomyOutcome outcome = EconomyOutcome.Unknown;
             EconomyForwardStatus refusal = EconomyForwardStatus.Failed;
+            bool replay = false;
             try
             {
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(_readStop.Token);
@@ -814,6 +835,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                 if (result is EconomyCommitResult.Committed or EconomyCommitResult.AlreadyCommitted)
                 {
                     outcome = EconomyOutcome.After;
+                    replay = result == EconomyCommitResult.AlreadyCommitted;
                 }
                 else
                 {
@@ -839,7 +861,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                 }
             }
 
-            world.Post(() => FinishForwarded(request, commit, auctionIds, mailIds, outcome, refusal, done));
+            world.Post(() => FinishForwarded(request, commit, auctionIds, mailIds, outcome, refusal, replay, done));
         });
         lock (_readGate)
         {
@@ -857,8 +879,9 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     /// <summary>World thread: release the rows, reserve what the outcome left uncertain, apply a committed write to the cache and answer the worker.</summary>
     private void FinishForwarded(EconomyForwardRequest request, EconomyCommitRequest commit, uint[] auctionIds, uint[] mailIds, EconomyOutcome outcome,
-        EconomyForwardStatus refusal, TaskCompletionSource<EconomyForwardResult> done)
+        EconomyForwardStatus refusal, bool replay, TaskCompletionSource<EconomyForwardResult> done)
     {
+        _forwardedInFlight.Remove(commit.OperationId);
         try
         {
             foreach (uint id in mailIds)
@@ -890,7 +913,17 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                     }
                 }
 
-                ApplyForwardedCommit(commit.Changes);
+                // A replay of an earlier commit (the store already had it) is answered Ok without touching the cache or the parties: the rows may
+                // have changed since, and the first application already notified.
+                if (!replay)
+                {
+                    ApplyForwardedCommit(commit.Changes);
+                }
+            }
+            else if (outcome == EconomyOutcome.Before && commit.Changes.Any(c => c is InsertAuction or InsertMail))
+            {
+                // As Start: a refused insert may mean the id counters are behind the store.
+                ReseedIds();
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -956,7 +989,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         MailView? existing = _mailboxes.TryGetValue(update.Expected.ReceiverId, out Mailbox? box)
             ? box.Mails.FirstOrDefault(m => m.Mail.Id == update.Expected.Id)
             : null;
-        var view = new MailView(update.Updated, update.Updated.HasItem ? existing?.Item : null);
+        var view = new MailView(update.Updated, update.Updated.HasItem ? existing?.Item : null) { Body = existing?.Body };
         if (update.Updated.ReceiverId != update.Expected.ReceiverId)
         {
             RemoveMail(update.Expected.ReceiverId, update.Expected.Id);

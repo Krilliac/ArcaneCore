@@ -48,6 +48,63 @@ public sealed class CrossWorkerEconomyTests
     }
 
     [Fact]
+    public async Task ListingFromB_LandsInHolderACacheAndStore_AndOneWithoutItsEscrowItemIsInvalid()
+    {
+        await using var cluster = await Cluster.CreateAsync();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var item = new ItemInstanceData { Guid = 200, Entry = 4100, Count = 1 };
+        var listing = new AuctionRecord
+        {
+            Id = 2, HouseId = House, ItemGuid = item.Guid, ItemEntry = item.Entry, ItemCount = 1,
+            SellerId = SellerId, StartBid = 30, Buyout = 300, ExpireTime = now + 7200, Deposit = 1,
+        };
+
+        // An insert without the escrow item that backs it cannot be listed from the cache: refused before anything is written.
+        var bare = new EconomyCommitRequest(Guid.NewGuid(), [], [new InsertAuction(listing)]);
+        Assert.Equal(EconomyForwardStatus.Invalid, (await cluster.ClientOnB.WriteAuctionAsync(bare)).Status);
+        Assert.Single(await cluster.A.OnWorld(() => cluster.A.Feature.Auctions.ToList()));
+
+        var commit = new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(item), new InsertAuction(listing)]);
+        Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(commit)).Status);
+
+        AuctionView listed = await cluster.A.OnWorld(() => cluster.A.Feature.Auctions.Single(v => v.Auction.Id == listing.Id));
+        Assert.Equal(listing, listed.Auction);
+        Assert.Equal(item.Guid, listed.Item.Guid);
+        await using (CharacterDbContext db = cluster.NewContext())
+        {
+            Assert.Equal(listing.Buyout, (await db.Set<AuctionRow>().SingleAsync(a => a.Id == listing.Id)).Buyout);
+        }
+
+        // A replay is answered Ok and leaves one listing.
+        Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(commit)).Status);
+        Assert.Equal(2, (await cluster.A.OnWorld(() => cluster.A.Feature.Auctions.ToList())).Count);
+    }
+
+    [Fact]
+    public async Task ReplayAfterTheHolderForgotIt_IsAnsweredOkAndDoesNotRelistAGoneAuction()
+    {
+        await using var cluster = await Cluster.CreateAsync();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var item = new ItemInstanceData { Guid = 200, Entry = 4100, Count = 1 };
+        var listing = new AuctionRecord
+        {
+            Id = 2, HouseId = House, ItemGuid = item.Guid, ItemEntry = item.Entry, ItemCount = 1,
+            SellerId = SellerId, StartBid = 30, Buyout = 300, ExpireTime = now + 7200, Deposit = 1,
+        };
+        var insert = new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(item), new InsertAuction(listing)]);
+        Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(insert)).Status);
+        var buyout = new EconomyCommitRequest(Guid.NewGuid(), [], [new DeleteAuction(listing), new DeleteEscrowItem(item.Guid)]);
+        Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(buyout)).Status);
+
+        // A holder that took over has no replay memory: model it with a second holder on the same store.
+        await using var successor = new Node(cluster.Options);
+        Assert.Equal(EconomyForwardStatus.Ok, (await new DirectEconomyHolderLink(successor.Feature).SendAsync(
+            new EconomyForwardRequest(Guid.NewGuid(), "worker-B", EconomyForwardKind.AuctionWrite, Commit: insert), CancellationToken.None)).Status);
+
+        Assert.DoesNotContain(await successor.OnWorld(() => successor.Feature.Auctions.ToList()), v => v.Auction.Id == listing.Id);
+    }
+
+    [Fact]
     public async Task BidFromB_LandsInHolderACacheAndStore_AndReplayIsIdempotent()
     {
         await using var cluster = await Cluster.CreateAsync();
@@ -258,6 +315,8 @@ public sealed class CrossWorkerEconomyTests
         public Node A { get; }
         public Node B { get; }
         public EconomyForwardClient ClientOnB { get; }
+
+        public DbContextOptions<CharacterDbContext> Options => _options;
 
         public CharacterDbContext NewContext() => new(_options);
 
