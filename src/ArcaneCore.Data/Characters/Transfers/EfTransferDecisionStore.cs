@@ -437,15 +437,30 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <summary>
-    /// Moves one transfer to Committed: the per-character ownership compare-and-swap (epoch N to N + 1) and the decision row, in the caller's transaction.
+    /// Moves one transfer to Committed: the per-character ownership compare-and-swap and the decision row, in the caller's transaction.
     /// The character's claim moves to <paramref name="targetScope"/> (the source scope when null) and the target incarnation in the same statement, so from this
     /// commit on the source's claim check (<see cref="CharacterWriteClaim"/>) refuses every save the source still holds: the refusal is durable, not in memory.
+    /// <para>
+    /// The committed token: within one scope (the realm-wide 'world' scope) the claim's epoch moves N to N + 1. Into another worker scope it is that worker's own
+    /// live scope token (its active <c>character_ownership</c> row under <paramref name="targetIncarnation"/>), so the token the target gives the arrived player is the one
+    /// the write fence verifies its saves against (the scope row) and the one its next transfer reserves with (the claim row): one token, one writer (writer-lock design
+    /// section 1b). A worker scope with no live row under that incarnation cannot write the character at all, so the commit is refused and the transfer stays abortable.
+    /// </para>
     /// </summary>
     private async Task CommitRowAsync(CharacterDbContext db, ClusterTransferDecisionRow row, string targetIncarnation, string? targetScope, CancellationToken ct)
     {
         long now = _clock();
         long targetEpoch = checked(row.SourceEpoch + 1);
         string newScope = targetScope ?? row.SourceScope;
+        if (!string.Equals(newScope, row.SourceScope, StringComparison.Ordinal) && CharacterOwnershipScopes.IsWorker(newScope))
+        {
+            long? live = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+                .Where(o => o.Scope == newScope && o.Active && o.OwnerIncarnation == targetIncarnation)
+                .Select(o => (long?)o.Epoch)
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            targetEpoch = live ?? throw new CharacterOwnershipRejectedException(newScope, 0);
+        }
+
         int swapped = await db.Set<ClusterTransferOwnerRow>()
             .Where(r => r.CharacterGuid == row.CharacterGuid && r.ActiveTransfer == row.TransferId && r.Scope == row.SourceScope
                 && r.Epoch == row.SourceEpoch && r.Incarnation == row.SourceIncarnation)

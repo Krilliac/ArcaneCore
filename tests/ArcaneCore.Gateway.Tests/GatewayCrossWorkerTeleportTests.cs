@@ -309,31 +309,8 @@ public sealed class GatewayCrossWorkerTeleportTests
             Gateway.Dispose();
             await KalimdorWorker.StopAsync(CancellationToken.None);
             await EastWorker.StopAsync(CancellationToken.None);
-            await DisposeTolerantAsync(Kalimdor);
-            await DisposeTolerantAsync(Eastern);
-        }
-
-        private static async Task DisposeTolerantAsync(SyntheticArcaneServer server)
-        {
-            try
-            {
-                await server.DisposeAsync();
-            }
-            catch (AggregateException ex) when (Leaves(ex).All(leaf => leaf is CharacterOwnershipRejectedException))
-            {
-                // KNOWN GAP (as in GatewayDeferredShadowLoadTests): a player that arrived by transfer carries the transfer's per-character token (a later epoch than the scope ownership row), so the
-                // save queue refuses its final save at shutdown. The transfer itself has completed and been asserted by then.
-            }
-        }
-
-        private static IEnumerable<Exception> Leaves(Exception ex)
-        {
-            if (ex is AggregateException aggregate)
-            {
-                return aggregate.InnerExceptions.SelectMany(Leaves);
-            }
-
-            return ex.InnerException is { } inner ? Leaves(inner) : [ex];
+            await Kalimdor.DisposeAsync(); // the shutdown saves of players that arrived by transfer run here: a refusal fails the test
+            await Eastern.DisposeAsync();
         }
 
         public static async Task WaitUntilAsync(Func<Task<bool>> condition, CancellationToken token)
