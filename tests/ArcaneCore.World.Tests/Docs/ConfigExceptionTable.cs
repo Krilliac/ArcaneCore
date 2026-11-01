@@ -80,7 +80,7 @@ internal static class ConfigExceptionTable
         new("Spells:RequireSpellFocus", "bool", "true",
             "`false` stops enforcing `SpellInfo.RequiresSpellFocus` on casts (read once by `SpellFocusFeature`); `true` is the retail behaviour."),
         new("Startup:Strict", "bool", "false",
-            "`true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigReport.Run` in both daemons.", ConfigDaemon.Both),
+            "`true` makes a configuration warning fail start-up like an error (exit code 78); read by `ConfigReport.Run` in the world, realm and gateway daemons.", ConfigDaemon.Both | ConfigDaemon.Gateway),
         new("Crafting:Enabled", "bool", "true",
             "`false` leaves crafting (reagent check, tool check and the CREATE_ITEM effect) and profession-specialization gossip unregistered (read once by `CraftingFeature`); unset or unparsable keeps crafting enabled, the retail behaviour."),
         new("Forms:ResetFistAttackTimeOnFormLoss", "bool", "false",

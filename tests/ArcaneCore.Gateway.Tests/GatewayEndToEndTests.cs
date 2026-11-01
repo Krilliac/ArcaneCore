@@ -80,6 +80,7 @@ public sealed class GatewayEndToEndTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task Login_RecordsTheLinkLatency_SessionOpens_AndForwardedPackets_PerNode()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -94,6 +95,11 @@ public sealed class GatewayEndToEndTests
         Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync("GATEMETER", logon.SessionKey, cts.Token));
         await WaitUntilAsync(() => Task.FromResult(probe.Gauge("arcanecore.gateway.sessions", node) == 1), cts.Token);
         Assert.Equal(1, probe.Gauge("arcanecore.gateway.connections", node));
+
+        // The client sees Ok before the login continuation records its metrics, so wait for them.
+        await WaitUntilAsync(() => Task.FromResult(
+            probe.Sum("arcanecore.gateway.session_opens", node, result: "accepted") >= 1
+            && probe.Count("arcanecore.gateway.link_latency", node) >= 1), cts.Token);
 
         // One accepted open, timed once, with the worker endpoint as the per-link tag.
         Assert.Equal(1, probe.Sum("arcanecore.gateway.session_opens", node, result: "accepted"));
