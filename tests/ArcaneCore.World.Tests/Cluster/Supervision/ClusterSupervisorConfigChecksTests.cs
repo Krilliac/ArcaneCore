@@ -133,6 +133,37 @@ public sealed class ClusterSupervisorConfigChecksTests
     }
 
     [Fact]
+    public void TwoStandbysOnOneShard_AreRefused_AndSoIsAStandbyWhoseShardNoActiveWorldUses()
+    {
+        const string scope = " --Cluster:Fencing:Scope=Worker";
+        const string standbyFlag = " --Cluster:Worker:Standby=true";
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(values, "a-standby", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-a --Cluster:Worker:NodeId=standby-a --Cluster:Fencing:Shard=node-a" + scope + standbyFlag);
+        AddWorld(values, "a-standby2", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-a2 --Cluster:Worker:NodeId=standby-a2 --Cluster:Fencing:Shard=NODE-A" + scope + standbyFlag);
+
+        ConfigIssue duplicate = Assert.Single(Errors(values));
+        Assert.Contains("both stand behind", duplicate.Problem, StringComparison.Ordinal);
+        Assert.Equal("Cluster:Supervisor:Processes:a-standby2:Arguments", duplicate.Key);
+
+        Dictionary<string, string?> orphan = Base();
+        AddWorld(orphan, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(orphan, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b" + scope);
+        AddWorld(orphan, "c-standby", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-c --Cluster:Worker:NodeId=standby-c --Cluster:Fencing:Shard=node-c" + scope + standbyFlag);
+        ConfigIssue unmatched = Assert.Single(Errors(orphan));
+        Assert.Contains("no active world child uses that shard", unmatched.Problem, StringComparison.Ordinal);
+        Assert.Equal("Cluster:Supervisor:Processes:c-standby:Arguments", unmatched.Key);
+
+        // One standby behind each of two active worlds is the supported layout.
+        Dictionary<string, string?> good = Base();
+        AddWorld(good, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(good, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b" + scope);
+        AddWorld(good, "a-standby", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-a --Cluster:Worker:NodeId=standby-a --Cluster:Fencing:Shard=node-a" + scope + standbyFlag);
+        AddWorld(good, "b-standby", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-b --Cluster:Worker:NodeId=standby-b --Cluster:Fencing:Shard=node-b" + scope + standbyFlag);
+        Assert.Empty(Errors(good));
+    }
+
+    [Fact]
     public void ANumericWorkerScope_IsParsedLikeTheName_SoCaseOnlyShardClashesAreStillRefused()
     {
         // CharacterFencingScope.Worker = 1: the configuration binder accepts the number, so the check must too.

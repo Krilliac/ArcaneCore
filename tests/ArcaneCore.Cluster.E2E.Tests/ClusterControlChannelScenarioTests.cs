@@ -71,6 +71,17 @@ public sealed class ClusterControlChannelScenarioTests
         Assert.Equal(0, await cluster.CharactersScalarAsync(Count("cluster_transfer_decision", "state = " + (int)PlayerTransferDecisionState.PreCommit), ct));
         Assert.Equal(0, await cluster.CharactersScalarAsync(Count("cluster_transfer_decision", "state = " + (int)PlayerTransferDecisionState.Committed), ct));
 
+        // The player moved, not just the reply: the one Completed journal row is this character's transfer from the Eastern Kingdoms worker to the Kalimdor worker, and the
+        // character's transfer ownership now sits in the Kalimdor worker's scope (shard = node id), so the Eastern Kingdoms worker no longer owns the player.
+        string eastern = SqlText(cluster.Workers[0].NodeId);
+        string kalimdor = SqlText(cluster.Workers[1].NodeId);
+        string guid = character.Guid.ToString(CultureInfo.InvariantCulture);
+        Assert.Equal(1, await cluster.CharactersScalarAsync(
+            Count("cluster_transfer_decision", $"character_guid = {guid} AND source_worker = {eastern} AND target_worker = {kalimdor} AND target_map = 1 AND state = {(int)PlayerTransferDecisionState.Completed}"), ct));
+        Assert.Equal(0, await cluster.CharactersScalarAsync(Count("cluster_transfer_decision", $"character_guid = {guid} AND state <> {(int)PlayerTransferDecisionState.Completed}"), ct));
+        Assert.Equal(1, await cluster.CharactersScalarAsync(Count("cluster_transfer_owner", $"character_guid = {guid} AND scope = {SqlText("worker:" + cluster.Workers[1].NodeId)} AND active_transfer IS NULL"), ct));
+        Assert.Equal(0, await cluster.CharactersScalarAsync(Count("cluster_transfer_owner", $"character_guid = {guid} AND scope = {SqlText("worker:" + cluster.Workers[0].NodeId)}"), ct));
+
         // The session is alive on the target: it answers a command (the Kalimdor worker's reply reaches the same client).
         await SayAsync(session, ".cluster handoff status", ct);
         string reply = await ReadSystemLineAsync(session, line => line.Contains("handoff", StringComparison.OrdinalIgnoreCase), ct);
@@ -149,6 +160,9 @@ public sealed class ClusterControlChannelScenarioTests
         Assert.True(cluster.IsWorkerRunning(0));
         Assert.True(cluster.IsWorkerRunning(1));
     }
+
+    /// <summary>A SQL string literal for a node id the fixture generated (never player input); a quote is doubled all the same.</summary>
+    private static string SqlText(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     private static string Count(string table, string where) => string.Create(CultureInfo.InvariantCulture, $"SELECT count(*) FROM {table} WHERE {where}");
 

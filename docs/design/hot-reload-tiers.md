@@ -699,7 +699,7 @@ workers. It is a separate process from every world, so the coordinators it hosts
   `ControlNotice`; frames 24 to 27 are unchanged) carry one request per verb. Handoff verbs: `Describe`, `Warm`, `StopAdmissions`, `Freeze`,
   `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
   `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
-  once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend`, 60 s `Flush` and `Activate`,
+  once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
   120 s `Promote`). The link contract version is 5, so a gateway and its workers upgrade together.
 - **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
   `ResumeSource` is refused once the row is Committed; `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
@@ -720,6 +720,13 @@ workers. It is a separate process from every world, so the coordinators it hosts
   slot's next standby (`--Cluster:Worker:Standby=true`); the supervisor persists the swapped roles, so a supervisor restart keeps them.
   `.cluster restart $worker` (Administrator, re-checked by the gateway against the auth database) starts this through the gateway; "started" is
   answered at once and the verdict reaches the same client after it has moved. `.cluster handoff status [id]` reads the journal.
+  The promoted standby is the same process that was started as the standby, so the launcher gives standbys the worlds' hang timeout and hang
+  capture: the supervisor's hang watch is armed by the first world-tick beat of whichever process beats (a standby that never beats is warned
+  about once, never killed for silence). When a world that holds the supervisor `RealmId` (the lease-holder slot) is restarted as a standby, the
+  supervisor moves that `RealmId` to the slot's other worker (the one that names the same `Cluster:Fencing:Shard`), so `.server` lifecycle commands
+  for the realm are forwarded to the world that is serving. Only the supervisor's routing follows the swap: the promoted process keeps the environment
+  it was launched with (no `ARCANECORE_SUPERVISED_REALM_ID` until its next relaunch), so a lifecycle command typed on it is sent to the supervisor
+  and routed back to it.
 - **Transfer hosting (`Gateway:Transfers:Enabled`).** A worker's far-teleport router turns a teleport to a map another worker owns into a
   `ControlSubmit` (the source must be the node of the link it arrived on, carrying the session generation it names); the gateway coordinates the
   six stages (reserve, suspend and capture, install on the target, commit, activate, retire the source) with the unchanged
