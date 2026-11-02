@@ -165,10 +165,38 @@ public sealed class ActivateObjectEffectTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, slowUnlock, targets, triggered: false));
         caster.Relocate(casterXAtCompletion, 0, caster.Z, 0, kit.Now);
         kit.Advance(2100);
-        FlushSpellBatch(kit); // with batching the finished cast bar goes off at the next boundary; its range was judged at completion
+        FlushSpellBatch(kit); // with batching the finished cast bar goes off at the next boundary; range was judged at completion, not again at the go
 
         // RED on main for the refused row: no game-object range check, so the door 40 yards away is unlocked.
         Assert.Equal(refused, door.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Fact]
+    public void ABatchedGameObjectCast_IsNotRangeCheckedAgainAtTheBatchedGo()
+    {
+        // vmangos checks range in Spell::cast (CheckCast(false), Spell.cpp:3662) and the batched go (SPELL_STATE_DELAYED) runs effects without
+        // CheckCast again: the caster who stepped out of reach during the window still opens the door. Window forced so both CI modes run it.
+        const uint instantUnlock = 990151;
+        SpellInfo spell = Spell(instantUnlock, Effect(SpellEffectName.ActivateObject, 0, SpellImplicitTarget.GameObject, misc: 6)) with
+        {
+            RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+        };
+        using var kit = new SpellTestKit(spell);
+        kit.System.SpellBatchWindowMs = 400;
+        var map = kit.World.GetMap(0);
+        var objects = new GameObjectMapSystem(map, new GameObjectContent([GameObjectTestKit.GoTemplate(Door, GameObjectType.Door)], [], [], [], []));
+        map.AddUpdater(objects);
+        (Player caster, _) = kit.AddPlayer(1);
+        GameObject door = objects.Summon(Door, 25, 0, caster.Z, 0)!;
+        door.Flags |= GameObjectFlags.Locked;
+
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = door.Guid };
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, instantUnlock, targets, triggered: false));
+        Assert.True(door.Flags.HasFlag(GameObjectFlags.Locked)); // held in the batch: nothing resolved yet
+        caster.Relocate(-30, 0, caster.Z, 0, kit.Now); // 55 yards from the door, far past any reach
+        kit.Advance(400 - (kit.Now % 400));
+
+        Assert.False(door.Flags.HasFlag(GameObjectFlags.Locked));
     }
 
     [Fact]
