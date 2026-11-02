@@ -9,7 +9,9 @@ namespace ArcaneCore.TestSupport;
 /// some hosts (51445-55540 on the Linux CI node) and is shared with every outbound connection of every concurrently running test
 /// process; under full-gate load bind(0) itself fails with "Address already in use". These listeners are bound below the ephemeral
 /// range, where only other listeners compete, and a failed bind is retried on the next port. The counter starts at a random offset so
-/// concurrent test processes diverge, and never hands out one port twice within a process.
+/// concurrent test processes diverge, and never hands out one port twice within a process. The range is disjoint from the one
+/// ClusterProcessFixture (ArcaneCore.Cluster.E2E.Tests) probes for its child processes (12000-19999): a probed port is free again until
+/// the child binds it seconds later, so a listener here must never be able to take it.
 /// </summary>
 public static class LoopbackPorts
 {

@@ -631,8 +631,12 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     // bind, any outbound connection (each process's pooled database connections, a gateway's link retries) may take it as its local port,
     // and the child then dies with "Address already in use". Below the ephemeral range only listeners compete, the probe sees them, and the
     // per-process counter (from a random start, so concurrent test processes diverge) never hands one port out twice.
-    private const int PortRangeStart = 20000;
-    private const int PortRangeSize = 12000;
+    // The range is disjoint from ArcaneCore.TestSupport.LoopbackPorts (20000-31999), which the in-process test hosts of the other suites
+    // use while this suite runs beside them in a gate. The probe cannot hold a port for a child process: between it and the child's bind
+    // there are seconds of database preparation and child startup, and a test host that picked the same port in that window took the
+    // child's port (the child died at startup with "the world port ... is already in use") and answered the readiness probe in its place.
+    private const int PortRangeStart = 12000;
+    private const int PortRangeSize = 8000;
     private static int s_nextPort = RandomNumberGenerator.GetInt32(PortRangeSize);
 
     private static int FreePort()
