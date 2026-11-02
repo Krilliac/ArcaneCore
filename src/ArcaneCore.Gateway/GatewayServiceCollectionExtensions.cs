@@ -5,6 +5,7 @@ using ArcaneCore.Gateway.Handoff;
 using ArcaneCore.Gateway.Transfers;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -59,6 +60,10 @@ public static class GatewayServiceCollectionExtensions
 
         services.AddOptions<GatewayTransferOptions>().Bind(configuration.GetSection(GatewayTransferOptions.SectionName)).ValidateOnStart();
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayTransferOptions>, GatewayTransferOptionsValidator>());
+        // A child of the cluster host supervisor stops gracefully on its stdin "drain" line or EOF (the same registration the realm and world make). It sits before the server, so the
+        // server's StopAsync (client and worker links) runs through the normal host shutdown that StopApplication begins, and the reader is released last.
+        services.TryAddSingleton(_ => ConsoleInputSource.Default());
+        services.AddHostedService<SupervisedChildDrain>();
         services.AddSingleton<GatewayServer>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayServer>());
         if (handoffEnabled)
