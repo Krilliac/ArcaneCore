@@ -30,7 +30,7 @@ public sealed class GatewayMetricsTests
         string node = "metrics-" + Guid.NewGuid().ToString("N")[..8];
         using var probe = new GatewayMeterProbe();
         var acceptor = new OpenEverythingAcceptor();
-        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0));
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()));
         host.Start();
         GatewayServer gateway = CreateGateway(node, host.BoundEndPoint.Port);
         try
@@ -97,7 +97,7 @@ public sealed class GatewayMetricsTests
         Options.Create(new GatewayOptions
         {
             BindAddress = IPAddress.Loopback.ToString(),
-            Port = 0,
+            Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
             WorkerAddress = IPAddress.Loopback.ToString(),
             WorkerPort = workerPort,
             LinkSecret = Secret,
@@ -110,7 +110,7 @@ public sealed class GatewayMetricsTests
 
     private static int FreePort()
     {
-        using var probe = new TcpListener(IPAddress.Loopback, 0);
+        using var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         probe.Start();
         return ((IPEndPoint)probe.LocalEndpoint).Port;
     }

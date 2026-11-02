@@ -175,7 +175,7 @@ public sealed class GatewayFuzzAndExceptionTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Gateway:BindAddress"] = "127.0.0.1",
-                ["Gateway:Port"] = "0",
+                ["Gateway:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["Gateway:WorkerAddress"] = "127.0.0.1",
                 ["Gateway:WorkerPort"] = "8095",
                 ["Gateway:LinkSecret"] = ValidSecret,
@@ -245,7 +245,7 @@ public sealed class GatewayFuzzAndExceptionTests
             Options.Create(new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 LinkSecret = secret,
             }),
             NullLoggerFactory.Instance);
@@ -264,7 +264,7 @@ public sealed class GatewayFuzzAndExceptionTests
             var opts = new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = "127.0.0.1",
                 WorkerPort = 8095,
                 LinkSecret = ValidSecret,
@@ -514,7 +514,7 @@ public sealed class GatewayFuzzAndExceptionTests
         Assert.Throws<ArgumentException>("request", () => GatewaySessionWire.EncodeOpen(1, new GatewaySessionOpenRequest(1, 1, overlong, 5875, "127.0.0.1:1")));
         Assert.Throws<ArgumentException>("request", () => GatewaySessionWire.EncodeOpen(1, new GatewaySessionOpenRequest(1, 1, "ALICE", 5875, overlong)));
 
-        using (var listener = new TcpListener(IPAddress.Loopback, 0))
+        using (var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener())
         {
             listener.Start();
             using var clientSide = new TcpClient();
@@ -1443,7 +1443,7 @@ public sealed class GatewayFuzzAndExceptionTests
             }
             else
             {
-                using var tempListener = new TcpListener(IPAddress.Loopback, 0);
+                using var tempListener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
                 tempListener.Start();
                 workerPort = ((IPEndPoint)tempListener.LocalEndpoint).Port;
                 tempListener.Stop();
@@ -1455,7 +1455,7 @@ public sealed class GatewayFuzzAndExceptionTests
             var gatewayOptions = new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = "127.0.0.1",
                 WorkerPort = workerPort,
                 LinkSecret = ValidSecret,
@@ -1515,7 +1515,7 @@ public sealed class GatewayFuzzAndExceptionTests
         public WorkerRig()
         {
             ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
-            Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, 0), NullLogger.Instance);
+            Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()), NullLogger.Instance);
         }
 
         public GatewaySessionLinkHost Host { get; }

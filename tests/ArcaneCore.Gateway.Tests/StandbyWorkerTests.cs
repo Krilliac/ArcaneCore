@@ -325,7 +325,7 @@ public sealed class StandbyWorkerTests
     {
         ["Cluster:Worker:Enabled"] = "true",
         ["Cluster:Worker:Standby"] = standby ? "true" : "false",
-        ["Cluster:Worker:Port"] = "0",
+        ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
         ["Cluster:Worker:LinkSecret"] = Secret,
     };
 
@@ -344,7 +344,7 @@ public sealed class StandbyWorkerTests
             ? services.GetRequiredService<GatewayWorkerEndpoint>()
             : new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = ArcaneCore.TestSupport.LoopbackPorts.Next(), LinkSecret = Secret }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<ArcaneCore.World.Handlers.OpcodeTable>(),
                 server.World,
@@ -363,7 +363,7 @@ public sealed class StandbyWorkerTests
             Options.Create(new GatewayOptions
             {
                 BindAddress = IPAddress.Loopback.ToString(),
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = IPAddress.Loopback.ToString(),
                 WorkerPort = endpoint.Host!.BoundEndPoint.Port,
                 LinkSecret = Secret,

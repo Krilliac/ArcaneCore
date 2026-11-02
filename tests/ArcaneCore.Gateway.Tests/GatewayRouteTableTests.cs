@@ -120,7 +120,7 @@ public sealed class GatewayRouteTableTests
     public async Task LinkClient_ReadsTheMapsTheWorkerAnnouncedInItsHelloAck()
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         await using var client = new GatewaySessionLinkClient(
             GatewayLinkManifest.Create(ClusterRole.Gateway, "gateway", Guid.NewGuid(), 1, "dev", 1, 1), (IPEndPoint)listener.LocalEndpoint, Secret);
@@ -168,7 +168,7 @@ public sealed class GatewayRouteTableTests
 
     private static async Task<GatewaySessionLinkClient> ConnectAgainstAckAsync(byte[] ack, CancellationToken token, Func<Task, Task> assertOutcome)
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         try
         {

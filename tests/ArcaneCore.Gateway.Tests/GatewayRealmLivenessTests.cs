@@ -298,7 +298,7 @@ public sealed class GatewayRealmLivenessTests
         int sessions = 3;
         var host = new GatewaySessionLinkHost(
             GatewayLinkManifest.Create(ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1),
-            new RefuseAll(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0), workerStatus: () => Active(Volatile.Read(ref ticks), Volatile.Read(ref sessions)));
+            new RefuseAll(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()), workerStatus: () => Active(Volatile.Read(ref ticks), Volatile.Read(ref sessions)));
         host.Start();
         await using (host)
         {

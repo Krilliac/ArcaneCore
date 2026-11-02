@@ -116,7 +116,7 @@ public sealed class LinkIntegrityTests
     public async Task Gateway_RefusesAWorkerThatCannotProveTheSecretBack()
     {
         using var cts = new CancellationTokenSource(Deadline);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), (IPEndPoint)listener.LocalEndpoint, Secret);
         Task connect = client.ConnectAsync(cts.Token);
@@ -138,7 +138,7 @@ public sealed class LinkIntegrityTests
     public async Task Gateway_RefusesAnAcceptingAckBeforeTheWorkerProved()
     {
         using var cts = new CancellationTokenSource(Deadline);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), (IPEndPoint)listener.LocalEndpoint, Secret);
         Task connect = client.ConnectAsync(cts.Token);
@@ -253,7 +253,7 @@ public sealed class LinkIntegrityTests
 
     private static GatewaySessionLinkHost StartHost()
     {
-        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new RefusingAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0));
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new RefusingAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()));
         host.Start();
         return host;
     }

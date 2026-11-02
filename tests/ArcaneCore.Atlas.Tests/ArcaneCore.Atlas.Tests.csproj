@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../tools/ArcaneCore.Atlas/ArcaneCore.Atlas.csproj" />
+    <ProjectReference Include="../ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- The map feed wire lines shared with the other test project. -->

@@ -49,7 +49,7 @@ public sealed class GatewayBanLookupCancellationTests
         services.AddSingleton<IBanStore>(bans);
         await using ServiceProvider provider = services.BuildServiceProvider();
 
-        using var tempListener = new TcpListener(IPAddress.Loopback, 0);
+        using var tempListener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         tempListener.Start();
         int unusedWorkerPort = ((IPEndPoint)tempListener.LocalEndpoint).Port;
         tempListener.Stop();
@@ -57,7 +57,7 @@ public sealed class GatewayBanLookupCancellationTests
         var gatewayOptions = new GatewayOptions
         {
             BindAddress = "127.0.0.1",
-            Port = 0,
+            Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
             WorkerAddress = "127.0.0.1",
             WorkerPort = unusedWorkerPort,
             LinkSecret = "0123456789abcdef-gateway-ban-secret",

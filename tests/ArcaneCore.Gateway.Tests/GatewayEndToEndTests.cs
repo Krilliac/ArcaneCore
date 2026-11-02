@@ -413,7 +413,7 @@ public sealed class GatewayEndToEndTests
         Options.Create(new GatewayOptions
         {
             BindAddress = IPAddress.Loopback.ToString(),
-            Port = 0,
+            Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
             WorkerAddress = IPAddress.Loopback.ToString(),
             WorkerPort = workerPort,
             LinkSecret = Stack.Secret,
@@ -425,7 +425,7 @@ public sealed class GatewayEndToEndTests
     private static GatewayServer CreateGateway(SyntheticArcaneServer server, GatewayOptions options)
     {
         options.BindAddress = IPAddress.Loopback.ToString();
-        options.Port = 0;
+        options.Port = ArcaneCore.TestSupport.LoopbackPorts.Next();
         options.LinkSecret = Stack.Secret;
         options.LinkRetryDelay = TimeSpan.FromMilliseconds(100);
         return new GatewayServer(
@@ -459,7 +459,7 @@ public sealed class GatewayEndToEndTests
 
     private static int FreePort()
     {
-        using var probe = new TcpListener(IPAddress.Loopback, 0);
+        using var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         probe.Start();
         return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
@@ -508,7 +508,7 @@ public sealed class GatewayEndToEndTests
             IServiceProvider services = server.Services;
             var endpoint = new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = ArcaneCore.TestSupport.LoopbackPorts.Next(), LinkSecret = Secret }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<OpcodeTable>(),
                 server.World,

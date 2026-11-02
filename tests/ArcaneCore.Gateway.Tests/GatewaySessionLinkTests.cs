@@ -178,7 +178,7 @@ public sealed class GatewaySessionLinkTests
         // An empty secret's proof is HMAC("", nonce): any local process could compute it, register as a gateway and open a session
         // for any account. Worker mode refuses to start with it on every bind address, and so does the gateway.
         ArgumentException worker = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkHost(
-            Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, secret, new IPEndPoint(IPAddress.Loopback, 0)));
+            Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next())));
         Assert.Contains("Cluster:Worker:LinkSecret", worker.Message, StringComparison.Ordinal);
         ArgumentException gateway = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkClient(
             Manifest(ClusterRole.Gateway), new IPEndPoint(IPAddress.Loopback, 1), secret));
@@ -237,7 +237,7 @@ public sealed class GatewaySessionLinkTests
     public async Task ServerPacketReplays_AndForeignEpochs_AreDroppedByTheGateway()
     {
         using var cts = new CancellationTokenSource(Deadline);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), (IPEndPoint)listener.LocalEndpoint, Secret);
         Task connect = client.ConnectAsync(cts.Token);
@@ -306,7 +306,7 @@ public sealed class GatewaySessionLinkTests
 
     private static GatewaySessionLinkHost StartHost(IGatewaySessionAcceptor acceptor)
     {
-        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0));
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()));
         host.Start();
         return host;
     }

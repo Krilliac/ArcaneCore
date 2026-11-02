@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/ArcaneCore.Gateway/ArcaneCore.Gateway.csproj" />
     <ProjectReference Include="../../tools/ArcaneCore.MockClient/ArcaneCore.MockClient.csproj" />
+    <ProjectReference Include="../ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
