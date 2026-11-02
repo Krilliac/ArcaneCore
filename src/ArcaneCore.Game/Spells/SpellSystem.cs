@@ -1618,7 +1618,7 @@ public sealed partial class SpellSystem
             return items;
         }
 
-        SpellCastResult objectRange = CheckGameObjectTargetRange(caster, spell, targets, triggered, strict);
+        SpellCastResult objectRange = batchedGo ? SpellCastResult.CastOk : CheckGameObjectTargetRange(caster, spell, targets, triggered, strict);
         if (objectRange != SpellCastResult.CastOk)
         {
             return objectRange;

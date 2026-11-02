@@ -288,10 +288,12 @@ public sealed class ItemUseTests
         Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.HandleItemUse(rig.Player, potion.BagSlot, potion.Slot, 0,
             new SpellCastTargets { Mask = SpellCastTargetFlags.Item, Item = other.Guid }));
         Assert.Equal(SpellCastResult.BadTargets, rig.LastCastResult());
+        rig.ResolveSpellBatch(); // a refused use is not held: nothing goes off at the boundary either
         Assert.Equal(2u, rig.Inventory.GetItemCount(Potion));
         Assert.Equal(10u, rig.Player.Health);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.HandleItemUse(rig.Player, potion.BagSlot, potion.Slot, 0, SpellCastTargets.ForSelf()));
+        rig.ResolveSpellBatch();
         Assert.Equal(1u, rig.Inventory.GetItemCount(Potion));
         Assert.True(rig.Player.Health > 10);
     }
