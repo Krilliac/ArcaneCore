@@ -44,7 +44,7 @@ public sealed class ClusterNodeBridgeFaultCountTests
     {
         var probe = new FaultCountProbe("cluster.bridge");
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         await using WorldTestHost host = WorldTestHost.Start();

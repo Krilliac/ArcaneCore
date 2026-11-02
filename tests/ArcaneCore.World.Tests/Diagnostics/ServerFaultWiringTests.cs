@@ -43,7 +43,7 @@ public sealed class ServerFaultWiringTests
         await using ServiceProvider provider = services.BuildServiceProvider();
         using var world = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
             provider.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance);
-        var probe = new TcpListener(IPAddress.Loopback, 0);
+        var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         probe.Start();
         int port = ((IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();

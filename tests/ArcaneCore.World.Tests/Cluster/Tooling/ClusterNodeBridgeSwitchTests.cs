@@ -84,7 +84,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task Disabled_OpensNoConnection_LogsNothing_AndStartsNoTask()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         await using WorldTestHost host = WorldTestHost.Start();
@@ -144,7 +144,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task StartingAWorld_WithNodeBridgeEnabledInHostConfiguration_TurnsTheBridgeOn()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -165,7 +165,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task Enabled_ConnectsToTheConfiguredEndpoints_AndReportsAnUnansweringNode()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         await using WorldTestHost host = WorldTestHost.Start();

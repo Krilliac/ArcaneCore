@@ -144,7 +144,7 @@ public sealed class WorldServerShutdownTests
 
     private static int AvailablePort()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();

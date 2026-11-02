@@ -155,7 +155,7 @@ public sealed class PresenceFeedTests
         try
         {
             int port;
-            using (var probe = new TcpListener(IPAddress.Loopback, 0))
+            using (var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener())
             {
                 probe.Start();
                 port = ((IPEndPoint)probe.LocalEndpoint).Port;

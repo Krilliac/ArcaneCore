@@ -556,7 +556,7 @@ public sealed class PlayerbotQuestGoalsTests
         WorldSession session = quest.Session;
         int queries = 0;
         var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
-        await quest.Host.OnWorldAsync(() =>
+        await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
         {
             Player player = session.Player!;
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
@@ -571,25 +571,25 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(1, queries);
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // refused
             return true;
-        });
+        }));
 
         for (int second = 0; second < 30; second++)
         {
             await quest.Host.World.AdvanceClockAsync(1_000);
-            await quest.Host.OnWorldAsync(() =>
+            await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
             {
                 for (int think = 0; think < 2; think++)
                 { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(session.Player!, 500); }
                 return true;
-            });
+            }));
         }
 
-        await quest.Host.OnWorldAsync(() =>
+        await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
         {
             Assert.Equal(1, queries);
             Assert.False(goals.HasCandidate(session.Player!));
             return true;
-        });
+        }));
     }
 
     [Fact]
@@ -1648,6 +1648,19 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
             return true;
         });
+    }
+
+    /// <summary>
+    /// Runs <paramref name="body"/> under a think probe on a manual clock. The quest phase has a 25 ms wall budget (a giver looked at after
+    /// it is spent is skipped); a test thread the OS held back that long between the start of a candidate search and its first giver saw no
+    /// candidate. The frozen clock makes the search's outcome independent of how loaded the machine is.
+    /// </summary>
+    private static T OnFrozenThinkClock<T>(Func<T> body)
+    {
+        var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
+        probe.Begin();
+        try { return body(); }
+        finally { probe.End(); }
     }
 
     private sealed class ProbeBudgetInspectingPathfinder : IPathfinder

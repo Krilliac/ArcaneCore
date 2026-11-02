@@ -74,7 +74,7 @@ public sealed class WorldProtectionTests
         await using var host = WorldTestHost.Start();
         var log = new CapturingLogger();
         NetGuard guard = Guard(new NetProtectionOptions { AuthFailureBurstPerIp = 2, AuthFailuresPerMinutePerIp = 1 }, log);
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         using var stop = new CancellationTokenSource();
@@ -370,7 +370,7 @@ public sealed class WorldProtectionTests
                 new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 },
                 provider.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance);
 
-            var probe = new TcpListener(IPAddress.Loopback, 0);
+            var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
             probe.Start();
             int port = ((IPEndPoint)probe.LocalEndpoint).Port;
             probe.Stop();

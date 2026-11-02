@@ -14,7 +14,7 @@ internal static class ClosedLoopbackPort
     /// <summary>Binds an ephemeral loopback port, releases it and returns its number.</summary>
     public static int Next()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
