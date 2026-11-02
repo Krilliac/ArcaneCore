@@ -345,6 +345,14 @@
           "Microsoft.Extensions.Hosting": "[9.0.21, )"
         }
       },
+      "arcanecore.testsupport": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Data": "[1.0.0, )",
+          "ArcaneCore.Game": "[1.0.0, )",
+          "xunit.assert": "[2.9.3, )"
+        }
+      },
       "arcanecore.world": {
         "type": "Project",
         "dependencies": {

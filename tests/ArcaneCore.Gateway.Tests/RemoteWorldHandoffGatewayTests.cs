@@ -576,7 +576,7 @@ public sealed class RemoteWorldHandoffGatewayTests
                     Options.Create(new GatewayOptions
                     {
                         BindAddress = IPAddress.Loopback.ToString(),
-                        Port = 0,
+                        Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                         Workers =
                         [
                             new GatewayWorkerEntry
@@ -688,7 +688,7 @@ public sealed class RemoteWorldHandoffGatewayTests
             ["Cluster:Worker:Enabled"] = "true",
             ["Cluster:Worker:Standby"] = standby ? "true" : "false",
             ["Cluster:Worker:NodeId"] = nodeId,
-            ["Cluster:Worker:Port"] = "0",
+            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Handoff:Enabled"] = "true",
         };

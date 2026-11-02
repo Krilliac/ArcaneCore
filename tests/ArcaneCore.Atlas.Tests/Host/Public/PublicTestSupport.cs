@@ -90,7 +90,7 @@ internal static class FreePort
 {
     public static int Next()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         try
         {

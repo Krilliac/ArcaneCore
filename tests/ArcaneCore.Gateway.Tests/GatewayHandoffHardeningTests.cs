@@ -378,7 +378,7 @@ public sealed class GatewayHandoffHardeningTests
     /// <summary>A loopback TCP forwarder to <c>upstream</c> that forwards nothing from the client until <see cref="Release"/>, so a handshake through it can be held open.</summary>
     private sealed class StallingProxy : IDisposable
     {
-        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly TcpListener _listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         private readonly IPEndPoint _upstream;
         private readonly CancellationTokenSource _stop = new();
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -445,7 +445,7 @@ public sealed class GatewayHandoffHardeningTests
 
     private static int FreePort()
     {
-        var probe = new TcpListener(IPAddress.Loopback, 0);
+        var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         probe.Start();
         try
         {
@@ -573,7 +573,7 @@ public sealed class GatewayHandoffHardeningTests
                 Options.Create(new GatewayOptions
                 {
                     BindAddress = IPAddress.Loopback.ToString(),
-                    Port = 0,
+                    Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                     Workers =
                     [
                         new GatewayWorkerEntry
@@ -662,7 +662,7 @@ public sealed class GatewayHandoffHardeningTests
             ["Cluster:Worker:Enabled"] = "true",
             ["Cluster:Worker:Standby"] = standby ? "true" : "false",
             ["Cluster:Worker:NodeId"] = nodeId,
-            ["Cluster:Worker:Port"] = "0",
+            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Handoff:Enabled"] = "true",
         };

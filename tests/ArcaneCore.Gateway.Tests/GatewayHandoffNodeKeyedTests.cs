@@ -197,7 +197,7 @@ public sealed class GatewayHandoffNodeKeyedTests
 
     private static IPEndPoint FreeEndPoint()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         try
         {
@@ -270,7 +270,7 @@ public sealed class GatewayHandoffNodeKeyedTests
                     Options.Create(new GatewayOptions
                     {
                         BindAddress = IPAddress.Loopback.ToString(),
-                        Port = 0,
+                        Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                         LinkSecret = Secret,
                         LinkRetryDelay = TimeSpan.FromMilliseconds(100),
                         Workers =
@@ -417,7 +417,7 @@ public sealed class GatewayHandoffNodeKeyedTests
             IServiceProvider services = server.Services;
             var endpoint = new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret, OwnedMaps = ownedMaps, AllowInstanceMaps = false }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = ArcaneCore.TestSupport.LoopbackPorts.Next(), LinkSecret = Secret, OwnedMaps = ownedMaps, AllowInstanceMaps = false }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<OpcodeTable>(),
                 server.World,

@@ -132,7 +132,7 @@ public sealed class GatewayWardenTests
         public static async Task<Rig> StartAsync(GatewayWardenManifestVerifier verifier, CancellationToken token, GatewayWardenPosture? linkPosture = null, bool open = true)
         {
             ConcurrentQueue<(long, ClusterWardenVerdict)>? applied = null;
-            var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0),
+            var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()),
                 wardenVerifier: verifier, wardenVerdictAccepted: (generation, verdict) => applied!.Enqueue((generation, verdict)));
             host.Start();
             var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), host.BoundEndPoint, Secret, wardenPosture: linkPosture ?? verifier.ToPosture());
@@ -167,7 +167,7 @@ public sealed class GatewayWardenTests
         await using Rig rig = await Rig.StartAsync(WorkerVerifier(Options()), cts.Token);
 
         Assert.True(rig.Client.SendWardenVerdict(1, 243, ClusterWardenAction.Kick, "failed scan 243", gateway.Posture));
-        await GatewaySessionLinkTests.WaitUntilAsync(() => rig.Host.AcceptedWardenVerdicts == 1, cts.Token);
+        await GatewaySessionLinkTests.WaitUntilAsync(() => rig.Host.AcceptedWardenVerdicts == 1 && rig.Applied.Count == 1, cts.Token);
         (long generation, ClusterWardenVerdict verdict) = Assert.Single(rig.Applied);
         Assert.Equal(1, generation);
         Assert.Equal(7, verdict.AccountId);
@@ -229,7 +229,7 @@ public sealed class GatewayWardenTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         GatewayWardenManifestVerifier verifier = WorkerVerifier(Options());
-        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0), wardenVerifier: verifier);
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()), wardenVerifier: verifier);
         host.Start();
         await using (host)
         {

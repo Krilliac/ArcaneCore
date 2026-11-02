@@ -690,7 +690,7 @@ public sealed class CliInstanceTests
     public async Task Ctl_AnInstanceThatCannotBeReached_IsReportedAsUnavailable()
     {
         using var cli = new CliRig();
-        var closed = new TcpListener(IPAddress.Loopback, 0);
+        var closed = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         closed.Start();
         int port = ((IPEndPoint)closed.LocalEndpoint).Port;
         closed.Stop();
@@ -908,7 +908,7 @@ public sealed class CliServeTests
     public async Task Serve_APortGivenOnTheCommandLine_IsTheOneUsed_AndAPortInUseIsAFailure()
     {
         using var cli = new CliRig();
-        var probe = new TcpListener(IPAddress.Loopback, 0);
+        var probe = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         probe.Start();
         int busy = ((IPEndPoint)probe.LocalEndpoint).Port;
         try

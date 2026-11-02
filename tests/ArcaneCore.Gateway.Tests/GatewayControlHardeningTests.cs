@@ -415,7 +415,7 @@ public sealed class GatewayControlHardeningTests
 
     private static int ClosedPort()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
@@ -436,7 +436,7 @@ public sealed class GatewayControlHardeningTests
             Options.Create(new GatewayOptions
             {
                 BindAddress = IPAddress.Loopback.ToString(),
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = IPAddress.Loopback.ToString(),
                 WorkerPort = port,
                 LinkSecret = StandbyWorkerTests.Secret,
@@ -551,7 +551,7 @@ public sealed class GatewayControlHardeningTests
                     Options.Create(new GatewayOptions
                     {
                         BindAddress = IPAddress.Loopback.ToString(),
-                        Port = 0,
+                        Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                         Workers = [entry],
                         LinkSecret = Secret,
                         LinkRetryDelay = TimeSpan.FromMilliseconds(100),
@@ -688,7 +688,7 @@ public sealed class GatewayControlHardeningTests
             ["Cluster:Worker:Enabled"] = "true",
             ["Cluster:Worker:Standby"] = standby ? "true" : "false",
             ["Cluster:Worker:NodeId"] = nodeId,
-            ["Cluster:Worker:Port"] = "0",
+            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Handoff:Enabled"] = "true",
         };

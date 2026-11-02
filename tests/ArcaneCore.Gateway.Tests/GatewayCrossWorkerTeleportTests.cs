@@ -206,7 +206,7 @@ public sealed class GatewayCrossWorkerTeleportTests
                     Options.Create(new GatewayOptions
                     {
                         BindAddress = IPAddress.Loopback.ToString(),
-                        Port = 0,
+                        Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                         LinkSecret = Secret,
                         LinkRetryDelay = TimeSpan.FromMilliseconds(100),
                         Workers =
@@ -380,7 +380,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             ["Cluster:Worker:NodeId"] = nodeId,
             ["Cluster:Worker:OwnedMaps"] = ownedMaps,
             ["Cluster:Worker:AllowInstanceMaps"] = "false",
-            ["Cluster:Worker:Port"] = "0",
+            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Transfers:Enabled"] = "true",
             ["Cluster:Node:Role"] = "MapWorker",

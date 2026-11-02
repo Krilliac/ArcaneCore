@@ -729,7 +729,7 @@ public sealed class GatewayTransferServiceTests
                 var options = new GatewayOptions
                 {
                     BindAddress = IPAddress.Loopback.ToString(),
-                    Port = 0,
+                    Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                     LinkSecret = StandbyWorkerTests.Secret,
                     LinkRetryDelay = TimeSpan.FromMilliseconds(100),
                     RealmId = 1,
@@ -775,7 +775,7 @@ public sealed class GatewayTransferServiceTests
         {
             var host = new GatewaySessionLinkHost(
                 GatewayLinkManifest.Create(ClusterRole.Worker, node, Guid.NewGuid(), 1, "dev", 1, 1),
-                new NoSessionsAcceptor(), () => 1, StandbyWorkerTests.Secret, new IPEndPoint(IPAddress.Loopback, 0))
+                new NoSessionsAcceptor(), () => 1, StandbyWorkerTests.Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()))
             {
                 ControlHandler = handler,
             };
