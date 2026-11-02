@@ -32,7 +32,7 @@ public sealed class PeerHolderLocator(IRealmAuthorityLeaseStore store, PeerLinkO
         foreach (string scope in Scopes)
         {
             if (store.GetCurrent(scope, now) is { } lease
-                && options.Nodes.TryGetValue(lease.OwnerNodeId, out string? endpoint)
+                && options.ResolveNodes().TryGetValue(lease.OwnerNodeId, out string? endpoint)
                 && PeerLinkOptions.TryParseEndpoint(endpoint, out string host, out int port))
             {
                 return new PeerHolder(scope, lease.OwnerNodeId, lease.OwnerIncarnation, lease.FencingToken, host, port);

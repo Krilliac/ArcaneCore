@@ -28,6 +28,13 @@ public sealed class PeerLinkOptions
     /// <summary>Where each node's peer listener is, by node id (<c>Cluster:Worker:NodeId</c>) to <c>host:port</c>. A node that finds the lease holder in the lease store looks its endpoint up here; a holder without an entry is not dialled.</summary>
     public Dictionary<string, string> Nodes { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The same map as <see cref="Nodes"/> in a list form that survives <c>:</c> inside a node id (<c>worker:EK</c>): configuration keys use <c>:</c> as the section
+    /// separator, so <c>Nodes:worker:EK</c> would nest instead of naming a key. Bind as <c>Cluster:Peer:Endpoints:0:NodeId</c> and <c>Cluster:Peer:Endpoints:0:Address</c> (<c>host:port</c>).
+    /// <see cref="ResolveNodes"/> merges both forms; an <see cref="Endpoints"/> entry wins over a <see cref="Nodes"/> entry with the same id.
+    /// </summary>
+    public List<PeerEndpointEntry> Endpoints { get; set; } = [];
+
     /// <summary>First wait, in milliseconds, before a client redials a lost or refused link; it doubles per failed attempt up to <see cref="ReconnectMaxMs"/> and resets once a link is admitted.</summary>
     public int ReconnectInitialMs { get; set; } = 250;
 
@@ -60,6 +67,21 @@ public sealed class PeerLinkOptions
 
     /// <summary><see cref="RequestTimeoutMs"/> as a time span.</summary>
     public TimeSpan RequestTimeout => TimeSpan.FromMilliseconds(RequestTimeoutMs);
+
+    /// <summary>The node id to <c>host:port</c> map from <see cref="Nodes"/> and <see cref="Endpoints"/> together.</summary>
+    public Dictionary<string, string> ResolveNodes()
+    {
+        Dictionary<string, string> merged = new(Nodes, StringComparer.Ordinal);
+        foreach (PeerEndpointEntry entry in Endpoints)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.NodeId) && !string.IsNullOrWhiteSpace(entry.Address))
+            {
+                merged[entry.NodeId] = entry.Address;
+            }
+        }
+
+        return merged;
+    }
 
     /// <summary>What is wrong with these values; empty when valid.</summary>
     public IEnumerable<string> Validate()
@@ -102,6 +124,18 @@ public sealed class PeerLinkOptions
         if (MaxPendingRequests < 1)
         {
             yield return $"MaxPendingRequests {MaxPendingRequests} must be at least 1";
+        }
+
+        foreach (PeerEndpointEntry entry in Endpoints)
+        {
+            if (string.IsNullOrWhiteSpace(entry.NodeId))
+            {
+                yield return "Endpoints has an entry with an empty NodeId";
+            }
+            else if (!TryParseEndpoint(entry.Address, out _, out _))
+            {
+                yield return $"Endpoints '{entry.NodeId}' '{entry.Address}' is not host:port";
+            }
         }
 
         foreach ((string node, string endpoint) in Nodes)
@@ -153,4 +187,14 @@ public sealed class PeerLinkOptions
         port = parsed;
         return true;
     }
+}
+
+/// <summary>One <see cref="PeerLinkOptions.Endpoints"/> entry: a node id and where its peer listener is.</summary>
+public sealed class PeerEndpointEntry
+{
+    /// <summary>The node id (<c>Cluster:Worker:NodeId</c>); may contain <c>:</c>.</summary>
+    public string NodeId { get; set; } = string.Empty;
+
+    /// <summary><c>host:port</c> of the node's peer listener.</summary>
+    public string Address { get; set; } = string.Empty;
 }

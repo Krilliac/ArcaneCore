@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Peer;
 using ArcaneCore.World.Cluster.Social;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -319,6 +320,34 @@ public sealed class PeerLinkTests : IAsyncLifetime
         var bad = new PeerLinkOptions { BindAddress = "not-an-ip", ReconnectInitialMs = 0 };
         bad.Nodes["x"] = "nope";
         Assert.Equal(3, bad.Validate().Count());
+    }
+
+    [Fact]
+    public void Endpoints_BindFromCommandLine_WithColonsInNodeIds_AndFeedTheLocator()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddCommandLine(
+        [
+            "--Cluster:Peer:Endpoints:0:NodeId=worker:EK", "--Cluster:Peer:Endpoints:0:Address=127.0.0.1:8105",
+            "--Cluster:Peer:Endpoints:1:NodeId=standby:EK", "--Cluster:Peer:Endpoints:1:Address=127.0.0.1:8108",
+            "--Cluster:Peer:Nodes:plain=127.0.0.1:8110",
+        ]).Build();
+        var options = new PeerLinkOptions();
+        configuration.GetSection(PeerLinkOptions.SectionName).Bind(options);
+
+        Assert.Empty(options.Validate());
+        Dictionary<string, string> nodes = options.ResolveNodes();
+        Assert.Equal(3, nodes.Count);
+        Assert.Equal("127.0.0.1:8105", nodes["worker:EK"]);
+        Assert.Equal("127.0.0.1:8108", nodes["standby:EK"]);
+        Assert.Equal("127.0.0.1:8110", nodes["plain"]);
+
+        _store.TryAcquire(RealmAuthorityScopes.Social, "worker:EK", Guid.NewGuid(), Hour, DateTimeOffset.UtcNow);
+        PeerHolder holder = Assert.IsType<PeerHolder>(new PeerHolderLocator(_store, options).Locate());
+        Assert.Equal("worker:EK", holder.NodeId);
+        Assert.Equal(8105, holder.Port);
+
+        var bad = new PeerLinkOptions { Endpoints = [new PeerEndpointEntry { NodeId = "", Address = "1.2.3.4:5" }, new PeerEndpointEntry { NodeId = "n", Address = "nope" }] };
+        Assert.Equal(2, bad.Validate().Count());
     }
 
     [Theory]

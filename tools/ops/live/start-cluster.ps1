@@ -62,7 +62,13 @@
     the user profile (<profile>\.arcanecore\pg-cutover.json, or ARCANECORE_PG_SECRET_FILE, or -PgSecretFile: a path, never a value; the
     same file pg-cutover.ps1 reads). They reach the children only as Database__<Component>__Provider / __ConnectionString variables of the
     supervisor console, never a command line, and -Plan prints neither them nor the file's contents. The link secret is read as for -Gateway.
-    There is no separate peer secret: gateway and workers share the one link secret.
+    There is no separate peer secret: gateway and workers share the one link secret, which Split also puts into the console's environment as
+    ARCANECORE_PEER_LINK_SECRET (the only place the worker-to-worker peer link reads its secret; masked in -Plan, never on a command line).
+    Peer link: every world (and every standby with -Standby) gets --Cluster:Peer:BindAddress=-WorkerAddress, Cluster:Peer:Port = -PeerPort + index
+    (default 8105; worlds first, standbys after them, like -WorkerPort) and the full node map in the list form Cluster:Peer:Endpoints:<n>:NodeId /
+    Address (host:port) for every node, because the lease holder can move between nodes. The list form is used because node ids contain ':'
+    and a Cluster:Peer:Nodes key cannot. Every world also gets World:RemoteAdmin:Port = -RemoteAdminPort + index (default 3443), since the shared
+    profile's one RemoteAdmin port could be bound by only one world. All peer and RemoteAdmin ports are in the duplicate-port check and -Plan's ports: line.
 
   What it waits for: the supervisor process stays alive, then each child (a child of the supervisor) listens on its port (Auth:Port, World:Port,
   gateway port) and stays up a few seconds. A child that exits while it starts is relaunched by the supervisor, so the wait follows the
@@ -155,6 +161,10 @@ param(
     [ValidateSet('EK', 'Kalimdor', 'instances')][string]$LeaseHolder = 'EK',
     # Split only: a path to the PostgreSQL secret file (default: ARCANECORE_PG_SECRET_FILE, else <profile>\.arcanecore\pg-cutover.json).
     [string]$PgSecretFile,
+    # Split only: the first peer link port; world i listens on -PeerPort + i (standbys continue after the worlds). See the help.
+    [ValidateRange(1, 65535)][int]$PeerPort = 8105,
+    # Split only: the first RemoteAdmin port (World:RemoteAdmin:Port); world i uses -RemoteAdminPort + i (standbys continue after the worlds).
+    [ValidateRange(1, 65535)][int]$RemoteAdminPort = 3443,
     # Split only: one standby child per world and the whole-World handoff keys (see the help). Off by default.
     [switch]$Standby,
     # Split only: the per-player transfer keys on the workers and the gateway (see the help). Off by default.
@@ -185,6 +195,8 @@ if ($split) {
     $Gateway = $true
 } elseif ($PSBoundParameters.ContainsKey('LeaseHolder') -or $PSBoundParameters.ContainsKey('PgSecretFile')) {
     throw '-LeaseHolder and -PgSecretFile only mean something with -Topology Split.'
+} elseif ($PSBoundParameters.ContainsKey('PeerPort') -or $PSBoundParameters.ContainsKey('RemoteAdminPort')) {
+    throw '-PeerPort and -RemoteAdminPort only mean something with -Topology Split.'
 }
 if (($Standby -or $Transfers) -and -not $split) {
     throw '-Standby and -Transfers only mean something with -Topology Split: they need several workers behind the gateway.'
@@ -225,11 +237,15 @@ if ($split) {
         $world = $splitWorlds[$i]
         $world | Add-Member -NotePropertyName WorkerPort -NotePropertyValue ($WorkerPort + $i)
         $world | Add-Member -NotePropertyName ClientPort -NotePropertyValue ($worldPortValue + 100 * $i)
+        $world | Add-Member -NotePropertyName PeerPort -NotePropertyValue ($PeerPort + $i)
+        $world | Add-Member -NotePropertyName AdminPort -NotePropertyValue ($RemoteAdminPort + $i)
         $world | Add-Member -NotePropertyName Key -NotePropertyValue "worker-$($world.Slug)"
         $portMap["World $($world.Slug)"] = $world.ClientPort
     }
     $portMap['Gateway'] = $GatewayPort
     foreach ($world in $splitWorlds) { $portMap["Worker link $($world.Slug)"] = $world.WorkerPort }
+    foreach ($world in $splitWorlds) { $portMap["Peer link $($world.Slug)"] = $world.PeerPort }
+    foreach ($world in $splitWorlds) { $portMap["RemoteAdmin $($world.Slug)"] = $world.AdminPort }
     if ($Standby) {
         # One standby per world, numbered after the worlds: its own link port (the gateway's control link), client port (used once it is promoted) and node id.
         for ($i = 0; $i -lt $splitWorlds.Count; $i++) {
@@ -237,12 +253,15 @@ if ($split) {
             $index = $splitWorlds.Count + $i
             $world | Add-Member -NotePropertyName Standby -NotePropertyValue ([pscustomobject]@{
                 Key = "standby-$($world.Slug)"; NodeId = "standby:$($world.Slug)"; WorkerPort = ($WorkerPort + $index); ClientPort = ($worldPortValue + 100 * $index)
+                PeerPort = ($PeerPort + $index); AdminPort = ($RemoteAdminPort + $index)
             })
             $portMap["World standby $($world.Slug)"] = $world.Standby.ClientPort
             $portMap["Standby link $($world.Slug)"] = $world.Standby.WorkerPort
+            $portMap["Peer link standby $($world.Slug)"] = $world.Standby.PeerPort
+            $portMap["RemoteAdmin standby $($world.Slug)"] = $world.Standby.AdminPort
         }
     }
-    if (@($portMap.Values | Where-Object { $_ -gt 65535 }).Count -gt 0) { throw '-WorldPort / -WorkerPort leave a split port above 65535.' }
+    if (@($portMap.Values | Where-Object { $_ -gt 65535 }).Count -gt 0) { throw '-WorldPort / -WorkerPort / -PeerPort / -RemoteAdminPort leave a split port above 65535.' }
 } elseif ($Gateway) { $portMap['Gateway'] = $GatewayPort; $portMap['Worker link'] = $WorkerPort }
 $seenPorts = @{}
 foreach ($entry in $portMap.GetEnumerator()) {
@@ -341,6 +360,15 @@ if ($Gateway) {
 if ($split) {
     $heartbeatDirectory = Split-Path -Parent $HeartbeatPath
     $order = 1
+    # The peer link: every node (worlds, and standbys with -Standby) listens on its own peer port and every node gets the whole node id -> host:port map, because the
+    # Social/Economy lease (and with it the peer listener's role) can move to any of them. Node ids contain ':', which a configuration key cannot carry, so the map is
+    # given in the list form Cluster:Peer:Endpoints:<n>:NodeId / Address (PeerLinkOptions.Endpoints).
+    $peerNodes = @($splitWorlds | ForEach-Object { [pscustomobject]@{ NodeId = $_.NodeId; PeerPort = $_.PeerPort } })
+    if ($Standby) { $peerNodes += @($splitWorlds | ForEach-Object { [pscustomobject]@{ NodeId = $_.Standby.NodeId; PeerPort = $_.Standby.PeerPort } }) }
+    $peerEndpointArgs = @()
+    for ($n = 0; $n -lt $peerNodes.Count; $n++) {
+        $peerEndpointArgs += @("--Cluster:Peer:Endpoints:${n}:NodeId=$($peerNodes[$n].NodeId)", "--Cluster:Peer:Endpoints:${n}:Address=${WorkerAddress}:$($peerNodes[$n].PeerPort)")
+    }
     # The lease holder starts first, and the supervisor (Cluster:Supervisor:StartGroupReadySeconds, set below) waits for its first heartbeat before it launches the next start-order group,
     # so its schema DDL is done before the validate-only worlds check the schema.
     foreach ($world in @($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }) + @($splitWorlds | Where-Object { $_.Slug -ne $LeaseHolder })) {
@@ -351,6 +379,7 @@ if ($split) {
             '--Cluster:Worker:Enabled=true', "--Cluster:Worker:BindAddress=$WorkerAddress", "--Cluster:Worker:Port=$($world.WorkerPort)",
             "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($world.NodeId)",
             "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())")
+        $splitArgs += @("--Cluster:Peer:BindAddress=$WorkerAddress", "--Cluster:Peer:Port=$($world.PeerPort)", "--World:RemoteAdmin:Port=$($world.AdminPort)") + $peerEndpointArgs
         $isLeaseHolder = $world.Slug -eq $LeaseHolder
         # One designated world runs the schema DDL (the lease holder, started first below); every other world only validates the schema.
         if (-not $isLeaseHolder) { $splitArgs += '--Database:Upgrade:ValidateOnly=true' }
@@ -379,6 +408,7 @@ if ($split) {
                 "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($standbyWorld.NodeId)",
                 "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())",
                 '--Cluster:Worker:Standby=true', '--Cluster:Worker:Handoff:Enabled=true', '--Database:Upgrade:ValidateOnly=true', '--Cluster:Node:Role=MapWorker')
+            $standbyArgs += @("--Cluster:Peer:BindAddress=$WorkerAddress", "--Cluster:Peer:Port=$($standbyWorld.PeerPort)", "--World:RemoteAdmin:Port=$($standbyWorld.AdminPort)") + $peerEndpointArgs
             if ($Transfers) { $standbyArgs += '--Cluster:Worker:Transfers:Enabled=true' }
             # A standby gets the normal hang timeout and hang capture: after a handoff the same process is the active world, and the supervisor's hang watch arms on its first
             # world-tick beat (a standby that never beats is only warned about once, never killed for silence).
@@ -435,6 +465,8 @@ if ($HangCapture -ne 'None') {
 if ($Gateway) {
     $clusterEnvironment['Cluster__Worker__LinkSecret'] = $secret
     $clusterEnvironment['Gateway__LinkSecret'] = $secret
+    # The peer link reads its secret only from this variable (PeerLinkOptions.SecretEnvironmentVariable); Split reuses the one link secret.
+    if ($split) { $clusterEnvironment['ARCANECORE_PEER_LINK_SECRET'] = $secret }
 }
 foreach ($entry in $pgEnvironment.GetEnumerator()) { $clusterEnvironment[$entry.Key] = $entry.Value }
 
