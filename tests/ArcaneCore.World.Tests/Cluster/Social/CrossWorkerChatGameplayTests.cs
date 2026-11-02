@@ -372,6 +372,9 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
         await JoinClubAsync(_hostA, _routingA, bob);
 
         await alice.SendAsync(ban ? WorldOpcode.CmsgChannelBan : WorldOpcode.CmsgChannelKick, [.. CString("Club"), .. CString("Bob")]);
+        // The client's packet reaches the world thread asynchronously, so a bare world-thread barrier can run before the handler is even queued. The kick/ban notice to
+        // the actor is sent by the handler itself; once it is read the handler has started, and the barrier below then waits for it to finish.
+        await ReadNotifyAsync(alice, ban ? ChatNotify.PlayerBanned : ChatNotify.PlayerKicked);
         await _hostA.OnWorldAsync(() => { });
         await _routingA.FlushAsync();
         Assert.False(await IsOnLocalChannelAsync(_hostA, "Bob", "Club"));
