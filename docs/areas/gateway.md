@@ -134,6 +134,17 @@ A clustered realm needs a server database: with the characters database on SQLit
 **Limits of the group wait.** If the schema-holder world crashes before its first alive heartbeat, the wait for that group ends (the child exited), and the next group may start while the relaunched holder is still running DDL. The validate-only worlds then fail and are restarted, and those restarts count toward `Cluster:Supervisor:CrashLoopMaxRestarts`, so a slow DDL combined with one holder crash can still push a validator into the crash loop. Also, `StartAsync` of the supervisor hosted service blocks up to `Cluster:Supervisor:StartGroupReadySeconds` per group (600 s with `-Topology Split`, four group boundaries, so up to 40 min when children stay silent); services registered after it wait that long, and Ctrl+C cancels the wait.
 
 
+### Login redirect to the map owner
+
+A session opens on the login worker (or, while that worker's link is down, on any worker with a ready link). When the client logs a character in, the worker checks whether it owns the character's map copy; if it does not, it answers with a session redirect instead of entering the world. The gateway then re-opens the session on the worker that owns the map, hands it the buffered `CMSG_PLAYER_LOGIN`, closes the session on the first worker, and replays the client packets it held in the meantime. A redirect can happen once per connection.
+
+- **Owner known but its link is down.** A starting gateway registers its links one by one, and a worker can be restarting, so the map's owner may have no registered link when the redirect arrives. When the route table still lists a configured owner for the map (the static map list of that worker), the gateway holds the login for up to 30 s instead of closing the client, and logs "holding the login for up to 30 s". For as long as any login waits, that worker's link supervisor dials it at least every 500 ms instead of following its doubling reconnect backoff (`LinkRetryDelay`, up to 30 s), without resetting that backoff; on its registration the login moves there. After 30 s, or when the map resolves back to the worker that sent the redirect, the client is disconnected and the log names the reason.
+- **Packet cap.** While the login is held the client's packets are buffered, up to 256; a client that sends more is disconnected. The gateway still answers `CMSG_PING` itself.
+- **Unowned map.** A map that no configured worker owns is refused at once (the client is disconnected immediately, as before redirects existed).
+- **Handoffs.** A redirect that arrives while a whole-World handoff holds the session's packets is refused (the handoff decides where the session goes), and a redirect whose session moved to another link while it waited drops the redirected session.
+
+Tests: `LoginRedirectTests` (in process, including an owner that comes up 20 s into the hold) and `TwoWorkerScenarioTests` (a late-started worker, multi-process).
+
 ### Whole-World handoff (Tier 3b groundwork, in process only)
 
 `WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over

@@ -65,8 +65,16 @@ public sealed class TwoWorkerScenarioTests(ITestOutputHelper output)
         // The login is answered only once the late worker is up (process start, database, link): longer than the mock client's default 5 s per read.
         client.OperationTimeout = TimeSpan.FromSeconds(90);
         Task<MockLogin> login = session.LoginAsync(character.Guid, ct);
-        await Task.Delay(TimeSpan.FromSeconds(2), ct); // the redirect reaches the gateway while the Eastern Kingdoms worker is still down
-        Assert.False(login.IsCompleted, login.Exception?.GetBaseException().ToString() ?? "the login completed without the map owner");
+        // The gateway logs the hold when the login worker's redirect arrives with the Eastern Kingdoms worker still down: the scenario must have taken that path.
+        using (var holdSeen = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            holdSeen.CancelAfter(TimeSpan.FromSeconds(30));
+            Task hold = cluster.WaitForGatewayOutputAsync("holding the login for up to", holdSeen.Token);
+            await Task.WhenAny(hold, login);
+            Assert.False(login.IsCompleted, login.Exception?.GetBaseException().ToString() ?? "the login completed without the map owner");
+            await hold;
+        }
+
         await cluster.StartLateWorkerAsync(ct);
 
         MockLogin entered = await login;

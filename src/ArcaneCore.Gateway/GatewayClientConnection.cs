@@ -95,12 +95,14 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     private static readonly TimeSpan RedirectTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// How long a login redirect waits for the map owner's link to register when the owner is configured but its link is down (gateway start, worker restart). The link
-    /// supervisor is woken from its backoff when the wait starts, so a worker that is up again registers within one connect attempt.
+    /// How long a login redirect waits for the map owner's link to register when the owner is configured but its link is down (gateway start, worker restart). For the
+    /// whole wait the owner's link supervisor dials at least every <see cref="GatewayWorkerLink.PromptDialInterval"/> instead of its doubling backoff, so a worker that
+    /// comes up at any point of the wait registers within about that interval plus one connect.
     /// </summary>
     private static readonly TimeSpan RedirectOwnerWait = TimeSpan.FromSeconds(30);
 
-    private static readonly TimeSpan RedirectOwnerPoll = TimeSpan.FromMilliseconds(100);
+    /// <summary>How often a waiting login redirect re-checks the route table besides waking on the owner's registration (an announce can change it without a new link).</summary>
+    private static readonly TimeSpan RedirectOwnerRecheck = TimeSpan.FromSeconds(1);
 
     private sealed record LoginPacket(byte[] Payload, uint ReceivedMs);
 
@@ -957,47 +959,109 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         GatewaySessionLinkClient? target = _server.FindLinkForMap(redirect.MapId, redirect.InstanceId);
         // The owner of the map is configured but its link is not registered right now: the gateway is starting (its links register one by one, and a new session
         // opens on whichever link is up first), or that worker is restarting after a crash or a failover. The login waits for it instead of losing the client.
-        bool awaitOwner = target is null && from is not null && login is not null && _server.AwaitMapOwnerLink(redirect.MapId, redirect.InstanceId);
-        if (from is null || login is null || (target is null && !awaitOwner) || ReferenceEquals(target, from) || redirect.SessionGeneration != SessionGeneration
-            || _state != ConnectionState.Forwarding || Interlocked.CompareExchange(ref _redirected, 1, 0) != 0)
+        GatewayWorkerLink? pendingOwner = target is null ? _server.FindConfiguredMapOwner(redirect.MapId, redirect.InstanceId) : null;
+        string? refusal = from is null ? "the session has no worker link"
+            : login is null ? "no login packet was seen"
+            : target is null && pendingOwner is null ? "no configured worker owns the map"
+            : ReferenceEquals(target, from) ? "the map owner is the login worker itself"
+            : redirect.SessionGeneration != SessionGeneration ? "the redirect names an older session generation"
+            : _state != ConnectionState.Forwarding ? "the connection is not forwarding"
+            : null;
+        if (refusal is null)
         {
-            _logger.LogInformation("[{Endpoint}] no worker to redirect to for map {Map} (instance {Instance}); closing", RemoteEndpoint, redirect.MapId, redirect.InstanceId);
-            return false;
+            lock (_redirectGate)
+            {
+                if (_redirectHeld is not null)
+                {
+                    // A whole-World handoff hold (BeginHandoffHold) owns the held packets now; replacing its list would drop them. The handoff decides where the session goes.
+                    refusal = "a handoff hold is in place";
+                }
+                else if (Interlocked.CompareExchange(ref _redirected, 1, 0) != 0)
+                {
+                    refusal = "the session was redirected before";
+                }
+                else
+                {
+                    _redirectHeld = [];
+                }
+            }
         }
 
-        lock (_redirectGate)
+        if (refusal is not null)
         {
-            _redirectHeld = [];
+            _logger.LogInformation("[{Endpoint}] no worker to redirect to for map {Map} (instance {Instance}): {Reason}; closing", RemoteEndpoint, redirect.MapId, redirect.InstanceId, refusal);
+            return false;
         }
 
         if (target is null)
         {
-            _logger.LogInformation("[{Endpoint}] the worker that owns map {Map} (instance {Instance}) has no registered link yet; holding the login for up to {Wait} s",
-                RemoteEndpoint, redirect.MapId, redirect.InstanceId, (int)RedirectOwnerWait.TotalSeconds);
+            _logger.LogInformation("[{Endpoint}] the worker that owns map {Map} (instance {Instance}), {Node}, has no registered link yet; holding the login for up to {Wait} s",
+                RemoteEndpoint, redirect.MapId, redirect.InstanceId, pendingOwner!.NodeId, (int)RedirectOwnerWait.TotalSeconds);
         }
 
-        _ = Task.Run(() => AdoptAsync(from, target, redirect, login), CancellationToken.None);
+        CancellationToken leave = LeaveToken();
+        _ = Task.Run(() => AdoptAsync(from!, target, pendingOwner, redirect, login!, leave), CancellationToken.None);
         return true;
     }
 
-    /// <summary>
-    /// The owner of the redirect's map copy once its link registers (polled; the route table has no change event), or null when <see cref="RedirectOwnerWait"/> runs out, the
-    /// client leaves, or the map resolves back to the login worker <paramref name="from"/> (which just said it does not own it).
-    /// </summary>
-    private async Task<GatewaySessionLinkClient?> WaitForMapOwnerAsync(GatewaySessionLinkClient from, GatewaySessionRedirect redirect)
+    /// <summary>Cancelled when the connection is kicked or closed (<see cref="Kick"/>, <see cref="Close"/>); an already cancelled token once it is torn down.</summary>
+    private CancellationToken LeaveToken()
     {
-        long deadline = Environment.TickCount64 + (long)RedirectOwnerWait.TotalMilliseconds;
-        while (_state != ConnectionState.Closed && Environment.TickCount64 < deadline)
+        try
         {
-            if (_server.FindLinkForMap(redirect.MapId, redirect.InstanceId) is { } owner)
-            {
-                return ReferenceEquals(owner, from) ? null : owner;
-            }
-
-            await Task.Delay(RedirectOwnerPoll).ConfigureAwait(false);
+            return _kick.Token;
         }
+        catch (ObjectDisposedException)
+        {
+            return new CancellationToken(canceled: true);
+        }
+    }
 
-        return null;
+    /// <summary>
+    /// The owner of the redirect's map copy once its link registers, or null with the reason when <see cref="RedirectOwnerWait"/> runs out, the client leaves
+    /// (<paramref name="leave"/>), or the map resolves back to the login worker <paramref name="from"/> (which just said it does not own it). While it waits, the owner's
+    /// link supervisor dials at least every <see cref="GatewayWorkerLink.PromptDialInterval"/> (<see cref="GatewayWorkerLink.HoldPromptDial"/>). It wakes on the owner's
+    /// registration (<see cref="GatewayWorkerLink.WaitForLinkAsync"/>) and re-checks the route table every <see cref="RedirectOwnerRecheck"/> for any other change.
+    /// </summary>
+    private async Task<(GatewaySessionLinkClient? Owner, string? Reason)> WaitForMapOwnerAsync(
+        GatewaySessionLinkClient from, GatewayWorkerLink pendingOwner, GatewaySessionRedirect redirect, CancellationToken leave)
+    {
+        using IDisposable dial = pendingOwner.HoldPromptDial();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(leave);
+        budget.CancelAfter(RedirectOwnerWait);
+        try
+        {
+            while (true)
+            {
+                if (_state == ConnectionState.Closed || leave.IsCancellationRequested)
+                {
+                    return (null, "the client left while the login waited for the map owner");
+                }
+
+                if (_server.FindLinkForMap(redirect.MapId, redirect.InstanceId) is { } owner)
+                {
+                    return ReferenceEquals(owner, from) ? (null, "the map resolves to the login worker, which does not own it") : (owner, null);
+                }
+
+                Task registered = pendingOwner.WaitForLinkAsync(budget.Token);
+                if (registered.IsCompleted)
+                {
+                    // Registered, but the route table does not resolve the map to it (yet): no event to wait for, so re-check on the slow beat.
+                    await Task.Delay(RedirectOwnerRecheck, budget.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await Task.WhenAny(registered, Task.Delay(RedirectOwnerRecheck, budget.Token)).ConfigureAwait(false);
+                    budget.Token.ThrowIfCancellationRequested();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return _state == ConnectionState.Closed || leave.IsCancellationRequested
+                ? (null, "the client left while the login waited for the map owner")
+                : (null, $"no worker for the map registered within {(int)RedirectOwnerWait.TotalSeconds} s");
+        }
     }
 
     /// <summary>
@@ -1006,19 +1070,20 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     /// close and the held packets follow the login packet; the fenced ownership claim happens on the target only. A <paramref name="target"/> of null means the
     /// owner's link is not registered yet: it is waited for first (<see cref="WaitForMapOwnerAsync"/>). A refusal, a timeout or a lost link ends the connection.
     /// </summary>
-    private async Task AdoptAsync(GatewaySessionLinkClient from, GatewaySessionLinkClient? target, GatewaySessionRedirect redirect, LoginPacket login)
+    private async Task AdoptAsync(
+        GatewaySessionLinkClient from, GatewaySessionLinkClient? target, GatewayWorkerLink? pendingOwner, GatewaySessionRedirect redirect, LoginPacket login, CancellationToken leave)
     {
         long newGeneration = 0;
         try
         {
             if (target is null)
             {
-                target = await WaitForMapOwnerAsync(from, redirect).ConfigureAwait(false);
+                (target, string? reason) = await WaitForMapOwnerAsync(from, pendingOwner!, redirect, leave).ConfigureAwait(false);
                 if (target is null)
                 {
-                    _logger.LogInformation("[{Endpoint}] no worker for map {Map} (instance {Instance}) registered within {Wait} s; closing",
-                        RemoteEndpoint, redirect.MapId, redirect.InstanceId, (int)RedirectOwnerWait.TotalSeconds);
-                    EndRedirect(from, redirect.SessionGeneration, "no worker for the character's map registered in time");
+                    _logger.LogInformation("[{Endpoint}] login redirect to map {Map} (instance {Instance}) ended: {Reason}; closing",
+                        RemoteEndpoint, redirect.MapId, redirect.InstanceId, reason);
+                    EndRedirect(from, redirect.SessionGeneration, "login redirect ended: " + reason);
                     return;
                 }
             }
@@ -1043,25 +1108,43 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 return;
             }
 
-            from.CloseSession(redirect.SessionGeneration, ClusterSessionDetachReason.Transferred);
             bool delivered = true;
+            bool moved = false;
             lock (_redirectGate)
             {
-                _link = target;
-                Interlocked.Exchange(ref _generation, newGeneration);
-                if (_redirectHeld is { } held)
+                // The swap is made only from the session being redirected: if the connection was moved meanwhile (it is on another link, or its session closed and the
+                // generation was cleared), the redirected session is dropped instead of replacing whatever the connection is on now. CloseSession only queues a frame.
+                if (!ReferenceEquals(_link, from) || Interlocked.Read(ref _generation) != redirect.SessionGeneration)
                 {
-                    foreach (HeldPacket packet in held)
-                    {
-                        if (!target.SendClientPacket(newGeneration, packet.Opcode, packet.Payload, packet.ReceivedMs))
-                        {
-                            delivered = false;
-                            break;
-                        }
-                    }
-
-                    _redirectHeld = null;
+                    moved = true;
                 }
+                else
+                {
+                    from.CloseSession(redirect.SessionGeneration, ClusterSessionDetachReason.Transferred);
+                    _link = target;
+                    Interlocked.Exchange(ref _generation, newGeneration);
+                    if (_redirectHeld is { } held)
+                    {
+                        foreach (HeldPacket packet in held)
+                        {
+                            if (!target.SendClientPacket(newGeneration, packet.Opcode, packet.Payload, packet.ReceivedMs))
+                            {
+                                delivered = false;
+                                break;
+                            }
+                        }
+
+                        _redirectHeld = null;
+                    }
+                }
+            }
+
+            if (moved)
+            {
+                _logger.LogInformation("[{Endpoint}] the session moved while its login redirect ran; dropping the redirected session (generation {Generation})", RemoteEndpoint, newGeneration);
+                target.CloseSession(newGeneration, ClusterSessionDetachReason.ClientDisconnect);
+                EndRedirect(from, redirect.SessionGeneration, "the session moved while its login redirect ran");
+                return;
             }
 
             _logger.LogInformation("[{Endpoint}] session moved to the map owner for map {Map} (generation {Generation})", RemoteEndpoint, redirect.MapId, newGeneration);
@@ -1178,6 +1261,15 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
             _state = ConnectionState.Closed;
             _outbound.Writer.TryComplete();
+        }
+
+        try
+        {
+            _kick.Cancel(); // ends a login redirect that waits for its map owner (LeaveToken) now, not on its next re-check
+        }
+        catch (ObjectDisposedException)
+        {
+            // torn down
         }
 
         Interlocked.Exchange(ref _warden, null)?.Dispose();

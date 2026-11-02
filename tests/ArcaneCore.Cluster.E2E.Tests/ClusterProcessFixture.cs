@@ -181,6 +181,25 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         AccountPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)); // 16 uppercase hex chars: the client caps passwords at 16 and uppercases them before hashing
     }
 
+    /// <summary>
+    /// What the child-log capture replaces with *** before a line is kept (the dump goes to the test output, which CI publishes): the link secret, the account password,
+    /// every connection string, and the bare PostgreSQL password on its own, since a driver error can print it without the rest of its connection string.
+    /// </summary>
+    private string[] Secrets()
+    {
+        string postgresPassword = string.Empty;
+        try
+        {
+            postgresPassword = new NpgsqlConnectionStringBuilder(_postgresBase).Password ?? string.Empty;
+        }
+        catch (ArgumentException)
+        {
+            // Not a parseable connection string: the whole variable is still scrubbed below.
+        }
+
+        return [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection, postgresPassword];
+    }
+
     /// <summary>The reason every cluster test is skipped, or null when <c>ARCANECORE_TEST_POSTGRES</c> is set.</summary>
     public static string? SkipReason => string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(PostgresVariable))
         ? $"Set {PostgresVariable} to a PostgreSQL 16 server connection string (without a database) to run the multi-process cluster tests."
@@ -360,7 +379,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
 
         await PrepareDatabasesAsync(cancellationToken).ConfigureAwait(false);
 
-        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        string[] secrets = Secrets();
         _children.Add(ChildProcess.Start("realm", "realm", "ArcaneCore.Realm", Path.Combine(_root, "realm"), RealmEnvironment(), secrets));
         foreach (ClusterWorkerInfo worker in _workers)
         {
@@ -788,7 +807,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         ClusterWorkerInfo worker = _workers[index];
         _children.Remove(old);
         _retired.Add(old);
-        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        string[] secrets = Secrets();
         ChildProcess child = ChildProcess.Start(
             worker.NodeId, "world", "ArcaneCore.World", Path.Combine(_root, worker.NodeId), WorldEnvironment(worker), secrets);
         _children.Add(child);
@@ -805,7 +824,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         }
 
         ClusterWorkerInfo worker = _workers[index];
-        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        string[] secrets = Secrets();
         ChildProcess child = ChildProcess.Start(
             worker.NodeId, "world", "ArcaneCore.World", Path.Combine(_root, worker.NodeId), WorldEnvironment(worker), secrets);
         _children.Add(child);
@@ -814,6 +833,16 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     }
 
     /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
+    /// <summary>
+    /// Completes once the running gateway process has logged a line containing <paramref name="fragment"/> (secrets scrubbed; the fixture runs the gateway's
+    /// own categories at Information). Lets a scenario wait for an event the gateway only logs instead of sleeping a fixed time.
+    /// </summary>
+    public Task WaitForGatewayOutputAsync(string fragment, CancellationToken cancellationToken)
+    {
+        ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway is not running.");
+        return gateway.WaitForLineAsync(fragment, cancellationToken);
+    }
+
     public Task KillGatewayAsync()
     {
         ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
@@ -832,7 +861,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
 
         _children.Remove(old);
         _retired.Add(old);
-        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        string[] secrets = Secrets();
         _gatewayProcess = ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(firstLaunch: false), secrets);
         _children.Add(_gatewayProcess);
         await WaitForListenerAsync("gateway", _gatewayPort, cancellationToken).ConfigureAwait(false);
@@ -1020,6 +1049,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         private readonly string[] _secrets;
         private readonly Queue<string> _tail = new();
         private readonly object _gate = new();
+        private readonly List<(string Fragment, TaskCompletionSource Seen)> _watches = [];
         private int _dropped;
 
         private ChildProcess(string name, Process process, string[] secrets)
@@ -1141,6 +1171,24 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             }
         }
 
+        /// <summary>Completes once this process has written a line containing <paramref name="fragment"/> (a line still in the tail counts, and so does any later one).</summary>
+        internal Task WaitForLineAsync(string fragment, CancellationToken cancellationToken)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(fragment);
+            var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_gate)
+            {
+                if (_tail.Any(line => line.Contains(fragment, StringComparison.Ordinal)))
+                {
+                    return Task.CompletedTask;
+                }
+
+                _watches.Add((fragment, seen));
+            }
+
+            return seen.Task.WaitAsync(cancellationToken);
+        }
+
         internal string Tail()
         {
             lock (_gate)
@@ -1213,6 +1261,15 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             line = DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " + line;
             lock (_gate)
             {
+                for (int index = _watches.Count - 1; index >= 0; index--)
+                {
+                    if (line.Contains(_watches[index].Fragment, StringComparison.Ordinal))
+                    {
+                        _watches[index].Seen.TrySetResult();
+                        _watches.RemoveAt(index);
+                    }
+                }
+
                 _tail.Enqueue(line);
                 while (_tail.Count > TailLines)
                 {
