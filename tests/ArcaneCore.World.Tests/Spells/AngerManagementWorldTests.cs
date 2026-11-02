@@ -32,6 +32,9 @@ public sealed class AngerManagementWorldTests
         });
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(994010));
         await host.StepAsync();
+        // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the go is held to the next batch boundary (SpellSystem.Batching.cs), which
+        // this manual clock only reaches when the test runs it there; one window always crosses it. Batching off: a 0 ms advance.
+        await host.AdvanceAsync(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs));
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
         // Manual game clock, one 50 ms tick per step: the rage value is captured in the same world-thread call that
         // detects the first change, so no later tick (the 3 s remainder) can move it between the read and the assert.

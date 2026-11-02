@@ -56,6 +56,9 @@ public sealed class ManaRegenInterruptWorldTests
 
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(998106));
         await host.StepAsync();
+        // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the go is held to the next batch boundary (SpellSystem.Batching.cs), which
+        // this manual clock only reaches when the test runs it there; one window always crosses it. Batching off: a 0 ms advance.
+        await host.AdvanceAsync(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs));
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
         Assert.Equal(10u, await host.OnWorldAsync(() => manaAtAuraApplication));
         Assert.InRange(await host.PlayerStateAsync("Manaint", player => player.Combat.LastManaUseTimer), 1u, 5000u);
