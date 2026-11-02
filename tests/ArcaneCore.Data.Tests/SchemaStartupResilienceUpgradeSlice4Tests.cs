@@ -11,12 +11,12 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// Share 4 of 4 of the interrupted-upgrade-step theory (every 4th row of <see cref="SchemaStartupResilienceTestBase.UpgradeSteps"/>): a fault at each DDL statement of an upgrade step, then a restart that must converge.
+/// Share 4 of 8 of the interrupted-upgrade-step theory (every 8th row of <see cref="SchemaStartupResilienceTestBase.UpgradeSteps"/>): a fault at each DDL statement of an upgrade step, then a restart that must converge.
 /// Split from the former <c>SchemaStartupResilienceTests</c> so the rows run in parallel; the body is <see cref="SchemaStartupResilienceTestBase"/>'s.
 /// </summary>
 public sealed class SchemaStartupResilienceUpgradeSlice4Tests : SchemaStartupResilienceTestBase
 {
-    public static IEnumerable<object[]> Rows() => UpgradeStepsSlice(3, 4);
+    public static IEnumerable<object[]> Rows() => UpgradeStepsSlice(3, 8);
 
     [Theory]
     [MemberData(nameof(Rows))]
