@@ -1,6 +1,7 @@
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
@@ -8,7 +9,7 @@ namespace ArcaneCore.Cluster.E2E.Tests;
 /// Scenarios that need two concurrent fenced workers. The fixture starts each worker with Cluster:Fencing:Scope=Worker (its own shard lock and ownership scope, so
 /// both write one PostgreSQL characters database), the layout tools/ops/live/start-cluster.ps1 -Topology Split runs.
 /// </summary>
-public sealed class TwoWorkerScenarioTests
+public sealed class TwoWorkerScenarioTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(5);
 
@@ -25,7 +26,7 @@ public sealed class TwoWorkerScenarioTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(TwoWorkers(), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(TwoWorkers(), output, ct);
 
         Assert.Equal(2, cluster.Workers.Count);
         Assert.Empty(cluster.Workers[0].OwnedMaps.Intersect(cluster.Workers[1].OwnedMaps));
@@ -44,12 +45,52 @@ public sealed class TwoWorkerScenarioTests
     }
 
     [PostgresClusterFact]
+    public async Task ALoginWhoseMapOwnerIsNotLinkedYet_IsHeldUntilTheOwnerRegisters_InsteadOfClosingTheClient()
+    {
+        // The order a slow CI runner produced by chance (an EOF in LoginAsync): the Kalimdor worker's link registers first, the session opens on it, and the
+        // character's map (the Eastern Kingdoms, where a human starts) belongs to a worker whose link is not up yet. Here that worker is launched only after the
+        // client asked for its character, so the order is certain.
+        using var cts = new CancellationTokenSource(Deadline);
+        CancellationToken ct = cts.Token;
+        ClusterOptions options = TwoWorkers();
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(
+            new ClusterOptions { WorkerCount = options.WorkerCount, WorkerMaps = options.WorkerMaps, LoginWorkerIndex = options.LoginWorkerIndex, LateWorkerIndex = 0 }, output, ct);
+        Assert.False(cluster.IsWorkerRunning(0));
+
+        await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
+        var session = new ScenarioConnection(client);
+        await session.CreateCharacterAsync("Latelink", ct);
+        MockCharacter character = Assert.Single(await session.EnumerateAsync(ct));
+
+        // The login is answered only once the late worker is up (process start, database, link): longer than the mock client's default 5 s per read.
+        client.OperationTimeout = TimeSpan.FromSeconds(90);
+        Task<MockLogin> login = session.LoginAsync(character.Guid, ct);
+        // The gateway logs the hold when the login worker's redirect arrives with the Eastern Kingdoms worker still down: the scenario must have taken that path.
+        using (var holdSeen = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            holdSeen.CancelAfter(TimeSpan.FromSeconds(30));
+            Task hold = cluster.WaitForGatewayOutputAsync("holding the login for up to", holdSeen.Token);
+            await Task.WhenAny(hold, login);
+            Assert.False(login.IsCompleted, login.Exception?.GetBaseException().ToString() ?? "the login completed without the map owner");
+            await hold;
+        }
+
+        await cluster.StartLateWorkerAsync(ct);
+
+        MockLogin entered = await login;
+        Assert.Contains((int)entered.Location.Map, cluster.Workers[0].OwnedMaps);
+        Assert.True(cluster.IsWorkerRunning(0));
+        Assert.True(cluster.IsWorkerRunning(1));
+        await session.LogoutAsync(ct);
+    }
+
+    [PostgresClusterFact]
     public async Task KillingTheLoginWorker_ThenReloggingIn_IsServedByTheSurvivor()
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
         // The character list is served by whichever worker holds a ready link once the login worker is gone.
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(TwoWorkers(), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(TwoWorkers(), output, ct);
 
         await using (WorldClient first = await cluster.ConnectGatewayClientAsync(ct))
         {
