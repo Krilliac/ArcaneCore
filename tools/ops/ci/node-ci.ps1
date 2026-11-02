@@ -8,8 +8,10 @@
   Ships `git archive <commit>` to the node, then runs a locked restore, Release build (warnings are errors via Directory.Build.props)
   and the two-stage test gate of test-stages.sh (shipped from this script's folder with every run, so the gate does not depend on the
   commit under test): stage main runs each suite (tests/ci/<Suite>.slnf, -m:1) with Category!=Timing, then the Rest-only MockClient
-  self-test; stage timing runs Category=Timing serially, reruns each failure once alone, prints "FLAKY (passed on rerun): <test>" for a
-  test that passes its rerun and fails the gate for one that fails twice or for a timing stage that runs 0 tests. The per-stage counts
+  self-test; stage main also reruns each failed test once alone when a target has at most GATE_MAIN_RERUN_MAX (default 5) plain failures
+  (not after a timeout, an abort or a crash; GATE_MAIN_RERUN=off disables it); stage timing runs Category=Timing serially, reruns each
+  failure once alone. Either stage prints "FLAKY (passed on rerun): <test>" for a test that passes its rerun and fails the gate for one
+  that fails twice or for a timing stage that runs 0 tests. The per-stage counts
   and the flaky tests are in the closing GATE SUMMARY; flaky tests are also appended to a local flake ledger (a markdown file) when
   NODE_CI_FLAKE_LEDGER names one. The full logs, .trx files and flake-ledger.txt stay on the node under
   /root/ci/<run>/logs.
@@ -221,7 +223,7 @@ $rc = $LASTEXITCODE
 if ($flaky.Count -gt 0) {
     if ($ledgerPath) {
         if (-not (Test-Path $ledgerPath)) {
-            $header = "# Flake ledger`n`nTiming-stage tests that failed once and passed their isolated rerun; node-ci.ps1 appends one row per flaky test.`n`n| When (UTC) | Commit | Run | Test |`n|---|---|---|---|`n"
+            $header = "# Flake ledger`n`nTests (main or timing stage) that failed once and passed their isolated rerun; node-ci.ps1 appends one row per flaky test.`n`n| When (UTC) | Commit | Run | Test |`n|---|---|---|---|`n"
             [IO.File]::WriteAllText($ledgerPath, $header, [Text.UTF8Encoding]::new($false))
         }
         $when = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')

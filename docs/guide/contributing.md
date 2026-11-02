@@ -63,7 +63,7 @@ The test step leaves those out (`Category!=Timing`), and the next step (`tools/o
 own, serially, with no parallel test collections. A timing test that fails gets exactly one isolated rerun: if it passes, the step passes
 but prints `FLAKY (passed on rerun): <test>` and records it in `timing-logs/flake-ledger.txt` (uploaded as the `timing-gate-*`
 artifact); if it fails again, the step fails. A timing stage that runs 0 tests also fails, so a lost tag or a broken filter cannot read
-green. A flaky test is still a bug to fix, not a pass: the ledger is the list to work from. Node CI (`tools/ops/ci/node-ci.ps1`) runs the
+green. The main stage of `test-stages.sh` (node CI and `full-suite-gate` style runs; the hosted `ci.yml` main steps call `dotnet test` directly) does the same for a target with at most `GATE_MAIN_RERUN_MAX` (default 5) plain test failures: each failed test is rerun once alone, a pass is `FLAKY`, a second failure, a timeout, an abort or a mass failure fails the gate (`GATE_MAIN_RERUN=off` disables it). A flaky test is still a bug to fix, not a pass: the ledger is the list to work from. Node CI (`tools/ops/ci/node-ci.ps1`) runs the
 same two stages with the same script.
 
 ### Package lock files
