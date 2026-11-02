@@ -6,6 +6,7 @@ using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
@@ -40,7 +41,7 @@ public enum CrashVictim
 /// </para>
 /// Processes are owned by the fixture. Thread affinity: none; each case is sequential.
 /// </summary>
-public sealed class TransferCrashTests
+public sealed class TransferCrashTests(ITestOutputHelper output)
 {
     private const string OrgrimmarGo = ".go xyz 1629.36 -4373.39 31.26 1";
     private const uint EasternKingdomsMap = 0;
@@ -104,7 +105,7 @@ public sealed class TransferCrashTests
                     ["ARCANECORE_TEST_TRANSFER_HOLD_DIR"] = holdDirectory,
                 },
             };
-            await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(options, ct);
+            await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(options, output, ct);
 
             await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
             var session = new ScenarioConnection(client);

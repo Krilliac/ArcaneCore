@@ -8,6 +8,7 @@ using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
@@ -21,7 +22,7 @@ namespace ArcaneCore.Cluster.E2E.Tests;
 /// fixture can drop the database. Thread affinity: none; each fact is sequential.
 /// </para>
 /// </summary>
-public sealed class CrossWorkerTransferTests
+public sealed class CrossWorkerTransferTests(ITestOutputHelper output)
 {
     // Orgrimmar (Kalimdor, map 1) and the Deadmines entrance room (map 36), as .go xyz arguments: x y z map.
     private const string OrgrimmarGo = ".go xyz 1629.36 -4373.39 31.26 1";
@@ -52,7 +53,7 @@ public sealed class CrossWorkerTransferTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), output, ct);
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
         var session = new ScenarioConnection(client);
@@ -121,7 +122,7 @@ public sealed class CrossWorkerTransferTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), output, ct);
         Assert.DoesNotContain((int)DeadminesMap, cluster.Workers[0].OwnedMaps);
         Assert.Contains((int)DeadminesMap, cluster.Workers[1].OwnedMaps);
 

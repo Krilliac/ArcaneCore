@@ -615,6 +615,30 @@ public sealed class GatewayServer : BackgroundService
         return null;
     }
 
+    /// <summary>
+    /// For a login redirect that found no registered owner (<see cref="FindLinkForMap"/> returned null): whether a configured worker owns the map copy and only its link
+    /// is down at this moment (starting, restarting, or between reconnect attempts), so the redirect can wait for it. When there is one, its link supervisor is woken
+    /// from a reconnect backoff (up to 30 s) to try at once. False when no configured worker could ever own the map: the redirect then ends at once.
+    /// </summary>
+    internal bool AwaitMapOwnerLink(uint mapId, uint instanceId)
+    {
+        if (!_routes.TryResolveConfigured(mapId, instanceId, out string nodeId))
+        {
+            return false;
+        }
+
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                worker.WakeFromBackoff();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private IPEndPoint ConfiguredWorker()
     {
         GatewayWorkerEntry entry = _options.Value.EffectiveWorkers()[0];
@@ -914,6 +938,9 @@ public sealed class GatewayWorkerLink
         Volatile.Write(ref _migrate, migrate);
         Retarget(worker);
     }
+
+    /// <summary>Ends a reconnect backoff early, so the supervisor tries the current endpoint at once (a no-op while connected or connecting). A login redirect waiting for this worker calls it.</summary>
+    internal void WakeFromBackoff() => Volatile.Read(ref _backoffWake)?.TrySetResult();
 
     internal async ValueTask DisposeLinkAsync()
     {

@@ -7,6 +7,7 @@ using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
@@ -20,7 +21,7 @@ namespace ArcaneCore.Cluster.E2E.Tests;
 /// </para>
 /// <para>Thread affinity: none; each fact owns its cluster and client and disposes them.</para>
 /// </summary>
-public sealed class ClusterControlChannelScenarioTests
+public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(6);
 
@@ -45,7 +46,7 @@ public sealed class ClusterControlChannelScenarioTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: true, standby: false), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: true, standby: false), output, ct);
         Assert.Null(cluster.Standby);
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
@@ -95,7 +96,7 @@ public sealed class ClusterControlChannelScenarioTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: false, standby: true), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: false, standby: true), output, ct);
         ClusterStandbyInfo standby = Assert.IsType<ClusterStandbyInfo>(cluster.Standby);
         Assert.Equal(0, standby.ForWorkerIndex);
         Assert.NotEqual(cluster.Workers[0].NodeId, standby.NodeId);
@@ -143,7 +144,7 @@ public sealed class ClusterControlChannelScenarioTests
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
         // The default two-worker cluster of the other scenarios: no control channel, so the worker and the gateway answer as they always did.
-        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: false, standby: false), ct);
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: false, standby: false), output, ct);
         Assert.Null(cluster.Standby);
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);

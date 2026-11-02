@@ -138,6 +138,38 @@ public sealed class LoginRedirectTests
     }
 
     [Fact]
+    public async Task KalimdorCharacter_LoggingInBeforeTheKalimdorWorkersLinkRegistered_IsHeldUntilItDoes_AndEndsUpOnTheKalimdorWorker()
+    {
+        // The race a starting gateway (or a restarting worker) runs: the session opened on the one link that was up, and the map owner's link registers only after
+        // the client asked for its character. The login waits for the owner instead of closing the client (the cluster E2E tests saw that close as an EOF in LoginAsync).
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token, kalimdorLinkLater: true);
+        await cluster.Server.AddAccountAsync("LATELINK", "PASSWORD", cts.Token);
+        await using WorldClient client = await cluster.ConnectAsync("LATELINK", cts.Token);
+        int character = await cluster.CreateCharacterOnMapAsync(client, "Latelink", mapId: 1, cts.Token);
+        Assert.Null(cluster.Gateway.Workers[1].Link);
+
+        await client.SendAsync((ushort)WorldOpcode.CmsgPlayerLogin, LoginPayload(character), cts.Token);
+        // Long enough for the login worker's SessionRedirect to reach the gateway; then the connection must still answer (the gateway answers PING in every state).
+        await Task.Delay(TimeSpan.FromSeconds(1), cts.Token);
+        byte[] ping = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(ping, 0x4C4C);
+        await client.SendAsync((ushort)WorldOpcode.CmsgPing, ping, cts.Token);
+        WorldFrame pong = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgPong, cts.Token);
+        Assert.Equal(0x4C4Cu, BinaryPrimitives.ReadUInt32LittleEndian(pong.Payload));
+        Assert.Equal(0, await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.OnlinePlayerCount));
+
+        // The Kalimdor worker comes up; its link registers and the held login moves there.
+        await cluster.KalimdorWorker.StartAsync(cts.Token);
+        WorldFrame verify = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, cts.Token);
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(verify.Payload));
+        await WaitUntilAsync(async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.OnlinePlayerCount) == 1, cts.Token);
+        Assert.Equal(0, await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.OnlinePlayerCount));
+        await WaitUntilAsync(() => Task.FromResult(cluster.EasternWorker.Acceptor!.Sessions.IsEmpty), cts.Token);
+        Assert.Equal(1, cluster.Gateway.Workers[1].Link!.SessionCount);
+    }
+
+    [Fact]
     public async Task EasternKingdomsCharacter_StaysOnTheLoginWorker_WithoutARedirect()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -232,7 +264,8 @@ public sealed class LoginRedirectTests
 
         public SyntheticArcaneServer Server => Eastern;
 
-        public static async Task<Cluster> StartAsync(CancellationToken token)
+        /// <param name="kalimdorLinkLater">When set, the Kalimdor worker's link listener is not started (the caller starts <see cref="KalimdorWorker"/>), and only the login worker's link is awaited.</param>
+        public static async Task<Cluster> StartAsync(CancellationToken token, bool kalimdorLinkLater = false)
         {
             // Both worlds run as Cluster:Fencing:Scope=Worker workers (design _wf/writer-lock-DESIGN.md, C8): each takes its own shard lock and ownership scope, so they write
             // the one characters database concurrently, as two world processes of a split realm do. SQLite is allowed for this in-process fixture only (AllowSqliteWorkerScope).
@@ -250,8 +283,15 @@ public sealed class LoginRedirectTests
                     token);
                 eastern.World.Ownership = Owns("0");
                 kalimdor.World.Ownership = Owns("1");
-                easternWorker = await StartWorkerAsync(eastern, "0", token);
-                kalimdorWorker = await StartWorkerAsync(kalimdor, "1", token);
+                easternWorker = CreateWorker(eastern, "0", ArcaneCore.TestSupport.LoopbackPorts.Next());
+                await easternWorker.StartAsync(token);
+                int kalimdorPort = ArcaneCore.TestSupport.LoopbackPorts.Next();
+                kalimdorWorker = CreateWorker(kalimdor, "1", kalimdorPort);
+                if (!kalimdorLinkLater)
+                {
+                    await kalimdorWorker.StartAsync(token);
+                }
+
                 gateway = new GatewayServer(
                     eastern.Services.GetRequiredService<IServiceScopeFactory>(),
                     Options.Create(new GatewayOptions
@@ -263,13 +303,20 @@ public sealed class LoginRedirectTests
                         Workers =
                         [
                             new GatewayWorkerEntry { NodeId = "w-east", Address = IPAddress.Loopback.ToString(), Port = easternWorker.Host!.BoundEndPoint.Port, Maps = [0] },
-                            new GatewayWorkerEntry { NodeId = "w-kalimdor", Address = IPAddress.Loopback.ToString(), Port = kalimdorWorker.Host!.BoundEndPoint.Port, Maps = [1] },
+                            new GatewayWorkerEntry { NodeId = "w-kalimdor", Address = IPAddress.Loopback.ToString(), Port = kalimdorPort, Maps = [1] },
                         ],
                         LoginWorker = "w-east",
                     }),
                     eastern.Services.GetRequiredService<ILoggerFactory>());
                 await gateway.StartAsync(token);
-                await gateway.WaitForAllLinksAsync(token);
+                if (kalimdorLinkLater)
+                {
+                    await gateway.Workers[0].WaitForLinkAsync(token);
+                }
+                else
+                {
+                    await gateway.WaitForAllLinksAsync(token);
+                }
                 return new Cluster
                 {
                     Eastern = eastern, Kalimdor = kalimdor, EasternWorker = easternWorker, KalimdorWorker = kalimdorWorker, Gateway = gateway,
@@ -362,19 +409,17 @@ public sealed class LoginRedirectTests
             return ownership;
         }
 
-        private static async Task<GatewayWorkerEndpoint> StartWorkerAsync(SyntheticArcaneServer server, string ownedMaps, CancellationToken token)
+        private static GatewayWorkerEndpoint CreateWorker(SyntheticArcaneServer server, string ownedMaps, int port)
         {
             IServiceProvider services = server.Services;
-            var endpoint = new GatewayWorkerEndpoint(
+            return new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = ArcaneCore.TestSupport.LoopbackPorts.Next(), LinkSecret = Secret, OwnedMaps = ownedMaps, AllowInstanceMaps = false }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = port, LinkSecret = Secret, OwnedMaps = ownedMaps, AllowInstanceMaps = false }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<OpcodeTable>(),
                 server.World,
                 services.GetRequiredService<SessionRegistry>(),
                 services.GetRequiredService<ILoggerFactory>());
-            await endpoint.StartAsync(token);
-            return endpoint;
         }
     }
 }

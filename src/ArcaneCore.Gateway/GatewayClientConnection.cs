@@ -94,6 +94,14 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
     private static readonly TimeSpan RedirectTimeout = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// How long a login redirect waits for the map owner's link to register when the owner is configured but its link is down (gateway start, worker restart). The link
+    /// supervisor is woken from its backoff when the wait starts, so a worker that is up again registers within one connect attempt.
+    /// </summary>
+    private static readonly TimeSpan RedirectOwnerWait = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan RedirectOwnerPoll = TimeSpan.FromMilliseconds(100);
+
     private sealed record LoginPacket(byte[] Payload, uint ReceivedMs);
 
     private sealed record HeldPacket(WorldOpcode Opcode, byte[] Payload, uint ReceivedMs);
@@ -938,15 +946,19 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
     /// <summary>
     /// The login worker found that another worker owns the saved map of the character the client asked for. Resolve that worker through the route table,
-    /// hold the client's packets and re-open the session there with the buffered login packet (<see cref="AdoptAsync"/>). False (the connection ends as a
-    /// worker close would end it) when no ready worker owns the map, it is the same worker, the connection was moved before, or no login packet was seen.
+    /// hold the client's packets and re-open the session there with the buffered login packet (<see cref="AdoptAsync"/>). When the configured owner's link is
+    /// not registered at this moment, the redirect is still taken and waits for it (<see cref="WaitForMapOwnerAsync"/>). False (the connection ends as a
+    /// worker close would end it) when no configured worker owns the map, it is the same worker, the connection was moved before, or no login packet was seen.
     /// </summary>
     bool IGatewaySessionSink.OnRedirect(GatewaySessionRedirect redirect)
     {
         GatewaySessionLinkClient? from = _link;
         LoginPacket? login = Volatile.Read(ref _loginPacket);
         GatewaySessionLinkClient? target = _server.FindLinkForMap(redirect.MapId, redirect.InstanceId);
-        if (from is null || login is null || target is null || ReferenceEquals(target, from) || redirect.SessionGeneration != SessionGeneration
+        // The owner of the map is configured but its link is not registered right now: the gateway is starting (its links register one by one, and a new session
+        // opens on whichever link is up first), or that worker is restarting after a crash or a failover. The login waits for it instead of losing the client.
+        bool awaitOwner = target is null && from is not null && login is not null && _server.AwaitMapOwnerLink(redirect.MapId, redirect.InstanceId);
+        if (from is null || login is null || (target is null && !awaitOwner) || ReferenceEquals(target, from) || redirect.SessionGeneration != SessionGeneration
             || _state != ConnectionState.Forwarding || Interlocked.CompareExchange(ref _redirected, 1, 0) != 0)
         {
             _logger.LogInformation("[{Endpoint}] no worker to redirect to for map {Map} (instance {Instance}); closing", RemoteEndpoint, redirect.MapId, redirect.InstanceId);
@@ -958,20 +970,59 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             _redirectHeld = [];
         }
 
+        if (target is null)
+        {
+            _logger.LogInformation("[{Endpoint}] the worker that owns map {Map} (instance {Instance}) has no registered link yet; holding the login for up to {Wait} s",
+                RemoteEndpoint, redirect.MapId, redirect.InstanceId, (int)RedirectOwnerWait.TotalSeconds);
+        }
+
         _ = Task.Run(() => AdoptAsync(from, target, redirect, login), CancellationToken.None);
         return true;
     }
 
     /// <summary>
+    /// The owner of the redirect's map copy once its link registers (polled; the route table has no change event), or null when <see cref="RedirectOwnerWait"/> runs out, the
+    /// client leaves, or the map resolves back to the login worker <paramref name="from"/> (which just said it does not own it).
+    /// </summary>
+    private async Task<GatewaySessionLinkClient?> WaitForMapOwnerAsync(GatewaySessionLinkClient from, GatewaySessionRedirect redirect)
+    {
+        long deadline = Environment.TickCount64 + (long)RedirectOwnerWait.TotalMilliseconds;
+        while (_state != ConnectionState.Closed && Environment.TickCount64 < deadline)
+        {
+            if (_server.FindLinkForMap(redirect.MapId, redirect.InstanceId) is { } owner)
+            {
+                return ReferenceEquals(owner, from) ? null : owner;
+            }
+
+            await Task.Delay(RedirectOwnerPoll).ConfigureAwait(false);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Re-open the session on the map owner and close it on the login worker. The new generation comes from the target link's own allocator lock (opens leave
     /// in generation order), the account, name and build are the ones authenticated here. Only after the target accepted does the login worker's session
-    /// close and the held packets follow the login packet; the fenced ownership claim happens on the target only. A refusal, a timeout or a lost link ends the connection.
+    /// close and the held packets follow the login packet; the fenced ownership claim happens on the target only. A <paramref name="target"/> of null means the
+    /// owner's link is not registered yet: it is waited for first (<see cref="WaitForMapOwnerAsync"/>). A refusal, a timeout or a lost link ends the connection.
     /// </summary>
-    private async Task AdoptAsync(GatewaySessionLinkClient from, GatewaySessionLinkClient target, GatewaySessionRedirect redirect, LoginPacket login)
+    private async Task AdoptAsync(GatewaySessionLinkClient from, GatewaySessionLinkClient? target, GatewaySessionRedirect redirect, LoginPacket login)
     {
         long newGeneration = 0;
         try
         {
+            if (target is null)
+            {
+                target = await WaitForMapOwnerAsync(from, redirect).ConfigureAwait(false);
+                if (target is null)
+                {
+                    _logger.LogInformation("[{Endpoint}] no worker for map {Map} (instance {Instance}) registered within {Wait} s; closing",
+                        RemoteEndpoint, redirect.MapId, redirect.InstanceId, (int)RedirectOwnerWait.TotalSeconds);
+                    EndRedirect(from, redirect.SessionGeneration, "no worker for the character's map registered in time");
+                    return;
+                }
+            }
+
             using var timeout = new CancellationTokenSource(RedirectTimeout);
             GatewaySessionOpenReply reply = await target.AdoptAsync(
                 _server.NextGeneration,

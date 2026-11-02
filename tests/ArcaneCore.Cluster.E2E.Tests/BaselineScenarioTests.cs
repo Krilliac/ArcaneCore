@@ -3,6 +3,7 @@ using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
@@ -11,7 +12,7 @@ namespace ArcaneCore.Cluster.E2E.Tests;
 /// to one fenced world worker. All three run as subprocesses over PostgreSQL (see <see cref="ClusterProcessFixture"/>); the facts report
 /// Skipped, with the variable to set, when <c>ARCANECORE_TEST_POSTGRES</c> is not set.
 /// </summary>
-public sealed class BaselineScenarioTests
+public sealed class BaselineScenarioTests(ITestOutputHelper output)
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(4);
 
@@ -20,7 +21,7 @@ public sealed class BaselineScenarioTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
-        ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(cancellationToken: ct);
+        ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(null, output, ct);
         try
         {
             Assert.Single(cluster.Workers);

@@ -113,13 +113,21 @@ public sealed class GatewayRouteTable
     /// The ready worker that owns the map copy <c>(mapId, instanceId)</c>: a worker that lists the map wins, otherwise the first (configuration order) ready
     /// worker that owns it by owning everything or by running instance copies. False when no ready worker owns it.
     /// </summary>
-    public bool TryResolve(uint mapId, uint instanceId, out string nodeId)
+    public bool TryResolve(uint mapId, uint instanceId, out string nodeId) => Resolve(mapId, instanceId, requireReady: true, out nodeId);
+
+    /// <summary>
+    /// Like <see cref="TryResolve"/>, but over every configured worker whether or not its link is up: the worker that will own the map copy once its link registers
+    /// (a down worker's announcement is dropped, so its static <c>Gateway:Workers:N:Maps</c> list applies). False when no configured worker could own it at all.
+    /// </summary>
+    public bool TryResolveConfigured(uint mapId, uint instanceId, out string nodeId) => Resolve(mapId, instanceId, requireReady: false, out nodeId);
+
+    private bool Resolve(uint mapId, uint instanceId, bool requireReady, out string nodeId)
     {
         lock (_sync)
         {
             foreach (Entry entry in _entries)
             {
-                if (entry.Ready && entry.Effective.ListsMap(mapId))
+                if ((entry.Ready || !requireReady) && entry.Effective.ListsMap(mapId))
                 {
                     nodeId = entry.NodeId;
                     return true;
@@ -128,7 +136,7 @@ public sealed class GatewayRouteTable
 
             foreach (Entry entry in _entries)
             {
-                if (entry.Ready && entry.Effective.Owns(mapId, instanceId))
+                if ((entry.Ready || !requireReady) && entry.Effective.Owns(mapId, instanceId))
                 {
                     nodeId = entry.NodeId;
                     return true;
