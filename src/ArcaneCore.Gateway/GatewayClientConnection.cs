@@ -973,7 +973,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             {
                 if (_redirectHeld is not null)
                 {
-                    // A whole-World handoff hold (BeginHandoffHold) owns the held packets now; replacing its list would drop them. The handoff decides where the session goes.
+                    // A whole-World handoff hold (BeginHandoffHold) owns the held packets now; replacing its list would drop them. The redirect is refused instead, and a
+                    // refusal disconnects the client: the link closes the session as the worker closing it (NotifyClosed(WorkerClosed)), and OnClosed kicks the connection.
                     refusal = "a handoff hold is in place";
                 }
                 else if (Interlocked.CompareExchange(ref _redirected, 1, 0) != 0)
@@ -1109,14 +1110,23 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             }
 
             bool delivered = true;
-            bool moved = false;
+            string? stale = null;
             lock (_redirectGate)
             {
-                // The swap is made only from the session being redirected: if the connection was moved meanwhile (it is on another link, or its session closed and the
-                // generation was cleared), the redirected session is dropped instead of replacing whatever the connection is on now. CloseSession only queues a frame.
-                if (!ReferenceEquals(_link, from) || Interlocked.Read(ref _generation) != redirect.SessionGeneration)
+                // The swap is made only from the session being redirected. If the client left meanwhile (Close cleared the generation), the worker closed the session
+                // (OnClosed cleared it), or the connection was moved to another link, the redirected session is dropped instead of replacing whatever the connection is on now, and the client is kicked (EndRedirect).
+                // CloseSession only queues a frame.
+                if (_state == ConnectionState.Closed)
                 {
-                    moved = true;
+                    stale = "the client left before its login redirect completed";
+                }
+                else if (Interlocked.Read(ref _generation) == 0)
+                {
+                    stale = "the session ended (the login worker closed it) before its login redirect completed";
+                }
+                else if (!ReferenceEquals(_link, from) || Interlocked.Read(ref _generation) != redirect.SessionGeneration)
+                {
+                    stale = "the session moved to another link while its login redirect ran";
                 }
                 else
                 {
@@ -1139,11 +1149,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 }
             }
 
-            if (moved)
+            if (stale is not null)
             {
-                _logger.LogInformation("[{Endpoint}] the session moved while its login redirect ran; dropping the redirected session (generation {Generation})", RemoteEndpoint, newGeneration);
+                _logger.LogInformation("[{Endpoint}] {Reason}; dropping the redirected session (generation {Generation}) and closing", RemoteEndpoint, stale, newGeneration);
                 target.CloseSession(newGeneration, ClusterSessionDetachReason.ClientDisconnect);
-                EndRedirect(from, redirect.SessionGeneration, "the session moved while its login redirect ran");
+                EndRedirect(from, redirect.SessionGeneration, stale);
                 return;
             }
 

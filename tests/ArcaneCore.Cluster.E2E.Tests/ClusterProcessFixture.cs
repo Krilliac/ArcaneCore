@@ -832,7 +832,6 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         await WaitForListenerAsync(worker.NodeId + " client listener", worker.ClientPort, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
     /// <summary>
     /// Completes once the running gateway process has logged a line containing <paramref name="fragment"/> (secrets scrubbed; the fixture runs the gateway's
     /// own categories at Information). Lets a scenario wait for an event the gateway only logs instead of sleeping a fixed time.
@@ -843,6 +842,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return gateway.WaitForLineAsync(fragment, cancellationToken);
     }
 
+    /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
     public Task KillGatewayAsync()
     {
         ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
@@ -1172,21 +1172,32 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         }
 
         /// <summary>Completes once this process has written a line containing <paramref name="fragment"/> (a line still in the tail counts, and so does any later one).</summary>
-        internal Task WaitForLineAsync(string fragment, CancellationToken cancellationToken)
+        internal async Task WaitForLineAsync(string fragment, CancellationToken cancellationToken)
         {
             ArgumentException.ThrowIfNullOrEmpty(fragment);
             var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            (string Fragment, TaskCompletionSource Seen) watch = (fragment, seen);
             lock (_gate)
             {
                 if (_tail.Any(line => line.Contains(fragment, StringComparison.Ordinal)))
                 {
-                    return Task.CompletedTask;
+                    return;
                 }
 
-                _watches.Add((fragment, seen));
+                _watches.Add(watch);
             }
 
-            return seen.Task.WaitAsync(cancellationToken);
+            try
+            {
+                await seen.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _watches.Remove(watch); // a cancelled wait leaves no watch behind (a matched one was removed by Append already)
+                }
+            }
         }
 
         internal string Tail()

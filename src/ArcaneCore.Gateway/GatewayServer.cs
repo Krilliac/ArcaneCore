@@ -835,7 +835,7 @@ public sealed class GatewayWorkerLink
     private TaskCompletionSource? _backoffWake;
     private int _promptDialWaiters;
     private int _promptWake;
-    private long _lastPromptWakeMs = long.MinValue / 2;
+    private int _longBackoff; // 1 while the supervisor's backoff wait is longer than PromptDialInterval (it began with no login waiting)
     private Func<GatewaySessionLinkClient?, GatewaySessionLinkClient, CancellationToken, Task>? _migrate;
     private GatewaySessionLinkClient? _draining;
 
@@ -949,21 +949,20 @@ public sealed class GatewayWorkerLink
 
     /// <summary>
     /// A login redirect waits for this worker's link (its owner is down): until the returned lease is disposed, the supervisor's reconnect waits are capped at
-    /// <see cref="PromptDialInterval"/> instead of the doubling backoff (up to 30 s), so a worker that comes back is dialled within that interval. The first lease
-    /// (no other login waiting) also ends a backoff wait in progress, at most once per interval. Leases do not reset the backoff: when the last one ends, the
-    /// supervisor goes on doubling from where it was. Thread-safe.
+    /// <see cref="PromptDialInterval"/> instead of the doubling backoff (up to 30 s), so a worker that comes back is dialled within that interval. A lease taken while
+    /// the supervisor sits in a longer wait (it began with no login waiting) ends that wait; the supervisor still starts dials at least <see cref="PromptDialInterval"/>
+    /// apart, so logins that come and go cannot make it dial faster. Leases do not reset the backoff: it keeps doubling through the dials of a hold, so after a long
+    /// hold on a dead worker it is at its 30 s maximum when the last lease ends. Thread-safe.
     /// </summary>
     internal IDisposable HoldPromptDial()
     {
-        if (Interlocked.Increment(ref _promptDialWaiters) == 1)
+        Interlocked.Increment(ref _promptDialWaiters);
+        // Read after the increment (a full fence), as the supervisor publishes _longBackoff and _backoffWake and then reads the count: either it sees this waiter and
+        // waits at most PromptDialInterval, or this sees its long wait and ends it.
+        if (Volatile.Read(ref _longBackoff) != 0)
         {
-            long now = Environment.TickCount64;
-            long last = Interlocked.Read(ref _lastPromptWakeMs);
-            if (now - last >= (long)PromptDialInterval.TotalMilliseconds && Interlocked.CompareExchange(ref _lastPromptWakeMs, now, last) == last)
-            {
-                Volatile.Write(ref _promptWake, 1);
-                Volatile.Read(ref _backoffWake)?.TrySetResult();
-            }
+            Volatile.Write(ref _promptWake, 1);
+            Volatile.Read(ref _backoffWake)?.TrySetResult();
         }
 
         return new PromptDialLease(this);
@@ -1044,6 +1043,7 @@ public sealed class GatewayWorkerLink
                 link.ControlSubmitReceived += submit => routeSubmit(this, submit);
             }
 
+            long dialStartedMs = Environment.TickCount64;
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -1063,9 +1063,17 @@ public sealed class GatewayWorkerLink
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
                 GatewayMeters.CountLinkFailure(_config.NodeId);
                 var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Volatile.Write(ref _promptWake, 0); // only a login that sees this wait's _longBackoff below may mark its wake as a login's
+                Volatile.Write(ref _longBackoff, nextDelay > PromptDialInterval ? 1 : 0);
                 Interlocked.Exchange(ref _backoffWake, wake); // a full fence: Retarget stores _target and then reads this field, this publishes it and then reads _target
-                // Read after the fence above, as HoldPromptDial increments and then reads _backoffWake: a login that starts waiting now either sees this wake or is seen here.
+                // Read after the fence above, as HoldPromptDial increments and then reads _longBackoff and _backoffWake: a login that starts waiting now either sees
+                // this long wait (and ends it) or is seen here (and the wait is capped at PromptDialInterval).
                 bool prompt = Volatile.Read(ref _promptDialWaiters) > 0 && nextDelay > PromptDialInterval;
+                if (prompt)
+                {
+                    Volatile.Write(ref _longBackoff, 0);
+                }
+
                 TimeSpan wait = prompt ? PromptDialInterval : nextDelay;
                 if (prompt)
                 {
@@ -1096,13 +1104,32 @@ public sealed class GatewayWorkerLink
                 }
                 finally
                 {
+                    Volatile.Write(ref _longBackoff, 0);
                     Volatile.Write(ref _backoffWake, null);
                 }
 
-                // A retarget's wake restarts the backoff at the base delay. A waiting login's wake (HoldPromptDial) does not: it shortens the waits only while a login
-                // waits (prompt above), so a dead worker that logins keep asking for is dialled at most once per PromptDialInterval, and the backoff resumes where it was.
+                // A retarget's wake restarts the backoff at the base delay. A waiting login's wake (HoldPromptDial) does not: the backoff keeps doubling through a hold's
+                // dials, so after a long hold on a dead worker it is at its maximum (30 s) when the last login stops waiting.
                 bool promptWake = Interlocked.Exchange(ref _promptWake, 0) != 0;
-                nextDelay = woken && (!promptWake || !Equals(_target, worker)) ? delay : TimeSpan.FromTicks(Math.Min(nextDelay.Ticks * 2, MaxLinkRetryDelay.Ticks));
+                bool retargeted = !Equals(_target, worker);
+                nextDelay = woken && (!promptWake || retargeted) ? delay : TimeSpan.FromTicks(Math.Min(nextDelay.Ticks * 2, MaxLinkRetryDelay.Ticks));
+                if (woken && promptWake && !retargeted)
+                {
+                    // Dials start at least PromptDialInterval apart, however often logins come and go (each one that finds no other waiting ends a long wait).
+                    long sinceDial = Environment.TickCount64 - dialStartedMs;
+                    if (sinceDial < (long)PromptDialInterval.TotalMilliseconds)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromMilliseconds(PromptDialInterval.TotalMilliseconds - sinceDial), stoppingToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            return;
+                        }
+                    }
+                }
+
                 continue;
             }
 

@@ -222,6 +222,69 @@ public sealed class LoginRedirectTests
     }
 
     [Fact]
+    public async Task ALoginThatStartsWaitingJustAfterAnotherStopped_EndsTheSupervisorsLongBackoff_AndTheOwnerIsDialledWithinAboutAPromptInterval()
+    {
+        // The narrow sequence: one login's wait ends the supervisor's backoff and stops at once; the dial it caused fails, and with nobody waiting the supervisor
+        // begins a long backoff. A second login starts waiting within PromptDialInterval of the first. It must still end that backoff (a wake on the first
+        // waiter only, rate-limited per interval, left it sitting out the whole backoff, longer than its 30 s hold).
+        using var cts = new CancellationTokenSource(Deadline);
+        int workerPort = ArcaneCore.TestSupport.LoopbackPorts.Next();
+        using FastRefusingListener refusing = FastRefusingListener.Start(workerPort); // every dial fails at once, on any OS
+        await using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
+        using var gateway = new GatewayServer(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new GatewayOptions
+            {
+                BindAddress = IPAddress.Loopback.ToString(),
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
+                WorkerAddress = IPAddress.Loopback.ToString(),
+                WorkerPort = workerPort,
+                LinkSecret = Secret,
+                LinkRetryDelay = TimeSpan.FromSeconds(20),
+            }),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        await gateway.StartAsync(cts.Token);
+        try
+        {
+            GatewayWorkerLink worker = Assert.Single(gateway.Workers);
+            long failures = await WaitForDialFailureAsync(worker, 0, TimeSpan.FromSeconds(10), cts.Token);
+            // The supervisor is in its 20 s backoff with no login waiting, and its last dial began more than PromptDialInterval ago (so the next one is not spaced out).
+            await Task.Delay(GatewayWorkerLink.PromptDialInterval + TimeSpan.FromMilliseconds(100), cts.Token);
+
+            // The first login ends the backoff and stops waiting before the dial it caused has failed.
+            var first = System.Diagnostics.Stopwatch.StartNew();
+            worker.HoldPromptDial().Dispose();
+            failures = await WaitForDialFailureAsync(worker, failures, TimeSpan.FromSeconds(2), cts.Token);
+            await Task.Delay(50, cts.Token); // the supervisor is in its next long backoff (40 s), again with no login waiting
+            Assert.True(first.Elapsed < GatewayWorkerLink.PromptDialInterval, $"the sequence took {first.ElapsedMilliseconds} ms; it must start the second wait within the prompt interval of the first");
+
+            using IDisposable second = worker.HoldPromptDial();
+            await WaitForDialFailureAsync(worker, failures, TimeSpan.FromSeconds(2), cts.Token);
+        }
+        finally
+        {
+            await gateway.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>The link's failure count once a dial after <paramref name="after"/> failures has failed and the supervisor is back in its backoff; fails after <paramref name="within"/>.</summary>
+    private static async Task<long> WaitForDialFailureAsync(GatewayWorkerLink worker, long after, TimeSpan within, CancellationToken token)
+    {
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            GatewayWorkerLinkInfo info = worker.Snapshot();
+            if (info.Failures > after && info.Status == GatewayWorkerLinkStatus.Backoff)
+            {
+                return info.Failures;
+            }
+
+            Assert.True(elapsed.Elapsed < within, $"no dial failed within {within.TotalSeconds:F1} s (failures {info.Failures}, status {info.Status})");
+            await Task.Delay(10, token);
+        }
+    }
+
+    [Fact]
     public async Task EasternKingdomsCharacter_StaysOnTheLoginWorker_WithoutARedirect()
     {
         using var cts = new CancellationTokenSource(Deadline);
