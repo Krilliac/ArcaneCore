@@ -148,7 +148,7 @@ dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-t
 ```
 
 - `Rest.slnf` = Realm, MockClient, Kernel, Cryptography, Gateway and Atlas tests. The four filters cover every test project once.
-- Timing-sensitive tests carry `[Trait("Category", "Timing")]` and run in the serial timing stage, with one isolated rerun; a `FLAKY (passed on rerun)` line is a bug to fix ([contributing](docs/guide/contributing.md)).
+- Timing-sensitive tests carry `[Trait("Category", "Timing")]` and run in the serial timing stage, with one isolated rerun (the `test-stages.sh` main stage also reruns up to `GATE_MAIN_RERUN_MAX`=5 plain failures once; the hosted `ci.yml` main steps do not); a `FLAKY (passed on rerun)` line is a bug to fix ([contributing](docs/guide/contributing.md)).
 - `tools/ops/ci/full-suite-gate.ps1` is the one-shot alternative: the four suites, then the serial timing stage (`TIMING_EXIT`, needs bash on PATH, else it fails), then the self-test. It exits 2 when restore or build fails, so nothing ran.
 - **Check counts, not exit codes.** Read the passed/failed/skipped totals per suite and compare them with the base branch. A
   killed run, a filter that matched 0 tests, or a build that never ran can all exit 0.

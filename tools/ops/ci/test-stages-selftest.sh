@@ -37,6 +37,9 @@ case "$flt" in
   *'!=Timing'*)
     case "$SIM_CASE" in
       main-fails) echo "  Failed Ns.A.Broken [1 ms]"; block 9 1 0 Failed; exit 1 ;;
+      main-flaky|main-twice) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 1 ;;
+      main-many) for i in 1 2 3 4 5 6; do echo "  Failed Ns.M.Bad$i [1 ms]"; done; block 4 6 0 Failed; exit 1 ;;
+      main-abort) echo "  Failed Ns.M.Flaky [1 ms]"; echo "Test Run Aborted."; block 3 1 0 Aborted; exit 1 ;;
       main-empty) echo "No test matches the given testcase filter \`$flt\` in a.dll"; exit 0 ;;
       hardstop)
         if [ -n "$tmo" ]; then
@@ -73,6 +76,9 @@ case "$flt" in
       two-flaky) cat > /dev/null; block 1 0 0 Successful; exit 0 ;; # swallows stdin: the gate must still rerun both
       twice) echo "  Failed Ns.T.Flaky(x: 1) [5 ms]"; block 1 1 0 Failed; exit 1 ;;
       rerun-empty) echo "No test matches the given testcase filter \`$flt\` in t.dll"; exit 0 ;;
+      main-flaky) block 1 0 0 Successful; exit 0 ;;
+      main-many) block 1 0 0 Successful; exit 0 ;;
+      main-twice) echo "  Failed Ns.M.Flaky [1 ms]"; block 0 1 0 Failed; exit 1 ;;
     esac ;;
 esac
 echo "fake dotnet: unexpected filter '$flt'"; exit 3
@@ -104,9 +110,39 @@ check rerun-empty 1 "" '^FAILED TWICE: Ns\.T\.Flaky'
 check timing-empty 1 "" 'timing stage matched 0 tests'
 check killed 1 "" 'attributable failure lines'
 check aborted 1 "" 'test run aborted'
-check main-fails 1 "" 'main tests/ci/X.slnf rc=1'
+envs="GATE_MAIN_RERUN=off"; tag=main-fails
+check main-fails 1 "" 'main tests/ci/X.slnf rc=1' 'rerunning'
+envs=; tag=
 check main-empty 1 "" 'executed 0 tests'
 check filtered-timing-empty 0 "--filter FullyQualifiedName~X" '^GATE RESULT: PASS$'
+
+# Main-stage reruns: a test that fails once and passes alone is FLAKY (gate passes, ledger row); failing alone too fails the gate; more
+# unique failures than GATE_MAIN_RERUN_MAX, an aborted run and GATE_MAIN_RERUN=off never rerun and fail as before.
+check main-flaky 0 "--stage main" '^FLAKY \(passed on rerun\): Ns\.M\.Flaky$' 'FAILED TWICE|main tests/ci/X.slnf rc=1 failed'
+[ "$(cut -f4 "$work/logs-main-flaky/flake-ledger.txt" 2>/dev/null)" = Ns.M.Flaky ] || { echo "FAIL main-flaky: ledger row missing"; bad=1; }
+grep -q 'main tests/ci/X.slnf rc=1 executed 10 (passed 9, failed 1)' "$work/main-flaky.out" || { echo "FAIL main-flaky: first-run counts rewritten"; bad=1; }
+grep -q '^  Failed Ns.M.Flaky' "$work/main-flaky.out" && grep -q 'main reruns: 1 (passed on rerun 1, failed twice 0)' "$work/main-flaky.out" && grep -q 'flaky tests (passed their rerun): Ns.M.Flaky' "$work/main-flaky.out" || { echo "FAIL main-flaky: Failed line or summary lines missing"; bad=1; }
+grep -q 'FullyQualifiedName=Ns.M.Flaky' "$work/args-main-flaky.txt" && [ -f "$work/logs-main-flaky/main-rerun-1.log" ] || { echo "FAIL main-flaky: rerun not run alone / log name"; bad=1; }
+check main-twice 1 "--stage main" '^FAILED TWICE: Ns\.M\.Flaky.*' 'FLAKY'
+grep -q 'main tests/ci/X.slnf rc=1 failed=1' "$work/main-twice.out" && grep -q 'main reruns: 1 (passed on rerun 0, failed twice 1)' "$work/main-twice.out" || { echo "FAIL main-twice: fail reason or summary missing"; bad=1; }
+[ -z "$(cat "$work/logs-main-twice/flake-ledger.txt")" ] || { echo "FAIL main-twice: ledger row written"; bad=1; }
+check main-many 1 "--stage main" 'no rerun: 6 failed tests is over GATE_MAIN_RERUN_MAX=5.*|main reruns: 0 ' 'rerunning|FLAKY'
+grep -q 'main reruns: 0 (passed on rerun 0, failed twice 0)' "$work/main-many.out" || { echo "FAIL main-many: reruns were made"; bad=1; }
+envs="GATE_MAIN_RERUN_MAX=6"; tag=main-many-cap6
+check main-many 0 "--stage main" 'main reruns: 6 \(passed on rerun 6' 'FAILED TWICE'
+envs="GATE_MAIN_RERUN_MAX=0"; tag=main-flaky-cap0
+check main-flaky 1 "--stage main" 'no rerun: 1 failed tests is over GATE_MAIN_RERUN_MAX=0' 'rerunning'
+envs="GATE_MAIN_RERUN=off"; tag=main-flaky-off
+check main-flaky 1 "--stage main" 'no rerun: reruns are off' 'rerunning|FLAKY'
+envs="GATE_MAIN_RERUN=0"; tag=main-flaky-zero
+check main-flaky 1 "--stage main" 'main tests/ci/X.slnf rc=1 failed=1' 'rerunning'
+envs=; tag=
+check main-abort 1 "--stage main" 'main tests/ci/X.slnf: test run aborted' 'rerunning|FLAKY'
+grep -q 'no rerun: the test run aborted' "$work/main-abort.out" || { echo "FAIL main-abort: no explanation"; bad=1; }
+# The flaky line lists both stages' flaky tests.
+tag=both-flaky
+check flaky 0 "" 'flaky tests \(passed their rerun\): Ns\.T\.Flaky$'
+tag=
 
 # Time budgets. Main-stage runs carry ONE `--` with the xunit diagnostics and the session timeout; the timing stage never gets one.
 check hardstop 1 "" 'main tests/ci/X.slnf was stopped at its 20m time budget.*still running: Ns\.Slow\.Sleeper \(00:01:05\)'
@@ -180,6 +216,9 @@ usage knob-class-cap "GATE_CLASS_BUDGET_SEC=86401" "tests/ci/X.slnf"
 usage knob-long-cap "GATE_LONG_TEST_SEC=3601" "tests/ci/X.slnf"
 usage knob-minute-cap "GATE_BUDGET_MINUTE_SEC=61" "tests/ci/X.slnf"
 usage knob-minute-zero "GATE_BUDGET_MINUTE_SEC=0" "tests/ci/X.slnf"
+usage knob-rerun-text "GATE_MAIN_RERUN=maybe" "tests/ci/X.slnf"
+usage knob-rerun-max-text "GATE_MAIN_RERUN_MAX=five" "tests/ci/X.slnf"
+usage knob-rerun-max-cap "GATE_MAIN_RERUN_MAX=1001" "tests/ci/X.slnf"
 usage empty-label "A=1" ".csproj"
 usage knob-empty-budgets "GATE_TIME_BUDGETS=maybe" "tests/ci/X.slnf"
 [ $bad = 0 ] && echo "test-stages self-test: all cases behaved" || echo "test-stages self-test: FAILED"
