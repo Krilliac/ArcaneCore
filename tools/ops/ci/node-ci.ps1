@@ -223,7 +223,7 @@ $rc = $LASTEXITCODE
 if ($flaky.Count -gt 0) {
     if ($ledgerPath) {
         if (-not (Test-Path $ledgerPath)) {
-            $header = "# Flake ledger`n`nTiming-stage tests that failed once and passed their isolated rerun; node-ci.ps1 appends one row per flaky test.`n`n| When (UTC) | Commit | Run | Test |`n|---|---|---|---|`n"
+            $header = "# Flake ledger`n`nTests (main or timing stage) that failed once and passed their isolated rerun; node-ci.ps1 appends one row per flaky test.`n`n| When (UTC) | Commit | Run | Test |`n|---|---|---|---|`n"
             [IO.File]::WriteAllText($ledgerPath, $header, [Text.UTF8Encoding]::new($false))
         }
         $when = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm')
