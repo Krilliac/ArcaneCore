@@ -350,6 +350,34 @@ public sealed class PeerLinkTests : IAsyncLifetime
         Assert.Equal(2, bad.Validate().Count());
     }
 
+    [Fact]
+    public void Validate_ReportsANodeIdListedTwiceInEndpoints()
+    {
+        var options = new PeerLinkOptions
+        {
+            Endpoints = [new PeerEndpointEntry { NodeId = "worker:EK", Address = "127.0.0.1:8105" }, new PeerEndpointEntry { NodeId = "worker:EK", Address = "127.0.0.1:8106" }],
+        };
+
+        string problem = Assert.Single(options.Validate());
+        Assert.Contains("worker:EK", problem);
+        Assert.Contains("more than once", problem);
+    }
+
+    [Fact]
+    public void ResolveNodes_EndpointsEntryOverridesANodesEntryWithTheSameId()
+    {
+        var options = new PeerLinkOptions
+        {
+            Nodes = new Dictionary<string, string>(StringComparer.Ordinal) { ["n1"] = "127.0.0.1:8000", ["n2"] = "127.0.0.1:8001" },
+            Endpoints = [new PeerEndpointEntry { NodeId = "n1", Address = "127.0.0.1:9000" }],
+        };
+
+        Dictionary<string, string> nodes = options.ResolveNodes();
+        Assert.Equal(2, nodes.Count);
+        Assert.Equal("127.0.0.1:9000", nodes["n1"]);
+        Assert.Equal("127.0.0.1:8001", nodes["n2"]);
+    }
+
     [Theory]
     [InlineData("127.0.0.1:8097", "127.0.0.1", 8097, true)]
     [InlineData("[::1]:9000", "::1", 9000, true)]

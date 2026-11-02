@@ -29,9 +29,8 @@ public sealed class PeerLinkOptions
     public Dictionary<string, string> Nodes { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The same map as <see cref="Nodes"/> in a list form that survives <c>:</c> inside a node id (<c>worker:EK</c>): configuration keys use <c>:</c> as the section
-    /// separator, so <c>Nodes:worker:EK</c> would nest instead of naming a key. Bind as <c>Cluster:Peer:Endpoints:0:NodeId</c> and <c>Cluster:Peer:Endpoints:0:Address</c> (<c>host:port</c>).
-    /// <see cref="ResolveNodes"/> merges both forms; an <see cref="Endpoints"/> entry wins over a <see cref="Nodes"/> entry with the same id.
+    /// List form of <see cref="Nodes"/> for node ids that contain <c>:</c> (for example <c>worker:EK</c>). Configuration keys use <c>:</c> as the section separator, so <c>Nodes:worker:EK</c> would nest instead of naming a key.
+    /// Bind each entry as <c>Cluster:Peer:Endpoints:0:NodeId</c> and <c>Cluster:Peer:Endpoints:0:Address</c> (<c>host:port</c>). <see cref="ResolveNodes"/> merges both forms; an <see cref="Endpoints"/> entry wins over a <see cref="Nodes"/> entry with the same id, and a node id listed twice in <see cref="Endpoints"/> is invalid.
     /// </summary>
     public List<PeerEndpointEntry> Endpoints { get; set; } = [];
 
@@ -126,8 +125,14 @@ public sealed class PeerLinkOptions
             yield return $"MaxPendingRequests {MaxPendingRequests} must be at least 1";
         }
 
+        HashSet<string> seenEndpointIds = new(StringComparer.Ordinal);
         foreach (PeerEndpointEntry entry in Endpoints)
         {
+            if (!string.IsNullOrWhiteSpace(entry.NodeId) && !seenEndpointIds.Add(entry.NodeId))
+            {
+                yield return $"Endpoints lists node id '{entry.NodeId}' more than once";
+            }
+
             if (string.IsNullOrWhiteSpace(entry.NodeId))
             {
                 yield return "Endpoints has an entry with an empty NodeId";

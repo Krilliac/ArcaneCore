@@ -33,7 +33,7 @@ public sealed class PeerLinkRuntime
 
 /// <summary>
 /// The production wiring of the peer link for realm presence (cluster mode only, i.e. with a <see cref="RealmAuthorityLeaseKeeper"/>): every node runs one
-/// <see cref="PeerLinkClient"/> (located through the lease store and <c>Cluster:Peer:Nodes</c>, so it dials the Social holder and never itself), and the node that holds the
+/// <see cref="PeerLinkClient"/> (located through the lease store and <c>Cluster:Peer:Nodes</c> or <c>Cluster:Peer:Endpoints</c>, so it dials the Social holder and never itself), and the node that holds the
 /// Social or Economy lease also runs a <see cref="PeerLinkHost"/> on <c>Cluster:Peer:BindAddress:Port</c> whose <see cref="PeerLinkHost.PayloadHandler"/> is
 /// <see cref="PresenceHolderService.Handle"/>. A small poll loop (every <see cref="PeerLinkOptions.HolderPollMs"/>) starts the host when the lease is gained and disposes it when the
 /// lease is lost, so a failover moves the listener with the lease. Nothing starts without the secret in <see cref="PeerLinkOptions.SecretEnvironmentVariable"/> and valid
@@ -98,7 +98,7 @@ public sealed class PeerLinkHostedService(
         _client = client;
         runtime.Presence = new PeerPresenceClient(client);
         _poll = Task.Run(() => PollAsync(options, secret, manifest, leases, _stop.Token), CancellationToken.None);
-        _logger.LogInformation("Peer link: client started (holder found through the lease store and Cluster:Peer:Nodes)");
+        _logger.LogInformation("Peer link: client started (holder found through the lease store and Cluster:Peer:Nodes or Cluster:Peer:Endpoints)");
     }
 
     private async Task PollAsync(PeerLinkOptions options, string secret, ClusterNodeManifest manifest, IPeerLeaseSource leases, CancellationToken ct)
