@@ -297,39 +297,73 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         }
 
         // A staged cross-worker transfer holds the packets of the freeze; a generation the session left is dropped (GatewayTransferRouter).
-        switch (_server.Transfers.Intercept(SessionGeneration, opcode, payload, _packetReceivedMs))
+        // This packet was read from the client before it is routed, and a transfer's route switch (GatewayTransferRouter.CommitRouteSwitchAsync:
+        // replay of the held packets, Repoint, retire of the old generation) can complete in between. Its generation is then one the session
+        // left, but the packet is not stale: the client sent it after every packet the switch replayed (a MSG_MOVE_WORLDPORT_ACK, typically),
+        // so it belongs to the new route, after them. The routing decision and the send therefore use one generation, and a packet whose
+        // generation moved under it is routed again under the current one instead of being dropped or sent down the old link.
+        long generation = SessionGeneration;
+        _server.BeforeRouteClientPacket?.Invoke(this, opcode);
+        while (true)
         {
-            case GatewayTransferVerdict.Held:
-            case GatewayTransferVerdict.Drop:
-                return true;
-            case GatewayTransferVerdict.Overflow:
-                _logger.LogWarning("[{Endpoint}] more input than the transfer buffer holds while the character moved; disconnecting", RemoteEndpoint);
-                return false;
-        }
-
-        lock (_redirectGate)
-        {
-            if (_redirectHeld is { } held)
+            switch (_server.Transfers.Intercept(generation, opcode, payload, _packetReceivedMs))
             {
-                if (held.Count >= MaxHeldPackets)
-                {
-                    _logger.LogWarning("[{Endpoint}] more than {Limit} packets while the login redirect ran; disconnecting", RemoteEndpoint, MaxHeldPackets);
+                case GatewayTransferVerdict.Held:
+                    return true;
+                case GatewayTransferVerdict.Drop:
+                    long current = SessionGeneration;
+                    if (current != generation && current != 0) // 0: the session closed meanwhile, the packet has no route
+                    {
+                        generation = current;
+                        continue;
+                    }
+
+                    return true;
+                case GatewayTransferVerdict.Overflow:
+                    _logger.LogWarning("[{Endpoint}] more input than the transfer buffer holds while the character moved; disconnecting", RemoteEndpoint);
                     return false;
+            }
+
+            GatewaySessionLinkClient? link;
+            lock (_redirectGate)
+            {
+                if (_redirectHeld is { } held)
+                {
+                    if (held.Count >= MaxHeldPackets)
+                    {
+                        _logger.LogWarning("[{Endpoint}] more than {Limit} packets while the login redirect ran; disconnecting", RemoteEndpoint, MaxHeldPackets);
+                        return false;
+                    }
+
+                    held.Add(new HeldPacket(opcode, payload, _packetReceivedMs));
+                    return true;
                 }
 
-                held.Add(new HeldPacket(opcode, payload, _packetReceivedMs));
+                // Link and generation change together under this gate (Repoint, AdoptAsync): a switch since the decision above routes the packet again.
+                long now = Interlocked.Read(ref _generation);
+                if (now != generation)
+                {
+                    if (now == 0)
+                    {
+                        return true; // the session closed meanwhile: the packet has no route
+                    }
+
+                    generation = now;
+                    continue;
+                }
+
+                link = _link;
+            }
+
+            if (link is not null && link.SendClientPacket(generation, opcode, payload, _packetReceivedMs))
+            {
+                GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
                 return true;
             }
-        }
 
-        if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload, _packetReceivedMs))
-        {
-            GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
-            return true;
+            _logger.LogInformation("[{Endpoint}] the worker link is gone; disconnecting", RemoteEndpoint);
+            return false;
         }
-
-        _logger.LogInformation("[{Endpoint}] the worker link is gone; disconnecting", RemoteEndpoint);
-        return false;
     }
 
     private async Task<bool> AuthenticateAsync(byte[] payload, CancellationToken token)
