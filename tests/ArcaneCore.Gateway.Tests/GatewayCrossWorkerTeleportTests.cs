@@ -76,6 +76,68 @@ public sealed class GatewayCrossWorkerTeleportTests
     }
 
     [Fact]
+    public async Task AWorldportAckReadBeforeTheRouteSwitch_AndRoutedAfterIt_ReachesTheKalimdorWorker()
+    {
+        // The client answers SMSG_NEW_WORLD (sent by the Kalimdor worker during the activation) at once, and the gateway's route switch runs right after the
+        // activation, on the link receive loop. The gateway's read loop can read the ack (and its session generation, still the Eastern Kingdoms one) before
+        // the switch and route it after the switch retired that generation. The ack must still reach the Kalimdor worker: dropped as stale, the player never
+        // enters the map, every later packet is dropped there ("while player.Map is null"), and the client sits on its loading screen.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELEPORT", "Telerace", cts.Token);
+        GatewayClusterFarTeleportRouter router = cluster.Router;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        long ackReadUnder = 0;
+        long ackRoutedAfter = 0;
+        bool ackReadWhileStaged = false;
+        using var ackRead = new ManualResetEventSlim();
+        cluster.Gateway.BeforeRouteClientPacket = (connection, opcode) =>
+        {
+            if (opcode != WorldOpcode.MsgMoveWorldportAck)
+            {
+                return;
+            }
+
+            // Hold the read loop until the route switch has completed: the session moved to a new generation and nothing is staged any more.
+            long read = connection.SessionGeneration;
+            Interlocked.Exchange(ref ackReadUnder, read);
+            Volatile.Write(ref ackReadWhileStaged, cluster.Gateway.Transfers.StagedCount == 1);
+            ackRead.Set();
+            while (!cts.IsCancellationRequested && (connection.SessionGeneration == read || cluster.Gateway.Transfers.StagedCount != 0))
+            {
+                Thread.Sleep(5);
+            }
+
+            Interlocked.Exchange(ref ackRoutedAfter, connection.SessionGeneration);
+        };
+
+        // The Kalimdor world thread waits until the gateway has read the ack, so the activation (a command on that thread) and the route switch after it
+        // cannot run before the read: the ack is read under the Eastern Kingdoms generation, while the transfer is staged, every time.
+        cluster.Kalimdor.World.Post(() => ackRead.Wait(cts.Token));
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+        cluster.Gateway.BeforeRouteClientPacket = null;
+
+        // The race was the one described: the ack was read under one generation and routed after the switch to another.
+        long readUnder = Interlocked.Read(ref ackReadUnder);
+        long routedAfter = Interlocked.Read(ref ackRoutedAfter);
+        Assert.True(Volatile.Read(ref ackReadWhileStaged));
+        Assert.NotEqual(0, readUnder);
+        Assert.NotEqual(0, routedAfter);
+        Assert.NotEqual(readUnder, routedAfter);
+        Guid transferId = router.LastTransferId;
+        await Cluster.WaitUntilAsync(
+            async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+    }
+
+    [Fact]
     public async Task ATeleportToAFullKalimdorWorker_LeavesThePlayerOnTheEasternKingdomsWorker_AndTellsThem()
     {
         using var cts = new CancellationTokenSource(Deadline);

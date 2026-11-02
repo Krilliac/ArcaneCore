@@ -116,17 +116,21 @@ public sealed class GatewayTransferRouterTests
         public List<(WorldOpcode Opcode, byte[] Payload, uint ReceivedMs)> ToSource { get; } = [];
         public GatewayTransferTarget? Repointed { get; private set; }
         public string? Kicked { get; private set; }
+        public Action? OnRepoint { get; set; }
+        public Action? OnForwardToWorker { get; set; }
 
         public void SendToClient(WorldOpcode opcode, ReadOnlySpan<byte> payload) => ToClient.Add((opcode, payload.ToArray()));
 
         public bool ForwardToWorker(WorldOpcode opcode, ReadOnlySpan<byte> payload, uint receivedMs)
         {
+            OnForwardToWorker?.Invoke();
             ToSource.Add((opcode, payload.ToArray(), receivedMs));
             return true;
         }
 
         public void Repoint(GatewayTransferTarget target)
         {
+            OnRepoint?.Invoke();
             Repointed = target;
             SessionGeneration = target.Generation;
         }
@@ -214,6 +218,30 @@ public sealed class GatewayTransferRouterTests
         // A repeated cancel and a late commit of the cancelled transfer change nothing.
         await router.CancelStagedWorldPortAsync(TransferId, 5, 7, "ek", "again");
         await Assert.ThrowsAsync<InvalidOperationException>(() => Stage(router)); // an ended transfer id is not staged again
+    }
+
+    [Fact]
+    public async Task WhileACommitOrACancelReplaysTheBuffer_TheStagedCountStaysUp_SoClientReadLoopsWaitAtTheGate()
+    {
+        // Intercept skips the gate while nothing is staged. Lowered before the replay, re-point and retire are done, the count would let a client read loop
+        // route a packet past the half-finished switch: down the old link, or ahead of the replayed packets.
+        (GatewayTransferRouter router, _, FakeSession session) = Setup();
+        await Stage(router);
+        router.Intercept(7, WorldOpcode.CmsgPing, Bytes(1), 1);
+        int duringCommit = -1;
+        session.OnRepoint = () => duringCommit = router.StagedCount;
+        await router.CommitRouteSwitchAsync(TransferId, 5, 7, "kal", Token);
+        Assert.Equal(1, duringCommit);
+        Assert.Equal(0, router.StagedCount);
+
+        (GatewayTransferRouter cancelled, _, FakeSession resumed) = Setup();
+        await Stage(cancelled);
+        cancelled.Intercept(7, WorldOpcode.CmsgPing, Bytes(1), 1);
+        int duringResume = -1;
+        resumed.OnForwardToWorker = () => duringResume = cancelled.StagedCount;
+        await cancelled.CancelStagedWorldPortAsync(TransferId, 5, 7, "ek", "target-rejected");
+        Assert.Equal(1, duringResume);
+        Assert.Equal(0, cancelled.StagedCount);
     }
 
     [Fact]

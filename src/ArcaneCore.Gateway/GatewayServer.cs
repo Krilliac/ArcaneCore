@@ -144,6 +144,12 @@ public sealed class GatewayServer : BackgroundService
         return null;
     }
 
+    /// <summary>
+    /// Test seam: runs on a client read loop after a forwarded packet's session generation is read and before the packet is routed (held, dropped or sent),
+    /// so a test can let a transfer's route switch complete in that window. Null (the default) in production.
+    /// </summary>
+    internal Action<GatewayClientConnection, ArcaneCore.Protocol.WorldOpcode>? BeforeRouteClientPacket { get; set; }
+
     /// <summary>The connection whose current session generation is <paramref name="generation"/>, or null.</summary>
     internal GatewayClientConnection? FindConnection(long generation)
     {

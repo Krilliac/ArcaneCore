@@ -354,6 +354,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
         ArgumentNullException.ThrowIfNull(targetOwnershipToken);
         IGatewayTransferSession? toKick = null;
         bool lostTarget = false;
+        using var unstage = new Unstage(this);
         lock (_gate)
         {
             if (_finished.Contains(transferId))
@@ -371,7 +372,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
                 throw new InvalidOperationException($"transfer {transferId} was staged for worker '{staged.TargetNode}', not '{targetWorkerId}'");
             }
 
-            RemoveStaged(sessionGeneration);
+            unstage.Removed = RemoveStaged(sessionGeneration);
             Finish(transferId);
             GatewayTransferTarget? target = staged.Target;
             if (staged.Overflowed)
@@ -500,6 +501,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
     private void Resume(long sessionGeneration, Staged staged)
     {
         bool delivered = true;
+        using var unstage = new Unstage(this);
         lock (_gate)
         {
             if (!_staged.TryGetValue(sessionGeneration, out Staged? current) || !ReferenceEquals(current, staged))
@@ -507,7 +509,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
                 return;
             }
 
-            RemoveStaged(sessionGeneration);
+            unstage.Removed = RemoveStaged(sessionGeneration);
             Finish(staged.TransferId);
             if (staged.Target is { } target)
             {
@@ -548,11 +550,26 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
         }
     }
 
-    private void RemoveStaged(long sessionGeneration)
+    /// <summary>Removes a staged entry. Caller holds the gate; the staged count is lowered by the caller's <see cref="Unstage"/> once the gate is released.</summary>
+    private bool RemoveStaged(long sessionGeneration) => _staged.Remove(sessionGeneration);
+
+    /// <summary>
+    /// Lowers the staged count after the gate is released, not when the entry is removed. <see cref="Intercept"/> skips the gate while the count is 0, so a
+    /// count lowered inside the gate would let a client read loop route a packet while the commit (or the resume) is still replaying the held packets, before
+    /// the session is re-pointed and the old generation retired: the packet would overtake the replay or go down the old link. Kept until the gate is
+    /// released, the count sends that read loop into the gate, where it waits for the switch to finish and then sees the finished state.
+    /// </summary>
+    private sealed class Unstage(GatewayTransferRouter router) : IDisposable
     {
-        if (_staged.Remove(sessionGeneration))
+        public bool Removed { get; set; }
+
+        public void Dispose()
         {
-            Interlocked.Decrement(ref _stagedCount);
+            if (Removed)
+            {
+                Removed = false;
+                Interlocked.Decrement(ref router._stagedCount);
+            }
         }
     }
 
