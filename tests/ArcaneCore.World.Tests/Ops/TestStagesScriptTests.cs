@@ -32,7 +32,7 @@ public sealed class TestStagesScriptTests
 
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\n{stdout}\n{stderr.Result}");
         Assert.Contains("test-stages self-test: all cases behaved", stdout, StringComparison.Ordinal);
-        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "both-flaky", "main-rc124", "main-rc255", "main-setup", "main-timeout", "main-crash", "timing-rc124", "timing-rc255" })
+        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "flaky-line", "both", "main-rc124", "main-rc255", "main-setup", "main-timeout", "main-crash", "timing-rc124", "timing-rc255" })
         {
             Assert.Contains("ok   " + budgetCase + ":", stdout, StringComparison.Ordinal);
         }
