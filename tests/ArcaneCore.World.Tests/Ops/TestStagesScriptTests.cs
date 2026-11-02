@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Tests.Ops;
 /// tools/ops/ci/test-stages.sh is the gate itself (ci.yml and node CI): a defect there reads as a green run. Its self-test drives it
 /// with a fake <c>dotnet</c> through a pass, a flaky test, a test that fails twice, a rerun or timing stage that matches 0 tests, a
 /// killed and an aborted run, the main-stage rerun (a flaky test, a test that fails twice, more failures than the cap, the off switch,
-/// an aborted run that is never rerun), the time budgets (a hard stop that names the slow test, the off switch,
+/// an aborted, timed-out, killed (rc 124/255), crashed or setup-error run that is never rerun or cleared, in both stages), the time budgets (a hard stop that names the slow test, the off switch,
 /// the class budget, a filtered run) and concurrent targets, and checks every verdict. Linux only (where CI and node CI run it); bash and coreutils are all it needs.
 /// </summary>
 public sealed class TestStagesScriptTests
@@ -32,12 +32,12 @@ public sealed class TestStagesScriptTests
 
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\n{stdout}\n{stderr.Result}");
         Assert.Contains("test-stages self-test: all cases behaved", stdout, StringComparison.Ordinal);
-        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "both-flaky" })
+        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "both-flaky", "main-rc124", "main-rc255", "main-setup", "main-timeout", "main-crash", "timing-rc124", "timing-rc255" })
         {
             Assert.Contains("ok   " + budgetCase + ":", stdout, StringComparison.Ordinal);
         }
 
-        Assert.Equal(51, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
+        Assert.Equal(59, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
     }
 }
 
