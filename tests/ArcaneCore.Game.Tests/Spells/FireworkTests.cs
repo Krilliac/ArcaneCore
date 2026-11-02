@@ -106,6 +106,19 @@ public sealed class FireworkTests
         public SpellCastResult PlayerCast(uint spell)
             => Kit.Spells.System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered: false);
 
+        /// <summary>
+        /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) the Player's untriggered cast is held until the next window
+        /// boundary: advance the clock to it so the held go resolves. A no-op with the window at 0.
+        /// </summary>
+        public void FlushSpellBatch()
+        {
+            uint window = Kit.Spells.System.SpellBatchWindowMs;
+            if (window != 0)
+            {
+                Kit.Spells.Advance(window - (Kit.Spells.Now % window));
+            }
+        }
+
         public void Dispose() => Kit.Dispose();
     }
 
@@ -285,6 +298,7 @@ public sealed class FireworkTests
         rig.Session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, rig.PlayerCast(spell));
+        rig.FlushSpellBatch();
 
         // The accepted cast ran its effects: the creature stands at the launcher and the launcher played its custom animation.
         Creature firework = Assert.Single(rig.NpcsOf(npcEntry));

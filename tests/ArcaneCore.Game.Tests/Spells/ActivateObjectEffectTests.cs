@@ -53,6 +53,19 @@ public sealed class ActivateObjectEffectTests
         => Spell(id, Effect(SpellEffectName.ActivateObject, 0, targetA, misc: action, targetB: targetB)
             with { Radius = radius }) with { RangeIndex = 4, Range = new SpellRange(0, 30) };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static ulong[] SpellGoHits(FakeSession session)
     {
         var reader = new PacketReader(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload);
@@ -119,10 +132,12 @@ public sealed class ActivateObjectEffectTests
         var farTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = far.Guid };
         // RED on main: CastOk, and the object 200 yards away is unlocked.
         Assert.Equal(SpellCastResult.OutOfRange, rig.Kit.System.CastSpell(rig.Caster, 990106, farTargets, triggered: false));
+        FlushSpellBatch(rig.Kit); // a refused cast is not held: nothing goes off at the boundary either
         Assert.True(far.Flags.HasFlag(GameObjectFlags.Locked));
 
         var nearTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = near.Guid };
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, 990106, nearTargets, triggered: false));
+        FlushSpellBatch(rig.Kit);
         Assert.False(near.Flags.HasFlag(GameObjectFlags.Locked));
     }
 
@@ -150,6 +165,7 @@ public sealed class ActivateObjectEffectTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, slowUnlock, targets, triggered: false));
         caster.Relocate(casterXAtCompletion, 0, caster.Z, 0, kit.Now);
         kit.Advance(2100);
+        FlushSpellBatch(kit); // with batching the finished cast bar goes off at the next boundary; its range was judged at completion
 
         // RED on main for the refused row: no game-object range check, so the door 40 yards away is unlocked.
         Assert.Equal(refused, door.Flags.HasFlag(GameObjectFlags.Locked));

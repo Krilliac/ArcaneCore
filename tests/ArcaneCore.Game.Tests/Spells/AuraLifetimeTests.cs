@@ -140,6 +140,14 @@ public sealed class AuraLifetimeTests
         Assert.Equal(900u, target.DisplayId);
 
         kit.Advance(15_000);
+        // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the hex's expiry waited for its batch boundary, so the reward started up to a
+        // window late, and the reward's own expiry waits for the boundary after it runs out: advance to that boundary. A no-op with the window at 0.
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+
         Assert.False(kit.System.HasAura(target, reward));
         Assert.Equal(100u, target.DisplayId);
     }
