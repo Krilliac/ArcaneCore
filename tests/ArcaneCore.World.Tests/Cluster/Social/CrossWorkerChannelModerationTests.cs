@@ -132,6 +132,7 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncLifetime
         Register(_b, 4, "Carol", 8);
         await JoinAsync(_a, 1, "Alice");
         _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1);
+        await _a.Routing.FlushAsync();
         await JoinAsync(_b, 2, "Bob");
         await JoinAsync(_b, 4, "Carol");
 
@@ -159,6 +160,7 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncLifetime
         Register(_b, 4, "Carol", 8);
         await JoinAsync(_a, 1, "Alice");
         _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1);
+        await _a.Routing.FlushAsync();
         await JoinAsync(_b, 2, "Bob");
         await JoinAsync(_b, 4, "Carol");
 
