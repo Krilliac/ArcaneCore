@@ -192,6 +192,38 @@ public sealed class GatewayFuzzAndExceptionTests
     }
 
     [Fact]
+    public void AddGateway_ValidConfiguration_RegistersSupervisedChildDrain()
+    {
+        var services = new ServiceCollection();
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gateway:BindAddress"] = "127.0.0.1",
+                ["Gateway:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Gateway:WorkerAddress"] = "127.0.0.1",
+                ["Gateway:WorkerPort"] = "8095",
+                ["Gateway:LinkSecret"] = ValidSecret,
+            })
+            .Build();
+        services.AddGateway(configuration);
+        services.AddSingleton<IHostApplicationLifetime, TestLifetime>();
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        // The supervisor drains a child by writing "drain" to its stdin; without this hosted service the gateway ignored it and was killed after the drain timeout.
+        Assert.Contains(provider.GetServices<IHostedService>(), s => s is ArcaneCore.Kernel.Ops.ServerConsole.SupervisedChildDrain);
+    }
+
+    private sealed class TestLifetime : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication()
+        {
+        }
+    }
+
+    [Fact]
     public void GatewayServer_Constructor_NullArguments_ThrowArgumentNullException()
     {
         using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
