@@ -10,12 +10,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.Cluster.Peer;
 
-/// <summary>Where the holder of a realm authority lease can be dialled: its lease (owner, incarnation, token) and its peer endpoint from <c>Cluster:Peer:Nodes</c>.</summary>
+/// <summary>Where the holder of a realm authority lease can be dialled: its lease (owner, incarnation, token) and its peer endpoint from <c>Cluster:Peer:Nodes</c> or <c>Cluster:Peer:Endpoints</c>.</summary>
 public sealed record PeerHolder(string Scope, string NodeId, Guid Incarnation, long FencingToken, string Host, int Port);
 
 /// <summary>
 /// Finds the node that holds the Social lease (else the Economy lease) in the lease store and maps its node id to a peer endpoint through
-/// <see cref="PeerLinkOptions.Nodes"/>. A holder with no (or a malformed) endpoint entry is skipped, so it is not dialled. Reads only
+/// <see cref="PeerLinkOptions.Nodes"/> or <see cref="PeerLinkOptions.Endpoints"/>. A holder with no (or a malformed) endpoint entry is skipped, so it is not dialled. Reads only
 /// (<see cref="IRealmAuthorityLeaseStore.GetCurrent"/>); the store call is synchronous and may touch a database, so callers run it off the world thread.
 /// Thread-safe when the store is.
 /// </summary>
@@ -32,7 +32,7 @@ public sealed class PeerHolderLocator(IRealmAuthorityLeaseStore store, PeerLinkO
         foreach (string scope in Scopes)
         {
             if (store.GetCurrent(scope, now) is { } lease
-                && options.Nodes.TryGetValue(lease.OwnerNodeId, out string? endpoint)
+                && options.ResolveNodes().TryGetValue(lease.OwnerNodeId, out string? endpoint)
                 && PeerLinkOptions.TryParseEndpoint(endpoint, out string host, out int port))
             {
                 return new PeerHolder(scope, lease.OwnerNodeId, lease.OwnerIncarnation, lease.FencingToken, host, port);

@@ -2575,6 +2575,22 @@
       "isCollection": false
     },
     {
+      "path": "Cluster:Peer:Endpoints",
+      "section": "Cluster:Peer",
+      "type": "List<PeerEndpointEntry>",
+      "kind": "sequence",
+      "elementType": "object",
+      "enumValues": null,
+      "default": null,
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "List form of `Nodes` for node ids that contain `:` (for example `worker:EK`). Configuration keys use `:` as the section separator, so `Nodes:worker:EK` would nest instead of naming a key. Bind each entry as `Cluster:Peer:Endpoints:0:NodeId` and `Cluster:Peer:Endpoints:0:Address` (`host:port`). `ResolveNodes` merges both forms; an `Endpoints` entry wins over a `Nodes` entry with the same id, and a node id listed twice in `Endpoints` is invalid.",
+      "allowed": "a list: numbered keys 0, 1, 2, ...; each entry is a group of keys",
+      "docs": "docs/reference/configuration.md#clusterpeer",
+      "isCollection": true
+    },
+    {
       "path": "Cluster:Peer:HandshakeTimeoutMs",
       "section": "Cluster:Peer",
       "type": "int",

@@ -2012,6 +2012,23 @@ Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimd
 Cluster.Peer.BindAddress = "127.0.0.1"
 
 #
+#    Cluster.Peer.Endpoints
+#        Description: List form of Nodes for node ids that contain : (for example worker:EK).
+#                     Configuration keys use : as the section separator, so Nodes:worker:EK would
+#                     nest instead of naming a key. Bind each entry as
+#                     Cluster:Peer:Endpoints:0:NodeId and Cluster:Peer:Endpoints:0:Address
+#                     (host:port). ResolveNodes merges both forms; an Endpoints entry wins over a
+#                     Nodes entry with the same id, and a node id listed twice in Endpoints is
+#                     invalid.
+#        Type: List<PeerEndpointEntry>
+#        Default: (empty list)
+#        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterpeer
+#
+# Empty by default. Each entry is a group of keys: Cluster.Peer.Endpoints.0.<Field> = value, Cluster.Peer.Endpoints.1.<Field> = value, ...
+
+#
 #    Cluster.Peer.HandshakeTimeoutMs
 #        Description: How long, in milliseconds, a new link may take to answer the challenge and say
 #                     hello before it is closed.

@@ -554,6 +554,112 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Equal(0, options.Processes["worker-EK"].RealmId);
     }
 
+    private static void AssertPeerLayout(Dictionary<string, string> worlds, string[] expectedNodeIds)
+    {
+        var peerPorts = new HashSet<string>(StringComparer.Ordinal);
+        var adminPorts = new HashSet<string>(StringComparer.Ordinal);
+        var portByNode = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach ((string key, string arguments) in worlds)
+        {
+            Assert.Equal("127.0.0.1", ArgumentValue(arguments, "Cluster:Peer:BindAddress"));
+            string peerPort = ArgumentValue(arguments, "Cluster:Peer:Port");
+            Assert.True(peerPorts.Add(peerPort), $"{key}: peer port is shared");
+            Assert.True(adminPorts.Add(ArgumentValue(arguments, "World:RemoteAdmin:Port")), $"{key}: RemoteAdmin port is shared");
+            portByNode[ArgumentValue(arguments, "Cluster:Worker:NodeId")] = peerPort;
+        }
+
+        foreach ((string key, string arguments) in worlds)
+        {
+            // Every node carries the same whole map: node id -> its own peer port.
+            for (int n = 0; n < expectedNodeIds.Length; n++)
+            {
+                string node = ArgumentValue(arguments, $"Cluster:Peer:Endpoints:{n}:NodeId");
+                Assert.Equal(expectedNodeIds[n], node);
+                Assert.Equal($"127.0.0.1:{portByNode[node]}", ArgumentValue(arguments, $"Cluster:Peer:Endpoints:{n}:Address"));
+            }
+
+            Assert.DoesNotContain($"Cluster:Peer:Endpoints:{expectedNodeIds.Length}:", arguments, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(expectedNodeIds.Length, portByNode.Count);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_GivesEveryWorldItsOwnPeerAndRemoteAdminPort_TheFullPeerMap_AndTheMaskedPeerSecret()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Assert.False(started);
+        Assert.DoesNotContain(Secret, output, StringComparison.Ordinal);
+        Assert.Contains("      ARCANECORE_PEER_LINK_SECRET=***", output, StringComparison.Ordinal);
+        Assert.Contains("Peer link EK 8105", output, StringComparison.Ordinal);
+        Assert.Contains("RemoteAdmin instances 3445", output, StringComparison.Ordinal);
+
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        Assert.Equal(3, worlds.Count);
+        AssertPeerLayout(worlds, ["worker:EK", "worker:Kalimdor", "worker:instances"]);
+        Assert.Equal("8105", ArgumentValue(worlds["worker-EK"], "Cluster:Peer:Port"));
+        Assert.Equal("3443", ArgumentValue(worlds["worker-EK"], "World:RemoteAdmin:Port"));
+        Assert.Equal("3444", ArgumentValue(worlds["worker-Kalimdor"], "World:RemoteAdmin:Port"));
+
+        // Custom bases move every port; a plain Combined/Gateway plan carries none of these keys.
+        (code, output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-PeerPort", "9200", "-RemoteAdminPort", "4000", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+        Assert.Equal(0, code);
+        worlds = SplitWorldArguments(output);
+        Assert.Equal("9202", ArgumentValue(worlds["worker-instances"], "Cluster:Peer:Port"));
+        Assert.Equal("4002", ArgumentValue(worlds["worker-instances"], "World:RemoteAdmin:Port"));
+        AssertPeerLayout(worlds, ["worker:EK", "worker:Kalimdor", "worker:instances"]);
+
+        (code, output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Gateway"], Secret);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("Cluster:Peer", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ARCANECORE_PEER_LINK_SECRET", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_Standby_PeerMapCoversTheStandbysToo()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-Standby", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+        Assert.Equal(0, code);
+        Assert.DoesNotContain(Secret, output, StringComparison.Ordinal);
+
+        Dictionary<string, string> children = new(StringComparer.Ordinal);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+                line.TrimEnd('\r'), "^ {6}Cluster__Supervisor__Processes__((?:worker|standby)-[A-Za-z0-9]+)__Arguments=(.*)$");
+            if (match.Success)
+            {
+                children[match.Groups[1].Value] = match.Groups[2].Value;
+            }
+        }
+
+        Assert.Equal(6, children.Count);
+        AssertPeerLayout(children, ["worker:EK", "worker:Kalimdor", "worker:instances", "standby:EK", "standby:Kalimdor", "standby:instances"]);
+        Assert.Equal("8108", ArgumentValue(children["standby-EK"], "Cluster:Peer:Port"));
+        Assert.Equal("3446", ArgumentValue(children["standby-EK"], "World:RemoteAdmin:Port"));
+    }
+
+    [PwshTheory]
+    [InlineData("-PeerPort 9000", "only mean something with -Topology Split")]
+    [InlineData("-RemoteAdminPort 9000", "only mean something with -Topology Split")]
+    [InlineData("-Gateway -PeerPort 9000", "only mean something with -Topology Split")]
+    [InlineData("-Topology Split -PeerPort 8095", "both 8095")]
+    [InlineData("-Topology Split -RemoteAdminPort 8095", "both 8095")]
+    [InlineData("-Topology Split -PeerPort 65535", "above 65535")]
+    [InlineData("-Topology Split -PeerPort 0", "PeerPort")]
+    public void StartCluster_Split_RefusesBadPeerParameters(string arguments, string message)
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", .. arguments.Split(' ')], Secret);
+        Assert.NotEqual(0, code);
+        Assert.Contains(message, output, StringComparison.Ordinal);
+        Assert.False(started);
+    }
+
     [PwshTheory]
     [InlineData("-Topology Split -MapWorker", "does not combine with -Topology Split")]
     [InlineData("-LeaseHolder EK", "only mean something with -Topology Split")]

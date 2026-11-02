@@ -352,6 +352,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Cluster:Peer:BindAddress` | `string` | `"127.0.0.1"` | - | Address the lease holder listens on. Keep it on loopback or a private network: the link is not encrypted. |
+| `Cluster:Peer:Endpoints` | `List<PeerEndpointEntry>` | `[]` | - | List form of `Nodes` for node ids that contain `:` (for example `worker:EK`). Configuration keys use `:` as the section separator, so `Nodes:worker:EK` would nest instead of naming a key. Bind each entry as `Cluster:Peer:Endpoints:0:NodeId` and `Cluster:Peer:Endpoints:0:Address` (`host:port`). `ResolveNodes` merges both forms; an `Endpoints` entry wins over a `Nodes` entry with the same id, and a node id listed twice in `Endpoints` is invalid. |
 | `Cluster:Peer:HandshakeTimeoutMs` | `int` | `5000` | - | How long, in milliseconds, a new link may take to answer the challenge and say hello before it is closed. |
 | `Cluster:Peer:HolderPollMs` | `int` | `1000` | - | How often, in milliseconds, a client re-reads the lease store to notice that the holder changed (a link to a former holder is dropped and the new holder is dialled). |
 | `Cluster:Peer:MaxPendingRequests` | `int` | `256` | - | Most requests a client may have in flight; one more is refused at once instead of queued. |
