@@ -247,7 +247,7 @@ public sealed class PacketToolsSessionTests
             new NetProtectionOptions { WorldOpcodeBurst = 2, WorldOpcodeRefillPerSecond = 0, WorldPacketsPerSecond = 0, WorldFloodPacketsPerSecond = 0 },
             () => 0, () => 0, NullLogger.Instance);
         byte[] key = await host.AddAccountAsync(Account);
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         using var stop = new CancellationTokenSource();
         var built = new TaskCompletionSource<WorldSession>(TaskCreationOptions.RunContinuationsAsynchronously);

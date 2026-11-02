@@ -660,7 +660,7 @@ public sealed class WorldNetPacketsSecurityFuzzAndExceptionTests
         using var unconnectedTcp = new TcpClient();
         Assert.Throws<InvalidOperationException>(() => new GatewayLinkChannel(unconnectedTcp));
 
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         using var connectedClient = new TcpClient();
         Task<TcpClient> acceptTask = listener.AcceptTcpClientAsync();

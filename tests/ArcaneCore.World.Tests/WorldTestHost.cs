@@ -152,8 +152,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         SaveQueue.Start();
         World.Start();
 
-        _listener = new TcpListener(IPAddress.Loopback, 0);
-        _listener.Start();
+        _listener = ArcaneCore.TestSupport.LoopbackPorts.StartListener();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _acceptGate = AcceptGate.Value;
         _acceptLoop = Task.Run(AcceptLoopAsync);

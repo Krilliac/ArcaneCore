@@ -186,7 +186,7 @@ public sealed class WorldHostSingleWriterTests
     {
         using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
-        var taken = new TcpListener(IPAddress.Loopback, 0);
+        var taken = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         taken.Start();
         try
         {
@@ -256,7 +256,7 @@ public sealed class WorldHostSingleWriterTests
     public async Task APortAlreadyInUse_FailsTheStart_BeforeAnyWorldFeatureOrBotIsStarted()
     {
         using var directory = new TempDirectory("arcanecore-singlewriter-", sqlite: true);
-        var taken = new TcpListener(IPAddress.Loopback, 0);
+        var taken = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         taken.Start();
         try
         {
@@ -278,7 +278,7 @@ public sealed class WorldHostSingleWriterTests
     [Fact]
     public async Task APortHeldByAFixtureThatOwnsItsSockets_IsNotProbed_WhenNoWorldServerIsRegistered()
     {
-        var taken = new TcpListener(IPAddress.Loopback, 0);
+        var taken = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         taken.Start();
         try
         {
