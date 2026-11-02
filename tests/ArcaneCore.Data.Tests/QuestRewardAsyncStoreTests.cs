@@ -34,7 +34,7 @@ public sealed class QuestRewardAsyncStoreTests : IAsyncLifetime
     public async Task DelayedCommit_AfterRealSaveChangesRemainsInvisibleUntilDurableCommit(DatabaseProvider provider)
     {
         using var deadline = TestDeadline();
-        Seed seed = await CreateAsync(provider, deadline.Token);
+        Seed seed = await CreateAsync(provider, deadline);
         var gate = new AfterRewardSaveGate();
         await using CharacterDbContext db = Context(seed.Connection, gate);
         Task<QuestRewardCommitResult> commit = new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request, deadline.Token);
@@ -67,7 +67,7 @@ public sealed class QuestRewardAsyncStoreTests : IAsyncLifetime
     {
         using var deadline = TestDeadline();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
-        Seed seed = await CreateAsync(provider, deadline.Token);
+        Seed seed = await CreateAsync(provider, deadline);
         var gate = new AfterRewardSaveGate { ThrowAfterRelease = !cancel };
         await using CharacterDbContext db = Context(seed.Connection, gate);
         Task<QuestRewardCommitResult> commit = new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request, cancellation.Token);
@@ -108,7 +108,7 @@ public sealed class QuestRewardAsyncStoreTests : IAsyncLifetime
     public async Task RetainedRequest_DetachesMutableBuffersAcrossAnAwaitAndReplayCannotChangeItsDurableReward(DatabaseProvider provider)
     {
         using var deadline = TestDeadline();
-        Seed seed = await CreateAsync(provider, deadline.Token);
+        Seed seed = await CreateAsync(provider, deadline);
         InventoryItemData[] before = seed.Request.Before.Inventory!.Items.ToArray();
         InventoryItemData[] after = seed.Request.After.Inventory!.Items.ToArray();
         int[] charges = after[0].Item.Charges.ToArray();
@@ -151,7 +151,19 @@ public sealed class QuestRewardAsyncStoreTests : IAsyncLifetime
     public Task InitializeAsync() => Task.CompletedTask;
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 
-    private async Task<Seed> CreateAsync(DatabaseProvider provider, CancellationToken token)
+    /// <summary>
+    /// Seeds the database, then starts the body's deadline. Schema bootstrap on MariaDB takes about 30 s on a loaded node (every MariaDB test in a full gate shows 29-33 s),
+    /// so charging it to the body's 30 s deadline made the deadline's KILL QUERY land inside the seed's own query. Setup has its own hang guard; the body keeps its 30 s.
+    /// </summary>
+    private async Task<Seed> CreateAsync(DatabaseProvider provider, CancellationTokenSource deadline)
+    {
+        using var setup = new CancellationTokenSource(SetupHangGuard);
+        Seed seed = await SeedAsync(provider, setup.Token);
+        deadline.CancelAfter(BodyDeadline);
+        return seed;
+    }
+
+    private async Task<Seed> SeedAsync(DatabaseProvider provider, CancellationToken token)
     {
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
         await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection);
@@ -272,5 +284,9 @@ public sealed class QuestRewardAsyncStoreTests : IAsyncLifetime
     }
 
     private static TaskCompletionSource<bool> Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private static CancellationTokenSource TestDeadline() => new(TimeSpan.FromSeconds(30));
+    private static readonly TimeSpan BodyDeadline = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SetupHangGuard = TimeSpan.FromMinutes(5);
+
+    /// <summary>Unarmed: <see cref="CreateAsync"/> starts the countdown once the seed exists, so only the exercised commit and its checks are bounded by <see cref="BodyDeadline"/>.</summary>
+    private static CancellationTokenSource TestDeadline() => new();
 }
