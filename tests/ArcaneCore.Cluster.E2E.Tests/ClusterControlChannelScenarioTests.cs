@@ -31,7 +31,7 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
     // A point in Kalimdor, as the in-process far-teleport tests use (GatewayCrossWorkerTeleportTests).
     private const string KalimdorPoint = "-1196.22 29.0 176.949 1";
 
-    private static ClusterOptions Options(bool transfers, bool standby) => new()
+    private static ClusterOptions Options(bool transfers, bool standby, int? lateWorker = null) => new()
     {
         WorkerCount = 2,
         WorkerMaps = TwoWorkerMaps,
@@ -39,6 +39,7 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
         Security = AccountSecurity.Administrator, // .go xyz needs Moderator, .cluster restart Administrator
         Transfers = transfers,
         StandbyWorkerIndex = standby ? 0 : null,
+        LateWorkerIndex = lateWorker,
     };
 
     [PostgresClusterFact]
@@ -160,6 +161,45 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
         Assert.Equal(0, await cluster.CharactersScalarAsync(Count("cluster_world_handoff", "stage >= 0"), ct));
         Assert.True(cluster.IsWorkerRunning(0));
         Assert.True(cluster.IsWorkerRunning(1));
+    }
+
+    /// <summary>
+    /// The order a slow host produces by chance, made likely: the target worker is launched only after the player is in the world, so the gateway's link supervisor for it has backed off and
+    /// the worker is normally up with no link when the teleport arrives. The teleport waits for that link (its submit makes the supervisor dial at once) instead of being refused with map-unassigned.
+    /// A dial of the backoff can still land between the worker listening and the teleport; the row then passes without the wait, which is why it does not assert the gateway's "waits up to" line.
+    /// </summary>
+    [PostgresClusterFact]
+    public async Task ACrossWorkerTeleport_ToAWorkerThatIsUpButBetweenLinkDials_WaitsForItsLink_AndTheJournalSaysCompleted()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        CancellationToken ct = cts.Token;
+        await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Options(transfers: true, standby: false, lateWorker: 1), output, ct);
+
+        await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
+        var session = new ScenarioConnection(client);
+        await session.CreateCharacterAsync("Telelate", ct);
+        MockCharacter character = Assert.Single(await session.EnumerateAsync(ct));
+        MockLogin login = await session.LoginAsync(character.Guid, ct);
+        Assert.Contains((int)login.Location.Map, cluster.Workers[0].OwnedMaps);
+
+        await cluster.StartLateWorkerAsync(ct);
+        await SayAsync(session, ".go xyz " + KalimdorPoint, ct);
+
+        // A refused teleport sends nothing that ends this read, so it has its own bound: well past a prompt dial and the transfer itself, far short of the scenario's deadline.
+        using (var arrival = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            arrival.CancelAfter(TimeSpan.FromSeconds(90));
+            byte[] pending = await ReadUntilOpcodeAsync(session, WorldOpcode.SmsgTransferPending, arrival.Token);
+            Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(pending));
+            byte[] newWorld = await ReadUntilOpcodeAsync(session, WorldOpcode.SmsgNewWorld, arrival.Token);
+            Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(newWorld));
+        }
+
+        await session.SendAsync(WorldOpcode.MsgMoveWorldportAck, [], ct);
+
+        string guid = character.Guid.ToString(CultureInfo.InvariantCulture);
+        await WaitForCountAsync(cluster, Count("cluster_transfer_decision", $"character_guid = {guid} AND state = {(int)PlayerTransferDecisionState.Completed}"), expected: 1, ct);
+        Assert.Equal(1, await cluster.CharactersScalarAsync(Count("cluster_transfer_owner", $"character_guid = {guid} AND scope = {SqlText("worker:" + cluster.Workers[1].NodeId)} AND active_transfer IS NULL"), ct));
     }
 
     /// <summary>A SQL string literal for a node id the fixture generated (never player input); a quote is doubled all the same.</summary>

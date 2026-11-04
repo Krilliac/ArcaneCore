@@ -76,6 +76,98 @@ public sealed class GatewayCrossWorkerTeleportTests
     }
 
     [Fact]
+    public async Task ATeleportToAWorkerThatIsUpButBetweenLinkDials_WaitsForItsLink_AndThePlayerMoves()
+    {
+        // The race a starting gateway (or a restarting worker) runs: the target's listener opened just after a failed dial, so the worker is up and the link supervisor sits out
+        // its backoff (up to 30 s) with nobody to wake it. Until the link registers the target owns nothing for routing; a submit that answered from that moment refused the teleport
+        // with map-unassigned, the player saw "The teleport could not be completed." and no journal row existed.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token, kalimdorLinkBackoff: TimeSpan.FromSeconds(30));
+        await using WorldClient client = await cluster.EnterEastAsync("TELEBACKOFF", "Telebackoff", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.Gateway.Workers[1].Snapshot() is { Failures: > 0, Status: GatewayWorkerLinkStatus.Backoff }), cts.Token);
+        Assert.Null(cluster.Gateway.Workers[1].Link);
+
+        await cluster.KalimdorWorker.StartAsync(cts.Token);
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+
+        WorldFrame pending = await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token);
+        Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(pending.Payload));
+        WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
+        Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+        Guid transferId = cluster.Router.LastTransferId;
+        await Cluster.WaitUntilAsync(
+            async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+    }
+
+    [Fact]
+    public async Task ARefusalAfterTheSourceLinkBlippedDuringTheWait_ReachesTheSourceOnItsNewLink_AndEndsTheInFlightEntry()
+    {
+        // The worker's in-flight entry has no link-loss hook: only the gateway's answer ends it, and without one the character's far teleports stay blocked for InFlightExpiry.
+        // The Kalimdor worker never starts, so the submit waits out MapOwnerLinkWait; the first link's retry delay is short so the east link is back well before that.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token, kalimdorLinkBackoff: TimeSpan.FromSeconds(1));
+        await using WorldClient client = await cluster.EnterEastAsync("TELEBLIP", "Teleblip", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+        GatewayWorkerLink east = cluster.Gateway.Workers[0];
+        GatewayWorkerLink kalimdor = cluster.Gateway.Workers[1];
+        GatewaySessionLinkClient firstLink = Assert.IsType<GatewaySessionLinkClient>(east.Link);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        Assert.Equal(1, cluster.Router.InFlightCount);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(kalimdor.PromptDialWaiters == 1), cts.Token); // the submit took its link and is waiting
+
+        await east.DisposeLinkAsync();
+        await Cluster.WaitUntilAsync(() => Task.FromResult(east.Link is { } link && !ReferenceEquals(link, firstLink)), cts.Token);
+        Assert.Equal(1, kalimdor.PromptDialWaiters); // the link came back inside the wait, so the answer is still to come
+
+        using var answered = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        answered.CancelAfter(GatewayTransferService.MapOwnerLinkWait + TimeSpan.FromSeconds(30));
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.Router.InFlightCount == 0), answered.Token);
+    }
+
+    /// <summary>
+    /// Reads frames until one with <paramref name="opcode"/> arrives. A transfer is seconds of silence, and the mock client's 5 s bound on a whole search flakes under load (see
+    /// TestDeadlines in the mock client's tests), so only the wait for a frame's first byte is long here. A teleport that was refused sends nothing that ends this; the 60 s bound does.
+    /// </summary>
+    private static async Task<WorldFrame> ReadPatientlyAsync(WorldClient client, WorldOpcode opcode, CancellationToken token)
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bound.CancelAfter(TimeSpan.FromSeconds(60));
+        while (true)
+        {
+            await client.WaitForTrafficAsync(bound.Token);
+            WorldFrame frame = await client.ReadAsync(bound.Token);
+            if (frame.Opcode == (ushort)opcode)
+            {
+                return frame;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task TheWaitForAMapOwnersLink_EndsAtOnceForAnUnownedMap_AndAtItsTimeForAnOwnerThatStaysDown()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token, kalimdorLinkBackoff: TimeSpan.FromSeconds(30));
+
+        var unowned = System.Diagnostics.Stopwatch.StartNew();
+        Assert.False(await cluster.Gateway.WaitForMapOwnerLinkAsync(999, 0, TimeSpan.FromMinutes(1), cts.Token));
+        Assert.True(unowned.Elapsed < TimeSpan.FromSeconds(30), "a map no configured worker owns has nothing to wait for");
+
+        var down = System.Diagnostics.Stopwatch.StartNew();
+        Assert.False(await cluster.Gateway.WaitForMapOwnerLinkAsync(1, 0, TimeSpan.FromMilliseconds(300), cts.Token));
+        Assert.True(down.Elapsed >= TimeSpan.FromMilliseconds(250), $"the wait ended after {down.Elapsed.TotalMilliseconds:F0} ms, before its time");
+        Assert.Null(cluster.Gateway.Workers[1].Link);
+    }
+
+    [Fact]
     public async Task AWorldportAckReadBeforeTheRouteSwitch_AndRoutedAfterIt_ReachesTheKalimdorWorker()
     {
         // The client answers SMSG_NEW_WORLD (sent by the Kalimdor worker during the activation) at once, and the gateway's route switch runs right after the
@@ -238,7 +330,9 @@ public sealed class GatewayCrossWorkerTeleportTests
             Eastern.Services.GetRequiredService<ClusterFarTeleportFeature>().Router
             ?? throw new InvalidOperationException("the east worker built no far-teleport router");
 
-        public static async Task<Cluster> StartAsync(CancellationToken token)
+        /// <param name="token">Cancels the start.</param>
+        /// <param name="kalimdorLinkBackoff">When set, the Kalimdor worker's link listener is not started (the caller starts <see cref="KalimdorWorker"/>), only the east link is awaited, and this is the gateway's first reconnect delay (Gateway:LinkRetryDelay); both links are up and the delay is 100 ms when not given.</param>
+        public static async Task<Cluster> StartAsync(CancellationToken token, TimeSpan? kalimdorLinkBackoff = null)
         {
             SyntheticArcaneServer eastern = await SyntheticArcaneServer.StartAsync(
                 new SyntheticServerOptions { Configuration = WorkerScopeConfiguration(EastNode, "0") }, configureServices: null, token);
@@ -247,16 +341,22 @@ public sealed class GatewayCrossWorkerTeleportTests
             GatewayWorkerEndpoint? kalimdorWorker = null;
             GatewayServer? gateway = null;
             GatewayTransferService? service = null;
+            int kalimdorPort = ArcaneCore.TestSupport.LoopbackPorts.Next();
             try
             {
                 kalimdor = await SyntheticArcaneServer.StartAsync(
-                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory, Configuration = WorkerScopeConfiguration(KalimdorNode, "1") },
+                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory, Configuration = WorkerScopeConfiguration(KalimdorNode, "1", kalimdorPort) },
                     configureServices: null,
                     token);
                 eastern.World.Ownership = Owns("0");
                 kalimdor.World.Ownership = Owns("1");
                 eastWorker = await StartWorkerAsync(eastern, token);
-                kalimdorWorker = await StartWorkerAsync(kalimdor, token);
+                kalimdorWorker = kalimdor.Services.GetRequiredService<GatewayWorkerEndpoint>();
+                if (kalimdorLinkBackoff is null)
+                {
+                    await kalimdorWorker.StartAsync(token);
+                }
+
                 // The container's worker endpoint verifies the gateway's Warden posture, so the gateway must run the same Warden the container configured (as the production host does).
                 int realmId = eastern.Services.GetService<IOptions<GatewayWorkerOptions>>()?.Value.RealmId ?? new GatewayWorkerOptions().RealmId;
                 var warden = new GatewayWarden(
@@ -270,11 +370,11 @@ public sealed class GatewayCrossWorkerTeleportTests
                         BindAddress = IPAddress.Loopback.ToString(),
                         Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                         LinkSecret = Secret,
-                        LinkRetryDelay = TimeSpan.FromMilliseconds(100),
+                        LinkRetryDelay = kalimdorLinkBackoff ?? TimeSpan.FromMilliseconds(100),
                         Workers =
                         [
                             new GatewayWorkerEntry { NodeId = EastNode, Address = IPAddress.Loopback.ToString(), Port = eastWorker.Host!.BoundEndPoint.Port, Maps = [0] },
-                            new GatewayWorkerEntry { NodeId = KalimdorNode, Address = IPAddress.Loopback.ToString(), Port = kalimdorWorker.Host!.BoundEndPoint.Port, Maps = [1] },
+                            new GatewayWorkerEntry { NodeId = KalimdorNode, Address = IPAddress.Loopback.ToString(), Port = kalimdorPort, Maps = [1] },
                         ],
                         LoginWorker = EastNode,
                     }),
@@ -282,7 +382,15 @@ public sealed class GatewayCrossWorkerTeleportTests
                     warden: warden,
                     transfers: Options.Create(new GatewayTransferOptions { Enabled = true }));
                 await gateway.StartAsync(token);
-                await gateway.WaitForAllLinksAsync(token);
+                if (kalimdorLinkBackoff is null)
+                {
+                    await gateway.WaitForAllLinksAsync(token);
+                }
+                else
+                {
+                    await gateway.Workers[0].WaitForLinkAsync(token);
+                }
+
                 EfTransferDecisionStore store = eastern.Services.GetRequiredService<EfTransferDecisionStore>();
                 service = new GatewayTransferService(
                     gateway, store, store, new GatewayTransferOptions { Enabled = true }, loggers: eastern.Services.GetRequiredService<ILoggerFactory>());
@@ -432,7 +540,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             return id;
         }
 
-        private static Dictionary<string, string?> WorkerScopeConfiguration(string nodeId, string ownedMaps) => new()
+        private static Dictionary<string, string?> WorkerScopeConfiguration(string nodeId, string ownedMaps, int? workerPort = null) => new()
         {
             ["Cluster:Fencing:Enabled"] = "true",
             ["Cluster:Fencing:Scope"] = "Worker",
@@ -442,7 +550,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             ["Cluster:Worker:NodeId"] = nodeId,
             ["Cluster:Worker:OwnedMaps"] = ownedMaps,
             ["Cluster:Worker:AllowInstanceMaps"] = "false",
-            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["Cluster:Worker:Port"] = (workerPort ?? ArcaneCore.TestSupport.LoopbackPorts.Next()).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["Cluster:Worker:LinkSecret"] = Secret,
             ["Cluster:Worker:Transfers:Enabled"] = "true",
             ["Cluster:Node:Role"] = "MapWorker",
