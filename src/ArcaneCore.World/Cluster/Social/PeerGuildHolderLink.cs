@@ -24,6 +24,12 @@ public interface IGuildHolderTransport
 
     /// <summary>One bounded batch of the events queued for <paramref name="workerId"/>, oldest first; empty when there is none.</summary>
     IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId);
+
+    /// <summary>
+    /// True when a call can be made now: the holder is in process, or the peer link to it is open. False is the normal state before the link connects; callers check it instead of
+    /// calling, so nothing throws. A link that drops after the check may still throw. Never blocks. Defaults to true for a transport that is always in process.
+    /// </summary>
+    bool IsAuthorityReachable => true;
 }
 
 /// <summary>
@@ -383,7 +389,9 @@ public sealed class GuildHolderService(IRealmPresenceDirectory directory, ILogge
 /// <para>
 /// <see cref="TargetIgnores"/> is false: ignore lists live on the target's own worker and the directory does not carry them, so a guild invitation to an ignoring character is
 /// not refused on its behalf. A request whose send fails (link down, refusal) is dropped with a log line and its completion callback runs with false; while the last
-/// contact with the holder failed, <see cref="Forward"/> returns false (nothing sent) so the caller can answer the player.
+/// contact with the holder failed, or while <see cref="IGuildHolderTransport.IsAuthorityReachable"/> is false (the peer link is not up yet), <see cref="Forward"/> returns false
+/// (nothing queued) so the caller can answer the player; guild requests are not held for the link because a player is waiting on them. A request accepted just before the link
+/// dropped is refused the same way (callback false) with one log line per outage.
 /// </para>
 /// Ownership: owns the sender and pump tasks; <see cref="DisposeAsync"/> stops both. Thread-safety: all members are safe from any thread except where noted (Deliver, the
 /// replication calls and FindOnline are made on the holder's world thread, which is the contract of <see cref="IGuildHolderLink"/>).
@@ -423,6 +431,7 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     private long _queueDropped;
     private long _sendFailed;
     private int _unreachable;
+    private int _outageLogged;
     private int _started;
     private int _disposed;
 
@@ -469,8 +478,10 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     public bool Forward(GuildRequest request, Action<bool>? completed)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (Volatile.Read(ref _disposed) != 0 || IsHolder || Volatile.Read(ref _unreachable) != 0)
+        if (Volatile.Read(ref _disposed) != 0 || IsHolder || Volatile.Read(ref _unreachable) != 0 || !_transport.IsAuthorityReachable)
         {
+            // A clean refusal: nothing is queued, no callback is kept, and the caller answers the player. Guild requests are interactive (a typed command, a petition turn-in), so
+            // making the player wait for a link that may be seconds away is worse than telling them now.
             return false;
         }
 
@@ -562,6 +573,24 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
                         continue;
                     }
 
+                    if (!_transport.IsAuthorityReachable)
+                    {
+                        // The link went away after Forward accepted this request: refuse it cleanly (callback false) and log once per outage, not per request.
+                        Interlocked.Increment(ref _sendFailed);
+                        if (Interlocked.Exchange(ref _outageLogged, 1) == 0)
+                        {
+                            _logger.LogInformation("Guild requests are refused: this node has no link to the Social holder (first was {Kind} of {Actor})", pending.Request.Kind, pending.Request.Actor.Value);
+                        }
+
+                        Complete(pending.RequestId, false);
+                        continue;
+                    }
+
+                    if (Interlocked.Exchange(ref _outageLogged, 0) != 0)
+                    {
+                        _logger.LogInformation("Guild requests resume: the Social holder is reachable again ({Failed} requests refused so far)", SendFailed);
+                    }
+
                     try
                     {
                         _transport.ForwardGuildRequest(_workerId, pending.RequestId, pending.Request);
@@ -592,7 +621,7 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     public int PumpOnce()
     {
         SweepWaiting();
-        if (IsHolder || _world is null)
+        if (IsHolder || _world is null || !_transport.IsAuthorityReachable)
         {
             return 0;
         }

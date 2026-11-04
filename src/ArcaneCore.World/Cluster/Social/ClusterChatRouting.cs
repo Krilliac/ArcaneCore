@@ -251,6 +251,7 @@ public sealed class ClusterChatRouting : IAsyncDisposable
     private readonly string _workerId;
     private readonly string _gatewayId;
     private readonly Func<ulong, long> _registeredGeneration;
+    private readonly Func<bool>? _authorityReachable;
     private readonly ILogger _logger;
     private readonly Channel<Action> _queue = Channel.CreateBounded<Action>(
         new BoundedChannelOptions(MaxQueuedOperations) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
@@ -271,13 +272,15 @@ public sealed class ClusterChatRouting : IAsyncDisposable
     /// <param name="workerId">This worker's id, as published in presence.</param>
     /// <param name="gatewayId">The gateway id published in presence.</param>
     /// <param name="registeredGeneration">The session generation this worker's presence registration of a character holds, or 0 when it has none (the publisher's registration).</param>
+    /// <param name="authorityReachable">Whether the authority can be called now (null: always). While false the pump drains nothing and throws nothing, instead of failing on every pass before the peer link connects.</param>
     public ClusterChatRouting(
         IClusterSocialRouter router,
         IRealmPresenceDirectory directory,
         string workerId,
         string gatewayId,
         Func<ulong, long> registeredGeneration,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<bool>? authorityReachable = null)
     {
         ArgumentNullException.ThrowIfNull(router);
         ArgumentNullException.ThrowIfNull(directory);
@@ -289,6 +292,7 @@ public sealed class ClusterChatRouting : IAsyncDisposable
         _workerId = workerId;
         _gatewayId = gatewayId;
         _registeredGeneration = registeredGeneration;
+        _authorityReachable = authorityReachable;
         _logger = logger ?? NullLogger.Instance;
         _sender = Task.Run(RunSenderAsync, CancellationToken.None);
     }
@@ -575,7 +579,7 @@ public sealed class ClusterChatRouting : IAsyncDisposable
         // Chat is delivered through the worker queue. The gateway copy of each delivery has no consumer in a cluster realm (every worker shares one gateway id); the router bounds that
         // queue itself (InMemoryClusterSocialRouter.MaxGatewayQueueDeliveries), so nothing is drained or retained here.
         Action<ClusterChatDelivery>? deliver = Deliver;
-        if (deliver is null)
+        if (deliver is null || _authorityReachable?.Invoke() == false)
         {
             return 0;
         }

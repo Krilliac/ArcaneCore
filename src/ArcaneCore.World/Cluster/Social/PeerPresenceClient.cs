@@ -30,6 +30,9 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
         return read(r);
     }
 
+    /// <summary>True while the peer link to the holder is admitted and open (an in-memory read, never blocks).</summary>
+    public bool IsAuthorityReachable => link.IsConnected;
+
     // ---- IGroupAuthorityTransport --------------------------------------------------------------------------------------------------------------
 
     public void ExecuteGroupCommand(string workerId, GroupCommand command)
@@ -239,7 +242,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 /// <summary>
 /// The one presence object a node registers for <see cref="IRealmPresenceDirectory"/>, <see cref="IClusterSocialRouter"/> and <see cref="IPresenceAuthority"/>: each call goes to the
 /// local <see cref="PresenceHolderService"/> while <c>holdsSocial</c> says this node holds the Social lease (always true in Combined mode: the in-process fast path), and to the
-/// <see cref="PeerPresenceClient"/> of the holder otherwise. With no peer client and no lease the call throws <see cref="InvalidOperationException"/> (the publisher retries).
+/// <see cref="PeerPresenceClient"/> of the holder otherwise. With no peer client and no lease a call throws <see cref="InvalidOperationException"/> (a misuse: ask <see cref="IsAuthorityReachable"/> first, as the publisher and the routers do).
 /// Thread-safe if <c>holdsSocial</c> and <c>remote</c> are.
 /// </summary>
 public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> holdsSocial, Func<PeerPresenceClient?> remote)
@@ -251,6 +254,13 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
 
     private IClusterSocialRouter Router => holdsSocial() ? local.Router : Remote;
 
+    /// <summary>
+    /// True when a call can be made now: this node holds the Social lease (the in-process fast path), or it has a peer client whose link to the holder is open. False is the normal
+    /// state before the link connects and while the holder is away: callers check it and wait, so nothing is thrown for it. Never blocks; safe on any thread.
+    /// </summary>
+    public bool IsAuthorityReachable => holdsSocial() || remote() is { IsAuthorityReachable: true };
+
+    // Reaching this without checking IsAuthorityReachable first is a misuse (or a link that vanished between the check and the call); the callers handle the throw as a transport failure.
     private PeerPresenceClient Remote => remote() ?? throw new InvalidOperationException("this node does not hold the Social lease and has no peer link to the node that does");
 
     public Task<PresenceUpsertReply> RegisterAsync(RealmPresenceEntry entry, CancellationToken cancellationToken = default) => Authority.RegisterAsync(entry, cancellationToken);
