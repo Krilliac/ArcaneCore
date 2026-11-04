@@ -363,6 +363,50 @@ public sealed class ClusterGroupRoutingHoldTests
     }
 
     [Fact]
+    public async Task A_command_forwarded_after_the_hold_never_expires_behind_a_slow_walk_of_stale_logins()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Login, 1));
+        await authority.Probed.WaitAsync(Safety);
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+
+        authority.Block();
+        authority.SetReachable(true);
+        await authority.Executing.WaitAsync(Safety); // the stale Login is being sent: the backlog is still being walked
+        routing.Forward(Command(GroupCommandKind.Leave, 2)); // the link is back: this one never sat through the outage
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.Release();
+
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new ulong[] { 1, 2 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(0, routing.Expired);
+    }
+
+    [Fact]
+    public async Task A_flush_marker_does_not_end_the_backlog_while_stale_commands_wait_behind_it()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await authority.Probed.WaitAsync(Safety);
+        Task first = routing.FlushAsync();
+        routing.Forward(Command(GroupCommandKind.Leave, 2));
+        routing.Forward(Command(GroupCommandKind.Kick, 3));
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+
+        authority.SetReachable(true);
+        await first.WaitAsync(Safety);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Empty(authority.Executed);
+        Assert.Equal(3, routing.Expired);
+    }
+
+    [Fact]
     public async Task A_slow_authority_with_the_link_up_expires_nothing()
     {
         var authority = new SwitchableAuthority();

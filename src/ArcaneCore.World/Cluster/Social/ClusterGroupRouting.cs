@@ -255,6 +255,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
     // Sender-task state of the current outage (only the sender task touches these).
     private bool _resumePending;
+    private long _holdEndedAt;
     private long _outageQueueDropped;
     private long _outageRelayDropped;
     private long _outageExpired;
@@ -345,7 +346,11 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
                 {
                     if (ReferenceEquals(queued, FlushMarker))
                     {
-                        ReportResume(reader);
+                        if (reader.Count == 0)
+                        {
+                            ReportResume(reader); // with commands behind the marker the backlog is not over
+                        }
+
                         ReleaseFlushWaiters();
                         continue;
                     }
@@ -364,8 +369,8 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
                         inHand = 0;
                     }
 
-                    // Ages fall towards the back of the queue, so the first command under the limit ends the outage's backlog. Only that backlog can expire.
-                    bool stale = _resumePending && _time.GetElapsedTime(queued.EnqueuedAt) > MaxHeldCommandAge;
+                    // Ages fall towards the back of the queue, so the first command under the limit, or queued after the hold ended, ends the outage's backlog. Only that backlog can expire.
+                    bool stale = _resumePending && queued.EnqueuedAt < _holdEndedAt && _time.GetElapsedTime(queued.EnqueuedAt) > MaxHeldCommandAge;
                     if (stale && command.Kind is not (GroupCommandKind.Login or GroupCommandKind.Logout))
                     {
                         Interlocked.Increment(ref _expired);
@@ -454,10 +459,11 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
             await Task.Delay(HoldPoll, _stop.Token).ConfigureAwait(false);
         }
 
+        _holdEndedAt = _time.GetTimestamp();
         _resumePending = true;
     }
 
-    /// <summary>Writes the once-per-outage resume line (if an outage is waiting to be reported): reached when the first command under the age limit is about to be sent, when the queue runs dry, at a flush marker, or when the next outage starts.</summary>
+    /// <summary>Writes the once-per-outage resume line (if an outage is waiting to be reported): reached when the first command under the age limit is about to be sent, when the queue runs dry (a flush marker with nothing behind it included), or when the next outage starts.</summary>
     private void ReportResume(ChannelReader<Queued> reader)
     {
         if (!_resumePending)
