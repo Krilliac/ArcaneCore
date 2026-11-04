@@ -255,7 +255,7 @@ public sealed class WorkerTransferSource(
     {
         ArgumentNullException.ThrowIfNull(supersededToken);
         cancellationToken.ThrowIfCancellationRequested();
-        Suspension suspension;
+        Suspension? suspension = null;
         lock (_gate)
         {
             if (!_suspended.TryGetValue(characterGuid, out Suspension? found))
@@ -264,27 +264,32 @@ public sealed class WorkerTransferSource(
                 {
                     return; // a roll-forward repeats the step
                 }
-
-                throw new InvalidOperationException($"character {characterGuid} is not suspended on this worker; nothing to retire for transfer '{transferId}'");
             }
-
-            if (found.TransferId != transferId)
+            else if (found.TransferId != transferId)
             {
                 throw new InvalidOperationException($"character {characterGuid} is suspended by transfer '{found.TransferId}', not '{transferId}'");
             }
-
-            // Same as resume: the coordinator's token is authoritative for the commit, so a difference from the captured world token is logged
-            // and the committed roll-forward still completes.
-            if (!Equals(found.Token, supersededToken))
+            else
             {
-                _logger.LogWarning("Transfer {TransferId} retires character {CharacterGuid} under superseded token {Superseded}, captured under {Captured}",
-                    transferId, characterGuid, supersededToken, found.Token);
-            }
+                // Same as resume: the coordinator's token is authoritative for the commit, so a difference from the captured world token is logged
+                // and the committed roll-forward still completes.
+                if (!Equals(found.Token, supersededToken))
+                {
+                    _logger.LogWarning("Transfer {TransferId} retires character {CharacterGuid} under superseded token {Superseded}, captured under {Captured}",
+                        transferId, characterGuid, supersededToken, found.Token);
+                }
 
-            // Release the claim before refusing saves: from here no path can resume or re-add the entity.
-            _suspended.Remove(characterGuid);
-            _retired.Add(transferId);
-            suspension = found;
+                // Release the claim before refusing saves: from here no path can resume or re-add the entity.
+                _suspended.Remove(characterGuid);
+                _retired.Add(transferId);
+                suspension = found;
+            }
+        }
+
+        if (suspension is null)
+        {
+            await RetireWithoutSuspensionAsync(transferId, characterGuid, cancellationToken).ConfigureAwait(false);
+            return;
         }
 
         // The hold set at capture stays; quarantine makes the refusal explicit and survives a later ResumeCharacter of the hold.
@@ -293,6 +298,39 @@ public sealed class WorkerTransferSource(
         // The retired entity never ran the logout teardown (capture detached it without it): do it now so the PlayerLoggingOut subscribers
         // forget the guid and the Player is released. The claim is already gone, so this runs at most once per transfer.
         await world.InvokeAsync(() => world.RetireDetachedPlayer(suspension.Player), CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Retire of a character this process holds no suspension of. The suspension is memory-only, so a source that restarted after the capture has none, and its frozen player died with
+    /// the old process: there is nothing to tear down, and the step is done once this world can no longer write the character. Refusing here would stop the committed roll-forward at
+    /// its first step and leave <c>active_transfer</c> set for good. Callers reach this only for a transfer the journal says is committed (the capture was durable before the commit),
+    /// and while that row's <c>active_transfer</c> is set the login claim refuses the character, so nothing on this worker can bring it online before the roll-forward ends.
+    /// The check and the refusal are one step on the world thread, where a login enters the world: an online character is not the player the transfer froze, so that is an error.
+    /// </summary>
+    private async Task RetireWithoutSuspensionAsync(Guid transferId, ulong characterGuid, CancellationToken cancellationToken)
+    {
+        var guid = new ObjectGuid(characterGuid);
+        bool online = await world.InvokeAsync(() =>
+        {
+            if (world.FindOnlinePlayer(guid) is not null)
+            {
+                return true;
+            }
+
+            persistence.Refuse(checked((int)guid.Low));
+            return false;
+        }, cancellationToken).ConfigureAwait(false);
+        if (online)
+        {
+            throw new InvalidOperationException($"character {characterGuid} is online on this worker but not suspended; nothing to retire for transfer '{transferId}'");
+        }
+
+        lock (_gate)
+        {
+            _retired.Add(transferId);
+        }
+
+        _logger.LogInformation("Transfer {TransferId}: character {CharacterGuid} has no suspension on this worker and is not online here (the worker restarted after the capture); retired", transferId, characterGuid);
     }
 
     private Capture CaptureOnWorldThread(
