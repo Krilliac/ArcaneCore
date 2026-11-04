@@ -59,7 +59,9 @@ public sealed class ExtraCommandTests
 
         Assert.Contains(await RunAsync(admin, $".alter auraduration {StackingSpell} 10"), l => l.EndsWith("10.0s left of 1.0m.", StringComparison.Ordinal));
         SpellAuraHolder holder = await host.OnWorldAsync(() => spells.GetAuras(me).Single(h => h.Spell.Id == StackingSpell));
-        Assert.InRange(await host.OnWorldAsync(() => holder.Duration), 9_000, 10_000);
+        // The host runs on the real clock, so the aura keeps ticking down while the test runs: the reply above pins the 10.0s the edit set, and
+        // here only "still running, and no more than the edit" is asserted (a lower bound of 9 s failed once a loaded run stalled for a second).
+        Assert.InRange(await host.OnWorldAsync(() => holder.Duration), 1, 10_000);
 
         Assert.Contains(await RunAsync(admin, $".alter aurastacks {StackingSpell} 3"), l => l.EndsWith("3 of 5 stacks.", StringComparison.Ordinal));
         Assert.Equal(3, await host.OnWorldAsync(() => (int)holder.StackAmount));
