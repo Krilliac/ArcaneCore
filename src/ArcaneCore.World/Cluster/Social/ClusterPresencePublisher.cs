@@ -63,6 +63,7 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
     private readonly Action<int> _kickAccount;
     private readonly ILogger _logger;
     private readonly TimeProvider _time;
+    private readonly Func<bool>? _authorityReachable;
     private readonly Lock _gate = new();
     private readonly SemaphoreSlim _flushing = new(1, 1);
     private readonly Dictionary<ulong, Pending> _pending = [];
@@ -77,7 +78,9 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
     /// <param name="workerId">This worker's id (<see cref="RealmPresenceEntry.WorkerId"/>).</param>
     /// <param name="gatewayId">The gateway id stamped on entries (<see cref="RealmPresenceEntry.GatewayId"/>).</param>
     /// <param name="kickAccount">Disconnects this node's session of an account (<c>SessionRegistry.KickSuperseded</c>); called on the flush thread.</param>
-    public ClusterPresencePublisher(IPresenceAuthority authority, string workerId, string gatewayId, Action<int> kickAccount, ILogger? logger = null, TimeProvider? time = null)
+    /// <param name="authorityReachable">Whether the authority can be called now (null: always). While false a flush returns false without touching the pending operations or calling the authority, so the normal not-yet-linked state throws nothing.</param>
+    public ClusterPresencePublisher(
+        IPresenceAuthority authority, string workerId, string gatewayId, Action<int> kickAccount, ILogger? logger = null, TimeProvider? time = null, Func<bool>? authorityReachable = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
@@ -89,6 +92,7 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
         _kickAccount = kickAccount;
         _logger = logger ?? NullLogger.Instance;
         _time = time ?? TimeProvider.System;
+        _authorityReachable = authorityReachable;
         _lastVersion = _time.GetUtcNow().UtcTicks;
     }
 
@@ -253,6 +257,11 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
         await _flushing.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_authorityReachable?.Invoke() == false)
+            {
+                return false; // not linked to the holder yet: every operation stays pending and the next flush retries, with nothing thrown
+            }
+
             KeyValuePair<ulong, Pending>[] batch;
             lock (_gate)
             {

@@ -309,7 +309,11 @@ public sealed class PetitionManager
         if (_context.Guilds.Link is { IsHolder: false } link)
         {
             // The petition and the signer's guild state are the holder's: it checks, signs and answers the signer and the owner wherever they are online.
-            link.Forward(new GuildRequest(GuildRequestKind.PetitionSign, player.Guid, Item: itemGuid.Value), null);
+            if (!link.Forward(new GuildRequest(GuildRequestKind.PetitionSign, player.Guid, Item: itemGuid.Value), null))
+            {
+                SendHolderUnreachable(player);
+            }
+
             return;
         }
 
@@ -455,13 +459,17 @@ public sealed class PetitionManager
         {
             // The holder founds the guild and drops the petition; the charter is destroyed and the answer sent here once it did.
             var request = new GuildRequest(GuildRequestKind.PetitionTurnIn, player.Guid, Item: itemGuid.Value, Id: petition.Id);
-            link.Forward(request, founded =>
+            if (!link.Forward(request, founded =>
             {
                 if (founded)
                 {
                     FinishTurnIn(player, itemGuid);
                 }
-            });
+            }))
+            {
+                SendHolderUnreachable(player);
+            }
+
             return;
         }
 
@@ -659,8 +667,19 @@ public sealed class PetitionManager
             return;
         }
 
-        link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, player.Guid, Item: itemGuid.Value, A: target.Low, B: held ? 1u : 0u), null);
+        if (!link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, player.Guid, Item: itemGuid.Value, A: target.Low, B: held ? 1u : 0u), null))
+        {
+            SendHolderUnreachable(player);
+        }
     }
+
+    /// <summary>
+    /// The holder could not be reached, so a forwarded sign, offer or turn-in did not happen: answer the player with the guild "internal error" result, the same answer
+    /// <see cref="GuildManager"/> gives a forwarded guild request that cannot be sent. ERR_GUILD_INTERNAL = 0x01 is in vmangos Guild.h:99 (CommandErrors); no vmangos handler sends it,
+    /// so this is the nearest existing result rather than a retail behaviour, and the client shows its generic guild error text.
+    /// </summary>
+    private static void SendHolderUnreachable(Player player)
+        => SendResult(player, GuildCommand.Create, string.Empty, GuildCommandError.Internal);
 
     /// <summary>
     /// The holder's half of <see cref="Offer"/> for a target on another worker: the same checks in the same order (team, guilded, invited, then the charter), against the
@@ -826,13 +845,19 @@ public sealed class PetitionManager
 
     private void Delete(Petition petition)
     {
-        _petitions.Remove(petition.Id);
         if (_context.Guilds.Link is { IsHolder: false } link)
         {
+            if (!link.CanForward)
+            {
+                return; // the holder cannot be told: keep the petition so this replica and the holder do not diverge (the charter check runs again at the next login)
+            }
+
+            _petitions.Remove(petition.Id);
             link.Forward(new GuildRequest(GuildRequestKind.PetitionDelete, ObjectGuid.Player(petition.OwnerId), Id: petition.Id), null);
             return;
         }
 
+        _petitions.Remove(petition.Id);
         Persistence?.DeletePetition(petition.Id);
         Publish(petition.Id, null);
     }

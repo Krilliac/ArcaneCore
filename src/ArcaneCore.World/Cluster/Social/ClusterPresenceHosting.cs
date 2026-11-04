@@ -54,12 +54,14 @@ public static class ClusterPresenceHosting
                 ?? sp.GetService<IOptions<GatewayWorkerOptions>>()?.Value.NodeId
                 ?? "world";
             SessionRegistry sessions = sp.GetRequiredService<SessionRegistry>();
+            LeaseRoutedPresence presence = sp.GetRequiredService<LeaseRoutedPresence>();
             return new ClusterPresencePublisher(
                 sp.GetRequiredService<IPresenceAuthority>(),
                 workerId,
                 LocalGatewayId,
                 account => sessions.KickSuperseded(account),
-                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterPresencePublisher>());
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterPresencePublisher>(),
+                authorityReachable: () => presence.IsAuthorityReachable);
         });
         services.AddHostedService(sp => new PresencePublisherStarter(sp.GetRequiredService<ClusterPresencePublisher>()));
         if (services.Any(d => d.ServiceType == typeof(RealmAuthorityLeaseKeeper)))
@@ -69,13 +71,15 @@ public static class ClusterPresenceHosting
             {
                 string workerId = sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId;
                 ClusterPresencePublisher publisher = sp.GetRequiredService<ClusterPresencePublisher>();
+                LeaseRoutedPresence presence = sp.GetRequiredService<LeaseRoutedPresence>();
                 return new ClusterChatRouting(
                     sp.GetRequiredService<IClusterSocialRouter>(),
                     sp.GetRequiredService<IRealmPresenceDirectory>(),
                     workerId,
                     LocalGatewayId,
                     guid => publisher.TryGetRegistration(guid, out long generation) ? generation : 0,
-                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterChatRouting>());
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterChatRouting>(),
+                    () => presence.IsAuthorityReachable);
             });
             services.AddHostedService(sp => new ChatRoutingStarter(sp.GetRequiredService<ClusterChatRouting>()));
 
