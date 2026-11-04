@@ -277,6 +277,13 @@ public sealed class PlayerbotTradeDeskTests
             await HelpTestKit.UntilAsync(() => TradeAsync(player).Result.Opened, "the bot to open the trade window");
         }
 
+        /// <summary>The player puts <paramref name="gold"/> in the window and waits until the server has applied it. An accept in the same wall-clock second as the side's last change is bounced, so <see cref="AcceptAsync"/> has to count its wait from the server applying the change, not from the packet being sent.</summary>
+        public async Task SetGoldAsync(uint gold)
+        {
+            await Customer!.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(gold));
+            await HelpTestKit.UntilAsync(() => TradeAsync().Result.CustomerGold == gold, $"the server to apply the player's gold {gold}");
+        }
+
         /// <summary>An accept that follows a change by less than a second is bounced by the server (scam prevention), so the player waits it out.</summary>
         public async Task AcceptAsync(WorldTestClient client)
         {
@@ -308,8 +315,8 @@ public sealed class PlayerbotTradeDeskTests
             Assert.True(quote.Ok, quote.Refusal.ToString());
             await OpenWindowAsync(Customer!);
             await HelpTestKit.UntilAsync(() => TradeAsync().Result.BotItems == 1, "the bot to put the item in");
-            await Customer!.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price));
-            await AcceptAsync(Customer);
+            await SetGoldAsync(Price);
+            await AcceptAsync(Customer!);
             await HelpTestKit.UntilAsync(() => !TradeAsync().Result.Exists, "the sale to complete");
             await HelpTestKit.UntilAsync(() => Ledger(CustomerGuid) is { FairDeals: > 0 }, "the bot to record the fair deal");
         }
@@ -388,8 +395,8 @@ public sealed class PlayerbotTradeDeskTests
         Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgSetTradeItem));
         Assert.Equal(0u, (await scene.TradeAsync()).BotGold);
 
-        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price));
-        await scene.AcceptAsync(scene.Customer);
+        await scene.SetGoldAsync(Price);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the window to complete");
         await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the fair deal to be recorded");
 
@@ -516,8 +523,8 @@ public sealed class PlayerbotTradeDeskTests
         await scene.OpenWindowAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotItems == 1, "the bot to put the item in");
 
-        await scene.Customer!.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price - 1));
-        await scene.AcceptAsync(scene.Customer);
+        await scene.SetGoldAsync(Price - 1);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.CustomerAccepted, "the player's accept to reach the server");
         // The hold is 1.5 s: wait well past it.
         Assert.False(await Scene.WaitWhileAsync(() => scene.BotSent(WorldOpcode.CmsgAcceptTrade) > 0, 3000), "the bot accepted a window that is short of gold");
@@ -530,8 +537,8 @@ public sealed class PlayerbotTradeDeskTests
         Assert.Equal(50u, await scene.MoneyAsync(BotName));
 
         // Control: the full price; the player accepts again (a change cleared the accepts).
-        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price));
-        await scene.AcceptAsync(scene.Customer);
+        await scene.SetGoldAsync(Price);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the paid window to complete");
         Assert.Equal(0u, await scene.CountAsync(BotName, DealEntry));
         Assert.Equal(1u, await scene.CountAsync(CustomerName, DealEntry));
@@ -606,7 +613,7 @@ public sealed class PlayerbotTradeDeskTests
         await scene.Customer.SendAsync(WorldOpcode.CmsgClearTradeItem, [0]);
         await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeItem, swappedItem);
         await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result is { BotGold: 0, CustomerItems: 1 }, "the bot to take its gold back");
-        await scene.AcceptAsync(scene.Customer);
+        await scene.AcceptAsync(scene.Customer!);
         Assert.False(await Scene.WaitWhileAsync(() => scene.BotSent(WorldOpcode.CmsgAcceptTrade) > 1 || !scene.TradeAsync().Result.Exists, 3000), "the bot accepted, or the window completed, with the swapped item");
         Trade trade = await scene.TradeAsync();
         Assert.True(trade.Exists);
@@ -847,8 +854,8 @@ public sealed class PlayerbotTradeDeskTests
             await scene.Customer!.SendAsync(WorldOpcode.CmsgBeginTrade, []);
             await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Opened, "the window to open");
             await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotItems == 1, "the bot to put the item in");
-            await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(900));
-            await scene.AcceptAsync(scene.Customer);
+            await scene.SetGoldAsync(900);
+            await scene.AcceptAsync(scene.Customer!);
             await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the discounted sale to complete");
             await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the sale to be recorded");
             Assert.Equal(50u + 900u, await scene.MoneyAsync(BotName));
@@ -921,7 +928,7 @@ public sealed class PlayerbotTradeDeskTests
 
         Assert.True(accepted, "the bot never accepted the matching window");
         Assert.Equal(Price, (await scene.TradeAsync()).BotGold);
-        await scene.AcceptAsync(scene.Customer);
+        await scene.AcceptAsync(scene.Customer!);
         for (int i = 0; i < 100; i++)
         {
             if (await scene.GratitudePassUnlessSettledAsync(now += 100)) break;
@@ -988,7 +995,7 @@ public sealed class PlayerbotTradeDeskTests
 
         Assert.True(accepted, "the bot never accepted the corrected window");
         Assert.Equal(Price, (await scene.TradeAsync()).BotGold);
-        await scene.AcceptAsync(scene.Customer);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the sale to complete");
         Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgAcceptTrade));
         Assert.Equal(5000u - Price, await scene.MoneyAsync(BotName));
@@ -1111,8 +1118,8 @@ public sealed class PlayerbotTradeDeskTests
         await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotItems == 1, "the bot to put the item in");
         PlayerbotTradeClaim windowClaim = await scene.ClaimAsync();
         Assert.True(await scene.DeskOwnsAsync(), $"owner {windowClaim.Owner} partner {windowClaim.Partner} state {scene.Desk.StateOf(scene.Bot, scene.CustomerGuid)}");
-        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price));
-        await scene.AcceptAsync(scene.Customer);
+        await scene.SetGoldAsync(Price);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the deal to complete");
         Assert.Equal(0u, await scene.CountAsync(BotName, DealEntry));
         Assert.Equal(1u, await scene.CountAsync(CustomerName, DealEntry));
@@ -1154,8 +1161,8 @@ public sealed class PlayerbotTradeDeskTests
         Assert.True((await scene.TradeAsync()).Exists, "CancelAllTips cancelled the desk's window");
         Assert.Equal(PlayerbotTradeOwner.Desk, (await scene.ClaimAsync()).Owner);
 
-        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(Price));
-        await scene.AcceptAsync(scene.Customer);
+        await scene.SetGoldAsync(Price);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the deal to complete");
         Assert.Equal(1u, await scene.CountAsync(CustomerName, DealEntry));
         Assert.Equal(0, scene.BotSent(WorldOpcode.CmsgCancelTrade));
@@ -1405,7 +1412,7 @@ public sealed class PlayerbotTradeDeskTests
 
         Assert.True(accepted, "the desk never accepted the buy window");
         Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgSetTradeGold)); // the desk's gold only: the fee leg put none in
-        await scene.AcceptAsync(scene.Customer);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the desk sale to complete");
         await HelpTestKit.UntilAsync(() => scene.ClaimAsync().Result.Owner == PlayerbotTradeOwner.None, "the desk to release the slot");
         Assert.Equal(50_000u - Price, await scene.MoneyAsync(BotName));
@@ -1504,7 +1511,7 @@ public sealed class PlayerbotTradeDeskTests
         bool accepted = false;
         for (int i = 0; i < 80 && !accepted; i++) { await scene.PayAsync(leg, request, SecondCustomerName, now += 100); accepted = (await scene.TradeAsync()).BotAccepted; await Task.Delay(100); }
         Assert.True(accepted, "desk never accepted");
-        await scene.AcceptAsync(scene.Customer);
+        await scene.AcceptAsync(scene.Customer!);
         await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "sale");
         await HelpTestKit.UntilAsync(() => !scene.BotHasTradeAsync().Result, "closed");
         Assert.Equal(50_000u - Price, await scene.MoneyAsync(BotName));
