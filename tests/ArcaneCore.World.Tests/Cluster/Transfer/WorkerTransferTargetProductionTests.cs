@@ -126,7 +126,7 @@ public sealed class WorkerTransferTargetProductionTests
         (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERARRIVE", "Arriveone", 0, 100f);
         await using AsyncServiceScope ownedScope = scope;
         TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session), new WorldSessionTransferEntry());
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session), new WorldSessionTransferEntry(host.WorldServices));
         Guid id = Guid.NewGuid();
         var at = new TransferPosition(-8949f, -132f, 83f, 0f);
         PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, at);
@@ -156,6 +156,38 @@ public sealed class WorkerTransferTargetProductionTests
         Assert.Equal(0u, player.Map!.MapId);
         Assert.Equal(TargetToken, player.CharacterOwnership);
         Assert.False(host.SaveQueue.IsHeld(character.Id));
+    }
+
+    [Fact]
+    public async Task ASessionThatClosesDuringTheArrival_StillResumesTheSaves_SoTheLogoutSnapshotIsWritten()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERCLOSED", "Closedone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session), new WorldSessionTransferEntry(host.WorldServices));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
+        ObjectGuid guid = new(bundle.CharacterGuid);
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
+        Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
+        Assert.Equal(TeleportStage.Far, await host.World.InvokeAsync(() => teleports.StageOf(player)));
+
+        // The character comes back to a worker it left earlier, whose save queue refuses it since that retire; only the arrival lifts that.
+        host.SaveQueue.QuarantineCharacter(character.Id);
+
+        // The client is gone before its worldport ack: the session's scope ends at once, the logout runs later on the world thread.
+        await scope.DisposeAsync();
+        await host.World.InvokeAsync(() =>
+        {
+            host.World.RemovePlayer(player);
+            return true;
+        });
+
+        Assert.False(host.SaveQueue.IsQuarantined(character.Id));
+        await WorldTestHost.WaitForAsync(() => host.Characters.SaveCount > 0, "the logout snapshot to be written");
     }
 
     private sealed class RecordingOutput : IRemoteSessionOutput

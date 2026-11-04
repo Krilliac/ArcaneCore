@@ -124,7 +124,7 @@ public sealed class DeferredShadowLoadTests
         Func<PlayerTransferBundle, WorldSession?> sessions = AdoptedSession(rig.Acceptor);
         var loader = new CountingLoader(new CharacterHooksShadowLoader(sessions), failFirstLoads);
         var target = new WorkerTransferTarget(
-            Target, rig.Host.World, loader, new WorldSessionTransferEntry(), sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
+            Target, rig.Host.World, loader, new WorldSessionTransferEntry(rig.Host.WorldServices), sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
             offlineArrival: offline ? new CharacterStoreOfflineArrival(rig.Host.WorldServices.GetRequiredService<IServiceScopeFactory>()) : null)
         {
             SessionOpenGrace = sessionOpenGrace ?? TimeSpan.FromMilliseconds(200),

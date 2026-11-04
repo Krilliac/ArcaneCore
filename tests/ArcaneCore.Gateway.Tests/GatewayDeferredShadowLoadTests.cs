@@ -316,7 +316,7 @@ public sealed class GatewayDeferredShadowLoadTests
             }
 
             var target = new WorkerTransferTarget(
-                nodeId, world, new CharacterHooksShadowLoader(Adopted), new WorldSessionTransferEntry(), admission, WorkerTransferHosting.MaxTargetReservations, host.Incarnation);
+                nodeId, world, new CharacterHooksShadowLoader(Adopted), new WorldSessionTransferEntry(services), admission, WorkerTransferHosting.MaxTargetReservations, host.Incarnation);
             var transfer = new WorkerControlTransfer(
                 services.GetRequiredService<ITransferDecisionStore>(), null, target, () => admission.IsOpen, () => WorkerTransferHosting.MaxTargetReservations - target.ReservedCount);
             return new WorkerControlService(

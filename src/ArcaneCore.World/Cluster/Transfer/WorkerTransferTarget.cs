@@ -163,7 +163,8 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
 /// Production <see cref="ITransferSessionEntry"/> over the adopted <see cref="WorldSession"/> of the player (the shadow was built with it).
 /// World thread. <see cref="TryAttach"/> needs the adopted session in <see cref="SessionState.CharacterSelect"/> (the same gate as a login).
 /// </summary>
-public sealed class WorldSessionTransferEntry : ITransferSessionEntry
+/// <param name="services">The world's root provider. The saves resume through it, not through the session's: a client that leaves during the arrival ends the session's scope before the logout abandons the arrival on the world thread.</param>
+public sealed class WorldSessionTransferEntry(IServiceProvider services) : ITransferSessionEntry
 {
     public bool TryAttach(Player player)
     {
@@ -185,15 +186,11 @@ public sealed class WorldSessionTransferEntry : ITransferSessionEntry
     public void ResumeSaves(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (player.Session is not WorldSession session)
-        {
-            return;
-        }
 
         // As the login does once the player is in its map: the saves held for the character since capture resume.
         int id = checked((int)player.Guid.Low);
-        session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(id);
-        session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(id);
+        services.GetService<CharacterSaveQueue>()?.ResumeCharacter(id);
+        services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(id);
     }
 }
 
