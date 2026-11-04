@@ -322,7 +322,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         world.Owners.FailNextUpdate = true;
         Assert.Equal("start-failed", (await world.Bots.StartAsync(poisoned.ToString())).Code);
         world.Members.Seed(new PlayerbotPopulationMember(poisoned, record.CharacterId, PopulationTestHost.Elwynn, 0, 100, 5000));
-        live.Holders[record.CharacterId] = "worker:Kalimdor"; // every retry is refused, so the bot stays Faulted and is retried again
+        world.Owners.FailUpdatesOf(poisoned); // every retry's Starting write fails: a real attempt that fails, so the bot stays Faulted and is retried again
         world.Ticks.Set(200, 10);
         int baseline = live.CallsFor(record.CharacterId);
 
@@ -346,9 +346,48 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         Assert.Equal(0, await PassAfterAsync(1_000_000)); // no fifth attempt for the life of the process
         Assert.Equal(0, await PassAfterAsync(1_000_000));
         Assert.Equal(baseline + 4, live.CallsFor(record.CharacterId));
-        // A retry the other worker refused leaves the row as it was: no new fault and no Starting.
         Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(poisoned)!.State);
-        Assert.Equal("start-failed", world.Owners.Peek(poisoned)!.ErrorCode);
+        Assert.True(string.IsNullOrEmpty(world.Feature.Status.LastError) || !world.Feature.Status.LastError!.Contains(poisoned.ToString()), "a failed retry is not one of the pass's failures");
+    }
+
+    [Fact]
+    public async Task ARetryRefusedForALiveOwner_OrAnUnknownOne_DoesNotUseUpAnAttempt()
+    {
+        var live = new FakeLiveOwners();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 100;
+            o.Population.TargetOnline = 100;
+            o.Population.MaxCreatePerMinute = 1;
+        }, manualClock: true, configureServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(live));
+        world.Host.World.Ownership = Owning(0, 1);
+        world.Feature.FaultRetryBaseMs = 1000;
+        world.Feature.ForeignBotMemoryMs = 0;
+        Guid poisoned = (await world.Bots.CreateAsync("Attemptone", 1, 1)).BotId!.Value;
+        ManagedPlayerbot record = world.Owners.Peek(poisoned)!;
+        world.Owners.FailNextUpdate = true;
+        Assert.Equal("start-failed", (await world.Bots.StartAsync(poisoned.ToString())).Code);
+        world.Members.Seed(new PlayerbotPopulationMember(poisoned, record.CharacterId, PopulationTestHost.Elwynn, 0, 100, 5000));
+        world.Ticks.Set(200, 10);
+
+        // Eight passes in which another worker holds it (and two in which the check fails): more than the four attempts a counted refusal would allow.
+        live.Holders[record.CharacterId] = "worker:Kalimdor";
+        for (int i = 0; i < 8; i++) await PassAfterAsync(world, 1_000_000);
+        live.Holders.TryRemove(record.CharacterId, out _);
+        live.ThrowFrom[record.CharacterId] = 1;
+        for (int i = 0; i < 2; i++) await PassAfterAsync(world, 1_000_000);
+        live.ThrowFrom.TryRemove(record.CharacterId, out _);
+        Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(poisoned)!.State);
+
+        await PassAfterAsync(world, 1_000_000); // the owner is gone: the retry is still available and starts it
+        await world.Host.WaitForWorldAsync(() => world.Owners.Peek(poisoned)!.State == ManagedPlayerbotState.Running, "the retried bot running");
+    }
+
+    private static async Task PassAfterAsync(PopulationTestHost world, long advanceMs)
+    {
+        await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += advanceMs; return true; });
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
     }
 
     [Fact]
@@ -410,6 +449,56 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         PopulationStatus next = await world.PassAsync(); // the two foreign bots are remembered: the scan reaches the owned one
         Assert.Contains("started 1", next.Reason);
         await world.Host.WaitForWorldAsync(() => world.Bots.Snapshot().Single(s => s.BotId == members[2].BotId).State == ManagedPlayerbotState.Running, "the owned bot running");
+    }
+
+    [Fact]
+    public async Task CombinedMode_AFaultedBotAfterARestart_IsStartedAsAnOperatorStart_NotRetried()
+    {
+        // After a restart the startup snapshot lists every registered bot as Stopped, so a Faulted row looks startable to the population. In combined mode it goes through the operator start
+        // (which reports "start-failed" and does not quarantine), never through the split-only retry (a restore-kind start, which would quarantine it: "quarantined (fault 1/3)").
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.TargetOnline = 1;
+            o.RestoreOnStartup = false;
+        });
+        Guid faulted = (await world.Bots.CreateAsync("Restartone", 1, 1)).BotId!.Value;
+        ManagedPlayerbot record = world.Owners.Peek(faulted)!;
+        world.Owners.FailNextUpdate = true;
+        Assert.Equal("start-failed", (await world.Bots.StartAsync(faulted.ToString())).Code);
+        Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(faulted)!.State);
+        await world.Bots.StartupAsync(default); // the restart: every registered bot is listed Stopped
+        Assert.Equal(ManagedPlayerbotState.Stopped, world.Bots.Snapshot().Single(b => b.BotId == faulted).State);
+        world.Members.Seed(new PlayerbotPopulationMember(faulted, record.CharacterId, PopulationTestHost.Elwynn, 0, 100, 5000));
+        world.Owners.FailNextUpdate = true; // the population's start of it fails once more
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        string error = status.LastError ?? string.Empty;
+        Assert.True(error.Contains($"start of {faulted} refused: start-failed"), "the operator start reports its failure as start-failed; got: " + error);
+        Assert.False(error.Contains("quarantined"), "a combined start is not a quarantine retry; got: " + error);
+    }
+
+    [Fact]
+    public async Task ASplitWorker_DropsABotWhoseRowDiffersInContent_EvenWhenTheRevisionAlsoMoved()
+    {
+        // Another writer changed more than the revision (here the bot's target): the row is not the trace of a refused start, so the bot must leave the active set, not adopt the row.
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            manualClock: true, configure: o => o.FaultBackoffSeconds = 3600);
+        host.World.Ownership = Owning(0, 1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Contentone", 1, 1)).BotId!.Value;
+        Assert.True((await feature.StartScriptedAsync(id.ToString(), new IdleController())).Success);
+        await CheckpointAsync(host, feature);
+
+        owners.ChangeOutOfBand(id, b => b with { TargetEntry = 777 });
+        await host.World.InvokeAsync(() => { feature.FindBrain(id)!.HoldGoalForTests(PlayerbotGoalKind.Grind, 11, 0); return true; });
+        await CheckpointAsync(host, feature);
+        await CheckpointAsync(host, feature);
+
+        Assert.False(feature.IsActive(id));
+        Assert.Equal(777u, owners.Peek(id)!.TargetEntry); // the other writer's row is left as it wrote it
     }
 
     private static async Task CheckpointAsync(WorldTestHost host, ManagedPlayerbotFeature feature)

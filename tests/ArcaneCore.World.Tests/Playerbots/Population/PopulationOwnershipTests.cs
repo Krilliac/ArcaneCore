@@ -261,6 +261,38 @@ public sealed class PopulationOwnershipTests
     }
 
     [Fact]
+    public async Task AnIdleWorker_ThatHoldsTheLease_SweepsAnOrphanMemberRow()
+    {
+        // The instances worker owns no map bots stand on, so its pass is idle; as the lease holder it still deletes the member rows whose bot is gone (and retries the pending deletions).
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2);
+        world.Host.World.Ownership = InstancesOnly();
+        Guid orphan = Guid.NewGuid();
+        world.Members.Seed(new PlayerbotPopulationMember(orphan, 424242, PopulationTestHost.Elwynn, 0, 100, 5000));
+        Guid pendingBot = (await world.Bots.CreateAsync("Pendingone", 1, 1)).BotId!.Value;
+        world.Members.Seed(new PlayerbotPopulationMember(pendingBot, world.Owners.Peek(pendingBot)!.CharacterId, PopulationTestHost.Elwynn, PlayerbotPopulationFeature.PendingDeleteBand, 100, 5000));
+
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Equal("idle", status.State);
+        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == orphan);
+        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == pendingBot); // the pending deletion finished
+        Assert.Null(world.Owners.Peek(pendingBot)); // and freed its registry slot
+    }
+
+    [Fact]
+    public async Task AnIdleWorker_ThatDoesNotHoldTheLease_SweepsNothing()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2, configureServices: AddNonHolderKeeper);
+        world.Host.World.Ownership = InstancesOnly();
+        Guid orphan = Guid.NewGuid();
+        world.Members.Seed(new PlayerbotPopulationMember(orphan, 424242, PopulationTestHost.Elwynn, 0, 100, 5000));
+
+        await world.PassAsync();
+
+        Assert.Contains(world.Members.Snapshot, m => m.BotId == orphan);
+    }
+
+    [Fact]
     public async Task CombinedMode_ThatDoesNotHoldTheLease_StillWaitsForIt()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2, configureServices: AddNonHolderKeeper);

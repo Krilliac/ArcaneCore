@@ -507,7 +507,14 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             return _pass = Task.CompletedTask;
         }
 
-        if (input is null) return _pass = Task.CompletedTask;
+        if (input is null)
+        {
+            // An idle split worker (no allowed map) that holds the lease still runs the realm-wide sweeps; any other null capture (no managed feature, no world) has nothing to sweep.
+            if (!shedOnly && Managed is { HoldsMaintenanceLease: true, IsStopping: false } sweeper && _world is { } idleWorld && ScopeOf(idleWorld).IsEmpty)
+                return _pass = SweepOnlyAsync(sweeper);
+            return _pass = Task.CompletedTask;
+        }
+
         return _pass = Task.Run(async () =>
         {
             try
@@ -1068,6 +1075,72 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         return built;
     }
 
+    /// <summary>
+    /// Read the population's membership and run the realm-wide sweeps of the shared member table: a member whose bot or character is gone is deleted (an orphan), and the pending-deletion
+    /// members are retried. Both are written only by the maintenance lease holder (<paramref name="maintenanceHolder"/>). The members are read BEFORE the registry, so a bot created between the
+    /// two reads (registry row and member row committed) is never taken for an orphan: a member read earlier is always in the later registry read.
+    /// </summary>
+    private async Task<(Dictionary<Guid, ManagedPlayerbot> Known, Dictionary<Guid, PlayerbotPopulationMember> Members, HashSet<Guid> PendingIds)> ReadMembershipAsync(
+        ManagedPlayerbotFeature managed, IServiceProvider scoped, IPlayerbotPopulationStore store, bool maintenanceHolder, CancellationToken ct)
+    {
+        IReadOnlyList<PlayerbotPopulationMember> stored = await store.LoadAllAsync(ct).ConfigureAwait(false);
+        IReadOnlyList<ManagedPlayerbot> registered = await scoped.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(ct).ConfigureAwait(false);
+        var known = registered.ToDictionary(b => b.BotId);
+        var members = new Dictionary<Guid, PlayerbotPopulationMember>();
+        foreach (PlayerbotPopulationMember member in stored)
+        {
+            // The bot or its character is gone (the character delete cleanup removes the row; a registry loss leaves it behind).
+            if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
+            else if (maintenanceHolder) await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
+        }
+
+        // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
+        // PopulationCounts, so not in any band either, even when a restart restored the bot and it is running for a moment).
+        var pendingIds = new HashSet<Guid>();
+        foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
+        {
+            members.Remove(pending.BotId);
+            pendingIds.Add(pending.BotId);
+            // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
+            if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
+            if (maintenanceHolder) await TryDeletePendingAsync(managed, store, pending.BotId, null, ct).ConfigureAwait(false);
+        }
+
+        // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
+        foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
+        foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
+        return (known, members, pendingIds);
+    }
+
+    /// <summary>
+    /// A worker that owns none of the maps bots stand on has no population to run, but when it holds the maintenance lease (<c>-LeaseHolder instances</c>) the orphan and pending-delete sweeps of the
+    /// shared member table are still its to run: nobody else writes them, and pending rows would hold registry slots (MaxRegisteredBots) for good. Runs those sweeps and nothing else.
+    /// The lease is read live every pass, so a lease that moves here after a restart is picked up on the next pass (the pending rows are in the store, not in this process).
+    /// </summary>
+    private Task SweepOnlyAsync(ManagedPlayerbotFeature managed) => Task.Run(async () =>
+    {
+        CancellationToken ct = _stop.Token;
+        try
+        {
+            await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+            IPlayerbotPopulationStore store = new SplitBrainGuardedStore(scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>(), managed);
+            await ReadMembershipAsync(managed, scope.ServiceProvider, store, maintenanceHolder: true, ct).ConfigureAwait(false);
+            Interlocked.Increment(ref _passes); // the pending-delete backoff counts passes
+        }
+        catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+        {
+            // Another world owns the playerbot rows: the sweep ends quietly.
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested || _stopping || _world?.IsStopped == true)
+        {
+            // Shutdown cancellation is expected.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("playerbot.population", ex, "Playerbot population: the membership sweep of an idle worker faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
+        }
+    });
+
     private async Task RunAsync(PassInput input)
     {
         CancellationToken ct = _stop.Token;
@@ -1092,34 +1165,10 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         {
             await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
             IPlayerbotPopulationStore store = new SplitBrainGuardedStore(scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>(), input.Managed);
-            IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
-                .LoadAllAsync(ct).ConfigureAwait(false);
-            var known = registered.ToDictionary(b => b.BotId);
             // A shed-only pass can run on a node that does not hold the maintenance lease; the membership deletes and the home sweep below are the holder's to write.
             bool maintenanceHolder = Managed is not { HoldsMaintenanceLease: false };
-            var members = new Dictionary<Guid, PlayerbotPopulationMember>();
-            foreach (PlayerbotPopulationMember member in await store.LoadAllAsync(ct).ConfigureAwait(false))
-            {
-                // The bot or its character is gone (the character delete cleanup removes the row; a registry loss leaves it behind).
-                if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
-                else if (maintenanceHolder) await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
-            }
-
-            // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
-            // PopulationCounts, so not in any band either, even when a restart restored the bot and it is running for a moment).
-            var pendingIds = new HashSet<Guid>();
-            foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
-            {
-                members.Remove(pending.BotId);
-                pendingIds.Add(pending.BotId);
-                // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
-                if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
-                if (maintenanceHolder) await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
-            }
-
-            // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
-            foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
-            foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
+            (Dictionary<Guid, ManagedPlayerbot> known, Dictionary<Guid, PlayerbotPopulationMember> members, HashSet<Guid> pendingIds) =
+                await ReadMembershipAsync(input.Managed, scope.ServiceProvider, store, maintenanceHolder, ct).ConfigureAwait(false);
 
             // A member that is gone no longer needs its start and park times.
             foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
@@ -1434,7 +1483,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 continue;
             }
 
-            bool retry = ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? faulted) && faulted.State == ManagedPlayerbotState.Faulted;
+            // A retry is a split-cluster rule (IsRetryableFault): in combined mode a Faulted row is started as an operator's start always was.
+            bool retry = scope is not null && ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? faulted) && faulted.State == ManagedPlayerbotState.Faulted;
             restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level), retry));
         }
 
@@ -1461,10 +1511,26 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         foreach ((PlayerbotPopulationMember member, int band, bool retry) in restart)
         {
             if (remaining == 0 || failures >= 3) break;
-            PlayerbotOperationResult result = retry
-                ? Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false))
-                : Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
-            if (retry) StampFaultRetry(member.BotId, ctx.Input.ClockMs); // counted when the attempt is made, not when the bot was picked
+            PlayerbotOperationResult result;
+            if (retry)
+            {
+                // Counted when a start was really attempted, not when the bot was picked: a refusal for capacity or for another worker's live character (or an unknown one) makes no start.
+                // A start that throws (its fault row could not be written either) was attempted too, so the stamp is set on the way out.
+                bool attempted = true;
+                try
+                {
+                    result = Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false));
+                    attempted = result.Code is not ("playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown);
+                }
+                finally
+                {
+                    if (attempted) StampFaultRetry(member.BotId, ctx.Input.ClockMs);
+                }
+            }
+            else
+            {
+                result = Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
+            }
             if (result.Success)
             {
                 started++;
