@@ -104,7 +104,8 @@ internal sealed record GatewayTransferWiring(
     Func<WorkerNodeId, Guid, CancellationToken, Task<bool>>? IncarnationCheck,
     Func<long, bool> SessionExists,
     Func<string, IReadOnlyList<string>> SlotNames,
-    Func<WorkerNodeId, CancellationToken, Task<int>>? AdmittedGateways = null)
+    Func<WorkerNodeId, CancellationToken, Task<int>>? AdmittedGateways = null,
+    Func<uint, uint, CancellationToken, Task<bool>>? WaitForMapOwner = null)
 {
     public static GatewayTransferWiring ForServer(GatewayServer server, GatewayHandoffService? handoffs, ILoggerFactory loggers)
     {
@@ -148,7 +149,8 @@ internal sealed record GatewayTransferWiring(
             Check,
             generation => server.FindConnection(generation) is IGatewayTransferSession { IsOpen: true },
             node => handoffs?.NodeNames(node) ?? new[] { node },
-            Gateways);
+            Gateways,
+            (mapId, instanceId, cancellationToken) => server.WaitForMapOwnerLinkAsync(mapId, instanceId, GatewayTransferService.MapOwnerLinkWait, cancellationToken));
     }
 }
 
@@ -158,7 +160,7 @@ internal sealed record GatewayTransferWiring(
 /// <see cref="GatewayTransferRouter"/> (in process), with the <see cref="GatewayClusterMapRouter"/> as placement.
 /// <list type="bullet">
 /// <item><description>Opt-in: it exists only with <c>Gateway:Transfers:Enabled</c>; the journal is the characters database, read validate-only.</description></item>
-/// <item><description><see cref="SubmitAsync"/> answers at once: refused, or accepted with the transfer running in the background. A refusal needs no cleanup: nothing was journalled.</description></item>
+/// <item><description><see cref="SubmitAsync"/> answers refused, or accepted with the transfer running in the background, at once unless the target map's configured owner has no link right now: it then waits up to <see cref="MapOwnerLinkWait"/> for that link first. A refusal needs no cleanup: nothing was journalled.</description></item>
 /// <item><description>Transfers and whole-World handoffs keep apart through <see cref="GatewaySlotStateMachine"/> and the journal: a transfer is refused while its source or target slot is handing off or has an unresolved handoff
 /// in the journal; a handoff (<see cref="EnterHandoffAsync"/>, called by <see cref="GatewayHandoffService"/>) is refused while transfers involve its slot, running or unresolved.</description></item>
 /// <item><description>The pre-commit check (design 4.3): after stage 4 the target is described again and a transfer whose target process changed since the reserve is aborted instead of committed.</description></item>
@@ -169,6 +171,12 @@ internal sealed record GatewayTransferWiring(
 /// </summary>
 public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, IGatewayHandoffGuard
 {
+    /// <summary>
+    /// How long a submit waits for the link of a target map's configured owner before it refuses the teleport. The player stays in the world and nothing is journalled meanwhile, so this bounds how long
+    /// a teleport to a map whose worker is really down takes to fail; it is far inside the worker's in-flight expiry (<see cref="GatewayClusterFarTeleportRouter.InFlightExpiry"/>).
+    /// </summary>
+    internal static readonly TimeSpan MapOwnerLinkWait = TimeSpan.FromSeconds(10);
+
     private readonly GatewayTransferOptions _options;
     private readonly ITransferJournalScan _journal;
     private readonly IWorldHandoffStore? _handoffStore;
@@ -177,6 +185,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     private readonly Func<long, bool> _sessionExists;
     private readonly Func<string, IReadOnlyList<string>> _slotNames;
     private readonly Func<WorkerNodeId, CancellationToken, Task<int>>? _admittedGateways;
+    private readonly Func<uint, uint, CancellationToken, Task<bool>>? _waitForMapOwner;
     private readonly HashSet<string> _slotSet;
     private readonly PlayerTransferCoordinator _coordinator;
     private readonly PlayerTransferCoordinatorHost _host;
@@ -243,6 +252,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         _sessionExists = wiring.SessionExists;
         _slotNames = wiring.SlotNames;
         _admittedGateways = wiring.AdmittedGateways;
+        _waitForMapOwner = wiring.WaitForMapOwner;
         _slotSet = new HashSet<string>(wiring.SlotNodes, StringComparer.Ordinal);
         _machine = new GatewaySlotStateMachine(wiring.SlotNodes);
         _coordinator = new PlayerTransferCoordinator(wiring.MapRouter, store, wiring.GatewayRouter, wiring.Sources, wiring.Targets);
@@ -328,6 +338,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     /// <summary>
     /// Takes one transfer request (design 2.3, after the control handler checked that the source is the node of the link it arrived on). It is refused, with the reason and with nothing journalled, when the gateway is stopping,
     /// the session is gone, the target map cannot be routed or its worker cannot take a player, the source and target are the same worker, a slot involved is handing off or has an unresolved handoff in the journal.
+    /// A map whose configured owner has no link right now (a worker that is starting, restarting, or up but between two dials of the link's backoff) is routed again once that link registers, within <see cref="MapOwnerLinkWait"/>.
     /// Otherwise the transfer runs in the background (the target pinned to the one routed here) and the submission carries its completion.
     /// </summary>
     public async Task<GatewayTransferSubmission> SubmitAsync(PlayerTransferRequest request, CancellationToken cancellationToken = default)
@@ -353,10 +364,35 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 
             target = explicitTarget;
         }
-        else if (!_mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out string? failure))
+        else
         {
-            return Refused(
-                request, CodeOfPlacementFailure(failure), $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}");
+            bool routed = _mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out string? failure);
+            if (!routed && failure == ClusterMapPlacementTable.FailureMapUnassigned && _waitForMapOwner is { } waitForMapOwner)
+            {
+                // A worker whose link is down owns nothing for routing, whether it is dead or only between two dials of the link's backoff. Nothing is journalled or frozen yet, so waiting costs the
+                // player only the delay; the gateway may have begun stopping and the client may have left meanwhile.
+                bool linked = await waitForMapOwner(request.TargetMapId, request.TargetInstanceId, cancellationToken).ConfigureAwait(false);
+                if (Volatile.Read(ref _stopped) != 0)
+                {
+                    return Refused(request, ControlReasonCode.GatewayStopping, "the gateway is stopping");
+                }
+
+                if (!_sessionExists(request.SessionGeneration))
+                {
+                    return Refused(request, ControlReasonCode.SessionNotOpen, $"session {request.SessionGeneration} is not an open client session of this gateway");
+                }
+
+                if (linked)
+                {
+                    routed = _mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out failure);
+                }
+            }
+
+            if (!routed)
+            {
+                return Refused(
+                    request, CodeOfPlacementFailure(failure), $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}");
+            }
         }
 
         if (target == request.SourceWorkerId)

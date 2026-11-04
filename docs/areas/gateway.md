@@ -145,6 +145,12 @@ A session opens on the login worker (or, while that worker's link is down, on an
 
 Tests: `LoginRedirectTests` (in process, including an owner that comes up 20 s into the hold) and `TwoWorkerScenarioTests` (a late-started worker, multi-process).
 
+### Transfer to a map whose owner has no link
+
+A far teleport routes the same way a login redirect does, and a worker whose link is down owns nothing for routing, whether it is dead or only between two dials of its reconnect backoff. So when the target map has a configured owner with no registered link, the gateway waits up to 10 s for that link before it answers the transfer request, and logs "waits up to 10 s for the link of its owner". The owner is dialled every 500 ms during the wait, as for a held login, so a worker that is up is reached at once. The player stays in the world and nothing is journalled while it waits. If the link registers, the map is routed again and the transfer starts. If it does not, the teleport is refused with `NoEligibleWorker` (`map-unassigned`) and the player sees "The teleport could not be completed." The teleport is also refused if the session ends or the gateway begins stopping during the wait. A map that no configured worker owns is refused at once.
+
+Tests: `GatewayCrossWorkerTeleportTests` (in process, the target worker up during a 30 s backoff), `GatewayTransferServiceTests` (the outcomes of the wait) and `ClusterControlChannelScenarioTests` (a late-started worker, multi-process).
+
 ### Whole-World handoff (Tier 3b groundwork, in process only)
 
 `WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over

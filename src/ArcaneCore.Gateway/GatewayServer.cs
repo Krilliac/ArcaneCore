@@ -638,6 +638,35 @@ public sealed class GatewayServer : BackgroundService
         return null;
     }
 
+    /// <summary>
+    /// For a player transfer whose target map has no routable owner: waits up to <paramref name="timeout"/> for the link of the configured worker that owns the map copy. While it waits, that link's
+    /// supervisor dials at least every <see cref="GatewayWorkerLink.PromptDialInterval"/> (<see cref="GatewayWorkerLink.HoldPromptDial"/>), so a worker that is up but between two dials of its backoff is
+    /// reached at once. True when the link is registered, so the caller should route again. False at once when no configured worker could own the map, and false when the time ran out or
+    /// <paramref name="cancellationToken"/> was cancelled. Thread-safe.
+    /// </summary>
+    internal async Task<bool> WaitForMapOwnerLinkAsync(uint mapId, uint instanceId, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        if (FindConfiguredMapOwner(mapId, instanceId) is not { } owner)
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "A transfer to map {Map} (instance {Instance}) waits up to {Seconds} s for the link of its owner, {Node}", mapId, instanceId, (int)timeout.TotalSeconds, owner.NodeId);
+        using IDisposable dial = owner.HoldPromptDial();
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(timeout);
+        try
+        {
+            await owner.WaitForLinkAsync(budget.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
     private IPEndPoint ConfiguredWorker()
     {
         GatewayWorkerEntry entry = _options.Value.EffectiveWorkers()[0];
