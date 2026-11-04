@@ -61,7 +61,10 @@ public sealed class PlayerbotGroupQuestWorldTests : PlayerbotGroupWorldTestBase
             return (player.Health, SpellSystem.GetPower(world.Player(healer.Id), PowerType.Mana));
         });
 
-        Assert.True(await world.RunUntilAsync(15_000, () => world.Player(tank.Id).Health >= wounded + 40), await world.TraceAsync());
+        // The tank has 60 health and the ogre hits it for 3 to 4 a swing. Under spell batching the heal and a swing land in the same
+        // window, so a sample can miss the full 60 (a failed run saw 56) and a +40 target (58) sat 2 under the cap. +30 still needs
+        // a heal, since the ogre only takes health away, and leaves room for a swing.
+        Assert.True(await world.RunUntilAsync(15_000, () => world.Player(tank.Id).Health >= wounded + 30), await world.TraceAsync());
         Assert.True(await world.OnWorldAsync(() => SpellSystem.GetPower(world.Player(healer.Id), PowerType.Mana) < manaBefore), "the priest spent no mana");
     }
 
