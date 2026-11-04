@@ -122,6 +122,39 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         }
     }
 
+    /// <summary>
+    /// Read-only: the scope of another worker that holds the character's claim live, or null. A claim of another scope counts as live while a transfer is in flight on it, or while the
+    /// holder is the active incarnation of its scope and (when <paramref name="reapAfter"/> is given) its heartbeat is newer than that age; a claim whose holder is gone or reapable is not
+    /// live (the login-time reap takes it over). Issues no SQL for a token that is not a worker token. No write of any kind.
+    /// </summary>
+    public async Task<string?> FindLiveOtherOwnerAsync(ulong characterGuid, CharacterOwnershipToken token, TimeSpan? reapAfter, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(token);
+        if (characterGuid == 0 || !CharacterOwnershipScopes.IsWorker(token.Scope))
+            return null;
+
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        long guid = (long)characterGuid;
+        ClusterTransferOwnerRow? row = await db.Set<ClusterTransferOwnerRow>().AsNoTracking()
+            .SingleOrDefaultAsync(r => r.CharacterGuid == guid, cancellationToken).ConfigureAwait(false);
+        if (row is null || string.Equals(row.Scope, token.Scope, StringComparison.Ordinal))
+            return null;
+        if (row.ActiveTransfer is not null)
+            return row.Scope;
+
+        string heldScope = row.Scope;
+        string heldIncarnation = row.Incarnation;
+        CharacterOwnershipRow? holder = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+            .SingleOrDefaultAsync(o => o.Scope == heldScope && o.Active && o.OwnerIncarnation == heldIncarnation, cancellationToken).ConfigureAwait(false);
+        if (holder is null)
+            return null;
+        if (reapAfter is { } age && holder.HeartbeatAtMs is { } beat && beat <= _clock() - (long)age.TotalMilliseconds)
+            return null;
+        return row.Scope;
+    }
+
     private async Task<string?> ReadClaimScopeAsync(long guid, CancellationToken cancellationToken)
     {
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();

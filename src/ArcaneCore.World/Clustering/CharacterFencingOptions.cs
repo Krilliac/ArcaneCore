@@ -105,8 +105,17 @@ public sealed class CharacterFencingOptions
             throw new InvalidOperationException("Cluster:Fencing takeover requires a positive epoch and non-empty incarnation together");
     }
 
-    /// <summary>The shard this worker claims: <see cref="Shard"/> when set, else <paramref name="nodeId"/> (Cluster:Worker:NodeId).</summary>
-    public string ResolveShard(string nodeId) => string.IsNullOrWhiteSpace(Shard) ? nodeId?.Trim() ?? string.Empty : Shard.Trim();
+    /// <summary>
+    /// The shard this worker claims: <see cref="Shard"/> when set, else <paramref name="nodeId"/> (Cluster:Worker:NodeId). A node id that already starts
+    /// with the scope prefix (<c>worker:Kalimdor</c>) names the shard <c>Kalimdor</c>, so the scope reads <c>worker:Kalimdor</c> and not <c>worker:worker:Kalimdor</c>.
+    /// </summary>
+    public string ResolveShard(string nodeId)
+    {
+        string shard = string.IsNullOrWhiteSpace(Shard) ? nodeId?.Trim() ?? string.Empty : Shard.Trim();
+        return shard.Length > CharacterOwnershipScopes.WorkerPrefix.Length && shard.StartsWith(CharacterOwnershipScopes.WorkerPrefix, StringComparison.Ordinal)
+            ? shard[CharacterOwnershipScopes.WorkerPrefix.Length..]
+            : shard;
+    }
 
     /// <summary>The durable scope this world claims: <c>world</c> in Realm scope, <c>worker:&lt;shard&gt;</c> in Worker scope.</summary>
     /// <exception cref="WorkerScopeConfigurationException">Worker scope with a shard id that is not valid.</exception>

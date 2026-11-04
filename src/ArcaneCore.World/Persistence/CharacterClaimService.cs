@@ -124,6 +124,17 @@ public sealed class CharacterClaimService(
     }
 
     /// <summary>
+    /// The scope of another worker that holds <paramref name="characterId"/> live (see <see cref="EfTransferDecisionStore.FindLiveOtherOwnerAsync"/>), or null. Read-only: nothing is claimed
+    /// or written. Null without a worker-shard token or a store (no claim exists in those modes). For a caller that must not touch anything of a character another worker runs.
+    /// </summary>
+    public async Task<string?> FindLiveOtherOwnerAsync(int characterId, CharacterOwnershipToken? token, CancellationToken cancellationToken = default)
+    {
+        if (token is null || !CharacterOwnershipScopes.IsWorker(token.Scope) || services.GetService<EfTransferDecisionStore>() is not { } store)
+            return null;
+        return await store.FindLiveOtherOwnerAsync((ulong)characterId, token, BuildReapPolicy()?.ReapAfter, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Releases this worker's claim of <paramref name="characterId"/> once the character's persistence is durable (every settlement barrier and write queue drained, the same barrier a login
     /// waits on). Call it after the logout snapshot was queued (the world thread, after <c>RemovePlayer</c>), and also for a login that claimed but never entered the world. Returns at once;
     /// the flush and the release run in the background. A no-op without a worker-shard token or a store. <paramref name="isOnline"/> (thread-safe) is asked just before the delete: a character that

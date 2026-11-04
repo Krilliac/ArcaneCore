@@ -23,6 +23,17 @@ public sealed class CharacterFencingOptionsTests
         }.Validate());
     }
 
+    [Theory]
+    [InlineData("worker:Kalimdor", "", "worker:Kalimdor")]   // a node id that already carries the prefix is not prefixed twice
+    [InlineData("w1", "", "worker:w1")]
+    [InlineData("worker:EK", "worker:EK", "worker:EK")]
+    [InlineData("w1", "shard-a", "worker:shard-a")]
+    public void TheWorkerScope_CarriesThePrefixOnce(string nodeId, string shard, string expected)
+    {
+        var options = new CharacterFencingOptions { Scope = CharacterFencingScope.Worker, Shard = shard };
+        Assert.Equal(expected, options.ResolveScope(nodeId));
+    }
+
     [Fact]
     public void OwnerNodeIsBounded()
     {
