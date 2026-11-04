@@ -224,32 +224,90 @@ public sealed class ManagedPlayerbotProvisionSweepTests
         Assert.Equal(youngBot, Assert.Single(await provisions.LoadPendingAsync()).BotId);
     }
 
-    [Fact]
-    public async Task TheHolderSweep_IsRateLimited_AndAFailureOfItNeverStopsThePass()
+    private static async Task<(PopulationTestHost World, ManagedPlayerbotLifecycleTests.MemoryProvisionStore Provisions, InMemoryAccountStore Accounts)> IdleHolderAsync()
     {
-        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2);
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2);
         world.Host.World.Ownership = new MapOwnership([new MapOwnership.Range(33, 34), new MapOwnership.Range(409, 409)], allowInstanceMaps: true);
-        var accounts = (InMemoryAccountStore)world.Host.WorldServices.GetRequiredService<IAccountStore>();
-        var provisions = (ManagedPlayerbotLifecycleTests.MemoryProvisionStore)world.Host.WorldServices.GetRequiredService<IManagedPlayerbotProvisionStore>();
+        return (world,
+            (ManagedPlayerbotLifecycleTests.MemoryProvisionStore)world.Host.WorldServices.GetRequiredService<IManagedPlayerbotProvisionStore>(),
+            (InMemoryAccountStore)world.Host.WorldServices.GetRequiredService<IAccountStore>());
+    }
+
+    private static async Task<Guid> StaleRowAsync(ManagedPlayerbotLifecycleTests.MemoryProvisionStore provisions, InMemoryAccountStore accounts, string username, long ageSeconds)
+    {
+        Account account = await accounts.CreateAsync(new Account { Username = username, Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
+        Guid botId = Guid.NewGuid();
+        provisions.AddPendingOutOfBand(botId, account.Id, account.Username, DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ageSeconds);
+        return botId;
+    }
+
+    [Fact]
+    public async Task TheHolderSweep_RunsOncePerInterval_AndAgainOnceTheIntervalAllows()
+    {
+        (PopulationTestHost world, var provisions, var accounts) = await IdleHolderAsync();
+        await using PopulationTestHost owned = world;
+        int baseline = provisions.LoadPendingCalls;
+
+        await world.PassAsync();
+        Assert.Equal(baseline + 1, provisions.LoadPendingCalls); // the first pass sweeps
+        await StaleRowAsync(provisions, accounts, "PBRATEONE", 601);
+        await world.PassAsync();
+        Assert.Equal(baseline + 1, provisions.LoadPendingCalls); // inside the interval: no load at all
+        Assert.Equal(0, provisions.RollbackCount);
+
+        world.Bots.ProvisionSweepIntervalMs = 0;
+        await world.PassAsync();
+        Assert.Equal(baseline + 2, provisions.LoadPendingCalls);
+        Assert.Equal(1, provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task AHeldOperationLock_SkipsTheHolderSweep_WithoutBlockingThePass_AndTheNextPassSweeps()
+    {
+        (PopulationTestHost world, var provisions, var accounts) = await IdleHolderAsync();
+        await using PopulationTestHost owned = world;
+        await StaleRowAsync(provisions, accounts, "PBHELDLOCK", 601);
+        int baseline = provisions.LoadPendingCalls;
+
+        using (await world.Bots.HoldOperationForTestsAsync())
+        {
+            await world.PassAsync().WaitAsync(TimeSpan.FromSeconds(20)); // a sweep that waited for the lock would hang the pass here
+            Assert.Equal(baseline, provisions.LoadPendingCalls);
+            Assert.Equal(0, provisions.RollbackCount);
+        }
+
+        await world.PassAsync(); // the skipped sweep did not use up the interval
+        Assert.Equal(1, provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task ARowThatCannotBeRolledBack_FailsNeitherThePass_NorTheRowsBehindIt()
+    {
+        (PopulationTestHost world, var provisions, var accounts) = await IdleHolderAsync();
+        await using PopulationTestHost owned = world;
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        // A stale row whose account is gone: the reconcile refuses it (throws). The pass must still run its own member sweep.
-        provisions.AddPendingOutOfBand(Guid.NewGuid(), 99_999, "PBGHOSTACCOUNT", now - 601);
+        // The oldest row's account is gone (the reconcile refuses it): it is first in the sweep, and the good stale row behind it must still be taken.
+        provisions.AddPendingOutOfBand(Guid.NewGuid(), 99_999, "PBGHOSTACCOUNT", now - 5000);
+        await StaleRowAsync(provisions, accounts, "PBBEHINDGHOST", 601);
         Guid orphan = Guid.NewGuid();
         world.Members.Seed(new PlayerbotPopulationMember(orphan, 424242, PopulationTestHost.Elwynn, 0, 100, 5000));
 
         await world.PassAsync();
 
-        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == orphan); // the member sweep ran although the provision sweep failed
-        Assert.Equal(0, provisions.RollbackCount);
+        Assert.Equal(1, provisions.RollbackCount); // the row behind the ghost was rolled back
+        Assert.DoesNotContain(world.Members.Snapshot, m => m.BotId == orphan); // and the pass went on to its member sweep
+        Assert.Single(await provisions.LoadPendingAsync()); // the ghost row stays pending
+    }
 
-        // Rate limit: a stale row added now is not looked at again within the interval, and is once the interval allows.
-        Account stale = await accounts.CreateAsync(new Account { Username = "PBRATELIMITED", Salt = new byte[32], Verifier = new byte[32], Security = AccountSecurity.Player });
-        provisions.AddPendingOutOfBand(Guid.NewGuid(), stale.Id, stale.Username, now - 601);
-        await world.PassAsync();
-        Assert.Equal(0, provisions.RollbackCount);
-        world.Bots.ProvisionSweepIntervalMs = 0;
-        provisions.RemovePendingOutOfBand("PBGHOSTACCOUNT"); // the unrollable row would throw before the good one
-        await world.PassAsync();
-        Assert.Equal(1, provisions.RollbackCount);
+    [Fact]
+    public async Task ASplitCreate_WithAnUnrollableStaleRowAhead_StillSucceeds()
+    {
+        var shared = new Shared();
+        shared.Provisions.AddPendingOutOfBand(Guid.NewGuid(), 99_999, "PBGHOSTCREATE", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 5000);
+        await using WorldTestHost host = shared.Host(0);
+
+        PlayerbotOperationResult result = await BotsOf(host).CreateAsync("Aheadcreate", 1, 1);
+
+        Assert.True(result.Success, result.Code);
     }
 }

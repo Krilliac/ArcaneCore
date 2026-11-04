@@ -1428,7 +1428,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
     /// <summary>
     /// Split cluster only: a member left Faulted with <c>start-failed</c> (the row a start refused for another worker's live character used to leave) is started again, a few times, with a growing wait.
-    /// In combined mode no other worker can have written that fault, so a Faulted bot stays Faulted (an operator start clears it). Any other fault is never retried here.
+    /// In combined mode no other worker can have written that fault, so a Faulted bot stays Faulted (an operator start clears it). Any other fault is never admitted by this predicate.
+    /// This is one of two ways a Faulted row reaches the restart list; the other is <see cref="IsStartable"/>, which is true for it after a restart (the startup snapshot lists every registered bot
+    /// Stopped). The attempt count and the wait therefore are not part of this predicate alone: <see cref="FaultRetryHeld"/> applies them to every Faulted candidate whichever predicate admitted it.
     /// </summary>
     private bool IsRetryableFault(PassContext ctx, PlayerbotPopulationMember member)
     {
@@ -1438,6 +1440,26 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         return !_faultRetries.TryGetValue(member.BotId, out (int Attempts, long NextAtMs) done)
             || (done.Attempts < FaultRetryAttempts && ctx.Input.ClockMs >= done.NextAtMs);
     }
+
+    /// <summary>
+    /// Split cluster only: true when the member's row is Faulted and the process already spent its attempts on it (<see cref="FaultRetryAttempts"/>) or its wait (<see cref="FaultRetryBaseMs"/>,
+    /// doubling) has not passed. Such a bot is not a restart candidate, however it was admitted (a restart makes the snapshot call a Faulted row Stopped). A Faulted bot with no attempt yet is not held.
+    /// </summary>
+    private bool FaultRetryHeld(PassContext ctx, PlayerbotPopulationMember member)
+    {
+        if (_world is not { } world || world.Ownership.OwnsEverything) return false;
+        if (!ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? row) || row.State != ManagedPlayerbotState.Faulted) return false;
+        return _faultRetries.TryGetValue(member.BotId, out (int Attempts, long NextAtMs) done)
+            && (done.Attempts >= FaultRetryAttempts || ctx.Input.ClockMs < done.NextAtMs);
+    }
+
+    /// <summary>
+    /// True for the refusals of a start that did nothing to the bot (another worker runs it, the owner of it could not be told, the whole feature is busy or stopping): they do not use an attempt.
+    /// A refusal that is not here (an owner the account store refuses, a failed start) uses one, so such a bot is bounded too.
+    /// </summary>
+    internal static bool MadeNoStartAttempt(string code)
+        => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
+            or "fleet-reset-running" or "playerbots-stopping" or "playerbots-disabled" or ManagedPlayerbotFeature.PlayerbotsDetaching;
 
     /// <summary>An attempt was made at <paramref name="nowMs"/>: count it and set the wait before the next one.</summary>
     private void StampFaultRetry(Guid botId, long nowMs)
@@ -1467,7 +1489,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         int reads = 0;
         bool truncated = false; // the read cap ended the scan with parked bots of this worker possibly still unread
         foreach (PlayerbotPopulationMember member in PopulationParking.RestartOrder(
-            ctx.Members.Values.Where(m => ctx.Input.RushCount == 0 && !ctx.RunningNow.Contains(m.BotId) && (IsStartable(ctx, m) || IsRetryableFault(ctx, m))), _parkedAt).Take(scope is null ? 128 : int.MaxValue))
+            ctx.Members.Values.Where(m => ctx.Input.RushCount == 0 && !ctx.RunningNow.Contains(m.BotId) && (IsStartable(ctx, m) || IsRetryableFault(ctx, m)) && !FaultRetryHeld(ctx, m)), _parkedAt).Take(scope is null ? 128 : int.MaxValue))
         {
             if (scope is not null)
             {
@@ -1516,13 +1538,21 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             PlayerbotOperationResult result;
             if (retry)
             {
-                // Counted when a start was really attempted, not when the bot was picked: a refusal for capacity or for another worker's live character (or an unknown one) makes no start.
-                // A start that throws (its fault row could not be written either) was attempted too, so the stamp is set on the way out.
+                // Counted when a start was really attempted, not when the bot was picked: a refusal that did nothing to the bot (MadeNoStartAttempt) uses no attempt, any other result does
+                // (a refusal that writes nothing, such as an owner the account store refuses, included, so that bot is bounded too).
+                // A start that throws (its fault row could not be written either) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
+                // the pass (the remaining restarts and every creation), so one bot whose fault row cannot be written would hold the worker's population back at each of its attempts. In split scope
+                // (the only place a retry happens) the exception is contained: logged once, counted as a failed attempt, and the pass goes on. A cancellation and a split-brain latch still end the pass.
                 bool attempted = true;
                 try
                 {
                     result = Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false));
-                    attempted = result.Code is not ("playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown);
+                    attempted = !MadeNoStartAttempt(result.Code);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+                {
+                    logger.LogFault("playerbot.population", ex, "Playerbot population: the retry start of {Bot} failed ({Type}: {Message}); the pass goes on", member.BotId, ex.GetType().Name, ex.Message);
+                    result = new PlayerbotOperationResult(false, "retry-faulted", member.BotId);
                 }
                 finally
                 {

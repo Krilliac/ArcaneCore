@@ -926,8 +926,16 @@ public sealed class ManagedPlayerbotLifecycleTests
         public void AddPendingOutOfBand(Guid botId, int accountId, string accountName, long createdUnix)
             => _pending[botId] = new ManagedPlayerbotProvision(botId, accountId, accountName, createdUnix);
 
+        private int _loadPendingCalls;
+
+        /// <summary>How many times the pending rows were loaded (every reconcile loads them once).</summary>
+        public int LoadPendingCalls => Volatile.Read(ref _loadPendingCalls);
+
         public Task<IReadOnlyList<ManagedPlayerbotProvision>> LoadPendingAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.ToArray());
+        {
+            Interlocked.Increment(ref _loadPendingCalls);
+            return Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.OrderBy(row => row.CreatedUnix).ThenBy(row => row.BotId).ToArray());
+        }
 
         public Task<bool> CompleteAsync(Guid botId, int accountId, CancellationToken cancellationToken = default)
             => Task.FromResult(_pending.TryRemove(botId, out ManagedPlayerbotProvision? proof) && proof.AccountId == accountId);

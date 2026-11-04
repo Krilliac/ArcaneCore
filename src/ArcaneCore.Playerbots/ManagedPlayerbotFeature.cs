@@ -914,7 +914,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // Attach always runs before this: it is the AfterWorldStart hook the attach registers, so SplitScope (the world's ownership) is known here.
         if (maintenanceHolder)
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken,
-                SplitScope ? ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) : ProvisionSweep.All).ConfigureAwait(false);
+                SplitScope ? ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) : ProvisionSweep.All, isolateRows: SplitScope).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides && _world is { } world)
@@ -1105,7 +1105,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // sweeps and only rows older than ProvisionSweepGrace; a non-holder leaves it to the holder.
             if (!SplitScope) await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
             else if (HoldsMaintenanceLease)
-                await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds())).ConfigureAwait(false);
+                await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
             // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
             // stopped bot never takes a running slot (the live stress test of 2026-10-08 found 5 stopped bots blocking creation).
@@ -1187,8 +1187,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
             // The repair rolls back what this attempt journaled. In a split cluster it covers only this attempt's own row (another worker's row may be in flight, and a row of a dead worker is the
-            // holder's sweep): before the journal row was written nothing is covered. Known limit: a create that outlives ProvisionSweepGrace can be rolled back by the holder's sweep and then
-            // refuses at its completion, leaving a registry row without a journal until the holder's startup orphan sweep removes it.
+            // holder's sweep): before the journal row was written nothing is covered. Known limit (see ProvisionSweepGrace): a create that outlives the grace can be taken by the holder's sweep. Rolled
+            // back, it refuses at its completion and the holder's startup orphan sweep removes the dangling registry row; completed, the creator reports create-failed while the registry row and
+            // the live character stay (no member row), and nothing removes them.
             try
             {
                 await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None,
@@ -4438,6 +4439,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// How old a pending provisioning journal row must be before a split cluster's sweep may take it: far longer than a create can sit between its journal commit and its completion, so a row
     /// younger than this belongs to a create in flight on another worker. Combined mode does not use it (no other creator exists).
+    /// Known limit: a create that outlives this grace can be taken by the holder's sweep. If the sweep rolls it back (its registry row was not stored yet) the creator then refuses at its completion
+    /// and the dangling registry row is removed by the holder's startup orphan sweep. If the sweep completes its journal row (the registry row was stored) the creator reports create-failed while
+    /// the registry row and the live character stay, with no population member row: nothing removes them, the bot is simply registered and stopped.
     /// </summary>
     internal static readonly TimeSpan ProvisionSweepGrace = TimeSpan.FromMinutes(10);
 
@@ -4481,11 +4485,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (_stopping || _detaching) return;
             Volatile.Write(ref _lastProvisionSweepMs, now);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds())).ConfigureAwait(false);
+            await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
         {
-            FaultLedger.Shared.Record("playerbot.provision-sweep", ex);
             logger.LogFault(LogLevel.Warning, "playerbot.provision-sweep", ex, "Playerbot provisioning sweep failed ({Type}: {Message}); retried on a later pass", ex.GetType().Name, ex.Message);
         }
         finally { _operations.Release(); }
@@ -4494,8 +4497,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// Roll back or complete the pending provisioning journal rows <paramref name="sweep"/> covers: a row whose registry row exists is completed, any other has its characters deleted and
     /// its empty account rolled back. The default covers every row (combined mode, where every pending row is a leftover of this process).
+    /// With <paramref name="isolateRows"/> (the split cluster's stale sweeps) a row that cannot be taken (its account is gone, a character cannot be deleted) is logged and the next row is still
+    /// taken, so one dead row never blocks the rows behind it or fails a create; without it the first refusal throws, as combined mode always did.
     /// </summary>
-    private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken, ProvisionSweep sweep = default)
+    private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken, ProvisionSweep sweep = default, bool isolateRows = false)
     {
         IManagedPlayerbotProvisionStore provisions = provider.GetRequiredService<IManagedPlayerbotProvisionStore>();
         IReadOnlyList<ManagedPlayerbotProvision> pendingList = [.. (await provisions.LoadPendingAsync(cancellationToken).ConfigureAwait(false)).Where(sweep.Covers)];
@@ -4504,31 +4509,39 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         IReadOnlyList<ManagedPlayerbot> registered = await provider.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (ManagedPlayerbotProvision pending in pendingList)
         {
-            ManagedPlayerbot? completed = registered.SingleOrDefault(b => b.BotId == pending.BotId && b.AccountId == pending.AccountId && b.AccountName == pending.AccountName);
-            if (completed is not null)
-            {
-                CharacterRecord? character = await characters.GetByIdAsync(completed.CharacterId, cancellationToken).ConfigureAwait(false);
-                if (character?.AccountId != pending.AccountId || !await provisions.CompleteAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
-                    throw new InvalidOperationException("provision-reconcile-refused");
-                continue;
-            }
-            Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(pending.AccountName, cancellationToken).ConfigureAwait(false);
-            if (owner?.Id != pending.AccountId) throw new InvalidOperationException("provision-owner-refused");
-            WorldSession session = await NewSessionAsync(owner, null, provider, cancellationToken).ConfigureAwait(false);
             try
             {
-                foreach (CharacterRecord character in await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false))
-                    if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
-                        throw new InvalidOperationException("provision-character-cleanup-refused");
+                ManagedPlayerbot? completed = registered.SingleOrDefault(b => b.BotId == pending.BotId && b.AccountId == pending.AccountId && b.AccountName == pending.AccountName);
+                if (completed is not null)
+                {
+                    CharacterRecord? character = await characters.GetByIdAsync(completed.CharacterId, cancellationToken).ConfigureAwait(false);
+                    if (character?.AccountId != pending.AccountId || !await provisions.CompleteAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
+                        throw new InvalidOperationException("provision-reconcile-refused");
+                    continue;
+                }
+                Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(pending.AccountName, cancellationToken).ConfigureAwait(false);
+                if (owner?.Id != pending.AccountId) throw new InvalidOperationException("provision-owner-refused");
+                WorldSession session = await NewSessionAsync(owner, null, provider, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    foreach (CharacterRecord character in await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false))
+                        if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
+                            throw new InvalidOperationException("provision-character-cleanup-refused");
+                }
+                finally
+                {
+                    session.Kick("playerbot provisioning cleanup");
+                    await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                }
+                if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
+                    || !await provisions.RollbackEmptyOwnerAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException("provision-rollback-refused");
             }
-            finally
+            catch (Exception ex) when (isolateRows && ex is not OutOfMemoryException and not OperationCanceledException)
             {
-                session.Kick("playerbot provisioning cleanup");
-                await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                // A row that cannot be taken stays pending and is tried again by a later sweep; the rows behind it are still taken.
+                logger.LogFault(LogLevel.Warning, "playerbot.provision-sweep", ex, "Playerbot provisioning row {BotId} could not be reconciled ({Type}: {Message}); the sweep goes on", pending.BotId, ex.GetType().Name, ex.Message);
             }
-            if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
-                || !await provisions.RollbackEmptyOwnerAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("provision-rollback-refused");
         }
     }
 

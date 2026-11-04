@@ -383,6 +383,108 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         await world.Host.WaitForWorldAsync(() => world.Owners.Peek(poisoned)!.State == ManagedPlayerbotState.Running, "the retried bot running");
     }
 
+    private static async Task<(PopulationTestHost World, FakeLiveOwners Live, Guid BotId, ManagedPlayerbot Record)> RestartedFaultedBotAsync(long baseMs)
+    {
+        // A bot a refused start left Faulted/start-failed, then a process restart: the startup snapshot lists it Stopped, so the population sees it as startable, not as a Faulted retry.
+        var live = new FakeLiveOwners();
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 100;
+            o.Population.TargetOnline = 100;
+            o.Population.MaxCreatePerMinute = 1;
+            o.RestoreOnStartup = false;
+        }, manualClock: true, configureServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(live));
+        world.Host.World.Ownership = Owning(0, 1);
+        world.Feature.FaultRetryBaseMs = baseMs;
+        world.Feature.ForeignBotMemoryMs = 0;
+        Guid poisoned = (await world.Bots.CreateAsync("Restartbot", 1, 1)).BotId!.Value;
+        ManagedPlayerbot record = world.Owners.Peek(poisoned)!;
+        world.Owners.FailNextUpdate = true;
+        Assert.Equal("start-failed", (await world.Bots.StartAsync(poisoned.ToString())).Code);
+        world.Members.Seed(new PlayerbotPopulationMember(poisoned, record.CharacterId, PopulationTestHost.Elwynn, 0, 100, 5000));
+        await world.Bots.StartupAsync(default);
+        Assert.Equal(ManagedPlayerbotState.Stopped, world.Bots.Snapshot().Single(b => b.BotId == poisoned).State);
+        return (world, live, poisoned, record);
+    }
+
+    [Fact]
+    public async Task AFaultedRowAfterARestart_GetsAtMostFourAttempts_EvenWhenItsFaultRowCannotBeWritten()
+    {
+        (PopulationTestHost world, FakeLiveOwners live, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        world.Owners.FailUpdatesOf(poisoned); // the fault write throws, so the snapshot stays Stopped and the attempt is only known to the population
+        int baseline = live.CallsFor(record.CharacterId);
+
+        for (int i = 0; i < 12; i++) await PassAfterAsync(world, 1_000_000);
+
+        Assert.Equal(baseline + 4, live.CallsFor(record.CharacterId));
+    }
+
+    [Fact]
+    public async Task AFaultedRowAfterARestart_WaitsForItsBackoff()
+    {
+        (PopulationTestHost world, FakeLiveOwners live, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(100_000_000);
+        await using PopulationTestHost owned = world;
+        world.Owners.FailUpdatesOf(poisoned);
+        int baseline = live.CallsFor(record.CharacterId);
+
+        for (int i = 0; i < 6; i++) await PassAfterAsync(world, 1000);
+
+        Assert.Equal(baseline + 1, live.CallsFor(record.CharacterId));
+    }
+
+    [Fact]
+    public async Task ARetryThatThrows_DoesNotEndThePass_SoNewBotsAreStillCreated()
+    {
+        (PopulationTestHost world, _, Guid poisoned, _) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        world.Owners.FailUpdatesOf(poisoned);
+        int before = world.Bots.Snapshot().Count;
+
+        PopulationStatus status = await PassAndStatusAsync(world, 1_000_000);
+
+        Assert.False(status.Reason.Contains("the pass failed"), "the pass must not fault: " + status.Reason);
+        Assert.True(world.Bots.Snapshot().Count > before, "a new bot was created in the same pass; " + status.Reason);
+    }
+
+    [Fact]
+    public async Task ARetryRefusedWithoutAWrite_IsBoundedToo()
+    {
+        // The owner account is refused by the start (a session key is set): it writes nothing and used to be retried every pass for good.
+        (PopulationTestHost world, _, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        var accounts = (InMemoryAccountStore)world.Host.WorldServices.GetRequiredService<IAccountStore>();
+        Account owner = (await accounts.FindByUsernameAsync(record.AccountName))!;
+        owner.SessionKey = new byte[40];
+
+        for (int i = 0; i < 6; i++) await PassAfterAsync(world, 1_000_000);
+        owner.SessionKey = null; // the owner would be accepted now
+        for (int i = 0; i < 2; i++) await PassAfterAsync(world, 1_000_000);
+
+        Assert.NotEqual(ManagedPlayerbotState.Running, world.Owners.Peek(poisoned)!.State); // the four attempts were spent on the refusals
+    }
+
+    [Theory]
+    [InlineData("playerbot-capacity", true)]
+    [InlineData("live-on-other-worker", true)]
+    [InlineData("live-owner-unknown", true)]
+    [InlineData("fleet-reset-running", true)]
+    [InlineData("playerbots-stopping", true)]
+    [InlineData("playerbots-disabled", true)]
+    [InlineData("playerbots-detaching", true)]
+    [InlineData("owner-refused", false)]
+    [InlineData("start-failed", false)]
+    [InlineData("retry-faulted", false)]
+    public void OnlyARefusalThatDidNothingToTheBot_UsesNoAttempt(string code, bool noAttempt)
+        => Assert.Equal(noAttempt, PlayerbotPopulationFeature.MadeNoStartAttempt(code));
+
+    private static async Task<PopulationStatus> PassAndStatusAsync(PopulationTestHost world, long advanceMs)
+    {
+        await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += advanceMs; return true; });
+        world.Ticks.Set(200, 10);
+        return await world.PassAsync();
+    }
+
     private static async Task PassAfterAsync(PopulationTestHost world, long advanceMs)
     {
         await world.Host.World.InvokeAsync(() => { world.Feature.ClockMs += advanceMs; return true; });
