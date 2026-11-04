@@ -1816,13 +1816,44 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>The error code of a start that failed (an operator or restore start: not quarantined).</summary>
     private const string StartFailedCode = "start-failed";
 
-    /// <summary>The scope of another worker that holds the character live (<see cref="IPlayerbotLiveOwnerProbe"/>), or null; always null outside a split cluster.</summary>
-    private async Task<string?> LiveOwnerElsewhereAsync(IServiceProvider provider, int characterId, CancellationToken cancellationToken)
+    /// <summary>The refusal code of a start whose live-owner check failed: nothing was written, the bot is tried again later.</summary>
+    internal const string LiveOwnerUnknown = "live-owner-unknown";
+
+    /// <summary>
+    /// True when this world owns a list of maps (a split cluster worker, <see cref="WorldRuntime.Ownership"/>). The registry rows are then shared with other workers that run other bots, and the
+    /// rules that guard a row against another worker's write apply; with nothing withheld (combined) no other writer exists and they do not.
+    /// </summary>
+    internal bool SplitScope => _world is { } world && !world.Ownership.OwnsEverything;
+
+    /// <summary>The probe in force: the registered one, else the character claim (<see cref="ClaimLiveOwnerProbe"/>). Null without a world.</summary>
+    internal IPlayerbotLiveOwnerProbe? LiveOwnerProbeFor(IServiceProvider provider)
+        => _world is { } world ? provider.GetService<IPlayerbotLiveOwnerProbe>() ?? new ClaimLiveOwnerProbe(services, world) : null;
+
+    /// <summary>
+    /// The scope of another worker that holds the character live (<see cref="IPlayerbotLiveOwnerProbe"/>), or null when none does; always null outside a split cluster. A probe that throws is
+    /// reported as failed (<c>Failed</c>) instead of propagating: a caller must neither fault the bot nor leave its row changed because the check could not be made. Cancellation propagates.
+    /// </summary>
+    private async Task<(string? Holder, bool Failed)> ProbeLiveOwnerAsync(IServiceProvider provider, int characterId, CancellationToken cancellationToken)
     {
-        if (_world is not { } world) return null;
-        IPlayerbotLiveOwnerProbe probe = provider.GetService<IPlayerbotLiveOwnerProbe>() ?? new ClaimLiveOwnerProbe(services, world);
-        return await probe.FindAsync(characterId, cancellationToken).ConfigureAwait(false);
+        if (LiveOwnerProbeFor(provider) is not { } probe) return (null, false);
+        try
+        {
+            return (await probe.FindAsync(characterId, cancellationToken).ConfigureAwait(false), false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.live-owner-probe", ex);
+            logger.LogWarning(ex, "Playerbot live-owner check for character {CharacterId} failed ({Type}); the bot is skipped for now", characterId, ex.GetType().Name);
+            return (null, true);
+        }
     }
+
+    /// <summary>
+    /// A start that does not count as an operator's: a population retry of a bot a refused start left Faulted. It never clears the quarantine, and a failure is recorded as any restore's
+    /// failure is (<see cref="StartKind.Restore"/>).
+    /// </summary>
+    internal Task<PlayerbotOperationResult> StartForRetryAsync(Guid botId, CancellationToken cancellationToken)
+        => StartCoreAsync(botId.ToString(), null, cancellationToken, StartKind.Restore);
 
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
@@ -1867,7 +1898,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 return new(false, "owner-refused", bot.BotId);
             // Split cluster: another worker may run this bot. Its registry row is that worker's: this start writes nothing (a changed revision drops the holder's
             // healthy bot at its next checkpoint), faults nothing and reports nothing.
-            if (await LiveOwnerElsewhereAsync(scope.ServiceProvider, bot.CharacterId, cancellationToken).ConfigureAwait(false) is { } holder)
+            (string? holder, bool probeFailed) = await ProbeLiveOwnerAsync(scope.ServiceProvider, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+            if (probeFailed)
+            {
+                // Unknown whether another worker runs it: skip it this time, writing nothing (a start-failed fault here is what dropped the holder's bots).
+                return new(false, LiveOwnerUnknown, bot.BotId);
+            }
+
+            if (holder is not null)
             {
                 logger.LogDebug("Playerbot {BotId} is live on {Holder}; not started here", bot.BotId, holder);
                 return new(false, LiveOnOtherWorker, bot.BotId);
@@ -1940,13 +1978,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             // The login was refused because another worker holds the character (it took the claim between the check above and the login): not the bot's fault.
             // Put the row back as it was (revision-checked: a holder's newer write stands) and report nothing.
-            if (bot is { State: ManagedPlayerbotState.Starting } && beforeStart is not null && ex is InvalidOperationException { Message: "login-refused" }
-                && await LiveOwnerElsewhereAsync(scope.ServiceProvider, bot.CharacterId, CancellationToken.None).ConfigureAwait(false) is { } racedHolder)
+            if (bot is { State: ManagedPlayerbotState.Starting } && beforeStart is not null && ex is InvalidOperationException { Message: "login-refused" })
             {
-                try { await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false); }
-                catch (ManagedRevisionConflictException) { }
-                logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder);
-                return new(false, LiveOnOtherWorker, bot.BotId);
+                // A probe that fails here is treated like a holder: the row goes back as it was and no fault is written (the bot is tried again later).
+                (string? racedHolder, bool racedProbeFailed) = await ProbeLiveOwnerAsync(scope.ServiceProvider, bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                if (racedHolder is not null || racedProbeFailed)
+                {
+                    try { await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false); }
+                    catch (ManagedRevisionConflictException) { }
+                    logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder ?? "(unknown, the check failed)");
+                    return new(false, racedHolder is not null ? LiveOnOtherWorker : LiveOwnerUnknown, bot.BotId);
+                }
             }
 
             if (ex is not OperationCanceledException)
@@ -3560,7 +3602,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
                             // A start-failed fault cannot be this worker's own: it writes one only while the bot has no active entry. It is another worker's refused start
                             // (the character was live here), so the bot is not faulted: its row is written back as Running over the foreign fault and it stays active.
-                            if (stored is { State: ManagedPlayerbotState.Faulted, ErrorCode: StartFailedCode } && !active.Paused)
+                            if (SplitScope && stored is { State: ManagedPlayerbotState.Faulted, ErrorCode: StartFailedCode } && !active.Paused)
                             {
                                 try
                                 {
@@ -3569,6 +3611,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                                     logger.LogWarning("Playerbot {BotId} row carried a start-failed fault written by another worker; it is running here, so the row was restored", active.Record.BotId);
                                 }
                                 catch (ManagedRevisionConflictException) { } // another write came in meanwhile: the next checkpoint looks again
+                                continue;
+                            }
+
+                            // A row that differs from ours only by revision (and its update time) is the trace of another worker's refused start of this bot: it wrote Starting and put the row back.
+                            // Nothing of the bot changed, so it keeps running: take the row's revision and let the next checkpoint write what changed.
+                            if (SplitScope && !active.Paused && stored is not null
+                                && stored with { Revision = active.Record.Revision, UpdatedUnix = active.Record.UpdatedUnix } == active.Record)
+                            {
+                                active.Record = active.Record with { Revision = stored.Revision, UpdatedUnix = stored.UpdatedUnix };
                                 continue;
                             }
 

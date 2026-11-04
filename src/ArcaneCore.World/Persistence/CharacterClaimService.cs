@@ -131,7 +131,7 @@ public sealed class CharacterClaimService(
     {
         if (token is null || !CharacterOwnershipScopes.IsWorker(token.Scope) || services.GetService<EfTransferDecisionStore>() is not { } store)
             return null;
-        return await store.FindLiveOtherOwnerAsync((ulong)characterId, token, BuildReapPolicy()?.ReapAfter, cancellationToken).ConfigureAwait(false);
+        return await store.FindLiveOtherOwnerAsync((ulong)characterId, token, BuildReapPolicy(), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

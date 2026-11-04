@@ -2,8 +2,14 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Kernel.Cluster.Social;
+using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 using ArcaneCore.World.Bots;
 
@@ -64,6 +70,17 @@ public sealed class PopulationOwnershipTests
         Assert.True(kalimdor.OwnsRaceStart(2));
         Assert.Equal(50, east.ShareOf(100));
         Assert.Equal(50, kalimdor.ShareOf(100));
+    }
+
+    [Fact]
+    public void TheWorkersShares_AddUpToTheTargetExactly()
+    {
+        var east = new PopulationMapScope(Owning(0), [0, 1]);
+        var kalimdor = new PopulationMapScope(Owning(1), [0, 1]);
+        Assert.Equal(501, east.ShareOf(1001));
+        Assert.Equal(500, kalimdor.ShareOf(1001));
+        foreach (int target in new[] { 0, 1, 2, 3, 7, 999, 1001 })
+            Assert.Equal(target, east.ShareOf(target) + kalimdor.ShareOf(target));
     }
 
     [Fact]
@@ -181,5 +198,77 @@ public sealed class PopulationOwnershipTests
         Assert.Contains("created 4", status.Reason);
         Assert.Equal(4, status.EffectiveTarget);
         await world.WaitForSettledAsync(4);
+    }
+
+    /// <summary>A lease keeper of a clustered map worker that holds no lease (the Maintenance holder is another node): <see cref="ManagedPlayerbotFeature.HoldsMaintenanceLease"/> is false.</summary>
+    private static void AddNonHolderKeeper(IServiceCollection services)
+        => services.AddSingleton(new RealmAuthorityLeaseKeeper(new InMemoryRealmAuthorityLeaseStore(),
+            Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker }),
+            Options.Create(new GatewayWorkerOptions { NodeId = "worker-test" }),
+            NullLogger<RealmAuthorityLeaseKeeper>.Instance));
+
+    [Fact]
+    public async Task ASplitWorker_ThatDoesNotHoldTheMaintenanceLease_StillRunsItsOwnPass()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 4, configureServices: AddNonHolderKeeper);
+        Assert.False(world.Bots.HoldsMaintenanceLease);
+        world.Host.World.Ownership = Owning(0);
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.NotEqual("not-holder", status.State);
+        Assert.Contains("created 2", status.Reason);
+        await world.WaitForSettledAsync(2);
+    }
+
+    [Fact]
+    public async Task AKalimdorWorker_ThatDoesNotHoldTheLease_CreatesOnlyKalimdorRaces()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 8;
+            o.Population.FreshLaunch = true;
+            o.Population.TargetOnline = 16;
+            o.Population.Factions = PopulationFactions.Both;
+            o.Population.MaxStartsPerInterval = 8;
+            o.Population.MaxCreatePerMinute = 60;
+        }, configureServices: AddNonHolderKeeper, dataStore: () => new ContinentStartDataStore());
+        world.Host.World.Ownership = Owning(1);
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.NotEqual("not-holder", status.State);
+        Assert.True(status.Reason.Contains("created 8", StringComparison.Ordinal), status.Reason + " / " + status.LastError);
+        foreach (ManagedPlayerbot bot in await world.Owners.LoadAllAsync())
+        {
+            CharacterRecord record = Assert.Single(await world.Host.Characters.GetByAccountAsync(bot.AccountId));
+            Assert.Equal(1u, PopulationStartAreas.ContinentOf(record.Race)); // orc, troll, tauren or night elf
+        }
+    }
+
+    [Fact]
+    public async Task AWorkerWithoutAContinent_ThatDoesNotHoldTheLease_IsIdle_NotWaitingForTheLease()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2, configureServices: AddNonHolderKeeper);
+        world.Host.World.Ownership = InstancesOnly();
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Equal("idle", status.State);
+    }
+
+    [Fact]
+    public async Task CombinedMode_ThatDoesNotHoldTheLease_StillWaitsForIt()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 2, configureServices: AddNonHolderKeeper);
+
+        world.Ticks.Set(200, 10);
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.Equal("not-holder", status.State);
+        Assert.Empty(world.Members.Snapshot);
     }
 }

@@ -41,15 +41,18 @@ internal sealed class PopulationMapScope
     public bool OwnsRaceStart(byte race) => Owns(PopulationStartAreas.ContinentOf(race));
 
     /// <summary>
-    /// This process's share of a realm-wide bot count: the count times the owned fraction of the allowed maps, rounded to the nearest whole bot
-    /// (the count itself when nothing is withheld). Each worker fills only its own share, from the bots it can log in and the bots it creates, so
-    /// the workers together stay at the realm-wide target instead of each trying to reach all of it from a subset of the pool.
+    /// This process's share of a realm-wide bot count. The count is divided evenly over the allowed maps and the remainder goes one bot each to the first maps in map id order; a worker's share is the
+    /// sum over the maps it owns. The workers own disjoint maps, so their shares add up to the count exactly (1001 over two maps is 501 and 500). The count itself when nothing is withheld.
+    /// Each worker fills only its own share, from the bots it can log in and the bots it creates, so the workers together stay at the realm-wide target instead of each trying to reach all of it.
     /// </summary>
     public int ShareOf(int count)
     {
         if (OwnsEverything) return count;
-        if (count <= 0) return 0;
-        if (_allowed.Length == 0 || Maps.Length == 0) return 0;
-        return (int)(((long)count * Maps.Length + _allowed.Length / 2) / _allowed.Length);
+        if (count <= 0 || _allowed.Length == 0 || Maps.Length == 0) return 0;
+        uint[] order = [.. _allowed.Order()];
+        int each = count / order.Length, extra = count % order.Length, share = 0;
+        for (int i = 0; i < order.Length; i++)
+            if (Maps.Contains(order[i])) share += each + (i < extra ? 1 : 0);
+        return share;
     }
 }

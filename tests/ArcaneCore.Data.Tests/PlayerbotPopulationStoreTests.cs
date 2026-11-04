@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Playerbots;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Characters;
@@ -42,6 +43,34 @@ public sealed class PlayerbotPopulationStoreTests
             Assert.Equal(57, new PlayerbotPopulationDataModule().SchemaVersion);
             Assert.Equal(1, await db.Database.SqlQueryRaw<int>(
                 "SELECT COUNT(*) AS Value FROM sqlite_master WHERE type = 'table' AND name = 'playerbot_population_member'").SingleAsync());
+        }
+    }
+
+    /// <summary>A lease source that holds nothing (another node is the maintenance holder) on a worker that owns the given maps (none: every map).</summary>
+    private sealed class NonHolder(OwnedMapSet owned) : IRealmLeaseFenceSource
+    {
+        public RealmLeaseFence? FenceFor(string scope) => null;
+
+        public bool Holds(string scope) => false;
+
+        public OwnedMapSet OwnedMaps => owned;
+    }
+
+    [Fact]
+    public async Task Sqlite_AWorkerThatOwnsMaps_WritesItsMembersWithoutTheLease_ButAnUnrestrictedNonHolderIsRefused()
+    {
+        (SqliteConnection connection, CharacterDbContext db) = await OpenAsync();
+        await using (connection) await using (db)
+        {
+            var split = new EfPlayerbotPopulationStore(db, new NonHolder(new OwnedMapSet([(0u, 0u)], allowInstanceMaps: false)));
+            await split.UpsertAsync(Member(BotA, 1));
+            await split.UpsertAsync(Member(BotA, 1, zone: 40, updated: 200));
+            Assert.Equal(40u, Assert.Single(await split.LoadAllAsync()).ZoneId);
+            Assert.True(await split.DeleteAsync(BotA));
+
+            var unrestricted = new EfPlayerbotPopulationStore(db, new NonHolder(OwnedMapSet.All));
+            await Assert.ThrowsAsync<RealmLeaseNotHeldException>(() => unrestricted.UpsertAsync(Member(BotB, 2)));
+            await Assert.ThrowsAsync<RealmLeaseNotHeldException>(() => unrestricted.DeleteAsync(BotB));
         }
     }
 

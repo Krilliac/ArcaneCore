@@ -486,7 +486,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // The pass's durable writes (membership rows, bot creation) belong to the maintenance lease holder (writer-lock design section 4, row 7): on a clustered node that does not
         // hold it the pass would create a bot and then be refused the membership row, leaving an orphan character per pass.
         // A shed-only pass (a rush's interval pass) only parks running bots for load: it creates nothing and writes no membership row, so it runs on a non-holder too.
-        if (!shedOnly && Managed is { HoldsMaintenanceLease: false })
+        // A split worker (it owns a list of maps) runs its own pass without the lease: every read and write of a pass is of bots on its own maps, which no other worker runs; what is realm-wide
+        // (the orphan and pending-delete sweeps of the shared member table) stays with the holder, below.
+        if (!shedOnly && !IsSplit && Managed is { HoldsMaintenanceLease: false })
         {
             Publish(PopulationStatus.Idle(true, "not-holder", "this node does not hold the maintenance lease; the population pass runs on the holder"));
             return _pass = Task.CompletedTask;
@@ -623,6 +625,12 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly, facts, pop.ValueRouting ? _zoneValue : null);
     }
 
+    /// <summary>The allowed maps this process owns (every one when nothing is withheld, the combined behaviour); safe from any thread.</summary>
+    private PopulationMapScope ScopeOf(WorldRuntime world) => new(world.Ownership, _options.AllowedMaps);
+
+    /// <summary>True when this world owns a list of maps (a split cluster worker); false in combined mode, where every map is owned.</summary>
+    private bool IsSplit => _world is { } world && !world.Ownership.OwnsEverything;
+
     /// <summary>
     /// The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload), the maps/exclusions
     /// change, or the terrain lookup of the graveyards (<see cref="StartLocating"/>) has come in.
@@ -633,9 +641,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     /// built without it (every link kept, the zone's lowest sub-area as the floor: the behaviour without terrain data).
     /// </para>
     /// </summary>
-    /// <summary>The allowed maps this process owns (every one when nothing is withheld, the combined behaviour); safe from any thread.</summary>
-    private PopulationMapScope ScopeOf(WorldRuntime world) => new(world.Ownership, _options.AllowedMaps);
-
     private PopulationZoneAtlas AtlasFor(WorldRuntime world, PlayerbotPopulationOptions pop)
     {
         uint[] ownedMaps = ScopeOf(world).Maps;
@@ -1179,7 +1184,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             int changed = 0;
             int homeChanges = 0;
             // Graduation: a start home follows its bot's level. Not in a rush batch pass (the interval passes that run beside a rush do it).
-            if (maintenanceHolder && input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
+            if ((maintenanceHolder || IsSplit) && input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
             {
                 homeChanges = await SweepStartHomesAsync(ctx, ct).ConfigureAwait(false);
             }
@@ -1352,26 +1357,42 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     }
 
     /// <summary>How long a bot found saved on another worker's map is left unread (milliseconds on the feature clock).</summary>
-    private const long ForeignBotMemoryMs = 10 * 60 * 1000;
+    internal long ForeignBotMemoryMs { get; set; } = 10 * 60 * 1000;
 
     /// <summary>The most bot records one restart choice reads on a split worker (the rest wait for the next pass).</summary>
-    private const int MaxForeignChecksPerPass = 512;
+    internal int MaxForeignChecksPerPass { get; set; } = 512;
 
     private readonly Dictionary<int, long> _foreignUntilMs = [];
 
     /// <summary>
-    /// How long a bot left Faulted by a refused start (<c>start-failed</c>, written when another worker held the character) waits for its next start attempt. A bot that
-    /// is Faulted any other way is never started here (an operator start clears its fault history).
+    /// The wait before the first retry of a bot a refused start left Faulted (<c>start-failed</c>), in milliseconds; it doubles after every attempt (30, 60, 120, 240 minutes) and the
+    /// attempts stop after <see cref="FaultRetryAttempts"/> for the life of the process. Tests lower it.
     /// </summary>
-    private const long FaultRetryMs = 30 * 60 * 1000;
+    internal long FaultRetryBaseMs { get; set; } = 30 * 60 * 1000;
 
-    private readonly Dictionary<Guid, long> _faultRetryAtMs = [];
+    /// <summary>The most start attempts a Faulted/start-failed bot gets from the population in one process.</summary>
+    internal const int FaultRetryAttempts = 4;
 
+    private readonly Dictionary<Guid, (int Attempts, long NextAtMs)> _faultRetries = [];
+
+    /// <summary>
+    /// Split cluster only: a member left Faulted with <c>start-failed</c> (the row a start refused for another worker's live character used to leave) is started again, a few times, with a growing wait.
+    /// In combined mode no other worker can have written that fault, so a Faulted bot stays Faulted (an operator start clears it). Any other fault is never retried here.
+    /// </summary>
     private bool IsRetryableFault(PassContext ctx, PlayerbotPopulationMember member)
     {
+        if (_world is not { } world || world.Ownership.OwnsEverything) return false;
         if (!ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? row) || row.State != ManagedPlayerbotState.Faulted || row.ErrorCode != "start-failed") return false;
         if (ctx.Input.States.TryGetValue(member.BotId, out ManagedPlayerbotState state) && state != ManagedPlayerbotState.Faulted) return false;
-        return !_faultRetryAtMs.TryGetValue(member.BotId, out long at) || ctx.Input.ClockMs >= at;
+        return !_faultRetries.TryGetValue(member.BotId, out (int Attempts, long NextAtMs) done)
+            || (done.Attempts < FaultRetryAttempts && ctx.Input.ClockMs >= done.NextAtMs);
+    }
+
+    /// <summary>An attempt was made at <paramref name="nowMs"/>: count it and set the wait before the next one.</summary>
+    private void StampFaultRetry(Guid botId, long nowMs)
+    {
+        int attempts = _faultRetries.TryGetValue(botId, out (int Attempts, long NextAtMs) done) ? done.Attempts + 1 : 1;
+        _faultRetries[botId] = (attempts, nowMs + (FaultRetryBaseMs << (attempts - 1)));
     }
 
     private async Task<(int Started, int Created)> AddAsync(PassContext ctx, int count, CancellationToken ct)
@@ -1383,21 +1404,24 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         // The population's own stopped bots, in rotation: the one parked longest ago first, whatever its band (PopulationParking.RestartOrder).
         // A faulted bot (quarantined or disabled) is not started here: an operator start would clear its fault history, and the manager
-        // retries a quarantined bot itself. The startable, not-running members are ordered first and only then capped, so a registry of
+        // retries a quarantined bot itself. The one exception is split cluster only (IsRetryableFault): a bot a refused start left Faulted with
+        // start-failed. The startable, not-running members are ordered first and only then capped, so a registry of
         // more than 128 owned bots never hides a parked bot behind running or faulted ones.
         ICharacterStore characters = ctx.Scoped.GetRequiredService<ICharacterStore>();
-        var restart = new List<(PlayerbotPopulationMember Member, int Band)>();
+        var restart = new List<(PlayerbotPopulationMember Member, int Band, bool Retry)>();
         // A rush makes new bots only; the parked ones come back through the ordinary passes.
         // A split worker starts only bots saved on a map it owns (the others are another worker's: a login here would be refused), and picks its 128
         // among those, so foreign bots never take the slots. A foreign bot is remembered for ForeignBotMemoryMs so it costs no read every pass.
         PopulationMapScope? scope = _world is { } scopeWorld && !ScopeOf(scopeWorld).OwnsEverything ? ScopeOf(scopeWorld) : null;
         int reads = 0;
+        bool truncated = false; // the read cap ended the scan with parked bots of this worker possibly still unread
         foreach (PlayerbotPopulationMember member in PopulationParking.RestartOrder(
             ctx.Members.Values.Where(m => ctx.Input.RushCount == 0 && !ctx.RunningNow.Contains(m.BotId) && (IsStartable(ctx, m) || IsRetryableFault(ctx, m))), _parkedAt).Take(scope is null ? 128 : int.MaxValue))
         {
             if (scope is not null)
             {
-                if (restart.Count >= 128 || reads >= MaxForeignChecksPerPass) break;
+                if (restart.Count >= 128) break;
+                if (reads >= MaxForeignChecksPerPass) { truncated = true; break; }
                 if (_foreignUntilMs.TryGetValue(member.CharacterId, out long until) && ctx.Input.ClockMs < until) continue;
                 reads++;
             }
@@ -1410,20 +1434,19 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 continue;
             }
 
-            if (ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? faulted) && faulted.State == ManagedPlayerbotState.Faulted)
-                _faultRetryAtMs[member.BotId] = ctx.Input.ClockMs + FaultRetryMs; // one retry of a start-failed bot per FaultRetryMs
-            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level)));
+            bool retry = ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? faulted) && faulted.State == ManagedPlayerbotState.Faulted;
+            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level), retry));
         }
 
         // New bots are planned against the population's own bots running or waiting to be restarted (a parked bot fills its band once it
         // is back), so only a band its parked bots cannot fill gets new ones. While parked bots wait as well, such a band gets at most
         // half the pass's slots first, the rotation the rest, and creation any slots the rotation leaves: neither starves the other.
         int[] planned = (int[])ctx.Have.Clone();
-        foreach ((_, int band) in restart)
+        foreach ((_, int band, _) in restart)
             if (band >= 0) planned[band]++;
 
         bool creationFailed = false;
-        if (restart.Count > 0 && PopulationBandPlanner.NextBand(ctx.Desired, planned) >= 0)
+        if (restart.Count > 0 && !truncated && PopulationBandPlanner.NextBand(ctx.Desired, planned) >= 0)
         {
             int first = (remaining + 1) / 2;
             (int made, string? because, bool failed) = await CreateAsync(ctx, planned, first, quietWhenNothingFits: true, ct).ConfigureAwait(false);
@@ -1435,10 +1458,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         int failures = 0;
         bool capacity = false;
-        foreach ((PlayerbotPopulationMember member, int band) in restart)
+        foreach ((PlayerbotPopulationMember member, int band, bool retry) in restart)
         {
             if (remaining == 0 || failures >= 3) break;
-            PlayerbotOperationResult result = Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
+            PlayerbotOperationResult result = retry
+                ? Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false))
+                : Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
+            if (retry) StampFaultRetry(member.BotId, ctx.Input.ClockMs); // counted when the attempt is made, not when the bot was picked
             if (result.Success)
             {
                 started++;
@@ -1450,11 +1476,16 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 if (band >= 0) ctx.Have[band]++;
             }
             else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
-            else if (result.Code == ManagedPlayerbotFeature.LiveOnOtherWorker)
+            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown)
             {
                 // Another worker runs this bot: not a failure and nothing was written. It is left alone for a while, like a bot saved on another worker's map.
                 _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
                 if (band >= 0) planned[band]--; // it will not fill its band: a new bot may
+            }
+            else if (retry)
+            {
+                // A retry that fails again is not one of this pass's failures (the three that end it): the bot has its own attempts and waits, and the managed feature records the fault.
+                if (band >= 0) planned[band]--;
             }
             else
             {
@@ -1464,7 +1495,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
         }
 
-        if (remaining > 0 && stoppedBecause is null && !capacity && !creationFailed)
+        if (remaining > 0 && stoppedBecause is null && !capacity && !creationFailed && !truncated)
         {
             if (ctx.Input.TerrainHold is { } hold) stoppedBecause = hold;
             else
@@ -1532,7 +1563,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             if (ctx.Known.Count + ctx.Created >= _options.MaxRegisteredBots) return (created, "the bot registry is full (MaxRegisteredBots)", false);
             if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
             // A lease lost since the pass began: the membership write after the create would be refused and leave the new bot an orphan.
-            if (!managed.HoldsMaintenanceLease) return (created, "the maintenance lease is no longer held", false);
+            if (!IsSplit && !managed.HoldsMaintenanceLease) return (created, "the maintenance lease is no longer held", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
             // A split worker creates only races that start on a map it owns: the new bot logs in there, and the placement stays on owned maps.

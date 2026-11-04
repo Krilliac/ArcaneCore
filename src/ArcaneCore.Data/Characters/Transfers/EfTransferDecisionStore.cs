@@ -124,10 +124,11 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
 
     /// <summary>
     /// Read-only: the scope of another worker that holds the character's claim live, or null. A claim of another scope counts as live while a transfer is in flight on it, or while the
-    /// holder is the active incarnation of its scope and (when <paramref name="reapAfter"/> is given) its heartbeat is newer than that age; a claim whose holder is gone or reapable is not
-    /// live (the login-time reap takes it over). Issues no SQL for a token that is not a worker token. No write of any kind.
+    /// holder is the active incarnation of its scope, unless the claim itself would reap it: <paramref name="reapPolicy"/> is given, the holder's heartbeat is at or before
+    /// <see cref="CharacterClaimReapPolicy.NewestReapableHeartbeat"/> and the shard lock is free (the same three conditions as <see cref="TryClaimCharacterAsync"/>). A holder with no heartbeat, or
+    /// a stale one whose lock is held, is live. Issues no SQL for a token that is not a worker token. No write of any kind.
     /// </summary>
-    public async Task<string?> FindLiveOtherOwnerAsync(ulong characterGuid, CharacterOwnershipToken token, TimeSpan? reapAfter, CancellationToken cancellationToken = default)
+    public async Task<string?> FindLiveOtherOwnerAsync(ulong characterGuid, CharacterOwnershipToken token, CharacterClaimReapPolicy? reapPolicy, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(token);
@@ -150,7 +151,8 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             .SingleOrDefaultAsync(o => o.Scope == heldScope && o.Active && o.OwnerIncarnation == heldIncarnation, cancellationToken).ConfigureAwait(false);
         if (holder is null)
             return null;
-        if (reapAfter is { } age && holder.HeartbeatAtMs is { } beat && beat <= _clock() - (long)age.TotalMilliseconds)
+        if (reapPolicy is not null && holder.HeartbeatAtMs is { } beat && beat <= reapPolicy.NewestReapableHeartbeat(_clock())
+            && await reapPolicy.IsShardLockFree(heldScope, cancellationToken).ConfigureAwait(false))
             return null;
         return row.Scope;
     }
@@ -210,7 +212,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     if (!probedFree || !string.Equals(probedScope, heldScope, StringComparison.Ordinal))
                         return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope); // the lock was not free, or the claim moved to another shard since the probe
 
-                    long newestReapable = now - (long)reapPolicy.ReapAfter.TotalMilliseconds;
+                    long newestReapable = reapPolicy.NewestReapableHeartbeat(now);
                     long holderEpoch = holder.Epoch;
                     int reaped = await db.Set<CharacterOwnershipRow>()
                         .Where(o => o.Scope == heldScope && o.Active && o.Epoch == holderEpoch && o.Epoch < long.MaxValue

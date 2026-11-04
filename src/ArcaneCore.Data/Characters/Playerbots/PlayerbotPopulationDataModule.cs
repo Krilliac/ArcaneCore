@@ -56,6 +56,17 @@ public sealed class PlayerbotPopulationDataModule : IDataModule, ICharacterDataC
 /// <summary>EF store of the population membership.</summary>
 public sealed class EfPlayerbotPopulationStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IPlayerbotPopulationStore
 {
+    /// <summary>
+    /// A realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2), except that a worker that owns a list of maps (a split cluster) also writes the
+    /// rows of its own bots. Every row is keyed by one bot and a bot is run by one worker, so those writes of different workers never meet; the realm-wide sweeps over the table (orphan and
+    /// pending-delete rows) stay with the holder, which the population feature gates itself.
+    /// </summary>
+    private void RequireWriter()
+    {
+        if (leaseFences is { OwnedMaps.OwnsEverything: false }) return;
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance);
+    }
+
     public async Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default)
     {
         List<PlayerbotPopulationMemberRow> rows = await db.Set<PlayerbotPopulationMemberRow>().AsNoTracking().OrderBy(row => row.BotId)
@@ -66,7 +77,7 @@ public sealed class EfPlayerbotPopulationStore(CharacterDbContext db, IRealmLeas
     public async Task UpsertAsync(PlayerbotPopulationMember member, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(member);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
+        RequireWriter();
         if (member.BotId == Guid.Empty || member.CharacterId <= 0 || member.CreatedUnix < 0 || member.UpdatedUnix < member.CreatedUnix)
             throw new ArgumentException("Population member identity or timestamps are invalid.", nameof(member));
 
@@ -99,7 +110,7 @@ public sealed class EfPlayerbotPopulationStore(CharacterDbContext db, IRealmLeas
 
     public async Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
+        RequireWriter();
         return await CharacterWrites.InTransactionAsync(
             db, () => db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == botId).ExecuteDeleteAsync(cancellationToken),
             cancellationToken).ConfigureAwait(false) == 1;
