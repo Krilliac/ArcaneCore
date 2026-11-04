@@ -303,6 +303,67 @@ public sealed class CrossWorkerGuildTests : IDisposable
     }
 
     [Fact]
+    public async Task PetitionSign_WithoutALinkToTheHolder_AnswersTheSignerAndChangesNothing()
+    {
+        await StartAsync();
+        await JoinAsync(_a, AliceId, "Alice");
+        (Player bob, RecordingSession bobSession) = await JoinAsync(_b, BobId, "Bob");
+        ObjectGuid charter = ObjectGuid.Item(500);
+        var stored = new PetitionData(1, AliceId, 500, GuildName, []);
+        foreach (Worker worker in _hub.Workers)
+        {
+            await OnWorldAsync(worker, () => worker.Context.Petitions.Load([stored]));
+        }
+
+        _hub.LinkUp = false;
+        await OnWorldAsync(_b, () => _b.Context.Petitions.Sign(bob, charter));
+
+        byte[] internalError = GuildPackets.BuildCommandResult(GuildCommand.Create, string.Empty, GuildCommandError.Internal);
+        Assert.True(Received(bobSession, WorldOpcode.SmsgGuildCommandResult, internalError));
+        Assert.Empty(await OnWorldAsync(_a, () => _a.Context.Petitions.Get(1)!.Signatures));
+    }
+
+    [Fact]
+    public async Task PetitionOffer_ToAPlayerOnAnotherWorker_WithoutALinkToTheHolder_AnswersTheOfferer()
+    {
+        await StartAsync();
+        (Player alice, RecordingSession aliceSession) = await JoinAsync(_b, AliceId, "Alice");
+        (Player bob, _) = await JoinAsync(_a, BobId, "Bob");
+        ObjectGuid charter = ObjectGuid.Item(500);
+
+        _hub.LinkUp = false;
+        await OnWorldAsync(_b, () => _b.Context.Petitions.Offer(alice, charter, bob.Guid));
+
+        byte[] internalError = GuildPackets.BuildCommandResult(GuildCommand.Create, string.Empty, GuildCommandError.Internal);
+        Assert.True(Received(aliceSession, WorldOpcode.SmsgGuildCommandResult, internalError));
+    }
+
+    [Fact]
+    public async Task PetitionDelete_WithoutALinkToTheHolder_KeepsThePetitionSoReplicaAndHolderStayEqual()
+    {
+        await StartAsync();
+        (Player alice, _) = await JoinAsync(_b, AliceId, "Alice");
+        var stored = new PetitionData(1, AliceId, 500, GuildName, []);
+        foreach (Worker worker in _hub.Workers)
+        {
+            await OnWorldAsync(worker, () => worker.Context.Petitions.Load([stored]));
+        }
+
+        // The owner logs in on worker B without the charter in the bags: the petition is orphaned and would be deleted.
+        _hub.LinkUp = false;
+        await OnWorldAsync(_b, () => _b.Context.Petitions.OnPlayerLoggedIn(alice));
+        Assert.NotNull(await OnWorldAsync(_b, () => _b.Context.Petitions.Get(1)));
+        Assert.NotNull(await OnWorldAsync(_a, () => _a.Context.Petitions.Get(1)));
+
+        // With the link back the same check deletes it on both.
+        _hub.LinkUp = true;
+        await OnWorldAsync(_b, () => _b.Context.Petitions.OnPlayerLoggingOut(alice));
+        await OnWorldAsync(_b, () => _b.Context.Petitions.OnPlayerLoggedIn(alice));
+        await WaitOnWorldAsync(_a, () => _a.Context.Petitions.Get(1) is null, "the holder to drop the petition");
+        Assert.Null(await OnWorldAsync(_b, () => _b.Context.Petitions.Get(1)));
+    }
+
+    [Fact]
     public async Task OneWorker_WithoutALink_BehavesAsBefore()
     {
         await StartAsync();
@@ -324,6 +385,8 @@ public sealed class CrossWorkerGuildTests : IDisposable
     /// <summary>The in-process cluster: who is the holder, which worker each character is online on, and the other workers.</summary>
     private sealed class Hub
     {
+        public volatile bool LinkUp = true;
+
         public Worker Holder { get; set; } = null!;
 
         public List<Worker> Workers { get; } = [];
@@ -352,8 +415,15 @@ public sealed class CrossWorkerGuildTests : IDisposable
 
         public bool IsHolder => ReferenceEquals(_hub.Holder, this);
 
+        public bool CanForward => _hub.LinkUp;
+
         public bool Forward(GuildRequest request, Action<bool>? completed)
         {
+            if (!_hub.LinkUp)
+            {
+                return false;
+            }
+
             Worker holder = _hub.Holder;
             holder.World.Post(() =>
             {

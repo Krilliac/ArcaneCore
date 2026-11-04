@@ -22,10 +22,10 @@ public interface IGroupAuthorityTransport
 
     /// <summary>
     /// True when a call can be made now: this node holds the authority, or it has a live link to the node that does. False is the normal state before the peer link connects (and
-    /// while the holder is away): callers wait instead of calling, so nothing throws. A link that drops between this check and the call may still throw. Never blocks. Defaults to true
-    /// for a transport that is always in process.
+    /// while the holder is away): callers wait instead of calling, so nothing throws. A link that drops between this check and the call may still throw. Never blocks.
+    /// A transport that is always in process returns true.
     /// </summary>
-    bool IsAuthorityReachable => true;
+    bool IsAuthorityReachable { get; }
 }
 
 /// <summary>
@@ -206,11 +206,19 @@ internal static class GroupWireCodec
 /// Group operations between workers (M15.2 S3a). The group manager of this worker hands every command to <see cref="Forward"/> (an enqueue, safe on the world thread); one background
 /// task sends them in order to the group authority at the Social lease holder (<see cref="IGroupAuthorityTransport"/>), and the pump (<see cref="PumpOnce"/>, every interval after
 /// <see cref="Start"/>) drains the events queued for this worker and hands them to <see cref="Deliver"/>, which the social feature posts to the world thread. A command whose send
-/// fails once the authority is reachable (link dropped mid-call, refusal) is dropped with a log line, as chat is. While <see cref="IGroupAuthorityTransport.IsAuthorityReachable"/> is
-/// false (the peer link is not up yet, or the holder is away) the sender holds the oldest command and the rest wait behind it in the queue, in order, and nothing is dropped for that
-/// reason: the first command to wait logs once at Information, and the resume logs once with the number sent and dropped. The queue holds at most <see cref="MaxQueuedCommands"/>
-/// commands; when a long outage fills it the newest are dropped (the ones already waiting keep their order) and counted in <see cref="QueueDropped"/>.
-/// Ownership: owns the sender and pump tasks; <see cref="DisposeAsync"/> stops both (a hold ends at once). Thread-safety: all members are safe from any thread.
+/// fails once the authority is reachable (link dropped mid-call, refusal) is dropped with a log line, as chat is.
+/// <para>
+/// While <see cref="IGroupAuthorityTransport.IsAuthorityReachable"/> is false (the peer link is not up yet, or the holder is away) the sender holds the oldest command and the rest
+/// wait behind it in the queue, in order. Transient <see cref="GroupCommandKind.Relay"/> commands (party stats, pings, rolls) are never held: <see cref="Forward"/> drops them
+/// while the authority is unreachable and counts them in <see cref="RelayDropped"/>, so they cannot crowd out a Logout or Leave. Every queued command carries its enqueue time; one
+/// older than <see cref="MaxHeldCommandAge"/> when it comes to be sent is dropped and counted in <see cref="Expired"/> (this bounds a stale Leave or Kick after a long outage; a
+/// startup hold is far shorter). The queue holds at most <see cref="MaxQueuedCommands"/> commands; when an outage fills it the newest are dropped (those already waiting keep their
+/// order) and counted in <see cref="QueueDropped"/>. The first command to wait logs once at Information, and the outage logs once more when it ends, with the number of commands
+/// dropped for each reason; the count of commands still waiting there is approximate.
+/// </para>
+/// <para>Ownership: owns the sender and pump tasks; <see cref="DisposeAsync"/> stops both (a hold ends at once and the commands still held are discarded, with one log line).
+/// Thread-safety: all members are safe from any thread. <see cref="Forward"/> reads <see cref="IGroupAuthorityTransport.IsAuthorityReachable"/> for a relay command, which takes a short lock
+/// in the lease keeper (never blocks on the network).</para>
 /// </summary>
 public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 {
@@ -220,10 +228,18 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     /// <summary>Most batches one <see cref="PumpOnce"/> pass takes from the holder.</summary>
     public const int MaxPumpBatches = 64;
 
+    /// <summary>The longest a command may wait before it is sent; an older one is dropped (see the class remarks).</summary>
+    public static readonly TimeSpan MaxHeldCommandAge = TimeSpan.FromSeconds(120);
+
+    private static readonly TimeSpan HoldPoll = TimeSpan.FromMilliseconds(25);
+
+    private sealed record Queued(GroupCommand Command, long EnqueuedAt);
+
     private readonly IGroupAuthorityTransport _transport;
     private readonly string _workerId;
     private readonly ILogger _logger;
-    private readonly Channel<GroupCommand> _queue = Channel.CreateBounded<GroupCommand>(
+    private readonly TimeProvider _time;
+    private readonly Channel<Queued> _queue = Channel.CreateBounded<Queued>(
         new BoundedChannelOptions(MaxQueuedCommands) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _sender;
@@ -231,28 +247,26 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     private Action<GroupEvent>? _deliver;
     private long _queueDropped;
     private long _sendFailed;
+    private long _relayDropped;
+    private long _expired;
     private int _started;
     private int _disposed;
 
-    /// <summary>How often a held sender re-reads <see cref="IGroupAuthorityTransport.IsAuthorityReachable"/> (a cheap property read).</summary>
-    public static readonly TimeSpan DefaultHoldPoll = TimeSpan.FromMilliseconds(25);
+    // Sender-task state of the current outage (only the sender task touches these).
+    private bool _resumePending;
+    private long _outageQueueDropped;
+    private long _outageRelayDropped;
+    private long _outageExpired;
 
-    private readonly TimeSpan _holdPoll;
-
-    /// <param name="holdPoll">How often a held sender checks whether the authority became reachable; null takes <see cref="DefaultHoldPoll"/>.</param>
-    public ClusterGroupRouting(IGroupAuthorityTransport transport, string workerId, ILogger? logger = null, TimeSpan? holdPoll = null)
+    /// <param name="time">The clock commands are aged with (<see cref="TimeProvider.GetTimestamp"/>); null takes the system clock.</param>
+    public ClusterGroupRouting(IGroupAuthorityTransport transport, string workerId, ILogger? logger = null, TimeProvider? time = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);
-        if (holdPoll is { } poll && poll <= TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(holdPoll));
-        }
-
         _transport = transport;
         _workerId = workerId;
-        _holdPoll = holdPoll ?? DefaultHoldPoll;
         _logger = logger ?? NullLogger.Instance;
+        _time = time ?? TimeProvider.System;
         _sender = Task.Run(RunSenderAsync, CancellationToken.None);
     }
 
@@ -272,16 +286,32 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     /// <summary>Commands dropped because the authority could not be reached or refused them.</summary>
     public long SendFailed => Interlocked.Read(ref _sendFailed);
 
+    /// <summary>Relay commands (stats, pings, rolls) dropped because the authority was unreachable.</summary>
+    public long RelayDropped => Interlocked.Read(ref _relayDropped);
+
+    /// <summary>Commands dropped at send time because they had waited longer than <see cref="MaxHeldCommandAge"/>.</summary>
+    public long Expired => Interlocked.Read(ref _expired);
+
     public void Forward(GroupCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (!_queue.Writer.TryWrite(command))
+        if (command.Kind == GroupCommandKind.Relay && !_transport.IsAuthorityReachable)
+        {
+            Interlocked.Increment(ref _relayDropped); // transient: a late ping or roll is worse than none
+            return;
+        }
+
+        if (!_queue.Writer.TryWrite(new Queued(command, _time.GetTimestamp())))
         {
             Interlocked.Increment(ref _queueDropped);
         }
     }
 
-    /// <summary>Completes when every command queued before the call has been sent (tests and orderly shutdown).</summary>
+    /// <summary>
+    /// Completes when the sender has passed every command queued before the call: each was sent, or dropped (refused, failed, expired), or, after disposal, discarded. During a hold
+    /// that is only once the authority is reachable again (or the routing is disposed). When the queue is full the marker cannot be queued and the call completes at once without
+    /// waiting for anything. For tests and orderly shutdown.
+    /// </summary>
     public async Task FlushAsync()
     {
         // A marker the sender recognises by reference (never sent): it is dequeued behind every command queued before it.
@@ -299,29 +329,49 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
         await done.Task.ConfigureAwait(false);
     }
 
-    private static readonly GroupCommand FlushMarker = new(GroupCommandKind.Login, 0, string.Empty, 0, false);
+    private static readonly Queued FlushMarker = new(new GroupCommand(GroupCommandKind.Login, 0, string.Empty, 0, false), 0);
     private readonly List<TaskCompletionSource> _flushWaiters = [];
 
     private async Task RunSenderAsync()
     {
-        ChannelReader<GroupCommand> reader = _queue.Reader;
+        ChannelReader<Queued> reader = _queue.Reader;
+        int inHand = 0;
         try
         {
             while (await reader.WaitToReadAsync(_stop.Token).ConfigureAwait(false))
             {
-                while (reader.TryRead(out GroupCommand? command))
+                while (!_stop.IsCancellationRequested && reader.TryRead(out Queued? queued))
                 {
-                    if (ReferenceEquals(command, FlushMarker))
+                    if (ReferenceEquals(queued, FlushMarker))
                     {
+                        ReportResume(reader);
                         ReleaseFlushWaiters();
                         continue;
                     }
 
+                    GroupCommand command = queued.Command;
                     if (!_transport.IsAuthorityReachable)
                     {
+                        if (command.Kind == GroupCommandKind.Relay)
+                        {
+                            Interlocked.Increment(ref _relayDropped); // queued before the link went away
+                            continue;
+                        }
+
+                        inHand = 1;
                         await HoldUntilReachableAsync(reader, command).ConfigureAwait(false);
+                        inHand = 0;
                     }
 
+                    if (_time.GetElapsedTime(queued.EnqueuedAt) > MaxHeldCommandAge)
+                    {
+                        Interlocked.Increment(ref _expired);
+                        _outageExpired++;
+                        _logger.LogDebug("Group command {Kind} of {Actor} dropped: it waited longer than {Seconds} s", command.Kind, command.Actor, (int)MaxHeldCommandAge.TotalSeconds);
+                        continue;
+                    }
+
+                    ReportResume(reader);
                     try
                     {
                         _transport.ExecuteGroupCommand(_workerId, command);
@@ -344,6 +394,20 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
         }
         finally
         {
+            int discarded = inHand;
+            while (reader.TryRead(out Queued? rest))
+            {
+                if (!ReferenceEquals(rest, FlushMarker))
+                {
+                    discarded++;
+                }
+            }
+
+            if (discarded > 0)
+            {
+                _logger.LogInformation("Group routing stopped: {Count} held commands were discarded", discarded);
+            }
+
             ReleaseFlushWaiters(); // a hold ended by disposal must not leave a FlushAsync caller waiting
         }
     }
@@ -363,22 +427,38 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
     /// <summary>
     /// Waits, on the sender task only, until the authority is reachable. <paramref name="held"/> is the command in hand (the oldest one); the others wait in the queue behind it, so
-    /// order is kept. Logs once when the wait starts and once when it ends. Throws <see cref="OperationCanceledException"/> when the routing is disposed.
+    /// order is kept. Logs once when the wait starts; the matching resume line is written by <see cref="ReportResume"/> once the backlog has been walked (so it can count what expired).
+    /// Throws <see cref="OperationCanceledException"/> when the routing is disposed.
     /// </summary>
-    private async Task HoldUntilReachableAsync(ChannelReader<GroupCommand> reader, GroupCommand held)
+    private async Task HoldUntilReachableAsync(ChannelReader<Queued> reader, GroupCommand held)
     {
-        long droppedAtStart = QueueDropped;
+        // A future lease takeover that ends a hold must be ordered against SocialGroupPersistenceFeature.ReloadAuthority's Reset: held commands must not reach a table that is being reloaded.
+        _outageQueueDropped = QueueDropped;
+        _outageRelayDropped = RelayDropped;
+        _outageExpired = 0;
         _logger.LogInformation(
-            "Group commands are held: this node has no link to the Social holder yet; starting with {Kind} of {Actor}, {Waiting} more queued",
+            "Group commands are held: this node has no link to the Social holder; starting with {Kind} of {Actor}, {Waiting} more queued",
             held.Kind, held.Actor, reader.Count);
         while (!_transport.IsAuthorityReachable)
         {
-            await Task.Delay(_holdPoll, _stop.Token).ConfigureAwait(false);
+            await Task.Delay(HoldPoll, _stop.Token).ConfigureAwait(false);
         }
 
+        _resumePending = true;
+    }
+
+    /// <summary>Writes the once-per-outage resume line (if an outage is waiting to be reported): reached when the first fresh command is about to be sent, or the backlog ended.</summary>
+    private void ReportResume(ChannelReader<Queued> reader)
+    {
+        if (!_resumePending)
+        {
+            return;
+        }
+
+        _resumePending = false;
         _logger.LogInformation(
-            "Group commands resume: the Social holder is reachable; about {Waiting} held commands to send, {Dropped} were dropped while the queue was full",
-            reader.Count + 1, QueueDropped - droppedAtStart);
+            "Group commands resume: the Social holder is reachable; about {Waiting} commands are still waiting; dropped during the outage: {Expired} older than {Seconds} s, {Dropped} for a full queue, {Relays} relays",
+            reader.Count, _outageExpired, (int)MaxHeldCommandAge.TotalSeconds, QueueDropped - _outageQueueDropped, RelayDropped - _outageRelayDropped);
     }
 
     /// <summary>Drains the events queued for this worker and hands them to <see cref="Deliver"/>; returns how many. Blocking when the authority is remote: never call on the world thread.</summary>

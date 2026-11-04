@@ -1682,6 +1682,12 @@ public interface IGuildHolderLink
     bool IsHolder { get; }
 
     /// <summary>
+    /// True when <see cref="Forward"/> would be accepted now (a worker that is not the holder has a link to it). Checked before a change is made locally that must be forwarded as a
+    /// pair, so the two copies cannot diverge. Never blocks.
+    /// </summary>
+    bool CanForward { get; }
+
+    /// <summary>
     /// Ask the holder to run <paramref name="request"/>. False when the holder cannot be reached (nothing was sent). Otherwise the request is queued for the holder's world
     /// thread; <paramref name="completed"/>, when given, later runs on the calling worker's world thread with <see cref="GuildManager.Serve"/>'s result.
     /// </summary>

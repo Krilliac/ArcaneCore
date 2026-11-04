@@ -27,9 +27,9 @@ public interface IGuildHolderTransport
 
     /// <summary>
     /// True when a call can be made now: the holder is in process, or the peer link to it is open. False is the normal state before the link connects; callers check it instead of
-    /// calling, so nothing throws. A link that drops after the check may still throw. Never blocks. Defaults to true for a transport that is always in process.
+    /// calling, so nothing throws. A link that drops after the check may still throw. Never blocks. An in-process transport returns true.
     /// </summary>
-    bool IsAuthorityReachable => true;
+    bool IsAuthorityReachable { get; }
 }
 
 /// <summary>
@@ -391,7 +391,8 @@ public sealed class GuildHolderService(IRealmPresenceDirectory directory, ILogge
 /// not refused on its behalf. A request whose send fails (link down, refusal) is dropped with a log line and its completion callback runs with false; while the last
 /// contact with the holder failed, or while <see cref="IGuildHolderTransport.IsAuthorityReachable"/> is false (the peer link is not up yet), <see cref="Forward"/> returns false
 /// (nothing queued) so the caller can answer the player; guild requests are not held for the link because a player is waiting on them. A request accepted just before the link
-/// dropped is refused the same way (callback false) with one log line per outage.
+/// dropped is refused the same way (callback false) with one log line per outage. Door refusals are counted in <see cref="DoorRefused"/> and log once per outage at Warning; a
+/// request that has no waiting player and is not kept (petition puts, character-deleted notices) logs a Warning each time naming what was lost.
 /// </para>
 /// Ownership: owns the sender and pump tasks; <see cref="DisposeAsync"/> stops both. Thread-safety: all members are safe from any thread except where noted (Deliver, the
 /// replication calls and FindOnline are made on the holder's world thread, which is the contract of <see cref="IGuildHolderLink"/>).
@@ -432,6 +433,8 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     private long _sendFailed;
     private int _unreachable;
     private int _outageLogged;
+    private int _doorLogged;
+    private long _doorRefused;
     private int _started;
     private int _disposed;
 
@@ -475,16 +478,40 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
 
     public bool IsHolder => _holdsSocial();
 
+    /// <summary>True when <see cref="Forward"/> would accept a request now: not disposed, no failed contact with the holder pending, and the transport reachable. Never blocks.</summary>
+    public bool CanForward => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _unreachable) == 0 && _transport.IsAuthorityReachable;
+
+    /// <summary>Requests refused at <see cref="Forward"/> because there was no link to the holder (nothing was queued).</summary>
+    public long DoorRefused => Interlocked.Read(ref _doorRefused);
+
     public bool Forward(GuildRequest request, Action<bool>? completed)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (Volatile.Read(ref _disposed) != 0 || IsHolder || Volatile.Read(ref _unreachable) != 0 || !_transport.IsAuthorityReachable)
+        if (Volatile.Read(ref _disposed) != 0 || IsHolder)
         {
-            // A clean refusal: nothing is queued, no callback is kept, and the caller answers the player. Guild requests are interactive (a typed command, a petition turn-in), so
-            // making the player wait for a link that may be seconds away is worse than telling them now.
             return false;
         }
 
+        if (!CanForward)
+        {
+            // A refusal at the door: nothing is queued and no callback is kept. Guild requests are interactive, so making the player wait for a link that may be seconds away is worse
+            // than refusing now; the caller answers the player (the petition paths send the guild "internal error" result, as GuildManager does) or, for a request with no waiting
+            // player, logs what was lost.
+            Interlocked.Increment(ref _doorRefused);
+            if (request.Kind is GuildRequestKind.PetitionPut or GuildRequestKind.PetitionCharacterDeleted)
+            {
+                _logger.LogWarning("Guild request {Kind} of {Actor} was lost: no link to the Social holder, and nothing is kept for later", request.Kind, request.Actor.Value);
+            }
+
+            if (Interlocked.Exchange(ref _doorLogged, 1) == 0)
+            {
+                _logger.LogWarning("Guild requests are being refused: this node has no link to the Social holder (first was {Kind} of {Actor})", request.Kind, request.Actor.Value);
+            }
+
+            return false;
+        }
+
+        Volatile.Write(ref _doorLogged, 0);
         long id = 0;
         if (completed is not null)
         {

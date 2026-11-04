@@ -51,6 +51,9 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
     /// <summary>Most undelivered kicks kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedKicksPerWorker = 1024;
 
+    /// <summary>The holder itself is always reachable (in process).</summary>
+    public bool IsAuthorityReachable => true;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<int, long> _generationByAccount = [];
     private readonly Dictionary<string, List<PresenceKick>> _kicks = new(StringComparer.Ordinal);
