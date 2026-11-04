@@ -201,7 +201,7 @@ public sealed class PopulationOwnershipTests
     }
 
     /// <summary>A lease keeper of a clustered map worker that holds no lease (the Maintenance holder is another node): <see cref="ManagedPlayerbotFeature.HoldsMaintenanceLease"/> is false.</summary>
-    private static void AddNonHolderKeeper(IServiceCollection services)
+    internal static void AddNonHolderKeeper(IServiceCollection services)
         => services.AddSingleton(new RealmAuthorityLeaseKeeper(new InMemoryRealmAuthorityLeaseStore(),
             Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker }),
             Options.Create(new GatewayWorkerOptions { NodeId = "worker-test" }),

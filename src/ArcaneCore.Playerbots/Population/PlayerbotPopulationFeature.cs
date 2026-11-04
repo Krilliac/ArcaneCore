@@ -1083,6 +1083,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     private async Task<(Dictionary<Guid, ManagedPlayerbot> Known, Dictionary<Guid, PlayerbotPopulationMember> Members, HashSet<Guid> PendingIds)> ReadMembershipAsync(
         ManagedPlayerbotFeature managed, IServiceProvider scoped, IPlayerbotPopulationStore store, bool maintenanceHolder, CancellationToken ct)
     {
+        // The holder also takes the journal rows of creates that died on another worker (split cluster; a no-op elsewhere, rate limited, never throws).
+        if (maintenanceHolder) await managed.SweepStaleProvisionsAsync(ct).ConfigureAwait(false);
         IReadOnlyList<PlayerbotPopulationMember> stored = await store.LoadAllAsync(ct).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scoped.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(ct).ConfigureAwait(false);
         var known = registered.ToDictionary(b => b.BotId);
