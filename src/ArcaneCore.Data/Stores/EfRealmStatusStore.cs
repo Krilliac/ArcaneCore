@@ -90,7 +90,7 @@ public sealed class EfRealmStatusStore(AuthDbContext db) : IRealmStatusStore
         for (int attempt = 0; attempt < FlagsAttempts; attempt++)
         {
             List<RealmFlags> found = await db.Realms.AsNoTracking()
-                .Where(r => r.Id == realmId).Select(r => r.Flags).Take(1)
+                .Where(r => r.Id == realmId).OrderBy(r => r.Id).Select(r => r.Flags).Take(1)
                 .ToListAsync(cancellationToken).ConfigureAwait(false);
             if (found.Count == 0)
             {
