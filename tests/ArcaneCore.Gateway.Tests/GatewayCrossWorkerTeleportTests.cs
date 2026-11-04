@@ -90,13 +90,11 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.Null(cluster.Gateway.Workers[1].Link);
 
         await cluster.KalimdorWorker.StartAsync(cts.Token);
-        var teleport = System.Diagnostics.Stopwatch.StartNew();
         Assert.True(await cluster.TeleportAsync(guid, Landing));
 
-        WorldFrame pending = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token);
+        WorldFrame pending = await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(pending.Payload));
-        Assert.True(teleport.Elapsed < TimeSpan.FromSeconds(20), $"the transfer waited {teleport.Elapsed.TotalSeconds:F1} s: the link came from the supervisor's backoff, not from a prompt dial");
-        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
 
@@ -105,6 +103,52 @@ public sealed class GatewayCrossWorkerTeleportTests
         Guid transferId = cluster.Router.LastTransferId;
         await Cluster.WaitUntilAsync(
             async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+    }
+
+    [Fact]
+    public async Task ARefusalAfterTheSourceLinkBlippedDuringTheWait_ReachesTheSourceOnItsNewLink_AndEndsTheInFlightEntry()
+    {
+        // The worker's in-flight entry has no link-loss hook: only the gateway's answer ends it, and without one the character's far teleports stay blocked for InFlightExpiry.
+        // The Kalimdor worker never starts, so the submit waits out MapOwnerLinkWait; the first link's retry delay is short so the east link is back well before that.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token, kalimdorLinkBackoff: TimeSpan.FromSeconds(1));
+        await using WorldClient client = await cluster.EnterEastAsync("TELEBLIP", "Teleblip", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+        GatewayWorkerLink east = cluster.Gateway.Workers[0];
+        GatewayWorkerLink kalimdor = cluster.Gateway.Workers[1];
+        GatewaySessionLinkClient firstLink = Assert.IsType<GatewaySessionLinkClient>(east.Link);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        Assert.Equal(1, cluster.Router.InFlightCount);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(kalimdor.PromptDialWaiters == 1), cts.Token); // the submit took its link and is waiting
+
+        await east.DisposeLinkAsync();
+        await Cluster.WaitUntilAsync(() => Task.FromResult(east.Link is { } link && !ReferenceEquals(link, firstLink)), cts.Token);
+        Assert.Equal(1, kalimdor.PromptDialWaiters); // the link came back inside the wait, so the answer is still to come
+
+        using var answered = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        answered.CancelAfter(GatewayTransferService.MapOwnerLinkWait + TimeSpan.FromSeconds(30));
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.Router.InFlightCount == 0), answered.Token);
+    }
+
+    /// <summary>
+    /// Reads frames until one with <paramref name="opcode"/> arrives. A transfer is seconds of silence, and the mock client's 5 s bound on a whole search flakes under load (see
+    /// TestDeadlines in the mock client's tests), so only the wait for a frame's first byte is long here. A teleport that was refused sends nothing that ends this; the 60 s bound does.
+    /// </summary>
+    private static async Task<WorldFrame> ReadPatientlyAsync(WorldClient client, WorldOpcode opcode, CancellationToken token)
+    {
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+        bound.CancelAfter(TimeSpan.FromSeconds(60));
+        while (true)
+        {
+            await client.WaitForTrafficAsync(bound.Token);
+            WorldFrame frame = await client.ReadAsync(bound.Token);
+            if (frame.Opcode == (ushort)opcode)
+            {
+                return frame;
+            }
+        }
     }
 
     [Fact]

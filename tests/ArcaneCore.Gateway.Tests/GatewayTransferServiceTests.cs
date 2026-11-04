@@ -203,7 +203,7 @@ public sealed class GatewayTransferServiceTests
             Assert.Equal(0u, instanceId);
             waits++;
             Assert.True(rig.Routes.LinkUp("kal", null, allowInstanceMaps: false));
-            return Task.FromResult(true);
+            return Task.CompletedTask;
         };
 
         GatewayTransferSubmission submission = await rig.Service.SubmitAsync(rig.Request());
@@ -214,11 +214,29 @@ public sealed class GatewayTransferServiceTests
     }
 
     [Fact]
+    public async Task ASubmit_IsRoutedAgainHoweverTheWaitEnded_SoAnOwnerThatLinkedRightAtTheDeadlineStillTakesThePlayer()
+    {
+        // The wait ran out, or it watched another worker that could own the map, yet the route table has an owner now: that decides, not how the wait ended.
+        await using Rig rig = new();
+        rig.Routes.LinkDown("kal");
+        rig.MapOwnerWait = async (_, _, _) =>
+        {
+            Assert.True(rig.Routes.LinkUp("kal", null, allowInstanceMaps: false));
+            await Task.Yield();
+        };
+
+        GatewayTransferSubmission submission = await rig.Service.SubmitAsync(rig.Request());
+
+        Assert.True(submission.Accepted, submission.Reason);
+        Assert.True((await submission.Completion!).Succeeded);
+    }
+
+    [Fact]
     public async Task ASubmit_WhoseMapOwnerNeverLinks_IsRefusedAsUnassigned_AndNothingIsJournalled()
     {
         await using Rig rig = new();
         rig.Routes.LinkDown("kal");
-        rig.MapOwnerWait = (_, _, _) => Task.FromResult(false);
+        rig.MapOwnerWait = (_, _, _) => Task.CompletedTask;
 
         GatewayTransferSubmission submission = await rig.Service.SubmitAsync(rig.Request());
 
@@ -238,7 +256,7 @@ public sealed class GatewayTransferServiceTests
         {
             rig.Routes.LinkUp("kal", null, allowInstanceMaps: false);
             rig.SessionOpen = false;
-            return Task.FromResult(true);
+            return Task.CompletedTask;
         };
 
         GatewayTransferSubmission submission = await rig.Service.SubmitAsync(rig.Request());
@@ -254,7 +272,7 @@ public sealed class GatewayTransferServiceTests
         await using Rig rig = new();
         rig.Routes.LinkDown("kal");
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var released = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         rig.MapOwnerWait = (_, _, _) =>
         {
             waiting.SetResult();
@@ -264,7 +282,7 @@ public sealed class GatewayTransferServiceTests
         Task<GatewayTransferSubmission> submit = rig.Service.SubmitAsync(rig.Request());
         await waiting.Task.WaitAsync(TimeSpan.FromSeconds(30));
         await rig.Service.StopAsync(CancellationToken.None);
-        released.SetResult(false);
+        released.SetResult();
 
         GatewayTransferSubmission submission = await submit.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.False(submission.Accepted);
@@ -684,7 +702,7 @@ public sealed class GatewayTransferServiceTests
                 },
                 _ => SessionOpen,
                 node => [node],
-                WaitForMapOwner: (mapId, instanceId, cancellationToken) => MapOwnerWait?.Invoke(mapId, instanceId, cancellationToken) ?? Task.FromResult(false));
+                WaitForMapOwner: (mapId, instanceId, cancellationToken) => MapOwnerWait?.Invoke(mapId, instanceId, cancellationToken) ?? Task.CompletedTask);
             Service = new GatewayTransferService(new GatewayTransferOptions(), Store, Store, handoffs, wiring);
         }
 
@@ -706,8 +724,8 @@ public sealed class GatewayTransferServiceTests
 
         public bool SessionOpen { get; set; } = true;
 
-        /// <summary>What the service's wait for a map owner's link does; null answers false at once (no configured owner).</summary>
-        public Func<uint, uint, CancellationToken, Task<bool>>? MapOwnerWait { get; set; }
+        /// <summary>What the service's wait for a map owner's link does; null ends it at once (no configured owner).</summary>
+        public Func<uint, uint, CancellationToken, Task>? MapOwnerWait { get; set; }
 
         public bool IncarnationUnchanged { get; set; } = true;
 

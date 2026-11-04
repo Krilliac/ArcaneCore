@@ -164,8 +164,9 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The order a slow host produces by chance, made certain: the target worker starts listening while the gateway's link supervisor for it sits in its doubling backoff, so the worker is up
-    /// but has no link and owns nothing for routing. The teleport waits for that link (its submit makes the supervisor dial at once) instead of being refused with map-unassigned.
+    /// The order a slow host produces by chance, made likely: the target worker is launched only after the player is in the world, so the gateway's link supervisor for it has backed off and
+    /// the worker is normally up with no link when the teleport arrives. The teleport waits for that link (its submit makes the supervisor dial at once) instead of being refused with map-unassigned.
+    /// A dial of the backoff can still land between the worker listening and the teleport; the row then passes without the wait, which is why it does not assert the gateway's "waits up to" line.
     /// </summary>
     [PostgresClusterFact]
     public async Task ACrossWorkerTeleport_ToAWorkerThatIsUpButBetweenLinkDials_WaitsForItsLink_AndTheJournalSaysCompleted()

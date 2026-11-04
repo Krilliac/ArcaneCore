@@ -105,7 +105,7 @@ internal sealed record GatewayTransferWiring(
     Func<long, bool> SessionExists,
     Func<string, IReadOnlyList<string>> SlotNames,
     Func<WorkerNodeId, CancellationToken, Task<int>>? AdmittedGateways = null,
-    Func<uint, uint, CancellationToken, Task<bool>>? WaitForMapOwner = null)
+    Func<uint, uint, CancellationToken, Task>? WaitForMapOwner = null)
 {
     public static GatewayTransferWiring ForServer(GatewayServer server, GatewayHandoffService? handoffs, ILoggerFactory loggers)
     {
@@ -173,7 +173,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 {
     /// <summary>
     /// How long a submit waits for the link of a target map's configured owner before it refuses the teleport. The player stays in the world and nothing is journalled meanwhile, so this bounds how long
-    /// a teleport to a map whose worker is really down takes to fail; it is far inside the worker's in-flight expiry (<see cref="GatewayClusterFarTeleportRouter.InFlightExpiry"/>).
+    /// a teleport to a map whose worker is really down takes to fail (what the source worker already did to the player for the teleport stays done either way: <c>TeleportToRemoteMap</c>); it is far inside the worker's in-flight expiry (<see cref="GatewayClusterFarTeleportRouter.InFlightExpiry"/>).
     /// </summary>
     internal static readonly TimeSpan MapOwnerLinkWait = TimeSpan.FromSeconds(10);
 
@@ -185,7 +185,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     private readonly Func<long, bool> _sessionExists;
     private readonly Func<string, IReadOnlyList<string>> _slotNames;
     private readonly Func<WorkerNodeId, CancellationToken, Task<int>>? _admittedGateways;
-    private readonly Func<uint, uint, CancellationToken, Task<bool>>? _waitForMapOwner;
+    private readonly Func<uint, uint, CancellationToken, Task>? _waitForMapOwner;
     private readonly HashSet<string> _slotSet;
     private readonly PlayerTransferCoordinator _coordinator;
     private readonly PlayerTransferCoordinatorHost _host;
@@ -369,9 +369,10 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
             bool routed = _mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out string? failure);
             if (!routed && failure == ClusterMapPlacementTable.FailureMapUnassigned && _waitForMapOwner is { } waitForMapOwner)
             {
-                // A worker whose link is down owns nothing for routing, whether it is dead or only between two dials of the link's backoff. Nothing is journalled or frozen yet, so waiting costs the
-                // player only the delay; the gateway may have begun stopping and the client may have left meanwhile.
-                bool linked = await waitForMapOwner(request.TargetMapId, request.TargetInstanceId, cancellationToken).ConfigureAwait(false);
+                // A worker whose link is down owns nothing for routing, whether it is dead or only between two dials of the link's backoff. Nothing is journalled or frozen yet, so the wait adds only
+                // its delay; a refusal after it leaves what a refusal always left (the source worker revived a ghost and took the player off its transport when it sent this request, and no refusal
+                // undoes that). The gateway may have begun stopping and the client may have left meanwhile.
+                await waitForMapOwner(request.TargetMapId, request.TargetInstanceId, cancellationToken).ConfigureAwait(false);
                 if (Volatile.Read(ref _stopped) != 0)
                 {
                     return Refused(request, ControlReasonCode.GatewayStopping, "the gateway is stopping");
@@ -382,10 +383,8 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
                     return Refused(request, ControlReasonCode.SessionNotOpen, $"session {request.SessionGeneration} is not an open client session of this gateway");
                 }
 
-                if (linked)
-                {
-                    routed = _mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out failure);
-                }
+                // However the wait ended: a link can register right at its deadline, and the wait watches one worker while another that could own the map may be the one that came up.
+                routed = _mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out failure);
             }
 
             if (!routed)
@@ -501,7 +500,8 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 
         PlayerTransferRequest request = RequestOf(node, body);
         GatewayTransferSubmission submission = await SubmitAsync(request, _runs.Token).ConfigureAwait(false);
-        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason, submission.Code));
+        // The submit can wait for a map owner's link, and the source's link may have been replaced meanwhile (a reconnect). Only this answer or the outcome notice ends the worker's in-flight entry.
+        (worker.Link ?? link).SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason, submission.Code));
         if (!submission.Accepted || submission.Completion is not { } completion)
         {
             return;

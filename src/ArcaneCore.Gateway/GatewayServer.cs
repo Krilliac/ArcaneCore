@@ -616,9 +616,9 @@ public sealed class GatewayServer : BackgroundService
     }
 
     /// <summary>
-    /// For a login redirect that found no registered owner (<see cref="FindLinkForMap"/> returned null): the configured worker that owns the map copy, whose link is
-    /// down at this moment (starting, restarting, or between reconnect attempts), so the redirect can wait for it (<see cref="GatewayWorkerLink.HoldPromptDial"/>,
-    /// <see cref="GatewayWorkerLink.WaitForLinkAsync"/>). Null when no configured worker could ever own the map: the redirect then ends at once.
+    /// For a login redirect or a player transfer that found no registered owner: the configured worker that owns the map copy, whose link is
+    /// down at this moment (starting, restarting, or between reconnect attempts), so the caller can wait for it (<see cref="GatewayWorkerLink.HoldPromptDial"/>,
+    /// <see cref="GatewayWorkerLink.WaitForLinkAsync"/>). Null when no configured worker could ever own the map: a redirect then ends at once, and a transfer is refused.
     /// </summary>
     internal GatewayWorkerLink? FindConfiguredMapOwner(uint mapId, uint instanceId)
     {
@@ -641,8 +641,8 @@ public sealed class GatewayServer : BackgroundService
     /// <summary>
     /// For a player transfer whose target map has no routable owner: waits up to <paramref name="timeout"/> for the link of the configured worker that owns the map copy. While it waits, that link's
     /// supervisor dials at least every <see cref="GatewayWorkerLink.PromptDialInterval"/> (<see cref="GatewayWorkerLink.HoldPromptDial"/>), so a worker that is up but between two dials of its backoff is
-    /// reached at once. True when the link is registered, so the caller should route again. False at once when no configured worker could own the map, and false when the time ran out or
-    /// <paramref name="cancellationToken"/> was cancelled. Thread-safe.
+    /// reached at once. True when the link is registered. False at once when no configured worker could own the map, and false when the time ran out or <paramref name="cancellationToken"/> was
+    /// cancelled. It watches one worker (the first that could own the map), so the caller routes again however this ends. Thread-safe.
     /// </summary>
     internal async Task<bool> WaitForMapOwnerLinkAsync(uint mapId, uint instanceId, TimeSpan timeout, CancellationToken cancellationToken)
     {
@@ -864,7 +864,7 @@ public sealed class GatewayWorkerLink
     private TaskCompletionSource? _backoffWake;
     private int _promptDialWaiters;
     private int _promptWake;
-    private int _longBackoff; // 1 while the supervisor's backoff wait is longer than PromptDialInterval (it began with no login waiting)
+    private int _longBackoff; // 1 while the supervisor's backoff wait is longer than PromptDialInterval (it began with no login or transfer waiting)
     private Func<GatewaySessionLinkClient?, GatewaySessionLinkClient, CancellationToken, Task>? _migrate;
     private GatewaySessionLinkClient? _draining;
 
@@ -971,16 +971,19 @@ public sealed class GatewayWorkerLink
     }
 
     /// <summary>
-    /// The longest reconnect wait while a login waits for this link (<see cref="HoldPromptDial"/>). Only one dial is ever in flight, so for as long as any login waits
+    /// The longest reconnect wait while a login or a transfer waits for this link (<see cref="HoldPromptDial"/>). Only one dial is ever in flight, so for as long as any of them waits
     /// the worker is dialled once per this interval plus the time a failed dial takes (a refused loopback connect is immediate on Linux, about 2 s on Windows), however many wait.
     /// </summary>
     internal static readonly TimeSpan PromptDialInterval = TimeSpan.FromMilliseconds(500);
 
+    /// <summary>How many logins and transfers hold a <see cref="HoldPromptDial"/> lease on this link right now.</summary>
+    internal int PromptDialWaiters => Volatile.Read(ref _promptDialWaiters);
+
     /// <summary>
-    /// A login redirect waits for this worker's link (its owner is down): until the returned lease is disposed, the supervisor's reconnect waits are capped at
+    /// A login redirect or a player transfer waits for this worker's link (it owns their map and its link is down): until the returned lease is disposed, the supervisor's reconnect waits are capped at
     /// <see cref="PromptDialInterval"/> instead of the doubling backoff (up to 30 s), so a worker that comes back is dialled within that interval. A lease taken while
-    /// the supervisor sits in a longer wait (it began with no login waiting) ends that wait; the supervisor still starts dials at least <see cref="PromptDialInterval"/>
-    /// apart, so logins that come and go cannot make it dial faster. Leases do not reset the backoff: it keeps doubling through the dials of a hold, so after a long
+    /// the supervisor sits in a longer wait (it began with nobody waiting) ends that wait; the supervisor still starts dials at least <see cref="PromptDialInterval"/>
+    /// apart, so waiters that come and go cannot make it dial faster. Leases do not reset the backoff: it keeps doubling through the dials of a hold, so after a long
     /// hold on a dead worker it is at its 30 s maximum when the last lease ends. Thread-safe.
     /// </summary>
     internal IDisposable HoldPromptDial()
@@ -1092,10 +1095,10 @@ public sealed class GatewayWorkerLink
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
                 GatewayMeters.CountLinkFailure(_config.NodeId);
                 var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                Volatile.Write(ref _promptWake, 0); // only a login that sees this wait's _longBackoff below may mark its wake as a login's
+                Volatile.Write(ref _promptWake, 0); // only a waiter that sees this wait's _longBackoff below may mark its wake as a waiter's
                 Volatile.Write(ref _longBackoff, nextDelay > PromptDialInterval ? 1 : 0);
                 Interlocked.Exchange(ref _backoffWake, wake); // a full fence: Retarget stores _target and then reads this field, this publishes it and then reads _target
-                // Read after the fence above, as HoldPromptDial increments and then reads _longBackoff and _backoffWake: a login that starts waiting now either sees
+                // Read after the fence above, as HoldPromptDial increments and then reads _longBackoff and _backoffWake: a login or transfer that starts waiting now either sees
                 // this long wait (and ends it) or is seen here (and the wait is capped at PromptDialInterval).
                 bool prompt = Volatile.Read(ref _promptDialWaiters) > 0 && nextDelay > PromptDialInterval;
                 if (prompt)
@@ -1106,7 +1109,7 @@ public sealed class GatewayWorkerLink
                 TimeSpan wait = prompt ? PromptDialInterval : nextDelay;
                 if (prompt)
                 {
-                    _logger.LogDebug("Worker link {Node} to {Worker} not established ({Message}); a login waits for it, retrying in {Delay}", NodeId, worker, ex.Message, wait);
+                    _logger.LogDebug("Worker link {Node} to {Worker} not established ({Message}); a login or transfer waits for it, retrying in {Delay}", NodeId, worker, ex.Message, wait);
                 }
                 else
                 {
@@ -1137,14 +1140,14 @@ public sealed class GatewayWorkerLink
                     Volatile.Write(ref _backoffWake, null);
                 }
 
-                // A retarget's wake restarts the backoff at the base delay. A waiting login's wake (HoldPromptDial) does not: the backoff keeps doubling through a hold's
-                // dials, so after a long hold on a dead worker it is at its maximum (30 s) when the last login stops waiting.
+                // A retarget's wake restarts the backoff at the base delay. A waiter's wake (HoldPromptDial, a login or a transfer) does not: the backoff keeps doubling through a hold's
+                // dials, so after a long hold on a dead worker it is at its maximum (30 s) when the last waiter stops waiting.
                 bool promptWake = Interlocked.Exchange(ref _promptWake, 0) != 0;
                 bool retargeted = !Equals(_target, worker);
                 nextDelay = woken && (!promptWake || retargeted) ? delay : TimeSpan.FromTicks(Math.Min(nextDelay.Ticks * 2, MaxLinkRetryDelay.Ticks));
                 if (woken && promptWake && !retargeted)
                 {
-                    // Dials start at least PromptDialInterval apart, however often logins come and go (each one that finds no other waiting ends a long wait).
+                    // Dials start at least PromptDialInterval apart, however often waiters come and go (each one that finds no other waiting ends a long wait).
                     long sinceDial = Environment.TickCount64 - dialStartedMs;
                     if (sinceDial < (long)PromptDialInterval.TotalMilliseconds)
                     {
