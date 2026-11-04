@@ -220,7 +220,7 @@ public sealed class ClusterGroupRoutingHoldTests
     }
 
     [Fact]
-    public async Task Relays_are_never_held_so_a_logout_and_leave_after_a_long_outage_still_arrive()
+    public async Task Relays_are_never_held_so_a_logout_and_leave_behind_a_flood_of_them_still_arrive()
     {
         var authority = new SwitchableAuthority();
         await using var routing = new ClusterGroupRouting(authority, "worker-a");
@@ -279,6 +279,107 @@ public sealed class ClusterGroupRoutingHoldTests
         Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
         Assert.Equal(1, routing.Expired);
         Assert.Contains(logger.AtLeast(LogLevel.Information), static l => l.Text.Contains("resume") && l.Text.Contains("1 older than 120 s"));
+    }
+
+    [Fact]
+    public async Task A_backlog_that_all_expires_still_writes_the_resume_line_with_no_command_behind_it()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await authority.Probed.WaitAsync(Safety);
+        routing.Forward(Command(GroupCommandKind.Leave, 2));
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+
+        authority.SetReachable(true);
+
+        // No flush: a flush marker would write the line itself, and this is about the queue running dry.
+        using var safety = new CancellationTokenSource(Safety);
+        while (!logger.AtLeast(LogLevel.Information).Any(static l => l.Text.Contains("resume")))
+        {
+            await Task.Delay(5, safety.Token);
+        }
+
+        Assert.Contains(logger.AtLeast(LogLevel.Information), static l => l.Text.Contains("resume") && l.Text.Contains("2 older than 120 s"));
+        Assert.Equal(2, routing.Expired);
+        Assert.Empty(authority.Executed);
+    }
+
+    [Fact]
+    public async Task An_outage_starting_inside_the_last_ones_backlog_reports_the_last_ones_drops_first()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1)); // expires
+        await authority.Probed.WaitAsync(Safety);
+        routing.Forward(Command(GroupCommandKind.Logout, 2)); // too old, but goes: the sender is inside this send when the link goes again
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        routing.Forward(Command(GroupCommandKind.Leave, 3)); // fresh: held by the second outage
+
+        authority.Block();
+        authority.SetReachable(true);
+        await authority.Executing.WaitAsync(Safety);
+        authority.SetReachable(false);
+        authority.Release();
+        using var safety = new CancellationTokenSource(Safety);
+        while (logger.AtLeast(LogLevel.Information).Count(static l => l.Text.Contains("are held")) < 2)
+        {
+            await Task.Delay(5, safety.Token);
+        }
+
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        string[] lines = [.. logger.AtLeast(LogLevel.Information).Select(static l => l.Text)];
+        Assert.Equal(4, lines.Length);
+        Assert.Contains("are held", lines[0]);
+        Assert.Contains("1 older than 120 s", lines[1]);
+        Assert.Contains("are held", lines[2]);
+        Assert.Contains("0 older than 120 s", lines[3]);
+        Assert.Equal(new ulong[] { 2, 3 }, authority.Executed.Select(static c => c.Actor));
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_held_past_the_age_limit_is_still_sent(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(kind, 1));
+        await authority.Probed.WaitAsync(Safety);
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+        Assert.Equal(0, routing.Expired);
+    }
+
+    [Fact]
+    public async Task A_slow_authority_with_the_link_up_expires_nothing()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        authority.Block();
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await authority.Executing.WaitAsync(Safety);
+        routing.Forward(Command(GroupCommandKind.Leave, 2));
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.Release();
+
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new ulong[] { 1, 2 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(0, routing.Expired);
     }
 
     [Fact]
