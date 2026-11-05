@@ -7,11 +7,13 @@
 //   openClientFilesSettings()      opens the settings panel (Change folder / Forget folder / cache budget)
 //   clientFilesStatus()            -> {state, folderName, build, version, warnings, cacheBytes, cacheBudgetBytes, archiveReads, cacheHits, error}
 //   localTileProvider()            -> {tile(layer, map, x, y, signal) -> {state, detail, body}}
+//   localModelProvider()           -> {model(kind, path, {signal}) -> Promise<object>}  the parsed M2 / WMO root / WMO group file (m2.js, wmo.js)
 //   localTextureProvider()         -> {texture(key, {signal}) -> Promise<Uint8Array>}  ATX1 bytes of a baked `cft:` terrain texture
 //
 // States: none (no choice yet), skipped, needs-permission (a stored handle waits for one click), ready, error.
 // Thread affinity: page thread only; parsing runs in the Workers of pool.js.
 
+import { LAYER_TERRAIN_TEX } from './terrain-tex.js';
 import { createFirstEntryDialog, createReallowBanner, createSettingsPanel, openFolderInput } from './dialog.js';
 import { ClientFsError } from './limits.js';
 import { WorkerPool, poolSizeFor } from './pool.js';
@@ -461,7 +463,17 @@ function waitForFiles() {
 }
 
 /** The cache-owned result (shared by every caller of the same tile); localTileProvider copies the body once per caller. */
+/**
+ * Whether serving this layer's tile needs the live folder before anything else. A textured terrain tile is only useful together with
+ * its baked textures, which exist only while the folder is open (they are never cached), so a cached textured tile without a live
+ * folder would draw every chunk with the missing-texture checker and never prompt the visitor.
+ */
+export const needsLiveFolder = (layer, folder) => layer === LAYER_TERRAIN_TEX && folder === null;
+
 async function buildOrLoad(layer, map, x, y) {
+    if (needsLiveFolder(layer, model.folder) && !await waitForFiles()) {
+        return emptyResult('NotApplicable', 'No client files are available.');
+    }
     const started = generation; // Forget folder bumps it; a result from before that must not be cached under the old folder's key
     const forgotten = () => started !== generation;
     const logical = `${KEY_VERSION}/${layer}/${map}/${x}/${y}`;
@@ -562,11 +574,14 @@ export function localTextureProvider() {
         async texture(key, { signal } = {}) {
             signal?.throwIfAborted?.();
             await init();
-            const folder = model.folder;
-            if (folder === null) {
-                // A texture follows a tile that was built from live files; without them (after a reload, cache only) it cannot be baked.
+            if (model.folder === null && !await waitForFiles()) {
                 throw new ClientFsError('bad-file', 'The client folder is not open, so the terrain texture cannot be built.');
             }
+            const folder = model.folder;
+            if (folder === null) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the terrain texture cannot be built.');
+            }
+            signal?.throwIfAborted?.();
             const cacheId = chainKey(`${TEXTURE_KEY_VERSION}/${key}`, folder.archives);
             const hot = textureLru.get(cacheId);
             if (hot !== undefined) {
@@ -590,6 +605,27 @@ export function localTextureProvider() {
             const bytes = await raceAbort(job, signal);
             signal?.throwIfAborted?.();
             return bytes.slice();
+        },
+    };
+}
+
+/** Parsed model files (`m2`, `wmo-root`, `wmo-group`) of the chosen folder, read and parsed in a Worker. Needs the live folder (never cached). */
+export function localModelProvider() {
+    return {
+        async model(kind, path, { signal } = {}) {
+            signal?.throwIfAborted?.();
+            await init();
+            if (model.folder === null && !await waitForFiles()) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the model cannot be read.');
+            }
+            const folder = model.folder;
+            if (folder === null) {
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the model cannot be read.');
+            }
+            const job = getPool().run('model', { archives: folder.archives, kind, path }, { kind: 'file', key: chainKey(`model/${kind}/${path}`, folder.archives) });
+            const result = await raceAbort(job, signal);
+            signal?.throwIfAborted?.();
+            return result;
         },
     };
 }

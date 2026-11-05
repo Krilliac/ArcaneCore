@@ -91,9 +91,8 @@ export function readTextureLayers(bytes) {
         const end = start + 8 + size;
         for (let at = from; at < end; at++) {
             if (bytes[at] === 0) {
-                if (at > from) {
-                    names.push(new TextDecoder('latin1').decode(bytes.subarray(from, at)));
-                }
+                // An empty string is kept: MCLY texture indices count every NUL-terminated entry.
+                names.push(new TextDecoder('latin1').decode(bytes.subarray(from, at)));
                 from = at + 1;
             }
         }
@@ -169,7 +168,7 @@ export function readTextureLayers(bytes) {
 export function pickLevel(levels, size = BAKE_SIZE) {
     const perRepeat = (size / REPEATS) * 2;
     for (let i = 0; i < levels.length; i++) {
-        if (levels[i].width <= perRepeat) {
+        if (Math.max(levels[i].width, levels[i].height) <= perRepeat) {
             return levels[i];
         }
     }
@@ -430,14 +429,14 @@ async function loadLevels(chain, path) {
         return hit;
     }
     let levels = null;
-    const bytes = await chain.read(path);
-    if (bytes !== null && bytes.length > 0) {
-        try {
+    try {
+        const bytes = await chain.read(path);
+        if (bytes !== null && bytes.length > 0) {
             levels = decodeBlp(bytes).levels;
-        } catch (error) {
-            if (!(error instanceof ClientFsError && error.code === 'bad-file')) {
-                throw error;
-            }
+        }
+    } catch (error) {
+        if (!(error instanceof ClientFsError && error.code === 'bad-file')) {
+            throw error;
         }
     }
     remember(cache, path, levels, BLP_CACHE);

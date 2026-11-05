@@ -6,7 +6,7 @@ Code: `tools/ArcaneCore.Atlas/Web/js/clientfs/`. Tests: `tests/ArcaneCore.Atlas.
 
 ## Integration status
 
-The reader is reachable from the Local page (lane Y39). `js/clientsource.js` (`ClientFilesSource`) sits between the viewport and the host API: tile requests of layer `ref.terrain.tex` and texture keys starting `cft:` go to the reader when the host cannot answer them (the host answers NotApplicable, Missing or Rejected, or does not know the layer), every other request goes to the host untouched. The reader module (`clientfs/index.js`) is imported on first need, so a page that never asks loads none of it. The top bar has a **Client files** button that opens `openClientFilesSettings()` (Choose or Change folder, Forget folder, cache budget); with no folder chosen the button opens the first-entry dialog, and once a folder is chosen (or changed, or forgotten) the page asks again for the textured terrain tiles it holds. A textured tile requested before any folder was chosen answers NotApplicable without opening a dialog; the dialog and the Re-allow banner appear on a cache miss only when a folder choice already exists.
+The reader is reachable from the Local page (lane Y39). `js/clientsource.js` (`ClientFilesSource`) sits between the viewport and the host API: tile requests of layer `ref.terrain.tex` and texture keys starting `cft:` go to the reader when the host cannot answer them (the host answers NotApplicable, Missing or Rejected, or does not know the layer), every other request goes to the host untouched. The reader module (`clientfs/index.js`) is imported on first need, so a page that never asks loads none of it. The top bar has a **Client files** button that opens `openClientFilesSettings()` (Choose or Change folder, Forget folder, cache budget); with no folder chosen the button opens the first-entry dialog, and once a folder is chosen (or changed, or forgotten) the page asks again for the textured terrain tiles it holds. `app.js` counts the reader into the layer list (`withClientReaderLayers` in `catalog.js`): a host that reports `hasSource: false` for `ref.terrain.tex` still gets a usable checkbox, and ticking it requests tiles through `ClientFilesSource`. A textured tile requested before any folder was chosen answers NotApplicable without opening a dialog; the dialog and the Re-allow banner appear on a cache miss only when a folder choice already exists. A textured terrain tile is never served from the OPFS cache while no live folder exists (`needsLiveFolder` in `clientfs/index.js`): the baked textures are memory-only, so a cached tile alone would draw every chunk with the missing-texture checker. The request first waits for the folder (the Re-allow banner or the dialog) and builds the tile fresh once it is open; a declined prompt answers NotApplicable, so nothing is drawn. Choosing, changing or forgetting the folder also replaces the texture store, so the old folder's baked textures never answer for the new one.
 
 Still open:
 
@@ -16,7 +16,7 @@ Still open:
 
 ## What the visitor sees
 
-- First entry: a dialog explains the feature and offers **Choose folder**, **Skip** and **Why?**. Skip is remembered; the map stays untextured.
+- First entry: a dialog explains the feature and offers **Choose folder**, **Skip** and **Why?**. Skip is remembered; the map stays untextured. The Local page opens it from the top bar **Client files** button or on the first request that needs files (`showFirstEntryDialogIfNeeded()` is part of the reader's API but no page calls it on load).
 - Choosing a folder validates it before anything is stored or cached. Errors are shown in the dialog (no Data folder, a Burning Crusade or later client, a missing or damaged archive, a different build). A `Data/<locale>` folder alone is a warning.
 - Later visits: with a stored folder handle the browser needs one click, so a **Re-allow access** prompt appears; a denial keeps the prompt and says the browser blocked access.
 - Settings: folder name, build, cache size, a cache budget slider (default `min(2 GiB, storage quota)`), **Change folder** and **Forget folder** (deletes the stored handle and the whole cache).
@@ -59,11 +59,10 @@ Still not in the browser reader, with the reason:
 
 | Deliverable | Reason | Owner |
 |---|---|---|
-| `clientfs/m2.js`, `clientfs/wmo.js` | The C# readers feed the models of the host; the browser has no model draw path that needs them until attached models land | lane Y40 (attached item models) |
-| animation decoding (M2 bone tracks) | The renderer's vertex layout has no bone streams; `skinned` and `character` chunks draw in their bind pose | lane Y40 |
+| animation decoding (M2 bone tracks) | Needs the 1.12.1 M2 bone and track layout (bone record size, whether the track's timestamps and keys are one flat array or one array per sequence). The C# readers do not decode it, the repository's references (vmangos `modelheaders.h`, mangos-classic `M2Structure.h`, arcemu `structs.h`) disagree or stop at the header, and the one public spec was unreachable from the lane. The renderer's vertex layout also has no bone streams, so `skinned` and `character` chunks draw in their bind pose | **put to Nathan**: provide the layout (or a real client to measure) and name the lane; lane Y40's scope (attached item models) does not include it and has not been extended |
 | `js/assets/source.js`, `visitor.js`, `server.js` and the `assets.source()` loader lines | Replaced by `clientsource.js`, which picks the host or the reader per request | none |
 
-Shipped: MPQ, explode, DBC, ADT heights/liquid, BLP2, terrain textures, validation, the dialog and settings, and the Local page wiring.
+Shipped: MPQ, explode, DBC, ADT heights/liquid, BLP2, terrain textures, `clientfs/m2.js` and `clientfs/wmo.js` (ports of `M2ModelFile`, `WmoRootFile`, `WmoGroupFile`, read through the Worker operation `model` and `localModelProvider()`; no browser draw path consumes them yet), validation, the dialog and settings, and the Local page wiring.
 
 ## Declining
 

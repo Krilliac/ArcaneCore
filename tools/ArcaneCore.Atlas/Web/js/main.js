@@ -97,7 +97,7 @@ function start(token, joinName) {
     const hud = new PerfHud(app, viewport);
     const insight = new InsightPanel(app, hud);
     const status = new StatusBar(app);
-    const topbar = new TopBar(app, viewport, { onPalette: () => openPalette(app), onShortcuts: () => showShortcuts(), onClientFiles: () => viewport.clientFiles.openSettings() });
+    const topbar = new TopBar(app, viewport, { onPalette: () => openPalette(app), onShortcuts: () => showShortcuts(), onClientFiles: () => viewport.clientFiles.openSettings().catch((error) => app.toast(`The client files reader could not start: ${error.message}`, 'warn')) });
 
     // Right rail with tabs.
     const panels = { inspector: inspector.element, probes: probes.element, live: live.element, insight: insight.element };

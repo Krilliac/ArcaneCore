@@ -54,7 +54,7 @@ the unit, read back as `(short)(tag >> 16)`), not its shader id (+0x02).
 ## Browser (`Web/js/materials/`, `renderer.js`, `viewport.js`)
 
 Files: `materials/index.js` (the registry: `registerMaterialKind(impl)`, `materialKind(kind)`), `materials/generic.js` (the real
-`generic` kind and the blend and flag tables), `materials/textures.js` (`TextureStore`) and `terrain.js`, `model.js`, `skinned.js` and `character.js` (lane Y39, built with `derived.js` on the generic program), each exporting a `register()` that the index calls after it is defined. A lane
+`generic` kind and the blend and flag tables), `materials/textures.js` (`TextureStore`) and `terrain.js`, `model.js` (kinds `wmo` and `m2`), `skinned.js` and `character.js` (lane Y39, built with `derived.js` on the generic program), each exporting a `register()` that the index calls after it is defined. A lane
 fills its stub by calling `registerMaterialKind` from its own `register()`; it edits neither the index nor the renderer. A kind nobody
 registered draws as `generic`. An `impl` is `{kind, programs(gl, shaderLib), layout(streams), bind(gl, program, material, ctx, textures),
 pass(material)}`: `pass` answers `'opaque'`, `'alphakey'` or `'blend'`, which is how the renderer orders the material pass, and `bind`

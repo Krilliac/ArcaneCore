@@ -9,7 +9,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Atg1Error, decodeChunk } from '../../../tools/ArcaneCore.Atlas/Web/js/atg1.js';
 import { Atx1Error, FORMAT, decodeTexture } from '../../../tools/ArcaneCore.Atlas/Web/js/atx1.js';
-import { MaterialRegistry, createMaterialRegistry, materialKind, registerMaterialKind } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/index.js';
+import { derivedKind } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/derived.js';
+import { BLEND, FLAGS, MaterialRegistry, createMaterialRegistry, materialKind, registerMaterialKind } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/index.js';
+import { withAlphaKeyReference } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/model.js';
 import { TextureStore } from '../../../tools/ArcaneCore.Atlas/Web/js/materials/textures.js';
 import { encodeChunkV2, trailerOffset } from './support/atg2-writer.mjs';
 import { encodeTexture, probeTexture } from './support/atx1-writer.mjs';
@@ -634,10 +636,9 @@ test('the shared material registry has a real generic material and the lane file
     assert.equal(generic.pass({ blend: 2 }), 'blend');
     assert.equal(generic.pass({ blend: 6 }), 'blend');
     assert.deepEqual(generic.layout().map((a) => a.stream), ['position', 'uv0', 'color0']);
-    for (const kind of ['wmo', 'm2', 'nonsense']) {
-        assert.equal(materialKind(kind), generic, `${kind} has no kind of its own and draws as generic`);
-    }
-    for (const kind of ['terrain', 'model', 'skinned', 'character']) {
+    assert.equal(materialKind('nonsense'), generic, 'a kind the wire does not have draws as generic');
+    assert.equal(materialKind('model'), generic, "'model' is not a wire kind (Core/Materials/Material.cs Kinds) and has no implementation");
+    for (const kind of ['terrain', 'wmo', 'm2', 'skinned', 'character']) {
         const impl = materialKind(kind);
         assert.notEqual(impl, generic, `${kind} is its own implementation`);
         assert.equal(impl.kind, kind);
@@ -646,7 +647,7 @@ test('the shared material registry has a real generic material and the lane file
             assert.equal(typeof impl[member], 'function', `${kind}.${member} is part of the impl interface`);
         }
     }
-    assert.deepEqual([...registry.kinds()].slice(0, 5), ['generic', 'terrain', 'model', 'skinned', 'character']);
+    assert.deepEqual([...registry.kinds()].slice(0, 6), ['generic', 'terrain', 'wmo', 'm2', 'skinned', 'character']);
 
     const WEB_JS = path.join(WEB, 'js', 'materials');
     for (const file of ['terrain', 'model', 'skinned', 'character']) {
@@ -663,6 +664,67 @@ test('the shared material registry has a real generic material and the lane file
     registerMaterialKind(impl);
     assert.equal(materialKind('seam-test'), impl);
     assert.throws(() => registerMaterialKind({ kind: 'seam-test', stub: false }), Error);
+});
+
+test('terrain draws opaque and clamped whatever the chunk says, and leaves the chunk material untouched', () => {
+    const terrain = materialKind('terrain');
+    const blended = Object.freeze({ kind: 'terrain', blend: BLEND.ALPHA, flags: 0, textures: [], alphaRef: 0.9 });
+    assert.equal(terrain.pass(blended), 'opaque');
+    const u = terrain.uniforms(blended, null);
+    assert.equal(u.ignoreAlpha, true, 'opaque ignores the texture alpha');
+    assert.equal(u.alphaKey, false);
+    assert.equal(u.clampS, true);
+    assert.equal(u.clampT, true);
+    assert.equal(u.unlit, false, 'terrain is lit');
+    assert.equal(terrain.pass({ blend: BLEND.ALPHA_KEY }), 'opaque');
+    assert.equal(terrain.uniforms({ blend: BLEND.ALPHA_KEY }, null).alphaKey, false);
+    // The flags the chunk set are kept next to the clamp bits.
+    const kept = terrain.uniforms({ blend: BLEND.OPAQUE, flags: FLAGS.UNLIT }, null);
+    assert.equal(kept.unlit, true);
+    assert.equal(kept.clampS, true);
+    // The generic kind of the same material does none of that.
+    const generic = materialKind('generic');
+    assert.equal(generic.pass(blended), 'blend');
+    assert.equal(generic.uniforms(blended, null).clampS, false);
+    assert.equal(blended.blend, BLEND.ALPHA, 'the input material is never mutated');
+});
+
+test('wmo, m2, skinned and character cut an alpha-key material without alphaRef at 0.5 and keep every other rule of the generic kind', () => {
+    const generic = materialKind('generic');
+    for (const kind of ['wmo', 'm2', 'skinned', 'character']) {
+        const impl = materialKind(kind);
+        assert.equal(impl.kind, kind);
+        const key = Object.freeze({ blend: BLEND.ALPHA_KEY, flags: 0, textures: [] });
+        const u = impl.uniforms(key, null);
+        assert.equal(u.alphaKey, true, kind);
+        assert.equal(u.alphaRef, 0.5, `${kind}: the retail alpha-key reference`);
+        assert.equal(generic.uniforms(key, null).alphaRef, 0, `${kind}: the generic kind keeps everything`);
+        assert.equal(impl.pass(key), 'alphakey', kind);
+        assert.equal(impl.uniforms({ ...key, alphaRef: 0.2 }, null).alphaRef, 0.2, `${kind}: an alphaRef the material carries wins`);
+        assert.equal(impl.uniforms({ blend: BLEND.OPAQUE, flags: 0 }, null).alphaRef, 0, `${kind}: only alpha-key materials get a reference`);
+        assert.equal(impl.pass({ blend: BLEND.OPAQUE }), 'opaque', kind);
+        assert.equal(impl.pass({ blend: BLEND.ALPHA }), 'blend', kind);
+        assert.equal(impl.uniforms({ blend: BLEND.OPAQUE, flags: FLAGS.CLAMP_S }, null).clampS, true, kind);
+        assert.equal(impl.uniforms({ blend: BLEND.OPAQUE, flags: 0 }, null).clampS, false, `${kind}: wrap is not forced`);
+    }
+});
+
+test('withAlphaKeyReference always returns a copy and derivedKind adjusts each material object once', () => {
+    const material = Object.freeze({ blend: BLEND.OPAQUE, flags: 0 });
+    const copy = withAlphaKeyReference(material);
+    assert.notEqual(copy, material);
+    assert.deepEqual(copy, material);
+    assert.equal(withAlphaKeyReference({ blend: BLEND.ALPHA_KEY, alphaRef: Number.NaN }).alphaRef, 0.5, 'a non-finite reference is replaced');
+
+    let calls = 0;
+    const kind = derivedKind('counting', { adjust: (m) => { calls++; return { ...m, flags: 0x1 }; } });
+    assert.equal(kind.uniforms(material, null).unlit, true);
+    assert.equal(kind.uniforms(material, null).unlit, true);
+    assert.equal(kind.pass(material), 'opaque');
+    assert.equal(calls, 1, 'one adjusted copy per material object, not per call');
+    kind.uniforms({ ...material }, null);
+    assert.equal(calls, 2, 'another material object is adjusted on its own');
+    assert.throws(() => { kind.kind = 'x'; }, TypeError, 'the kind object is frozen');
 });
 
 test('the legacy material registry class (stubs and replace) still behaves', () => {

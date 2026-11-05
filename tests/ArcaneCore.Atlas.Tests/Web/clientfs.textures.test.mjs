@@ -558,3 +558,48 @@ test('terrain-tex.js bakes the texture of one MCNK from the tile, reads each fil
     }
     await assert.rejects(() => bakeTexture(sampleChain(), 'cft:0/10/10/0'), (error) => error instanceof ClientFsError && error.code === 'bad-file', 'a tile that is not in the archives');
 });
+
+test('terrain-tex.js keeps an empty MTEX entry so the MCLY texture indices after it still line up', () => {
+    const names = ['Tileset\\Red.blp', '', 'Tileset\\Green.blp'];
+    const info = readTextureLayers(adtBytes(names, (i) => (i === 0 ? { layers: [{ texture: 2 }] } : {})));
+    assert.deepEqual(info.names, names);
+    assert.equal(info.names[info.chunks[0].layers[0].texture], 'Tileset\\Green.blp', 'index 2 is the third string, not the second');
+});
+
+test('terrain-tex.js picks the mip level by its larger side, so a non-square BLP is not under-sampled', () => {
+    const levels = [{ width: 8, height: 64 }, { width: 4, height: 32 }, { width: 2, height: 16 }, { width: 1, height: 8 }];
+    assert.equal(pickLevel(levels).height, 32, 'the 4x32 level is the first with a larger side of at most 32');
+});
+
+test('terrain-tex.js draws the fallback colour for a tileset whose archive read fails as a bad file, and lets any other failure through', async () => {
+    const damaged = sampleChain();
+    const read = damaged.read.bind(damaged);
+    damaged.read = async (path) => {
+        if (path.toLowerCase() === 'tileset\\green.blp') {
+            throw new ClientFsError('bad-file', 'the archive entry is damaged');
+        }
+        return read(path);
+    };
+    const texture = decodeTexture(await bakeTexture(damaged, 'cft:0/33/31/0'));
+    const at = (x, y) => [...texture.levels[0].subarray(((y * BAKE_SIZE) + x) * 4, (((y * BAKE_SIZE) + x) * 4) + 4)];
+    assert.deepEqual(at(8, 60), [255, 0, 0, 255], 'the readable base still draws');
+    assert.deepEqual(at(120, 60), [...FALLBACK_COLOUR, 255], 'the damaged layer is the fallback colour, the bake does not fail');
+
+    const broken = sampleChain();
+    broken.read = async (path) => {
+        if (path.toLowerCase() === 'tileset\\green.blp') {
+            throw new TypeError('not a clientfs error');
+        }
+        return read(path);
+    };
+    await assert.rejects(() => bakeTexture(broken, 'cft:0/33/31/0'), TypeError);
+});
+
+test('index.js: a textured terrain tile needs the live folder before any cached answer, a plain tile does not', async () => {
+    const { needsLiveFolder } = await import('../../../tools/ArcaneCore.Atlas/Web/js/clientfs/index.js');
+    const folder = { archives: [] };
+    assert.equal(needsLiveFolder('ref.terrain.tex', null), true, 'after a reload only the cache is left, and baked textures are never cached');
+    assert.equal(needsLiveFolder('ref.terrain.tex', folder), false);
+    assert.equal(needsLiveFolder('ref.terrain', null), false, 'plain terrain geometry is served from the cache without files');
+    assert.equal(needsLiveFolder('ref.liquid', null), false);
+});

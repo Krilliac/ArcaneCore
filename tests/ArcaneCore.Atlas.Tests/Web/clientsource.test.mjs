@@ -5,6 +5,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ApiError } from '../../../tools/ArcaneCore.Atlas/Web/js/api.js';
+import { normalizeLayerList, withClientReaderLayers } from '../../../tools/ArcaneCore.Atlas/Web/js/catalog.js';
+import { resolveLayers, wantedTileLayers } from '../../../tools/ArcaneCore.Atlas/Web/js/layerstate.js';
+import { Scene } from '../../../tools/ArcaneCore.Atlas/Web/js/scene.js';
+import { defaultView } from '../../../tools/ArcaneCore.Atlas/Web/js/view.js';
 import { CLIENT_TEXTURE_PREFIX, ClientFilesSource, TEXTURED_TERRAIN_LAYER } from '../../../tools/ArcaneCore.Atlas/Web/js/clientsource.js';
 
 const envelope = () => new Uint8Array(4).buffer;
@@ -195,4 +199,67 @@ test('clientsource: a status read that fails neither stops the watcher nor repor
     status.value = { state: 'ready', folderName: 'WoW' };
     await timers.shift()();
     assert.equal(calls.changes, 1);
+});
+
+// ---- the whole path of a host that has no source for the textured layer -----------------------------------------------------
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+function layersListWithoutSource() {
+    // What Host/StatusCommands.cs sends for a layer with no registered source: hasSource false.
+    return [{ id: TEXTURED_TERRAIN_LAYER, group: 'Reference', view: 'Client', title: 'Client terrain (textured)', hasSource: false, tiled: true }];
+}
+
+function tickedView() {
+    const view = defaultView();
+    view.compare = 'reference';
+    view.layers = { ...view.layers, [TEXTURED_TERRAIN_LAYER]: { visible: true, color: '#8FA9B8', opacity: 1, mode: 'fill', colorByAttribute: false } };
+    return view;
+}
+
+test('clientsource: a host that reports hasSource false for ref.terrain.tex still gets a usable layer that reaches the reader', async () => {
+    const view = tickedView();
+
+    // Without the client-reader override the layer is unavailable, forced invisible and never wanted (the bug this guards).
+    const hostOnly = normalizeLayerList(layersListWithoutSource());
+    const hostInfo = hostOnly.find((l) => l.id === TEXTURED_TERRAIN_LAYER);
+    assert.equal(hostInfo.available, false);
+    assert.equal(resolveLayers(view, hostOnly).find((l) => l.id === TEXTURED_TERRAIN_LAYER).visible, false);
+    assert.equal(wantedTileLayers(resolveLayers(view, hostOnly)).includes(TEXTURED_TERRAIN_LAYER), false);
+
+    // With it (what the Local page's refreshLayers does) the checkbox is usable, the layer resolves visible and is wanted.
+    const infos = withClientReaderLayers(hostOnly);
+    const info = infos.find((l) => l.id === TEXTURED_TERRAIN_LAYER);
+    assert.equal(info.available, true);
+    assert.equal(info.viaClientFiles, true);
+    assert.notEqual(info, hostInfo, 'a new object: the host list is not mutated');
+    assert.equal(hostInfo.available, false);
+    const resolved = resolveLayers(view, infos);
+    assert.equal(resolved.find((l) => l.id === TEXTURED_TERRAIN_LAYER).visible, true);
+    const wanted = wantedTileLayers(resolved);
+    assert.ok(wanted.includes(TEXTURED_TERRAIN_LAYER), 'the textured layer is wanted');
+
+    // The scene asks its api (ClientFilesSource) for those tiles; the host says NotApplicable and the reader builds them.
+    const { source, calls } = fixture({ host: () => ({ state: 'NotApplicable', detail: 'no source', body: envelope() }) });
+    const renderer = { stats: { gpuBytes: 0 }, createChunk: () => assert.fail('an empty envelope has no chunk'), destroyChunk() {} };
+    const scene = new Scene({ api: source, renderer, concurrency: 2, clock: () => 0 });
+    scene.setLayerInfos(infos);
+    scene.update({ map: 0, focusTile: { x: 32, y: 32 }, radius: 0, layers: [TEXTURED_TERRAIN_LAYER] });
+    await flush();
+    await flush();
+    assert.ok(calls.localTiles.length >= 1, 'the reader was asked for a tile');
+    assert.ok(calls.localTiles.every((t) => t[0] === TEXTURED_TERRAIN_LAYER));
+    assert.ok(calls.localTiles.some((t) => t[2] === 32 && t[3] === 32), 'including the focus tile');
+});
+
+test('clientsource: the override touches only layers the reader can serve, and only when the host says unavailable', () => {
+    const list = normalizeLayerList([
+        ...layersListWithoutSource(),
+        { id: 'ref.wmo.tex', group: 'Reference', hasSource: false },
+        { id: 'terrain', group: 'Server', hasSource: true },
+    ]);
+    const out = withClientReaderLayers(list);
+    assert.equal(out.find((l) => l.id === 'ref.wmo.tex').available, false, 'the reader has no WMO tiles');
+    assert.equal(out.find((l) => l.id === 'terrain').available, true);
+    const served = withClientReaderLayers(normalizeLayerList([{ id: TEXTURED_TERRAIN_LAYER, group: 'Reference', hasSource: true }]));
+    assert.equal(served.find((l) => l.id === TEXTURED_TERRAIN_LAYER).viaClientFiles, undefined, 'a host that serves it is left alone');
 });

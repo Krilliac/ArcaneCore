@@ -34,6 +34,10 @@ export class Viewport {
             api: app.api,
             onChange: () => {
                 this.scene?.invalidateLayer('ref.terrain.tex');
+                // cft: keys carry no archive identity: the old folder's baked textures must not answer for the new one.
+                if (this.renderer) {
+                    this.#createTextures();
+                }
                 this.dirty = true;
             },
         });

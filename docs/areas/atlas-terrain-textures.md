@@ -15,4 +15,4 @@ Textured terrain is built in the browser from the visitor's own client files, no
 MCNK (`materials/terrain.js`: opaque, lit, clamped). Details, limits and the Worker operations are in [atlas-client-files](atlas-client-files.md).
 
 Not delivered: MCSH shadow maps, the host-side texture arrays and alpha atlas (the host has no source for the reserved layer `ref.terrain.tex`, so it answers
-NotApplicable or does not serve it, and the Local page falls back to the reader), and a real-client check of the alpha-map orientation.
+NotApplicable or does not serve it, and the Local page counts the reader into its layer list, so the layer is available and asks the host first and the reader second), and a real-client check of the alpha-map orientation.

@@ -1561,6 +1561,28 @@ test('the webkitdirectory fallback caches parsed results and asks again only whe
     }, { helpers: PAGE_HELPERS_NO_PICKER });
 });
 
+test('a textured terrain tile is not served from the cache without a live folder: the visitor is asked, not given checkered chunks', async () => {
+    await withBrowser(async ({ fx, harness, page }) => {
+        assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog');
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "ready")()', 'the folder to validate', 60_000);
+        const tile = fx.manifest.tiles[1];
+        const request = `cf.localTileProvider().tile('ref.terrain.tex', 0, ${tile.x}, ${tile.y}, new AbortController().signal).then((r) => r.state)`;
+        const first = await page.evaluate(request);
+        assert.ok(['Ok', 'Empty', 'Missing', 'Rejected'].includes(first), `the first visit answers from the live folder (${first})`);
+
+        // File objects die with the page: after a reload only the cache is left. A textured tile may not come out of it.
+        await reload(page, harness);
+        await page.evaluate(`window.__pending = ${request}.then(() => 'settled', () => 'rejected'); true`);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog on the second visit', 15_000);
+        assert.equal(await page.evaluate('window.__pending === undefined ? "no" : "set"'), 'set');
+        assert.deepEqual(problems(page), []);
+    }, { helpers: PAGE_HELPERS_NO_PICKER });
+});
+
 test('Skip on a cache-miss dialog is remembered for the session', async () => {
     await withBrowser(async ({ fx, harness, page }) => {
         assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
