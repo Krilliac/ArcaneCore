@@ -9,6 +9,7 @@
 //   localTileProvider()            -> {tile(layer, map, x, y, signal) -> {state, detail, body}}
 //   localModelProvider()           -> {model(kind, path, {signal}) -> Promise<object>}  the parsed M2 / WMO root / WMO group file (m2.js, wmo.js)
 //   localTextureProvider()         -> {texture(key, {signal}) -> Promise<Uint8Array>}  ATX1 bytes of a baked `cft:` terrain texture
+//   onClientFilesChanged(listener) -> unsubscribe  listener() runs when a folder was opened (picked or re-allowed) or forgotten
 //
 // States: none (no choice yet), skipped, needs-permission (a stored handle waits for one click), ready, error.
 // Thread affinity: page thread only; parsing runs in the Workers of pool.js.
@@ -64,6 +65,24 @@ let generation = 0; // bumped by Forget folder so a pick that is still validatin
 
 const spawn = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 const getPool = () => (pool ??= new WorkerPool({ size: poolSizeFor(navigator.hardwareConcurrency), spawn }));
+
+const changeListeners = new Set();
+
+/** Calls `listener()` whenever the visitor opened a folder (picked one or re-allowed the stored one) or forgot it. @returns {() => void} unsubscribe */
+export function onClientFilesChanged(listener) {
+    changeListeners.add(listener);
+    return () => changeListeners.delete(listener);
+}
+
+function notifyChanged() {
+    for (const listener of [...changeListeners]) {
+        try {
+            listener();
+        } catch {
+            // a listener that throws must not stop the others or the reader
+        }
+    }
+}
 
 function resolveWaiters(value) {
     const list = waiters;
@@ -178,6 +197,7 @@ async function finishPick(scan, handle, started) {
         declined = false;
         closeDialog();
         resolveWaiters(true);
+        notifyChanged();
     } catch (error) {
         if (started === generation) {
             dialog?.setError(error instanceof ClientFsError ? error.message : `Could not read the folder: ${error?.message ?? error}`);
@@ -277,6 +297,7 @@ function showBanner() {
                     banner?.close();
                     banner = null;
                     resolveWaiters(true);
+                    notifyChanged();
                 } else {
                     banner?.setError(model.error);
                 }
@@ -338,6 +359,7 @@ async function forgetNow() {
     lru.clear();
     textureLru.clear();
     await opfs.clear();
+    notifyChanged();
 }
 
 export async function openClientFilesSettings() {
@@ -462,7 +484,21 @@ function waitForFiles() {
     return new Promise((resolve) => waiters.push(resolve));
 }
 
-/** The cache-owned result (shared by every caller of the same tile); localTileProvider copies the body once per caller. */
+/**
+ * Asks the visitor for the folder without waiting for the answer (the dialog, or the Re-allow banner for a stored handle). Does
+ * nothing once they declined or while a folder is open. The answer arrives as onClientFilesChanged.
+ */
+function promptForFiles() {
+    if (model.folder !== null || declined) {
+        return;
+    }
+    if (model.state === 'needs-permission') {
+        showBanner();
+    } else {
+        openClientFilesDialog();
+    }
+}
+
 /**
  * Whether serving this layer's tile needs the live folder before anything else. A textured terrain tile is only useful together with
  * its baked textures, which exist only while the folder is open (they are never cached), so a cached textured tile without a live
@@ -470,9 +506,13 @@ function waitForFiles() {
  */
 export const needsLiveFolder = (layer, folder) => layer === LAYER_TERRAIN_TEX && folder === null;
 
+/** The cache-owned result (shared by every caller of the same tile); localTileProvider copies the body once per caller. */
 async function buildOrLoad(layer, map, x, y) {
-    if (needsLiveFolder(layer, model.folder) && !await waitForFiles()) {
-        return emptyResult('NotApplicable', 'No client files are available.');
+    if (needsLiveFolder(layer, model.folder)) {
+        // Answered at once, never held for the visitor: the page's tile fetches have a few slots, and a human prompt that stays open
+        // must not occupy them. The tile is asked again when onClientFilesChanged fires after the folder opened.
+        promptForFiles();
+        return emptyResult('NotApplicable', 'The client folder has to be opened first.');
     }
     const started = generation; // Forget folder bumps it; a result from before that must not be cached under the old folder's key
     const forgotten = () => started !== generation;

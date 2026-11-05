@@ -69,6 +69,11 @@ function required(bytes, chunk, context) {
     return bytes.subarray(chunk.offset, chunk.offset + chunk.size);
 }
 
+/** The name of a group: the NUL-terminated string at `offset` of the root's `groupNames` blob, or null past its end. */
+export function groupName(groupNames, offset) {
+    return stringAt(groupNames, offset);
+}
+
 /** The NUL-terminated Latin-1 string at `offset` of a string blob, or null past its end. */
 export function stringAt(blob, offset) {
     if (offset < 0 || offset >= blob.length) {
@@ -96,7 +101,7 @@ export function groupFilePath(rootPath, groupIndex) {
 /**
  * Parses a WMO root file.
  * @returns {{version: number, header: object, groups: object[], groupNames: Uint8Array, doodadSets: object[], doodads: object[]}}
- *   `groupName(offset)` is on the result as a method. Throws ClientFsError 'bad-file' for an empty, truncated or unsupported file.
+ *   Plain data only (the result crosses the Worker boundary by structured clone): look a group name up with `groupName(root.groupNames, offset)`. Throws ClientFsError 'bad-file' for an empty, truncated or unsupported file.
  */
 export function parseWmoRoot(bytes) {
     if (bytes.length === 0) {
@@ -216,7 +221,7 @@ export function parseWmoRoot(bytes) {
         }
     }
 
-    return { version, header, groups, groupNames, doodadSets, doodads, groupName: (offset) => stringAt(groupNames, offset) };
+    return { version, header, groups, groupNames, doodadSets, doodads };
 }
 
 function readLiquid(payload) {

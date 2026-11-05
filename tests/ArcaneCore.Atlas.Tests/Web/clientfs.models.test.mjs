@@ -5,9 +5,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ClientFsError } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/limits.js';
-import { parseM2 } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/m2.js';
-import { readModel } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/model.js';
-import { groupFilePath, isCollidable, parseWmoGroup, parseWmoRoot, scanChunks, stringAt, WmoMaterialFlags } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/wmo.js';
+import { parseM2, parseM2Animation } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/m2.js';
+import { readModel, transferables } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/model.js';
+import { groupFilePath, groupName, isCollidable, parseWmoGroup, parseWmoRoot, scanChunks, stringAt, WmoMaterialFlags } from '../../../tools/ArcaneCore.Atlas/Web/js/clientfs/wmo.js';
 
 const refuses = (fn, what) => assert.throws(fn, (error) => error instanceof ClientFsError && error.code === 'bad-file', what);
 
@@ -155,6 +155,135 @@ test('m2.js zeroes a non-finite normal instead of refusing the file', () => {
     assert.deepEqual([...m.normals.subarray(3, 6)], [0, 0, 1]);
 });
 
+// ---- m2.js animation ----------------------------------------------------------------------------------------------------------
+/** A pre-Wrath M2Track: u16 type, i16 global sequence, then {count, offset} for ranges, timestamps and values. */
+function trackBytes(type, globalSequence, ranges, stamps, values) {
+    const w = writer().u16(type).u16(globalSequence & 0xFFFF);
+    for (const [n, ofs] of [ranges, stamps, values]) {
+        w.u32(n).u32(ofs);
+    }
+    return w.done();
+}
+
+/** A model with 2 global sequences, 2 sequences and 2 bones (a root with rotation and translation keys, a child with none). */
+function animationBytes({ withCrc = true, parent = 0, badInterpolation = false } = {}) {
+    const header = new Uint8Array(0x104);
+    const hv = new DataView(header.buffer);
+    header.set([0x4D, 0x44, 0x32, 0x30]);
+    hv.setUint32(4, 256, true);
+    const GLOBAL = 0x104;
+    const SEQUENCES = GLOBAL + 8;
+    const RANGES = SEQUENCES + (2 * 68);
+    const ROT_STAMPS = RANGES + 8;
+    const ROT_VALUES = ROT_STAMPS + 12;
+    const POS_STAMPS = ROT_VALUES + 48;
+    const POS_VALUES = POS_STAMPS + 8;
+    const BONES = POS_VALUES + 24;
+    hv.setUint32(0x14, 2, true); hv.setUint32(0x18, GLOBAL, true);
+    hv.setUint32(0x1C, 2, true); hv.setUint32(0x20, SEQUENCES, true);
+    hv.setUint32(0x34, 2, true); hv.setUint32(0x38, BONES, true);
+
+    const body = writer().u32(1000).u32(2000);
+    const sequence = (id, variation, start, end, flags, next) => body
+        .u16(id).u16(variation).u32(start).u32(end).f32(2.5).u32(flags).u16(0x7FFF).u16(0).u32(1).u32(3).u32(150)
+        .f32(-1).f32(-2).f32(-3).f32(4).f32(5).f32(6).f32(7).u16(next & 0xFFFF).u16(0);
+    sequence(4, 0, 0, 1500, 0x20, -1);
+    sequence(5, 1, 1500, 2000, 0, 0);
+    body.u32(0).u32(3); // one range over the three rotation keys
+    [0, 500, 1000].forEach((t) => body.u32(t));
+    [[0, 0, 0, 1], [0, 0.5, 0, 0.5], [0, 1, 0, 0]].forEach((q) => q.forEach((v) => body.f32(v)));
+    [0, 1500].forEach((t) => body.u32(t));
+    [[1, 2, 3], [4, 5, 6]].forEach((v) => v.forEach((c) => body.f32(c)));
+
+    const prefix = (key, flags, parentBone, submesh, crc) => {
+        body.i32(key).u32(flags).u16(parentBone & 0xFFFF).u16(submesh);
+        if (withCrc) {
+            body.u32(crc);
+        }
+    };
+    const pivot = (x, y, z) => body.f32(x).f32(y).f32(z);
+    prefix(0, 0x8, -1, 0, 0xAABBCCDD);
+    body.raw(trackBytes(1, -1, [0, 0], [2, POS_STAMPS], [2, POS_VALUES]))
+        .raw(trackBytes(badInterpolation ? 9 : 1, -1, [1, RANGES], [3, ROT_STAMPS], [3, ROT_VALUES]))
+        .raw(trackBytes(0, -1, [0, 0], [0, 0], [0, 0]));
+    pivot(0.5, 1.5, 2.5);
+    prefix(-1, 0, parent, 7, 0x01020304);
+    body.raw(trackBytes(0, 1, [0, 0], [0, 0], [0, 0])).raw(trackBytes(0, -1, [0, 0], [0, 0], [0, 0])).raw(trackBytes(0, -1, [0, 0], [0, 0], [0, 0]));
+    pivot(0, 0, 0);
+    return concat(header, body.done());
+}
+
+test('m2.js reads the animation tables: global sequences, sequences, bones and their flat tracks', () => {
+    const anim = parseM2Animation(animationBytes());
+    assert.deepEqual([...anim.globalSequences], [1000, 2000]);
+    assert.equal(anim.sequences.length, 2);
+    assert.equal(anim.sequences[0].id, 4);
+    assert.equal(anim.sequences[0].start, 0);
+    assert.equal(anim.sequences[0].end, 1500);
+    assert.equal(anim.sequences[0].duration, 1500);
+    assert.equal(anim.sequences[0].moveSpeed, 2.5);
+    assert.equal(anim.sequences[0].flags, 0x20);
+    assert.equal(anim.sequences[0].frequency, 0x7FFF);
+    assert.equal(anim.sequences[0].replayMax, 3);
+    assert.equal(anim.sequences[0].blendTime, 150);
+    assert.deepEqual(anim.sequences[0].boundsMin, [-1, -2, -3]);
+    assert.deepEqual(anim.sequences[0].boundsMax, [4, 5, 6]);
+    assert.equal(anim.sequences[0].boundsRadius, 7);
+    assert.equal(anim.sequences[0].variationNext, -1);
+    assert.equal(anim.sequences[1].variationIndex, 1);
+    assert.equal(anim.sequences[1].duration, 500);
+
+    assert.equal(anim.boneRecordSize, 112);
+    assert.equal(anim.bones.length, 2);
+    const root = anim.bones[0];
+    assert.equal(root.keyBoneId, 0);
+    assert.equal(root.flags, 8);
+    assert.equal(root.parent, -1);
+    assert.equal(root.nameCrc, 0xAABBCCDD);
+    assert.deepEqual(root.pivot, [0.5, 1.5, 2.5]);
+    assert.equal(root.translation.interpolation, 1);
+    assert.deepEqual([...root.translation.timestamps], [0, 1500]);
+    assert.deepEqual([...root.translation.values], [1, 2, 3, 4, 5, 6]);
+    assert.equal(root.translation.components, 3);
+    assert.equal(root.rotation.components, 4);
+    assert.deepEqual([...root.rotation.timestamps], [0, 500, 1000]);
+    assert.deepEqual([...root.rotation.ranges], [0, 3]);
+    assert.deepEqual([...root.rotation.values].slice(4, 8), [0, 0.5, 0, 0.5]);
+    assert.equal(root.scale.timestamps.length, 0);
+    const child = anim.bones[1];
+    assert.equal(child.parent, 0);
+    assert.equal(child.submeshId, 7);
+    assert.equal(child.keyBoneId, -1);
+    assert.equal(child.translation.globalSequence, 1);
+});
+
+test('m2.js reads bones with or without the 4-byte name CRC, deciding from the file', () => {
+    const without = parseM2Animation(animationBytes({ withCrc: false }));
+    assert.equal(without.boneRecordSize, 108);
+    assert.equal(without.bones[0].nameCrc, null);
+    assert.deepEqual([...without.bones[0].rotation.timestamps], [0, 500, 1000]);
+    assert.equal(without.bones[1].parent, 0);
+    assert.equal(without.bones[1].submeshId, 7);
+});
+
+test('m2.js refuses a damaged animation block', () => {
+    refuses(() => parseM2Animation(new Uint8Array(0)), 'empty');
+    refuses(() => parseM2Animation(animationBytes({ parent: 5 })), 'a parent outside the bones (with and without the CRC)');
+    refuses(() => parseM2Animation(animationBytes({ badInterpolation: true })), 'an unknown interpolation type');
+    const truncated = animationBytes();
+    refuses(() => parseM2Animation(truncated.subarray(0, truncated.length - 40)), 'the file ends inside the bone array');
+    const notM2 = animationBytes();
+    notM2[0] = 0x4E;
+    refuses(() => parseM2Animation(notM2), 'wrong magic');
+    const nan = animationBytes();
+    new DataView(nan.buffer).setUint32(0x104 + 8 + 136 + 8 + 12 + 4, 0x7FC00000, true);
+    refuses(() => parseM2Animation(nan), 'a value that is not finite');
+    const backwards = animationBytes();
+    new DataView(backwards.buffer).setUint32(0x104 + 8 + 8, 0, true);
+    new DataView(backwards.buffer).setUint32(0x104 + 8 + 4, 9, true);
+    refuses(() => parseM2Animation(backwards), 'a sequence that ends before it starts');
+});
+
 // ---- wmo.js -----------------------------------------------------------------------------------------------------------------
 test('wmo.js scans chunks with reversed tags and clamps a final chunk that overruns the file', () => {
     const data = concat(chunk('MVER', writer().u32(17).done()), writer().raw([0x58, 0x58, 0x58, 0x4D]).u32(100).u8(1).u8(2).done());
@@ -179,9 +308,9 @@ test('wmo.js reads a root file: header, groups, group names, doodad sets and doo
     assert.equal(root.groups.length, 2);
     assert.equal(root.groups[1].nameOffset, 4);
     assert.deepEqual(root.groups[1].boundsMax, [2, 2, 2]);
-    assert.equal(root.groupName(root.groups[0].nameOffset), 'Inn');
-    assert.equal(root.groupName(root.groups[1].nameOffset), 'Cellar');
-    assert.equal(root.groupName(999), null);
+    assert.equal(groupName(root.groupNames, root.groups[0].nameOffset), 'Inn');
+    assert.equal(groupName(root.groupNames, root.groups[1].nameOffset), 'Cellar');
+    assert.equal(groupName(root.groupNames, 999), null);
     assert.deepEqual(root.doodadSets, [{ name: 'Set_A', firstDoodad: 0, doodadCount: 1 }]);
     assert.equal(root.doodads.length, 1);
     assert.equal(root.doodads[0].modelPath, 'World\\Doodad\\Tree.mdx');
@@ -279,4 +408,22 @@ test('model.js reads a file from the chain with the parser of its kind and refus
     await assert.rejects(() => readModel(chain, 'm2', 'World\\missing.m2'), (e) => e instanceof ClientFsError && /not in the client archives/.test(e.message));
     await assert.rejects(() => readModel(chain, 'm2', ''), (e) => e instanceof ClientFsError);
     await assert.rejects(() => readModel(chain, 'wmo-root', 'World\\a.m2'), (e) => e instanceof ClientFsError, 'a damaged file is refused by its parser');
+});
+
+test('every model kind survives the Worker boundary: the result structured-clones with its transfer list (m2, m2-animation, wmo-root, wmo-group)', async () => {
+    const m2 = m2Bytes({ vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], lookup: [0, 1, 2], triangles: [0, 1, 2], boundingIndices: [0, 1, 2], boundingVertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]] });
+    const files = new Map([['world\\a.m2', m2], ['world\\anim.m2', animationBytes()], ['world\\inn.wmo', rootBytes()], ['world\\inn_000.wmo', groupBytes()]]);
+    const chain = { async read(path) { return files.get(path.toLowerCase().replaceAll('/', '\\')) ?? null; } };
+    for (const [kind, path] of [['m2', 'World\\a.m2'], ['m2-animation', 'World\\anim.m2'], ['wmo-root', 'World\\Inn.wmo'], ['wmo-group', 'World\\Inn_000.wmo']]) {
+        const result = await readModel(chain, kind, path);
+        const transfer = transferables(result);
+        assert.ok(transfer.length > 0, `${kind}: typed arrays are transferred`);
+        const before = JSON.stringify(result, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
+        // The Worker's postMessage(result, transfer) uses the same structured clone; a function property throws DataCloneError here.
+        const copy = structuredClone(result, { transfer });
+        assert.equal(JSON.stringify(copy, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v)), before, `${kind}: the clone equals the parsed result`);
+        for (const buffer of transfer) {
+            assert.equal(buffer.byteLength, 0, `${kind}: the transferred buffer is detached`);
+        }
+    }
 });

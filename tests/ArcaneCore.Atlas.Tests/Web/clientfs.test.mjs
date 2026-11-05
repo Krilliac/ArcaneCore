@@ -1572,13 +1572,23 @@ test('a textured terrain tile is not served from the cache without a live folder
         const tile = fx.manifest.tiles[1];
         const request = `cf.localTileProvider().tile('ref.terrain.tex', 0, ${tile.x}, ${tile.y}, new AbortController().signal).then((r) => r.state)`;
         const first = await page.evaluate(request);
-        assert.ok(['Ok', 'Empty', 'Missing', 'Rejected'].includes(first), `the first visit answers from the live folder (${first})`);
+        assert.equal(first, 'Ok', 'the first visit answers from the live folder and is cacheable');
 
         // File objects die with the page: after a reload only the cache is left. A textured tile may not come out of it.
         await reload(page, harness);
-        await page.evaluate(`window.__pending = ${request}.then(() => 'settled', () => 'rejected'); true`);
+        await page.evaluate('window.__changed = 0; cf.onClientFilesChanged(() => { window.__changed++; }); true');
+        // The answer is immediate: the request never waits on the visitor, so it cannot hold one of the page's tile-fetch slots.
+        const answer = await page.evaluate(`Promise.race([${request}, new Promise((resolve) => setTimeout(() => resolve('still pending'), 10000))])`);
+        assert.equal(answer, 'NotApplicable', 'no cached textured tile and no wait for the dialog');
         await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog on the second visit', 15_000);
-        assert.equal(await page.evaluate('window.__pending === undefined ? "no" : "set"'), 'set');
+        assert.equal(await page.evaluate('window.__changed'), 0, 'nothing changed while the dialog is open');
+
+        // Answering the dialog tells the page, which asks the tile again.
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('window.__changed === 1', 'the change notification after the folder opened', 60_000);
+        assert.equal(await page.evaluate(request), 'Ok', 'with the folder open the tile is served');
         assert.deepEqual(problems(page), []);
     }, { helpers: PAGE_HELPERS_NO_PICKER });
 });

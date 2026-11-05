@@ -2,8 +2,10 @@
 // render vertices and normals, the first embedded view's triangles and the bounding (collision) triangles and vertices the vmap
 // extractor keeps. Positions are in model space exactly as stored (flat Float32Array triples).
 //
-// Not here: bone tracks and animation sequences. Their field layout for 1.12.1 could not be checked against a spec or real data from
-// this repository (docs/areas/atlas-client-files.md, "Deferred deliverables").
+// Animation (parseM2Animation, a separate parse so a damaged animation block never costs a model its mesh): global sequences, the
+// sequence table and the bone tree with its translation / rotation / scale tracks, laid out as the pre-Wrath M2 spec has them
+// (wowdev.wiki/M2 and pywowlib file_formats/m2_format.py, read while writing this; neither is vendored here). NOT checked against a
+// real 1.12.1 file: the tests use synthetic files built to that layout. Renderer bone streams (skinning, playback) are not here.
 //
 // Every offset and count is checked against the file; a damaged file is refused with ClientFsError 'bad-file'. No shared state.
 
@@ -205,4 +207,157 @@ export function parseM2(bytes) {
         renderBox: box(vertices),
         boundingBox: box(boundingVertices),
     };
+}
+
+// ---- animation ---------------------------------------------------------------------------------------------------------------
+// Header: global sequences (u32 durations) 0x14, sequences 0x1C, bones 0x34 (each an {count, offset} pair).
+const OFFSET_GLOBAL_SEQUENCES = 0x14;
+const OFFSET_SEQUENCES = 0x1C;
+const OFFSET_BONES = 0x34;
+const SEQUENCE_SIZE = 68;
+const TRACK_SIZE = 28; // u16 interpolation, i16 global sequence, ranges {n, ofs}, timestamps {n, ofs}, values {n, ofs}
+const BONE_PREFIX_WITH_CRC = 16; // i32 key bone, u32 flags, i16 parent, u16 submesh, u32 name crc
+const BONE_PREFIX_WITHOUT_CRC = 12;
+const BONE_TAIL = (3 * TRACK_SIZE) + 12; // translation, rotation, scale tracks, then the pivot
+
+function readTrack(view, at, length, components, what) {
+    const interpolation = view.getUint16(at, true);
+    const globalSequence = view.getInt16(at + 2, true);
+    const [rangeCount, rangeOffset] = readArray(view, at + 4);
+    const [stampCount, stampOffset] = readArray(view, at + 12);
+    const [valueCount, valueOffset] = readArray(view, at + 20);
+    requireRange(length, rangeOffset, rangeCount, 8, `${what} interpolation ranges`);
+    requireRange(length, stampOffset, stampCount, 4, `${what} timestamps`);
+    requireRange(length, valueOffset, valueCount, 4 * components, `${what} values`);
+    if (interpolation > 3) {
+        throw badFile(`M2: ${what} has interpolation type ${interpolation} (0 none, 1 linear, 2 hermite, 3 bezier).`);
+    }
+    const ranges = new Uint32Array(rangeCount * 2);
+    for (let i = 0; i < ranges.length; i++) {
+        ranges[i] = view.getUint32(rangeOffset + (4 * i), true);
+    }
+    const timestamps = new Uint32Array(stampCount);
+    for (let i = 0; i < stampCount; i++) {
+        timestamps[i] = view.getUint32(stampOffset + (4 * i), true);
+    }
+    const values = new Float32Array(valueCount * components);
+    for (let i = 0; i < values.length; i++) {
+        const value = view.getFloat32(valueOffset + (4 * i), true);
+        if (!Number.isFinite(value)) {
+            throw badFile(`M2: ${what} has a value that is not finite.`);
+        }
+        values[i] = value;
+    }
+    return { interpolation, globalSequence, ranges, timestamps, values, components };
+}
+
+function readBones(view, length, count, offset, prefix) {
+    const size = prefix + BONE_TAIL;
+    requireRange(length, offset, count, size, 'bones');
+    const bones = [];
+    for (let i = 0; i < count; i++) {
+        const at = offset + (i * size);
+        const parent = view.getInt16(at + 8, true);
+        if (parent < -1 || parent >= count) {
+            throw badFile(`M2: bone ${i} names parent ${parent}, outside the ${count} bones.`);
+        }
+        const tracks = at + prefix;
+        const pivot = tracks + (3 * TRACK_SIZE);
+        bones.push({
+            keyBoneId: view.getInt32(at, true),
+            flags: view.getUint32(at + 4, true),
+            parent,
+            submeshId: view.getUint16(at + 10, true),
+            nameCrc: prefix === BONE_PREFIX_WITH_CRC ? view.getUint32(at + 12, true) : null,
+            translation: readTrack(view, tracks, length, 3, `bone ${i} translation`),
+            rotation: readTrack(view, tracks + TRACK_SIZE, length, 4, `bone ${i} rotation`), // [x, y, z, w] floats
+            scale: readTrack(view, tracks + (2 * TRACK_SIZE), length, 3, `bone ${i} scale`),
+            pivot: [view.getFloat32(pivot, true), view.getFloat32(pivot + 4, true), view.getFloat32(pivot + 8, true)],
+        });
+    }
+    return bones;
+}
+
+/**
+ * Parses the animation tables of a model: global sequences, sequences, bones and their tracks.
+ *
+ * A track keeps the file's flat layout (pre-Wrath: one timestamps array and one values array for the whole model, plus `ranges`,
+ * the {min, max} pairs the spec lists as interpolation ranges, flattened). `interpolation` is 0 none, 1 linear, 2 hermite, 3 bezier;
+ * for 2 and 3 the spec stores in/out tangents beside each value. How `ranges` map to sequences, the rotation component order and
+ * the tangent layout are as the spec describes and are UNVERIFIED against a real 1.12.1 model.
+ *
+ * Whether a bone record carries the 4-byte name CRC (the wiki marks it as present from TBC on, pywowlib reads it for every version)
+ * is decided from the file: the bone array is read with the CRC (112-byte records) and, when that does not fit the file or names an
+ * impossible parent, track or interpolation, again without it (108 bytes). `boneRecordSize` reports which one held.
+ *
+ * @returns {{name: string, globalSequences: Uint32Array, sequences: object[], bones: object[], boneRecordSize: number}} plain data
+ *   (typed arrays and objects only), so it can cross the Worker boundary. Throws ClientFsError 'bad-file'.
+ */
+export function parseM2Animation(bytes) {
+    if (bytes.length === 0) {
+        throw badFile('M2 file is empty (0 bytes).');
+    }
+    if (bytes.length < MINIMUM_HEADER_BYTES || bytes[0] !== 0x4D || bytes[1] !== 0x44 || bytes[2] !== 0x32 || bytes[3] !== 0x30) {
+        throw badFile('M2: not an MD20 model (missing magic or header truncated).');
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const length = bytes.length;
+    const version = view.getUint32(4, true);
+    if (version < M2_MIN_VERSION || version > M2_MAX_VERSION) {
+        throw badFile(`M2: version ${version} is not the 1.12.1 version ${M2_MIN_VERSION}.`);
+    }
+
+    const [globalCount, globalOffset] = readArray(view, OFFSET_GLOBAL_SEQUENCES);
+    requireRange(length, globalOffset, globalCount, 4, 'global sequences');
+    const globalSequences = new Uint32Array(globalCount);
+    for (let i = 0; i < globalCount; i++) {
+        globalSequences[i] = view.getUint32(globalOffset + (4 * i), true);
+    }
+
+    const [sequenceCount, sequenceOffset] = readArray(view, OFFSET_SEQUENCES);
+    requireRange(length, sequenceOffset, sequenceCount, SEQUENCE_SIZE, 'sequences');
+    const sequences = [];
+    for (let i = 0; i < sequenceCount; i++) {
+        const at = sequenceOffset + (i * SEQUENCE_SIZE);
+        const start = view.getUint32(at + 4, true);
+        const end = view.getUint32(at + 8, true);
+        if (end < start) {
+            throw badFile(`M2: sequence ${i} ends (${end}) before it starts (${start}).`);
+        }
+        sequences.push({
+            id: view.getUint16(at, true),
+            variationIndex: view.getUint16(at + 2, true),
+            start,
+            end,
+            duration: end - start,
+            moveSpeed: view.getFloat32(at + 12, true),
+            flags: view.getUint32(at + 16, true),
+            frequency: view.getInt16(at + 20, true),
+            replayMin: view.getUint32(at + 24, true),
+            replayMax: view.getUint32(at + 28, true),
+            blendTime: view.getUint32(at + 32, true),
+            boundsMin: [view.getFloat32(at + 36, true), view.getFloat32(at + 40, true), view.getFloat32(at + 44, true)],
+            boundsMax: [view.getFloat32(at + 48, true), view.getFloat32(at + 52, true), view.getFloat32(at + 56, true)],
+            boundsRadius: view.getFloat32(at + 60, true),
+            variationNext: view.getInt16(at + 64, true),
+            aliasNext: view.getUint16(at + 66, true),
+        });
+    }
+
+    const [boneCount, boneOffset] = readArray(view, OFFSET_BONES);
+    let bones = [];
+    let prefix = BONE_PREFIX_WITH_CRC;
+    if (boneCount > 0) {
+        try {
+            bones = readBones(view, length, boneCount, boneOffset, BONE_PREFIX_WITH_CRC);
+        } catch (withCrc) {
+            prefix = BONE_PREFIX_WITHOUT_CRC;
+            try {
+                bones = readBones(view, length, boneCount, boneOffset, BONE_PREFIX_WITHOUT_CRC);
+            } catch {
+                throw withCrc;
+            }
+        }
+    }
+    return { name: readName(bytes, view), globalSequences, sequences, bones, boneRecordSize: prefix + BONE_TAIL };
 }

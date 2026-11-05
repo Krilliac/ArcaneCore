@@ -3,7 +3,7 @@
 //   validate  {folder}                         -> validateClientFolder result
 //   tile      {archives, layer, map, x, y}     -> {state, detail, parts: [Uint8Array]} (Api.tile's state names)
 //   texture   {archives, key}                  -> Uint8Array, an ATX1 texture baked from the MCNK named by a `cft:` key
-//   model     {archives, kind, path}           -> the parsed M2 ('m2'), WMO root ('wmo-root') or WMO group ('wmo-group') file (m2.js, wmo.js)
+//   model     {archives, kind, path}           -> the parsed M2 ('m2'), its animation tables ('m2-animation'), WMO root ('wmo-root') or WMO group ('wmo-group') file (m2.js, wmo.js)
 // Requests are {id, op, ...payload}; replies are {id, ok: true, result, reads} or {id, ok: false, error: {code, message}}.
 // `reads` (present only when above 0) is the number of archive range reads the job made (the page's "archive reads" counter).
 // The Worker is started from /app/js/clientfs/worker.js, which the page's script-src 'self' (and the public listener's
@@ -12,7 +12,7 @@
 import { buildTile } from './adt.js';
 import { LAYER_TERRAIN_TEX, bakeTexture, buildTexturedTile } from './terrain-tex.js';
 import { ClientFsError } from './limits.js';
-import { readModel } from './model.js';
+import { readModel, transferables } from './model.js';
 import { createChain, loadOrder, openArchive, stats } from './mpq.js';
 import { validateClientFolder } from './validate.js';
 
@@ -41,22 +41,6 @@ async function chainOf(archives) {
         chains.set(id, chain);
     }
     return chain;
-}
-
-/** The distinct ArrayBuffers behind the typed arrays of a parsed model, so they move to the page instead of being copied. */
-function transferables(value) {
-    const buffers = new Set();
-    const walk = (v) => {
-        if (ArrayBuffer.isView(v)) {
-            buffers.add(v.buffer);
-        } else if (Array.isArray(v)) {
-            v.forEach(walk);
-        } else if (v !== null && typeof v === 'object') {
-            Object.values(v).forEach(walk);
-        }
-    };
-    walk(value);
-    return [...buffers];
 }
 
 const handlers = {

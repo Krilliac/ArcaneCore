@@ -1,6 +1,6 @@
 // Lane Y39: where the Local page gets textured terrain from (js/clientsource.js): the host first, the visitor's own client files
 // (clientfs/index.js, injected here) when the host has none, and the reader module loaded only when a request needs it.
-// Not run in the lane that wrote it (no CI in that lane); the integration gate is the first run.
+// Written without a CI run in its lane (the lane's author ran the Node tests by hand); the integration gate is the first full run.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -14,7 +14,7 @@ import { CLIENT_TEXTURE_PREFIX, ClientFilesSource, TEXTURED_TERRAIN_LAYER } from
 const envelope = () => new Uint8Array(4).buffer;
 
 function fixture({ host = () => ({ state: 'Ok', detail: null, body: envelope() }), local = () => ({ state: 'Ok', detail: null, body: envelope() }), loadFails = 0 } = {}) {
-    const calls = { hostTiles: [], hostTextures: [], localTiles: [], localTextures: [], loads: 0, settings: 0, changes: 0 };
+    const calls = { hostTiles: [], hostTextures: [], localTiles: [], localTextures: [], loads: 0, settings: 0, changes: 0, subscriptions: 0 };
     const api = {
         async tile(layer, map, x, y) {
             calls.hostTiles.push([layer, map, x, y]);
@@ -26,8 +26,7 @@ function fixture({ host = () => ({ state: 'Ok', detail: null, body: envelope() }
         },
     };
     let failures = loadFails;
-    const status = { value: { state: 'none', folderName: '' }, fail: false };
-    const timers = [];
+    const listeners = [];
     const reader = {
         localTileProvider: () => ({
             async tile(layer, map, x, y) {
@@ -44,17 +43,15 @@ function fixture({ host = () => ({ state: 'Ok', detail: null, body: envelope() }
         async openClientFilesSettings() {
             calls.settings++;
         },
-        async clientFilesStatus() {
-            if (status.fail) {
-                throw new Error('the status could not be read');
-            }
-            return status.value;
+        onClientFilesChanged(listener) {
+            calls.subscriptions++;
+            listeners.push(listener);
+            return () => {};
         },
     };
     const source = new ClientFilesSource({
         api,
         onChange: () => calls.changes++,
-        schedule: (fn) => timers.push(fn),
         loadReader: async () => {
             calls.loads++;
             if (failures > 0) {
@@ -64,7 +61,7 @@ function fixture({ host = () => ({ state: 'Ok', detail: null, body: envelope() }
             return reader;
         },
     });
-    return { source, calls, status, timers };
+    return { source, calls, changed: () => listeners.forEach((l) => l()) };
 }
 
 test('clientsource: other layers and host textures never load the reader', async () => {
@@ -165,40 +162,25 @@ test('clientsource: the reader module loads once, a failed load is retried, and 
     assert.equal(calls.settings, 1);
 });
 
-test('clientsource: after the settings opened, a changed folder choice is reported once, an unchanged one is watched and then dropped', async () => {
-    const { source, calls, status, timers } = fixture();
+test('clientsource: the reader reports every folder change and the page hears each one, with one subscription however often the reader is used', async () => {
+    const { source, calls, changed } = fixture();
     await source.openSettings();
-    assert.equal(timers.length, 1, 'one poll is scheduled');
     await source.openSettings();
-    assert.equal(timers.length, 1, 'a second open does not start a second watcher');
-
-    await timers.shift()();
-    assert.equal(calls.changes, 0, 'nothing changed yet');
-    assert.equal(timers.length, 1, 'the next poll is scheduled');
-
-    status.value = { state: 'ready', folderName: 'WoW' };
-    await timers.shift()();
-    assert.equal(calls.changes, 1, 'the choice changed: the page is told');
-    assert.equal(timers.length, 0, 'and the watcher stops');
-
-    await source.openSettings();
-    status.value = { state: 'ready', folderName: 'WoW2' };
-    assert.equal(timers.length, 1, 'a later open watches again');
-    await timers.shift()();
-    assert.equal(calls.changes, 2, 'a different folder name counts as a change');
+    await source.tile(TEXTURED_TERRAIN_LAYER, 0, 1, 1);
+    assert.equal(calls.subscriptions, 1, 'one subscription per loaded reader');
+    assert.equal(calls.changes, 0);
+    changed();
+    assert.equal(calls.changes, 1, 'a folder opened');
+    changed();
+    assert.equal(calls.changes, 2, 'a second change is heard too, with no polling window that can run out; a different folder of the same name is a change as well');
 });
 
-test('clientsource: a status read that fails neither stops the watcher nor reports a change', async () => {
-    const { source, calls, status, timers } = fixture();
+test('clientsource: a failed reader load subscribes nothing and the retry subscribes once', async () => {
+    const { source, calls } = fixture({ loadFails: 1 });
+    await assert.rejects(() => source.openSettings(), /did not load/);
+    assert.equal(calls.subscriptions, 0);
     await source.openSettings();
-    status.fail = true;
-    await timers.shift()();
-    assert.equal(calls.changes, 0, 'a failed read is not a change');
-    assert.equal(timers.length, 1, 'the watcher polls again');
-    status.fail = false;
-    status.value = { state: 'ready', folderName: 'WoW' };
-    await timers.shift()();
-    assert.equal(calls.changes, 1);
+    assert.equal(calls.subscriptions, 1);
 });
 
 // ---- the whole path of a host that has no source for the textured layer -----------------------------------------------------
@@ -263,3 +245,23 @@ test('clientsource: the override touches only layers the reader can serve, and o
     const served = withClientReaderLayers(normalizeLayerList([{ id: TEXTURED_TERRAIN_LAYER, group: 'Reference', hasSource: true }]));
     assert.equal(served.find((l) => l.id === TEXTURED_TERRAIN_LAYER).viaClientFiles, undefined, 'a host that serves it is left alone');
 });
+
+test('clientsource: a textured tile the reader refuses at once does not hold a Scene slot, so a plain tile of another layer is still fetched', async () => {
+    // The reader answers a textured tile NotApplicable immediately while it asks the visitor for the folder (it never waits on the prompt).
+    const { source, calls } = fixture({
+        host: (layer) => (layer === TEXTURED_TERRAIN_LAYER ? { state: 'NotApplicable', detail: 'no source', body: envelope() } : { state: 'Ok', detail: null, body: envelope() }),
+        local: () => ({ state: 'NotApplicable', detail: 'The client folder has to be opened first.', body: envelope() }),
+    });
+    const infos = withClientReaderLayers(normalizeLayerList([...layersListWithoutSource(), { id: 'ref.terrain', group: 'Reference', hasSource: true, tiled: true }]));
+    const renderer = { stats: { gpuBytes: 0 }, createChunk: () => assert.fail('an empty envelope has no chunk'), destroyChunk() {} };
+    const scene = new Scene({ api: source, renderer, concurrency: 1, clock: () => 0 });
+    scene.setLayerInfos(infos);
+    scene.update({ map: 0, focusTile: { x: 32, y: 32 }, radius: 1, layers: [TEXTURED_TERRAIN_LAYER, 'ref.terrain'] });
+    for (let i = 0; i < 40; i++) {
+        await flush();
+    }
+    assert.ok(calls.localTiles.length >= 1, 'textured tiles reached the reader');
+    assert.ok(calls.hostTiles.some((t) => t[0] === 'ref.terrain'), 'the plain layer is fetched although textured tiles were asked first or alongside');
+    assert.ok(calls.hostTiles.filter((t) => t[0] === 'ref.terrain').length >= 9, 'every plain tile of the radius is fetched with a single slot');
+});
+
