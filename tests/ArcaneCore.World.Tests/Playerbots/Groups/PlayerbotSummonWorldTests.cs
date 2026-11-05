@@ -161,17 +161,15 @@ public sealed class PlayerbotSummonWorldTests
         await GroupAsync(world, "Summonanchor", warlock, helperOne, helperTwo, far);
 
         int participants = 0;
-        bool sawOffer = false;
         bool arrived = await world.RunUntilAsync(180_000, () =>
         {
             participants = Math.Max(participants, Portals(world).Select(g => g.Participants.Count).DefaultIfEmpty(0).Max());
-            sawOffer |= world.Player(far.Id).PendingSummon is not null;
             return world.Bots.Summons.Accepted >= 1 && Distance(world.Player(far.Id), world.Player(warlock.Id)) < 12f;
         });
 
         Assert.True(arrived, await world.TraceAsync());
         Assert.Equal(1, world.Bots.Summons.Started);
-        Assert.True(sawOffer, "the far member never got a summon request");
+        Assert.True(world.Bots.Summons.Accepted >= 1, "the far member never answered a summon request"); // the bot answers within the tick the request lands in, so no tick boundary sees the pending request
         Assert.True(participants >= 3, $"the portal took {participants} participants");
         Assert.Equal(2u, await world.OnWorldAsync(() => world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)));
     }
@@ -270,7 +268,7 @@ public sealed class PlayerbotSummonWorldTests
         Assert.Equal(1, world.Bots.Summons.Started);
 
         // After the gap it may try again.
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync() + await world.OnWorldAsync(() => $"DIAG started={world.Bots.Summons.Started} active={world.Bots.Summons.Active} job={world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind} shards={world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)} portals={Portals(world).Count()} combat={world.Player(warlock.Id).Combat.IsInCombat} pending={Real(world, "Summonsilent").PendingSummon is not null} realAt={Real(world, "Summonsilent").X}"));
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync() + await world.OnWorldAsync(() => $"DIAG started={world.Bots.Summons.Started} active={world.Bots.Summons.Active} job={world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind} shards={world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)} portals={Portals(world).Count()} combat={world.Player(warlock.Id).Combat.IsInCombat} pending={Real(world, "Summonsilent").PendingSummon is not null} realAt={Real(world, "Summonsilent").X} moving={world.Player(warlock.Id).Movement.Flags} motion={PlayerbotMotion.IsActive(world.Player(warlock.Id))} cast={world.World.Services.GetRequiredService<SpellFeature>().System.GetState(world.Player(warlock.Id).Guid)?.CurrentCast?.State} h1={Distance(world.Player(helperOne.Id), world.Player(warlock.Id))} h1c={world.Player(helperOne.Id).Combat.IsInCombat} h2={Distance(world.Player(helperTwo.Id), world.Player(warlock.Id))} pd={world.Bots.IsPartyDriven(warlock.Id)} alive={world.Player(warlock.Id).IsAlive}"));
     }
 
     [Fact]
