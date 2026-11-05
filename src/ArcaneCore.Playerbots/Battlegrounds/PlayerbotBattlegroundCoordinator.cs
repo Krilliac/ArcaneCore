@@ -864,6 +864,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>A free bot that may start a queue now: alive, out of combat, on an allowed open-world map, in no group, queue or match, no deserter.</summary>
     private bool MayQueue(Player player, BattlegroundFeature feature)
     {
+        // A cluster worker that is not the holder keeps no queue state: the join would land in the holder's queue and this coordinator would never see the slot or the invitation.
+        // Bots therefore queue only where the manager holds the state (a limit of the cluster mode: no bot battleground queueing on a plain worker).
+        if (!feature.HoldsQueueState) return false;
         if (!player.IsAlive || player.Combat.IsInCombat || player.Map is not { } map) return false;
         if (map.Template is { IsDungeon: true } or { IsBattleground: true }) return false;
         if (_options.AllowedMaps is { Length: > 0 } allowed && !allowed.Contains(map.MapId)) return false;

@@ -30,6 +30,10 @@ internal enum PresenceOp : byte
     GroupDrain = 22,
     GuildForward = 23,
     GuildDrain = 24,
+    BattlegroundSubmit = 25,
+    BattlegroundTake = 26,
+    BattlegroundPost = 27,
+    BattlegroundDrain = 28,
 }
 
 /// <summary>
@@ -649,6 +653,38 @@ internal static class PresenceWireCodec
             {
                 IReadOnlyList<GuildLinkEvent> events = service.Guilds.Drain(r.ReadString());
                 return EncodeReply(w => GuildWireCodec.WriteEvents(w, events));
+            }
+
+            case PresenceOp.BattlegroundSubmit:
+            {
+                string worker = r.ReadString();
+                IReadOnlyList<BattlegroundQueuedCommand> items = BattlegroundWireCodec.ReadCommands(r);
+                bool holderLive = service.Battlegrounds.Submit(worker, [.. items.Select(i => i.Command)]);
+                return EncodeReply(w => w.Write(holderLive));
+            }
+
+            case PresenceOp.BattlegroundTake:
+            {
+                BattlegroundTakeResult taken = service.Battlegrounds.Take(r.ReadString());
+                return EncodeReply(w =>
+                {
+                    w.Write(taken.IsHolder);
+                    BattlegroundWireCodec.WriteCommands(w, taken.Commands);
+                });
+            }
+
+            case PresenceOp.BattlegroundPost:
+            {
+                string node = r.ReadString();
+                bool accepted = service.Battlegrounds.Post(node, BattlegroundWireCodec.ReadNotices(r));
+                return EncodeReply(w => w.Write(accepted));
+            }
+
+            case PresenceOp.BattlegroundDrain:
+            {
+                string worker = r.ReadString();
+                IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> notices = service.Battlegrounds.Drain(worker);
+                return EncodeReply(w => BattlegroundWireCodec.WriteNotices(w, [.. notices.Select(n => new BattlegroundQueuedNotice(worker, n))]));
             }
 
             default:

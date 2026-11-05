@@ -102,6 +102,12 @@ feature with its own tests and touches the lease filter only through lane 2.
 8. **s3e-bg-queue**: one holder for `BattlegroundQueue` (`ArcaneCore.Game/Battlegrounds/BattlegroundQueue.cs`), match creation on
    the node that owns the new instance, client-visible instance ids allocated by the holder (`BattlegroundManager.cs:333-352`),
    invite and status messages routed to the player's node. Size L.
+   Delivered as the battleground hub (`BattlegroundHub`, `ClusterBattlegroundLink`, presence ops 25 to 28). The node holding the Social lease runs only a mailbox;
+   the queue's holder is a node the gateway sends battleground transfers to: it owns everything or its `OwnedMaps` list names all three battleground maps (instance-copy ownership alone does not count, because the transfer names instance 0), elected at the hub by asking for the commands:
+   the first asker holds the role while it asks at least every 5 seconds. Every node sends its players' queue commands to the hub and drains its notices from it; an
+   accepted invitation is a far transfer to the holder's node. Limits: the hub and the holder's manager live in memory, so a Social lease move or a holder change loses
+   the waiting commands and the queue state (players queue again); a cluster with no node that owns all three battleground maps has no holder, and queued commands
+   wait at the hub (bounded) with one warning in the log; a holder cut off from the hub steps down after the 5 second window, and its notices are dropped. Playerbots queue for battlegrounds only on the node that holds the queue state (the elected holder), because a plain worker's manager keeps none.
 9. **s3e-lfg**: the meeting stone queue on its holder (`ArcaneCore.World/GameObjects/MeetingStoneFeature.cs:61`), party formation
    through the group authority from lane 7. Size M.
 10. **s3e-outdoor-pvp-owner**: assert and test that Silithus and Eastern Plaguelands each have exactly one owner in the placement

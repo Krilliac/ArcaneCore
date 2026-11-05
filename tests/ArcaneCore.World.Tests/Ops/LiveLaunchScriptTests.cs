@@ -551,6 +551,18 @@ public sealed class LiveLaunchScriptTests : IDisposable
         }
 
         Assert.Equal(3, checkedWorkers);
+
+        // The launcher's instances world is the node the battleground queue holder election needs: it lists Alterac Valley, Warsong Gulch and Arathi Basin, the continent worlds do not.
+        string instancesArguments = worlds.Values.Single(a => ArgumentValue(a, "Cluster:Worker:NodeId") == "worker:instances");
+        Assert.True(MapOwnership.TryParse(ArgumentValue(instancesArguments, "Cluster:Worker:OwnedMaps"), true, out MapOwnership instancesOwnership, out string? instancesError), instancesError);
+        Assert.True(ArcaneCore.World.Battlegrounds.BattlegroundFeature.CanHoldQueues(instancesOwnership));
+        foreach (string continent in new[] { "worker:EK", "worker:Kalimdor" })
+        {
+            string continentArguments = worlds.Values.Single(a => ArgumentValue(a, "Cluster:Worker:NodeId") == continent);
+            Assert.True(MapOwnership.TryParse(ArgumentValue(continentArguments, "Cluster:Worker:OwnedMaps"), true, out MapOwnership continentOwnership, out string? continentError), continentError);
+            Assert.False(ArcaneCore.World.Battlegrounds.BattlegroundFeature.CanHoldQueues(continentOwnership));
+        }
+
         Assert.Contains("--Gateway:LoginWorker=worker:Kalimdor", output, StringComparison.Ordinal);
         Assert.Contains("MapWorker on worker:Kalimdor", output, StringComparison.Ordinal);
 

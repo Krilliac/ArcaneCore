@@ -103,6 +103,13 @@ public static class ClusterPresenceHosting
             });
             services.TryAddSingleton<ArcaneCore.Game.Guilds.IGuildHolderLink>(sp => sp.GetRequiredService<PeerGuildHolderLink>());
             services.AddHostedService(sp => new GuildLinkStarter(sp.GetRequiredService<PeerGuildHolderLink>()));
+
+            // Battleground queues (S3e lane 8): commands and notices travel through the hub the Social holder runs; the battleground feature starts the link when it installs,
+            // and the node that owns the battleground maps becomes the queue's holder. Combined mode registers nothing, so the manager stays local.
+            services.TryAddSingleton(sp => new ClusterBattlegroundLink(
+                sp.GetRequiredService<LeaseRoutedPresence>(),
+                sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId,
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterBattlegroundLink>()));
         }
 
         return services;
