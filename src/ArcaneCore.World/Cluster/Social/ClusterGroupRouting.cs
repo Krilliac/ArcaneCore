@@ -446,7 +446,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     /// </summary>
     private async Task HoldUntilReachableAsync(ChannelReader<Queued> reader, GroupCommand held)
     {
-        // A future lease takeover that ends a hold must be ordered against SocialGroupPersistenceFeature.ReloadAuthority's Reset: held commands must not reach a table that is being reloaded.
+        // A future lease takeover that ends a hold must be ordered against SocialGroupPersistenceFeature.ApplyReload's Reset: held commands must not reach a table that is being reloaded.
         ReportResume(reader); // the link went again inside the last outage's backlog: its counts are reset below
         _outageQueueDropped = QueueDropped;
         _outageRelayDropped = RelayDropped;

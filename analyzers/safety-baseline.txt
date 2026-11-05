@@ -67,7 +67,6 @@ ARC0006|src/ArcaneCore.World/Reputation/ReputationFeature.cs|ReputationFeature.L
 ARC0006|src/ArcaneCore.World/Rules/RuleFeature.cs|RuleFeature.Attach|TaskAwaiter.GetResult|1
 ARC0006|src/ArcaneCore.World/Skills/SkillsFeature.cs|SkillsFeature.ReadSpellRows|TaskAwaiter.GetResult|1
 ARC0006|src/ArcaneCore.World/Social/SocialGroupPersistenceFeature.cs|SocialGroupPersistenceFeature.Attach|TaskAwaiter.GetResult|1
-ARC0006|src/ArcaneCore.World/Social/SocialGroupPersistenceFeature.cs|SocialGroupPersistenceFeature.ReloadAuthority|TaskAwaiter.GetResult|1
 ARC0006|src/ArcaneCore.World/Spells/Procs/SpellProcFeature.cs|SpellProcFeature.Attach|TaskAwaiter.GetResult|1
 ARC0006|src/ArcaneCore.World/Spells/SpellFeature.cs|SpellFeature.Attach|TaskAwaiter.GetResult|4
 ARC0006|src/ArcaneCore.World/Spells/Totems/TotemFeature.cs|TotemFeature.Attach|TaskAwaiter.GetResult|1

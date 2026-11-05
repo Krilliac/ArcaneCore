@@ -46,7 +46,7 @@ public sealed class RepoBaselineTests
             ["ARC0002"] = (14, 22),
             ["ARC0003"] = (2, 2),
             ["ARC0004"] = (2, 2),
-            ["ARC0006"] = (64, 77),
+            ["ARC0006"] = (63, 76),
         };
 
         string root = RepoRoot();

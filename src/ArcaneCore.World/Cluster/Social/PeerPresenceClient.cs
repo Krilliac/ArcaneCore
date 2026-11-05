@@ -26,7 +26,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     private T Send<T>(PresenceOp op, Action<BinaryWriter>? write, Func<BinaryReader, T> read)
     {
-#pragma warning disable ARC0006 // the documented synchronous entry point: its callers are the cluster sender and pump tasks and the .cluster commands (never the world thread), Task.Run keeps the await off any captured context, and the link request timeout bounds the wait
+#pragma warning disable ARC0006 // the documented synchronous entry point: its callers are the cluster sender and pump tasks and CrossWorkerSocial's Task.Run (the .cluster commands deliberately do not reach it: they read LeaseRoutedPresence.TryGetLocalCount on the world thread), Task.Run keeps the await off any captured context, and the link request timeout bounds the wait
         using BinaryReader r = Task.Run(() => SendAsync(op, write)).GetAwaiter().GetResult();
 #pragma warning restore ARC0006
         return read(r);
