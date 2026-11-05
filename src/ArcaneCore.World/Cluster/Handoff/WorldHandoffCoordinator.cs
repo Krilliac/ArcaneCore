@@ -22,7 +22,7 @@ public interface IWorldHandoffSource
 
     /// <summary>
     /// Wait until every save captured by the freeze, and every other write A has open at that point in a character, instance or social queue, offline characters and writes of no one character
-    /// included, and in the group, GM audit, account data, account address, creature and game object respawn and world-state save queues, is durable; throws, before the commit, when one cannot be. Pet saves and the running game-event set are not waited for. On success A's writes are sealed until
+    /// included, and in the group, GM audit, account data, account address, creature and game object respawn and world-state save queues, is durable; throws, before the commit, when one cannot be. Pet saves are waited for (per character); the running game-event set is not. On success A's writes are sealed until
     /// <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected. A flush that outlives its freeze (A resumed
     /// meanwhile) throws and seals nothing. A write made after this returns has no durability promise: it lands only if the takeover has not.
     /// </summary>

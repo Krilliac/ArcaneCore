@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -230,9 +231,21 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
     }
 
+    /// <summary>
+    /// The retained keys a retry can still owe: those a store refused because this node does not hold the realm lease for them (<see cref="RealmLeaseNotHeldException"/>) are left out. The
+    /// holder writes the stored value, the key stays retained (the periodic retry lands it if the lease comes back, and stop still names it), but a handoff flush must not be refused by it.
+    /// </summary>
+    private string[] OwedKeys()
+    {
+        lock (_gate)
+        {
+            return [.. _keys.Where(k => k.Value.Failure is not null and not RealmLeaseNotHeldException).Select(k => k.Key).Order(StringComparer.Ordinal)];
+        }
+    }
+
     private Task RetainedFailureTask()
     {
-        string[] failed = [.. RetainedKeys];
+        string[] failed = OwedKeys();
         Exception? first;
         lock (_gate)
         {
@@ -304,7 +317,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                             await ExecuteAsync(key, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
 
-                        string[] failed = [.. RetainedKeys];
+                        string[] failed = OwedKeys();
                         if (failed.Length == 0)
                         {
                             work.Done?.TrySetResult();

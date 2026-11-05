@@ -345,7 +345,7 @@ public sealed class CharacterPersistenceBarrier
     /// Extravaganza, Elemental Invasion, Nightmare Dragons). Each queue retries what it retains and faults while one is still not durable. Every queue is attempted even when an earlier one
     /// faults, so a refused handoff has written all it could: one failure is thrown as it is, several as one <see cref="InvalidOperationException"/> whose inner exception is the
     /// <see cref="AggregateException"/> of them. All under one <see cref="DefaultTimeout"/> (a timeout or a cancellation stops the rest). The last time this process can write them: B reads the
-    /// characters database, and the fence refuses A after the takeover. Not covered: pet saves (they have no fence handling and are reported at stop) and the running game-event set, which lives in the world database.
+    /// characters database, and the fence refuses A after the takeover. A lease refusal (<see cref="ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"/>) of a keyed queue's write is not owed here: the holder writes it. Pet saves are flushed per character (<see cref="FlushCharacterAsync(int, TimeSpan?, CancellationToken)"/>), not here. Not covered: the running game-event set, which a separate sink writes to the characters database.
     /// </summary>
     public async Task FlushSharedWritesAsync(CancellationToken cancellationToken = default)
     {

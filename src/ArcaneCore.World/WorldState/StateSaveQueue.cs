@@ -54,6 +54,7 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
         {
             if (!_pending.ContainsKey(key)) _order.Add(key);
             _pending[key] = state;
+            _failed.Remove(key); // the newer value is the one owed now; a retry must not write the older failed one over it
             if (_draining) return;
             _draining = true;
             _drain = Task.Run(DrainAsync);
