@@ -79,7 +79,7 @@ public sealed class SplitPeerLinkTests(ITestOutputHelper output)
         await session.LogoutAsync(ct);
     }
 
-    [PostgresClusterFact]
+    [Fact]
     public async Task APeerLinkWithOneWorker_IsRefusedBeforeAnyProcessStarts()
     {
         ArgumentException failure = await Assert.ThrowsAsync<ArgumentException>(

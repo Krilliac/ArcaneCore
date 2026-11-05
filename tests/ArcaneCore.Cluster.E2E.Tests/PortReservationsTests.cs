@@ -54,6 +54,23 @@ public sealed class PortReservationsTests : IDisposable
     }
 
     [Fact]
+    public void ADirectoryThatCannotBeRecreated_IsNotAHeldPort_SoNoCandidateIsBurned()
+    {
+        using var reservations = new PortReservations(_root);
+        Assert.True(reservations.Enabled);
+        Directory.Delete(_root, recursive: true);
+        File.WriteAllText(_root, "a file where the lock directory belongs");
+        try
+        {
+            Assert.True(reservations.TryReserve(12346)); // nothing is reservable, and that is not a held port: the caller's listener probe decides
+        }
+        finally
+        {
+            File.Delete(_root);
+        }
+    }
+
+    [Fact]
     public void FixturePortChoice_SkipsHeldPorts_AndSurvivesADeletedLockDirectory()
     {
         using var holder = new PortReservations(_root);

@@ -62,8 +62,8 @@ internal static class WorldStartup
     /// A stop requested while the host is still starting (Ctrl-C or <see cref="IHostApplicationLifetime.StopApplication"/> during the bot restore) cancels the start: the host
     /// rethrows that cancellation from <c>StartAsync</c> and, inside <c>RunAsync</c>, would dispose the container without stopping a single hosted service. Out of an async
     /// <c>Main</c> it is then an unhandled exception, which the crash handler turns into a fail-fast (2026-10-16). Here it is the shutdown it is: every hosted service is
-    /// stopped in order (the world saved, the WAL checkpointed), then the container is disposed and the clean exit code returned. A world port that is already in use
-    /// (<see cref="Net.WorldPortInUseException"/>, from the early probe or the real bind) is a failed start that ends the same way with <see cref="ExitCodes.Failure"/>, logged and in the fault ledger, not an unhandled
+    /// stopped in order (the world saved, the WAL checkpointed), then the container is disposed and the clean exit code returned. A listener that cannot bind
+    /// (<see cref="Net.WorldBindFailedException"/>: the world port in use or any other bind error, from the early probe or the real bind, or the gateway link port) is a failed start that ends the same way with <see cref="ExitCodes.Failure"/>, logged and in the fault ledger, not an unhandled
     /// exception. Any other start failure, and a cancellation without a stop request (a start timeout), surfaces unchanged.
     /// </para>
     /// <para>
@@ -125,12 +125,12 @@ internal static class WorldStartup
                 host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(WorldStartup).FullName!)
                     .LogWarning("Shutdown was requested while the world was starting; stopping in order");
             }
-            catch (Exception ex) when (IsPortInUse(ex))
+            catch (Exception ex) when (IsBindFailure(ex))
             {
                 // The early probe in WorldHost or the real bind in WorldServer: a failed start, ended with a failure code instead of an unhandled exception (the crash handler's fail-fast and dump).
                 // The services that did start are stopped in order below, as for a stop request during start.
                 failed = true;
-                RecordFailure(logger, "world.start-port-in-use", "The world could not start: its port is in use", ex);
+                RecordFailure(logger, "world.start-bind-failed", "The world could not start: a listener could not bind its endpoint", ex);
             }
 
             // The stop runs here, not in the disposal: WaitForShutdownAsync stops the host once the shutdown was requested, and a failed start that was a stop request stops it directly.
@@ -155,9 +155,9 @@ internal static class WorldStartup
         return Finish(exitCode(), failed);
     }
 
-    /// <summary>True for the port-in-use refusal, also when the host wrapped it in an <see cref="AggregateException"/> (concurrent start).</summary>
-    private static bool IsPortInUse(Exception ex)
-        => ex is Net.WorldPortInUseException || (ex is AggregateException aggregate && aggregate.InnerExceptions.Any(static inner => inner is Net.WorldPortInUseException));
+    /// <summary>True for a listener bind failure (port in use, or any other bind error, <see cref="Net.WorldBindFailedException"/>), also when the host wrapped it in an <see cref="AggregateException"/> (concurrent start).</summary>
+    private static bool IsBindFailure(Exception ex)
+        => ex is Net.WorldBindFailedException || (ex is AggregateException aggregate && aggregate.InnerExceptions.Any(static inner => inner is Net.WorldBindFailedException));
 
     /// <summary>
     /// Listens for the stop requests the host's console lifetime handles once it starts (SIGINT = Ctrl-C, SIGQUIT = Ctrl-Break, SIGTERM; on Windows the

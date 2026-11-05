@@ -62,16 +62,16 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.True(await cluster.TeleportAsync(guid, Landing));
 
         // The retail far-teleport sequence, sent by the Kalimdor worker (the east worker sends no loading-screen packet of its own).
-        WorldFrame pending = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token);
+        WorldFrame pending = await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(pending.Payload));
-        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
         Assert.True(await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is not null, cts.Token));
         Assert.False(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is not null, cts.Token));
 
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
         // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgInitWorldStates, cts.Token);
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
@@ -112,10 +112,10 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.Equal(0u, body.MapId);
 
         Assert.True(await cluster.TeleportAsync(guid, Landing));
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
         // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgInitWorldStates, cts.Token);
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1, Combat.Corpse: not null }, cts.Token), cts.Token);
 
@@ -281,9 +281,9 @@ public sealed class GatewayCrossWorkerTeleportTests
         // cannot run before the read: the ack is read under the Eastern Kingdoms generation, while the transfer is staged, every time.
         cluster.Kalimdor.World.Post(() => ackRead.Wait(cts.Token));
         Assert.True(await cluster.TeleportAsync(guid, Landing));
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
@@ -332,7 +332,7 @@ public sealed class GatewayCrossWorkerTeleportTests
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
         passed.Wait(cts.Token);
         Assert.True(await cluster.TeleportAsync(guid, Landing));
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);

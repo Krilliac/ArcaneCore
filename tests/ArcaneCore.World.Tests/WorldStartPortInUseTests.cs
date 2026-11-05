@@ -141,17 +141,146 @@ public sealed class WorldStartPortInUseTests
 
     [Theory]
     [InlineData(SocketError.AddressAlreadyInUse, true)]
-    [InlineData(SocketError.AccessDenied, true)]
+    [InlineData(SocketError.AccessDenied, false)]
     [InlineData(SocketError.AddressNotAvailable, false)]
     [InlineData(SocketError.TooManyOpenSockets, false)]
     [InlineData(SocketError.ConnectionReset, false)]
-    public void TheClashSet_IsOneDefinition_ForEveryBindSite(SocketError error, bool clash)
-        => Assert.Equal(clash, ArcaneCore.World.Net.WorldPortInUseException.IsClash(new SocketException((int)error)));
+    public void OnlyAddressInUse_IsAClash_AndEveryOtherBindErrorIsDescribedAsItself(SocketError error, bool clash)
+    {
+        var ex = new SocketException((int)error);
+        Assert.Equal(clash, ArcaneCore.World.Net.WorldPortInUseException.IsClash(ex));
+
+        WorldBindFailedException failure = WorldBindFailedException.For("world port", "127.0.0.1:1", ex);
+
+        Assert.Equal(clash, failure is WorldPortInUseException);
+        Assert.Equal(clash, failure.Message.Contains("already in use", StringComparison.Ordinal));
+        Assert.Contains("127.0.0.1:1", failure.Message);
+        Assert.Same(ex, failure.InnerException);
+    }
+
+    [Fact]
+    public async Task ANonClashBindError_AtTheRealWorldBind_EndsAsACleanFailedStart_WithItsTrueDescription_ThroughRunAsync()
+    {
+        int before = ExitCodes.Current;
+        var started = new Recorder();
+        try
+        {
+            ExitCodes.Current = ExitCodes.Success;
+            // 203.0.113.0/24 (TEST-NET-3) is never an address of this host: the bind fails with AddressNotAvailable (not AddressAlreadyInUse).
+            IHost host = new HostBuilder().ConfigureServices(services =>
+            {
+                services.AddSingleton<ICharacterStore>(new InMemoryCharacterStore());
+                services.AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance));
+                services.AddSingleton(sp => new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, sp.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance));
+                services.AddSingleton<IHostedService>(started);
+                services.AddSingleton<IHostedService>(sp => new WorldServer(
+                    sp.GetRequiredService<IServiceScopeFactory>(),
+                    Options.Create(new WorldOptions { BindAddress = "203.0.113.77", Port = 45871 }),
+                    Options.Create(new WorldSessionOptions()), new OpcodeTable(), sp.GetRequiredService<WorldRuntime>(), new SessionRegistry(),
+                    NullLoggerFactory.Instance, NullLogger<WorldServer>.Instance));
+            }).Build();
+
+            int code = await WorldStartup.RunAsync(host, () => Task.CompletedTask, new StringWriter(), () => ExitCodes.Current).WaitAsync(Deadline);
+
+            Assert.Equal(ExitCodes.Failure, code);
+            Assert.True(started.Stopped, "a hosted service started before the listener must still be stopped in order");
+        }
+        finally
+        {
+            ExitCodes.Current = before;
+        }
+    }
+
+    [Fact]
+    public async Task ANonClashBindError_AtTheEarlyProbe_StopsBeforeTheOwnershipClaimAndTheBotRestore_AndReturnsAFailureExitCode()
+    {
+        int before = ExitCodes.Current;
+        try
+        {
+            ExitCodes.Current = ExitCodes.Success;
+            var ownership = new CountingOwnershipStore();
+            IHost host = new HostBuilder().ConfigureServices(services =>
+            {
+                services.AddSingleton<ICharacterStore>(new InMemoryCharacterStore());
+                services.AddSingleton<ICharacterOwnershipStore>(ownership);
+                services.AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance));
+                services.AddSingleton(sp => new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, sp.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance));
+                services.AddSingleton<IHostedService>(sp => new WorldHost(
+                    sp.GetRequiredService<WorldRuntime>(), sp.GetRequiredService<CharacterSaveQueue>(), new CharacterDirectory(), sp.GetRequiredService<IServiceScopeFactory>(),
+                    NullLogger<WorldHost>.Instance, worldOptions: Options.Create(new WorldOptions { BindAddress = "203.0.113.77", Port = 45872 })) { ListenerExpected = true });
+            }).Build();
+
+            int code = await WorldStartup.RunAsync(host, () => Task.CompletedTask, new StringWriter(), () => ExitCodes.Current).WaitAsync(Deadline);
+
+            Assert.Equal(ExitCodes.Failure, code);
+            Assert.Equal(0, ownership.Calls); // the ownership claim, and with it the bot restore after it, never ran
+        }
+        finally
+        {
+            ExitCodes.Current = before;
+        }
+    }
+
+    [Fact]
+    public async Task ANonClashBindError_AtTheEarlyProbe_ThrowsABindFailure_ThatNamesTheRealError_NotAnInUseClaim()
+    {
+        IHost host = new HostBuilder().ConfigureServices(services =>
+        {
+            services.AddSingleton<ICharacterStore>(new InMemoryCharacterStore());
+            services.AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance));
+            services.AddSingleton(sp => new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, sp.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance));
+            services.AddSingleton<IHostedService>(sp => new WorldHost(
+                sp.GetRequiredService<WorldRuntime>(), sp.GetRequiredService<CharacterSaveQueue>(), new CharacterDirectory(), sp.GetRequiredService<IServiceScopeFactory>(),
+                NullLogger<WorldHost>.Instance, worldOptions: Options.Create(new WorldOptions { BindAddress = "203.0.113.77", Port = 45873 })) { ListenerExpected = true });
+        }).Build();
+
+        var failure = await Assert.ThrowsAsync<WorldBindFailedException>(() => host.StartAsync()).WaitAsync(Deadline);
+
+        Assert.Contains("203.0.113.77:45873", failure.Message);
+        Assert.DoesNotContain("already in use", failure.Message, StringComparison.Ordinal);
+        Assert.IsType<SocketException>(failure.InnerException);
+    }
 
     private sealed class NeverOpensAcceptor : IGatewaySessionAcceptor
     {
         public ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
             => throw new NotSupportedException("no gateway connects in this test");
+    }
+
+    /// <summary>An ownership store that counts how often the start reached the ownership claim (the step before the bot restore).</summary>
+    private sealed class CountingOwnershipStore : ICharacterOwnershipStore
+    {
+        public int Calls { get; private set; }
+
+        public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(false);
+        }
+
+        public Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<CharacterOwnershipToken?>(null);
+        }
+
+        public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<CharacterOwnershipToken?>(null);
+        }
+
+        public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult<CharacterOwnershipToken?>(null);
+        }
+
+        public Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class Recorder : IHostedService

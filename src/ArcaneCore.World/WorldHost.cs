@@ -648,13 +648,10 @@ public sealed class WorldHost(
         if (!expected || worldOptions?.Value is not { Port: > 0 } options || !IPAddress.TryParse(options.BindAddress, out IPAddress? address)) return;
         var probe = new TcpListener(address, options.Port);
         try { probe.Start(); }
-        catch (SocketException ex) when (Net.WorldPortInUseException.IsClash(ex))
+        catch (SocketException ex)
         {
-            throw new Net.WorldPortInUseException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
-        }
-        catch (SocketException)
-        {
-            // Not a clash (an address this host does not have, a privileged port): the early probe has nothing to say; the real bind in WorldServer reports the error itself.
+            // Any failed bind ends the start here, before the ownership claim and the bot restore: a clash is "in use", anything else (an address this host does not have, a privileged port) is reported as itself.
+            throw Net.WorldBindFailedException.For("world port", $"{address}:{options.Port}", ex, "refusing to start before any playerbot is restored");
         }
         finally { probe.Stop(); }
     }

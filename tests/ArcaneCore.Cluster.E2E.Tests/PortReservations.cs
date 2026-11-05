@@ -33,7 +33,7 @@ internal sealed class PortReservations : IDisposable
 
     /// <summary>
     /// Claims <paramref name="port"/> until disposal. False when another holder has it, or when its lock file cannot be opened by this user (another user's file, EACCES: that user's run
-    /// may hold the port, so the caller takes the next candidate). True when claimed, or when reservation is disabled.
+    /// may hold the port, so the caller takes the next candidate). True when claimed, when reservation is disabled, or when the lock directory vanished and cannot be recreated (true without a lock: the caller's own listener probe decides).
     /// </summary>
     public bool TryReserve(int port)
     {
@@ -55,11 +55,19 @@ internal sealed class PortReservations : IDisposable
             try
             {
                 Directory.CreateDirectory(_directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return true; // the directory cannot be recreated: nothing is reservable, and that is not a held port
+            }
+
+            try
+            {
                 held = Open(path);
             }
-            catch (Exception retry) when (retry is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return retry is DirectoryNotFoundException; // still no directory: nothing reservable; any other failure (a sharing violation, no permission) is a held or foreign port
+                return false; // the directory is back, but the file is held or foreign (a sharing violation, no permission, or a second deletion race): not reservable here
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

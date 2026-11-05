@@ -65,6 +65,8 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
         byte[] newWorld = await ReadUntilOpcodeAsync(session, WorldOpcode.SmsgNewWorld, ct);
         Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(newWorld));
         await session.SendAsync(WorldOpcode.MsgMoveWorldportAck, [], ct);
+        // The journal's Completed row is written at arrival registration, not at client load: wait for the arrival's login packets before any command or assertion.
+        await ReadUntilOpcodeAsync(session, WorldOpcode.SmsgInitWorldStates, ct);
 
         // The transfer finishes: the journal says Completed, and nothing was aborted.
         string completed = Count("cluster_transfer_decision", "state = " + (int)PlayerTransferDecisionState.Completed);
@@ -196,6 +198,8 @@ public sealed class ClusterControlChannelScenarioTests(ITestOutputHelper output)
         }
 
         await session.SendAsync(WorldOpcode.MsgMoveWorldportAck, [], ct);
+        // The journal's Completed row is written at arrival registration, not at client load: wait for the arrival's login packets before any command or assertion.
+        await ReadUntilOpcodeAsync(session, WorldOpcode.SmsgInitWorldStates, ct);
 
         string guid = character.Guid.ToString(CultureInfo.InvariantCulture);
         await WaitForCountAsync(cluster, Count("cluster_transfer_decision", $"character_guid = {guid} AND state = {(int)PlayerTransferDecisionState.Completed}"), expected: 1, ct);

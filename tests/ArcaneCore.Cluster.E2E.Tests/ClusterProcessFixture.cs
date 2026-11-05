@@ -283,13 +283,13 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     /// </summary>
     public static async Task<ClusterProcessFixture> StartAsync(ClusterOptions? options, ITestOutputHelper? output, CancellationToken cancellationToken = default)
     {
+        options ??= new ClusterOptions();
+        Validate(options); // before the skip check: an invalid layout is refused whether or not this host can run the cluster
         if (SkipReason is { } skip)
         {
             throw new InvalidOperationException(skip);
         }
 
-        options ??= new ClusterOptions();
-        Validate(options);
         var fixture = new ClusterProcessFixture(options) { _output = output };
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         startup.CancelAfter(StartupTimeout);
