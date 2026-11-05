@@ -1754,6 +1754,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     private bool Tracks(GameObject go)
         => _objects.TryGetValue(go.Guid, out GameObject? current) && ReferenceEquals(current, go);
 
+    /// <summary>vmangos <c>lock->Index[1] == LOCKTYPE_SLOW_OPEN</c> over the object's lock (GameObject.cpp:446-448).</summary>
+    private bool HasSlowOpenLock(GameObject go)
+    {
+        uint lockId = GameObjectLocks.LockIdOf(go.Template);
+        return lockId != 0 && _content.FindLock(lockId) is { } entry && entry.Indexes.Count > 1 && entry.Indexes[1] == (uint)LockType.SlowOpen;
+    }
+
+    /// <summary>SMSG_GAMEOBJECT_RESET_STATE to the players that have <paramref name="go"/> (vmangos SendGameObjectReset, GameObject.cpp:2460-2465); nothing when it left the map again meanwhile.</summary>
+    private void SendResetState(GameObject go)
+    {
+        if (!ReferenceEquals(go.Map, Map) || !go.IsSpawned)
+        {
+            return;
+        }
+
+        byte[] payload = GameObjectPackets.ResetState(go.Guid);
+        foreach (Player observer in Map.ObserversOf(go))
+        {
+            observer.Session.Send(WorldOpcode.SmsgGameobjectResetState, payload);
+        }
+    }
+
     private void Respawn(GameObject go)
     {
         go.InitializeFields();
@@ -1774,6 +1796,18 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         else
         {
             Map.AddObject(go);
+        }
+
+        if (HasSlowOpenLock(go))
+        {
+            // vmangos GameObject::Update, GO_READY respawn (GameObject.cpp:445-453): the PvP banner workaround. An object whose lock's second slot is
+            // SLOW_OPEN (lock type 17, the capture banners) is told to reset its state when it comes back, to every player within range.
+            // vmangos also raises the "spawn animation" respawn delay (-1) for the add, which this server has no counterpart for; and it does
+            // this only for a spawned-by-default object, while the Arathi Basin banners are brought back through event spawns (ArathiBasin.CreateBanner).
+            // The order is the point of the packet: vmangos Map::Add runs UpdateObjectVisibility synchronously (create sent), then SendGameObjectReset.
+            // Map.AddObject here only queues the object; the creates go out in this tick's Output stage. So the reset waits until after that stage and
+            // goes to the players who now have the object (the observers), never to a client that has not received the create yet.
+            Map.RunAfterUpdate(() => SendResetState(go));
         }
 
         if (go.Spawn is { SpawnTimeSeconds: >= 0 })

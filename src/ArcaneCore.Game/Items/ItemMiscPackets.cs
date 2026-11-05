@@ -20,6 +20,17 @@ public static class ItemMiscPackets
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// SMSG_OPEN_CONTAINER (0x113): the u64 GUID of the bag the client should open (vmangos Server/Packets/Item.cpp:204-212,
+    /// Player::SendOpenContainer Player.cpp:11552-11557; mangos-classic Player.cpp:11148). Sent after a bag is auto-equipped.
+    /// </summary>
+    public static byte[] OpenContainer(ObjectGuid bag)
+    {
+        var writer = new PacketWriter(8);
+        writer.WriteUInt64(bag.Value);
+        return writer.ToArray();
+    }
+
     /// <summary>The text vmangos sends for a page that does not exist (QueryHandler.cpp:274).</summary>
     public const string MissingPageText = "Item page missing.";
 
