@@ -30,7 +30,10 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
 
     private static PlayerbotOptions Options() => new() { Enabled = true, ThinkIntervalMs = 100, Population = { TramMinLevel = 0 } };
 
-    /// <summary>The trip from the Stormwind tram exit to Ironforge, through the bot's brain, with the anticheat judging the bot as a client.</summary>
+    /// <summary>
+    /// The trip from the Stormwind tram exit to Ironforge, through the bot's brain, with the anticheat judging the bot as a client: the walks on
+    /// the ground went through the distance budget, and the same bot overrunning it afterwards is scored (<see cref="BotAntiCheatTestKit"/>).
+    /// </summary>
     [Fact]
     public async Task ABot_RidesTheTram_FromStormwindToIronforge_AsAClientWould()
     {
@@ -89,6 +92,9 @@ public sealed class PlayerbotTramRouteTests(ITestOutputHelper output)
         Assert.Null(consent); // the entrance consent is gone with the trip
         Assert.False(mayWalkTram);
         Assert.DoesNotContain(findings, f => f.Type is AntiCheatViolation.Flag or AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+
+        // Stormwind's platform landing (x 68) to the side of a car (x 5 or less, beside it within 20 yards or so) is over 40 yards alone.
+        await BotAntiCheatTestKit.AssertJudgedThenOverrunIsScoredAsync(world.Host, world.Session, anticheat, findings, atLeastYards: 20f);
     }
 
     /// <summary>

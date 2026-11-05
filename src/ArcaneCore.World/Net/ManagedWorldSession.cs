@@ -171,7 +171,7 @@ public sealed partial class WorldSession
         BotPolicy?.BeforeAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
-        _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
+        _currentPacketReceivedMs = ManagedReceiveClock?.Invoke() ?? (uint)Kernel.Logging.Clock.Milliseconds();
         try
         {
             handler.World(this, player, payload);
@@ -183,6 +183,14 @@ public sealed partial class WorldSession
 
         return _state == SessionState.InWorld && IsCurrentSession;
     }
+
+    /// <summary>
+    /// Test seam (never configuration-bound, null outside tests): the clock <see cref="TryManagedAction"/> stamps a packet's receive time with,
+    /// instead of the real monotonic one. A bot's own movement clock is the world's game clock, and on the manual clock game time runs far ahead of
+    /// real time, so a harness that lets the anticheat judge a bot must stamp from the game clock too: the checks compare the two, and the distance budget
+    /// refills from the receive interval alone. Only for a harness with no reject window: <c>MovementCheats</c> arms that on the real clock.
+    /// </summary>
+    internal Func<uint>? ManagedReceiveClock { get; set; }
 
     private byte[]? _managedScratch;
     private bool _managedScratchBusy;

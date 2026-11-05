@@ -68,8 +68,10 @@ public sealed class AntiCheatOptions
     public int SpeedChangeGraceMs { get; set; } = 2000;
 
     /// <summary>
-    /// Caps the time-skip credit (milliseconds): all the skips the evidence supports in ten seconds together earn at most this much. A silence
-    /// between two movement packets is never a free baseline; the step after it is judged against the time that passed. Default 3000.
+    /// Caps the time-skip credit (milliseconds): all the skips the evidence supports in ten seconds together earn at most this much. It also
+    /// caps the time budget of any single step (a silence buys at most this much movement in one step) and, times four, the extra distance the
+    /// multi-packet budget grants after a stall (the packets a stall held arrive together). A silence between two movement packets is never a
+    /// free baseline; the step after it is judged against the time that passed. Default 3000.
     /// </summary>
     public int BaselineGapMs { get; set; } = 3000;
 

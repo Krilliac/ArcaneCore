@@ -54,6 +54,11 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     private readonly LogGate _lineGate = new(TimeSpan.FromSeconds(10));
     private readonly LogGate _flushGate = new(TimeSpan.FromSeconds(60));
     private readonly List<AntiCheatFinding> _scratch = [];
+
+    /// <summary>Tests only: the terrain probe used instead of the map's own (the test host holds no client data). Null in production.</summary>
+    internal Func<Map, IAntiCheatTerrain?>? TerrainProbe { get; set; }
+
+    private IAntiCheatTerrain? TerrainFor(PlayerState state, Map map) => TerrainProbe is { } probe ? probe(map) : state.TerrainOf(map);
     private AntiCheatOptions _options = new();
     private WorldRuntime? _world;
     private IOpsAnnouncer? _announcer;
@@ -156,10 +161,14 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
         => Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
 
+    /// <summary>The yards the distance budget of this player's own unit has judged since its checks were built (diagnostics, world thread).</summary>
+    internal float BudgetedYardsOf(Player player) => _players.TryGetValue(player.Guid, out PlayerState? state) ? state.Checks.BudgetedYards : 0f;
+
     private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
         if (IsExempt(session, player))
         {
+            ForgetBaselineWhileExempt(player);
             return;
         }
 
@@ -177,12 +186,34 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             GrantedFlags = GrantedFlags(player, state) | extraGrants,
             ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
             Transport = ClaimOf(player, movement),
-            Terrain = _options.TerrainChecks && player.Map is { } map ? state.TerrainOf(map) : null,
+            Terrain = _options.TerrainChecks && player.Map is { } map ? TerrainFor(state, map) : null,
         };
 
         _scratch.Clear();
         state.Checks.Observe(sample, _scratch);
         RecordAll(session, player, state);
+    }
+
+    /// <summary>
+    /// A block of an exempt player is stored without being judged, and <see cref="AfterMovement"/> records its position as the one the server holds,
+    /// so the next judged block would not look relocated and would be measured from the last position judged before the exemption began
+    /// (a false teleport when a GM leaves GM mode far from where it entered it). The next judged block is a new baseline instead.
+    /// </summary>
+    private void ForgetBaselineWhileExempt(Player player)
+    {
+        if (_players.TryGetValue(player.Guid, out PlayerState? state))
+        {
+            state.Checks.NotifyServerRelocation();
+        }
+    }
+
+    /// <summary>The same for a unit the player controls: an exempt controller's block is stored unjudged, so the unit's checks start afresh at the next judged block.</summary>
+    private void ForgetControlledBaselineWhileExempt(Player controller, Unit unit)
+    {
+        if (_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            state.ControlledChecksIfFor(unit.Guid)?.NotifyServerRelocation();
+        }
     }
 
     /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds.</summary>
@@ -205,6 +236,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         ArgumentNullException.ThrowIfNull(unit);
         if (IsExempt(session, controller))
         {
+            ForgetControlledBaselineWhileExempt(controller, unit);
             return;
         }
 
@@ -249,7 +281,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             GrantedFlags = granted,
             ServerControlled = serverControlled,
             Transport = claim,
-            Terrain = null,
+            Terrain = _options.TerrainChecks && unit.Map is { } unitMap ? TerrainFor(state, unitMap) : null,
         };
 
         _scratch.Clear();
@@ -297,6 +329,28 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         _scratch.Clear();
         state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
         RecordAll(session, player, state);
+    }
+
+    /// <summary>
+    /// CMSG_MOVE_TIME_SKIPPED naming a unit the player controls (the client reports the stall per mover): judged against that unit's checks only
+    /// (a unit no longer controlled has none, and is ignored). The skip scores the controller like any controlled finding.
+    /// </summary>
+    public void OnControlledTimeSkipped(WorldSession session, Player controller, Unit unit, uint skippedMs)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (IsExempt(session, controller) || !_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            return;
+        }
+
+        if (state.ControlledChecksIfFor(unit.Guid) is not { } checks)
+        {
+            return;
+        }
+
+        _scratch.Clear();
+        checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
+        RecordAll(session, controller, state, controlledUnit: unit.Guid.Low);
     }
 
     /// <summary>The server moved the player (teleport events): the next client packet is trusted.</summary>
