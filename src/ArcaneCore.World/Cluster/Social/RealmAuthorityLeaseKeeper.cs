@@ -47,12 +47,12 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     /// </summary>
     private static readonly string[] OptionalScopes = [RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
 
-    /// <summary>The scopes this node competes for: the Instances lease only on a <see cref="ClusterNodeRole.MapWorker"/> (the only non-combined role that attaches the instance feature), so a Gateway, Social or Economy node never holds it and orphans the schedule.</summary>
     /// <summary>The scopes that may be taken over after start: those whose work asks <see cref="Holds"/> at run time. Social and Economy are excluded, their features attach only at start (see the class summary). Only a map worker takes any.</summary>
     private string[] TakeoverScopes => _node.Role == ClusterNodeRole.MapWorker ? RuntimeScopes : [];
 
     private static readonly string[] RuntimeScopes = [RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
 
+    /// <summary>The scopes this node competes for: the Instances lease only on a <see cref="ClusterNodeRole.MapWorker"/> (the only non-combined role that attaches the instance feature), so a Gateway, Social or Economy node never holds it and orphans the schedule.</summary>
     private string[] ScopesToTake => _node.Role == ClusterNodeRole.MapWorker ? MapWorkerScopes : Scopes;
 
     private sealed class Held(long token, DateTimeOffset expiresAtUtc)
