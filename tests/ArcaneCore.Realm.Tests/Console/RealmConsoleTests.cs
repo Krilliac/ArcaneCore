@@ -149,14 +149,18 @@ public sealed class RealmConsoleTests
 
         public FakeCounts Counts { get; } = new();
 
-        public Rig()
+        public Rig(bool withCountStore = true)
         {
-            ServiceProvider services = new ServiceCollection()
+            IServiceCollection collection = new ServiceCollection()
                 .AddSingleton<IAccountStore>(Accounts)
                 .AddSingleton<IAccountAdmin>(new FakeAdmin(Accounts))
-                .AddSingleton<IRealmCharacterCountStore>(Counts)
-                .AddSingleton<IRealmStore>(new InMemoryRealmStore(Realms))
-                .BuildServiceProvider();
+                .AddSingleton<IRealmStore>(new InMemoryRealmStore(Realms));
+            if (withCountStore)
+            {
+                collection.AddSingleton<IRealmCharacterCountStore>(Counts);
+            }
+
+            ServiceProvider services = collection.BuildServiceProvider();
             Commands = new RealmConsoleCommands(services.GetRequiredService<IServiceScopeFactory>(), () => Sessions, Time, Lifetime);
         }
 
@@ -309,6 +313,14 @@ public sealed class RealmConsoleTests
 
     private static async Task SeedAccountAsync(Rig rig, string name, int id, params (int Realm, int Chars)[] counts)
     {
+        foreach (int realm in new[] { 1, 2 })
+        {
+            if (rig.Realms.All(r => r.Id != realm))
+            {
+                rig.Realms.Add(new RealmEntry { Id = realm, Name = "R" + realm, Address = "a:1" });
+            }
+        }
+
         await rig.Accounts.CreateAsync(new Account { Id = id, Username = name, Salt = new byte[32], Verifier = new byte[32] });
         foreach ((int realm, int chars) in counts)
         {
@@ -376,6 +388,33 @@ public sealed class RealmConsoleTests
 
         Assert.Equal([Prefix + "account 'NOBODY' does not exist"], await rig.RunAsync("account delete nobody"));
         Assert.StartsWith(Prefix + "usage: account create", Assert.Single(await rig.RunAsync("account delete alice maybe")), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RealmConsole_AccountDelete_FailsClosed_WhenARealmHasNoCountRow_OrNoRealmIsListed_OrNoStoreExists()
+    {
+        // Characters may exist with no realmcharacters row (predate the table, dump import, playerbots, realm id 0, failed write).
+        var rig = new Rig();
+        await SeedAccountAsync(rig, "ALICE", 5, (1, 0)); // realm 2 has no row
+        await SeedAccountAsync(rig, "CAROL", 7);          // no rows at all
+
+        Assert.Contains("no character count is recorded for realm(s) 2", Assert.Single(await rig.RunAsync("account delete alice")), StringComparison.Ordinal);
+        Assert.Contains("no character count is recorded for realm(s) 2", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
+        Assert.Contains("no character count is recorded for realm(s) 1, 2", Assert.Single(await rig.RunAsync("account delete carol")), StringComparison.Ordinal);
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("ALICE"));
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("CAROL"));
+
+        var noRealms = new Rig();
+        await noRealms.Accounts.CreateAsync(new Account { Id = 9, Username = "DAVE", Salt = new byte[32], Verifier = new byte[32] });
+        Assert.Contains("no realm is listed", Assert.Single(await noRealms.RunAsync("account delete dave")), StringComparison.Ordinal);
+        Assert.Contains("no realm is listed", Assert.Single(await noRealms.RunAsync("account delete dave confirm")), StringComparison.Ordinal);
+        Assert.NotNull(await noRealms.Accounts.FindByUsernameAsync("DAVE"));
+
+        var noStore = new Rig(withCountStore: false);
+        await SeedAccountAsync(noStore, "ERIN", 11);
+        Assert.Contains("no character count store is configured", Assert.Single(await noStore.RunAsync("account delete erin")), StringComparison.Ordinal);
+        Assert.Contains("no character count store is configured", Assert.Single(await noStore.RunAsync("account delete erin confirm")), StringComparison.Ordinal);
+        Assert.NotNull(await noStore.Accounts.FindByUsernameAsync("ERIN"));
     }
 
     private static void AssertVerifier(Account account, string password)

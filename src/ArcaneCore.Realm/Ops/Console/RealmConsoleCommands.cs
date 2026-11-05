@@ -33,7 +33,7 @@ public sealed class RealmConsoleCommands(
     private readonly RealmLivenessOptions _liveness = liveness ?? new RealmLivenessOptions();
     private readonly IHostApplicationLifetime _lifetime = lifetime ?? throw new ArgumentNullException(nameof(lifetime));
     /// <summary>How long an armed <c>account delete</c> waits for its <c>confirm</c>.</summary>
-    internal static readonly TimeSpan DeleteConfirmWindow = TimeSpan.FromSeconds(60);
+    public static readonly TimeSpan DeleteConfirmWindow = TimeSpan.FromSeconds(60);
 
     private readonly object _pendingLock = new();
     private string? _pendingDeleteName;
@@ -98,7 +98,7 @@ public sealed class RealmConsoleCommands(
         say("  account create <name> <password>            create an account (the password is visible while typed; arcane-account prompts without echo)");
         say("  account set-password <name> <password>      change an account's password");
         say("  account set-gmlevel <name> <0-3|name>       set an account's GM level (applies from the next world login)");
-        say("  account delete <name>                       arm the deletion of an account that has no characters (then repeat with 'confirm' within 60 s; irreversible)");
+        say("  account delete <name>                       arm the deletion of an account proven to have no characters (then repeat with 'confirm' within 60 s; irreversible)");
         say("  quit | shutdown                             stop the realm daemon");
     }
 
@@ -196,10 +196,16 @@ public sealed class RealmConsoleCommands(
     /// <summary>
     /// <c>account delete &lt;name&gt;</c> then <c>account delete &lt;name&gt; confirm</c> within <see cref="DeleteConfirmWindow"/>. The realm
     /// console is the local operator's stdin, which is the highest authority this daemon has (there is no in-band account to check a GM
-    /// level of), so the guardrails are the two steps and the characters check: an account that still has characters on any realm is
-    /// refused, because this daemon cannot remove the characters rows (they live in the world's characters database) and deleting the account
-    /// would orphan them. A delete removes the account's <c>realmcharacters</c> rows and the account row (vmangos AccountMgr.cpp:105 order)
-    /// and nothing else; bans, realms and other accounts are untouched.
+    /// level of), so the guardrails are the two steps and a character check that fails closed. This daemon cannot read the characters
+    /// database, so its only evidence is the <c>realmcharacters</c> cache (written by the world), and a missing row is NOT evidence of 0
+    /// (characters that predate the table, player-dump imports, playerbot characters, a world with realm id 0 and a failed count write all
+    /// leave no row). The delete is therefore refused unless the count store is configured, at least one realm is listed, and every listed
+    /// realm has an explicit row of 0 for the account; any recorded character refuses it too. Deliberate deviation from vmangos
+    /// AccountMgr.cpp:82-105, which removes the characters first and then deletes the account row (:104) and the <c>realmcharacters</c>
+    /// rows (:105) in one transaction: here the account row goes first, then the count rows, as two separate statements (no transaction
+    /// spans the stores). A failure in between leaves harmless count rows of a dead account id instead of a live account with no rows.
+    /// Limit: the realm cannot kick a world session, so an account online at character select keeps its session until it ends.
+    /// Bans, realms and other accounts are untouched.
     /// </summary>
     private async Task DeleteAccountAsync(string username, bool confirm, Action<string> say, CancellationToken cancellationToken)
     {
@@ -218,17 +224,31 @@ public sealed class RealmConsoleCommands(
             return;
         }
 
-        IRealmCharacterCountStore? counts = scope.ServiceProvider.GetService<IRealmCharacterCountStore>();
-        if (counts is not null)
+        if (scope.ServiceProvider.GetService<IRealmCharacterCountStore>() is not { } counts)
         {
-            IReadOnlyDictionary<int, int> perRealm = await counts.GetCountsAsync(account.Id, cancellationToken).ConfigureAwait(false);
-            int characters = perRealm.Values.Sum();
-            if (characters > 0)
-            {
-                ClearPendingDelete();
-                say($"account '{username}' still has {characters} character(s); delete them on their realm first, then delete the account");
-                return;
-            }
+            ClearPendingDelete();
+            say($"account '{username}' cannot be deleted: no character count store is configured, so its characters cannot be ruled out");
+            return;
+        }
+
+        IReadOnlyList<RealmEntry> realms = await scope.ServiceProvider.GetRequiredService<IRealmStore>().GetRealmsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyDictionary<int, int> perRealm = await counts.GetCountsAsync(account.Id, cancellationToken).ConfigureAwait(false);
+        int characters = perRealm.Values.Sum();
+        if (characters > 0)
+        {
+            ClearPendingDelete();
+            say($"account '{username}' still has {characters} character(s); delete them on their realm first, then delete the account");
+            return;
+        }
+
+        int[] unproven = [.. realms.Select(r => r.Id).Where(id => !perRealm.ContainsKey(id)).Order()];
+        if (realms.Count == 0 || unproven.Length > 0)
+        {
+            ClearPendingDelete();
+            say(realms.Count == 0
+                ? $"account '{username}' cannot be deleted: no realm is listed, so its characters cannot be ruled out"
+                : $"account '{username}' cannot be deleted: no character count is recorded for realm(s) {string.Join(", ", unproven)}, so its characters there cannot be ruled out (a world records it when the account lists characters there)");
+            return;
         }
 
         if (!confirm)
@@ -256,14 +276,9 @@ public sealed class RealmConsoleCommands(
             return;
         }
 
-        if (counts is not null)
-        {
-            await counts.DeleteByAccountAsync(account.Id, cancellationToken).ConfigureAwait(false);
-        }
-
-        say(await admin.DeleteAsync(username, cancellationToken).ConfigureAwait(false)
-            ? $"deleted account '{username}'"
-            : $"account '{username}' does not exist");
+        bool deleted = await admin.DeleteAsync(username, cancellationToken).ConfigureAwait(false);
+        await counts.DeleteByAccountAsync(account.Id, cancellationToken).ConfigureAwait(false);
+        say(deleted ? $"deleted account '{username}'" : $"account '{username}' does not exist");
     }
 
     private void ClearPendingDelete()
