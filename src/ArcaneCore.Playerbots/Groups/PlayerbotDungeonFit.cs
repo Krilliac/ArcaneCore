@@ -59,7 +59,12 @@ internal static class PlayerbotDungeonFit
 
         if (any) return new PlayerbotDungeonBand(min, max);
         if (ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.RecommendedBand(mapId) is { } recommended)
-            return new PlayerbotDungeonBand((byte)Math.Clamp(recommended.Min - StaticSlack, 1, 255), (byte)Math.Clamp(recommended.Max + StaticSlack, 1, 255));
+        {
+            // A raid (60 in the original game) is not entered below its level: only the five-player instances get the slack under the minimum.
+            int lowSlack = ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.IsRaidMap(mapId) ? 0 : StaticSlack;
+            return new PlayerbotDungeonBand((byte)Math.Clamp(recommended.Min - lowSlack, 1, 255), (byte)Math.Clamp(recommended.Max + StaticSlack, 1, 255));
+        }
+
         return new PlayerbotDungeonBand(Math.Max(entranceLevel, (byte)1), 255);
     }
 

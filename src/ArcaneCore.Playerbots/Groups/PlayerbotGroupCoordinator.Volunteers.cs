@@ -117,7 +117,7 @@ public sealed partial class PlayerbotGroupCoordinator
             goal = anchor.Waiting.Goal;
         }
 
-        if (IgnoresOrRivals(player, sameGoal))
+        if (IgnoresOrRivals(player, sameGoal.Select(w => w.BotId)))
         {
             _volunteers.Remove(player.Guid);
             return new(PlayerbotVolunteerOutcome.Ignored);
@@ -140,6 +140,7 @@ public sealed partial class PlayerbotGroupCoordinator
         if (player.Level > highest + _options.Groups.LevelRange) return new(PlayerbotVolunteerOutcome.LevelHigh, Level: highest + _options.Groups.LevelRange);
 
         // The dry run came first: the role answer is for a player the coordinator could not place (a dual-role bot may tank or heal, so the roles are only counted once placing failed).
+        // It is given only when the role is the true reason: a stand-in of the missing role's class, with the player's level and position, must be placeable where the player is not.
         if (size - candidates.Count <= 1)
         {
             (int tanks, int healers) = PlayerbotRecruitment.MissingRoles(candidates, size, _options.Groups);
@@ -152,7 +153,11 @@ public sealed partial class PlayerbotGroupCoordinator
                     PlayerbotGroupRole.Damage => false,
                     _ => (tanks > 0 && PlayerbotGroupContent.CanTank(player.Class)) || (healers > 0 && PlayerbotGroupContent.CanHeal(player.Class)),
                 };
-                if (!fills) return new(PlayerbotVolunteerOutcome.Role, Needed: tanks > 0 ? PlayerbotGroupRole.Tank : PlayerbotGroupRole.Healer);
+                if (!fills)
+                {
+                    if (tanks > 0 && PlanForVolunteer(player, candidates, size, goal, botId, null, Class.Warrior) is not null) return new(PlayerbotVolunteerOutcome.Role, Needed: PlayerbotGroupRole.Tank);
+                    if (healers > 0 && PlanForVolunteer(player, candidates, size, goal, botId, null, Class.Priest) is not null) return new(PlayerbotVolunteerOutcome.Role, Needed: PlayerbotGroupRole.Healer);
+                }
             }
         }
 
@@ -170,11 +175,11 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>Whether the player ignores one of the waiting bots (the server refuses the invitation then) or one of them holds the player as a rival.</summary>
-    private bool IgnoresOrRivals(Player player, List<(Guid BotId, Waiting Waiting)> bots)
+    private bool IgnoresOrRivals(Player player, IEnumerable<Guid> bots)
     {
         SocialContext? social = SocialOrNull();
         var memory = Social?.Memory;
-        foreach ((Guid id, _) in bots)
+        foreach (Guid id in bots)
         {
             if (social is not null && _bots.TryGetValue(id, out PlayerbotGroupBot bot) && bot.Session.Player is { } botPlayer && social.IsIgnoring(player, botPlayer.Guid)) return true;
             if (memory is not null && memory.TryGet(id, player.Guid.Value, out var relation) && memory.IsRival(relation)) return true;
@@ -195,15 +200,17 @@ public sealed partial class PlayerbotGroupCoordinator
     /// bots alone, then the whole list. The player is first tried as a damage dealer, so a bot tanks and heals when one can; only when
     /// none can does the player's own class count (and may fill the tank or healer the group asks for, with a bot still leading). A
     /// player who stated <paramref name="stated"/> (a role the class can play) is weighed as that role in the second try, and one who
-    /// stated damage is never placed in a tank's or healer's place.
+    /// stated damage is never placed in a tank's or healer's place. <paramref name="standIn"/> asks the question the role answer needs instead:
+    /// would the plan hold a player of that class (a warrior for the tank place, a priest for the healer's) at the real player's level and place.
     /// </summary>
-    private PlayerbotGroupPlan? PlanForVolunteer(Player real, List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, Guid preferredBot, PlayerbotGroupRole? stated = null)
+    private PlayerbotGroupPlan? PlanForVolunteer(Player real, List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, Guid preferredBot, PlayerbotGroupRole? stated = null, Class? standIn = null)
     {
         if (candidates.Count == 0 || !CanReach(real, goal)) return null;
         var self = new PlayerbotGroupCandidate(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
             new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, static _ => false), Gear(real), uint.MaxValue, Qualifying: PlayerbotGroupContent.QualifiesAtLevel(goal, real.Level));
         PlayerbotGroupCandidate damageOnly = self with { Class = Class.Mage, TalentRole = PlayerbotRole.RangeDps };
         if (stated is { } claimed) self = self with { TalentRole = PlayerbotGroupContent.CombatRole(claimed, self.TalentRole) };
+        if (standIn is { } fillClass) self = self with { Class = fillClass, TalentRole = PlayerbotGroupContent.CanTank(fillClass) ? PlayerbotRole.Tank : PlayerbotRole.Healer };
 
         var lists = new List<List<PlayerbotGroupCandidate>>(2);
         if (candidates.Count >= size)
@@ -215,7 +222,7 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         lists.Add(candidates);
-        foreach (PlayerbotGroupCandidate asked in stated == PlayerbotGroupRole.Damage ? new[] { damageOnly } : new[] { damageOnly, self })
+        foreach (PlayerbotGroupCandidate asked in standIn is not null ? new[] { self } : stated == PlayerbotGroupRole.Damage ? new[] { damageOnly } : new[] { damageOnly, self })
             foreach (List<PlayerbotGroupCandidate> bots in lists)
                 if (VolunteerPlan(bots, asked, self, size, goal) is { } plan && (!goal.InInstance || PlanAnchored(plan))) return plan; // an instance plan needs a waiting anchor: try the next list
         return null;
@@ -266,6 +273,27 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         return bots.Count == 0 ? null : new PlayerbotGroupPlan(Oldest(healers.Count > 0 ? healers : bots), plan.Members);
+    }
+
+    /// <summary>Sets <paramref name="player"/> aside as one who declined a bot group's invitation, for <see cref="SetAsideMs"/> (tests; the coordinator does it when an invitation goes unanswered).</summary>
+    internal void NoteDeclined(ObjectGuid player) => _declinedPlayers[player] = unchecked(Now + SetAsideMs);
+
+    /// <summary>The id of the formed group that has <paramref name="botId"/> as a member (0: none).</summary>
+    internal int FormedGroupIdOf(Guid botId)
+    {
+        foreach (BotGroup group in _groups)
+            foreach (Member member in group.Members)
+                if (!member.Real && member.BotId == botId) return group.Id;
+        return 0;
+    }
+
+    /// <summary>The id of the formed group that has taken <paramref name="guid"/>, a real player whose invitation is not answered yet (0: none).</summary>
+    internal int AwaitedGroupIdOf(ObjectGuid guid)
+    {
+        foreach (BotGroup group in _groups)
+            foreach (Member member in group.Members)
+                if (member.Real && !member.Joined && member.Guid == guid) return group.Id;
+        return 0;
     }
 
     private readonly List<(Guid BotId, ObjectGuid Player)> _expiredVolunteers = [];
@@ -324,6 +352,8 @@ public sealed partial class PlayerbotGroupCoordinator
             if (_declinedPlayers.ContainsKey(real.Guid)) continue;
             if (PlanForVolunteer(real, candidates, size, goal, volunteerBot, entry.Role) is { } plan)
             {
+                // The offer was checked against the bots waiting then; the plan's bots may have changed since (an ignore or a rivalry made in the meantime).
+                if (IgnoresOrRivals(real, plan.Members.Where(m => m.Bot.BotId != Guid.Empty).Select(m => m.Bot.BotId))) continue;
                 volunteer = guid;
                 return plan;
             }

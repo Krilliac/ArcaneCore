@@ -27,6 +27,26 @@ public sealed class PlayerbotDungeonFitTests
         Assert.Equal(new PlayerbotDungeonBand(56, 62), PlayerbotDungeonFit.BandOf(Stratholme, 55, [])); // 58-60 +-2
     }
 
+    [Theory]
+    [InlineData(509u)] // Ruins of Ahn'Qiraj
+    [InlineData(531u)] // Temple of Ahn'Qiraj
+    [InlineData(533u)] // Naxxramas
+    public void BandOf_ForARaidMap_StartsAtTheRaidLevel_AndOnlyWidensAboveIt(uint raidMap)
+    {
+        PlayerbotDungeonBand band = PlayerbotDungeonFit.BandOf(raidMap, 60, []);
+        Assert.Equal(new PlayerbotDungeonBand(60, 62), band);
+        Assert.False(band.Holds(59));
+        Assert.True(band.Holds(60));
+    }
+
+    [Fact]
+    public void BareRuins_NamesNoDungeon_ButAq20StillDoes()
+    {
+        Assert.Null(ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("lfm ruins", 60));
+        Assert.Equal(509u, ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("lfm aq20", 60)?.MapId);
+        Assert.Equal(509u, ArcaneCore.World.Playerbots.Chat.PlayerbotDungeons.Named("raq tonight", 60)?.MapId);
+    }
+
     [Fact]
     public void BandOf_UsesTheCatalogueBandsOfTheMap_AsTheirUnion()
     {

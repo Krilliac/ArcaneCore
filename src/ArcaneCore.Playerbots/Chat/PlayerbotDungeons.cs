@@ -38,7 +38,7 @@ internal static partial class PlayerbotDungeons
         new("Onyxia's Lair", "Ony", ["ony", "onyxia"], 60, 60, Raid: true, MapId: 249),
         new("Zul'Gurub", "ZG", ["zg", "zulgurub"], 60, 60, Raid: true, MapId: 309),
         new("Blackwing Lair", "BWL", ["bwl"], 60, 60, Raid: true, MapId: 469),
-        new("Ruins of Ahn'Qiraj", "AQ20", ["aq20", "raq", "ruins"], 60, 60, Raid: true, MapId: 509),
+        new("Ruins of Ahn'Qiraj", "AQ20", ["aq20", "raq"], 60, 60, Raid: true, MapId: 509),
         new("Temple of Ahn'Qiraj", "AQ40", ["aq40", "taq"], 60, 60, Raid: true, MapId: 531),
         new("Naxxramas", "Naxx", ["naxx", "nax", "naxxramas"], 60, 60, Raid: true, MapId: 533),
     ];
@@ -113,6 +113,21 @@ internal static partial class PlayerbotDungeons
         }
 
         return found ? (min, max) : null;
+    }
+
+    /// <summary>Whether the instance on <paramref name="mapId"/> is a raid (every entry sharing the map is one): a raid is entered at its level, never below it.</summary>
+    internal static bool IsRaidMap(uint mapId)
+    {
+        if (mapId == 0) return false;
+        bool found = false;
+        foreach (PlayerbotDungeon dungeon in All)
+        {
+            if (dungeon.MapId != mapId) continue;
+            if (!dungeon.Raid) return false;
+            found = true;
+        }
+
+        return found;
     }
 
     [GeneratedRegex(@"aq\d+|[a-z']+")] private static partial Regex Word();

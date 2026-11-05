@@ -1063,15 +1063,18 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     }
 
     /// <summary>
-    /// Whether this player already got an answer about this waiting group within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/>; when not,
-    /// records the answer now. A repeated "inv" is applied (the volunteer is refreshed) but not answered twice.
+    /// Whether this player already got this answer about this waiting group within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/>. A repeated
+    /// "inv" is applied (the volunteer is refreshed) but not answered twice. Only reads: <see cref="RecordAnswer"/> notes an answer once it was sent.
     /// </summary>
-    private bool AnsweredLately(PlayerbotChat chat, (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) key)
+    internal bool AnsweredLately(PlayerbotChat chat, (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) key)
+        => _answered.TryGetValue(key, out long at) && chat.NowMs - at < chat.LfgOptions.AnswerRepeatSeconds * 1000L;
+
+    /// <summary>Notes that the answer <paramref name="key"/> was sent now (a refusal by the limiter or the chat service leaves no note, so the next "inv" is answered).</summary>
+    internal void RecordAnswer(PlayerbotChat chat, (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) key)
     {
         PlayerbotLfgOptions lfg = chat.LfgOptions;
         long now = chat.NowMs;
-        if (_answered.TryGetValue(key, out long at) && now - at < lfg.AnswerRepeatSeconds * 1000L) return true;
-        if (_answered.Count >= lfg.MaxTrackedVolunteers)
+        if (!_answered.ContainsKey(key) && _answered.Count >= lfg.MaxTrackedVolunteers)
         {
             foreach ((var other, long when) in _answered.ToArray())
                 if (now - when >= lfg.AnswerRepeatSeconds * 1000L) _answered.Remove(other);
@@ -1079,17 +1082,14 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         }
 
         _answered[key] = now;
-        return false;
     }
 
-    /// <summary>Whether this player was told within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/> that <paramref name="bot"/>'s group is complete with them (Ready).</summary>
-    private bool AnsweredReadyLately(PlayerbotChat chat, ObjectGuid asker, Guid bot)
-    {
-        long window = chat.LfgOptions.AnswerRepeatSeconds * 1000L;
-        foreach (((ObjectGuid who, Guid from, _, PlayerbotVolunteerOutcome outcome), long at) in _answered)
-            if (who == asker && from == bot && outcome == PlayerbotVolunteerOutcome.Ready && chat.NowMs - at < window) return true;
-        return false;
-    }
+    /// <summary>How many answers are remembered (tests).</summary>
+    internal int AnswersKept => _answered.Count;
+
+    /// <summary>The answer key of a Ready answer: the formed group stands in for the bot, so any bot of that group repeating gets the same quiet.</summary>
+    private static (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) ReadyKey(ObjectGuid asker, int formedGroup)
+        => (asker, Guid.Empty, formedGroup, PlayerbotVolunteerOutcome.Ready);
 
     private bool Answer(PlayerbotChat chat, PlayerbotVoiceOptions options, BotHeardLine line, Player player, PlayerbotPartyAI party)
     {
@@ -1123,10 +1123,17 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting)
                 {
                     // The group formed on this player's earlier inv (the invitation is pending): the repeat is quiet and the post stays.
-                    if (AnsweredReadyLately(chat, asker.Guid, line.BotId)) return true;
+                    // Quiet while this player's invitation from the bot's own formed group is pending, or when that group's Ready was answered lately.
+                    int formed = coordinator.FormedGroupIdOf(line.BotId);
+                    if (AnsweredLately(chat, ReadyKey(asker.Guid, formed)) || (formed != 0 && coordinator.AwaitedGroupIdOf(asker.Guid) == formed)) return true;
                     chat.Voice.Forget(line.BotId);
                 }
-                else if (AnsweredLately(chat, (asker.Guid, line.BotId, waitingGroup, result.Outcome))) return true; // applied above, an identical answer said once
+
+                // A Ready answer is keyed on the group that formed (read after Volunteer), any other on the group that waited.
+                (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) answerKey = result.Outcome == PlayerbotVolunteerOutcome.Ready
+                    ? ReadyKey(asker.Guid, coordinator.AwaitedGroupIdOf(asker.Guid))
+                    : (asker.Guid, line.BotId, waitingGroup, result.Outcome);
+                if (result.Outcome != PlayerbotVolunteerOutcome.NotWaiting && AnsweredLately(chat, answerKey)) return true; // applied above, an identical answer said once
                 string roles = result.Needed == PlayerbotGroupRole.Tank ? "tank" : "healer";
                 string minLevel = Number(result.Level > 0 ? result.Level : post.MinLevel);
                 (string key, string sentence) = result.Outcome switch
@@ -1143,8 +1150,10 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                     _ => (string.Empty, string.Empty),
                 };
                 if (key.Length == 0) return false;
-                return Say(chat, line.BotId, player, party, reply, key, sentence, $"Answer {asker.Name} by whisper: {sentence}", null,
+                bool said = Say(chat, line.BotId, player, party, reply, key, sentence, $"Answer {asker.Name} by whisper: {sentence}", null,
                     ("count", Number(result.Missing)), ("minlevel", minLevel), ("maxlevel", Number(result.Level)), ("dungeon", post.What ?? string.Empty), ("roles", roles));
+                if (said && result.Outcome != PlayerbotVolunteerOutcome.NotWaiting) RecordAnswer(chat, answerKey); // after the send: a refused whisper is not "answered"
+                return said;
             }
 
             case PlayerbotVoicePostKind.Selling when post.What is { } item && PlayerbotVoiceFacts.AsksAbout(line.Text, item):

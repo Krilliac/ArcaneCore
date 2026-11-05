@@ -2019,18 +2019,24 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   "heal"/"healer", "dps"/"dd"; a class word states none). Limit: only that whispered offer is read. The server does not answer group
   searches such as "any groups for SFK?", guild requests and searches, or an "inv" in a channel; the code that would read them was removed
   rather than kept uncalled. Volunteering is deliberately a partial port of the earlier design: the level answer for a player above the
-  bots' range (`LevelHigh`) is kept, while the "noted far, meet at" outcome and the level-below refusal are left out, since a player who
-  cannot be placed (too far, another map, below the range) gets the general `CannotPlace` answer.
+  bots' range (`LevelHigh`) and the level-below refusal (`Level`) are kept, while the "noted far, meet at" outcome is left out, since a player who
+  cannot be placed (too far, another map, outside the bots' level window) gets the general `CannotPlace` answer.
 - **Volunteering** (a real player whispers "inv" to a bot's LFG or LFM call): the poster, or any bot of the same waiting group (`Enabled`),
   answers. `PlayerbotGroupCoordinator.Volunteer` checks in this order, the first failure deciding: the same team, a level of at least the
   goal's ("sorry, need 14+"), not in a group (or with an invitation pending), no recent decline, an instance goal's anchor, no ignore or
   rivalry between the player and the waiting bots (silent: no invitation and no reply), reach (CannotPlace: a player off the meeting map
-  or beyond 1500 yards is not promised an invitation), then, when the player would take the group's last place and it is a tank's or a
-  healer's, a role the player's class can fill ("sorry, we need a healer"; a stated role, "i can tank", is used for the match when the class
-  can play it and dropped when it cannot; a stated damage role is never placed in a tank or healer place), then the dry-run match as before
-  (Ready, Noted or CannotPlace; LevelHigh, "sorry, this group tops out at 12", when the player is more than `World:Playerbots:Groups:LevelRange` above the
-  highest waiting bot, checked once placing has failed). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
-  (a different outcome, such as CannotPlace then Noted, is answered again; after Ready the repeat is quiet and the post stays); `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
+  or beyond 1500 yards is not promised an invitation), then the dry-run match (Ready, the group forms and the invitation follows). A stated
+  role ("i can tank") is used for that match when the class can play it and dropped when it cannot; a stated damage role is never placed
+  in a tank or healer place. Only when the match fails are the other answers worked out, in this order: LevelHigh ("sorry, this group tops
+  out at 12") when the player is more than `World:Playerbots:Groups:LevelRange` above the highest waiting bot; Role ("sorry, we need a
+  healer") when the group's last place is a tank's or a healer's, the player's class cannot fill it, and a player of the class that could
+  (a warrior or a priest) at the same level and place would have been placed, so the role named is the true reason; Noted when the bots are
+  too few (the player is kept for five minutes and matched, with the stated role and with the ignore and rivalry check made again against
+  the bots of the plan, once the group can form); CannotPlace for every other reason. A repeated "inv" inside `AnswerRepeatSeconds` is
+  applied again, but an identical answer is said once. An answer counts as given only once the whisper was sent: one the limiter or the
+  chat service refused is repeated on the next "inv". A different outcome, such as CannotPlace then Noted, is answered again; after Ready
+  the repeat is quiet while the invitation of the formed group is pending (whichever bot of that group is asked) and the post stays;
+  `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
   only the whisper to the poster itself.
 
 ## Scenario harness
