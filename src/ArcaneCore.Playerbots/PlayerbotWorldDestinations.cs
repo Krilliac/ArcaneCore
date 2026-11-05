@@ -51,7 +51,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     internal const float ClosingStepYards = 2f;
 
     private uint _closingSpawn;
-    private bool _closingToLift; // the not-closing clock measures to a lift's landing (PlayerbotRoute.ToLiftLanding), not to the spawn
+    private PlayerbotProgressAim _closingAim; // what _closingBest measures to: the spawn, or a lift's landing on the way (PlayerbotProgressAim)
     private float _closingBest = float.PositiveInfinity;
     private uint _closingMs;
     private uint _closingClockedAt;
@@ -872,24 +872,29 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
     }
 
     /// <param name="route">The walk being followed or planned. For a route to a lift's landing (<see cref="PlayerbotRoute.ToLiftLanding"/>) the
-    /// distance is measured to that landing, not to the spawn: the way to the lift may lead away from the goal.</param>
+    /// distance is measured to that landing, not to the spawn: the way to the lift may lead away from the goal (<see cref="PlayerbotProgressAim"/>:
+    /// a change of aim starts the best over and is no progress; past its bound the spawn again).</param>
     private bool NotClosing(Player player, uint spawnGuid, uint elapsedMs, uint now, PlayerbotRoute? route = null)
     {
         DestinationEntry? spawn = null;
         foreach (DestinationEntry entry in _entries)
             if (entry.Spawn.Guid == spawnGuid) { spawn = entry; break; }
         if (spawn is null) return false;
-        bool toLift = route is { ToLiftLanding: true };
-        float distance = toLift
-            ? Vector3.Distance(new(player.X, player.Y, player.Z), route!.LiftLanding)
+        bool fresh = spawnGuid != _closingSpawn || unchecked(now - _closingClockedAt) > 60_000u;
+        if (fresh) _closingAim.Reset();
+        bool retargeted = _closingAim.Retarget(route);
+        float distance = _closingAim.Landing is { } landing
+            ? Vector3.Distance(new(player.X, player.Y, player.Z), landing)
             : MathF.Sqrt(DistanceSquared(player, spawn.Spawn));
-        if (spawnGuid != _closingSpawn || toLift != _closingToLift || unchecked(now - _closingClockedAt) > 60_000u)
+        if (fresh)
         {
-            _closingToLift = toLift;
             (_closingSpawn, _closingBest, _closingMs, _closingClockedAt) = (spawnGuid, distance, 0, now);
             return false;
         }
 
+        // A change of aim (the spawn to a lift's landing, the spawn again after a fallback or the ride, another car's landing) starts the
+        // best over where the bot stands and is no progress: the clock runs on (PlayerbotProgressAim).
+        if (retargeted) _closingBest = distance;
         if (distance <= ArrivalYards || distance < _closingBest - ClosingStepYards)
         {
             _closingBest = MathF.Min(_closingBest, distance);
@@ -905,6 +910,7 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
         if (_closingMs < SpawnNotClosingMs) return false;
         _farBlockedUntil[spawnGuid] = unchecked(now + NotClosingBlockMs);
         (_closingSpawn, _closingBest, _closingMs) = (0, float.PositiveInfinity, 0);
+        _closingAim.Reset();
         return true;
     }
 

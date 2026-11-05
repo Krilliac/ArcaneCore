@@ -117,12 +117,6 @@ internal sealed class PlayerbotRoute
     /// as far as one route reaches). Meaningless unless <see cref="ToLiftLanding"/>.</summary>
     internal Vector3 LiftLanding { get; set; }
 
-    /// <summary>
-    /// What a caller's progress clock measures this walk against: the lift's landing for a <see cref="ToLiftLanding"/> route (walking to
-    /// the lift may lead away from the goal, e.g. a canyon floor under a plateau), the goal otherwise.
-    /// </summary>
-    internal Vector3 ProgressAim(Vector3 goal) => ToLiftLanding ? LiftLanding : goal;
-
     /// <summary>The map pathfinder active when this route was planned, used to detect live pathfinder replacement.</summary>
     internal IPathfinder? Pathfinder { get; set; }
 
@@ -211,6 +205,52 @@ internal sealed class PlayerbotRoute
         Navigated = legs.All(leg => leg);
         if (MeshPoints is not null) MeshPoints = points;
         NextPoint = 1;
+    }
+}
+
+/// <summary>
+/// The aim a caller's progress clock measures a walk against (the destination's not-closing clock, the repair walk's stuck clock, the
+/// explore cell's best distance): the goal itself, or the landing of the lift the walk heads for (<see cref="PlayerbotRoute.ToLiftLanding"/>:
+/// the way to the lift may lead away from the goal, a canyon floor under a plateau). One rule for the three: a change of aim (the goal to
+/// a landing, the goal again when the approach falls back or the ride is over, one car's landing to another's) starts the best distance
+/// over at the new aim and is no progress in itself (the caller keeps its accumulated time); after <see cref="MaxChanges"/> changes on
+/// one goal the aim is the goal for good, so a bot that alternates between a lift leg and a goal leg (a pending or refused approach
+/// between them) is judged by the goal, as before the approach existed, instead of starting a fresh best at every leg.
+/// A mutable struct held in a field of the caller: call <see cref="Retarget"/> and <see cref="Reset"/> on the field itself, on the
+/// caller's thread (the bot's world thread).
+/// </summary>
+internal struct PlayerbotProgressAim
+{
+    /// <summary>
+    /// Changes of aim on one goal after which a <see cref="PlayerbotRoute.ToLiftLanding"/> walk is measured to the goal: a trip is two
+    /// (the landing, then the goal again after the ride), a fallback to the goal and back two more, a change of the nearest car one.
+    /// </summary>
+    internal const int MaxChanges = 6;
+
+    /// <summary>The landing measured to; null: the goal.</summary>
+    internal Vector3? Landing { get; private set; }
+
+    /// <summary>Changes of aim so far on this goal.</summary>
+    internal int Changes { get; private set; }
+
+    /// <summary>
+    /// Point the clock at the aim of <paramref name="route"/> (null, or not to a lift: the goal). True when the aim changed: the caller
+    /// starts its best distance over at the distance to the new aim and keeps its accumulated time.
+    /// </summary>
+    internal bool Retarget(PlayerbotRoute? route)
+    {
+        Vector3? aim = route is { ToLiftLanding: true } && Changes < MaxChanges ? route.LiftLanding : null;
+        if (aim == Landing) return false;
+        Landing = aim;
+        Changes++;
+        return true;
+    }
+
+    /// <summary>The clock starts over (another goal, or it ran out).</summary>
+    internal void Reset()
+    {
+        Landing = null;
+        Changes = 0;
     }
 }
 

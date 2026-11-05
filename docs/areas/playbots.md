@@ -584,8 +584,11 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   approach is not planned again for 5 s) and the trip begins on a later think, once the bot is near (all lifts share the rule). The route
   must end within 150 yards of the lift or at least 30 yards nearer it than the bot, so a leg that gains nothing is not handed back for
   ever. Callers walk it as they walk a direct route, skip the flight-path and held-off checks as they do for one, and their progress
-  clocks (the destination's not-closing clock, the repair walk's stuck clock) measure it to the landing, not the goal, since the way to
-  the lift may lead away from the goal; the explore cell is not blocked because a leg ends away from it. The far case costs the direct
+  clocks (the destination's not-closing clock, the repair walk's stuck clock, the explore cell's best distance) measure it to the
+  landing, not the goal, since the way to the lift may lead away from the goal (`PlayerbotProgressAim`): a change of aim (the landing,
+  the goal again when the approach falls back or after the ride, another car's landing) starts the best distance over where the bot
+  stands and is no progress in itself, and after six changes on one goal the clocks measure to the goal again, so a bot that keeps
+  alternating between a lift leg and a goal leg runs out as before. The far case costs the direct
   mesh check plus up to one `PlanToward` per car (the other plans cost one query). When the approach is refused or its tiles are still being read the caller plans the goal
   itself as before. This moves the approach out of the trip; it does not make the canyon floor of Thousand Needles any easier to cross, so
   a bot there whose approach is refused is reported by its caller as an unreachable goal instead of as `bot-elevator/trip-failed`.

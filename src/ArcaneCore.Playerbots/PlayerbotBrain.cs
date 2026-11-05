@@ -3759,10 +3759,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _exploreBlockedCells[key] = unchecked(_session.World.NowMs + 180_000u);
         _exploreCandidate = null;
         _exploreBestDistSq = float.PositiveInfinity;
+        _exploreAim.Reset();
         TargetEntry = 0;
     }
 
     private float _exploreBestDistSq = float.PositiveInfinity;
+    private PlayerbotProgressAim _exploreAim; // what _exploreBestDistSq measures to: the cell, or a lift's landing on the way (PlayerbotProgressAim)
 
     private bool ExploreMovementPaused(Player player, uint elapsedMs)
         => elapsedMs == 0 || _session.ManagedBudget is { Remaining: <= 0 }
@@ -3797,24 +3799,38 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 // Within sight but FindTargets found nothing to fight: this patch is depleted, gated, or unavailable.
                 BlockExploreCell(current);
             }
-            else if (_route is { Complete: true, ToLiftLanding: true })
-            {
-                // A leg of the walk to a lift's landing ends where one route reaches, which may be farther from the cell (the lift can lie away
-                // from it) and is no dead end: each accepted leg closes at least PlayerbotElevator.ApproachProgressYards on the lift.
-            }
-            else if (_route is { Complete: true })
+            else if (_route is { Complete: true } done)
             {
                 // A previous route leg finished outside the 65-yard sight radius: if it failed to reduce flat distance by at least 4 yards,
-                // the partial route reached a terrain dead end (e.g., Coldridge ridge above cave #570) and cannot get closer.
-                float prevBest = float.IsFinite(_exploreBestDistSq) ? MathF.Sqrt(_exploreBestDistSq) : float.PositiveInfinity;
-                float curDist = MathF.Sqrt(distSq);
-                if (curDist + 4f >= prevBest)
+                // the partial route reached a terrain dead end (e.g., Coldridge ridge above cave #570) and cannot get closer. A leg of the
+                // walk to a lift's landing (ToLiftLanding) is measured to that landing, which may lie away from the cell. A change of aim
+                // (the first lift leg; the cell again after a fallback or the ride; another car's landing) starts the best over where the
+                // bot stands: the best in hand was measured to something else (PlayerbotProgressAim). Known limit: a lift leg accepted
+                // because it ends within NearLiftYards but gains under 4 yards would be blocked at the next check; approach legs otherwise
+                // gain 30 yards or more.
+                bool retargeted = _exploreAim.Retarget(done);
+                float aimDistSq = distSq;
+                if (_exploreAim.Landing is { } landing)
                 {
-                    BlockExploreCell(current);
+                    float lx = landing.X - player.X, ly = landing.Y - player.Y;
+                    aimDistSq = (lx * lx) + (ly * ly);
+                }
+                if (retargeted)
+                {
+                    _exploreBestDistSq = aimDistSq;
                 }
                 else
                 {
-                    _exploreBestDistSq = distSq;
+                    float prevBest = float.IsFinite(_exploreBestDistSq) ? MathF.Sqrt(_exploreBestDistSq) : float.PositiveInfinity;
+                    float curDist = MathF.Sqrt(aimDistSq);
+                    if (curDist + 4f >= prevBest)
+                    {
+                        BlockExploreCell(current);
+                    }
+                    else
+                    {
+                        _exploreBestDistSq = aimDistSq;
+                    }
                 }
             }
         }
@@ -3881,6 +3897,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 return false;
             }
             float initDx = _exploreCandidate.Value.Spawn.X - player.X, initDy = _exploreCandidate.Value.Spawn.Y - player.Y;
+            _exploreAim.Reset();
             _exploreBestDistSq = (initDx * initDx) + (initDy * initDy);
         }
 
