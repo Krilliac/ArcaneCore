@@ -1275,6 +1275,46 @@ public sealed class PlayerbotPathShapingTests
         });
     }
 
+    [Fact]
+    public async Task SeededContinuousAngleFuzz_OpenGround_EndpointsUnchanged_FiniteAndInsideTheRegion()
+    {
+        // The grid fuzz above turns at fixed angles; here every corner's turn is a continuous random angle in 0.6..3.1 rad (both
+        // signs, any heading) between random legs, so the arc, lead and radius-floor decisions see angles no fixed pattern reaches.
+        Rect[] open = [new(-200f, -200f, 200f, 200f)];
+        await RunAsync(open, (world, map, at) =>
+        {
+            var rng = new Random(20261105);
+            var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
+            ShapeStats total = default;
+            for (int n = 0; n < 1500; n++)
+            {
+                float heading = (float)rng.NextDouble() * MathF.Tau;
+                float theta = 0.6f + ((float)rng.NextDouble() * 2.5f);
+                float turn = rng.Next(2) == 0 ? theta : -theta;
+                float leg1 = 3f + ((float)rng.NextDouble() * 17f), leg2 = 3f + ((float)rng.NextDouble() * 17f);
+                var corner = new Vector2(MathF.Cos(heading) * leg1, MathF.Sin(heading) * leg1);
+                float outHeading = heading + turn;
+                Vector2 end = corner + new Vector2(MathF.Cos(outHeading) * leg2, MathF.Sin(outHeading) * leg2);
+                Vector3[] input = [at(Vector2.Zero), at(corner), at(end)];
+
+                ShapeStats stats = default;
+                IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+                total.Add(in stats);
+
+                Assert.True(shaped.Count >= 3, $"path {n} theta {theta:F4}: only {shaped.Count} points");
+                Assert.Equal(input[0], shaped[0]);
+                Assert.Equal(input[^1], shaped[^1]);
+                Assert.All(shaped, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"path {n} theta {theta:F4}: non-finite point {p}"));
+                AssertInside(world, shaped);
+                AssertSegmentsSafe(map, shaped);
+            }
+
+            _output.WriteLine($"continuous-angle fuzz: shaped {total.CornersShaped} rounded {total.CornersRounded} fallbacks {total.Fallbacks}");
+            Assert.True(total.CornersRounded > 0, "no corner was rounded in the continuous-angle sweep");
+            return true;
+        });
+    }
+
     private static List<Vector3> GenerateFuzzPath(Random rng, float[] gridLines, Func<Vector2, Vector3> at, int pathIdx)
     {
         var local = new List<Vector2>();
