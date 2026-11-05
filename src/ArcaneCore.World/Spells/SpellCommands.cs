@@ -360,7 +360,7 @@ public sealed class SpellCommands : ICommandGroup
     /// </summary>
     internal static (float X, float Y, float Z) ClosePoint(Player player, float distance)
         => ClosePoint(player.X, player.Y, player.Z, player.Orientation, player.BoundingRadius, distance,
-            player.Map is { } map ? (px, py, pz) => map.Collision.GetHeight(px, py, pz) : null);
+            player.Map is { } map ? new Func<float, float, float, float>((px, py, pz) => map.Collision.GetHeight(px, py, pz)) : null);
 
     /// <summary>The close point from explicit values; <paramref name="height"/> is the ground lookup (null: none), whose answer is used when it is a real height.</summary>
     internal static (float X, float Y, float Z) ClosePoint(
