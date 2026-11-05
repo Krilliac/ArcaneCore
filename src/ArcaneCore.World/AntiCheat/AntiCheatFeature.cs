@@ -160,6 +160,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     {
         if (IsExempt(session, player))
         {
+            ForgetBaselineWhileExempt(player);
             return;
         }
 
@@ -183,6 +184,19 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         _scratch.Clear();
         state.Checks.Observe(sample, _scratch);
         RecordAll(session, player, state);
+    }
+
+    /// <summary>
+    /// A block of an exempt player is stored without being judged, and <see cref="AfterMovement"/> records its position as the one the server holds,
+    /// so the next judged block would not look relocated and would be measured from the last position judged before the exemption began
+    /// (a false teleport when a GM leaves GM mode far from where it entered it). The next judged block is a new baseline instead.
+    /// </summary>
+    private void ForgetBaselineWhileExempt(Player player)
+    {
+        if (_players.TryGetValue(player.Guid, out PlayerState? state))
+        {
+            state.Checks.NotifyServerRelocation();
+        }
     }
 
     /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds.</summary>
@@ -249,7 +263,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             GrantedFlags = granted,
             ServerControlled = serverControlled,
             Transport = claim,
-            Terrain = null,
+            Terrain = _options.TerrainChecks && unit.Map is { } unitMap ? state.TerrainOf(unitMap) : null,
         };
 
         _scratch.Clear();
@@ -297,6 +311,14 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         _scratch.Clear();
         state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
         RecordAll(session, player, state);
+
+        // The unit the player controls is moved by the same client: the stall covers its checks too (its findings would repeat the player's, so they are dropped).
+        if (state.CurrentControlledChecks is { } controlled)
+        {
+            _scratch.Clear();
+            controlled.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
+            _scratch.Clear();
+        }
     }
 
     /// <summary>The server moved the player (teleport events): the next client packet is trusted.</summary>
@@ -867,6 +889,9 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
             return _controlled;
         }
+
+        /// <summary>The checks of the unit controlled last (a time skip reaches them), null before any.</summary>
+        public MovementAntiCheat? CurrentControlledChecks => _controlled;
 
         /// <summary>The checks of that unit when they exist, else null.</summary>
         public MovementAntiCheat? ControlledChecksIfFor(ObjectGuid unit) => _controlled is not null && _controlledGuid == unit ? _controlled : null;

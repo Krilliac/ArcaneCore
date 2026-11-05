@@ -76,6 +76,14 @@ public sealed class MovementAntiCheat
     private bool _hasBlockedStep;
     private uint _lastBlockedStep;
 
+    // The distance budget: yards the player may still have covered, refilled at the allowed speed by the time that passed.
+    private bool _bucketActive;
+    private float _bucketYards;
+
+    // The ack's own timestamp check already scored this stamp: the block it carries is not scored for the same regression again.
+    private bool _ackStampScored;
+    private uint _ackStampScoredTime;
+
     private uint _skipWindowStart;
     private int _skipCount;
     private bool _skipWindowOpen;
@@ -114,6 +122,7 @@ public sealed class MovementAntiCheat
         _clock.Reset();
         _swimOutOfWater = 0;
         _hasBlockedStep = false;
+        _bucketActive = false;
     }
 
     /// <summary>A knockback was acknowledged: a new baseline, and no speed check until the player lands (or six seconds pass).</summary>
@@ -164,6 +173,7 @@ public sealed class MovementAntiCheat
         _airborne = false;
         _apexZ = z;
         _knockback = false;
+        _bucketActive = false;
         NotifyStored(x, y, z);
     }
 
@@ -198,9 +208,11 @@ public sealed class MovementAntiCheat
         _hasLastSeen = true;
         _lastSeenMs = now;
 
+        bool ackStampScored = _ackStampScored && _ackStampScoredTime == m.Time;
+        _ackStampScored = false;
         CheckFlags(sample, findings);
         CheckRoot(sample, findings);
-        CheckClientTime(m.Time, findings);
+        CheckClientTime(m.Time, ackStampScored, findings);
         CheckBurst(m.Time, now, findings);
         float allowed = AllowedSpeed(sample);
         SpeedHackDecision clock = _clock.Feed(m.Time, now);
@@ -237,6 +249,10 @@ public sealed class MovementAntiCheat
         if (!legitTransport && !_lastLegitTransport && !_knockback)
         {
             CheckDistance(sample, allowed, horizontal, airborne || _lastAirborne, skipBudgetMs, findings);
+        }
+        else
+        {
+            _bucketActive = false;
         }
 
         if (!legitTransport && !_lastLegitTransport && Options.TerrainChecks && sample.Terrain is { } terrain)
@@ -348,6 +364,8 @@ public sealed class MovementAntiCheat
         if (_hasAckTime && unchecked((int)(_lastAckTime - clientTime)) > Options.ClientTimeRegressionMs)
         {
             findings.Add(new AntiCheatFinding(AntiCheatViolation.PacketTiming, 10f, "acknowledgement timestamp went back"));
+            _ackStampScored = true;
+            _ackStampScoredTime = clientTime;
         }
 
         _lastAckTime = clientTime;
@@ -484,13 +502,16 @@ public sealed class MovementAntiCheat
         }
     }
 
-    private void CheckClientTime(uint clientTime, List<AntiCheatFinding> findings)
+    private void CheckClientTime(uint clientTime, bool alreadyScoredByAck, List<AntiCheatFinding> findings)
     {
         if (_hasClientTime)
         {
             if (unchecked((int)(_lastClientTime - clientTime)) > Options.ClientTimeRegressionMs)
             {
-                findings.Add(new AntiCheatFinding(AntiCheatViolation.PacketTiming, 10f, "client timestamp went back"));
+                if (!alreadyScoredByAck)
+                {
+                    findings.Add(new AntiCheatFinding(AntiCheatViolation.PacketTiming, 10f, "client timestamp went back"));
+                }
             }
             else if (clientTime == 0)
             {
@@ -504,7 +525,8 @@ public sealed class MovementAntiCheat
 
     /// <summary>
     /// More than <see cref="AntiCheatOptions.BurstPacketsPerSecond"/> packets within one second by the receive clock AND by
-    /// the client's own clock. Packets bunched by lag were sent over a longer client time and do not count.
+    /// the client's own clock. Packets bunched by lag were sent over a longer client time and do not count; stamps that stand still or
+    /// go back span no client time at all (signed difference), so they count.
     /// </summary>
     private void CheckBurst(uint clientTime, uint now, List<AntiCheatFinding> findings)
     {
@@ -523,7 +545,7 @@ public sealed class MovementAntiCheat
 
         int oldest = _burstHead; // the slot written longest ago
         int newest = (_burstHead + size - 1) % size;
-        if (unchecked(_burstReceived[newest] - _burstReceived[oldest]) < 1000 && unchecked(_burstClient[newest] - _burstClient[oldest]) < 1000)
+        if (unchecked(_burstReceived[newest] - _burstReceived[oldest]) < 1000 && unchecked((int)(_burstClient[newest] - _burstClient[oldest])) < 1000)
         {
             findings.Add(new AntiCheatFinding(AntiCheatViolation.Burst, 15f, "movement packet burst"));
             _burstCount = 0; // at most once per window
@@ -574,7 +596,17 @@ public sealed class MovementAntiCheat
         }
 
         uint receivedDelta = unchecked(now - _lastReceived);
-        long wallMs = (long)receivedDelta + Slack(sample.LatencyMs);
+        int maxGapMs = Options.SpeedClock.MaxGapMs;
+        bool stampAhead = maxGapMs > 0 && (long)clientDelta > (long)receivedDelta + maxGapMs;
+        if (stampAhead)
+        {
+            // No honest clock runs that far ahead of real time (a stall only leaves client time out): the independent clock discards
+            // such a pair, so it is scored here, and the step gets no latency slack (only the real interval).
+            findings.Add(new AntiCheatFinding(AntiCheatViolation.TimeSync, 15f, "client timestamp far ahead of real time"));
+            clientDelta = (int)Math.Min(receivedDelta, (uint)int.MaxValue);
+        }
+
+        long wallMs = (long)receivedDelta + (stampAhead ? 0 : Slack(sample.LatencyMs));
         long budgetMs = Math.Max(Math.Min((long)clientDelta, wallMs), Math.Min((long)clientDelta + skipBudgetMs, (long)receivedDelta));
         float speed = airborne ? allowed * AirborneSpeedFactor : allowed;
         float seconds = budgetMs / 1000f;
@@ -582,6 +614,7 @@ public sealed class MovementAntiCheat
         if (horizontal > teleport)
         {
             findings.Add(new AntiCheatFinding(AntiCheatViolation.Teleport, 25f, "teleport or blink"));
+            _bucketActive = false;
             return;
         }
 
@@ -590,6 +623,46 @@ public sealed class MovementAntiCheat
         {
             float ratio = horizontal / Math.Max(0.01f, expected);
             findings.Add(new AntiCheatFinding(AntiCheatViolation.Speed, Math.Clamp((ratio - 1f) * 50f, 5f, 25f), "faster than the allowed speed"));
+            _bucketActive = false;
+            return;
+        }
+
+        CheckDistanceBudget(sample, speed, horizontal, budgetMs, receivedDelta, findings);
+    }
+
+    /// <summary>
+    /// The distance a player may have covered over many steps, whatever each step's own budget was. A step's budget alone is blind to a
+    /// stream of packets stamped at or behind the last (no client time, so only <see cref="AntiCheatOptions.SpeedSlackYards"/> a step) and
+    /// adds the latency slack again for every packet. Here the yards stand in a bucket that the allowed speed (with the tolerance) refills by
+    /// the time that passed (the larger of the real interval and the step's own time budget, so lag bunching refills what it
+    /// carries and a stamp going back or standing still refills only real time), at most <see cref="AntiCheatOptions.SpeedSlackYards"/>
+    /// plus the speed over the latency slack (or one step's refill when that is more); every step spends its horizontal distance.
+    /// An overdraft is a Speed finding, and the bucket restarts empty.
+    /// </summary>
+    private void CheckDistanceBudget(in MovementSample sample, float speed, float horizontal, long stepBudgetMs, uint receivedDelta, List<AntiCheatFinding> findings)
+    {
+        if (!(speed > 0f))
+        {
+            _bucketActive = false;
+            return;
+        }
+
+        float perSecond = speed * (1f + (Options.SpeedTolerancePercent / 100f));
+        long refillMs = Math.Max((long)receivedDelta, stepBudgetMs);
+        float refill = perSecond * (refillMs / 1000f);
+        float cap = Math.Max(Options.SpeedSlackYards + (perSecond * (Slack(sample.LatencyMs) / 1000f)), refill);
+        if (!_bucketActive)
+        {
+            _bucketActive = true;
+            _bucketYards = cap;
+        }
+
+        _bucketYards = Math.Min(cap, _bucketYards + refill) - horizontal;
+        if (_bucketYards < 0f)
+        {
+            float overdraft = -_bucketYards;
+            findings.Add(new AntiCheatFinding(AntiCheatViolation.Speed, Math.Clamp(5f + overdraft, 5f, 25f), "faster than the allowed speed over several packets"));
+            _bucketYards = 0f;
         }
     }
 
