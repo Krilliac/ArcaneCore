@@ -157,6 +157,9 @@ public sealed class CreatureAiContent
     /// <summary>The creature rows of the AzerothCore-style <c>smart_scripts</c> table that AIName 'SmartAI' runs (docs/integration/smartai-20261010.md).</summary>
     public SmartScriptCatalog SmartScripts { get; init; } = SmartScriptCatalog.Empty;
 
+    /// <summary>The creature spell lists with their targeting and condition rows; a reload swaps them with the rest of the AI content.</summary>
+    public CreatureSpellListCatalog SpellLists { get; init; } = CreatureSpellListCatalog.Empty;
+
     /// <summary>The EventAI rows of a creature entry, in id order.</summary>
     public IReadOnlyList<CreatureAiEvent> GetEvents(uint entry) => _events.GetValueOrDefault(entry) ?? [];
 

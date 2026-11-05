@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures.AI;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -27,6 +28,12 @@ public sealed partial class Creature : Unit, ICombatCreature
 
     /// <summary>The script driving this creature (null outside a creature map system).</summary>
     public CreatureAI? AI { get; internal set; }
+
+    /// <summary>The creature's spell list scheduler; null without a list or with an AI that does not run one (CreatureMapSystem.SpellLists.cs).</summary>
+    internal CreatureSpellListScheduler<Unit>? SpellLists { get; set; }
+
+    /// <summary>The content version the list was bound at; a reload moves <see cref="CreatureContent.DefinitionsVersion"/> past it.</summary>
+    internal int SpellListVersion { get; set; }
 
     /// <summary>Where combat began (vmangos m_combatStartX/Y/Z): waypoint movers evade back here.</summary>
     internal CreatureHome? CombatStart { get; set; }

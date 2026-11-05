@@ -88,6 +88,20 @@ public sealed class AvEventAI : EscortAI
 
     private uint Entry => Me.Template.Entry;
 
+    /// <summary>
+    /// This script replaces the cmangos EventAI of these commanders, whose fights were EventAI rows. Their spells ship as spell lists
+    /// (sql/content/world, 0006_creature_spell_lists_av.sql, list id = entry * 100 + 1), which the classic-db templates do not name.
+    /// </summary>
+    public override uint ScriptSpellList => Entry switch
+    {
+        NpcWingCommanderGuse or NpcWingCommanderJeztor or NpcWingCommanderMulverick
+            or NpcWingCommanderIchman or NpcWingCommanderSlidore or NpcWingCommanderVipore or NpcRamRiderCommander => (Entry * 100) + 1,
+        _ => 0,
+    };
+
+    /// <inheritdoc/>
+    public override bool RunsSpellList => ScriptSpellList != 0;
+
     private Random Rng => Match.ScriptRandom;
 
     /// <summary>Whether the wing commander has left its war rider (m_bWarRiderSummoned).</summary>

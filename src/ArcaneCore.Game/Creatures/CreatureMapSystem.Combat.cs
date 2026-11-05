@@ -52,6 +52,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             creature.CombatStart = new CreatureHome(creature.X, creature.Y, creature.Z, creature.Orientation);
             // The instance hears OnCreatureEnterCombat once, after the AI's aggro hook (below; cmangos Unit::SetInCombatWith). sd2-mid,
             // sd2-high, sd2-end and raid-mc-ony each added a call; wave-7 integration keeps raid-mc-ony's, which also passes the enemy.
+            creature.SpellLists?.EnterCombat(); // cmangos UnitAI::EnterCombat: AddInitialCooldowns, ahead of the script's aggro hook
             creature.AI?.OnAggro(target);
             if (!creature.IsAlive || creature.IsEvading || !creature.HasAggroed)
             {

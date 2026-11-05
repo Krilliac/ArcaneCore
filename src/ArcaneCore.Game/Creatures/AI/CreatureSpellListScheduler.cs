@@ -24,6 +24,12 @@ public interface ICreatureSpellListHost<TTarget>
     bool IsSpellReady(uint spellId);
 
     /// <summary>
+    /// Whether the AI may cast the spell on its own. False for an unknown spell and for SPELL_ATTR_EX_NO_AUTOCAST_AI, which cmangos stores as
+    /// <c>DisabledForAI</c> when it loads a list; the catalog cannot read spells, so the scheduler asks here.
+    /// </summary>
+    bool CanAutocast(uint spellId);
+
+    /// <summary>
     /// Whether the combat condition an entry names holds for the creature and the spell's range (cmangos ObjectMgr::IsCombatConditionSatisfied).
     /// Asked only for entries whose <see cref="CreatureSpellListEntry.HasCombatCondition"/> is true; false skips the entry.
     /// </summary>
@@ -46,15 +52,15 @@ public interface ICreatureSpellListHost<TTarget>
 /// ones, then casts one blocking entry chosen by probability weight (lowest position first when every weight is zero) and falls back to
 /// the next one when a cast is refused.
 /// <para>
-/// Deliberate deviation: this scheduler stops after the first successful blocking cast. The reference keeps iterating its inner loop
-/// after a success (it ends the outer loop only afterwards), so an instant blocking spell could fire a second entry there unless
-/// something else, such as a global cooldown, stops it (not traced). Here a tick casts one blocking entry, following the spec ("choose
-/// one eligible blocking spell") and cmangos doc/SpellLists.txt ("always one spell is selected").
+/// By default a tick casts one blocking entry, following cmangos doc/SpellLists.txt ("always one spell is selected"). The cmangos code keeps
+/// iterating its inner loop after a success and ends the outer loop only afterwards; the constructor's <c>continueAfterCast</c>
+/// (<c>Creatures:SpellListContinueAfterCast</c>) follows that code instead.
 /// </para>
 /// <para>
-/// Not modelled: the cmangos cooldown map keyed per unit and spell. Cooldowns here are per entry index, so two entries naming the same
-/// spell do not share one, and <see cref="Bind"/> forgets them. The <see cref="CreatureSpellListFlags.CategoryCooldown"/> flag is not read;
-/// the host reads it from the entry in <see cref="ICreatureSpellListHost{TTarget}.OnCast"/> when it applies the spell system cooldown.
+/// Cooldowns: the entry's repeat time is both the scheduler's own timer and, through <see cref="TryGetSpellCooldown"/>, what the spell system
+/// starts in place of the Spell.dbc time (cmangos Creature::AddCooldown asks Creature::GetSpellCooldown). One roll serves both, so a cast never
+/// applies two different repeat times. The own timers are per entry index, so two entries naming the same spell do not share one, and
+/// <see cref="Bind"/> forgets them.
 /// </para>
 /// <para>
 /// Ownership: the instance owns only its cooldown clock and the entries an availability roll kept; the list it was bound to is immutable
@@ -70,15 +76,23 @@ public sealed class CreatureSpellListScheduler<TTarget>
     private CreatureSpellList? _list;
     private CreatureSpellListEntry[] _active = [];
     private ulong[] _readyAtMs = [];
+    private uint?[] _pendingRepeatMs = [];
     private ulong _nowMs;
     private uint _tickRemainingMs;
+    private int _castingIndex = -1;
+    private uint? _castRepeatMs;
+    private readonly bool _continueAfterCast;
 
-    public CreatureSpellListScheduler(ICreatureSpellListHost<TTarget> host, Random random)
+    /// <param name="host">The creature the scheduler runs for.</param>
+    /// <param name="random">The draws of this scheduler; see the class remarks about sharing.</param>
+    /// <param name="continueAfterCast">Keep walking the eligible blocking entries after a successful cast, as the cmangos loop does.</param>
+    public CreatureSpellListScheduler(ICreatureSpellListHost<TTarget> host, Random random, bool continueAfterCast = false)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(random);
         _host = host;
         _random = random;
+        _continueAfterCast = continueAfterCast;
     }
 
     /// <summary>The list this scheduler runs, or null.</summary>
@@ -119,6 +133,8 @@ public sealed class CreatureSpellListScheduler<TTarget>
         }
 
         _readyAtMs = new ulong[_active.Length];
+        _pendingRepeatMs = new uint?[_active.Length];
+        _castingIndex = -1;
         _tickRemainingMs = 0;
     }
 
@@ -134,7 +150,40 @@ public sealed class CreatureSpellListScheduler<TTarget>
     public void Reset()
     {
         Array.Clear(_readyAtMs);
+        Array.Clear(_pendingRepeatMs);
         _tickRemainingMs = 0;
+    }
+
+    /// <summary>
+    /// The list's repeat time for a spell the spell system is about to put on cooldown (cmangos Creature::GetSpellCooldown). False when the
+    /// list has no entry for the spell. Takes the time an entry's cast already rolled when one is waiting for a cast time to end; any other
+    /// cast of the spell, by a script say, rolls a fresh time. <paramref name="category"/> says the time replaces the category cooldown
+    /// (<see cref="CreatureSpellListFlags.CategoryCooldown"/>). A time of 0 leaves the Spell.dbc values in place.
+    /// </summary>
+    public bool TryGetSpellCooldown(uint spellId, out uint cooldownMs, out bool category)
+    {
+        int index = _castingIndex >= 0 && _active[_castingIndex].SpellId == spellId
+            ? _castingIndex
+            : Array.FindIndex(_active, e => e.SpellId == spellId);
+        if (index < 0)
+        {
+            cooldownMs = 0;
+            category = false;
+            return false;
+        }
+
+        CreatureSpellListEntry entry = _active[index];
+        category = (entry.Flags & CreatureSpellListFlags.CategoryCooldown) != 0;
+        if (_pendingRepeatMs[index] is { } pending)
+        {
+            _pendingRepeatMs[index] = null;
+            cooldownMs = pending;
+            return true;
+        }
+
+        cooldownMs = RollRange(entry.RepeatMin, entry.RepeatMax);
+        if (index == _castingIndex) _castRepeatMs = cooldownMs;
+        return true;
     }
 
     /// <summary>Advance the clock by <paramref name="diffMs"/> and run a tick when the 1200 ms loop is due. True when a tick ran.</summary>
@@ -157,6 +206,8 @@ public sealed class CreatureSpellListScheduler<TTarget>
     {
         if (_list is null || !_host.IsInCombat || !_host.CanCastSpell) return;
 
+        // A cast can run a script that binds another list; the indexes below stay valid for this array only (see Execute).
+        CreatureSpellListEntry[] active = _active;
         List<Candidate>? blocking = null;
         List<Candidate>? nonBlocking = null;
         long sum = 0;
@@ -168,10 +219,10 @@ public sealed class CreatureSpellListScheduler<TTarget>
             ? (int)_list.ChanceRangedAttack
             : Math.Max((int)_list.ChanceRangedAttack - (int)CreatureSpellList.MeleeModeRangedPenalty, 0);
 
-        for (int i = 0; i < _active.Length; i++)
+        for (int i = 0; i < active.Length; i++)
         {
-            CreatureSpellListEntry entry = _active[i];
-            if (entry.DisabledForAI) continue;
+            CreatureSpellListEntry entry = active[i];
+            if (entry.DisabledForAI || !_host.CanAutocast(entry.SpellId)) continue;
             if ((entry.Flags & CreatureSpellListFlags.SupportAction) != 0 && supportRoll > (int)_list.ChanceSupportAction) continue;
             if (entry.HasCombatCondition && !_host.IsCombatConditionSatisfied(entry.CombatCondition, entry.SpellId)) continue;
             if ((entry.Flags & CreatureSpellListFlags.RangedAction) != 0 && rangedRoll > rangedChance) continue;
@@ -193,7 +244,7 @@ public sealed class CreatureSpellListScheduler<TTarget>
         if (nonBlocking is not null)
         {
             foreach (Candidate candidate in nonBlocking)
-                Execute(candidate);
+                Execute(active, candidate);
         }
 
         if (blocking is null) return;
@@ -201,17 +252,18 @@ public sealed class CreatureSpellListScheduler<TTarget>
         // A zero total means priority by position: the entries are already in position order and the roll of -1 selects the first one.
         if (blocking.Count > 1 && sum != 0) Shuffle(blocking);
         long roll = sum == 0 ? -1 : _random.NextInt64(0, sum);
-        while (blocking.Count > 0)
+        bool success = false;
+        do
         {
             for (int k = 0; k < blocking.Count;)
             {
                 Candidate candidate = blocking[k];
-                uint probability = _active[candidate.Index].Probability;
+                uint probability = active[candidate.Index].Probability;
                 if (roll < probability)
                 {
-                    bool cast = Execute(candidate);
+                    success = Execute(active, candidate);
                     blocking.RemoveAt(k);
-                    if (cast) return;
+                    if (success && !_continueAfterCast) return;
                 }
                 else
                 {
@@ -221,13 +273,48 @@ public sealed class CreatureSpellListScheduler<TTarget>
                 roll -= probability;
             }
         }
+        while (!success && blocking.Count > 0);
     }
 
-    private bool Execute(Candidate candidate)
+    private bool Execute(CreatureSpellListEntry[] active, Candidate candidate)
     {
-        CreatureSpellListEntry entry = _active[candidate.Index];
-        if (!_host.TryCast(entry.SpellId, candidate.Target)) return false;
-        _readyAtMs[candidate.Index] = _nowMs + RollRange(entry.RepeatMin, entry.RepeatMax);
+        if (!ReferenceEquals(active, _active)) return false; // a script of this tick bound another list: the rest of the tick's choices are void
+
+        int index = candidate.Index;
+        CreatureSpellListEntry entry = active[index];
+        _pendingRepeatMs[index] = null;
+        _castRepeatMs = null;
+        _castingIndex = index;
+        bool cast;
+        try
+        {
+            cast = _host.TryCast(entry.SpellId, candidate.Target);
+        }
+        finally
+        {
+            _castingIndex = -1;
+        }
+
+        if (!cast) return false;
+        if (!ReferenceEquals(active, _active))
+        {
+            _host.OnCast(entry, candidate.Target);
+            return true;
+        }
+
+        // An instant spell asked for its cooldown inside the cast. A spell with a cast time asks when it completes, so the roll waits for it.
+        uint repeat;
+        if (_castRepeatMs is { } rolled)
+        {
+            repeat = rolled;
+        }
+        else
+        {
+            repeat = RollRange(entry.RepeatMin, entry.RepeatMax);
+            _pendingRepeatMs[index] = repeat;
+        }
+
+        _readyAtMs[index] = _nowMs + repeat;
         _host.OnCast(entry, candidate.Target);
         return true;
     }

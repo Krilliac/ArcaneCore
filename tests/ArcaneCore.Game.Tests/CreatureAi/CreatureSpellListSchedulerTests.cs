@@ -48,6 +48,7 @@ public sealed class CreatureSpellListSchedulerTests
         public HashSet<uint> Refused { get; } = [];
         public HashSet<uint> NoTarget { get; } = [];
         public HashSet<uint> NotReady { get; } = [];
+        public HashSet<uint> NoAutocast { get; } = [];
         public HashSet<int> ConditionFalse { get; } = [];
         public List<uint> Casts { get; } = [];
         public List<Marker?> CastTargets { get; } = [];
@@ -57,7 +58,12 @@ public sealed class CreatureSpellListSchedulerTests
         public List<uint> TargetIdsAsked { get; } = [];
         public Marker Victim { get; } = new();
 
+        /// <summary>Runs inside TryCast, as the spell system's cooldown step does for an instant spell.</summary>
+        public Action<uint>? DuringCast { get; set; }
+
         public bool IsSpellReady(uint spellId) => !NotReady.Contains(spellId);
+
+        public bool CanAutocast(uint spellId) => !NoAutocast.Contains(spellId);
 
         public bool IsCombatConditionSatisfied(int combatCondition, uint spellId)
         {
@@ -75,6 +81,7 @@ public sealed class CreatureSpellListSchedulerTests
         public bool TryCast(uint spellId, Marker? target)
         {
             if (Refused.Contains(spellId)) return false;
+            DuringCast?.Invoke(spellId);
             Casts.Add(spellId);
             CastTargets.Add(target);
             return true;
@@ -130,7 +137,7 @@ public sealed class CreatureSpellListSchedulerTests
         rows.Add(row);
 
         CreatureSpellList withTarget = List(0, 0, Entry(0, 10, target: 150));
-        CreatureSpellList withHardcoded = List(1, 0, Entry(0, 11, target: CreatureSpellListTargets.CurrentNotAlone));
+        CreatureSpellList withHardcoded = new(2, "test", 0, 0, [Entry(0, 11, target: CreatureSpellListTargets.CurrentNotAlone)]);
         CreatureSpellListCatalog catalog = new([withTarget, withHardcoded], rows);
         Assert.Same(row, catalog.FindTargeting(150));
         Assert.Equal(CreatureSpellListTargetingType.Hardcoded, catalog.FindTargeting(CreatureSpellListTargets.CurrentNotAlone)?.Type);
@@ -411,6 +418,93 @@ public sealed class CreatureSpellListSchedulerTests
         Assert.False(s.HasSpells);
         Assert.False(s.Update(1200));
         Assert.Empty(host.Casts);
+    }
+
+    [Fact]
+    public void Tick_SpellTheAiMayNotAutocast_IsSkipped()
+    {
+        FakeHost host = new();
+        host.NoAutocast.Add(11);
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0, Entry(1, 11), Entry(2, 22)));
+        s.Update(0);
+        Assert.Equal([22u], host.Casts);
+    }
+
+    [Fact]
+    public void Tick_ContinueAfterCast_WalksTheRemainingBlockingEntries()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = new(host, new ScriptedRandom(), continueAfterCast: true);
+        s.Bind(List(0, 0, Entry(1, 11), Entry(2, 22)));
+        s.EnterCombat();
+        s.Update(0);
+        Assert.Equal([11u, 22u], host.Casts); // the roll stays below every later zero weight, as in the cmangos loop
+    }
+
+    [Fact]
+    public void TryGetSpellCooldown_InsideTheCast_RollsOnce_ForTheSpellSystemAndTheEntryTimer()
+    {
+        FakeHost host = new();
+        ScriptedRandom random = new();
+        CreatureSpellListScheduler<Marker> s = new(host, random);
+        s.Bind(List(0, 0, new CreatureSpellListEntry(0, 11, CreatureSpellListFlags.None, 1, 0, 100, 0, 0, 0, 2000, 3000)));
+        s.EnterCombat();
+        uint seen = 0;
+        host.DuringCast = spell =>
+        {
+            Assert.True(s.TryGetSpellCooldown(spell, out seen, out bool category));
+            Assert.False(category);
+        };
+        random.Longs.Enqueue(2500);
+        s.Update(0);
+        Assert.Equal(2500u, seen);
+        Assert.Single(random.LongRanges); // one draw served both
+
+        s.Update(1200);
+        s.Update(1200); // 2400 ms: inside the 2500 ms repeat
+        Assert.Single(host.Casts);
+        s.Update(1200);
+        Assert.Equal(2, host.Casts.Count);
+    }
+
+    [Fact]
+    public void TryGetSpellCooldown_AfterACastTime_TakesTheRollOfTheCast_ThenRollsFresh()
+    {
+        FakeHost host = new();
+        ScriptedRandom random = new();
+        CreatureSpellListScheduler<Marker> s = new(host, random);
+        s.Bind(List(0, 0, new CreatureSpellListEntry(0, 11, CreatureSpellListFlags.CategoryCooldown, 1, 0, 100, 0, 0, 0, 2000, 3000)));
+        s.EnterCombat();
+        random.Longs.Enqueue(2200);
+        s.Update(0); // the spell has a cast time: nothing asked for the cooldown inside TryCast
+
+        Assert.True(s.TryGetSpellCooldown(11, out uint first, out bool category));
+        Assert.Equal(2200u, first);
+        Assert.True(category);
+
+        random.Longs.Enqueue(2900); // another cast of the spell, by a script say
+        Assert.True(s.TryGetSpellCooldown(11, out uint second, out _));
+        Assert.Equal(2900u, second);
+
+        Assert.False(s.TryGetSpellCooldown(99, out uint none, out _));
+        Assert.Equal(0u, none);
+    }
+
+    [Fact]
+    public void Tick_AScriptBindsAnotherListInsideTheCast_TheOldTickStopsCleanly()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0,
+            Entry(1, 11, flags: CreatureSpellListFlags.NonBlocking),
+            Entry(2, 22, flags: CreatureSpellListFlags.NonBlocking),
+            Entry(3, 33)));
+        host.DuringCast = _ => s.Bind(List(0, 0, Entry(1, 44)));
+        s.Update(0);
+        Assert.Equal([11u], host.Casts); // the entries chosen from the replaced list do not fire
+
+        host.DuringCast = null;
+        s.Update(1200);
+        Assert.Equal([11u, 44u], host.Casts);
     }
 
     [Fact]

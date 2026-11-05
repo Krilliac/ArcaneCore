@@ -1,9 +1,37 @@
 # Creature spell lists and the caster contract (wave 79)
 
-Status: design record. The content model and the scheduler exist (`CreatureSpellListCatalog`, `CreatureSpellListScheduler`); the data layer,
-the host adapter over `SpellSystemCreatureCaster` and the spawn/respawn/set-list binding do not (row 431 of the ultracode triage stays open).
+Status: delivered. The tables, importer and store are in `CreatureSpellListDataModule` (world schema 68), `CreatureDumpImporter` and
+`EfCreatureDataStore`; the scheduler runs on the map through `CreatureMapSystem.SpellLists.cs` and `CreatureSpellListHost`. "As delivered" below
+says how it ended up. None of this has run against a real client.
 The first part below is the wave-79 contract text, copied here so it survives the archive of its source tree; "currently" in it describes the
 tree at the time it was written (the base has since gained EventAI action 57, `SetRangedModeAction`). The second part is the rule-engine comparison.
+
+## As delivered
+
+- **Which creatures run a list.** `CreatureAI.RunsSpellList`: EventAI (with `CreatureRuleAI`) and the plain `AggressorAI`, `ReactorAI` and `GuardAI`. In cmangos every
+  UnitAI runs one; a ported script AI here keeps its own timers and does not, because a boss with both would cast everything twice. classic-db has 87 templates with a
+  list; the 19 with a `ScriptName` (the Zul'Gurub bosses among them) follow their script, whose spells are its own.
+- **Lifecycle.** A spawn, a respawn and a new AI bind the template's list, and the availability roll runs there. Aggro arms the initial cooldowns ahead of the script's
+  hook, the tick runs after the AI's update, and an evade, death or respawn resets. A reload rebinds at the creature's next tick out of combat.
+  EventAI action 60 and the rule action `creature.set_spell_list` go through `CreatureMapSystem.SetSpellList`.
+- **Cooldowns.** One roll of an entry's repeat time serves the scheduler and `SpellSystem.AddCooldown`, where it replaces the Spell.dbc recovery (or with flag 4 the category
+  recovery) when it is not 0, as cmangos Creature::AddCooldown does.
+- **Main spells.** An EventAI creature adds the ranged entries of its list to its main spells; a main spell's failed cast ends ranged mode as an EventAI one does.
+- **Alterac Valley.** `AvEventAI.ScriptSpellList` gives the wing commanders and the Ram Rider Commander the lists of
+  `sql/content/world/<provider>/0006_creature_spell_lists_av.sql`; the templates stay as imported.
+- **One blocking spell per tick** by default; `Creatures:SpellListContinueAfterCast` follows the cmangos loop instead.
+
+Limits:
+
+- **vmangos data.** `creature_template.spell_list_id` and `creature_spells` are a different layout and are not translated, so a vmangos world has no lists.
+- **World state expressions** are not imported, so a combat condition that names one stays off and is reported once per map. In classic-db those are Hakkar's
+  (conditions 1005-1009), and he runs a script AI.
+- **Unit condition variables without a model** make their term false and are reported once per map: has pet (10), has weapon (11), combo points (16), harmful aura school (23), is
+  moving (32), is interruptible (53), spell known (60), AoE immune (62), critter and totems (68-73), string id (75), player-controlled NPC (82), path fail count (84). The one classic-db
+  condition an unscripted list reaches (1221, "an enemy is casting or channeling") uses neither. The cmangos loop would treat that row as true of any enemy; see
+  `CreatureSpellListDataModule.ToUnitCondition`.
+- **Targeting flags.** A row has no range parameters, so the two range select flags never pass; no classic-db row uses them.
+- **AV commanders.** EventAI stopped Sunder Armor at five stacks with a phase; the list recasts it on its timer. Ichman's Greater Invisibility on spawn is out of combat, so no list carries it.
 
 ## Part 1: wave-79 contract (copied)
 

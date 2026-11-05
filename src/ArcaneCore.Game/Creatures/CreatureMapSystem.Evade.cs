@@ -235,6 +235,7 @@ public sealed partial class CreatureMapSystem
         creature.CalledAssistance = false;
         creature.CombatStart = null;
         creature.LeashClock = null;
+        creature.SpellLists?.Reset();
         for (int i = _pendingAssists.Count - 1; i >= 0; i--)
         {
             PendingAssist pending = _pendingAssists[i];
@@ -267,6 +268,7 @@ public sealed partial class CreatureMapSystem
         }
 
         _ai.Spells?.OnCreatureRemoved(creature);
+        creature.SpellLists = null;
         creature.AI = null;
     }
 

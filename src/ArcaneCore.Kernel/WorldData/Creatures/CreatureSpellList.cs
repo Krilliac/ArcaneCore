@@ -16,8 +16,8 @@ public enum CreatureSpellListFlags : uint
     RangedAction = 2,
 
     /// <summary>
-    /// The cast imposes the spell's category cooldown rather than its own. Metadata for the host: the scheduler never reads this flag (it runs
-    /// one repeat timer per entry either way); the host reads it from the entry when it applies the spell system cooldown after a cast.
+    /// The entry's repeat time replaces the spell's category cooldown rather than its own recovery time (cmangos Creature::AddCooldown). The
+    /// scheduler reports the flag through <see cref="CreatureSpellListEntry"/> to the spell system cooldown; its own repeat timer runs either way.
     /// </summary>
     CategoryCooldown = 4,
 
@@ -89,6 +89,9 @@ public sealed record CreatureSpellListEntry(
     /// <summary>Whether <see cref="CombatCondition"/> names a condition (cmangos skips the check for 0 and -1).</summary>
     public bool HasCombatCondition => CombatCondition is not (0 or -1);
 }
+
+/// <summary>One <c>creature_spell_list_entry</c> row: a list's name and the chances that gate its support and ranged entries.</summary>
+public sealed record CreatureSpellListHeader(uint Id, string Name, uint ChanceSupportAction, uint ChanceRangedAttack);
 
 /// <summary>One spell list: the chances that gate its support and ranged entries, and its entries in position order.</summary>
 public sealed class CreatureSpellList
@@ -171,13 +174,111 @@ public sealed class CreatureSpellListCatalog
                 throw new ArgumentException($"Spell list {list.Id} is defined twice.", nameof(lists));
             foreach (CreatureSpellListEntry entry in list.Entries)
             {
-                if (entry.TargetId >= CreatureSpellListTargets.HardcodedCount &&!_targeting.ContainsKey(entry.TargetId))
+                if (entry.TargetId >= CreatureSpellListTargets.HardcodedCount && !_targeting.ContainsKey(entry.TargetId))
                     throw new ArgumentException($"Spell list {list.Id} position {entry.Position} names missing targeting row {entry.TargetId}.", nameof(lists));
             }
         }
     }
 
+    /// <summary>The <c>combat_condition</c> and <c>unit_condition</c> rows the entries name.</summary>
+    public CreatureConditionCatalog Conditions { get; init; } = CreatureConditionCatalog.Empty;
+
     public int Count => _lists.Count;
+
+    /// <summary>
+    /// Build a catalog from database rows, leaving out and naming each row a strict catalog would refuse, so one bad row costs that row and not
+    /// the whole load (cmangos ObjectMgr::LoadCreatureSpellLists logs and skips the same kinds of row: a list without a name, an entry of an
+    /// unknown list or targeting row, a ranged or support entry whose chance is 0, an inverted time range).
+    /// </summary>
+    /// <param name="headers">The <c>creature_spell_list_entry</c> rows.</param>
+    /// <param name="entries">The <c>creature_spell_list</c> rows with the list each belongs to.</param>
+    /// <param name="targeting">The <c>creature_spell_targeting</c> rows.</param>
+    /// <param name="conditions">The condition rows, or null for none.</param>
+    /// <param name="skipped">Told why each left-out row was refused.</param>
+    public static CreatureSpellListCatalog FromRows(
+        IEnumerable<CreatureSpellListHeader> headers,
+        IEnumerable<(uint ListId, CreatureSpellListEntry Entry)> entries,
+        IEnumerable<CreatureSpellListTargeting> targeting,
+        CreatureConditionCatalog? conditions,
+        Action<string> skipped)
+    {
+        ArgumentNullException.ThrowIfNull(headers);
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(targeting);
+        ArgumentNullException.ThrowIfNull(skipped);
+
+        Dictionary<uint, CreatureSpellListTargeting> rows = [];
+        foreach (CreatureSpellListTargeting row in targeting)
+        {
+            if (row.Type > CreatureSpellListTargetingType.Support)
+                skipped($"creature_spell_targeting {row.Id} has unknown type {(uint)row.Type}.");
+            else if (!rows.TryAdd(row.Id, row))
+                skipped($"creature_spell_targeting {row.Id} is defined twice.");
+        }
+
+        Dictionary<uint, CreatureSpellListHeader> lists = [];
+        foreach (CreatureSpellListHeader header in headers)
+        {
+            if (header.Name.Length == 0)
+                skipped($"creature_spell_list_entry {header.Id} has no name.");
+            else if (header.ChanceSupportAction > 100 || header.ChanceRangedAttack > 100)
+                skipped($"creature_spell_list_entry {header.Id} has a chance above 100.");
+            else if (!lists.TryAdd(header.Id, header))
+                skipped($"creature_spell_list_entry {header.Id} is defined twice.");
+        }
+
+        Dictionary<uint, Dictionary<uint, CreatureSpellListEntry>> kept = [];
+        foreach ((uint listId, CreatureSpellListEntry entry) in entries)
+        {
+            string where = $"creature_spell_list {listId} position {entry.Position}";
+            if (!lists.TryGetValue(listId, out CreatureSpellListHeader? header))
+            {
+                skipped($"{where}: the list does not exist.");
+            }
+            else if (entry.SpellId == 0)
+            {
+                skipped($"{where}: no spell.");
+            }
+            else if (entry.TargetId >= CreatureSpellListTargets.HardcodedCount && !rows.ContainsKey(entry.TargetId))
+            {
+                skipped($"{where}: targeting row {entry.TargetId} does not exist.");
+            }
+            else if ((entry.Flags & CreatureSpellListFlags.RangedAction) != 0 && header.ChanceRangedAttack == 0)
+            {
+                skipped($"{where}: a ranged entry, but ChanceRangedAttack is 0.");
+            }
+            else if ((entry.Flags & CreatureSpellListFlags.SupportAction) != 0 && header.ChanceSupportAction == 0)
+            {
+                skipped($"{where}: a support entry, but ChanceSupportAction is 0.");
+            }
+            else if (entry.InitialMin > entry.InitialMax || entry.RepeatMin > entry.RepeatMax)
+            {
+                skipped($"{where}: a minimum above its maximum.");
+            }
+            else if (entry.Availability > 100)
+            {
+                skipped($"{where}: availability above 100.");
+            }
+            else
+            {
+                if (!kept.TryGetValue(listId, out Dictionary<uint, CreatureSpellListEntry>? positions))
+                    kept[listId] = positions = [];
+                if (!positions.TryAdd(entry.Position, entry))
+                    skipped($"{where}: the position is defined twice.");
+            }
+        }
+
+        List<CreatureSpellList> built = new(lists.Count);
+        foreach (CreatureSpellListHeader header in lists.Values)
+        {
+            IEnumerable<CreatureSpellListEntry> rowsOfList = kept.TryGetValue(header.Id, out Dictionary<uint, CreatureSpellListEntry>? positions)
+                ? positions.Values
+                : [];
+            built.Add(new CreatureSpellList(header.Id, header.Name, header.ChanceSupportAction, header.ChanceRangedAttack, rowsOfList));
+        }
+
+        return new CreatureSpellListCatalog(built, rows.Values) { Conditions = conditions ?? CreatureConditionCatalog.Empty };
+    }
 
     /// <summary>The targeting row with this id, or null (the hardcoded ids 0 to 7 have a row only when the data supplies one).</summary>
     public CreatureSpellListTargeting? FindTargeting(uint id) => _targeting.GetValueOrDefault(id);
