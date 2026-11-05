@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;

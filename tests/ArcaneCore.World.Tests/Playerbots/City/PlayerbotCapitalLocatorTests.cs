@@ -36,7 +36,7 @@ public sealed class PlayerbotCapitalLocatorTests : IDisposable
             GridHeight = 20f,
             AreaFlags = [.. Enumerable.Repeat((ushort)1000, 256)],
         }.Build());
-        var registry = new MapRegistry([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", "")]);
+        var registry = new MapRegistry([new MapTemplate(0, 0, MapType.Common, TerrainZone, 0, 0, -1, 0, 0, "Eastern Kingdoms", "")]);
         _areas = new AreaTable(
         [
             new AreaTemplate(TerrainZone, 0, 0, 0, 0, 1, "Terrain Zone", 0, 0),
@@ -94,8 +94,24 @@ public sealed class PlayerbotCapitalLocatorTests : IDisposable
     [Fact]
     public void Locate_AMissingTile_IsUnknown_NotTheMapsLinkedZone()
     {
+        // The map's linked zone resolves (TerrainZone), so only the missing-tile guard makes this (0, 0).
         var locator = Locator(WmoAreaTable.Empty, null);
         Assert.Equal((0u, 0u), locator.Locate(0, -600f, -600f, 5f)); // tile (33, 33) has no file
+    }
+
+    [Fact]
+    public void Locate_AMissingTile_WithAMappedWmoGroup_IsTheGroupsArea()
+    {
+        var models = new FakeModels(Group());
+        var locator = Locator(Rows(), models);
+        Assert.Equal((CityArea, CityArea), locator.Locate(0, -600f, -600f, 5f)); // tile (33, 33) has no file
+        Assert.Equal([6f], models.AskedZ);
+    }
+
+    [Fact]
+    public void Locate_AMissingTile_WithAGroupThatHasNoAreaRow_IsUnknown()
+    {
+        Assert.Equal((0u, 0u), Locator(Rows(areaId: 0), new FakeModels(Group())).Locate(0, -600f, -600f, 5f));
     }
 
     [Fact]
