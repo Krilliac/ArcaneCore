@@ -1593,8 +1593,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// <paramref name="arguments"/> with <see cref="StandbyArgument"/> added at the end (when <paramref name="standby"/> and it is not already a word of the line)
-    /// or removed from the end (when not). Only a trailing occurrence is ever removed, which is the one this supervisor appends; an occurrence an operator wrote
-    /// into the middle of the configured arguments is left alone.
+    /// or removed (when not). Every occurrence of the word is removed wherever it stands, because <c>tools/ops/live/start-cluster.ps1</c> writes it in the middle of
+    /// the line and a leftover would bring the promoted child back as a standby on its next launch. The rest of the line is left byte for byte as it was.
     /// </summary>
     internal static string WithStandbyArgument(string? arguments, bool standby)
     {
@@ -1606,10 +1606,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 : text.Length == 0 ? StandbyArgument : text + " " + StandbyArgument;
         }
 
-        if (string.Equals(text, StandbyArgument, StringComparison.Ordinal))
-            return string.Empty;
+        string padded = $" {text} ";
+        string word = $" {StandbyArgument} ";
+        while (padded.Contains(word, StringComparison.Ordinal))
+            padded = padded.Replace(word, " ", StringComparison.Ordinal);
 
-        return text.EndsWith(" " + StandbyArgument, StringComparison.Ordinal) ? text[..^(StandbyArgument.Length + 1)] : text;
+        return padded.Length <= 2 ? string.Empty : padded[1..^1];
     }
 
     /// <summary>Sets the standby role of <paramref name="entry"/> and keeps its launch arguments in step. Call under <c>_gate</c>.</summary>

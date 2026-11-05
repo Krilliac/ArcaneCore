@@ -133,7 +133,7 @@ public sealed class SupervisorStandbyPromotionTests
         public bool TryKill(int processId) => throw new InvalidOperationException("no process may be killed by this test");
     }
 
-    private static ClusterHostSupervisor NewPersistingSupervisor(ClusterSupervisorOptions options, ScriptedLauncher launcher, string statePath)
+    private static ClusterHostSupervisor NewPersistingSupervisor(ClusterSupervisorOptions options, ISupervisedProcessLauncher launcher, string statePath)
     {
         var delays = new ManualDelays { AutoComplete = ManualDelays.IsBackoff };
         return new ClusterHostSupervisor(
@@ -233,6 +233,113 @@ public sealed class SupervisorStandbyPromotionTests
             restarted.ReconcileOrphans();
             Assert.False(restarted.GetSnapshot(Active).Standby);
             Assert.True(restarted.GetSnapshot(StandbyName).Standby);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    // The argument order tools/ops/live/start-cluster.ps1 produces for a standby: the standby argument stands in the middle of the line, not at its end.
+    private const string ProductionStandbyArguments = "--s --Cluster:Fencing:Shard=worker:EK --Cluster:Worker:Standby=true --Cluster:Handoff:Enabled=true --Node:Role=worker --Admin:Port=18001";
+
+    private static ClusterSupervisorOptions ProductionOrderOptions()
+    {
+        ClusterSupervisorOptions o = SlotOptions();
+        o.Processes[Active].RealmId = 0;
+        o.Processes[StandbyName].Arguments = ProductionStandbyArguments;
+        return o;
+    }
+
+    private static bool HasStandbyWord(string arguments)
+        => $" {arguments} ".Contains($" {ClusterHostSupervisor.StandbyArgument} ", StringComparison.Ordinal);
+
+    /// <summary>Records the arguments of each launch, then hands the launch to the scripted launcher.</summary>
+    private sealed class ArgumentRecordingLauncher(ScriptedLauncher inner) : ISupervisedProcessLauncher
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(string Name, string Arguments)> Launched { get; } = new();
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config)
+        {
+            Launched.Enqueue((config.Name, config.Arguments));
+            return inner.Launch(config);
+        }
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config, Action<ISupervisedProcess, string, bool> onOutputLine)
+        {
+            Launched.Enqueue((config.Name, config.Arguments));
+            return inner.Launch(config, onOutputLine);
+        }
+
+        public string[] ArgumentsOf(string name) => [.. Launched.Where(l => l.Name == name).Select(l => l.Arguments)];
+    }
+
+    // Regression: the standby argument sits mid-line in what start-cluster.ps1 configures, so only a trailing removal left it in the promoted child's next launch.
+    [Fact]
+    public async Task APromotedChildWithTheStandbyArgumentMidLine_IsRelaunchedWithoutIt_AfterASwap()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-standby-midline-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            ClusterSupervisorOptions options = ProductionOrderOptions();
+            var recording = new ArgumentRecordingLauncher(new ScriptedLauncher());
+            await using ClusterHostSupervisor supervisor = NewPersistingSupervisor(options, recording, Path.Combine(dir, "children.json"));
+            await supervisor.StartProcessAsync("gateway");
+            await supervisor.StartProcessAsync(Active);
+            await supervisor.StartProcessAsync(StandbyName);
+
+            await supervisor.RestartProcessAsync(Active, standby: true); // swap: the standby process is promoted
+            Assert.False(supervisor.GetSnapshot(StandbyName).Standby);
+
+            await supervisor.DrainProcessAsync(StandbyName); // the promoted world goes down (a crash or hang relaunch starts it from the same configuration)
+            await supervisor.StartProcessAsync(StandbyName);
+
+            string[] launches = recording.ArgumentsOf(StandbyName);
+            Assert.Equal(2, launches.Length);
+            Assert.True(HasStandbyWord(launches[0]));
+            Assert.False(HasStandbyWord(launches[1]));
+            Assert.Equal("--s --Cluster:Fencing:Shard=worker:EK --Cluster:Handoff:Enabled=true --Node:Role=worker --Admin:Port=18001", launches[1]);
+            Assert.True(HasStandbyWord(recording.ArgumentsOf(Active)[^1])); // the demoted world comes back as the standby
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task APromotedChildWithTheStandbyArgumentMidLine_IsLaunchedWithoutIt_AfterASupervisorRestart()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-standby-midline-restart-" + Guid.NewGuid().ToString("N"));
+        string statePath = Path.Combine(dir, "children.json");
+        try
+        {
+            await using (ClusterHostSupervisor first = NewPersistingSupervisor(ProductionOrderOptions(), new ScriptedLauncher(), statePath))
+            {
+                await first.StartProcessAsync("gateway");
+                await first.StartProcessAsync(Active);
+                await first.StartProcessAsync(StandbyName);
+                await first.RestartProcessAsync(Active, standby: true); // the swap is persisted
+            }
+
+            ClusterSupervisorOptions fresh = ProductionOrderOptions();
+            var recording = new ArgumentRecordingLauncher(new ScriptedLauncher());
+            await using ClusterHostSupervisor restarted = NewPersistingSupervisor(fresh, recording, statePath);
+            restarted.ReconcileOrphans();
+            Assert.True(restarted.GetSnapshot(Active).Standby);
+            Assert.False(restarted.GetSnapshot(StandbyName).Standby);
+
+            await restarted.StartProcessAsync(StandbyName);
+            await restarted.StartProcessAsync(Active);
+
+            Assert.False(HasStandbyWord(Assert.Single(recording.ArgumentsOf(StandbyName))));
+            Assert.True(HasStandbyWord(Assert.Single(recording.ArgumentsOf(Active))));
         }
         finally
         {
