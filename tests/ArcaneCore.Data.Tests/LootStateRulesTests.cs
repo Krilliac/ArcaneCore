@@ -22,6 +22,8 @@ public sealed class LootStateRulesTests
 
     private static LootStateItem Quest(byte slot, params int[] allowed) => new(slot, 30, 1, true, false, false, allowed, []);
 
+    private static LootStateItem PartyQuest(byte slot, params int[] allowed) => new(slot, 31, 1, true, true, false, allowed, []);
+
     private static LootStateRecord Chest(int owner = 0, int[]? recipients = null, params LootStateItem[] items)
         => new(Key, 3000, owner, 1, false, 0, recipients ?? [Alice, Bob], items);
 
@@ -70,12 +72,25 @@ public sealed class LootStateRulesTests
     }
 
     [Fact]
-    public void QuestStack_IsOnlyForAllowedCharacters_AndLootedWhenAllTookIt()
+    public void QuestStack_IsOnlyForAllowedCharacters_AndGoneForEveryoneAfterOnePickup()
     {
+        // vmangos LootHandler.cpp:223-224: a quest item without ITEM_FLAG_PARTY_LOOT is looted for everyone once one player took it.
         LootStateRecord chest = Chest(items: [Quest(0, Alice, Bob)]);
         Assert.Null(LootStateRules.Take(chest, Carol, 0, Respawn));
         LootStateRecord afterAlice = LootStateRules.Take(chest, Alice, 0, Respawn)!;
+        Assert.True(afterAlice.Items[0].IsLooted);
+        Assert.True(afterAlice.Consumed);
+        Assert.Null(LootStateRules.Take(afterAlice, Bob, 0, Respawn));
+    }
+
+    [Fact]
+    public void PartyLootQuestStack_IsLootedWhenEveryAllowedCharacterTookIt()
+    {
+        LootStateRecord chest = Chest(items: [PartyQuest(0, Alice, Bob)]);
+        LootStateRecord afterAlice = LootStateRules.Take(chest, Alice, 0, Respawn)!;
         Assert.False(afterAlice.Items[0].IsLooted);
+        Assert.False(afterAlice.Consumed);
+        Assert.Null(LootStateRules.Take(afterAlice, Alice, 0, Respawn));
         Assert.True(LootStateRules.Take(afterAlice, Bob, 0, Respawn)!.Consumed);
     }
 

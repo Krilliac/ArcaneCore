@@ -64,7 +64,8 @@ public sealed class DireMaulInstanceTests
             goRows.Add(GameObjectTestKit.GoSpawn(goGuid++, DireMaulInstance.CrystalGenerators[i], i * 50f, Y) with { MapId = Dungeon, Z = Z });
         }
 
-        uint[] others = [DireMaulInstance.GoForcefield, DireMaulInstance.GoWarpwoodDoor, DireMaulInstance.GoPrincesChestAura];
+        uint[] others = [DireMaulInstance.GoForcefield, DireMaulInstance.GoWarpwoodDoor, DireMaulInstance.GoPrincesChestAura,
+            DireMaulInstance.GoFelvineShard];
         foreach (uint entry in others)
         {
             goRows.Add(GameObjectTestKit.GoSpawn(goGuid++, entry, 10f + goGuid, Y + 40f) with { MapId = Dungeon, Z = Z });
@@ -107,6 +108,33 @@ public sealed class DireMaulInstanceTests
             Assert.Equal(GameObjectState.Active, run.Go(DireMaulInstance.CrystalGenerators[i]).State);
             Assert.Equal(i == 4, run.Go(DireMaulInstance.GoForcefield).State == GameObjectState.Active);
         }
+    }
+
+    [Fact]
+    public void AlzzinDone_RespawnsADespawnedFelvineShard_ButSpecialDoesNot()
+    {
+        using Run run = Enter();
+        GameObject shard = run.Go(DireMaulInstance.GoFelvineShard);
+        Assert.Contains(shard.Guid, run.Data.FelvineShards);
+        run.Objects.Despawn(shard);
+        Assert.False(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Special);
+        Assert.False(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Done);
+        Assert.True(shard.IsSpawned);
+    }
+
+    [Fact]
+    public void AlzzinDone_LeavesASpawnedFelvineShardAlone()
+    {
+        using Run run = Enter();
+        GameObject shard = run.Go(DireMaulInstance.GoFelvineShard);
+        Assert.True(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Done);
+        Assert.True(shard.IsSpawned);
     }
 
     [Fact]

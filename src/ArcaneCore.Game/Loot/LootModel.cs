@@ -417,7 +417,9 @@ public sealed class LootBag
         if (item.IsQuestItem)
         {
             item.LootedBy.Add(player.Guid);
-            item.IsLooted = item.AllowedLooters.All(item.LootedBy.Contains);
+            // vmangos HandleAutostoreLootItemOpcode (LootHandler.cpp:223-224): "if (!item->freeforall) item->is_looted = true". A quest item
+            // without ITEM_FLAG_PARTY_LOOT goes to whoever takes it first; one with the flag is a copy per allowed looter.
+            item.IsLooted = !item.IsPerPlayer || item.AllowedLooters.All(item.LootedBy.Contains);
         }
         else if (item.IsPerPlayer)
         {

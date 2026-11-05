@@ -53,6 +53,53 @@ public sealed class HonorStoreTests : IAsyncLifetime
         Assert.Equal(1, await verify.Set<CharacterHonorRow>().CountAsync());
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AppendCp_RepeatedBatch_StoresEachOperationOnce(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Retried", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Retried");
+        Guid first = Guid.NewGuid(), second = Guid.NewGuid();
+        HonorCpRecord[] batch =
+        [
+            new HonorCpRecord(4, 11, 10f, 100, (byte)HonorKind.Honorable) { OperationId = first },
+            new HonorCpRecord(4, 12, 20f, 100, (byte)HonorKind.Honorable) { OperationId = second },
+        ];
+
+        await WriteAsync(cs, s => s.AppendCpAsync(id, batch));
+        await WriteAsync(cs, s => s.AppendCpAsync(id, batch)); // a retry after a lost acknowledgement
+        Assert.Equal(2, (await LoadAsync(cs, id)).Cp.Count);
+
+        // A batch that is half stored (a retry that gained a row meanwhile) adds only the new row.
+        HonorCpRecord third = new(4, 13, 30f, 101, (byte)HonorKind.Honorable) { OperationId = Guid.NewGuid() };
+        await WriteAsync(cs, s => s.AppendCpAsync(id, [.. batch, third]));
+        Assert.Equal([11u, 12u, 13u], (await LoadAsync(cs, id)).Cp.Select(r => r.VictimId));
+
+        // The same id twice in one batch is one row.
+        HonorCpRecord twin = new(4, 14, 5f, 101, (byte)HonorKind.Honorable) { OperationId = Guid.NewGuid() };
+        await WriteAsync(cs, s => s.AppendCpAsync(id, [twin, twin]));
+        Assert.Equal(4, (await LoadAsync(cs, id)).Cp.Count);
+
+        await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(cs);
+        Assert.Equal(4, await verify.Set<HonorCpRow>().CountAsync(r => r.CharacterId == id));
+        Assert.Equal(4, await verify.Set<HonorCpRow>().CountAsync(r => r.OperationId != null));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AppendCp_RowsWithoutAnOperationId_AreAlwaysAppended(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await HonorTestKit.CreateWithCharactersAsync(_databases, provider, ("Unstamped", 1, 60, 1));
+        int id = await HonorTestKit.IdOfAsync(cs, "Unstamped");
+        HonorCpRecord[] batch = [new HonorCpRecord(4, 21, 10f, 100, (byte)HonorKind.Honorable), new HonorCpRecord(4, 21, 10f, 100, (byte)HonorKind.Honorable)];
+
+        await WriteAsync(cs, s => s.AppendCpAsync(id, batch));
+        await WriteAsync(cs, s => s.AppendCpAsync(id, batch));
+        Assert.Equal(4, (await LoadAsync(cs, id)).Cp.Count);
+        await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(cs);
+        Assert.Equal(0, await verify.Set<HonorCpRow>().CountAsync(r => r.OperationId != null));
+    }
+
     [Fact]
     public void OneDecimal_RoundsExactTiesToEven_AndRefusesNonFiniteValues()
     {

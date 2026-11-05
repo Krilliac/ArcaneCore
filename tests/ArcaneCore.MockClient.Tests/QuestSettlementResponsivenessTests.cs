@@ -40,7 +40,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     private const int HeldMapTicks = 10;
 
     [Fact]
-    public async Task SettlementCapacity_EightHeldRealTurnInsLeaveTheNinthPlayerActiveAndAbleToRetry()
+    public async Task SettlementCapacity_EightHeldRealTurnInsQueueTheNinthPlayerWhoIsRewardedWhenASlotFrees()
     {
         using var deadline = new CancellationTokenSource(); // armed once the server is up (TestDeadlines): startup keeps its own bound
         CancellationToken token = deadline.Token;
@@ -109,6 +109,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 Assert.Equal(SyntheticArcaneServer.NpcGuid, status.Guid);
             }, responseSamples, token);
             Assert.Equal(QuestNpcFeature.MaxConcurrentSettlements, feature.PendingSettlementCount);
+            Assert.Equal(1, feature.QueuedSettlementCount); // queued, not refused (the status reply above came after the choice on this connection)
             Assert.Equal(QuestNpcFeature.MaxConcurrentSettlements, hold.Attempts);
             Assert.Null(feature.PendingOperationId(checked((int)ninth.Guid)));
             Assert.False(server.Services.GetRequiredService<CharacterSaveQueue>().IsHeld(checked((int)ninth.Guid)));
@@ -124,6 +125,10 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 storeAttemptsBeforeRelease = hold.Attempts,
             }));
 
+            // The reader starts only now: until here the ninth connection was read by the status query above. It asserts nothing was
+            // granted before the release and then waits for the queued turn-in's completion.
+            Task<MockQuestComplete> ninthReader = ReadCapacityRewardAsync(ninth.Connection, ninth.Guid, hold, token);
+            rewardReaders.Add(ninthReader);
             hold.Release();
             for (int index = 0; index < QuestNpcFeature.MaxConcurrentSettlements; index++)
             {
@@ -136,15 +141,13 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
                 await MockScenarios.ValidatePersistedRewardAsync(server, client.Guid, rewarded: true, count: 2, token);
             }
 
-            Assert.Equal(0, feature.PendingSettlementCount);
-            stage = "ninth player retry";
-            Task<MockQuestComplete> ninthReader = ReadCapacityRewardAsync(ninth.Connection, ninth.Guid, hold, token);
-            rewardReaders.Add(ninthReader);
-            await MockScenarios.ChooseRewardAsync(ninth.Connection, 1, token);
+            stage = "queued ninth player rewarded without a retry";
             ValidateCapacityReward(await ninthReader.WaitAsync(token));
+            await feature.WaitForSettlementAsync(checked((int)ninth.Guid), token);
             await MockScenarios.ValidatePersistedRewardAsync(server, ninth.Guid, rewarded: true, count: 2, token);
             Assert.Equal(QuestNpcFeature.MaxConcurrentSettlements + 1, hold.Attempts);
             Assert.Equal(0, feature.PendingSettlementCount);
+            Assert.Equal(0, feature.QueuedSettlementCount);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

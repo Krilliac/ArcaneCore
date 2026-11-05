@@ -37,6 +37,7 @@ public sealed class LocationDumpImporter
 
     private readonly SpecKeyReader _keys = new();
     private readonly Dictionary<uint, (int Patch, AreaTriggerTeleportRow Row)> _portals = [];
+    private readonly Dictionary<uint, PortalRequirementColumns> _portalRequirements = [];
     private readonly Dictionary<uint, GameTeleRow> _teleports = [];
     private readonly Dictionary<(uint Id, uint Quest), AreaTriggerQuestRow> _questTriggers = [];
     private readonly MapDiagnostics _diagnostics = new();
@@ -130,7 +131,23 @@ public sealed class LocationDumpImporter
         return portals.Count;
     }
 
-    /// <summary>Refresh entry requirements on matching portals without replacing a world's destinations or custom rows.</summary>
+    /// <summary>The entry requirement columns a dump row carried with a value (a column the dump lacks, or holds NULL, reads as 0 in the mapped row).</summary>
+    [Flags]
+    private enum PortalRequirementColumns
+    {
+        None = 0,
+        Level = 1,
+        Item = 2,
+        Item2 = 4,
+        QuestDone = 8,
+        Condition = 16,
+    }
+
+    /// <summary>
+    /// Refresh entry requirements on matching portals without replacing a world's destinations or custom rows. Only the requirement columns the
+    /// dump carries are written: a dump without <c>required_item2</c> (or whose condition column has another name) would otherwise zero the
+    /// requirement a world already has.
+    /// </summary>
     public async Task<int> RefreshPortalRequirementsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
@@ -145,11 +162,17 @@ public sealed class LocationDumpImporter
             if (!existing.TryGetValue(row.Id, out AreaTriggerTeleportRow? target))
                 continue;
 
-            target.RequiredLevel = row.RequiredLevel;
-            target.RequiredItem = row.RequiredItem;
-            target.RequiredItem2 = row.RequiredItem2;
-            target.RequiredQuestDone = row.RequiredQuestDone;
-            target.RequiredCondition = row.RequiredCondition;
+            PortalRequirementColumns carried = _portalRequirements.GetValueOrDefault(row.Id);
+            if ((carried & PortalRequirementColumns.Level) != 0)
+                target.RequiredLevel = row.RequiredLevel;
+            if ((carried & PortalRequirementColumns.Item) != 0)
+                target.RequiredItem = row.RequiredItem;
+            if ((carried & PortalRequirementColumns.Item2) != 0)
+                target.RequiredItem2 = row.RequiredItem2;
+            if ((carried & PortalRequirementColumns.QuestDone) != 0)
+                target.RequiredQuestDone = row.RequiredQuestDone;
+            if ((carried & PortalRequirementColumns.Condition) != 0)
+                target.RequiredCondition = row.RequiredCondition;
         }
 
         return await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -188,5 +211,28 @@ public sealed class LocationDumpImporter
         }
 
         _portals[key[0]] = (patch, s_portalMapper.Map(row, _diagnostics));
+        _portalRequirements[key[0]] = RequirementColumnsOf(row);
+    }
+
+    private static PortalRequirementColumns RequirementColumnsOf(DumpRow row)
+    {
+        PortalRequirementColumns carried = PortalRequirementColumns.None;
+        for (int i = 0; i < row.Columns.Count && i < row.Values.Count; i++)
+        {
+            if (row.Values[i] is null)
+                continue;
+
+            carried |= RowMapper<AreaTriggerTeleportRow>.Normalize(row.Columns[i]) switch
+            {
+                "requiredlevel" => PortalRequirementColumns.Level,
+                "requireditem" => PortalRequirementColumns.Item,
+                "requireditem2" => PortalRequirementColumns.Item2,
+                "requiredquestdone" => PortalRequirementColumns.QuestDone,
+                "requiredcondition" or "conditionid" => PortalRequirementColumns.Condition,
+                _ => PortalRequirementColumns.None,
+            };
+        }
+
+        return carried;
     }
 }
