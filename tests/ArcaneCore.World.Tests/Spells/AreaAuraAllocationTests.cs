@@ -216,6 +216,8 @@ internal sealed class AreaAuraGroupKit : IDisposable
 
     public GroupManager Groups => _feature.Context.Groups;
 
+    internal SocialFeature Social => _feature;
+
     /// <summary>The paladin casts the aura and the system ticks until every child is applied.</summary>
     public void Cast()
     {

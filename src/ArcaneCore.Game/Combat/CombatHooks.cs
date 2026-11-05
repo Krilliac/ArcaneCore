@@ -91,7 +91,7 @@ public class CombatHooks
 
     /// <summary>
     /// The group test the free-for-all rule needs (vmangos Player::IsInRaidWith): two players of one group stay friends in an arena.
-    /// Per world; without one nobody is grouped. Called by the social area when it attaches.
+    /// Per world; without one nobody is grouped. Called by the spell feature when it attaches and the social area is present.
     /// </summary>
     public static void RegisterSameGroup(Maps.WorldRuntime world, Func<Player, Player, bool> sameGroup)
     {

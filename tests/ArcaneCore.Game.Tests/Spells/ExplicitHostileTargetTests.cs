@@ -214,7 +214,7 @@ public sealed class ExplicitHostileTargetTests
         kit.System.Relations = CombatHookRelations.Instance;
         CharmService.SetCharmerGuid(controlled, charmer.Guid);
 
-        // RED while Player.Team (race) decides: the Human friend and the Human under control are the same team, so the friend cannot hit it.
+        // Team (race) alone would not decide this (the base already resolves the controlling player): the Human friend and the Human under control are the same team, so the friend cannot hit it.
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(friend, Bolt, SpellCastTargets.ForUnit(controlled.Guid)));
         Assert.True(CombatHooks.Default.IsFriendly(controlled, charmer));
         Assert.False(CombatHooks.Default.IsFriendly(controlled, friend));
@@ -237,7 +237,7 @@ public sealed class ExplicitHostileTargetTests
         var reader = new PacketReader(wire.ToArray());
         SpellCastTargets fromClient = SpellCastTargets.Read(ref reader);
 
-        // RED while Player.Team decides: the controlled Human and the friend are the same team and the pet-bar cast is BAD_TARGETS.
+        // Team alone would not decide this (the base already resolves the controlling player): the controlled Human and the friend are the same team and the pet-bar cast is BAD_TARGETS.
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(controlled, Bolt, fromClient));
     }
 
@@ -278,6 +278,29 @@ public sealed class ExplicitHostileTargetTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid)));
         kit.Advance(2000);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(dueller.Guid)));
+    }
+
+    [Fact]
+    public void DestinationSelectorAtADeadAttackableTarget_IsBadTargets_UnlessTheSpellCanTargetTheDead()
+    {
+        const uint DeadRelay = 900424;
+        SpellInfo relay = Spell(Relay, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        using var kit = new SpellTestKit(relay, relay with { Id = DeadRelay, AttributesEx2 = SpellAttributesEx2.AllowDeadTarget });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, Relay, DeadRelay);
+        kit.System.Relations = CombatHookRelations.Instance;
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Relay, SpellCastTargets.ForUnit(foe.Guid)));
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, DeadRelay, SpellCastTargets.ForUnit(foe.Guid)));
     }
 
     [Fact]
