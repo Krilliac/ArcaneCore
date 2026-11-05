@@ -358,7 +358,7 @@ public sealed class PlayerbotNavigationAnomalyTests
 
     private static readonly Vector3 Bot = new(100f, 200f, 300f);
 
-    /// <summary>A flat floor at the bot's height within <paramref name="reach"/> yards of the bot, none beyond (the steep ground past it).</summary>
+    /// <summary>A flat floor one yard below the bot (its Z is <c>Bot.Z - 1</c>) within <paramref name="reach"/> yards of the bot, none beyond (the steep ground past it).</summary>
     private static Func<Vector3, Vector3?> FloorWithin(float reach)
         => point => Vector3.Distance(point with { Z = Bot.Z }, Bot) <= reach ? point with { Z = Bot.Z - 1f } : null;
 
@@ -399,6 +399,44 @@ public sealed class PlayerbotNavigationAnomalyTests
         Assert.Equal(point, noProbe);
     }
 
+    /// <summary>A floor only on the +Y side of the bot (one yard below it): the fan's 45 and 90 degree left turns from a +X retreat are grounded, the rest are not.</summary>
+    private static Vector3? FloorOnPositiveY(Vector3 point) => point.Y > Bot.Y + 5f ? point with { Z = Bot.Z - 1f } : null;
+
+    [Fact]
+    public void TheRetreatFan_TriesGroundedPointsFirst_AndTheGoalIsTheFirstGroundedOne()
+    {
+        (Vector3[] points, int[] order, Vector3 goal) = PlayerbotRetreat.ShapeFan(FloorOnPositiveY, Bot, Vector3.UnitX, 0f);
+        Assert.Equal(5, points.Length);
+        // Fan indexes: 0 = straight, 1 = +45, 2 = -45, 3 = +90, 4 = -90. Grounded: 1 and 3; the ungrounded 0, 2, 4 follow, each group in fan order.
+        Assert.Equal([1, 3, 0, 2, 4], order);
+        Assert.Equal(points[1], goal);
+        Assert.Equal(Bot.Z - 1f, goal.Z);
+        Assert.Equal(Bot.Z - 1f, points[3].Z);
+        // An ungrounded point stays the raw full run.
+        Assert.Equal(Bot + (Vector3.UnitX * PlayerbotRetreat.ExtendYards), points[0]);
+    }
+
+    [Fact]
+    public void TheRetreatFan_WithNoGroundedPoint_KeepsFanOrder_AndTheStraightPointAsGoal()
+    {
+        (Vector3[] points, int[] order, Vector3 goal) = PlayerbotRetreat.ShapeFan(_ => null, Bot, Vector3.UnitX, 0f);
+        Assert.Equal([0, 1, 2, 3, 4], order);
+        Assert.Equal(points[0], goal);
+        (Vector3[] noProbePoints, int[] noProbeOrder, Vector3 noProbeGoal) = PlayerbotRetreat.ShapeFan(null, Bot, Vector3.UnitX, 0f);
+        Assert.Equal(points, noProbePoints);
+        Assert.Equal(order, noProbeOrder);
+        Assert.Equal(goal, noProbeGoal);
+    }
+
+    [Fact]
+    public void TheRetreatFan_WithEveryPointGrounded_KeepsFanOrder_AndTheStraightPointAsGoal()
+    {
+        (Vector3[] points, int[] order, Vector3 goal) = PlayerbotRetreat.ShapeFan(p => p with { Z = Bot.Z - 1f }, Bot, Vector3.UnitX, 0f);
+        Assert.Equal([0, 1, 2, 3, 4], order);
+        Assert.Equal(points[0], goal);
+        Assert.All(points, p => Assert.Equal(Bot.Z - 1f, p.Z));
+    }
+
     /// <summary>The ground lookup itself tells a point with no qualifying floor from a grounded one (<c>GroundNear</c> hides it by returning the point).</summary>
     [Fact]
     public void TryGroundNear_IsNull_WhereGroundNearReturnsThePointAsItWas()
@@ -409,7 +447,6 @@ public sealed class PlayerbotNavigationAnomalyTests
         Assert.Equal(299f, PlayerbotNavigation.TryGroundNear((_, _, _) => 299f, null, 300f, point)!.Value.Z);
         Assert.Equal(point, PlayerbotNavigation.GroundNear((_, _, _) => float.NaN, null, 300f, point));
     }
-
 
     [Fact]
     public async Task AGoalRefusedFewerTimesInARow_IsNotReported()
