@@ -53,6 +53,32 @@ public sealed class AddonInfoFirstChanceTests
         Assert.Equal("[e] addon block is not zlib (CMF n/a, len 4); sending empty addon info", Assert.Single(log.Entries).Message);
     }
 
+    /// <summary>
+    /// A header whose CMF/FLG pair passes the multiple-of-31 check but that ZLibStream would still reject: a preset dictionary (FDICT, FLG bit 5)
+    /// and a window size above 32 KiB (CINFO above 7). Both must be refused before ZLibStream, so no first-chance exception is raised.
+    /// </summary>
+    [Theory]
+    [InlineData(0x78, 0x20)] // FDICT set; fixed up below so CMF*256+FLG stays a multiple of 31
+    [InlineData(0x88, 0x00)] // CINFO 8
+    public void ZlibHeaderWithPresetDictionaryOrOversizedWindow_RaisesNoFirstChanceException_AndAnswersEmpty(int cmf, int flg)
+    {
+        // Set FCHECK (FLG low 5 bits) so (CMF*256 + FLG) % 31 == 0 and only FDICT / CINFO make the header unusable.
+        int fcheck = 31 - ((cmf * 256 + flg) % 31);
+        flg |= fcheck == 31 ? 0 : fcheck;
+        Assert.Equal(0, (cmf * 256 + flg) % 31);
+        byte[] block = new byte[4 + 16];
+        BinaryPrimitives.WriteUInt32LittleEndian(block, 16);
+        block[4] = (byte)cmf;
+        block[5] = (byte)flg;
+        var log = new CapturingLogger<AddonInfoFirstChanceTests>();
+
+        (byte[] response, List<Exception> raised) = Record(() => AddonInfo.BuildResponse(block, log, "e"));
+
+        Assert.Empty(raised);
+        Assert.Empty(response);
+        Assert.Equal($"[e] addon block is not zlib (CMF 0x{cmf:X2}, len 20); sending empty addon info", Assert.Single(log.Entries).Message);
+    }
+
     [Fact]
     public void ValidBlock_AnswersPerRecord_WithoutFirstChanceException()
     {

@@ -4,12 +4,15 @@ using System.Text;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Cryptography;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Tests.Ops.MapFeed;
+using ArcaneCore.World.Ops.MapFeed;
 using ArcaneCore.World.Ops.RemoteAdmin;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
+using static ArcaneCore.World.Tests.Ops.Control.WorldControlPipeTests;
 
 namespace ArcaneCore.World.Tests.Ops.RemoteAdmin;
 
@@ -238,7 +241,7 @@ public sealed class RemoteAdminServerTests
     [Fact]
     public async Task AccountLogin_RequiresTheFixedPin_OfAnAccountThatHasOne()
     {
-        // The RA login skipped the second factor the realm and the web login enforce (vmangos AuthSocket.cpp:497-517).
+        // The RA login skipped the second factor the realm and the web login enforce (vmangos AuthSocket.cpp:697-749).
         await using WorldTestHost host = PartyTestHost.Start();
         await CreateAdminAsync(host, "RAPIN", AccountLockFlags.FixedPin, "1234");
         RemoteAdminServer server = NewServer(host, Options0());
@@ -305,6 +308,46 @@ public sealed class RemoteAdminServerTests
         {
             Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAMOVED secret"));
             Assert.Equal("+Logged in as RAMOVED (Administrator).", await TryLoginAsync(server, "@login RAMOVED secret 4321"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_AnAccountWithoutAFactor_DoesNotIgnoreATrailingWord()
+    {
+        // "@login u secret junk": the account has no PIN/TOTP, so the whole text is its password ("secret junk" is wrong); the last word must not be
+        // peeled off as a code that is then ignored.
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RANOFACTOR");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RANOFACTOR secret junk"));
+            Assert.Equal("+Logged in as RANOFACTOR (Administrator).", await TryLoginAsync(server, "@login RANOFACTOR secret"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_AnAccountWithAFactor_RefusesAWrongCodeAndAWordlessLine()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RAPINWORD", AccountLockFlags.FixedPin, "1234");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret"));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret 9999"));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret 1234 extra"));
+            Assert.Equal("+Logged in as RAPINWORD (Administrator).", await TryLoginAsync(server, "@login RAPINWORD secret 1234"));
         }
         finally
         {
@@ -429,5 +472,163 @@ public sealed class RemoteAdminServerTests
         Assert.Equal("127.0.0.1", options.BindAddress);
         Assert.Equal(AccountSecurity.Administrator, options.MinSecurity);
         Assert.Contains(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) && d.ImplementationType == typeof(RemoteAdminServer));
+    }
+
+    [WindowsFact]
+    public async Task ATotpCodeSpentOnTheWebLogin_IsRefusedByRemoteAdmin_BuiltFromTheSameContainer()
+    {
+        // Both real consumers come from one container: the web login (MapFeedLogin) spends a code, then a RemoteAdminServer activated from that
+        // container is shown the same code. Both fall back silently to a private checker when the container has none, so only this proves they share one.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string directory = WebAuditFile.NewDirectory();
+        try
+        {
+            var time = new FeedTestClock();
+            await using FeedWorld world = await FeedWorld.StartAsync(new FeedWorldSetup
+            {
+                Terrain = true,
+                Time = time,
+                WebLogin = true,
+                Actions = o =>
+                {
+                    o.Enabled = true;
+                    o.WebLogin = true;
+                    o.WebLoginMinSecurity = AccountSecurity.Moderator;
+                    o.AuditDirectory = directory;
+                },
+            });
+            WorldTestHost host = world.Host;
+            IServiceProvider container = host.WorldServices;
+            string secret = Totp.NewSecret();
+            await CreateAdminAsync(host, "RAXSURFACE", AccountLockFlags.Totp, secret);
+            Assert.True(Totp.TryDecodeSecret(secret, out byte[] key));
+            string code = Totp.Generate(key, time.GetUtcNow().ToUnixTimeSeconds()).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+
+            FeedClient web = await world.ConnectAsync("web");
+            await web.SendAsync($$"""{"op":"login","id":1,"user":"RAXSURFACE","password":"secret","code":"{{code}}","ip":"198.51.100.7"}""");
+            System.Text.Json.JsonElement ok = await ActionWire.ReadResultAsync(web, 1);
+            Assert.True(ok.Ok(), ok.ToString());
+
+            var registered = container.GetRequiredService<ArcaneCore.World.Ops.Accounts.SecondFactorChecker>();
+            RemoteAdminServer shared = ActivatorUtilities.CreateInstance<RemoteAdminServer>(
+                container, Options.Create(Options0()), host.Opcodes, host.World, host.Registry, Options.Create(new WorldSessionOptions()), NullLoggerFactory.Instance);
+            Assert.Same(registered, FactorOf(shared));
+            Assert.Same(registered, FactorOf(container.GetRequiredService<MapFeedLogin>()));
+
+            await shared.StartAsync(CancellationToken.None);
+            try
+            {
+                Assert.Equal("-Wrong username or password.", await TryLoginAsync(shared, "@login RAXSURFACE secret " + code));
+            }
+            finally
+            {
+                await shared.StopAsync(CancellationToken.None);
+            }
+
+            // Control: with a private checker the very same code is accepted, so the refusal above is the shared replay record and nothing else.
+            RemoteAdminServer isolated = new(Options.Create(Options0()), container.GetRequiredService<IServiceScopeFactory>(), host.Opcodes, host.World, host.Registry,
+                Options.Create(new WorldSessionOptions()), NullLoggerFactory.Instance, new ArcaneCore.World.Ops.Accounts.SecondFactorChecker());
+            await isolated.StartAsync(CancellationToken.None);
+            try
+            {
+                Assert.Equal("+Logged in as RAXSURFACE (Administrator).", await TryLoginAsync(isolated, "@login RAXSURFACE secret " + code));
+            }
+            finally
+            {
+                await isolated.StopAsync(CancellationToken.None);
+            }
+        }
+        finally
+        {
+            WebAuditFile.TryDelete(directory);
+        }
+    }
+
+    private static object? FactorOf(object consumer)
+        => consumer.GetType().GetField("_factor", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(consumer);
+
+    [Fact]
+    public void RemoteAdminAndTheWebLogin_RegisterOneSecondFactorCheckerSingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddRemoteAdmin(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        services.AddMapFeedWebLogin();
+        ServiceDescriptor descriptor = Assert.Single(services, d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));
+        Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+    }
+
+    /// <summary>Forwards every call to the real store and records the method name, so a test can compare the store work of two logins.</summary>
+    public class CallRecorder : System.Reflection.DispatchProxy
+    {
+        private object _target = null!;
+        private System.Collections.Concurrent.ConcurrentQueue<string> _calls = null!;
+
+        public static T Wrap<T>(T target, System.Collections.Concurrent.ConcurrentQueue<string> calls) where T : class
+        {
+            T proxy = Create<T, CallRecorder>();
+            var recorder = (CallRecorder)(object)proxy;
+            recorder._target = target;
+            recorder._calls = calls;
+            return proxy;
+        }
+
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args)
+        {
+            _calls.Enqueue(targetMethod!.Name);
+            try
+            {
+                return targetMethod.Invoke(_target, args);
+            }
+            catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                throw;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task OneLineLogin_DoesTheSameStoreWork_ForAFactorAccount_ANoFactorAccount_AndAnUnknownName()
+    {
+        // A stranger who knows no password must not tell accounts, or accounts with a second factor, from invented names by the work the server
+        // does (the SRP verifier, the lookups and the ban round trip all run for every name). The wrong password keeps every attempt on the
+        // pre-authentication path; two line shapes: a text without a space and a text over 128 characters that has one (a factor account splits it).
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RASPYPIN", AccountLockFlags.FixedPin, "1234");
+        await CreateAdminAsync(host, "RASPYPLAIN");
+        var calls = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var services = new ServiceCollection();
+        services.AddSingleton(CallRecorder.Wrap<IAccountStore>(host.Accounts, calls));
+        services.AddSingleton(CallRecorder.Wrap<IBanStore>(host.Bans, calls));
+        using ServiceProvider provider = services.BuildServiceProvider();
+        RemoteAdminServer server = new(Options.Create(Options0()), provider.GetRequiredService<IServiceScopeFactory>(), host.Opcodes, host.World, host.Registry,
+            Options.Create(new WorldSessionOptions()), NullLoggerFactory.Instance);
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            foreach (string shape in new[] { "wrongpw", new string('a', 100) + " " + new string('b', 40) })
+            {
+                var sequences = new List<string[]>();
+                foreach (string name in new[] { "RASPYPIN", "RASPYPLAIN", "RASPYNOBODY" })
+                {
+                    calls.Clear();
+                    Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, $"@login {name} {shape}"));
+                    sequences.Add([.. calls]);
+                }
+
+                Assert.Contains("FindByUsernameAsync", sequences[0]);
+                Assert.Contains("GetActiveAccountBanAsync", sequences[0]);
+                Assert.Equal(sequences[0], sequences[1]);
+                Assert.Equal(sequences[0], sequences[2]);
+            }
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
     }
 }

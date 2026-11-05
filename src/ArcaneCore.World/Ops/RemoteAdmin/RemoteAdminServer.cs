@@ -364,7 +364,7 @@ public sealed class RemoteAdminServer : IHostedService
                     string rest = first.Length > 6 ? first[6..].Trim() : string.Empty;
                     int space = rest.IndexOf(' ');
                     who = space < 0 ? rest : rest[..space];
-                    login = space < 0 ? null : await CheckAccountAsync(who, rest[(space + 1)..].TrimStart(), splitCode: true, automation: true, endpoint, token).ConfigureAwait(false);
+                    login = space < 0 ? null : await CheckOneLineAsync(who, rest[(space + 1)..].TrimStart(), automation: true, endpoint, token).ConfigureAwait(false);
                 }
                 else
                 {
@@ -416,33 +416,54 @@ public sealed class RemoteAdminServer : IHostedService
     }
 
     /// <summary>
-    /// Checks the one-line <c>@login user password [code]</c>: tries the whole text as the password first, then the text before the last space as the
-    /// password and the last word as the PIN/TOTP code.
+    /// Checks the one-line <c>@login user password [code]</c>. The account is looked up first to learn whether it has a PIN/TOTP: an account with a
+    /// factor takes its text split at the last space (password, then code); any other account takes the whole text as the password and a trailing
+    /// word is part of that password, never a code to ignore. The work a stranger can observe does not depend on that answer: every text, whatever the
+    /// account, then goes through the same full check (two account lookups, the SRP verifier, the ban lookup); a factor account's line without a code
+    /// carries no code, which <see cref="SecondFactorChecker.CodeAccepted"/> refuses after the password was judged.
     /// </summary>
-    private async Task<Login?> CheckAccountAsync(string name, string password, bool splitCode, bool automation, string endpoint, CancellationToken token)
+    private async Task<Login?> CheckOneLineAsync(string name, string text, bool automation, string endpoint, CancellationToken token)
     {
-        if (name.Length is 0 or > 32 || password.Length is 0 or > 128 + 16) return null;
-        Login? login = await CheckAccountAsync(name, password, code: null, automation, endpoint, token).ConfigureAwait(false);
-        int cut = password.LastIndexOf(' ');
-        if (login is null && splitCode && cut > 0 && cut < password.Length - 1)
+        if (name.Length is 0 or > 32 || text.Length is 0 or > 128 + 16) return null;
+        bool factor;
+        await using (AsyncServiceScope scope = _scopes.CreateAsyncScope())
         {
-            login = await CheckAccountAsync(name, password[..cut].TrimEnd(), password[(cut + 1)..], automation, endpoint, token).ConfigureAwait(false);
+            IAccountStore? accounts = scope.ServiceProvider.GetService<IAccountStore>();
+            if (accounts is null) return null;
+            Account? found = await accounts.FindByUsernameAsync(name, token).ConfigureAwait(false);
+            factor = found is not null && SecondFactorChecker.HasFactor(found);
         }
 
-        return login;
+        string password = text;
+        string? code = null;
+        if (factor)
+        {
+            int cut = text.LastIndexOf(' ');
+            if (cut > 0 && cut < text.Length - 1)
+            {
+                password = text[..cut].TrimEnd();
+                code = text[(cut + 1)..];
+            }
+        }
+
+        return await CheckAccountAsync(name, password, code, automation, endpoint, token).ConfigureAwait(false);
     }
 
     private async Task<Login?> CheckAccountAsync(string name, string password, string? code, bool automation, string endpoint, CancellationToken token)
     {
-        if (name.Length is 0 or > 32 || password.Length is 0 or > 128) return null;
+        // A password over the limit still does the whole check (with a stand-in that is then discarded), so the length of the text, which the
+        // split of a factor account changes, does not tell a stranger which kind of account a name is.
+        if (name.Length is 0 or > 32 || password.Length == 0) return null;
+        bool oversize = password.Length > AccountPasswordCheck.MaxPasswordLength;
+        string judged = oversize ? "x" : password;
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore? accounts = scope.ServiceProvider.GetService<IAccountStore>();
         if (accounts is null) return null;
         IBanStore? bans = scope.ServiceProvider.GetService<IBanStore>();
         TimeProvider time = scope.ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
         // The shared check (equal-time verifier, status column and ban rows, as the realm and the gateway judge them): a banned account is refused.
-        AccountCheckResult check = await AccountPasswordCheck.CheckAsync(accounts, bans, name, password, time, token).ConfigureAwait(false);
-        if (check.Account is not { } account || account.Security < _options.MinSecurity) return null;
+        AccountCheckResult check = await AccountPasswordCheck.CheckAsync(accounts, bans, name, judged, time, token).ConfigureAwait(false);
+        if (oversize || check.Account is not { } account || account.Security < _options.MinSecurity) return null;
 
         // IP bans (vmangos AuthSocket.cpp:338-352), as the realm and the web login judge them.
         string? address = AccountBanEvaluator.AddressOfEndpoint(endpoint);
@@ -453,7 +474,7 @@ public sealed class RemoteAdminServer : IHostedService
             return null;
         }
 
-        // IP lock and the second factor (vmangos AuthSocket.cpp:393-414,497-517; ArcaneCore.Realm LogonSession): an IP-locked account
+        // IP lock and the second factor (vmangos AuthSocket.cpp:414-437 IP lock, 697-749 PIN/TOTP check; ArcaneCore.Realm LogonSession): an IP-locked account
         // from another address needs a configured factor, and a configured PIN/TOTP is always required. (The realm asks for a factor only
         // when the address moved or ALWAYS_ENFORCE is set; RA, like the web login, is stricter.) The factor and the replay record are
         // the ones the web login uses (SecondFactorChecker), so a code spent there is spent here.
