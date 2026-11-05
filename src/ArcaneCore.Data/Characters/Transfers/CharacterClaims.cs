@@ -40,4 +40,11 @@ public sealed record CharacterClaimResult(CharacterClaimOutcome Outcome, Charact
 /// </summary>
 /// <param name="ReapAfter"><c>Cluster:Fencing:ReapAfterSeconds</c>.</param>
 /// <param name="IsShardLockFree">True when the advisory lock of the given worker scope can be taken, so no process holds it. The caller owns the lock probing (it holds the connection options).</param>
-public sealed record CharacterClaimReapPolicy(TimeSpan ReapAfter, Func<string, CancellationToken, Task<bool>> IsShardLockFree);
+public sealed record CharacterClaimReapPolicy(TimeSpan ReapAfter, Func<string, CancellationToken, Task<bool>> IsShardLockFree)
+{
+    /// <summary>
+    /// The newest heartbeat (unix ms) a dead-looking shard may have at <paramref name="nowMs"/> and still be reaped: a holder whose heartbeat is at or before this is stale. The claim's
+    /// reap and the read-only live-owner probe (<see cref="EfTransferDecisionStore.FindLiveOtherOwnerAsync"/>) both use this one cut-off, so they agree on what is stale.
+    /// </summary>
+    public long NewestReapableHeartbeat(long nowMs) => nowMs - (long)ReapAfter.TotalMilliseconds;
+}

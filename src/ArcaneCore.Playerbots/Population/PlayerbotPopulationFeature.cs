@@ -486,7 +486,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // The pass's durable writes (membership rows, bot creation) belong to the maintenance lease holder (writer-lock design section 4, row 7): on a clustered node that does not
         // hold it the pass would create a bot and then be refused the membership row, leaving an orphan character per pass.
         // A shed-only pass (a rush's interval pass) only parks running bots for load: it creates nothing and writes no membership row, so it runs on a non-holder too.
-        if (!shedOnly && Managed is { HoldsMaintenanceLease: false })
+        // A split worker (it owns a list of maps) runs its own pass without the lease: every read and write of a pass is of bots on its own maps, which no other worker runs; what is realm-wide
+        // (the orphan and pending-delete sweeps of the shared member table) stays with the holder, below.
+        if (!shedOnly && !IsSplit && Managed is { HoldsMaintenanceLease: false })
         {
             Publish(PopulationStatus.Idle(true, "not-holder", "this node does not hold the maintenance lease; the population pass runs on the holder"));
             return _pass = Task.CompletedTask;
@@ -505,7 +507,14 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             return _pass = Task.CompletedTask;
         }
 
-        if (input is null) return _pass = Task.CompletedTask;
+        if (input is null)
+        {
+            // An idle split worker (no allowed map) that holds the lease still runs the realm-wide sweeps; any other null capture (no managed feature, no world) has nothing to sweep.
+            if (!shedOnly && Managed is { HoldsMaintenanceLease: true, IsStopping: false } sweeper && _world is { } idleWorld && ScopeOf(idleWorld).IsEmpty)
+                return _pass = SweepOnlyAsync(sweeper);
+            return _pass = Task.CompletedTask;
+        }
+
         return _pass = Task.Run(async () =>
         {
             try
@@ -561,6 +570,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
 
         PlayerbotPopulationOptions pop = _options.Population;
+        // A world worker that owns none of the maps bots may stand on (the instances worker) has no population to run: its share of the pool is another worker's.
+        if (ScopeOf(world).IsEmpty)
+        {
+            Publish(PopulationStatus.Idle(true, "idle", "this worker owns none of the maps the population places bots on (World:Playerbots:AllowedMaps); another worker runs the population"));
+            return null;
+        }
+
         // Fresh launch places nobody (the character-create handler puts a bot at its race start): no atlas, no terrain lookup, no hold.
         PopulationZoneAtlas atlas = pop.FreshLaunch ? _atlas : AtlasFor(world, pop);
         string? terrainHold = pop.FreshLaunch ? null : TerrainHold();
@@ -616,6 +632,12 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly, facts, pop.ValueRouting ? _zoneValue : null);
     }
 
+    /// <summary>The allowed maps this process owns (every one when nothing is withheld, the combined behaviour); safe from any thread.</summary>
+    private PopulationMapScope ScopeOf(WorldRuntime world) => new(world.Ownership, _options.AllowedMaps);
+
+    /// <summary>True when this world owns a list of maps (a split cluster worker); false in combined mode, where every map is owned.</summary>
+    private bool IsSplit => _world is { } world && !world.Ownership.OwnsEverything;
+
     /// <summary>
     /// The atlas for the area table and graveyards in force, rebuilt when either is replaced (a content reload), the maps/exclusions
     /// change, or the terrain lookup of the graveyards (<see cref="StartLocating"/>) has come in.
@@ -628,11 +650,12 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
     /// </summary>
     private PopulationZoneAtlas AtlasFor(WorldRuntime world, PlayerbotPopulationOptions pop)
     {
+        uint[] ownedMaps = ScopeOf(world).Maps;
         AreaTable areas = WorldMaps.Of(world).Areas;
         GraveyardCatalog graveyards = WorldGraveyards.Of(world).Catalog;
         CreatureContent? creatures = services.GetService<CreatureWorldFeature>()?.Content;
         // The creature definitions version: `.reload creature_template` swaps templates (levels, factions) in the same content.
-        string key = string.Join(',', _options.AllowedMaps) + "|" + string.Join(',', pop.ExcludedZones) + "|" + pop.CreatureSurveyRadius
+        string key = string.Join(',', ownedMaps) + "|" + string.Join(',', pop.ExcludedZones) + "|" + pop.CreatureSurveyRadius
             + "|" + creatures?.DefinitionsVersion;
         bool sourcesChanged = !ReferenceEquals(areas, _atlasAreas) || !ReferenceEquals(graveyards, _atlasGraveyards)
             || !ReferenceEquals(creatures, _atlasCreatures) || key != _atlasKey;
@@ -662,7 +685,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
 
         PopulationLocated? located = _located;
-        _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, _options.AllowedMaps, new HashSet<uint>(pop.ExcludedZones),
+        _atlas = PopulationZoneAtlas.Build(areas.All, graveyards, ownedMaps, new HashSet<uint>(pop.ExcludedZones),
             located is null ? null : l => located.Where.GetValueOrDefault(l.Id),
             located is null || located.Creatures.Count == 0 ? null : (l, t) => located.Creatures.GetValueOrDefault((l.Id, t)),
             pop.SpawnsPerBot, _capacity);
@@ -806,7 +829,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         string key = fake is not null
             ? "fake|" + CapacitySurveyorVersion + "|" + RuntimeHelpers.GetHashCode(areas)
-            : string.Join(',', _options.AllowedMaps) + "|" + creatures!.DefinitionsVersion + "|" + RuntimeHelpers.GetHashCode(areas)
+            : string.Join(',', ScopeOf(world).Maps) + "|" + creatures!.DefinitionsVersion + "|" + RuntimeHelpers.GetHashCode(areas)
                 + "|" + RuntimeHelpers.GetHashCode(creatures);
         if (key == _capacityKey) return;
         _capacityKey = key;
@@ -820,7 +843,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (services.GetService<GameEventFeature>()?.Service?.Rows is { } rows)
             foreach ((int signedEvent, IReadOnlyList<uint> guids) in rows.Creatures)
                 if (signedEvent > 0) gated.UnionWith(guids);
-        uint[] maps = [.. _options.AllowedMaps];
+        uint[] maps = ScopeOf(world).Maps;
         _capacityTask = Task.Factory.StartNew(() =>
         {
             PopulationSpawnCapacity? result = null;
@@ -906,7 +929,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         TerrainTile tile = TerrainTile.Empty;
         try
         {
-            return PopulationCreatureSurvey.CountSurface(ordered,
+            // A spawn on a map another worker owns is that worker's to count: this process cannot create the map for the indoor test.
+            return PopulationCreatureSurvey.CountSurface(ordered.Where(spawn => world.Owns(spawn.MapId)),
                 spawn =>
                 {
                     if (TerrainTile.TileOf(spawn.X, spawn.Y) is not { } at) return 0;
@@ -1051,11 +1075,83 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         return built;
     }
 
+    /// <summary>
+    /// Read the population's membership and run the realm-wide sweeps of the shared member table: a member whose bot or character is gone is deleted (an orphan), and the pending-deletion
+    /// members are retried. Both are written only by the maintenance lease holder (<paramref name="maintenanceHolder"/>). The members are read BEFORE the registry, so a bot created between the
+    /// two reads (registry row and member row committed) is never taken for an orphan: a member read earlier is always in the later registry read.
+    /// </summary>
+    private async Task<(Dictionary<Guid, ManagedPlayerbot> Known, Dictionary<Guid, PlayerbotPopulationMember> Members, HashSet<Guid> PendingIds)> ReadMembershipAsync(
+        ManagedPlayerbotFeature managed, IServiceProvider scoped, IPlayerbotPopulationStore store, bool maintenanceHolder, CancellationToken ct)
+    {
+        // The holder also takes the journal rows of creates that died on another worker (split cluster; a no-op elsewhere, rate limited, never throws).
+        if (maintenanceHolder) await managed.SweepStaleProvisionsAsync(ct).ConfigureAwait(false);
+        IReadOnlyList<PlayerbotPopulationMember> stored = await store.LoadAllAsync(ct).ConfigureAwait(false);
+        IReadOnlyList<ManagedPlayerbot> registered = await scoped.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(ct).ConfigureAwait(false);
+        var known = registered.ToDictionary(b => b.BotId);
+        var members = new Dictionary<Guid, PlayerbotPopulationMember>();
+        foreach (PlayerbotPopulationMember member in stored)
+        {
+            // The bot or its character is gone (the character delete cleanup removes the row; a registry loss leaves it behind).
+            if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
+            else if (maintenanceHolder) await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
+        }
+
+        // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
+        // PopulationCounts, so not in any band either, even when a restart restored the bot and it is running for a moment).
+        var pendingIds = new HashSet<Guid>();
+        foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
+        {
+            members.Remove(pending.BotId);
+            pendingIds.Add(pending.BotId);
+            // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
+            if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
+            if (maintenanceHolder) await TryDeletePendingAsync(managed, store, pending.BotId, null, ct).ConfigureAwait(false);
+        }
+
+        // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
+        foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
+        foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
+        return (known, members, pendingIds);
+    }
+
+    /// <summary>
+    /// A worker that owns none of the maps bots stand on has no population to run, but when it holds the maintenance lease (<c>-LeaseHolder instances</c>) the orphan and pending-delete sweeps of the
+    /// shared member table are still its to run: nobody else writes them, and pending rows would hold registry slots (MaxRegisteredBots) for good. Runs those sweeps and nothing else.
+    /// The lease is read live every pass, so a lease that moves here after a restart is picked up on the next pass (the pending rows are in the store, not in this process).
+    /// </summary>
+    private Task SweepOnlyAsync(ManagedPlayerbotFeature managed) => Task.Run(async () =>
+    {
+        CancellationToken ct = _stop.Token;
+        try
+        {
+            await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+            IPlayerbotPopulationStore store = new SplitBrainGuardedStore(scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>(), managed);
+            await ReadMembershipAsync(managed, scope.ServiceProvider, store, maintenanceHolder: true, ct).ConfigureAwait(false);
+            Interlocked.Increment(ref _passes); // the pending-delete backoff counts passes
+        }
+        catch (ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+        {
+            // Another world owns the playerbot rows: the sweep ends quietly.
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested || _stopping || _world?.IsStopped == true)
+        {
+            // Shutdown cancellation is expected.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("playerbot.population", ex, "Playerbot population: the membership sweep of an idle worker faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
+        }
+    });
+
     private async Task RunAsync(PassInput input)
     {
         CancellationToken ct = _stop.Token;
         PlayerbotPopulationOptions pop = input.Pop;
         int effectiveTarget = PopulationBudgetController.EffectiveTarget(pop, _options.MaxBots);
+        // A split worker fills its own share of the realm-wide target (see PopulationMapScope.ShareOf), never above its own running cap (MaxBots);
+        // combined mode keeps all of it.
+        if (_world is { } scopeWorld && ScopeOf(scopeWorld) is { OwnsEverything: false } shareScope)
+            effectiveTarget = Math.Min(shareScope.ShareOf(pop.TargetOnline), Math.Max(0, _options.MaxBots));
         // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts), which leaves out
         // the pending-deletion members.
         int[] desired = new int[input.Bands.Length];
@@ -1071,34 +1167,10 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         {
             await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
             IPlayerbotPopulationStore store = new SplitBrainGuardedStore(scope.ServiceProvider.GetRequiredService<IPlayerbotPopulationStore>(), input.Managed);
-            IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
-                .LoadAllAsync(ct).ConfigureAwait(false);
-            var known = registered.ToDictionary(b => b.BotId);
             // A shed-only pass can run on a node that does not hold the maintenance lease; the membership deletes and the home sweep below are the holder's to write.
             bool maintenanceHolder = Managed is not { HoldsMaintenanceLease: false };
-            var members = new Dictionary<Guid, PlayerbotPopulationMember>();
-            foreach (PlayerbotPopulationMember member in await store.LoadAllAsync(ct).ConfigureAwait(false))
-            {
-                // The bot or its character is gone (the character delete cleanup removes the row; a registry loss leaves it behind).
-                if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
-                else if (maintenanceHolder) await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
-            }
-
-            // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
-            // PopulationCounts, so not in any band either, even when a restart restored the bot and it is running for a moment).
-            var pendingIds = new HashSet<Guid>();
-            foreach (PlayerbotPopulationMember pending in members.Values.Where(m => m.Band == PendingDeleteBand).ToArray())
-            {
-                members.Remove(pending.BotId);
-                pendingIds.Add(pending.BotId);
-                // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
-                if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
-                if (maintenanceHolder) await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
-            }
-
-            // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
-            foreach (Guid stale in _pendingRetryAt.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingRetryAt.Remove(stale);
-            foreach (Guid stale in _pendingFailures.Keys.Where(id => !pendingIds.Contains(id)).ToArray()) _pendingFailures.Remove(stale);
+            (Dictionary<Guid, ManagedPlayerbot> known, Dictionary<Guid, PlayerbotPopulationMember> members, HashSet<Guid> pendingIds) =
+                await ReadMembershipAsync(input.Managed, scope.ServiceProvider, store, maintenanceHolder, ct).ConfigureAwait(false);
 
             // A member that is gone no longer needs its start and park times.
             foreach (Guid gone in _startedAt.Keys.Where(id => !members.ContainsKey(id)).ToArray()) _startedAt.Remove(gone);
@@ -1163,7 +1235,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             int changed = 0;
             int homeChanges = 0;
             // Graduation: a start home follows its bot's level. Not in a rush batch pass (the interval passes that run beside a rush do it).
-            if (maintenanceHolder && input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
+            if ((maintenanceHolder || IsSplit) && input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
             {
                 homeChanges = await SweepStartHomesAsync(ctx, ct).ConfigureAwait(false);
             }
@@ -1335,6 +1407,67 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         logger.LogWarning("Playerbot population: {Error}", error);
     }
 
+    /// <summary>How long a bot found saved on another worker's map is left unread (milliseconds on the feature clock).</summary>
+    internal long ForeignBotMemoryMs { get; set; } = 10 * 60 * 1000;
+
+    /// <summary>The most bot records one restart choice reads on a split worker (the rest wait for the next pass).</summary>
+    internal int MaxForeignChecksPerPass { get; set; } = 512;
+
+    private readonly Dictionary<int, long> _foreignUntilMs = [];
+
+    /// <summary>
+    /// The wait before the first retry of a bot a refused start left Faulted (<c>start-failed</c>), in milliseconds; it doubles after every attempt (30, 60, 120, 240 minutes) and the
+    /// attempts stop after <see cref="FaultRetryAttempts"/> for the life of the process. Tests lower it.
+    /// </summary>
+    internal long FaultRetryBaseMs { get; set; } = 30 * 60 * 1000;
+
+    /// <summary>The most start attempts a Faulted/start-failed bot gets from the population in one process.</summary>
+    internal const int FaultRetryAttempts = 4;
+
+    private readonly Dictionary<Guid, (int Attempts, long NextAtMs)> _faultRetries = [];
+
+    /// <summary>
+    /// Split cluster only: a member left Faulted with <c>start-failed</c> (the row a start refused for another worker's live character used to leave) is started again, a few times, with a growing wait.
+    /// In combined mode no other worker can have written that fault, so a Faulted bot stays Faulted (an operator start clears it). Any other fault is never admitted by this predicate.
+    /// This is one of two ways a Faulted row reaches the restart list; the other is <see cref="IsStartable"/>, which is true for it after a restart (the startup snapshot lists every registered bot
+    /// Stopped). The attempt count and the wait therefore are not part of this predicate alone: <see cref="FaultRetryHeld"/> applies them to every Faulted candidate whichever predicate admitted it.
+    /// </summary>
+    private bool IsRetryableFault(PassContext ctx, PlayerbotPopulationMember member)
+    {
+        if (_world is not { } world || world.Ownership.OwnsEverything) return false;
+        if (!ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? row) || row.State != ManagedPlayerbotState.Faulted || row.ErrorCode != "start-failed") return false;
+        if (ctx.Input.States.TryGetValue(member.BotId, out ManagedPlayerbotState state) && state != ManagedPlayerbotState.Faulted) return false;
+        return !_faultRetries.TryGetValue(member.BotId, out (int Attempts, long NextAtMs) done)
+            || (done.Attempts < FaultRetryAttempts && ctx.Input.ClockMs >= done.NextAtMs);
+    }
+
+    /// <summary>
+    /// Split cluster only: true when the member's row is Faulted and the process already spent its attempts on it (<see cref="FaultRetryAttempts"/>) or its wait (<see cref="FaultRetryBaseMs"/>,
+    /// doubling) has not passed. Such a bot is not a restart candidate, however it was admitted (a restart makes the snapshot call a Faulted row Stopped). A Faulted bot with no attempt yet is not held.
+    /// </summary>
+    private bool FaultRetryHeld(PassContext ctx, PlayerbotPopulationMember member)
+    {
+        if (_world is not { } world || world.Ownership.OwnsEverything) return false;
+        if (!ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? row) || row.State != ManagedPlayerbotState.Faulted) return false;
+        return _faultRetries.TryGetValue(member.BotId, out (int Attempts, long NextAtMs) done)
+            && (done.Attempts >= FaultRetryAttempts || ctx.Input.ClockMs < done.NextAtMs);
+    }
+
+    /// <summary>
+    /// True for the refusals of a start that did nothing to the bot (another worker runs it, the owner of it could not be told, the whole feature is busy or stopping): they do not use an attempt.
+    /// A refusal that is not here (an owner the account store refuses, a failed start) uses one, so such a bot is bounded too.
+    /// </summary>
+    internal static bool MadeNoStartAttempt(string code)
+        => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
+            or "fleet-reset-running" or "playerbots-stopping" or "playerbots-disabled" or ManagedPlayerbotFeature.PlayerbotsDetaching;
+
+    /// <summary>An attempt was made at <paramref name="nowMs"/>: count it and set the wait before the next one.</summary>
+    private void StampFaultRetry(Guid botId, long nowMs)
+    {
+        int attempts = _faultRetries.TryGetValue(botId, out (int Attempts, long NextAtMs) done) ? done.Attempts + 1 : 1;
+        _faultRetries[botId] = (attempts, nowMs + (FaultRetryBaseMs << (attempts - 1)));
+    }
+
     private async Task<(int Started, int Created)> AddAsync(PassContext ctx, int count, CancellationToken ct)
     {
         ManagedPlayerbotFeature managed = ctx.Input.Managed;
@@ -1344,28 +1477,50 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         // The population's own stopped bots, in rotation: the one parked longest ago first, whatever its band (PopulationParking.RestartOrder).
         // A faulted bot (quarantined or disabled) is not started here: an operator start would clear its fault history, and the manager
-        // retries a quarantined bot itself. The startable, not-running members are ordered first and only then capped, so a registry of
+        // retries a quarantined bot itself. The one exception is split cluster only (IsRetryableFault): a bot a refused start left Faulted with
+        // start-failed. The startable, not-running members are ordered first and only then capped, so a registry of
         // more than 128 owned bots never hides a parked bot behind running or faulted ones.
         ICharacterStore characters = ctx.Scoped.GetRequiredService<ICharacterStore>();
-        var restart = new List<(PlayerbotPopulationMember Member, int Band)>();
+        var restart = new List<(PlayerbotPopulationMember Member, int Band, bool Retry)>();
         // A rush makes new bots only; the parked ones come back through the ordinary passes.
+        // A split worker starts only bots saved on a map it owns (the others are another worker's: a login here would be refused), and picks its 128
+        // among those, so foreign bots never take the slots. A foreign bot is remembered for ForeignBotMemoryMs so it costs no read every pass.
+        PopulationMapScope? scope = _world is { } scopeWorld && !ScopeOf(scopeWorld).OwnsEverything ? ScopeOf(scopeWorld) : null;
+        int reads = 0;
+        bool truncated = false; // the read cap ended the scan with parked bots of this worker possibly still unread
         foreach (PlayerbotPopulationMember member in PopulationParking.RestartOrder(
-            ctx.Members.Values.Where(m => ctx.Input.RushCount == 0 && !ctx.RunningNow.Contains(m.BotId) && IsStartable(ctx, m)), _parkedAt).Take(128))
+            ctx.Members.Values.Where(m => ctx.Input.RushCount == 0 && !ctx.RunningNow.Contains(m.BotId) && (IsStartable(ctx, m) || IsRetryableFault(ctx, m)) && !FaultRetryHeld(ctx, m)), _parkedAt).Take(scope is null ? 128 : int.MaxValue))
         {
+            if (scope is not null)
+            {
+                if (restart.Count >= 128) break;
+                if (reads >= MaxForeignChecksPerPass) { truncated = true; break; }
+                if (_foreignUntilMs.TryGetValue(member.CharacterId, out long until) && ctx.Input.ClockMs < until) continue;
+                reads++;
+            }
+
             CharacterRecord? character = await characters.GetByIdAsync(member.CharacterId, ct).ConfigureAwait(false);
             if (character is null) continue;
-            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level)));
+            if (scope is not null && !scope.Owns(character.MapId))
+            {
+                _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
+                continue;
+            }
+
+            // A retry is a split-cluster rule (IsRetryableFault): in combined mode a Faulted row is started as an operator's start always was.
+            bool retry = scope is not null && ctx.Known.TryGetValue(member.BotId, out ManagedPlayerbot? faulted) && faulted.State == ManagedPlayerbotState.Faulted;
+            restart.Add((member, PopulationBandPlanner.BandOf(ctx.Input.Bands, character.Level), retry));
         }
 
         // New bots are planned against the population's own bots running or waiting to be restarted (a parked bot fills its band once it
         // is back), so only a band its parked bots cannot fill gets new ones. While parked bots wait as well, such a band gets at most
         // half the pass's slots first, the rotation the rest, and creation any slots the rotation leaves: neither starves the other.
         int[] planned = (int[])ctx.Have.Clone();
-        foreach ((_, int band) in restart)
+        foreach ((_, int band, _) in restart)
             if (band >= 0) planned[band]++;
 
         bool creationFailed = false;
-        if (restart.Count > 0 && PopulationBandPlanner.NextBand(ctx.Desired, planned) >= 0)
+        if (restart.Count > 0 && !truncated && PopulationBandPlanner.NextBand(ctx.Desired, planned) >= 0)
         {
             int first = (remaining + 1) / 2;
             (int made, string? because, bool failed) = await CreateAsync(ctx, planned, first, quietWhenNothingFits: true, ct).ConfigureAwait(false);
@@ -1377,10 +1532,37 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         int failures = 0;
         bool capacity = false;
-        foreach ((PlayerbotPopulationMember member, int band) in restart)
+        foreach ((PlayerbotPopulationMember member, int band, bool retry) in restart)
         {
             if (remaining == 0 || failures >= 3) break;
-            PlayerbotOperationResult result = Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
+            PlayerbotOperationResult result;
+            if (retry)
+            {
+                // Counted when a start was really attempted, not when the bot was picked: a refusal that did nothing to the bot (MadeNoStartAttempt) uses no attempt, any other result does
+                // (a refusal that writes nothing, such as an owner the account store refuses, included, so that bot is bounded too).
+                // A start that throws (its fault row could not be written either) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
+                // the pass (the remaining restarts and every creation), so one bot whose fault row cannot be written would hold the worker's population back at each of its attempts. In split scope
+                // (the only place a retry happens) the exception is contained: logged once, counted as a failed attempt, and the pass goes on. A cancellation and a split-brain latch still end the pass.
+                bool attempted = true;
+                try
+                {
+                    result = Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false));
+                    attempted = !MadeNoStartAttempt(result.Code);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
+                {
+                    logger.LogFault("playerbot.population", ex, "Playerbot population: the retry start of {Bot} failed ({Type}: {Message}); the pass goes on", member.BotId, ex.GetType().Name, ex.Message);
+                    result = new PlayerbotOperationResult(false, "retry-faulted", member.BotId);
+                }
+                finally
+                {
+                    if (attempted) StampFaultRetry(member.BotId, ctx.Input.ClockMs);
+                }
+            }
+            else
+            {
+                result = Checked(await managed.StartAsync(member.BotId.ToString(), ct).ConfigureAwait(false));
+            }
             if (result.Success)
             {
                 started++;
@@ -1392,6 +1574,17 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 if (band >= 0) ctx.Have[band]++;
             }
             else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
+            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown)
+            {
+                // Another worker runs this bot: not a failure and nothing was written. It is left alone for a while, like a bot saved on another worker's map.
+                _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
+                if (band >= 0) planned[band]--; // it will not fill its band: a new bot may
+            }
+            else if (retry)
+            {
+                // A retry that fails again is not one of this pass's failures (the three that end it): the bot has its own attempts and waits, and the managed feature records the fault.
+                if (band >= 0) planned[band]--;
+            }
             else
             {
                 failures++;
@@ -1400,7 +1593,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
         }
 
-        if (remaining > 0 && stoppedBecause is null && !capacity && !creationFailed)
+        if (remaining > 0 && stoppedBecause is null && !capacity && !creationFailed && !truncated)
         {
             if (ctx.Input.TerrainHold is { } hold) stoppedBecause = hold;
             else
@@ -1468,9 +1661,11 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             if (ctx.Known.Count + ctx.Created >= _options.MaxRegisteredBots) return (created, "the bot registry is full (MaxRegisteredBots)", false);
             if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
             // A lease lost since the pass began: the membership write after the create would be refused and leave the new bot an orphan.
-            if (!managed.HoldsMaintenanceLease) return (created, "the maintenance lease is no longer held", false);
+            if (!IsSplit && !managed.HoldsMaintenanceLease) return (created, "the maintenance lease is no longer held", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
+            // A split worker creates only races that start on a map it owns: the new bot logs in there, and the placement stays on owned maps.
+            if (ScopeOf(world) is { OwnsEverything: false } createScope) cache = cache.Restrict(createScope.OwnsRaceStart);
             PopulationPlan? plan = null;
             Team planTeam;
             byte planRace, planClass;

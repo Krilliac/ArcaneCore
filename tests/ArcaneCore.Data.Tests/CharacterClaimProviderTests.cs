@@ -143,6 +143,70 @@ public sealed class CharacterClaimProviderTests : IAsyncLifetime
         await WriteAsync(services, 43, b);
     }
 
+    /// <summary>
+    /// The read-only live-owner probe a playerbot start asks before it writes anything: it must say "live" exactly when the claim would refuse (a fresh holder, a holder with no heartbeat, a
+    /// stale holder whose shard lock is still held, a transfer in flight) and "not live" exactly when the claim would take the character (no row, its own claim, a dead incarnation, a stale
+    /// heartbeat with the lock free). Each case is checked against the real claim, so the two cannot drift apart.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheLiveOwnerProbe_AgreesWithTheClaim_OnEveryCase(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long stale = now - (long)TimeSpan.FromMinutes(10).TotalMilliseconds;
+        var lockFree = new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(true));
+        var lockHeld = new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(false));
+
+        // No row.
+        Assert.Null(await store.FindLiveOtherOwnerAsync(50, b, lockFree));
+        // Its own claim.
+        await store.TryClaimCharacterAsync(51, b);
+        Assert.Null(await store.FindLiveOtherOwnerAsync(51, b, lockFree));
+        // A realm token claims nothing and probes nothing.
+        Assert.Null(await store.FindLiveOtherOwnerAsync(51, new CharacterOwnershipToken(CharacterOwnershipScopes.World, 1, Guid.NewGuid()), lockFree));
+
+        // A fresh holder of another scope.
+        await store.TryClaimCharacterAsync(52, a);
+        await HeartbeatAsync(services, a, now);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, lockFree));
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, null));
+
+        // A holder with no heartbeat is live whatever the lock says (the reap needs a heartbeat to be stale).
+        await store.TryClaimCharacterAsync(53, a);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(53, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(53, b, lockFree)).Outcome);
+        await HeartbeatAsync(services, a, now);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(53, b, lockFree)).Outcome);
+
+        // A stale heartbeat with the lock held: the claim refuses, so the probe must say live (it used to say not live).
+        await HeartbeatAsync(services, a, stale);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(52, b, lockHeld)).Outcome);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, lockHeld));
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, null)); // no reap policy: the claim refuses a stale holder too
+        // A stale heartbeat with the lock free: the claim would reap, so the probe says not live (and writes nothing: the claim below still has to do the reap itself).
+        Assert.Null(await store.FindLiveOtherOwnerAsync(52, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(52, b, lockFree)).Outcome);
+
+        // A transfer in flight.
+        await store.TryClaimCharacterAsync(54, a);
+        await store.CreateReservationAsync(Guid.NewGuid(), 54, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(54, b, lockFree));
+
+        // A dead incarnation: the scope was reclaimed by a restarted node, so the old holder is no live owner.
+        CharacterOwnershipToken c = await AcquireAsync(services, "c", 60); // its own shard: the reap above deactivated a's
+        await store.TryClaimCharacterAsync(55, c);
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            Assert.NotNull(await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryReclaimAsync(c, "node-restarted", Guid.NewGuid(), [60u]));
+        }
+
+        Assert.Null(await store.FindLiveOtherOwnerAsync(55, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(55, b)).Outcome);
+    }
+
     /// <summary>Begin and commit a characters transaction as the worker holding <paramref name="as"/> under the claim scope the write queues set; the fence verifies at begin.</summary>
     private static async Task WriteAsync(ServiceProvider services, int characterId, CharacterOwnershipToken @as)
     {

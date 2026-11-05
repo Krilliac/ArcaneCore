@@ -47,6 +47,13 @@ internal sealed class PopulationRaceClassCache
         return new PopulationRaceClassCache(valid, factions) { Key = KeyOf(classes) };
     }
 
+    /// <summary>The same cache without the races <paramref name="keepRace"/> refuses (a split worker keeps the races that start on a map it owns).</summary>
+    public PopulationRaceClassCache Restrict(Func<byte, bool> keepRace)
+    {
+        ArgumentNullException.ThrowIfNull(keepRace);
+        return new PopulationRaceClassCache(_valid.Where(p => keepRace(p.Race)), _raceFactions) { Key = Key };
+    }
+
     /// <summary>The classes that have at least one valid race of the team, among <paramref name="classes"/>.</summary>
     public IReadOnlyList<byte> ClassesFor(Team team, IEnumerable<uint> classes)
         => [.. classes.Select(c => (byte)c).Where(c => Races.Any(r => TeamOf(r) == team && _valid.Contains((r, c))))];

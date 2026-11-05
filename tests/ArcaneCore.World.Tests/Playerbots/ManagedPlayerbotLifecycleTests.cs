@@ -911,12 +911,31 @@ public sealed class ManagedPlayerbotLifecycleTests
         public async Task<Account> CreateAsync(Guid botId, Account account, CancellationToken cancellationToken = default)
         {
             Account created = await accounts.CreateAsync(account, cancellationToken);
-            _pending[botId] = new ManagedPlayerbotProvision(botId, created.Id, created.Username, 1);
+            // The clock the real journal stamps rows with (EfManagedPlayerbotProvisionStore): a split cluster's sweep tells a create in flight from a dead one by this age.
+            _pending[botId] = new ManagedPlayerbotProvision(botId, created.Id, created.Username, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             return created;
         }
 
+        /// <summary>Remove the journal rows of an account name behind the feature's back.</summary>
+        public void RemovePendingOutOfBand(string accountName)
+        {
+            foreach (ManagedPlayerbotProvision row in _pending.Values.Where(r => r.AccountName == accountName)) _pending.TryRemove(row.BotId, out _);
+        }
+
+        /// <summary>A journal row another worker wrote (or left behind), with the creation time the test chooses.</summary>
+        public void AddPendingOutOfBand(Guid botId, int accountId, string accountName, long createdUnix)
+            => _pending[botId] = new ManagedPlayerbotProvision(botId, accountId, accountName, createdUnix);
+
+        private int _loadPendingCalls;
+
+        /// <summary>How many times the pending rows were loaded (every reconcile loads them once).</summary>
+        public int LoadPendingCalls => Volatile.Read(ref _loadPendingCalls);
+
         public Task<IReadOnlyList<ManagedPlayerbotProvision>> LoadPendingAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.ToArray());
+        {
+            Interlocked.Increment(ref _loadPendingCalls);
+            return Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.OrderBy(row => row.CreatedUnix).ThenBy(row => row.BotId).ToArray());
+        }
 
         public Task<bool> CompleteAsync(Guid botId, int accountId, CancellationToken cancellationToken = default)
             => Task.FromResult(_pending.TryRemove(botId, out ManagedPlayerbotProvision? proof) && proof.AccountId == accountId);
@@ -1007,8 +1026,29 @@ public sealed class ManagedPlayerbotLifecycleTests
         /// <summary>Runs first in the next registrations (a test changes the world mid-creation here).</summary>
         public Action<ManagedPlayerbot>? OnCreate { get; set; }
 
+        private TaskCompletionSource? _createHeld;
+        private TaskCompletionSource _createRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// The next registration waits (before storing anything, with its journal row and character already written) until <see cref="ReleaseHeldCreate"/>; the returned task completes
+        /// when it is waiting. A create parked here is another worker's create in flight.
+        /// </summary>
+        public TaskCompletionSource HoldNextCreate()
+        {
+            _createRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _createHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public void ReleaseHeldCreate() => _createRelease.TrySetResult();
+
         public async Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
         {
+            if (Interlocked.Exchange(ref _createHeld, null) is { } createHeld)
+            {
+                createHeld.TrySetResult();
+                await _createRelease.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
+            }
+
             OnCreate?.Invoke(bot);
             if (FailNextCreate) { FailNextCreate = false; throw new InvalidOperationException("fixture-create-failure"); }
             if (Interlocked.Exchange(ref _nextCreateException, null) is { } next) throw next;
