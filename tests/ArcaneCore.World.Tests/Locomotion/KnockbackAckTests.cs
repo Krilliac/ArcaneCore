@@ -91,4 +91,42 @@ public sealed class KnockbackAckTests
         // (vmangos SetFallInformation(0), then a relocation without UpdateFallInformationIfNeed).
         Assert.False(await host.OnWorldAsync(() => player.Locomotion.IsFalling));
     }
+
+    [Fact]
+    public async Task AnAckDuringATaxiFlight_ClearsTheOrder_ButEndsNoFallAndReachesNoObserver()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient mover = await host.EnterWorldAsync("MOVER", "Mover");
+        await using WorldTestClient watcher = await host.EnterWorldAsync("WATCHER", "Watcher");
+        await mover.CollectAsync();
+        await watcher.CollectAsync();
+        Player player = await host.PlayerAsync("Mover");
+
+        // A client that holds its ack, activates a taxi and acks in flight.
+        await host.OnWorldAsync(() =>
+        {
+            player.Locomotion.FallStartZ = 120f;
+            KnockbackService.KnockBack(Spells(host), player, 0f, 7.5f, 5f);
+            player.UnitFlags |= UnitFlags.TaxiFlight;
+        });
+        await mover.ReadUntilAsync(WorldOpcode.SmsgMoveKnockBack);
+
+        await mover.SendAsync(WorldOpcode.CmsgMoveKnockBackAck, Ack(counter: 0, 1, 0, 7.5f, -5f));
+        await host.WaitForWorldAsync(() => !player.Locomotion.Pending.HasPending, "the ack to be matched");
+
+        // vmangos returns on the pending spline (MovementHandler.cpp:778), before SetFallInformation(0) (:796) and SendKnockBackToObservers (:801).
+        Assert.True(await host.OnWorldAsync(() => player.Locomotion.IsFalling));
+        Assert.DoesNotContain(await watcher.CollectThroughBarrierAsync(), p => p.Opcode == WorldOpcode.MsgMoveKnockBack);
+
+        // The same ack after the flight does both, so the silence above is the flight's gate and not a watcher that sees nothing.
+        await host.OnWorldAsync(() =>
+        {
+            player.UnitFlags &= ~UnitFlags.TaxiFlight;
+            KnockbackService.KnockBack(Spells(host), player, 0f, 7.5f, 5f);
+        });
+        await mover.ReadUntilAsync(WorldOpcode.SmsgMoveKnockBack);
+        await mover.SendAsync(WorldOpcode.CmsgMoveKnockBackAck, Ack(counter: 1, 1, 0, 7.5f, -5f));
+        await watcher.ReadUntilAsync(WorldOpcode.MsgMoveKnockBack);
+        Assert.False(await host.OnWorldAsync(() => player.Locomotion.IsFalling));
+    }
 }

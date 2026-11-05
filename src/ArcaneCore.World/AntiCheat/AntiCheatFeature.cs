@@ -205,8 +205,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             // An honoured root ack is judged before MovementControl.ApplyReal sets the Root flag, so the server does not hold the root yet; the order it
             // acknowledges is what the block is held to (a client that stops on a root order never acknowledges it with a moving block). A later root or unroot order still pending
             // exempts it, as in vmangos (MovementAnticheat.cpp:777-780 scores ROOT_MOVE only without a pending root change, after the acked order was erased).
-            // Unlike vmangos, which needs a current or last Root flag there and kicks a root ack carrying movement separately (MovementHandler.cpp:719-731),
-            // the root ack need not carry Root here: a root ack with Forward scores Physics.
+            // Unlike vmangos, which needs a current or last Root flag there and kicks an apply ack without the Root flag unless the client is jumping or falling
+            // (MovementHandler.cpp:719-731), the root ack need not carry Root here: a root ack with Forward scores Physics.
             Rooted = (acknowledgement && opcode == WorldOpcode.CmsgForceMoveRootAck && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
                 || (!(acknowledgement && opcode == WorldOpcode.CmsgForceMoveUnrootAck) && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)),
             GrantedFlags = GrantedFlags(player, state.ExplicitGrants) | extraGrants,

@@ -135,10 +135,12 @@ new baseline and last-valid position, which is the rubberband target; stored, it
 off the flight at a chosen position (the drift check then ends it). The stored-position marker does not advance either
 (`AntiCheatFeature.AfterMovement`, and the session trace shadow's): nothing notifies the checks at the end of a flight, so
 that marker is the only thing that shows the flight moved the player, and the first block afterwards re-baselines from it
-wherever the last ack arrived. A knockback ack during a flight launched nothing, so it opens no baseline and no knockback
-window. vmangos likewise runs no cheat test on an ack while a spline is pending (the `HasPendingSplineDone` gates,
-MovementHandler.cpp :489 speed, :589 flag, :683 root, :778 knockback) and erases the order first (`HandleMoveRootAck`,
-MovementHandler.cpp:671-723).
+wherever the last ack arrived. A knockback ack during a flight launched nothing: its clock is checked, but it opens no
+baseline and no knockback window, does not end a fall and is not relayed to observers as `MSG_MOVE_KNOCK_BACK`. vmangos
+likewise runs no cheat test on an ack while a spline is pending (the `HasPendingSplineDone` gates, MovementHandler.cpp :489
+speed, :589 flag, :683 root, :778 knockback) and erases the order first (`HandleMoveRootAck`, MovementHandler.cpp:671-723).
+The knockback gate returns from the handler, before `SetFallInformation(0)` (:796) and `SendKnockBackToObservers` (:801); the
+speed, flag and root gates only leave the relocation block, so those acks keep their relay here too.
 Limit: the moving test (`Translating`) is narrower than vmangos `MOVEFLAG_MASK_MOVING` (it leaves out pitch, jumping, falling
 and spline elevation), so a jump-only block under a root is not scored.
 
@@ -252,6 +254,8 @@ reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds
   judged like a movement packet (a blink or a forged flag scores; an honest ack scores nothing and its block is stored), an
   unroot ack is exempt from the rooted-while-moving check and the other acks are not. During a taxi flight each of those acks
   clears its order, is neither judged nor stored, and leaves the flight visible, so the next block is not scored.
+  `KnockbackAckTests`: a knockback ack during a flight ends no fall and reaches no observer. `SessionTraceAntiCheatTests`: in
+  the shadow too, it opens no baseline, so a blink after the flight is a Teleport line.
 
 ## Open questions
 
