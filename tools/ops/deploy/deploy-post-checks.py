@@ -125,7 +125,7 @@ def main() -> int:
     missing = [k for k, ok in checks.items() if not ok]
     require(not missing, f"the world log lacks expected lines {missing}; the run is not marked healthy and standard-processes.json is untouched")
     report["world_log_checks"] = checks
-    report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
+    report["world_log_counts"] = deploy_log_lines.log_counts(text)
     report.update(enabled_bots=enabled, max_bots=max_bots, started_bots=started, post_checks="deploy-post-checks.py",
                   healthy=True, finished=datetime.datetime.now(datetime.timezone.utc).isoformat())
     report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")

@@ -457,7 +457,7 @@ def main() -> int:
         require(not flipped, f"DesiredEnabled changed for non-population bots: {flipped[:5]}")
         text = log_text("world")
         report["world_log_checks"] = deploy_log_lines.check_log(text, args.no_transports, args.no_optional_data, args.no_elevators)
-        report["world_log_counts"] = {k: text.count(k) for k in ("unknown target map", "not existing zone id", " WARN ", " ERROR ", " FATAL ")}
+        report["world_log_counts"] = deploy_log_lines.log_counts(text)
         missing_lines = [k for k, ok in report["world_log_checks"].items() if not ok]
         if missing_lines:
             save()
