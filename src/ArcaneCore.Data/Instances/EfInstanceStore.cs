@@ -20,9 +20,10 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
         // missing instances go first. It runs after the world's claim, so under the fence it is one verified transaction.
         // In a cluster only the Instances lease holder cleans up (writer-lock design section 4, row 2): a bind committed before its instance row on one worker would be
         // deleted by another worker's boot. A node that is not the holder loads read-only.
-        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
+        // TryBeginSweep reads the fence once, before the holder check, so a release in between cannot leave the cleanup without a fence (unchecked).
+        if (LeaseFencedWrite.TryBeginSweep(leaseFences, RealmAuthorityScopes.Instances, out RealmLeaseFence? sweepFence))
         {
-            await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync(db, leaseFences, RealmAuthorityScopes.Instances, async () =>
+            await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync<bool>(db, sweepFence, async () =>
             {
                 await db.Set<CharacterInstanceRow>()
                     .Where(b => !db.Characters.Any(c => c.Id == b.CharacterId))
@@ -38,6 +39,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
                 await db.Set<GroupInstanceRow>()
                     .Where(b => !db.Characters.Any(c => c.Id == b.LeaderCharacterId) || !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
                     .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                return true;
             }, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
 

@@ -281,6 +281,11 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
                 db => new EfPetitionStore(db).SavePetitionAsync(new PetitionData(2, second, 1001, "Other", [])),
                 (db, src) => new EfPetitionStore(db, src).DeletePetitionAsync(2),
                 async db => !await db.Set<PetitionRow>().AnyAsync(p => p.Id == 2)),
+            // The charter turn-in: a guild row set and the petition delete in one verified transaction. Its guild uses the second character, free by this point (the guild delete site above removed guild 2).
+            new("social: petition complete (guild created, petition deleted)", false, true,
+                db => new EfPetitionStore(db).SavePetitionAsync(new PetitionData(3, second, 1002, "Charter", [])),
+                (db, src) => new EfPetitionStore(db, src).CompletePetitionAsync(Guild(3, second), 3),
+                async db => await db.Set<GuildRow>().AnyAsync(g => g.Id == 3) && !await db.Set<PetitionRow>().AnyAsync(p => p.Id == 3)),
             new("social: group save", false, true, Nothing,
                 (db, src) => new EfGroupStore(db, src).SaveGroupAsync(Group(1, leader)),
                 db => db.Set<GroupRow>().AnyAsync(g => g.GroupId == 1)),
@@ -440,7 +445,8 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
     public async Task FenceReleasedAfterTheRequireFenceRead_IsStillCheckedAtCommit(DatabaseProvider provider)
     {
         Rig rig = await CreateAsync(provider, takeOver: true);
-        foreach (Site site in Sites(rig).Where(s => s.Fenced && !s.Sweep))
+        // Sweeps too (boot cleanups that ask TryBeginSweep): a holder check followed by a second fence read used to leave a released fence null and the sweep unchecked.
+        foreach (Site site in Sites(rig).Where(s => s.Fenced))
         {
             await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
                 await site.Seed(seed);
@@ -522,6 +528,24 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         MailRecord mail = ExpiredMail;
         Assert.True(EfEconomyStore.IsRealmSweep(new EconomyCommitRequest(Guid.NewGuid(), [], [new DeleteMail(mail)])));
         Assert.False(EfEconomyStore.IsRealmSweep(new EconomyCommitRequest(Guid.NewGuid(), [], [new InsertMail(mail, null)])));
+    }
+
+    [Fact]
+    public void TryBeginSweep_ReadsTheFenceOnce_AndSkipsWithoutAHolderOrAFence()
+    {
+        var fence = new RealmLeaseFence(RealmAuthorityScopes.Instances, "node-a", Guid.NewGuid(), 4);
+        Assert.True(LeaseFencedWrite.TryBeginSweep(null, RealmAuthorityScopes.Instances, out RealmLeaseFence? none));
+        Assert.Null(none);
+
+        int reads = 0;
+        var holder = new Source(_ => { reads++; return fence; }, _ => true);
+        Assert.True(LeaseFencedWrite.TryBeginSweep(holder, RealmAuthorityScopes.Instances, out RealmLeaseFence? got));
+        Assert.Equal(fence, got);
+        Assert.Equal(1, reads);
+
+        Assert.False(LeaseFencedWrite.TryBeginSweep(new Source(_ => fence, _ => false), RealmAuthorityScopes.Instances, out _)); // lost locally: skips
+        Assert.False(LeaseFencedWrite.TryBeginSweep(new Source(_ => null, _ => true), RealmAuthorityScopes.Instances, out _)); // holds but no fence to verify with: skips, never writes unchecked
+        Assert.False(LeaseFencedWrite.TryBeginSweep(new Source(_ => null, _ => false), RealmAuthorityScopes.Instances, out _));
     }
 
     [Fact]
