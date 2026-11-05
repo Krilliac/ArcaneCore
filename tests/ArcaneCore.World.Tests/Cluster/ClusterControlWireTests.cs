@@ -465,7 +465,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     public void Encoders_RefuseMismatchedKinds_Arguments_Payloads_AndOversizedBundles()
     {
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.PlayerTransfer, Op, ControlVerb.Freeze, ControlNoArguments.Instance)));
-        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, (ControlVerb)10, ControlNoArguments.Instance)));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, (ControlVerb)11, ControlNoArguments.Instance)));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Warm, ControlNoArguments.Instance)));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Freeze, new ControlWarmArguments(Inc))));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
@@ -541,7 +541,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badKind));
 
         byte[] badVerb = [.. body];
-        badVerb[verbAt] = 10;
+        badVerb[verbAt] = 11; // 10 is RetireWrites; 11 is the first unassigned handoff value
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badVerb));
         badVerb[verbAt] = 0;
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badVerb));
