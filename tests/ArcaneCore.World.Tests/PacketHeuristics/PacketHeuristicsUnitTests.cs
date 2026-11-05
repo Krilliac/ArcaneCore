@@ -53,7 +53,7 @@ public sealed class PacketHeuristicsUnitTests
     }
 
     [Fact]
-    public void AnEmptySection_LeavesTheDefaultOn()
+    public void ASectionWithoutEnabled_LeavesTheDefaultOn()
     {
         IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {

@@ -43,7 +43,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     private TeleportFeature? _teleport;
     private ArcaneCore.Game.Maps.WorldRuntime? _world; // the GM stream's anticheat channel (TraceToGmStream)
 
-    /// <summary>Creates the feature with the options of the <c>World:PacketHeuristics</c> section (defaults when there is none or it is invalid; the startup check refuses an invalid one).</summary>
+    /// <summary>Creates the feature with the options of the <c>World:PacketHeuristics</c> section (the defaults, with the checks on, when there is none; Enabled = false when it is invalid; the startup check refuses an invalid one).</summary>
     public PacketHeuristicsFeature(IServiceProvider services)
     {
         _services = services;
@@ -52,7 +52,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         IReadOnlyList<string> problems = configured.Validate();
         if (problems.Count > 0)
         {
-            _logger?.LogError("{Section} is invalid ({Problems}); packet heuristics stay off with the defaults", PacketHeuristicsOptions.SectionName, string.Join(" ", problems));
+            _logger?.LogError("{Section} is invalid ({Problems}); packet heuristics are switched off", PacketHeuristicsOptions.SectionName, string.Join(" ", problems));
             configured = new PacketHeuristicsOptions { Enabled = false };
         }
 
