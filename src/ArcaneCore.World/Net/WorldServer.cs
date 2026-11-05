@@ -43,7 +43,16 @@ public sealed class WorldServer(
     {
         WorldOptions config = options.Value;
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
-        listener.Start();
+        try
+        {
+            listener.Start();
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            listener.Stop();
+            throw new WorldPortInUseException($"the world port {config.BindAddress}:{config.Port} is already in use (another world process?)", ex);
+        }
+
         _listener = listener;
         logger.LogInformation("World daemon listening on {Address}:{Port} ({Handlers} opcode handlers)",
             config.BindAddress, config.Port, opcodes.Count);

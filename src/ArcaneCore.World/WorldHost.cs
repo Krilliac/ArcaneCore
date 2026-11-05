@@ -642,7 +642,7 @@ public sealed class WorldHost(
         try { probe.Start(); }
         catch (SocketException ex)
         {
-            throw new InvalidOperationException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
+            throw new Net.WorldPortInUseException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
         }
         finally { probe.Stop(); }
     }

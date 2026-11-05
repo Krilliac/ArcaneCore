@@ -161,6 +161,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-cluster-e2e-" + Guid.NewGuid().ToString("N"));
     private readonly DateTime _startedUtc = DateTime.UtcNow;
     private readonly object _gate = new();
+    private readonly PortReservations _ports = new(PortLockDirectory);
     private Task? _disposeTask;
     private int _realmId;
     private string _authConnection = string.Empty;
@@ -168,7 +169,6 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private string _worldConnection = string.Empty;
     private int _realmPort;
     private int _gatewayPort;
-    private readonly List<FileStream> _portReservations = [];
     private ClusterStandbyInfo? _standby;
     private ChildProcess? _standbyProcess;
     private ChildProcess? _gatewayProcess;
@@ -694,8 +694,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
 
     // Cross-process reservation: a port is also claimed by an exclusive lock file (FileShare.None, an flock on Linux) in a shared temp directory, held until
     // this fixture is disposed (the OS drops it when the process dies). Concurrent gate runs on one host then never pick the same port, even though the
-    // probe cannot bind it for a child. An unusable directory means no reservation: the listener probe alone decides, as before.
-    private static readonly string s_portLockDirectory = Path.Combine(Path.GetTempPath(), "arcanecore-cluster-e2e-ports");
+    // probe cannot bind it for a child. An unusable directory means no reservation (PortReservations.Enabled is false): the listener probe alone decides, as before.
+    private static readonly string PortLockDirectory = Path.Combine(Path.GetTempPath(), "arcanecore-cluster-e2e-ports");
 
     private int FreePort()
     {
@@ -707,44 +707,13 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 continue;
             }
 
-            if (TryReservePort(port))
+            if (_ports.TryReserve(port))
             {
                 return port;
             }
         }
 
         throw new InvalidOperationException($"No free port in {PortRangeStart}-{PortRangeStart + PortRangeSize - 1}.");
-    }
-
-    private bool TryReservePort(int port)
-    {
-        FileStream held;
-        try
-        {
-            Directory.CreateDirectory(s_portLockDirectory);
-            held = new FileStream(
-                Path.Combine(s_portLockDirectory, string.Create(CultureInfo.InvariantCulture, $"port-{port}.lock")),
-                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return true; // the lock directory cannot be used: no reservation
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return true;
-        }
-        catch (IOException)
-        {
-            return false; // another process (or fixture) holds this port
-        }
-
-        lock (_gate)
-        {
-            _portReservations.Add(held);
-        }
-
-        return true;
     }
 
     private static bool CanListen(IPAddress address, int port)
@@ -1018,15 +987,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             child.Dispose();
         }
 
-        lock (_gate)
-        {
-            foreach (FileStream reservation in _portReservations)
-            {
-                reservation.Dispose();
-            }
-
-            _portReservations.Clear();
-        }
+        _ports.Dispose();
 
         // The orphan assertion: nothing this fixture launched may outlive it.
         IReadOnlyList<int> alive = LiveProcessIds();

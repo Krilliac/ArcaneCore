@@ -201,7 +201,7 @@ public sealed class WorldHostSingleWriterTests
             await using ServiceProvider provider = new ServiceCollection().AddLogging().AddCharacterDatabase(configuration).AddWorldDaemon(configuration).BuildServiceProvider();
             WorldHost host = provider.GetServices<IHostedService>().OfType<WorldHost>().Single(); // no ListenerExpected seam: WorldServer is detected
 
-            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(CancellationToken.None));
+            InvalidOperationException failure = await Assert.ThrowsAsync<ArcaneCore.World.Net.WorldPortInUseException>(() => host.StartAsync(CancellationToken.None));
 
             Assert.Contains($"127.0.0.1:{port}", failure.Message);
             Assert.Contains("already in use", failure.Message);
