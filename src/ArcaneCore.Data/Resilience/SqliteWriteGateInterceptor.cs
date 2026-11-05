@@ -425,13 +425,17 @@ public sealed class SqliteWriteGateInterceptor : DbTransactionInterceptor, IDbCo
         if (Stopwatch.GetElapsedTime(last, now).TotalMilliseconds < _options.StatsIntervalMs || !_lastStats.TryUpdate(gate, now, last)) return;
         GateStats stats = gate.TakeStats();
         long lastFaults = _lastLoggedFaults.TryGetValue(gate, out long logged) ? logged : 0;
-        if (stats.Acquired == 0 && stats.Timeouts == 0 && stats.Forced == 0 && stats.HandlerFaultsTotal == lastFaults) return;
+        if (!HasSomethingToReport(stats, lastFaults)) return;
         _lastLoggedFaults[gate] = stats.HandlerFaultsTotal;
         _logger.LogInformation(
             "SQLite write gate {File}: {Writes} writes in the last {IntervalS} s, {Contended} queued (wait mean {WaitMeanMs:0.0} ms, max {WaitMaxMs:0} ms), longest hold {HoldMaxMs:0} ms by {HoldOwner}, {Timeouts} timed out, {Forced} stuck holds released; {Waiting} waiting now (lifetime {Total} writes, {TotalTimeouts} timeouts, {TotalDead} ended unseen, {HandlerFaults} log handler faults, first: {FirstHandlerFault})",
             Path.GetFileName(stats.Path), stats.Acquired, _options.StatsIntervalMs / 1000, stats.Contended, stats.WaitMsMean, stats.WaitMsMax, stats.HoldMsMax, stats.HoldMaxOwner ?? "-",
             stats.Timeouts, stats.Forced, stats.Waiting, stats.AcquiredTotal, stats.TimeoutsTotal, gate.DeadTotal, stats.HandlerFaultsTotal, stats.FirstHandlerFault ?? "-");
     }
+
+    /// <summary>Whether an interval line is worth logging: any write, timeout or forced release in it, or a release-handler fault since the last logged line.</summary>
+    internal static bool HasSomethingToReport(GateStats stats, long lastLoggedFaults)
+        => stats.Acquired != 0 || stats.Timeouts != 0 || stats.Forced != 0 || stats.HandlerFaultsTotal != lastLoggedFaults;
 
     private void OnStuckReleased(SqliteWriteGate.Hold hold)
         => _logger?.LogError(

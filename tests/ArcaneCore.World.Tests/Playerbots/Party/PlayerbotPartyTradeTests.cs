@@ -347,6 +347,8 @@ public sealed class PlayerbotPartyTradeTests
 
         await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
         await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
+        // The invitation must exist before it is bounced: a refused initiate would otherwise make the "closed" wait below pass without a window ever having been open.
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result.Exists, "the bot's invitation to exist");
         await scene.Stranger.SendAsync(WorldOpcode.CmsgBusyTrade, []);
         // The busy answer arrives over the stranger's socket and is handled on a later world tick, while the bot's packets below are handled
         // at once on the world thread. If the busy answer is still in flight, the bot's second CMSG_INITIATE_TRADE is ignored (the first
@@ -389,6 +391,8 @@ public sealed class PlayerbotPartyTradeTests
 
         await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
         await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
+        // The invitation must exist before it is bounced: a refused initiate would otherwise make the "closed" wait below pass without a window ever having been open.
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result.Exists, "the bot's invitation to exist");
         options.ThinkIntervalMs = 60_000; // hold the bot's intake: nothing below is read until it is released
         await scene.Stranger.SendAsync(WorldOpcode.CmsgBusyTrade, []);
         await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the busy answer to close the first invitation");

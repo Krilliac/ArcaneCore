@@ -307,6 +307,30 @@ public sealed class PlayerbotFestivalRulesTests
         => Assert.Equal(held, PlayerbotFestivalRules.IsHeldAtSpot(distance2D, dz, 10f));
 
     [Theory]
+    [InlineData(0f, 0f, true)]
+    [InlineData(3f, 0f, true)]
+    [InlineData(3.01f, 0f, false)]
+    [InlineData(30f, 0f, false)]
+    [InlineData(2f, 5f, true)]
+    [InlineData(2f, 5.01f, false)]
+    [InlineData(0f, float.NaN, false)]
+    [InlineData(float.NaN, 0f, false)]
+    public void TheArrivalLineAndEmotesNeedTheBotToHaveArrived_NotMerelyToBeHeldWithin30Yards(float distance2D, float dz, bool arrived)
+    {
+        Assert.Equal(arrived, PlayerbotFestivalRules.IsArrivedAtSpot(distance2D, dz, 10f));
+        if (arrived) Assert.True(PlayerbotFestivalRules.IsHeldAtSpot(distance2D, dz, 10f)); // arrived implies held, never the other way round
+    }
+
+    [Fact]
+    public void ABotMidWalkToItsSpot_IsHeldButHasNotArrived_AndAnArrivedBotInsideTheInteractionDiscIsNeither()
+    {
+        Assert.True(PlayerbotFestivalRules.IsHeldAtSpot(20f, 0f, 10f));
+        Assert.False(PlayerbotFestivalRules.IsArrivedAtSpot(20f, 0f, 10f));
+        Assert.False(PlayerbotFestivalRules.IsArrivedAtSpot(1f, 0f, 4.99f));
+        Assert.True(PlayerbotFestivalRules.IsArrivedAtSpot(1f, 0f, 5f));
+    }
+
+    [Theory]
     [InlineData(0f, false)]
     [InlineData(4.99f, false)]
     [InlineData(5f, true)]

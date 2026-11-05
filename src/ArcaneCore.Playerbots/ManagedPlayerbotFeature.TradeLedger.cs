@@ -14,7 +14,7 @@ public sealed partial class ManagedPlayerbotFeature
     // the gate, so the last writer holds the newest rows. The ledger changes rarely (a completed trade), so one gate costs nothing.
     private readonly SemaphoreSlim _tradeLedgerGate = new(1, 1);
 
-    // Deleted bots whose stored rows are gone (set after the delete went through: a failed one is tried again by the next forget).
+    // Deleted bots whose stored rows are gone (set after the delete went through; after a failed one the bot stays out of the set, so a later forget of the same bot tries the delete again).
     private readonly ConcurrentDictionary<Guid, byte> _retiredTradeBots = new();
 
     /// <summary>Load every stored trade ledger row (startup). A failure is recorded at <c>playerbot.social-memory</c>; the bots then start with no ledger.</summary>
@@ -74,9 +74,9 @@ public sealed partial class ManagedPlayerbotFeature
     /// Deleted bots: forget their ledgers in memory and in the store, and every surviving bot's row about their characters (written again without it right away:
     /// a bot that is not running is never checkpointed, so a version bump alone would leave its stored rows). The gate is held for one write at a time, never across
     /// a whole fleet reset: a save racing a delete sees version 0 with no rows (the ledger was forgotten first) and writes nothing. Never throws: a failure is
-    /// recorded at <c>playerbot.social-memory</c>.
+    /// recorded at <c>playerbot.social-memory</c>. A bot in <paramref name="stillExisting"/> keeps no ledger but is not marked retired (it was not deleted as a whole).
     /// </summary>
-    private async Task ForgetTradeLedgerAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed)
+    private async Task ForgetTradeLedgerAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed, IReadOnlySet<Guid>? stillExisting)
     {
         try
         {
@@ -98,7 +98,7 @@ public sealed partial class ManagedPlayerbotFeature
                     await _tradeLedgerGate.WaitAsync().ConfigureAwait(false);
                     try { await RetryTransientBusyAsync(() => store.ReplaceAsync(botId, []), CancellationToken.None).ConfigureAwait(false); }
                     finally { _tradeLedgerGate.Release(); }
-                    _retiredTradeBots[botId] = 0;
+                    if (stillExisting?.Contains(botId) != true) _retiredTradeBots[botId] = 0;
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException) { ReportLedgerForgetFault(ex); }
             }

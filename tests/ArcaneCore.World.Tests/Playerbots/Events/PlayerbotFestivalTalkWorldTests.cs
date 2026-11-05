@@ -63,6 +63,43 @@ public sealed class PlayerbotFestivalTalkWorldTests
     }
 
     [Fact]
+    public async Task ABotHeldAtItsSpotButStillWalkingToIt_SaysAndEmotesNothing_UntilItIsWithin3Yards()
+    {
+        await using SocialWorld world = await StartAsync(new FakeBotChatClient(), options => options.Chat.Safety.RequireOptIn = true);
+        await StartEventAsync(world, WinterVeil);
+        (ulong botGuid, string bot) = await BotAsync(world, "Walkbot");
+        Eager(world);
+        await using WorldTestClient listener = await world.AddPlayerAsync("Walklisten");
+        await HelpTestKit.StandAsync(world, bot, ("Walklisten", 12f));
+
+        // The spot is 10 yards from the bot (inside the 30 yard hold distance, beyond the 3 yard arrival distance) and the anchor 20 yards
+        // from the bot, 10 from the spot: the bot is held, but it has not arrived.
+        Assert.True(await ClaimAtOffsetAsync(world, bot, WinterVeil, 1_000, spotDx: 10f, anchorDx: 20f));
+        for (long t = 1_000; t <= 51_000; t += 10_000)
+        {
+            await RenewAllAsync(world, t);
+            await RunLaneAsync(world, t);
+        }
+
+        Assert.Equal(0, Lane(world).Lines);
+        Assert.Equal(0, Lane(world).EmotesSent);
+        Assert.Equal(0, world.Log.Count(WorldOpcode.CmsgTextEmote));
+
+        // Within 3 yards of the spot (and 10 yards from the anchor): it has arrived and says its line.
+        await world.Host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player self = HelpTestKit.Online(world, bot);
+            self.Relocate(self.X + 8f, self.Y, self.Z, 0f, world.Host.World.NowMs);
+        });
+        await world.Host.WaitForWorldAsync(() => HelpTestKit.Online(world, bot).VisibleObjects.Contains(HelpTestKit.Online(world, "Walklisten").Guid), "the listener in sight again");
+        await RenewAllAsync(world, 61_000);
+        await RunLaneAsync(world, 61_000);
+
+        Assert.Equal(1, Lane(world).Lines);
+        Assert.False(string.IsNullOrWhiteSpace((await SayFromAsync(listener, botGuid)).Text));
+    }
+
+    [Fact]
     public async Task APlayerOfTheOtherFactionInRange_IsAListenerToo_AndOneBeyondTheRangeIsNot()
     {
         await using SocialWorld world = await StartAsync(new FakeBotChatClient(), options => options.Chat.Safety.RequireOptIn = true);

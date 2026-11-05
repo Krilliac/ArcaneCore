@@ -44,6 +44,19 @@ public sealed class SqliteWriteGateTests : IDisposable
         => Assert.Equal(expected, SqliteWriteGateInterceptor.IsWrite(sql));
 
     [Fact]
+    public void AStatsLine_IsLoggedForAnIntervalWithOnlyANewHandlerFault_AndNotForAQuietOne()
+    {
+        GateStats Stats(long acquired, long timeouts, long forced, long faults) => new("x.db", acquired, 0, 0, 0, 0, null, timeouts, forced, 0, acquired, timeouts, forced, faults, null);
+
+        Assert.False(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(0, 0, 0, 0), lastLoggedFaults: 0));
+        Assert.False(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(0, 0, 0, 3), lastLoggedFaults: 3));
+        Assert.True(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(0, 0, 0, 1), lastLoggedFaults: 0));
+        Assert.True(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(1, 0, 0, 0), lastLoggedFaults: 0));
+        Assert.True(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(0, 1, 0, 0), lastLoggedFaults: 0));
+        Assert.True(SqliteWriteGateInterceptor.HasSomethingToReport(Stats(0, 0, 1, 0), lastLoggedFaults: 0));
+    }
+
+    [Fact]
     public async Task ManyConcurrentWriteTransactions_AllCommit_WithoutABusyFailure()
     {
         string connection = ConnectionString("concurrent.db");

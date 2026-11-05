@@ -85,4 +85,19 @@ public sealed class GameObjectRespawnPersistSwitchTests
         Assert.Equal(1, store.Loads);
         await feature.StopAsync();
     }
+
+    [Fact]
+    public async Task NoConfigurationRegistered_KeepsTheDefaultOn_AndLoadsTheStore()
+    {
+        var store = new CountingStore();
+        await using ServiceProvider sp = Build(store, null);
+        using WorldRuntime world = NewWorld(sp);
+        var feature = new GameObjectRespawnFeature(sp, sp.GetRequiredService<ILogger<GameObjectRespawnFeature>>());
+
+        feature.Attach(world);
+
+        Assert.NotNull(feature.Persistence);
+        Assert.Equal(1, store.Loads);
+        await feature.StopAsync();
+    }
 }

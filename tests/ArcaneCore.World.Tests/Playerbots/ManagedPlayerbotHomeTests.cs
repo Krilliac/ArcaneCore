@@ -120,6 +120,83 @@ public sealed class ManagedPlayerbotHomeTests
     }
 
     [Fact]
+    public void SameHomeArea_IgnoresTheTimeItWasSet_AndSeesEveryOtherChange()
+    {
+        var id = Guid.NewGuid();
+        var home = new PlayerbotHome(id, 7, 0, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind", 1000);
+
+        Assert.True(ManagedPlayerbotFeature.SameHomeArea(home, home with { SetUnix = 2000 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { MapId = 1 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { X = -8913f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Y = 555f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Z = 94f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Radius = 301f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = "Ironforge" }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = null }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { ZoneClipped = false }));
+    }
+
+    [Fact]
+    public async Task SettingTheSameHomeAgain_KeepsTheBrainsArea_AndAChangedPlaceSwapsIt()
+    {
+        var homes = new MemoryHomeStore();
+        await using WorldTestHost host = StartHost(homes);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid bot = await BotAsync(feature, host, "Hmresave");
+        var centre = new Vector3(-8913.23f, 554.633f, 93.7944f);
+
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        PlayerbotHomeArea? first = feature.FindBrain(bot)!.Home;
+        Assert.NotNull(first);
+
+        // The same place again (only the time it was set differs): the brain keeps its area object, so its festival spot and intent stay.
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.Same(first, feature.FindBrain(bot)!.Home);
+
+        // A changed radius, then a changed place: each swaps the area.
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 400f, "Stormwind")).Set);
+        PlayerbotHomeArea? wider = feature.FindBrain(bot)!.Home;
+        Assert.NotSame(first, wider);
+        Assert.Equal(400f, wider!.Radius);
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 400f, "Ironforge")).Set);
+        PlayerbotHomeArea? moved = feature.FindBrain(bot)!.Home;
+        Assert.NotSame(wider, moved);
+        Assert.Equal("Ironforge", moved!.Place);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public async Task SettingTheSameHomeAgain_ReappliesAZoneClippedAreaThatFoundNoZone_SoTheWarningsAdviceHolds()
+    {
+        var homes = new MemoryHomeStore();
+        uint zone = 0;
+        await using WorldTestHost host = StartHost(homes, zones: (x, y, z) => zone);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid bot = await BotAsync(feature, host, "Hmnozone");
+        var centre = new Vector3(-8913.23f, 554.633f, 93.7944f);
+
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        // Reading the line looks the zone up on the area: it is cached as unknown.
+        Assert.Contains(" zone=unknown ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+        PlayerbotHomeArea dead = feature.FindBrain(bot)!.Home!;
+        Assert.True(dead.ZoneFoundUnknown);
+
+        // The terrain now knows the zone (a content reload): the same home set again looks it up afresh.
+        zone = FixtureZone;
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.NotSame(dead, feature.FindBrain(bot)!.Home);
+        Assert.Contains(" zone=12 ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+
+        // A known zone is kept: the next identical set leaves the area alone.
+        PlayerbotHomeArea live = feature.FindBrain(bot)!.Home!;
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.Same(live, feature.FindBrain(bot)!.Home);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
     public async Task SetHome_PrefixSelector_AnchorsEveryMatchingBot_AndReportsTheCount()
     {
         var homes = new MemoryHomeStore();

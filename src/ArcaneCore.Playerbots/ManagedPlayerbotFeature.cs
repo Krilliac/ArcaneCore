@@ -1620,8 +1620,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
 
         bool anyActive = false;
+        // A home saved again with the same place changes nothing for the brain: AreaOf builds a new area object each call, and a brain given a new object drops its
+        // intent and releases its festival spot, so an unchanged home is not applied again, except when the brain's area is zone-clipped and found no zone (it caches that, and setting the home again is the documented way to look again).
+        HashSet<Guid> moved = [];
         foreach (PlayerbotHome home in saved)
         {
+            if (!_homes.TryGetValue(home.BotId, out PlayerbotHome? previous) || !SameHomeArea(previous, home)) moved.Add(home.BotId);
             _homes[home.BotId] = home;
             if (_active.ContainsKey(home.BotId)) anyActive = true;
         }
@@ -1632,7 +1636,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 await world.InvokeAsync(() =>
                 {
                     foreach (PlayerbotHome home in saved)
-                        if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused) active.Brain.Home = AreaOf(home.BotId);
+                        if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused
+                            && (moved.Contains(home.BotId) || active.Brain.Home is { ZoneFoundUnknown: true })) active.Brain.Home = AreaOf(home.BotId);
                     lock (_snapshotGate) _snapshotEpoch++;
                     return true;
                 }).ConfigureAwait(false);
@@ -2358,6 +2363,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             brain.Suspensions.Restore(rows, session.World.NowMs, _setAsideTime.GetUtcNow().ToUnixTimeMilliseconds());
         return brain;
     }
+
+    /// <summary>Whether two stored homes describe the same area (the time they were set is not part of it).</summary>
+    internal static bool SameHomeArea(PlayerbotHome a, PlayerbotHome b)
+        => a.MapId == b.MapId && a.X == b.X && a.Y == b.Y && a.Z == b.Z && a.Radius == b.Radius && a.ZoneClipped == b.ZoneClipped
+            && string.Equals(a.Place, b.Place, StringComparison.Ordinal);
 
     /// <summary>
     /// The bot's home as a brain's area, or null when it has none. A zone-clipped home takes the zone of its centre from the terrain on
@@ -4159,15 +4169,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>
     /// Several bots were deleted (a fleet reset): every one is forgotten in memory first (the bot, then everyone's relation toward its characters),
     /// then each removed bot's rows are deleted once and each surviving bot that knew one of them is written once, without all of them.
-    /// Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
+    /// <paramref name="stillExisting"/> names bots of <paramref name="removed"/> that were not deleted as a whole (a fleet reset lost a later character of
+    /// the account): their memory and rows are forgotten like the rest (a character of theirs is gone), but they are not marked retired, so a later forget
+    /// of the finished deletion still removes their stored rows. Never throws: a failure is recorded at <c>playerbot.social-memory</c>.
     /// </summary>
-    private async Task ForgetRelationsAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed)
+    internal async Task ForgetRelationsAsync(IServiceProvider provider, IReadOnlyList<(Guid BotId, IReadOnlyList<int> CharacterIds)> removed, IReadOnlySet<Guid>? stillExisting = null)
     {
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
             foreach ((Guid botId, _) in removed) memory.Forget(botId);
-            await ForgetTradeLedgerAsync(provider, removed).ConfigureAwait(false);
+            await ForgetTradeLedgerAsync(provider, removed, stillExisting).ConfigureAwait(false);
             HashSet<Guid> survivors = [];
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
@@ -4177,8 +4189,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             foreach ((Guid botId, _) in removed)
             {
                 if (_retiredBots.ContainsKey(botId)) continue; // already deleted from the store and its gate retired: nothing to write, no gate to make
-                await WriteRelationsAsync(store, botId, static () => [], retire: true).ConfigureAwait(false);
-                _retiredBots[botId] = 0; // only after the write went through: a failed delete is tried again by the next forget
+                bool retire = stillExisting?.Contains(botId) != true;
+                await WriteRelationsAsync(store, botId, static () => [], retire: retire).ConfigureAwait(false);
+                if (retire) _retiredBots[botId] = 0; // only after the write went through: a failed delete is tried again by the next forget
             }
 
             foreach (Guid other in survivors)
