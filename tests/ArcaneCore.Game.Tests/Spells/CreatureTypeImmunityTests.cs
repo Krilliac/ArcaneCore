@@ -120,4 +120,41 @@ public sealed class CreatureTypeImmunityTests
             Assert.False(EffectImmune(kit, c, LeechSpell));
         }
     }
+
+    [Fact]
+    public void APassiveSpellOfAnImmuneDispelType_IsNotRefusedByTheCreatureTypeImmunity()
+    {
+        using SpellTestKit kit = Kit();
+        Creature elemental = Make(Elemental);
+        SpellInfo passive = kit.Store.Get(PoisonSpell)! with { Attributes = SpellAttributes.Passive };
+
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, elemental, passive, castOnSelf: false));
+        Assert.True(SpellImmune(kit, elemental, PoisonSpell)); // the same spell without the attribute is still refused
+    }
+
+    [Theory]
+    [InlineData(Mechanical, 30u)]
+    [InlineData(Beast, 130u)]
+    public void AHealCastOnACreature_LandsExceptOnAMechanical(uint type, uint expectedHealth)
+    {
+        const uint entry = 932_001;
+        const uint friendlyHeal = 932_110;
+        using SpellTestKit kit = new(Hostile(friendlyHeal, Effect(SpellEffectName.Heal, 100, SpellImplicitTarget.UnitFriend)));
+        kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
+        kit.System.CombatRules = SpellCombatRules.Neutral;
+        (Player healer, _) = kit.AddPlayer(1);
+        CreatureTemplate template = Template(entry, t =>
+        {
+            t.MinLevelHealth = 500;
+            t.MaxLevelHealth = 500;
+        }) with { CreatureType = type };
+        (_, _, CreatureMapSystem creatures) = ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit.CreateAiSystem(Content([template], []), world: kit.World);
+        Creature target = creatures.SpawnTemporary(template, healer.X + 3, healer.Y, healer.Z, 0);
+        target.Health = 30;
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, friendlyHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+        kit.Advance(kit.System.SpellBatchWindowMs);
+
+        Assert.Equal(expectedHealth, target.Health);
+    }
 }
