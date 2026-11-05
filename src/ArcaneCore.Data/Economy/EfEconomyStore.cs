@@ -51,7 +51,7 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         // that does not hold the economy lease is refused outright (writer-lock design section 2b, economy row: RequireHeld on the expiry operations), whatever its sweep thinks.
         if (IsRealmSweep(request))
         {
-            LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Economy);
+            LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Economy);
         }
 
         // Worker fencing scope: as the transaction begins, the write fence also proves that every participant's per-character claim is held by a live worker

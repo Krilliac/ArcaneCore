@@ -160,14 +160,26 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// Refuses a realm-singleton write from a node that never held the scope's lease. With no <paramref name="source"/> (the Combined role, tests: nothing is clustered, so this process is
-    /// the only writer) it does nothing; with a source that has no fence for <paramref name="scope"/> (never taken, held by another node, or given back) it throws <see cref="RealmLeaseNotHeldException"/>.
-    /// This is the gap <see cref="InTransactionAsync{T}"/> leaves on purpose (a non-holder's write goes through unchecked there). The decision is the fence's, not <see cref="IRealmLeaseFenceSource.Holds"/>:
-    /// a keeper that marked the lease lost locally (a slow renewal round, a transient store failure) keeps the old token in <see cref="IRealmLeaseFenceSource.FenceFor"/>, and the commit fence
-    /// (<see cref="InTransactionAsync{T}"/> or <see cref="EnsureHeldAsync"/>) refuses the write exactly when another node really took the lease over and accepts it while the token is still the row's.
-    /// Call it before the write; a write path that has no commit fence must not rely on this for a lost lease. Synchronous and cheap (one in-memory lookup).
+    /// Refuses a realm-singleton write from a node that is not the scope's live holder. With no <paramref name="source"/> (the Combined role, tests: nothing is clustered, so this process is
+    /// the only writer) it does nothing; with a source that does not hold the scope (<see cref="IRealmLeaseFenceSource.Holds"/>: never taken, held by another node, given back, or marked lost by the keeper)
+    /// it throws <see cref="RealmLeaseNotHeldException"/>. This is the safe default for every write that has no check of the lease row at commit: a deposed node must not write. This is the gap
+    /// <see cref="InTransactionAsync{T}"/> leaves on purpose (a non-holder's write goes through unchecked there). Stores whose write verifies the lease row in its own transaction use <see cref="RequireFence"/>.
+    /// Synchronous and cheap (one in-memory lookup).
     /// </summary>
     public static void RequireHeld(IRealmLeaseFenceSource? source, string scope)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        if (!IsHolder(source, scope))
+            throw new RealmLeaseNotHeldException(scope);
+    }
+
+    /// <summary>
+    /// <see cref="RequireHeld"/> for a write that verifies the lease row at commit (<see cref="InTransactionAsync{T}"/>, <see cref="SaveChangesAsync"/> or <see cref="EnsureHeldAsync"/> in the write's own transaction):
+    /// refuses only a node that has no fence for <paramref name="scope"/> (never taken, held by another node, given back). A keeper that marked the lease lost locally (a slow renewal round, a transient store failure)
+    /// keeps the old token in <see cref="IRealmLeaseFenceSource.FenceFor"/>, so the commit fence decides: it refuses the write exactly when another node really took the lease over and accepts it while the token is still the
+    /// row's. Never call it from a write that has no commit-time check: there nothing would stop a deposed node.
+    /// </summary>
+    public static void RequireFence(IRealmLeaseFenceSource? source, string scope)
     {
         ArgumentException.ThrowIfNullOrEmpty(scope);
         if (source is not null && source.FenceFor(scope) is null)
@@ -176,7 +188,7 @@ public static class LeaseFencedWrite
 
     /// <summary>
     /// Whether this process may make the realm-singleton writes of <paramref name="scope"/>: always with no <paramref name="source"/> (nothing is clustered), otherwise only while the source
-    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder or a node that lost the lease (boot cleanups) ask this; writes that must refuse a node that never held the lease call <see cref="RequireHeld"/>.
+    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder or a node that lost the lease (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/> (or <see cref="RequireFence"/> when they verify the lease row at commit).
     /// </summary>
     public static bool IsHolder(IRealmLeaseFenceSource? source, string scope)
     {
@@ -185,7 +197,7 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a node that never held the lease is refused before anything is written, and the writer's token is verified against the lease row
+    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a node that is not the holder is refused before anything is written, and the holder's write is verified against the lease row
     /// in the transaction that makes it. The one call a realm-singleton store write makes.
     /// </summary>
     public static Task<T> HeldWriteAsync<T>(

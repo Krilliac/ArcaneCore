@@ -141,7 +141,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
     public async Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(bind);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Instances); // leader-keyed and cross-character: only the Instances holder writes it
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // leader-keyed and cross-character: only the Instances holder writes it
         int instanceId = (int)bind.InstanceId;
         GroupInstanceRow? row = await db.Set<GroupInstanceRow>()
             .FirstOrDefaultAsync(b => b.LeaderCharacterId == bind.LeaderCharacterId && b.InstanceId == instanceId, cancellationToken).ConfigureAwait(false);
@@ -159,7 +159,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
 
     public async Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Instances);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances);
         int id = (int)instanceId;
         await CharacterWrites.InTransactionAsync(
             db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Instances, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken), cancellationToken),
@@ -168,7 +168,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
 
     public async Task SaveResetTimeAsync(InstanceResetRecord reset, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Instances); // the raid reset schedule is the Instances holder's (writer-lock design section 2b, row 1)
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // the raid reset schedule is the Instances holder's (writer-lock design section 2b, row 1)
         int mapId = (int)reset.MapId;
         InstanceResetRow? row = await db.Set<InstanceResetRow>().FirstOrDefaultAsync(r => r.MapId == mapId, cancellationToken).ConfigureAwait(false);
         if (row is null)

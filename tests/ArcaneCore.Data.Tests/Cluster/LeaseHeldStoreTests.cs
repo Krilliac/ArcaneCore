@@ -30,7 +30,7 @@ namespace ArcaneCore.Data.Tests.Cluster;
 /// <summary>
 /// Writer-lock design step C6 (sections 2b and 4), store level: every realm-singleton store write and every boot sweep that assumes sole ownership is gated on the lease of its scope.
 /// For each site, on every available provider: a node that does not hold the lease is refused (a write: <see cref="RealmLeaseNotHeldException"/>) or skips (a sweep) and changes nothing;
-/// the holder writes; a node whose lease was lost locally (the keeper reports it no longer holds the scope while the stores still see the old token) skips its sweeps and leaves its writes to the commit fence; and where the
+/// the holder writes; a node whose lease was lost locally (the keeper reports it no longer holds the scope while the stores still see the old token) skips its sweeps and its unfenced writes, and leaves the writes that verify the lease row to the commit fence; and where the
 /// store verifies the lease row inside the write's transaction, a holder whose lease was taken over is refused with <see cref="RealmLeaseFenceLostException"/>.
 /// </summary>
 public sealed class LeaseHeldStoreTests : IAsyncLifetime
@@ -314,11 +314,11 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         throw new Xunit.Sdk.XunitException($"{site}: expected {typeof(T).Name}, but nothing was thrown");
     }
 
-    private async Task RunDeniedAsync(DatabaseProvider provider, Func<Rig, IRealmLeaseFenceSource> pick)
+    private async Task RunDeniedAsync(DatabaseProvider provider, Func<Rig, IRealmLeaseFenceSource> pick, Func<Site, bool>? only = null)
     {
         Rig rig = await CreateAsync(provider);
         IRealmLeaseFenceSource source = pick(rig);
-        foreach (Site site in Sites(rig))
+        foreach (Site site in Sites(rig).Where(only ?? (_ => true)))
         {
             await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
                 await site.Seed(seed);
@@ -341,6 +341,15 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         => RunDeniedAsync(provider, rig => rig.NonHolder);
 
     /// <summary>
+    /// A node whose keeper marked the lease lost locally (a slow renewal round) is refused or skips at every site that has NO commit-time check of the lease row (the sweeps, the worldstate and playerbot
+    /// ledgers, the honor first-start state): nothing else would stop a deposed node there, so <see cref="LeaseFencedWrite.RequireHeld"/> keeps asking the keeper.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public Task LostLease_IsRefusedOrSkips_AtEverySite_AndChangesNothing(DatabaseProvider provider)
+        => RunDeniedAsync(provider, rig => rig.Lost, site => site.Sweep || !site.Fenced);
+
+    /// <summary>
     /// A node whose keeper marked the lease lost locally (a slow renewal round) but whose token is still the lease row's: the sweeps skip (they ask the keeper, IsHolder), and every write is decided by the
     /// commit fence alone, which accepts the still-valid token. Before 2026-11-04 RequireHeld refused these writes on the keeper's say-so and lost guild and group writes the fence would have accepted.
     /// </summary>
@@ -349,7 +358,7 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
     public async Task LostLocally_ButTokenStillCurrent_SweepsSkip_AndWritesPassTheCommitFence(DatabaseProvider provider)
     {
         Rig rig = await CreateAsync(provider);
-        foreach (Site site in Sites(rig))
+        foreach (Site site in Sites(rig).Where(s => s.Sweep || s.Fenced))
         {
             await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
                 await site.Seed(seed);
@@ -394,48 +403,20 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public void RequireHeld_RefusesOnlyWhenTheSourceHasNoFence_NotWhenTheKeeperSaysItLostTheLease()
+    public void RequireHeld_RefusesAfterLocalLoss_AndRequireFence_LeavesThatToTheCommitFence()
     {
         var fence = new RealmLeaseFence(RealmAuthorityScopes.Social, "node-a", Guid.NewGuid(), 1);
         LeaseFencedWrite.RequireHeld(null, RealmAuthorityScopes.Social);
-        LeaseFencedWrite.RequireHeld(new Source(_ => fence, _ => false), RealmAuthorityScopes.Social); // lost locally, token kept: the commit fence decides
+        LeaseFencedWrite.RequireFence(null, RealmAuthorityScopes.Social);
         LeaseFencedWrite.RequireHeld(new Source(_ => fence, _ => true), RealmAuthorityScopes.Social);
+
+        // Lost locally, old token kept: an unfenced write is still refused; a write that verifies the lease row at commit is let through to that check.
+        Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireHeld(new Source(_ => fence, _ => false), RealmAuthorityScopes.Social));
+        LeaseFencedWrite.RequireFence(new Source(_ => fence, _ => false), RealmAuthorityScopes.Social);
+
+        // No fence at all (never taken, held elsewhere, given back): both refuse.
         Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireHeld(new Source(_ => null, _ => false), RealmAuthorityScopes.Social));
-        Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireHeld(new Source(_ => null, _ => true), RealmAuthorityScopes.Social));
-    }
-
-    [Theory]
-    [MemberData(nameof(Providers))]
-    public async Task Holder_WritesAndSweeps_AtEverySite(DatabaseProvider provider)
-    {
-        Rig rig = await CreateAsync(provider);
-        foreach (Site site in Sites(rig))
-        {
-            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
-                await site.Seed(seed);
-            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
-                await site.Act(db, rig.Holder);
-
-            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
-            Assert.True(await site.Done(check), $"{site.Name}: the lease holder must write");
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(Providers))]
-    public async Task HolderWhoseLeaseWasTakenOver_IsRefusedInTheTransaction_WhereTheStoreVerifiesTheLeaseRow(DatabaseProvider provider)
-    {
-        Rig rig = await CreateAsync(provider, takeOver: true);
-        foreach (Site site in Sites(rig).Where(s => s.Fenced))
-        {
-            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
-                await site.Seed(seed);
-            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
-                await ExpectAsync<RealmLeaseFenceLostException>(site.Name, () => site.Act(db, rig.Holder));
-
-            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
-            Assert.False(await site.Done(check), $"{site.Name}: a former holder must not write");
-        }
+        Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireFence(new Source(_ => null, _ => false), RealmAuthorityScopes.Social));
     }
 
     [Fact]

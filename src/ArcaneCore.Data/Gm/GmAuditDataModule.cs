@@ -164,7 +164,7 @@ public sealed class EfGmAuditStore(CharacterDbContext db, IRealmLeaseFenceSource
     public async Task SaveTicketAsync(GmTicketRecord ticket, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(ticket);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social); // the ticket queue lives with the Social holder (decision Q10): the same id on two workers would overwrite each other
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // the ticket queue lives with the Social holder (decision Q10): the same id on two workers would overwrite each other
         if (!await db.Characters.AnyAsync(c => c.Id == ticket.CharacterId, cancellationToken).ConfigureAwait(false))
         {
             return;
@@ -185,7 +185,7 @@ public sealed class EfGmAuditStore(CharacterDbContext db, IRealmLeaseFenceSource
 
     public async Task DeleteTicketAsync(int ticketId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         await CharacterWrites.InTransactionAsync(
             db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Social, () => db.Set<GmTicketRow>().Where(r => r.Id == ticketId).ExecuteDeleteAsync(cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
