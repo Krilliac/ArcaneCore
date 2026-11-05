@@ -1,4 +1,3 @@
-using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Characters.Pets;
 using Microsoft.Extensions.Logging;
 

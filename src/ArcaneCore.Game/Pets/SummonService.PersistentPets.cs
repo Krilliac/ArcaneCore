@@ -108,7 +108,22 @@ public sealed partial class SummonService
 
     private async Task SaveDetachedQueuedAsync(Player owner)
     {
-        try { await SaveDetachedPetAsync(owner).ConfigureAwait(false); }
+        PersistentPetSnapshot? snapshot;
+        try { snapshot = CaptureCurrentPet(owner); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("pet.persistence", ex, "detached hunter pet capture failed for character {CharacterId}", owner.Guid.Low);
+            return;
+        }
+        if (snapshot is null)
+            return;
+        snapshot = snapshot with { IsCurrent = false };
+        lock (_cacheGate)
+        {
+            _cached[(int)owner.Guid.Low] = snapshot;
+            _cacheGeneration[(int)owner.Guid.Low] = _cacheGeneration.GetValueOrDefault((int)owner.Guid.Low) + 1;
+        }
+        try { await PersistSerializedAsync(snapshot, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Observe only: PersistSerializedAsync already recorded and logged this failure once.
@@ -196,7 +211,7 @@ public sealed partial class SummonService
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException && attempt < DeleteAttempts)
                 {
-                    _logger.LogFault(LogLevel.Warning, "pet-persistence", ex, "persistent hunter pet delete attempt {Attempt} failed for character {CharacterId}; retrying", attempt, characterId);
+                    _logger.LogFault(LogLevel.Warning, "pet.persistence", ex, "persistent hunter pet delete attempt {Attempt} failed for character {CharacterId}; retrying", attempt, characterId);
                     await Task.Delay(DeleteRetryDelay * attempt).ConfigureAwait(false);
                 }
             }
@@ -211,7 +226,7 @@ public sealed partial class SummonService
             if (ex is not OutOfMemoryException)
             {
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
-                _logger.LogFault("pet-persistence", ex, "persistent hunter pet delete failed for character {CharacterId}; kept for retry at the next barrier", characterId);
+                _logger.LogFault("pet.persistence", ex, "persistent hunter pet delete failed for character {CharacterId}; kept for retry at the next barrier", characterId);
             }
             lock (_cacheGate) _failedDeletes.Add(characterId); // durable intent: FlushCharacterAsync retries it
             done.TrySetException(ex);
@@ -327,7 +342,7 @@ public sealed partial class SummonService
             {
                 // LogFault records the fault ledger entry once; no separate Record.
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
-                _logger.LogFault("pet-persistence", ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId);
+                _logger.LogFault("pet.persistence", ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId);
             }
             lock (_cacheGate)
             {
