@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Chat;
@@ -32,6 +33,24 @@ public sealed class ChatWordFilterTests
 
         Assert.Equal(clean, filter.Apply(clean));
         Assert.Equal(1, ledger.Snapshot().Where(s => s.Site == "chat.word-filter-timeout").Sum(s => s.Count));
+    }
+
+    [Fact]
+    public void PatternsTheLinearEngineSupports_UseNonBacktracking_AndOthersFallBack()
+    {
+        var ledger = new FaultLedger();
+        var filter = new ChatWordFilter(
+            [
+                new ChatWordFilterRule(1, @"^(a+)+$", ChatWordFilterScope.Names, ChatWordFilterAction.Block),
+                new ChatWordFilterRule(2, @"^(a+)+\1$", ChatWordFilterScope.Names, ChatWordFilterAction.Block),
+            ],
+            TimeSpan.FromMilliseconds(1),
+            ledger);
+
+        Assert.Equal(2, filter.NamePatterns.Length);
+        Assert.True(filter.NamePatterns[0].Options.HasFlag(RegexOptions.NonBacktracking));
+        Assert.False(filter.NamePatterns[1].Options.HasFlag(RegexOptions.NonBacktracking)); // a backreference needs the backtracking engine
+        Assert.Equal(Regex.InfiniteMatchTimeout, filter.NamePatterns[0].MatchTimeout);
     }
 
     [Fact]

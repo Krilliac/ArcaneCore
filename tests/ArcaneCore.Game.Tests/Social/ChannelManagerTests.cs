@@ -106,7 +106,7 @@ public sealed class ChannelManagerTests
         f.Context.Channels.Join(b, "GuildRecruitment - City", string.Empty);
 
         Assert.Equal([ChatNotify.InvalidName, ChatNotify.WrongPassword], Notifies(f, b));
-        Assert.False(f.Context.Channels.Find(Team.Alliance, "GuildRecruitment - City")?.IsOn(b.Guid) ?? false); // the rejected join leaves an empty built-in, which is deleted
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "GuildRecruitment - City")); // the rejected join leaves an empty built-in, which is deleted
         Assert.Empty(f.Context.Channels.JoinedBy(b));
 
         f.Context.Channels.Join(b, "Club", "pw");
@@ -218,6 +218,33 @@ public sealed class ChannelManagerTests
         Assert.Equal([ChatNotify.YouJoined], Notifies(f, a));
         Assert.True(channel.IsOn(a.Guid));
         Assert.Contains(channel, f.Context.Channels.JoinedBy(a));
+    }
+
+    [Fact]
+    public void EmptyBuiltInChannel_KeepsAGmBan_ButADefaultOneIsDeleted()
+    {
+        using var f = new SocialFixture();
+        Player gm = f.AddPlayer(1, security: AccountSecurity.GameMaster);
+        Player b = f.AddPlayer(2);
+        const string Name = "General - Elwynn Forest";
+        f.Context.Channels.Join(gm, Name, string.Empty);
+        f.Context.Channels.Join(b, Name, string.Empty);
+        f.Context.Channels.KickOrBan(gm, Name, "P2", ban: true);
+        f.Context.Channels.Leave(gm, Name);
+
+        Channel kept = f.Context.Channels.Find(Team.Alliance, Name)!;
+        Assert.NotNull(kept);
+        Assert.Equal(0, kept.MemberCount);
+        Assert.True(kept.IsBanned(b.Guid));
+
+        f.ClearAll();
+        f.Context.Channels.Join(b, Name, string.Empty);
+        Assert.Equal([ChatNotify.Banned], Notifies(f, b));
+
+        f.Context.Channels.Join(gm, Name, string.Empty);
+        f.Context.Channels.Unban(gm, Name, "P2");
+        f.Context.Channels.Leave(gm, Name);
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, Name));
     }
 
     [Theory]

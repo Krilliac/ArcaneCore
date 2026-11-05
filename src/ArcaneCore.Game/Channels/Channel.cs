@@ -72,6 +72,12 @@ public sealed class Channel
 
     public ObjectGuid Owner { get; private set; }
 
+    /// <summary>
+    /// A built-in channel whose state a GM changed (a ban, moderation, announcements on, a password): the manager keeps it while empty
+    /// so that state survives. Only GMs can change a built-in's state (<c>CheckModerator</c>), so clients cannot use this to grow the registry.
+    /// </summary>
+    internal bool HoldsGmState => IsConstant && (_banned.Count > 0 || Moderate || Announce || Password.Length > 0);
+
     public int MemberCount => _players.Count;
 
     public IEnumerable<ObjectGuid> Members => _players.Keys.Select(k => new ObjectGuid(k));
