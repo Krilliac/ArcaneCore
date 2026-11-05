@@ -105,6 +105,50 @@ public sealed class ClientRequestHandlerTests
     }
 
     [Fact]
+    public void RecordCountOnly_RaisesTheCount_WithoutTouchingTheLastSummary()
+    {
+        var tracker = new ClientRequestTracker();
+        tracker.Record(WorldOpcode.CmsgChatFiltered, "first");
+        tracker.RecordCountOnly(WorldOpcode.CmsgChatFiltered);
+        tracker.RecordCountOnly(WorldOpcode.CmsgChatFiltered);
+
+        Assert.Equal(3, tracker.Count(WorldOpcode.CmsgChatFiltered));
+        Assert.Equal("first", tracker.Last(WorldOpcode.CmsgChatFiltered));
+        Assert.Equal(0, tracker.Count(WorldOpcode.CmsgMinigameMove)); // another opcode is not touched
+        Assert.Null(tracker.Last(WorldOpcode.CmsgMinigameMove));
+    }
+
+    [Fact]
+    public async Task APastTheDetailLimitRequest_IsOnlyCounted_NoSummaryAndNoLedgerEntry()
+    {
+        // DetailLimit is 256 per opcode: a tracker already at the limit makes the next real packet a count-only one.
+        var tracker = new ClientRequestTracker();
+        for (int i = 0; i < 256; i++)
+        {
+            tracker.Record(WorldOpcode.CmsgChatFiltered, "seeded");
+        }
+
+        await using var host = WorldTestHost.Start(configureServices: c => c.AddSingleton(tracker));
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "Z37FLD", "Floodone");
+        await using (client)
+        {
+            using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == AnomalyLedger.KeyOf("client", "unmodelled-request") && n.Subject == "CMSG_CHAT_FILTERED");
+            await client.CollectAsync();
+
+            await client.SendAsync(WorldOpcode.CmsgChatFiltered, GuidPayload());
+            await client.SendAsync(WorldOpcode.CmsgChatFiltered, GuidPayload());
+            await client.SendAsync(WorldOpcode.CmsgPing, PacketHeuristicsTestKit.PingPayload(1));
+            await client.CollectFromAsync(WorldOpcode.SmsgPong, TimeSpan.FromMilliseconds(250));
+            await PacketHeuristicsTestKit.SettleAsync(host, client, session);
+
+            Assert.Equal(258, tracker.Count(WorldOpcode.CmsgChatFiltered)); // the count keeps rising
+            Assert.Equal("seeded", tracker.Last(WorldOpcode.CmsgChatFiltered)); // no new summary
+            Assert.Empty(capture.Notices); // and no ledger entry
+            Assert.Equal(SessionState.InWorld, session.State);
+        }
+    }
+
+    [Fact]
     public void Summarise_DecodesTheClientLayouts_AndFallsBackToTheLengthForAShortPacket()
     {
         // Layouts from the static check of Wow.exe: AUTOSTORE_GROUND_ITEM u64, STORE_LOOT_IN_SLOT 3 x u8, SKILL_BUY_STEP u32,

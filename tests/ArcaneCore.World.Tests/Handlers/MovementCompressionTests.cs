@@ -31,6 +31,23 @@ public sealed class MovementCompressionTests
     }
 
     [Fact]
+    public void ABatch_AfterClear_StartsEmptyAndBuildsOnlyWhatWasAddedSince_FromTheBufferItKept()
+    {
+        var batch = new MovementPacketBatch();
+        batch.Add(WorldOpcode.MsgMoveHeartbeat, [1, 2, 3]);
+        byte[] first = batch.Build();
+        batch.Clear();
+        Assert.False(batch.HasData);
+
+        batch.Add(WorldOpcode.SmsgMonsterMove, [9]);
+        byte[] second = batch.Build();
+
+        ushort monster = (ushort)WorldOpcode.SmsgMonsterMove;
+        Assert.Equal([3, (byte)monster, (byte)(monster >> 8), 9], WorldTestClient.Inflate(second)); // none of the first batch is left in it
+        Assert.Equal(5 + 1 + 2 + 3, WorldTestClient.Inflate(first).Length); // and clearing did not reach into the packet already built
+    }
+
+    [Fact]
     public void ABatch_RefusesWhatTheSizeByteOrTheClientCannotCarry()
     {
         var batch = new MovementPacketBatch();

@@ -16,7 +16,7 @@ internal sealed class MovementPacketBatch
     /// <summary>The client crashes on a larger batch (vmangos logs "[CRASH-CLIENT] Too large packet size" at 900000).</summary>
     public const int MaxBatchBytes = 900_000;
 
-    private PacketWriter _entries = new(1024);
+    private readonly PacketWriter _entries = new(1024);
 
     public bool HasData => _entries.Length != 0;
 
@@ -56,5 +56,5 @@ internal sealed class MovementPacketBatch
     /// <summary>The SMSG_COMPRESSED_MOVES body for what was added.</summary>
     public byte[] Build() => ProtocolGapPackets.CompressedMoves(_entries.AsSpan());
 
-    public void Clear() => _entries = new PacketWriter(1024);
+    public void Clear() => _entries.Reset(); // keeps the buffer: Build copies the entries out, nothing holds a view of it
 }
