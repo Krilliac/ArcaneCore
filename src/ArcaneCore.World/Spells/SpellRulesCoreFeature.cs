@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Game.Spells.Rules.Diminishing;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Game.Stats;
 using ArcaneCore.World.Combat;
 using ArcaneCore.World.Features;
 using Microsoft.Extensions.Configuration;
@@ -43,6 +44,7 @@ public sealed class SpellRulesCoreFeature(IServiceProvider services, ILogger<Spe
             system.CombatRules = new VanillaSpellCombatRules
             {
                 Options = Options,
+                CritSource = new IntellectSpellCritSource(),
                 ResistTable = string.IsNullOrWhiteSpace(Options.ResistTablePath) ? null : ResistOutcomeTable.Load(Options.ResistTablePath),
             };
         }

@@ -65,9 +65,8 @@ public static class SpellCombatRules
 public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISpellResistRoll, ISchoolResistRoll
 {
     /// <summary>
-    /// Base spell critical chance (percent) of a player before stat-driven bonuses. The stats area
-    /// owns vmangos Player::UpdateSpellCritChance (intellect and class base); until then a flat value
-    /// is used, recorded as a limitation.
+    /// Fallback base spell critical chance (percent) of a player, used only when no <see cref="CritSource"/> is set;
+    /// the world host installs the intellect-driven source (vmangos Unit::GetSpellCritFromIntellect).
     /// </summary>
     public float PlayerBaseSpellCrit { get; init; } = 5.0f;
 

@@ -42,8 +42,8 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
   auras and never crits, `SpellCaster.h:320`); the target side still applies.
 - Spell power does not yet model: damage done versus creature types, equipped-item restricted auras, class script modifiers,
   talent spell mods, Ignite, totem/pet owner bonuses, weapon-based periodic damage (left to the melee formulas), absorb.
-  Spell crit from intellect and the spell hit/resist tables belong to the stats lane (`VanillaSpellCombatRules` keeps its
-  flat 5 percent), so caster damage is not retail until that lands.
+  Spell crit from intellect is installed by the spell rules feature (`IntellectSpellCritSource`); the spell hit/resist tables belong to the
+  stats lane, so caster damage is not fully retail until those land.
 - Five second rule: the consumers of the timer (mp5, aura 134 interrupt percentage, Evocation, Mage Armor) are in the stats
   and spell-breadth lanes. Until they merge a caster regenerates 0 mana for 5 s after any paid cast, as a gearless retail
   caster does, with none of the offsets.
