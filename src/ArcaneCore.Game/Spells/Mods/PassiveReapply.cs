@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Spells.Mods;
 /// permanent passive aura the player cast on itself that the modifier affects is removed and cast again, so an amount that read
 /// a modifier is recomputed. Skipped for the operations whose consumers read the engine live (duration, charges, casting time,
 /// cooldown, cost, activation time, global cooldown, speed, haste, attack power; :1056-1070) and for a mod spell with proc
-/// charges (:1051-1054). Pets and totems the player controls are not refreshed (limit, docs/areas/spell-mods.md).
+/// charges (:1051-1054). The pets and totems the player controls are refreshed too (:1067-1073).
 /// </summary>
 internal static class PassiveReapply
 {
@@ -24,7 +24,23 @@ internal static class PassiveReapply
             return;
         }
 
-        UnitSpellState? state = system.GetState(player.Guid);
+        ReapplyOn(system, player, mod);
+
+        // Aura::ReapplyAffectedPassiveAuras (SpellAuras.cpp:1067-1073): the passives, area auras and talents on the player's pet and
+        // totems read the owner's mods too (GetSpellModOwner), so they are refreshed as well. Only when the owner-mod resolution is on.
+        if (engine.Options.OwnerModsForPetsAndTotems)
+        {
+            foreach (Unit controlled in system.ControlledPetsAndTotems(player))
+            {
+                ReapplyOn(system, controlled, mod);
+            }
+        }
+    }
+
+    /// <summary>One unit's own permanent passives that <paramref name="mod"/> affects: removed and cast again (vmangos Aura::ReapplyAffectedPassiveAuras(Unit*)).</summary>
+    private static void ReapplyOn(SpellSystem system, Unit unit, SpellMod mod)
+    {
+        UnitSpellState? state = system.GetState(unit.Guid);
         if (state is null)
         {
             return;
@@ -35,7 +51,7 @@ internal static class PassiveReapply
         foreach (SpellAuraHolder holder in state.Auras)
         {
             if (holder.Spell.IsPassive && holder.IsPermanent && !holder.IsRemoved && holder.Spell.Id != mod.SpellId
-                && holder.CasterGuid == player.Guid && mod.IsAffectedOnSpell(holder.Spell))
+                && holder.CasterGuid == unit.Guid && mod.IsAffectedOnSpell(holder.Spell))
             {
                 affected.Add(holder.Spell.Id);
             }
@@ -51,8 +67,8 @@ internal static class PassiveReapply
         {
             foreach (uint spellId in affected)
             {
-                system.RemoveAuras(player, spellId);
-                system.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true);
+                system.RemoveAuras(unit, spellId);
+                system.CastSpell(unit, spellId, SpellCastTargets.ForSelf(), triggered: true);
             }
         }
         finally

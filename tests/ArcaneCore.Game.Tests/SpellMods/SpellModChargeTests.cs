@@ -30,6 +30,7 @@ public sealed class SpellModChargeTests
     private const uint CritShape = 945030;     // flat crit +100, 1 charge
     private const uint CritBolt = 945031;      // instant fire bolt, family mask 1
     private const uint ProcAura = 945032;      // a timed (saveable) buff granting a pct cost -100 mod with 2 charges
+    private const uint RangeShape = 945040;    // flat range +5, 1 charge
 
     private static SpellTestKit Kit() => new(
         InFamily(Spell(Bolt, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with
@@ -85,6 +86,7 @@ public sealed class SpellModChargeTests
             Duration = new SpellDuration(15000, 0, 15000),
             SpellVisual = 1,
         },
+        ModPassive(RangeShape, AuraType.AddFlatModifier, SpellModOp.Range, 5, procCharges: 1),
         ModPassive(CritShape, AuraType.AddFlatModifier, SpellModOp.CriticalChance, 100, procCharges: 1),
         InFamily(Spell(CritBolt, Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)) with
         {
@@ -120,6 +122,54 @@ public sealed class SpellModChargeTests
 
     private static SpellMod? ModOf(SpellTestKit kit, Player player, uint spell, SpellModOp op)
         => kit.System.Mods.ModsOf(player, op).SingleOrDefault(m => m.SpellId == spell);
+
+    [Fact]
+    public void ARangeMod_SpendsItsCharge_AtTheFirstCheckCast()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Setup(RangeShape);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.CastOk, Cast(kit, caster, target, Bolt));
+
+            // vmangos Spell::prepare: CheckCast reads SPELLMOD_RANGE with the spell (Spell.cpp:6917) and drops the charge; the cost and
+            // cast time reads do not touch a range mod, so the mod is already pinned to this cast while the bar runs.
+            Assert.Equal(-1, ModOf(kit, caster, RangeShape, SpellModOp.Range)!.Charges);
+            Assert.True(kit.System.HasAura(caster, RangeShape));
+
+            kit.Advance(2100);
+            FlushSpellBatch(kit);
+
+            Assert.False(kit.System.HasAura(caster, RangeShape));     // the finished cast removes the aura of a spent mod
+        }
+    }
+
+    [Fact]
+    public void AFailedFirstCheckCast_GivesTheRangeChargeBack()
+    {
+        (SpellTestKit kit, Player caster, _) = Setup(RangeShape);
+        using (kit)
+        {
+            (Player far, _) = kit.AddHostilePlayer(3, 80, 0);
+
+            Assert.Equal(SpellCastResult.OutOfRange, Cast(kit, caster, far, Bolt));
+
+            // Spell::finish(false) -> RestoreSpellMods: the charge the range read spent is back.
+            Assert.Equal(1, ModOf(kit, caster, RangeShape, SpellModOp.Range)!.Charges);
+            Assert.True(kit.System.HasAura(caster, RangeShape));
+        }
+    }
+
+    [Fact]
+    public void TheFirstCheckCast_DoesNotSpendACostModCharge()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Setup(FreeCast);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.CastOk, Cast(kit, caster, target, Bolt));
+
+            Assert.Equal(1, ModOf(kit, caster, FreeCast, SpellModOp.Cost)!.Charges);
+        }
+    }
 
     [Fact]
     public void AChargedMod_IsRegistered_WithItsCharges()

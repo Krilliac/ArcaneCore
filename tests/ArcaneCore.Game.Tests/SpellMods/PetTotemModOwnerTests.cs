@@ -115,6 +115,34 @@ public sealed class PetTotemModOwnerTests
     }
 
     [Fact]
+    public void AModOnTheOwner_RefreshesThePetsAffectedPassive()
+    {
+        const uint petPassive = 947010;
+        const uint damageMod = 947011;
+        using PetTestKit kit = new(
+        [
+            InFamily(Spell(petPassive, Effect(SpellEffectName.ApplyAura, 1, aura: AuraType.Dummy)) with
+            {
+                Attributes = SpellAttributes.Passive,
+                Duration = new SpellDuration(-1, 0, -1),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            }),
+            Pct(damageMod, SpellModOp.Damage, 10),
+        ]);
+        (Player owner, _) = kit.AddPlayer(1);
+        Creature pet = SummonPet(kit, owner);
+        kit.Spells.System.CastSpell(pet, petPassive, SpellCastTargets.ForSelf(), triggered: true);
+        SpellAuraHolder before = Assert.Single(kit.Spells.System.GetAuras(pet), h => h.Spell.Id == petPassive);
+
+        kit.Spells.System.LearnSpell(owner, damageMod);
+
+        // Aura::ReapplyAffectedPassiveAuras (SpellAuras.cpp:1067-1073): the pet's passive the owner's mod affects is removed and cast again.
+        SpellAuraHolder after = Assert.Single(kit.Spells.System.GetAuras(pet), h => h.Spell.Id == petPassive);
+        Assert.NotSame(before, after);
+    }
+
+    [Fact]
     public void APetsCast_ReadsButNeverSpendsTheOwnersCharges()
     {
         using PetTestKit kit = new(

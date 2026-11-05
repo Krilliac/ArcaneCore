@@ -31,6 +31,9 @@ public sealed class SpellModScope
     /// <summary>vmangos Spell::HasModifierApplied (Spell.cpp:8282-8289).</summary>
     public bool HasModifierApplied(SpellMod mod) => _applied.Contains(mod);
 
+    /// <summary>True while the first CheckCast's window is open: only range, radius and jump-target reads spend charges (see <c>SpellSystem.BeginModCheckWindow</c>).</summary>
+    internal bool ChecksOnly { get; set; }
+
     internal void Add(SpellMod mod) => _applied.Add(mod);
 
     internal bool Remove(SpellMod mod) => _applied.Remove(mod);
@@ -50,5 +53,13 @@ public readonly struct SpellModWindow : IDisposable
         _scope = scope;
     }
 
-    public void Dispose() => _engine?.End(_scope!);
+    public void Dispose()
+    {
+        if (_scope is not null)
+        {
+            _scope.ChecksOnly = false;
+        }
+
+        _engine?.End(_scope!);
+    }
 }

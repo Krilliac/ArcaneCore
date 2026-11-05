@@ -36,7 +36,7 @@ public static class PetTargets
         if (!spells.IsRegisteredLocationTarget(MinionPosition))
         {
             spells.RegisterTargetSelector(MinionPosition,
-                (_, cast, effect, _) => Spells.Targets.SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f), locationOnly: true);
+                (system, cast, effect, _) => Spells.Targets.SpellTargetSelectors.SelectCasterRelativeLocation(system, cast, effect, MathF.PI * 0.25f), locationOnly: true);
         }
         spells.RegisterCastCheck(new CasterPetCastCheck());
     }

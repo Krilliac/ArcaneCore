@@ -61,7 +61,7 @@ public sealed partial class SpellModEngine : ISpellModEngine
             SpellModScope scope = _windows[i];
             if (ReferenceEquals(scope.Owner, owner) && scope.Spell.Id == spell.Id && !scope.IsClosed)
             {
-                return scope;
+                return scope.ChecksOnly && op is not (SpellModOp.Range or SpellModOp.Radius or SpellModOp.JumpTargets) ? null : scope;
             }
         }
 

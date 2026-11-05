@@ -68,10 +68,10 @@ public sealed partial class SpellSystem
             // Location32 also prepares the destination when target B selects the units.
             if (selector != effect.TargetA && effect.TargetA == SpellImplicitTarget.LocationUnitMinionPosition
                 && effect.Effect != SpellEffectName.Duel)
-                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f);
+                SpellTargetSelectors.SelectCasterRelativeLocation(this, cast, effect, MathF.PI * 0.25f);
             // Target B 48/49/50 names a caster-relative place while target A picks the unit (Blink 29209-29211: A caster, B back/left/right).
             if (selector != effect.TargetB && SpellTargetSelectors.CasterSideAngle(effect.TargetB) is { } sideAngle)
-                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, sideAngle);
+                SpellTargetSelectors.SelectCasterRelativeLocation(this, cast, effect, sideAngle);
             // Target B 46 beside a unit target A (12699: A unit / B46; 22393 is A38 / B46, whose selector is 38 and so takes this branch too): vmangos
             // runs SetTargetMap for B as well, so the nearest listed object becomes the destination while A picks the unit. The destination flag this sets
             // is kept from costing a self-aimed cast its explicit-or-self fallback by ScriptTargetKeptSelfAim (SelectEffectTargets).

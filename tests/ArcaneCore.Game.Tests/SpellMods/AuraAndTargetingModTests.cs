@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Casters;
+using ArcaneCore.Game.Spells.Targets;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -71,6 +72,34 @@ public sealed class AuraAndTargetingModTests
             Pct(MultiplyMod, SpellModOp.MultipleValue, 100));
         CasterSpellModules.Register(kit.System, null);
         return kit;
+    }
+
+    [Fact]
+    public void ACasterRelativeDestination_UsesTheRadiusMod()
+    {
+        // Spell::SetTargetMap applies SPELLMOD_RADIUS before the caster-relative cases (vmangos Spell.cpp:2051-2062, :2977-3022): a radius 8
+        // destination in front of the caster moves out to 10 with a +25 percent mod.
+        const uint front = 944010;
+        using var kit = new SpellTestKit(
+            InFamily(Spell(front, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)SpellTargetSelectors.LocationCasterFront) with { Radius = 8 })),
+            Pct(RadiusMod, SpellModOp.Radius, 25));
+        (Player caster, _) = kit.AddPlayer(1);
+        SpellInfo spell = kit.Store.Get(front)!;
+
+        float Reach()
+        {
+            var cast = new SpellCast(spell, caster, SpellCastTargets.ForSelf(), true, 0, 0, 0);
+            SpellTargetSelectors.SelectCasterRelativeLocation(kit.System, cast, spell.Effects[0], 0f);
+            (float x, float y, _) = cast.Targets.Dest;
+            return MathF.Sqrt(((x - caster.X) * (x - caster.X)) + ((y - caster.Y) * (y - caster.Y)));
+        }
+
+        float plain = Reach();
+        kit.System.LearnSpell(caster, RadiusMod);
+        float modified = Reach();
+
+        Assert.Equal(8f, plain, 0.01f);
+        Assert.Equal(10f, modified, 0.01f);
     }
 
     [Fact]
