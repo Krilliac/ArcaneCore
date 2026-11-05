@@ -31,8 +31,18 @@ public sealed partial class EconomyFeature
     private bool _auctionCacheStale;
     private bool _auctionRefreshing;
 
+    // A failed snapshot read is not tried again before this feature-clock time, and each further failure in a row waits longer: the read also rereads the whole character identity table, so a store outage must not be hit on every sweep or bot tick (world thread).
+    private long _auctionRefreshNotBeforeMs;
+    private int _auctionRefreshFailures;
+
     // Auction ids this node's own commits, forwarded commits or deletion resyncs changed since the snapshot read began: the snapshot may predate them, so it never replaces these (world thread).
     private readonly HashSet<uint> _auctionsTouchedDuringRefresh = [];
+
+    /// <summary>World-thread test probe: a takeover snapshot read has started and not finished.</summary>
+    internal bool AuctionRefreshInFlight => _auctionRefreshing;
+
+    /// <summary>World-thread test probe: the feature-clock time before which a failed takeover snapshot is not read again (0 = none).</summary>
+    internal long AuctionRefreshNotBeforeMs => _auctionRefreshNotBeforeMs;
 
     private void NoteAuctionTouched(uint auctionId)
     {
@@ -69,7 +79,7 @@ public sealed partial class EconomyFeature
     /// <summary>
     /// World thread: whether the auction cache is current for this node's holding of the Economy lease. Always true on a node that held the lease at attach (or runs no keeper).
     /// On a node that took the lease over later it is false until a fresh snapshot of the auctions has replaced the cache: the first call that finds the lease held starts the read
-    /// (off the world thread), and the expiry sweep, the recovery sweep and the auction bot act only once this is true. A failed read is tried again by the next call.
+    /// (off the world thread), and the expiry sweep, the recovery sweep and the auction bot act only once this is true. A failed read is tried again by the first call after a backoff (1 s, doubling per failure in a row, at most <see cref="MaxRetryMs"/>).
     /// </summary>
     public bool EnsureAuctionCacheCurrent()
     {
@@ -78,7 +88,7 @@ public sealed partial class EconomyFeature
             return true;
         }
 
-        if (HoldsEconomyLease && Enabled && !_stopping)
+        if (HoldsEconomyLease && Enabled && !_stopping && NowMs >= _auctionRefreshNotBeforeMs)
         {
             BeginAuctionRefresh();
         }
@@ -124,11 +134,15 @@ public sealed partial class EconomyFeature
             ApplyAuctionSnapshot(result.Snapshot, result.Seed);
             _auctionsTouchedDuringRefresh.Clear();
             _auctionCacheStale = false;
+            _auctionRefreshFailures = 0;
+            _auctionRefreshNotBeforeMs = 0;
             _logger.LogInformation("Auction cache reloaded after taking over the economy lease: {Auctions} auctions ({Reserved} reserved)", _auctions.Count, _auctionRecoveries.Count);
         }, () =>
         {
             _auctionRefreshing = false;
             _auctionsTouchedDuringRefresh.Clear();
+            _auctionRefreshFailures++;
+            _auctionRefreshNotBeforeMs = NowMs + Math.Min(1000L << Math.Min(_auctionRefreshFailures - 1, 9), MaxRetryMs);
         });
     }
 

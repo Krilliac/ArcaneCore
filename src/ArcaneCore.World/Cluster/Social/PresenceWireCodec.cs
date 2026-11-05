@@ -104,9 +104,31 @@ internal static class PresenceWireCodec
             return false;
         }
 
-        using var r = new BinaryReader(new MemoryStream(request.ToArray(), 1, request.Length - 1, writable: false), Encoding.UTF8);
-        _ = r.ReadString(); // the worker; a taken request parsed, so this cannot fail
-        return (ArcaneCore.Game.Groups.GroupCommandKind)r.ReadByte() != ArcaneCore.Game.Groups.GroupCommandKind.Relay;
+        // Reads the two fields it needs in place, with no copy of the request: after the op byte comes the worker id (a BinaryWriter string: a 7-bit encoded byte length, then the bytes), then the command kind byte.
+        ReadOnlySpan<byte> span = request.Span;
+        int position = 1;
+        int length = 0;
+        for (int shift = 0; ; shift += 7)
+        {
+            if (position >= span.Length || shift > 28)
+            {
+                return false; // a taken request parsed, so this is not reached; a request that is cut short is not counted
+            }
+
+            byte part = span[position++];
+            length |= (part & 0x7F) << shift;
+            if ((part & 0x80) == 0)
+            {
+                break;
+            }
+        }
+
+        if (length < 0 || length >= span.Length - position)
+        {
+            return false;
+        }
+
+        return (ArcaneCore.Game.Groups.GroupCommandKind)span[position + length] != ArcaneCore.Game.Groups.GroupCommandKind.Relay;
     }
 
     /// <summary>

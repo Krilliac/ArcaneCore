@@ -267,7 +267,24 @@ public sealed class SocialGroupTakeoverTests
         Assert.True(rig.Persistence.AuthorityLoaded);
         Assert.True(rig.Holder.Groups.HeldCommandCount > 0, "the world stopped with no backlog left, so this test proves nothing");
 
+        // A peer command that reaches the table while the final write is being queued and drained must be refused: the table is closed before the write's snapshot, so the snapshot is the boundary and no acked command is outside it.
+        var attemptsDuringFinalWrite = new List<bool>();
+        rig.Rows.OnSave = _ =>
+        {
+            bool applied = rig.Holder.Groups.TryExecute("worker-c", invite);
+            lock (attemptsDuringFinalWrite)
+            {
+                attemptsDuringFinalWrite.Add(applied);
+            }
+        };
+
         await rig.Persistence.StopAsync();
+
+        lock (attemptsDuringFinalWrite)
+        {
+            Assert.NotEmpty(attemptsDuringFinalWrite); // the backlog changed the group, so the final write saved it
+            Assert.All(attemptsDuringFinalWrite, applied => Assert.False(applied));
+        }
 
         Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
         Assert.Equal(invites + 1, rig.Holder.Groups.PendingFor("worker-c"));
@@ -354,6 +371,9 @@ public sealed class SocialGroupTakeoverTests
 
         public int Writes => Volatile.Read(ref _writes);
 
+        /// <summary>Called, on the write queue's thread, as each group save starts.</summary>
+        public Action<GroupRecord>? OnSave { get; set; }
+
         public Task LoadEntered => _loadEntered.Task;
 
         public void HoldLoads() => Volatile.Write(ref _release, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
@@ -380,6 +400,7 @@ public sealed class SocialGroupTakeoverTests
         public Task SaveGroupAsync(GroupRecord group, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _writes);
+            OnSave?.Invoke(group);
             return _rows.SaveGroupAsync(group, cancellationToken);
         }
 
@@ -541,8 +562,21 @@ public sealed class SocialGroupTakeoverTests
         /// <summary>Ends the parked world thread with no further tick: the stop is under way before it wakes, so the replay stays where it was.</summary>
         public async Task StopParkedWorldAsync()
         {
-            Task stopping = Task.Run(World.Stop);
-            await Task.Delay(100);
+            var started = new TaskCompletionSource<Thread>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task stopping = Task.Run(() =>
+            {
+                started.SetResult(Thread.CurrentThread);
+                World.Stop();
+            });
+            Thread stopper = await started.Task.WaitAsync(Budget);
+
+            // Stop sets the stop signal and then joins the parked world thread, so a stopper that is waiting has set the signal: the world thread ends after this tick instead of running another. No fixed delay.
+            using var timeout = new CancellationTokenSource(Budget);
+            while ((stopper.ThreadState & ThreadState.WaitSleepJoin) == 0)
+            {
+                await Task.Delay(1, timeout.Token);
+            }
+
             _parkGate.Set();
             await stopping.WaitAsync(Budget);
         }

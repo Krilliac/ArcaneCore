@@ -104,7 +104,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             if (_holding)
             {
                 Restored = _authority.Restore(stored, _characters);
-                int failedHeld = _authority.ReleaseHeldCommands();
+                int failedHeld = _authority.ReleaseHeldCommands(onFailure: LogHeldCommandFailure);
                 if (failedHeld > 0)
                 {
                     _logger.LogInformation("Social group table installed at attach: {Failed} held commands failed", failedHeld);
@@ -177,17 +177,12 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             }
         }
 
-        Sync();
+        // Closed BEFORE the final write, not after: the write below takes its snapshot, and a peer command acked between that snapshot and a later close would be in no write and lost. From here a command is refused (the peer answers "not the holder"
+        // and the sender keeps it), so the snapshot is the boundary whatever order the peer link and this feature stop in. The replay above emptied the hold under the table's lock and _stopping stops a new one, so nothing is discarded here.
+        // Closing first also leaves the table closed if Sync throws.
+        _authority?.CloseTable();
 
-        // The final write is queued: a loaded table is closed after it, whatever order the peer link and this feature stop in. A command acked from here on would be in no write, so it is refused (the peer answers "not the holder" and the sender keeps it).
-        if (_holding)
-        {
-            int unreplayed = _authority?.CloseTable() ?? 0;
-            if (unreplayed > 0)
-            {
-                _logger.LogWarning("Group table closed after the final write with {Count} commands still held; they are lost", unreplayed);
-            }
-        }
+        Sync();
 
         await Writes.StopAsync().ConfigureAwait(false);
     }
@@ -368,7 +363,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private void ReplayHeldCommands(int maxCommands)
     {
         GroupAuthority authority = _authority!;
-        _replayFailed += authority.ReleaseHeldCommands(maxCommands);
+        _replayFailed += authority.ReleaseHeldCommands(maxCommands, LogHeldCommandFailure);
         if (authority.HeldCommandCount == 0)
         {
             _replaying = false;
@@ -378,6 +373,9 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             }
         }
     }
+
+    private void LogHeldCommandFailure(string workerId, GroupCommand command, Exception exception)
+        => _logger.LogFault(LogLevel.Warning, "social.group-held-command", exception, "A held group command {Kind} from worker {Worker} failed when it was replayed", command.Kind, workerId);
 
     private static string Key(uint groupId) => "group:" + groupId;
 }

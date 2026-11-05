@@ -311,7 +311,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     /// <summary>Commands held through an outage and dropped, without a further send, because they had waited longer than <see cref="MaxHeldCommandAge"/>.</summary>
     public long Expired => Interlocked.Read(ref _expired);
 
-    /// <summary>Logins and Logouts that were still waiting at the head of the queue (held for an unreachable holder, or failing on an open link) after <see cref="MaxHeldCommandAge"/>, counted once each. They never expire, so a hung holder keeps them, and everything queued behind them, waiting; a value above zero that keeps growing means the Social holder is not answering.</summary>
+    /// <summary>Logins and Logouts that were still waiting at the head of the queue (held for an unreachable holder, or failing on an open link) after <see cref="MaxHeldCommandAge"/>, counted once each, when the hold for an unreachable holder ends or a send fails: a command still inside an unbounded hold is not counted until it comes out of it, so this is not a live view of one stuck there. They never expire, so a hung holder keeps them, and everything queued behind them, waiting; a value above zero that keeps growing means the Social holder is not answering.</summary>
     public long LoginLogoutStuckAtHead => Interlocked.Read(ref _stuckAtHead);
 
     public void Forward(GroupCommand command)
@@ -432,6 +432,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
                             if (held)
                             {
                                 await HoldUntilReachableAsync(reader, command).ConfigureAwait(false);
+                                NoteStuckAtHead(queued); // a hold that ended after the limit counts, as at the first hold
                             }
 
                             inHand = 0;

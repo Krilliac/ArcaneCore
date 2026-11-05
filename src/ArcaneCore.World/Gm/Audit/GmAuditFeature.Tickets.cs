@@ -165,10 +165,10 @@ public sealed partial class GmAuditFeature
             _tickets[ticket.Id] = ticket;
             GmTicketRecord filed = ticket;
             held = HoldTicketChange("file:" + filed.Id, filed.Id, now, () => RestoreHeldTicket(filed));
+            PersistTicket(ticket, held); // in the lock: a reload cannot slip between the decision to hold and the queued write
         }
 
         TouchQueue();
-        PersistTicket(ticket, held);
         return ticket;
     }
 
@@ -205,10 +205,10 @@ public sealed partial class GmAuditFeature
             updated = ticket with { Text = text, Category = newCategory, UpdatedAt = now };
             _tickets[ticketId] = updated;
             held = HoldTicketChange("text:" + ticketId, ticketId, now, () => ReplayTicketEdit(ticketId, row => row with { Text = text, Category = newCategory, UpdatedAt = now }));
+            PersistTicket(updated, held); // in the lock: a reload cannot slip between the decision to hold and the queued write
         }
 
         TouchQueue();
-        PersistTicket(updated, held);
         changed = true;
         return updated;
     }
@@ -229,10 +229,10 @@ public sealed partial class GmAuditFeature
             updated = ticket with { Response = response, UpdatedAt = now };
             _tickets[ticketId] = updated;
             held = HoldTicketChange("answer:" + ticketId, ticketId, now, () => ReplayTicketEdit(ticketId, row => row with { Response = response, UpdatedAt = now }));
+            PersistTicket(updated, held); // in the lock: a reload cannot slip between the decision to hold and the queued write
         }
 
         TouchQueue();
-        PersistTicket(updated, held);
         return updated;
     }
 
@@ -254,10 +254,10 @@ public sealed partial class GmAuditFeature
             long now = NowUnixSeconds;
             closed = Closed(ticket, closedBy, response, now);
             held = HoldTicketChange("close:" + ticketId, ticketId, now, () => ReplayTicketClose(ticketId, closedBy, response, now));
+            PersistTicket(closed, held); // in the lock: a reload cannot slip between the decision to hold and the queued write
         }
 
         TouchQueue();
-        PersistTicket(closed, held);
         return closed;
     }
 
@@ -283,19 +283,20 @@ public sealed partial class GmAuditFeature
     private GmTicketRecord? RemoveTicket(int ticketId)
     {
         GmTicketRecord? removed;
-        bool held = false;
         lock (_gate)
         {
             if (_tickets.Remove(ticketId, out removed))
             {
-                held = HoldTicketChange("delete:" + ticketId, ticketId, NowUnixSeconds, () => RemoveTicket(ticketId) is not null);
+                bool held = HoldTicketChange("delete:" + ticketId, ticketId, NowUnixSeconds, () => RemoveTicket(ticketId) is not null);
+
+                // In the lock: a reload cannot slip between the decision to hold and the queued write.
+                Writes.Save(TicketKey(ticketId), held ? RefuseHeldTicketWrite : store => store.DeleteTicketAsync(ticketId));
             }
         }
 
         if (removed is not null)
         {
             TouchQueue();
-            Writes.Save(TicketKey(ticketId), held ? RefuseHeldTicketWrite : store => store.DeleteTicketAsync(ticketId));
         }
 
         return removed;

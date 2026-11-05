@@ -627,13 +627,15 @@ public sealed class ClusterGroupRoutingHoldTests
         Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
     }
 
-    [Fact]
-    public async Task A_login_held_for_an_unreachable_holder_past_the_age_limit_is_counted_when_it_goes()
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_held_for_an_unreachable_holder_past_the_age_limit_is_counted_when_it_goes(GroupCommandKind kind)
     {
         var authority = new SwitchableAuthority();
         var time = new SteppedTimeProvider();
         await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
-        routing.Forward(Command(GroupCommandKind.Logout, 1));
+        routing.Forward(Command(kind, 1));
         await authority.Probed.WaitAsync(Safety);
 
         time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
@@ -641,7 +643,7 @@ public sealed class ClusterGroupRoutingHoldTests
         await routing.FlushAsync().WaitAsync(Safety);
 
         Assert.Equal(1, routing.LoginLogoutStuckAtHead);
-        Assert.Equal(new[] { GroupCommandKind.Logout }, authority.Executed.Select(static c => c.Kind));
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
     }
 
     [Fact]

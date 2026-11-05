@@ -70,13 +70,24 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
 
     /// <summary>
     /// Whether group requests from peers are served here. A node can run the peer listener without the Social lease (it holds Economy, or the lease went), and a command acked here would sit in a table that may never be loaded,
-    /// so <see cref="PresenceWireCodec"/> answers such a request "not the holder" and the sender keeps the command. In production this is <see cref="RealmAuthorityLeaseKeeper.Holds"/>, so it turns false as soon as the keeper knows of a loss;
-    /// until the old holder's next renewal tick it cannot know that another node took the lease, and it still takes commands.
+    /// so <see cref="PresenceWireCodec"/> answers such a request "not the holder" and the sender keeps the command. In production this is <see cref="RealmAuthorityLeaseKeeper.Holds"/>, so it turns false as soon as the keeper knows of a loss and when the lease's local expiry has passed; the store grants the lease to another node
+    /// only after that expiry, so a deposed node still takes commands (until its next renewal tick, 10 s by default) only when its clock runs behind the store's.
     /// </summary>
     public bool HoldsSocial => holdsSocial is null || holdsSocial();
 
     /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
-    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId) => Groups.Execute(workerId, command);
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
+    {
+        try
+        {
+            Groups.Execute(workerId, command);
+        }
+        catch (InvalidOperationException ex) when (ex is not PresenceRefusedException)
+        {
+            // As over the peer link, where the wire turns it into a refusal: the table's own code failed on this command, which says nothing about the link, so the sender drops it instead of retrying it as a transport failure (for a Login or Logout, forever).
+            throw new PresenceRefusedException(ex.Message);
+        }
+    }
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId) => Groups.Drain(workerId);
 

@@ -234,7 +234,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         }
     }
 
-    /// <summary>Commands that reached <see cref="Execute"/> after <see cref="CloseHeldTable"/> and were not applied.</summary>
+    /// <summary>Commands that reached <see cref="Execute"/> after <see cref="CloseHeldTable"/> or <see cref="CloseTable"/> and were not applied.</summary>
     public long CommandsRefusedAfterClose
     {
         get
@@ -284,10 +284,10 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
-    /// The reload is over: the oldest held commands, at most <paramref name="maxCommands"/>, run in order on the new table. Returns how many failed (the rest still ran). The table stays held while any are left, so a command
+    /// The reload is over: the oldest held commands, at most <paramref name="maxCommands"/>, run in order on the new table. Returns how many failed (the rest still ran); <paramref name="onFailure"/> gets the worker, the command and the exception of each, so the caller can say which. The table stays held while any are left, so a command
     /// that comes in meanwhile waits behind them; the hold ends with the call that runs the last one. A caller on the world thread passes a limit and calls again on the next tick, so a full backlog does not stall one tick.
     /// </summary>
-    public int ReleaseHeldCommands(int maxCommands = int.MaxValue)
+    public int ReleaseHeldCommands(int maxCommands = int.MaxValue, Action<string, GroupCommand, Exception>? onFailure = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCommands);
         lock (_gate)
@@ -307,6 +307,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     failed++;
+                    onFailure?.Invoke(next.WorkerId, next.Command, ex);
                 }
             }
 
@@ -340,8 +341,8 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
-    /// The node is stopping and this table has been written for the last time (the final sync after the replay): from now on nothing is applied, loaded or not. <see cref="TryExecute"/> answers false (a peer command is answered "not the holder", so its sender keeps it for the next holder) and <see cref="Execute"/> drops and counts
-    /// (<see cref="CommandsRefusedAfterClose"/>); a command acked after the final write would otherwise be lost with the table. Does not depend on the order the hosted services stop in. Returns how many held commands were discarded (none when the replay ran to its end). Idempotent.
+    /// The node is stopping and this table is about to be written for the last time (called after the replay and before the final sync, so that sync's snapshot is the boundary): from now on nothing is applied, loaded or not. <see cref="TryExecute"/> answers false (a peer command is answered "not the holder", so its sender keeps it for the next holder) and <see cref="Execute"/> drops and counts
+    /// (<see cref="CommandsRefusedAfterClose"/>); a command acked after that snapshot would otherwise be lost with the table. Does not depend on the order the hosted services stop in. Returns how many held commands were discarded (none when the replay ran to its end). Idempotent.
     /// </summary>
     public int CloseTable()
     {
@@ -487,7 +488,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         return size;
     }
 
-    /// <summary>Apply one command of the character on <paramref name="workerId"/> and queue the resulting events (or keep it, while the table is held). After <see cref="CloseHeldTable"/> it is dropped and counted.</summary>
+    /// <summary>Apply one command of the character on <paramref name="workerId"/> and queue the resulting events (or keep it, while the table is held). After <see cref="CloseHeldTable"/> or <see cref="CloseTable"/> it is dropped and counted.</summary>
     public void Execute(string workerId, GroupCommand command)
     {
         lock (_gate)
@@ -499,7 +500,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         }
     }
 
-    /// <summary>As <see cref="Execute"/>, but false, with nothing done, once the table is closed (<see cref="CloseHeldTable"/>): the peer path answers that as "not the holder", so the sender keeps the command for the next holder.</summary>
+    /// <summary>As <see cref="Execute"/>, but false, with nothing done, once the table is closed (<see cref="CloseHeldTable"/>, <see cref="CloseTable"/>): the peer path answers that as "not the holder", so the sender keeps the command for the next holder.</summary>
     public bool TryExecute(string workerId, GroupCommand command)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workerId);

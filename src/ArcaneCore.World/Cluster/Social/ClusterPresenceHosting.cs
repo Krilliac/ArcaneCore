@@ -99,6 +99,7 @@ public static class ClusterPresenceHosting
                     sp.GetRequiredService<LeaseRoutedPresence>(),
                     sp.GetRequiredService<PresenceHolderService>().Guilds,
                     keeper.NodeId,
+                    // TokenFor, not Holds, on purpose (unlike LeaseRoutedPresence): this says whether the node ever held the lease, and a deposed or stalled node keeps its token, so for a moment the guild link still calls itself the holder while the presence transport already routes remote. That is harmless: every write this node makes is refused by the commit fence and a lost lease stops the process.
                     () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null,
                     sp.GetRequiredService<ILoggerFactory>().CreateLogger<PeerGuildHolderLink>());
             });
