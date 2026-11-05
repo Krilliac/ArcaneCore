@@ -120,7 +120,7 @@ public sealed class PlayerbotBattlegroundQueueWorldTests : PlayerbotBattleground
     /// <summary>
     /// PlayerbotBattlegroundCoordinator.MayQueue refuses while the node does not hold the queue state: a plain cluster worker's local manager is empty, so a join would land in the
     /// holder's queue and the coordinator would never see its slot. The same bot queues at once on a node that holds it (the flow test above); here the feature is turned into a worker
-    /// whose holder link is absent, and the bot must not walk to a battlemaster, queue, or send a command to the holder.
+    /// whose holder link is absent, and the bot must not walk to a battlemaster, queue, or ask the holder to join or port (logins are still reported).
     /// </summary>
     [Fact]
     public async Task APlainClusterWorker_DoesNotQueueItsBots_BecauseItHoldsNoQueueState()
@@ -143,18 +143,19 @@ public sealed class PlayerbotBattlegroundQueueWorldTests : PlayerbotBattleground
 
             ScenarioContext.ExpectEqual(0, coordinator.Totals.Queued, "queues joined on a node that holds no queue state");
             ScenarioContext.Expect(!coordinator.Holds(ally.BotId), "the bot was taken on for a queue on a node that holds no queue state");
-            ScenarioContext.ExpectEqual(0, holder.Submitted, "commands the bot sent to the holder");
+            // A worker still tells the holder about logins and logouts; it must not ask to join or port.
+            ScenarioContext.ExpectEqual(0, holder.Count<BattlegroundJoinCommand>() + holder.Count<BattlegroundPortCommand>(), "join or port commands the bot sent to the holder");
             ScenarioContext.Expect(!await context.ReadAsync(() => Manager(context).StateOf(ally.Guid).InAnyQueue), "the bot is queued");
         });
     }
 
     private sealed class CountingHolder : IBattlegroundHolderLink
     {
-        private int _submitted;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<BattlegroundCommand> _submitted = new();
 
-        public int Submitted => Volatile.Read(ref _submitted);
+        public int Count<T>() where T : BattlegroundCommand => _submitted.OfType<T>().Count();
 
-        public void Submit(string workerId, BattlegroundCommand command) => Interlocked.Increment(ref _submitted);
+        public void Submit(string workerId, BattlegroundCommand command) => _submitted.Enqueue(command);
     }
 
     // --- caps and invitations ------------------------------------------------------------------------------------------
