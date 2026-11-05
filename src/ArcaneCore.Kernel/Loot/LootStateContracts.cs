@@ -29,7 +29,7 @@ public sealed record LootStateItem(
             && IsQuest == other.IsQuest && IsPerPlayer == other.IsPerPlayer && IsLooted == other.IsLooted
             && RandomPropertyId == other.RandomPropertyId && LootStateRules.SameSet(AllowedLooters, other.AllowedLooters) && LootStateRules.SameSet(LootedBy, other.LootedBy);
 
-    public override int GetHashCode() => HashCode.Combine(Slot, ItemId, Count, IsQuest, IsPerPlayer, IsLooted);
+    public override int GetHashCode() => HashCode.Combine(Slot, ItemId, Count, IsQuest, IsPerPlayer, IsLooted, RandomPropertyId);
 }
 
 /// <summary>
