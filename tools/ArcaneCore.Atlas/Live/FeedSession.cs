@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Commands;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32.SafeHandles;
 
 namespace ArcaneCore.Atlas.Live;
 
@@ -87,6 +88,12 @@ internal sealed class FeedSession : IDisposable
 
     /// <summary>True until the session is disposed or the pipe ends.</summary>
     public bool IsOpen => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _ended) == 0;
+
+    /// <summary>
+    /// The client end of the pipe, so a test can watch <see cref="SafePipeHandle.IsClosed"/>. <see cref="IsOpen"/> cannot show that the handle closed: it is
+    /// already false once the reader ends. Read it while the session is open; the getter throws after disposal.
+    /// </summary>
+    internal SafePipeHandle PipeHandle => _pipe.SafePipeHandle;
 
     /// <summary>
     /// Connects, verifies the pipe's owner, starts the reader loop and completes the hello exchange. On any failure the pipe is closed and a
@@ -364,10 +371,9 @@ internal sealed class FeedSession : IDisposable
         Volatile.Write(ref _ended, 1);
         FailWaiters(reason);
 
-        // The reader has ended, so nothing reads the pipe again: release the client handle now instead of leaving it to the finalizer.
-        // Windows keeps a pipe instance alive until every handle closes, so a leaked handle made the server's next instance on the
-        // same name fail with "All pipe instances are busy" and the reconnect could not happen. It is released before the close notice,
-        // so whoever sees "disconnected" can already reuse the name; the notice only reads Hello and PipeName, which survive disposal.
+        // The reader has ended, so nothing reads the pipe again: close the client handle now instead of leaving it to the finalizer. The end
+        // of the stream does not close it, and LiveFeed's close handler does not dispose the session. It is closed before the close notice,
+        // so no sink sees an ended session still holding its handle; LiveFeed's handler reads only Id and Hello, which survive disposal.
         try
         {
             Dispose();

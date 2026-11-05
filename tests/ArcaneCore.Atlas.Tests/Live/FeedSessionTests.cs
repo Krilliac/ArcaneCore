@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Commands;
 using ArcaneCore.Atlas.Live;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Win32.SafeHandles;
 using Xunit;
 
 namespace ArcaneCore.Atlas.Tests.Live;
@@ -11,13 +12,24 @@ public sealed class FeedSessionTests
 {
     private sealed class RecordingSink : IFeedSink
     {
+        private volatile SafePipeHandle? _watched;
+
         public TaskCompletionSource<string> ClosedReason { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Whether the watched handle was closed when the close notice arrived; null until then, or when nothing was watched.</summary>
+        public bool? HandleClosedAtNotice { get; private set; }
+
+        public void Watch(SafePipeHandle handle) => _watched = handle;
 
         public void Frame(FeedSession session, ParsedFrame frame)
         {
         }
 
-        public void Closed(FeedSession session, string reason) => ClosedReason.TrySetResult(reason);
+        public void Closed(FeedSession session, string reason)
+        {
+            HandleClosedAtNotice = _watched?.IsClosed;
+            ClosedReason.TrySetResult(reason);
+        }
     }
 
     /// <summary>A session that finished its hello exchange with a fake daemon, closed together.</summary>
@@ -107,17 +119,19 @@ public sealed class FeedSessionTests
         Assert.Equal("unsubscribe", (await c.Server.ReadAsync())["op"]!.GetValue<string>());
     }
 
-    [WindowsFact]
-    public async Task WhenTheServerEnds_TheClientPipeHandleIsReleasedBeforeTheCloseNotice_SoTheNameCanBeServedAgain()
+    [Fact]
+    public async Task WhenTheServerEnds_TheClientPipeHandleIsClosedBeforeTheCloseNotice()
     {
         await using Connected c = await OpenAsync(TimeSpan.FromSeconds(30));
+        SafePipeHandle handle = c.Session.PipeHandle;
+        c.Sink.Watch(handle);
+        Assert.False(handle.IsClosed);
 
         c.Server.Drop();
         await c.Sink.ClosedReason.Task.WaitAsync(FakeFeedServer.Patience);
 
-        // The fake server allows one instance. A client handle that outlived the reader would keep the old instance alive on Windows, and
-        // creating the next one on the same name would fail with "All pipe instances are busy".
-        await using var next = new FakeFeedServer(c.Server.PipeName);
-        Assert.False(c.Session.IsOpen);
+        // Sampled inside the notice, so this pins the order as well as the close. Nothing but the session closes this handle here: the end of
+        // the stream leaves it open, and RecordingSink does not dispose the session. IsOpen proves nothing, it is false as soon as the reader ends.
+        Assert.True(c.Sink.HandleClosedAtNotice);
     }
 }

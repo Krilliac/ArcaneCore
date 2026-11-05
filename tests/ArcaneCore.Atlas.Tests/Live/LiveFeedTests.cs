@@ -703,7 +703,7 @@ public sealed class LiveFeedTests
         await first.WriteAsync(Wire.Frame(1, 4, 1, Wire.Entity("1", "bot", 1, 2, 3)));
         await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
         first.Drop();
-        // IsConnected goes false when the reader ends, slightly before the store is emptied; the disconnected status is published after both.
+        // Earlier connected statuses are skipped; the disconnected one is published after the store is emptied.
         JsonObject closed;
         do
         {
