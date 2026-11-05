@@ -123,6 +123,58 @@ public sealed class GmGoWorldAndInstanceTests : GmGoBattlegroundAndInstanceTestB
     }
 
     [Fact]
+    public async Task Goname_FromTheWorld_MatchEndsWhileLoading_ReturnsToTheOriginThroughANewLoadingScreen()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-goname-origin-reload", async context =>
+        {
+            (_, _, Battleground a) = await context.EnterMatchAsync(BattlegroundType.WarsongGulch, "Scnorally", "Scnorhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMORGM", "Gmorgm", AccountSecurity.Administrator);
+            ClientTap anchor = await ClientTap.EnterAsync(world, "GMORANC", "Gmoranc", AccountSecurity.Player);
+            try
+            {
+                Battleground b = await CreateMatchWithAnchorAsync(context, anchor, a);
+                (uint mapId, float x, float y) = await context.ReadAsync(() =>
+                {
+                    Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                    return (p.MapId, p.X, p.Y);
+                });
+                ScenarioContext.Expect(mapId != Wsg, "the scenario needs the GM outside the battleground map");
+
+                gm.HoldWorldportAcks = true;
+                await gm.SayAsync(".goname " + anchor.Name);
+                await context.WaitUntilAsync("the GM's client holds the loading screen for the battleground", () => gm.HoldingNewWorld);
+
+                await anchor.DisposeAsync();
+                await context.WaitUntilAsync("B is deleted", () => Battlegrounds(context).Manager.GetBattleground(b.InstanceId, BattlegroundType.WarsongGulch) is null, TimeSpan.FromMinutes(2));
+
+                // The client loaded the battleground map; the origin is on another map id, so it needs a new loading screen (vmangos
+                // TeleportTo(oldLoc) is a far teleport, Player.cpp:2130) instead of the server entering the origin map behind its back.
+                await gm.AcknowledgeHeldNewWorldAsync();
+                await context.WaitUntilAsync("a second loading screen for the origin map is sent", () => gm.HoldingNewWorld);
+                (TeleportStage? stage, uint? destination) = await context.ReadAsync(() =>
+                {
+                    Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                    TeleportService teleports = context.Services.GetRequiredService<TeleportFeature>().Teleports;
+                    return (teleports.StageOf(p), teleports.DestinationOf(p)?.MapId);
+                });
+                ScenarioContext.ExpectEqual(TeleportStage.Far, stage, "teleport stage while the origin loads");
+                ScenarioContext.ExpectEqual(mapId, destination, "the map the second loading screen is for");
+
+                await gm.ReleaseWorldportAckAsync();
+                await context.WaitUntilAsync("the GM is back on its origin map", () => context.World.FindOnlinePlayer(gm.Name) is { IsInWorld: true, Map: { } map } p
+                    && map.MapId == mapId && Math.Abs(p.X - x) < 1f && Math.Abs(p.Y - y) < 1f);
+                MoveView v = await ViewAsync(context, gm.Name, a, b);
+                ScenarioContext.Expect(v.Online && !v.HasRecord && !v.BoundToB, "the GM is bound, has a record or was kicked");
+            }
+            finally
+            {
+                await anchor.DisposeAsync();
+            }
+        });
+    }
+
+    [Fact]
     public async Task Goname_WhileBeingTeleported_IsRefusedAndMakesNoRecord()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);

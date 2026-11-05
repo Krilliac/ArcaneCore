@@ -82,7 +82,7 @@ public sealed partial class EconomyFeature
             return;
         }
 
-        if (!Options.AllowCrossTeamTrade && other.Team != player.Team)
+        if (!Options.AllowCrossTeamTrade && !player.IsGameMaster && other.Team != player.Team)
         {
             Status(TradeStatus.WrongFaction);
             return;

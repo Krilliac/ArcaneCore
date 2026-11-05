@@ -13,7 +13,8 @@ namespace ArcaneCore.World.Honor;
 /// <summary>
 /// CMSG_INSPECT and MSG_INSPECT_HONOR_STATS (vmangos MiscHandler.cpp:943-1036). Both take the target's u64 guid and answer only for
 /// a player on the same map within 10 yards (INSPECT_DISTANCE, ObjectDefines.h:26) that the inspector could not attack: an
-/// enemy-faction player, or anyone unreachable, gets no reply (the original returns silently). CMSG_INSPECT also selects the
+/// enemy-faction player, or anyone unreachable, gets no reply (the original returns silently). A game master with GM mode on skips the
+/// attackability test (an ArcaneCore extension, vmangos has none) and so inspects either faction. CMSG_INSPECT also selects the
 /// target, and its answer is just the guid (the equipment is read by the client from the update fields). The honor statistics are the
 /// 50-byte <see cref="HonorPackets.InspectHonorStats"/> read from the target's honor update fields, so they work for whatever the
 /// honor feature published (zeros without it).
@@ -47,7 +48,8 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
             return null;
         }
 
-        return map.Combat.Hooks.CanAttack(inspector, target) ? null : target;
+        // A game master (.gm on) inspects across factions; the other player's own rules are untouched.
+        return !inspector.IsGameMaster && map.Combat.Hooks.CanAttack(inspector, target) ? null : target;
     }
 
     /// <summary>Tell every <see cref="IPlayerInspectReceiver"/> that a real player inspected a playerbot (after the reply was sent).</summary>
