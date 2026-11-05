@@ -473,7 +473,31 @@ public sealed class ClusterSupervisorHostingTests
     }
 
     [Fact]
-    public async Task TheDefaultTotalMemory_IsTheHostWideTotalOfTheSameSourceAsTheAdmissionProbe()
+    public void TheTotalMemoryResolver_PrefersTheHostWideTotal_AndUsesTheRuntimeFigureOnlyWhenTheOsHasNone()
+    {
+        const long mib = 1024L * 1024L;
+        int runtimeReads = 0;
+
+        // Two different figures: the host total wins and the runtime figure is never even read.
+        long withHost = ClusterSupervisorHostedService.ResolveTotalMemoryMb(() => 64_000 * mib, () =>
+        {
+            runtimeReads++;
+            return 8_000 * mib;
+        });
+        Assert.Equal(64_000, withHost);
+        Assert.Equal(0, runtimeReads);
+
+        long withoutHost = ClusterSupervisorHostedService.ResolveTotalMemoryMb(() => null, () =>
+        {
+            runtimeReads++;
+            return 8_000 * mib;
+        });
+        Assert.Equal(8_000, withoutHost);
+        Assert.Equal(1, runtimeReads);
+    }
+
+    [Fact]
+    public async Task TheDefaultTotalMemory_IsResolvedFromTheHostWideTotal()
     {
         ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1), new RecordingLauncher(), new FixedProbe(1), out ServiceProvider provider);
         await using ServiceProvider owner = provider;
@@ -481,6 +505,45 @@ public sealed class ClusterSupervisorHostingTests
         long? hostBytes = HostMemory.TryGetTotalBytes();
         Assert.True(hostBytes is > 0, "this platform has an OS total memory source");
         Assert.Equal(hostBytes!.Value / (1024L * 1024L), hosted.TotalMemoryMb());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAChildIsGivenUpOnDuringTheMidStartMemoryWait_ExitsWithFailureAndTheBelowMinimumReason()
+    {
+        var launcher = new RecordingLauncher();
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Configuration.AddConfiguration(Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50")));
+        builder.Services.AddSingleton<ISupervisedProcessLauncher>(launcher);
+        // The plan and p0's admission see plenty; p1's admission sees 10 MiB (refused for the reserve) and, in that same read, p0 exits with 78, which the supervisor gives up on.
+        builder.Services.AddSingleton<IClusterCapacityProbe>(new ExitingProbe(launcher, "p0", 78, 100_000, 100_000, 10));
+        var error = new StringWriter();
+
+        int exit = await ClusterSupervisorHosting.RunAsync(builder, error).WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(1, exit);
+        string text = error.ToString();
+        Assert.Contains("exiting with code 1: the supervisor stopped itself during its start", text, StringComparison.Ordinal);
+        Assert.Contains("below MinClusterProcesses (1)", text, StringComparison.Ordinal);
+        Assert.Contains("a process was given up on", text, StringComparison.Ordinal);
+        Assert.Equal(["p0"], launcher.Launched.ToArray());
+    }
+
+    /// <summary>A probe that replays <paramref name="values"/> and makes <paramref name="name"/> exit with <paramref name="code"/> on the read that returns the last value, the first time it does.</summary>
+    private sealed class ExitingProbe(RecordingLauncher launcher, string name, int code, params long[] values) : IClusterCapacityProbe
+    {
+        private int _next;
+        private int _exited;
+
+        public long GetAvailableMemoryMb()
+        {
+            int index = Math.Min(Interlocked.Increment(ref _next) - 1, values.Length - 1);
+            if (index == values.Length - 1 && Interlocked.Exchange(ref _exited, 1) == 0)
+            {
+                launcher.ExitProcess(name, code);
+            }
+
+            return values[index];
+        }
     }
 
     [Fact]
@@ -506,7 +569,12 @@ public sealed class ClusterSupervisorHostingTests
         int delays = 0;
         hosted.DelayAsync = (_, _) =>
         {
-            delays++;
+            // Bounded: a regression that never gives up fails here instead of hanging the assembly.
+            if (++delays > ClusterSupervisorHostedService.MaxMidStartMemoryRetries + 1)
+            {
+                throw new TimeoutException("the supervisor never gave up");
+            }
+
             return Task.CompletedTask;
         };
 
@@ -621,6 +689,7 @@ public sealed class ClusterSupervisorHostingTests
 
     private sealed class RecordingLauncher : ISupervisedProcessLauncher
     {
+        private readonly ConcurrentDictionary<string, Process> _processes = new(StringComparer.Ordinal);
         private int _drained;
         private int _disposed;
 
@@ -639,8 +708,6 @@ public sealed class ClusterSupervisorHostingTests
             _processes[config.Name] = process;
             return process;
         }
-
-        private readonly ConcurrentDictionary<string, Process> _processes = new(StringComparer.Ordinal);
 
         /// <summary>Makes the last launched process of <paramref name="name"/> exit on its own with <paramref name="code"/> (0 is a clean exit the supervisor leaves down).</summary>
         public void ExitProcess(string name, int code) => _processes[name].Exit(code);

@@ -10,8 +10,8 @@ namespace ArcaneCore.Kernel.Tests.Ops;
 
 /// <summary>
 /// The supervisor token is taken out of the environment at the start of every daemon (<see cref="SupervisorProtocol.CaptureProcessToken"/>) and the readers take it from the
-/// captured copy: these tests go through the production paths (the production <see cref="HeartbeatWriter"/> constructor, the host's configuration builder, the daemon entry
-/// points) instead of injecting an environment, so a reader reverted to the live environment, or a daemon that stops capturing, fails here.
+/// captured copy: these tests go through the production paths (the public <see cref="HeartbeatWriter"/> seam plus a source-text pin on the daemon's writer constructor, the host's configuration
+/// builder, the daemon entry points) instead of injecting an environment, so a reader reverted to the live environment, or a daemon that stops capturing, fails here.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 public sealed class SupervisorTokenWiringTests
