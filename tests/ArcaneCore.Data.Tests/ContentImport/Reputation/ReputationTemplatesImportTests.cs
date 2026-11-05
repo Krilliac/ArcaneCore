@@ -159,4 +159,27 @@ public sealed class ReputationTemplatesImportTests : IAsyncLifetime
         Assert.Equal([21u], await verify.Set<ReputationSpilloverTemplateRow>().Select(r => r.Faction).ToListAsync());
         Assert.Equal(3, await verify.Set<ReputationRewardRateRow>().CountAsync());
     }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Write_WithReplace_ARatesOnlyDump_KeepsEverySpilloverRow_AndReplacesTheRates(DatabaseProvider provider)
+    {
+        const string ratesOnly = """
+            CREATE TABLE `reputation_reward_rate` (`faction` smallint unsigned NOT NULL, `quest_rate` float, `creature_rate` float, `spell_rate` float, PRIMARY KEY (`faction`));
+            INSERT INTO `reputation_reward_rate` VALUES (21,2,3,4);
+            """;
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            await Import(Dump).WriteAsync(db, replace: false);
+            db.ChangeTracker.Clear();
+
+            await Import(ratesOnly).WriteAsync(db, replace: true);
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(connection);
+        Assert.Equal(12, await verify.Set<ReputationSpilloverTemplateRow>().CountAsync());
+        Assert.Equal([21u], await verify.Set<ReputationRewardRateRow>().Select(r => r.Faction).ToListAsync());
+    }
 }

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -38,15 +39,34 @@ public sealed class ChickenCluckTests
         public IReadOnlyList<Player> GroupMembersOf(Player player) => [];
     }
 
+    private const uint QuestGiverFlag = 2;
+    private const string FirstCluck = "Cluck cluck, first line";
+    private const string SecondCluck = "Cluck cluck, second line";
+
+    /// <summary>
+    /// The chicken's creature_ai_texts lines, so what it says can be asserted. Its template carries the quest-giver flag (2) from the start:
+    /// the AI must clear it on its first update, so a chicken that never reset would read as offering before any emote.
+    /// </summary>
+    private static CreatureAiContent ClucksAiContent() => new([], [new CreatureAiText(ChickenCluckAI.SayClucks1, FirstCluck, 0, 0, 0), new CreatureAiText(ChickenCluckAI.SayClucks2, SecondCluck, 0, 0, 0)]);
+
+    private static (WorldRuntime World, Creature Chicken, Player Player, ChickenCluckAI Ai, FakeSession Session) RigWithSession(CompleteQuests quests)
+    {
+        CreatureContent content = new([Template(ChickenCluckAI.Entry, b => b.NpcFlags = QuestGiverFlag)], [Spawn(1, ChickenCluckAI.Entry, 0, 0)], [], [], [], ClucksAiContent());
+        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = quests });
+        (Player player, FakeSession session) = AddPlayer(world, 1, 2, 0);
+        Creature chicken = Assert.Single(system.Creatures);
+        Assert.Equal(QuestGiverFlag, chicken.NpcFlags); // the template flag is on the creature until the AI's first update
+        world.RunTick(100);
+        return (world, chicken, player, Assert.IsType<ChickenCluckAI>(chicken.AI), session);
+    }
+
     private static (WorldRuntime World, Creature Chicken, Player Player, ChickenCluckAI Ai) Rig(CompleteQuests quests)
     {
-        CreatureContent content = new([Template(ChickenCluckAI.Entry)], [Spawn(1, ChickenCluckAI.Entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
-        (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = quests });
-        (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
-        Creature chicken = Assert.Single(system.Creatures);
-        world.RunTick(100);
-        return (world, chicken, player, Assert.IsType<ChickenCluckAI>(chicken.AI));
+        (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai, FakeSession _) = RigWithSession(quests);
+        return (world, chicken, player, ai);
     }
+
+    private static List<string> Heard(FakeSession session) => [.. Packets(session, WorldOpcode.SmsgMessagechat).Select(p => ParseMonsterChat(p).Message)];
 
     [Fact]
     public void ItIsAPlainCritter_BeforeAnyEmote()
@@ -74,12 +94,15 @@ public sealed class ChickenCluckTests
     [Fact]
     public void ACheer_WithTheQuestComplete_OffersAtOnce_AndTheOfferResetsAfterTwentySeconds()
     {
-        (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai) = Rig(new CompleteQuests { Complete = true });
+        (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai, FakeSession session) = RigWithSession(new CompleteQuests { Complete = true });
         using (world)
         {
+            Assert.False(ai.Offering);
+            session.Clear();
             ai.OnReceiveEmote(player, ChickenCluckAI.TextEmoteCheer);
             Assert.True(ai.Offering);
             Assert.Equal(ChickenCluckAI.FactionFriendly, chicken.FactionTemplate);
+            Assert.Equal([SecondCluck], Heard(session));
 
             Run(world, 19_000);
             Assert.True(ai.Offering);
@@ -93,9 +116,10 @@ public sealed class ChickenCluckTests
     [Fact]
     public void AChickenEmote_OffersOnlyOnceTheRandomDrawWins()
     {
-        (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai) = Rig(new CompleteQuests());
+        (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai, FakeSession session) = RigWithSession(new CompleteQuests());
         using (world)
         {
+            session.Clear();
             int emotes = 0;
             while (!ai.Offering && emotes < 5000)
             {
@@ -105,13 +129,14 @@ public sealed class ChickenCluckTests
 
             Assert.True(ai.Offering, "5000 /chicken emotes never won the random draw");
             Assert.Equal(ChickenCluckAI.FactionFriendly, chicken.FactionTemplate);
+            Assert.Equal([FirstCluck], Heard(session)); // spoken once, on the winning draw only
         }
     }
 
     [Fact]
     public void ACritterTypeChicken_KeepsTheCritterBehaviour_ItFleesFromAHitAndDoesNotRetaliate()
     {
-        CreatureContent content = new([Template(ChickenCluckAI.Entry) with { CreatureType = 8 }], [Spawn(1, ChickenCluckAI.Entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        CreatureContent content = new([Template(ChickenCluckAI.Entry, b => b.NpcFlags = QuestGiverFlag) with { CreatureType = 8 }], [Spawn(1, ChickenCluckAI.Entry, 0, 0)], [], [], [], ClucksAiContent());
         (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = new CompleteQuests() });
         using (world)
         {

@@ -42,6 +42,44 @@ public sealed class AuctionBotFeatureTests
         Assert.Equal(1, await fixture.CountAsync<AuctionRow>());
     }
 
+    /// <summary>
+    /// The feature's own wiring (<c>p.Security &gt; AccountSecurity.Player</c> into <c>CountedOnlineLevels</c>) on a real world with a staff
+    /// character at level 60 and a player at level 20 online: the pure helper is covered in <c>AuctionBotGapTests</c>, this proves the
+    /// feature feeds it the session's security and honours <c>DynamicIgnoreGmAccounts</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(false, 60u)]
+    [InlineData(true, 20u)]
+    public async Task The_dynamic_level_cap_counts_staff_characters_unless_ignore_gm_accounts_is_on(bool ignoreGm, uint expected)
+    {
+        await using var fixture = await Fixture.CreateAsync(extra: new Dictionary<string, string?>
+        {
+            ["AuctionHouseBot:DynamicMaxRequiredLevel"] = "true",
+            ["AuctionHouseBot:DynamicIgnoreGmAccounts"] = ignoreGm ? "true" : "false",
+            ["AuctionHouseBot:MaxRequiredLevel"] = "10",
+        });
+
+        uint cap = await fixture.OnWorld(() =>
+        {
+            ArcaneCore.Game.Entities.Player Online(int id, string name, byte level, ArcaneCore.Kernel.Accounts.AccountSecurity security)
+            {
+                var character = new CharacterRecord { Id = id, AccountId = id, Name = name, Race = 1, Class = 1, Gender = 0, Level = level, MapId = 0 };
+                var player = new ArcaneCore.Game.Entities.Player(character,
+                    new ArcaneCore.Game.Entities.PlayerAppearance(49, 1, ArcaneCore.Game.PowerType.Rage, 60, 0, 60, 1000, 0, 400),
+                    new ArcaneCore.TestSupport.NullPlayerSession(id, security));
+                player.Relocate(10f, 10f, 10f, 0f, 0);
+                fixture.World.AddPlayer(player, fixture.World.GetMap(0));
+                return player;
+            }
+
+            Online(9001, "Dynplayer", 20, ArcaneCore.Kernel.Accounts.AccountSecurity.Player);
+            Online(9002, "Dynstaff", 60, ArcaneCore.Kernel.Accounts.AccountSecurity.GameMaster);
+            return fixture.Bot.CurrentMaxRequiredLevel(1_000_000);
+        });
+
+        Assert.Equal(expected, cap);
+    }
+
     private const string EconomyScope = ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy;
 
     /// <summary>A map worker (worker-a) whose economy scope is held by worker-b, which never renews it.</summary>

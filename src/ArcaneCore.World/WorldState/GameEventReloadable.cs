@@ -20,8 +20,8 @@ namespace ArcaneCore.World.WorldState;
 /// set and initialises at once, so nothing flickers and nothing is announced again). An event whose window changed is
 /// rescheduled by the new service's first update. Limits: a manual <c>.event start</c> / <c>.event stop</c> override of the schedule does
 /// not survive a reload (the table decides again), and the roll-back of a failed commit rebuilds the previous service from the previous tables.
-/// The rebuilt service is seeded with the running set (<c>SeedRunning</c>), so it does not notify listeners: events the failed swap had stopped
-/// are running again without a stop or start callback having fired for the listeners, which see only what the swap itself announced.
+/// The rebuilt service is seeded with the running set (<c>SeedRunning</c>), so it does not notify listeners: listeners get the stop the
+/// failed swap announced for an event, and miss only the matching start when the roll-back runs that event again.
 /// This is the accepted limit of the roll-back, not a bug to retry around.
 /// </para>
 /// </summary>
