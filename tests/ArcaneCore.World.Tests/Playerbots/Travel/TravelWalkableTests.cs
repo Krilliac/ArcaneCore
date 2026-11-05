@@ -29,7 +29,7 @@ public sealed class TravelWalkableTests
         Assert.DoesNotContain(route.Legs, l => l.Means == TravelMeans.Walk && l.From.Position.X < 7000f && l.To.Position.X > 9000f);
     }
 
-    private static readonly TriggerPortal UpToTeldrassil = new(527, new TravelPlace(1, new Vector3(8790f, 967f, 30f)), new TravelPlace(1, new Vector3(9500f, 1500f, 250f)));
+    private static readonly TriggerPortal RuttheranToUpperLevel = new(542, new TravelPlace(1, new Vector3(8799.41f, 969.787f, 30.24f)), new TravelPlace(1, new Vector3(9946.25f, 2612.97f, 1316.49f)));
 
     /// <summary>
     /// Two places the region graph could not place count as joined, except at the two levels a tall same-map trigger joins (Rut'theran and
@@ -39,13 +39,13 @@ public sealed class TravelWalkableTests
     public void TwoUnplacedPlaces_AtTheTwoLevelsOfATallTrigger_AreNotJoined_ButOnOneLevelTheyAre()
     {
         var low = new TravelPlace(1, new Vector3(8800f, 970f, 40f));
-        var high = new TravelPlace(1, new Vector3(9450f, 1480f, 240f));
+        var high = new TravelPlace(1, new Vector3(9900f, 2600f, 1310f));
         var low2 = new TravelPlace(1, new Vector3(8900f, 1000f, 30f));
-        Assert.True(PlayerbotTravel.TriggerSeparates(low, high, [UpToTeldrassil]));
-        Assert.True(PlayerbotTravel.TriggerSeparates(high, low, [UpToTeldrassil]));
-        Assert.False(PlayerbotTravel.Joined(low, high, 0, false, 0, false, [UpToTeldrassil]));
-        Assert.False(PlayerbotTravel.TriggerSeparates(low, low2, [UpToTeldrassil]));
-        Assert.True(PlayerbotTravel.Joined(low, low2, 0, false, 0, false, [UpToTeldrassil]));
+        Assert.True(PlayerbotTravel.TriggerSeparates(low, high, [RuttheranToUpperLevel]));
+        Assert.True(PlayerbotTravel.TriggerSeparates(high, low, [RuttheranToUpperLevel]));
+        Assert.False(PlayerbotTravel.Joined(low, high, 0, false, 0, false, [RuttheranToUpperLevel]));
+        Assert.False(PlayerbotTravel.TriggerSeparates(low, low2, [RuttheranToUpperLevel]));
+        Assert.True(PlayerbotTravel.Joined(low, low2, 0, false, 0, false, [RuttheranToUpperLevel]));
         Assert.True(PlayerbotTravel.Joined(low, high, 0, false, 0, false, []));
         Assert.True(PlayerbotTravel.Joined(low, high, 0, false, 0, false, null));
     }
@@ -58,7 +58,7 @@ public sealed class TravelWalkableTests
         var a = new TravelPlace(1, new Vector3(0f, 5f, 10f));
         var b = new TravelPlace(1, new Vector3(50f, 5f, 100f));
         Assert.False(PlayerbotTravel.TriggerSeparates(a, b, [hop]));
-        Assert.True(PlayerbotTravel.Joined(a, b, 3, true, 3, true, [UpToTeldrassil]));
+        Assert.True(PlayerbotTravel.Joined(a, b, 3, true, 3, true, [RuttheranToUpperLevel]));
         Assert.False(PlayerbotTravel.Joined(a, b, 3, true, 4, true, []));
     }
 }

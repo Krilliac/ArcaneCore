@@ -549,7 +549,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// <item>Walkable: the same map, not separated by the water of Teldrassil (<c>SeparatedByWater</c>, #1466), and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
     /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
-    /// failure then replans. The goal reads its tile at once (<see cref="BlockingLocates"/>), so a goal on a tile not read yet is placed.
+    /// failure then replans. The exception is the two levels of a same-map trigger that moves the bot by more than 150 yards in height (<see cref="TriggerSeparates"/>):
+    /// two unplaced places at those two levels are not joined, so the planner takes the trigger. The first same-map place the planner asks about after the start
+    /// reads its tile at once (<see cref="BlockingLocates"/>); on a cross-map goal that is the first same-map node (a port or a trigger end), not the goal.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
     /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
@@ -652,8 +654,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     private static readonly PathOptions BlockingDryWalkingLocate = DryWalkingLocate with { NonBlockingTiles = false };
 
     /// <summary>
-    /// How many places one set of facts locates with a blocking tile read: the first place that is not the bot's own, which the planner asks
-    /// about right after the start, so the goal. A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// How many places one set of facts locates with a blocking tile read: the first same-map place that is not the bot's own, which the planner asks
+    /// about right after the start. That is the goal when the goal is on the bot's map; for a goal on another map the walkable test returns before
+    /// locating anything (the maps differ) and the planner skips other-map nodes, so it is the first same-map node (a port or a trigger end). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
     /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
     /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
     /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
