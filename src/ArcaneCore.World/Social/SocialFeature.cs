@@ -203,6 +203,13 @@ public sealed class SocialFeature(
 
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
+
+        // Decided before the read below: a lease that arrives after this rereads the guilds and petitions (SocialPetitionFeature), and one held now was held when the read ran.
+        if (services?.GetService<IGuildHolderLink>() is PeerGuildHolderLink { IsHolder: false } guildLink)
+        {
+            guildLink.MarkReloadPending();
+        }
+
         _guildsLoaded = Task.Run(LoadGuildsAsync);
         _statsTimer = new Timer(_ => world.Post(RunPeriodicStatsPass), null, StatsIntervalMs, StatsIntervalMs);
     }

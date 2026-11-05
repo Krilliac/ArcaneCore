@@ -164,7 +164,7 @@ public sealed partial class GmAuditFeature
             ticket = new GmTicketRecord(NextTicketId(), characterId, text, category, mapId, x, y, z, now, now, GmTicketStatus.Open, string.Empty, string.Empty, 0);
             _tickets[ticket.Id] = ticket;
             GmTicketRecord filed = ticket;
-            held = HoldTicketChange("file:" + filed.Id, filed.Id, () => RestoreHeldTicket(filed));
+            held = HoldTicketChange("file:" + filed.Id, filed.Id, now, () => RestoreHeldTicket(filed));
         }
 
         TouchQueue();
@@ -200,9 +200,11 @@ public sealed partial class GmAuditFeature
                 return ticket;
             }
 
-            updated = ticket with { Text = text, Category = newCategory, UpdatedAt = NowUnixSeconds };
-            _tickets[updated.Id] = updated;
-            held = HoldTicketChange("text:" + characterId, updated.Id, () => UpdateTicketText(characterId, text, newCategory, out _));
+            long now = NowUnixSeconds;
+            int ticketId = ticket.Id;
+            updated = ticket with { Text = text, Category = newCategory, UpdatedAt = now };
+            _tickets[ticketId] = updated;
+            held = HoldTicketChange("text:" + ticketId, ticketId, now, () => ReplayTicketEdit(ticketId, row => row with { Text = text, Category = newCategory, UpdatedAt = now }));
         }
 
         TouchQueue();
@@ -223,9 +225,10 @@ public sealed partial class GmAuditFeature
                 return null;
             }
 
-            updated = ticket with { Response = response, UpdatedAt = NowUnixSeconds };
+            long now = NowUnixSeconds;
+            updated = ticket with { Response = response, UpdatedAt = now };
             _tickets[ticketId] = updated;
-            held = HoldTicketChange("answer:" + ticketId, ticketId, () => RespondToTicket(ticketId, response));
+            held = HoldTicketChange("answer:" + ticketId, ticketId, now, () => ReplayTicketEdit(ticketId, row => row with { Response = response, UpdatedAt = now }));
         }
 
         TouchQueue();
@@ -249,21 +252,23 @@ public sealed partial class GmAuditFeature
             }
 
             long now = NowUnixSeconds;
-            closed = ticket with
-            {
-                Status = GmTicketStatus.Closed,
-                Response = string.IsNullOrEmpty(response) ? ticket.Response : response,
-                ClosedBy = closedBy,
-                ClosedAt = now,
-                UpdatedAt = now,
-            };
-            held = HoldTicketChange("close:" + ticketId, ticketId, () => CloseTicket(ticketId, closedBy, response));
+            closed = Closed(ticket, closedBy, response, now);
+            held = HoldTicketChange("close:" + ticketId, ticketId, now, () => ReplayTicketClose(ticketId, closedBy, response, now));
         }
 
         TouchQueue();
         PersistTicket(closed, held);
         return closed;
     }
+
+    private static GmTicketRecord Closed(GmTicketRecord ticket, string closedBy, string? response, long at) => ticket with
+    {
+        Status = GmTicketStatus.Closed,
+        Response = string.IsNullOrEmpty(response) ? ticket.Response : response,
+        ClosedBy = closedBy,
+        ClosedAt = at,
+        UpdatedAt = at,
+    };
 
     /// <summary>Delete an open ticket outright, row included (vmangos <c>.ticket delete</c>). False when there is no such ticket.</summary>
     public bool DeleteTicket(int ticketId) => RemoveTicket(ticketId) is not null;
@@ -283,7 +288,7 @@ public sealed partial class GmAuditFeature
         {
             if (_tickets.Remove(ticketId, out removed))
             {
-                held = HoldTicketChange("delete:" + ticketId, ticketId, () => RemoveTicket(ticketId));
+                held = HoldTicketChange("delete:" + ticketId, ticketId, NowUnixSeconds, () => RemoveTicket(ticketId) is not null);
             }
         }
 

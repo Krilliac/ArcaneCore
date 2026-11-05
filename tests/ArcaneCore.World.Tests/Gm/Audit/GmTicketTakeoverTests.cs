@@ -176,6 +176,119 @@ public sealed class GmTicketTakeoverTests
     }
 
     [Fact]
+    public async Task Held_text_never_lands_on_the_new_stored_ticket_of_a_character_whose_ticket_the_holder_closed()
+    {
+        await using Rig rig = await Rig.CreateAsync(Ticket(1, 1));
+        await rig.OnWorld(() => rig.Audit.UpdateTicketText(1, "old text", 7, out _));
+
+        // The holder closed ticket 1, and the character then filed ticket 9 there. Both rows are older than the held change: only the ticket it was made on tells them apart.
+        rig.Rows.Seed(ClosedByHolder(Ticket(1, 1)));
+        rig.Rows.Seed(Ticket(9, 1, "the new ticket"));
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+        await rig.Audit.Writes.FlushAsync();
+
+        Assert.Equal(0, rig.Store.TicketWrites);
+        Assert.Empty(rig.Audit.Writes.RetainedKeys);
+        Assert.Equal("the new ticket", rig.Rows.Ticket(9)!.Text);
+        Assert.Equal((byte)0, rig.Rows.Ticket(9)!.Category);
+        Assert.Equal(GmTicketStatus.Closed, rig.Rows.Ticket(1)!.Status);
+        Assert.Equal("help", rig.Rows.Ticket(1)!.Text);
+    }
+
+    [Fact]
+    public async Task Held_text_of_a_dropped_filing_never_lands_on_the_stored_ticket_that_won()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        GmTicketRecord dropped = await rig.OnWorld(() =>
+        {
+            GmTicketRecord filed = rig.Audit.CreateTicket(7, "filed here", 0, 0, 0f, 0f, 0f)!;
+            Assert.NotNull(rig.Audit.UpdateTicketText(7, "edited here", out _));
+            return filed;
+        });
+        rig.Rows.Seed(Ticket(50, 7, "at the holder"));
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+        await rig.Audit.Writes.FlushAsync();
+
+        Assert.Equal(0, rig.Store.TicketWrites);
+        Assert.Empty(rig.Audit.Writes.RetainedKeys);
+        Assert.Null(rig.Rows.Ticket(dropped.Id));
+        Assert.Equal("at the holder", rig.Rows.Ticket(50)!.Text);
+        Assert.Equal("at the holder", await rig.OnWorld(() => rig.Audit.OpenTicketOf(7)!.Text));
+    }
+
+    [Fact]
+    public async Task Held_change_older_than_the_stored_row_is_skipped()
+    {
+        await using Rig rig = await Rig.CreateAsync(Ticket(1, 1), Ticket(2, 2), Ticket(3, 3), Ticket(4, 4));
+        await rig.OnWorld(() =>
+        {
+            Assert.NotNull(rig.Audit.RespondToTicket(1, "held answer"));
+            Assert.NotNull(rig.Audit.UpdateTicketText(2, "held text", out _));
+            Assert.NotNull(rig.Audit.CloseTicket(3, "Gm", "held close"));
+            Assert.True(rig.Audit.DeleteTicket(4));
+            return true;
+        });
+
+        // The holder's rows are newer than every change held here.
+        long later = rig.Audit.NowUnixSeconds + 3600;
+        GmTicketRecord[] holders = [.. new[] { 1, 2, 3, 4 }.Select(id => Ticket(id, id, "holder text") with { Response = "holder answer", UpdatedAt = later })];
+        foreach (GmTicketRecord row in holders)
+        {
+            rig.Rows.Seed(row);
+        }
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+        await rig.Audit.Writes.FlushAsync();
+
+        Assert.Equal(0, rig.Store.TicketWrites);
+        Assert.Empty(rig.Audit.Writes.RetainedKeys);
+        foreach (GmTicketRecord row in holders)
+        {
+            Assert.Equal(row, rig.Rows.Ticket(row.Id));
+        }
+    }
+
+    [Fact]
+    public async Task A_stored_row_changed_in_the_same_second_as_the_held_change_is_kept()
+    {
+        await using Rig rig = await Rig.CreateAsync(Ticket(1, 1));
+        GmTicketRecord held = await rig.OnWorld(() => rig.Audit.RespondToTicket(1, "held answer")!);
+        rig.Rows.Seed(Ticket(1, 1) with { Response = "holder answer", UpdatedAt = held.UpdatedAt });
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+        await rig.Audit.Writes.FlushAsync();
+
+        Assert.Equal(0, rig.Store.TicketWrites);
+        Assert.Equal("holder answer", rig.Rows.Ticket(1)!.Response);
+    }
+
+    [Fact]
+    public async Task Held_changes_of_one_ticket_all_land_stamped_when_they_were_made()
+    {
+        await using Rig rig = await Rig.CreateAsync(Ticket(1, 1));
+        GmTicketRecord last = await rig.OnWorld(() =>
+        {
+            Assert.NotNull(rig.Audit.RespondToTicket(1, "held answer"));
+            return rig.Audit.UpdateTicketText(1, "held text", out _)!;
+        });
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+        await rig.Audit.Writes.FlushAsync();
+
+        GmTicketRecord stored = rig.Rows.Ticket(1)!;
+        Assert.Equal("held answer", stored.Response);
+        Assert.Equal("held text", stored.Text);
+        Assert.Equal(last.UpdatedAt, stored.UpdatedAt);
+    }
+
+    [Fact]
     public async Task Failed_reload_keeps_the_writes_held_and_is_tried_again()
     {
         await using Rig rig = await Rig.CreateAsync(Ticket(1, 1));

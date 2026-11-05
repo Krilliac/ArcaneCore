@@ -27,8 +27,11 @@ public sealed partial class GmAuditFeature
     // True from attach on a clustered node that did not hold the Social lease then, until the queue has been reread after gaining it. Changed at attach and under _gate; read without it on the world tick.
     private volatile bool _ticketsStale;
 
-    /// <summary>A ticket change made while the queue is stale: <see cref="Replay"/> runs the same operation again on the reread queue. A newer change of the same <see cref="Key"/> replaces it, so the list stays about as small as the queue.</summary>
-    private readonly record struct HeldTicketChange(string Key, Action Replay);
+    /// <summary>
+    /// A ticket change made while the queue is stale, bound to the one ticket it was made on. <see cref="Replay"/> applies it to that ticket of the reread queue, stamped with <see cref="ChangedAt"/>, and says whether it could.
+    /// A newer change of the same <see cref="Key"/> replaces it, so the list stays about as small as the queue.
+    /// </summary>
+    private readonly record struct HeldTicketChange(string Key, int TicketId, long ChangedAt, Func<bool> Replay);
 
     /// <summary>
     /// World thread: whether the ticket queue is current for this node's holding of the Social lease. Always true on a node that held the lease at attach (or runs no keeper).
@@ -59,7 +62,7 @@ public sealed partial class GmAuditFeature
     /// Call with <c>_gate</c> held, in the same lock as the cache change: remembers the change for <see cref="ApplyTicketReload"/> when the queue is stale. True when it did: the caller then queues
     /// <see cref="RefuseHeldTicketWrite"/> in place of the write, so the key stays retained and is named at stop exactly as a non-holder's refused write is, but cannot land when the lease arrives.
     /// </summary>
-    private bool HoldTicketChange(string key, int ticketId, Action replay)
+    private bool HoldTicketChange(string key, int ticketId, long changedAt, Func<bool> replay)
     {
         if (!_ticketsStale)
         {
@@ -67,7 +70,7 @@ public sealed partial class GmAuditFeature
         }
 
         _heldTicketChanges.RemoveAll(change => change.Key == key);
-        _heldTicketChanges.Add(new HeldTicketChange(key, replay));
+        _heldTicketChanges.Add(new HeldTicketChange(key, ticketId, changedAt, replay));
         _heldTicketIds.Add(ticketId);
         return true;
     }
@@ -109,9 +112,11 @@ public sealed partial class GmAuditFeature
     }
 
     /// <summary>
-    /// World thread: storage replaces the ticket queue, then the changes held here run again on it, in order, as the normal operations. A held change that no longer applies (the previous holder closed or deleted the
-    /// ticket, or the character already has a stored open ticket) does nothing, so it reverts nothing. Every write queued while stale is replaced first, so none stays retained. In one lock, so no other thread sees the
-    /// queue between the two steps. With no store the cache is all there is: it stays, and the held changes are already in it.
+    /// World thread: storage replaces the ticket queue, then the changes held here are applied to it, in order, each to the ticket it was made on. Held changes can be arbitrarily old (they collect from attach, not from
+    /// the gain), so one is skipped, with a log line, when the stored row changed at or after the moment it was made (whole seconds: a tie goes to what is stored), when its ticket is not in the queue (the previous holder
+    /// closed or deleted it, or the filing was dropped), or when it files a ticket for a character that has a stored open one. A skipped change reverts nothing. The comparison reads the rows as stored, not the queue, so
+    /// one held change never hides the next. Every write queued while stale is replaced first, so none stays retained. In one lock, so no other thread sees the queue between the two steps. With no store the cache is all
+    /// there is: it stays, and the held changes are already in it.
     /// </summary>
     private void ApplyTicketReload(IReadOnlyList<GmTicketRecord>? stored, int maxTicketId)
     {
@@ -121,7 +126,8 @@ public sealed partial class GmAuditFeature
             return;
         }
 
-        int replayed;
+        int replayed = 0;
+        int skipped = 0;
         lock (_gate)
         {
             HeldTicketChange[] held = [.. _heldTicketChanges];
@@ -140,40 +146,73 @@ public sealed partial class GmAuditFeature
             }
 
             _tickets.Clear();
+            Dictionary<int, long> storedAt = [];
             foreach (GmTicketRecord ticket in stored)
             {
                 _tickets[ticket.Id] = ticket;
+                storedAt[ticket.Id] = ticket.UpdatedAt;
             }
 
             _lastTicketId = Math.Max(_lastTicketId, Math.Max(maxTicketId, stored.Count == 0 ? 0 : stored.Max(t => t.Id)));
             foreach (HeldTicketChange change in held)
             {
-                change.Replay();
-            }
+                bool storedIsNewer = storedAt.TryGetValue(change.TicketId, out long storedChange) && storedChange >= change.ChangedAt;
+                if (!storedIsNewer && change.Replay())
+                {
+                    replayed++;
+                    continue;
+                }
 
-            replayed = held.Length;
+                skipped++;
+                loggers.CreateLogger<GmAuditFeature>().LogWarning(
+                    "GM ticket change {Change} made here at {ChangedAt} before the social lease arrived is skipped: {Reason}",
+                    change.Key, change.ChangedAt, storedIsNewer ? "the stored ticket changed later" : "its ticket is not in the stored queue, or the character has a stored open ticket");
+            }
         }
 
-        loggers.CreateLogger<GmAuditFeature>().LogInformation("GM ticket queue reloaded after gaining the social lease: {Tickets} open tickets, {Held} held changes run again", stored.Count, replayed);
+        loggers.CreateLogger<GmAuditFeature>().LogInformation("GM ticket queue reloaded after gaining the social lease: {Tickets} open tickets, {Held} held changes applied, {Skipped} skipped", stored.Count, replayed, skipped);
     }
 
-    /// <summary>A ticket filed here while the queue was stale, on the reread queue. The stored ticket wins when the character has one by now: one open ticket per character, and it is the one the previous holder accepted.</summary>
-    private void RestoreHeldTicket(GmTicketRecord ticket)
+    /// <summary>A held text or answer, on the ticket it was made on. False when that ticket is not in the reread queue. Call with <c>_gate</c> held.</summary>
+    private bool ReplayTicketEdit(int ticketId, Func<GmTicketRecord, GmTicketRecord> edit)
     {
-        lock (_gate)
+        if (!_tickets.TryGetValue(ticketId, out GmTicketRecord? ticket))
         {
-            if (_tickets.Values.Any(t => t.CharacterId == ticket.CharacterId))
-            {
-                loggers.CreateLogger<GmAuditFeature>().LogWarning(
-                    "GM ticket {Ticket} filed here before the social lease arrived is dropped: character {Character} already has a stored open ticket", ticket.Id, ticket.CharacterId);
-                return;
-            }
+            return false;
+        }
 
-            _tickets[ticket.Id] = ticket;
+        GmTicketRecord updated = edit(ticket);
+        _tickets[ticketId] = updated;
+        TouchQueue();
+        PersistTicket(updated, held: false);
+        return true;
+    }
+
+    /// <summary>A held close, with the time it was made. False when the ticket is not in the reread queue. Call with <c>_gate</c> held.</summary>
+    private bool ReplayTicketClose(int ticketId, string closedBy, string? response, long closedAt)
+    {
+        if (!_tickets.Remove(ticketId, out GmTicketRecord? ticket))
+        {
+            return false;
         }
 
         TouchQueue();
+        PersistTicket(Closed(ticket, closedBy, response, closedAt), held: false);
+        return true;
+    }
+
+    /// <summary>A ticket filed here while the queue was stale, on the reread queue. The stored ticket wins when the character has one by now: one open ticket per character, and it is the one the previous holder accepted. Call with <c>_gate</c> held.</summary>
+    private bool RestoreHeldTicket(GmTicketRecord ticket)
+    {
+        if (_tickets.ContainsKey(ticket.Id) || _tickets.Values.Any(t => t.CharacterId == ticket.CharacterId))
+        {
+            return false;
+        }
+
+        _tickets[ticket.Id] = ticket;
+        TouchQueue();
         PersistTicket(ticket, held: false);
+        return true;
     }
 
     private async Task StopTicketReloadAsync()
