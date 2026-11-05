@@ -169,14 +169,13 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
 - Summon goes through `ISpellSummonSink` (implemented by `SummonService`); without a sink the effect is
   reported as not implemented.
 - Player base spell crit comes from the intellect table (`IntellectSpellCritSource`); the
-  resist distribution is the simplified two-step spread; binary spells get no extra resist chance
-  (they are only excluded from partial resists); no spell penetration or hit-from-gear.
+  partial-resist distribution is the retail table when `SpellRuleOptions.ResistTablePath` loads one and a mean-preserving quarter-step approximation otherwise; spell hit comes from `ModSpellHitChance` auras, `ModTargetResistance` auras act as spell penetration, and binary spells scale their hit chance by the victim's resist chance (`SpellCombatRules.MagicHitPercent`).
 - Auras and cooldowns are saved at logout and at a cluster transfer capture only. The periodic character autosave (`WorldRuntime.Autosave.cs`) snapshots the character state without them, so a crash loses them.
 - Line of sight covers static models only (vmap-los limits: no terrain or game-object LOS).
-- Proc charges are persisted and restored; the proc system lives in `Spells/Procs` (`SpellSystem.Procs.cs`, `BuiltInProcHandlers.cs`) and covers only the aura types with a built-in handler.
+- Proc charges are persisted and restored; the proc system lives in `Spells/Procs` (`SpellSystem.Procs.cs`, `BuiltInProcHandlers.cs`) and runs a per-spell `IProcScript` first (for example Ignite) and then the built-in handler for the aura type; an aura type with neither procs as OK and spends a charge, as vmangos `HandleNULLProc` does (see `docs/areas/procs.md`).
 - Melee damage forwarding needs the combat area's `MapCombat`; units that take damage outside it
   call `SpellSystem.OnDamageTaken` themselves.
 
 ## Suggested next slice
 
-Save auras and cooldowns from the periodic autosave so they survive a crash, and add stat-driven spell hit (stat-driven spell crit exists via `IntellectSpellCritSource`, not proven retail).
+Save auras and cooldowns from the periodic autosave so they survive a crash. Stat-driven spell crit (`IntellectSpellCritSource`) and spell hit (`ModSpellHitChance`) already exist.

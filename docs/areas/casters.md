@@ -42,7 +42,7 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
   auras and never crits, `SpellCaster.h:320`); the target side still applies.
 - Spell power models damage done versus creature types, equipped-item restricted auras, class script modifiers (including the
   owner's), talent spell mods and Ignite. Limits (see the `SpellBonusModule` header): the paladin seal exception for
-  weapon-restricted percent auras, weapon-based periodic damage (left to the melee formulas) and the melee class SCHOOL_DAMAGE
+  weapon-restricted percent auras, totems and pets using their owner's spell power (a totem casts as itself, so `ModDamageDone`, `ModHealingDone` and the rest are read from the totem; only the class script modifiers use the owner, and vmangos gives a totem its owner's bonus, `SpellCaster.cpp:1577-1581`), weapon-based periodic damage (left to the melee formulas) and the melee class SCHOOL_DAMAGE
   spells' `MeleeDamageBonusDone` (they take only the DAMAGE spell mod). Spell crit from intellect is installed by the spell rules
   feature (`IntellectSpellCritSource`).
 - Five second rule: the consumers of the timer (mp5, aura 134 interrupt percentage, Evocation, Mage Armor) are in the stats
