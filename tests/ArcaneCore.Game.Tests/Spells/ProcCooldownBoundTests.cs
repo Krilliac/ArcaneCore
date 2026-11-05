@@ -35,12 +35,18 @@ public sealed class ProcCooldownBoundTests : IDisposable
     }
 
     [Fact]
-    public void BoundedProcCooldownIsNotLonger()
+    public void ProcCooldownBeyondTheBound_IsStoredAtTheBound_AndEndsThere()
     {
         SpellInfo spell = _kit.System.Store.Get(ProcSpell)!;
+        uint addedAt = _kit.Now;
 
         _kit.System.AddProcCooldown(_unit, spell, SpellSystem.MaxReasonableCooldownMs + 1u);
 
+        uint until = _kit.System.GetState(_unit.Guid)!.SpellCooldowns[ProcSpell];
+        Assert.Equal(SpellSystem.MaxReasonableCooldownMs, until - addedAt);
+        _kit.Now = addedAt + SpellSystem.MaxReasonableCooldownMs - 1u;
         Assert.False(_kit.System.IsProcSpellReady(_unit, spell));
+        _kit.Now = addedAt + SpellSystem.MaxReasonableCooldownMs;
+        Assert.True(_kit.System.IsProcSpellReady(_unit, spell));
     }
 }
