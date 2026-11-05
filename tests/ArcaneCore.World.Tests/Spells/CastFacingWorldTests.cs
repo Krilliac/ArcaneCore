@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Numerics;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
@@ -29,6 +30,7 @@ public sealed class CastFacingWorldTests
         var wolf = new CreatureTemplate
         {
             Entry = WolfEntry, Name = "Facing Wolf", MinLevel = 2, MaxLevel = 2, DisplayIds = [903], Faction = 35, CreatureType = 1, Family = 1,
+            AIName = "NullAI", // the victim set below carries no threat entry, which any hostile AI tick would clear
             MinLevelHealth = 55, MaxLevelHealth = 55,
         };
         // The human start is (-8949.95, -132.49, 83.53): the wolf is 10 yards east of it, facing 0 (east), so the invoker is behind it.
@@ -75,6 +77,9 @@ public sealed class CastFacingWorldTests
         return await client.CollectFromAsync(WorldOpcode.SmsgMessagechat, Quiet);
     }
 
+    private static List<string> ReplyTexts(IEnumerable<(WorldOpcode Opcode, byte[] Payload)> packets)
+        => [.. packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat).Select(p => ChatMessage.Parse(p.Payload).Text)];
+
     private static float Bearing(WorldObject from, WorldObject to) => Creature.NormalizeOrientation(MathF.Atan2(to.Y - from.Y, to.X - from.X));
 
     [Theory]
@@ -99,6 +104,7 @@ public sealed class CastFacingWorldTests
 
         List<(WorldOpcode Opcode, byte[] Payload)> packets = await RunAsync(gm, $".{subcommand} {Heal} triggered");
 
+        Assert.Equal($"Cast spell {Heal}.", ReplyTexts(packets).Last()); // a refusal ("has no victim") would also leave the wolf unturned
         Assert.Equal(expected, await host.OnWorldAsync(() => Wolf(scene).Orientation), 0.001);
         (ulong _, byte _, float angle) = Assert.Single(FacingMoves(packets, wolfGuid));
         Assert.Equal(expected, angle, 0.001); // SMSG_MONSTER_MOVE with the facing-angle type, to the observer
@@ -130,10 +136,11 @@ public sealed class CastFacingWorldTests
     }
 
     [Theory]
-    [InlineData("cast back", false)]
-    [InlineData("cast target", false)]
-    [InlineData("cast back", true)]
-    public async Task APlayerThatStandsStill_TurnsToTheInvoker_ButOneThatIsMovingDoesNot(string subcommand, bool moving)
+    [InlineData("cast back", false, false)]
+    [InlineData("cast target", false, false)]
+    [InlineData("cast back", true, false)] // walking under its own client's control: stopped in vmangos (IsStopped is about motion generators), so it turns
+    [InlineData("cast back", false, true)] // a taxi flight spline is held by the client: left alone (limit of this server)
+    public async Task APlayerWhoseClientDrivesIt_TurnsToTheInvoker_ButOneInTaxiFlightDoesNot(string subcommand, bool walking, bool taxi)
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("FPGM", "Fpgm", AccountSecurity.Administrator);
@@ -145,11 +152,16 @@ public sealed class CastFacingWorldTests
             Player invoker = host.World.FindOnlinePlayer("Fpgm")!;
             Player other = host.World.FindOnlinePlayer("Fpcast")!;
             other.SetPosition(invoker.X + 10f, invoker.Y, invoker.Z, 1f); // 10 yards east of the invoker, facing 1 radian: the bearing to the invoker is pi
-            if (moving)
+            if (walking)
             {
                 MovementInfo info = other.Movement;
                 info.Flags |= MovementFlags.Forward;
                 other.ApplyMovement(in info, info.Time);
+            }
+
+            if (taxi)
+            {
+                other.UnitFlags |= UnitFlags.TaxiFlight;
             }
 
             invoker.Selection = other.Guid;
@@ -157,12 +169,13 @@ public sealed class CastFacingWorldTests
             return (other.Guid.Value, Bearing(other, invoker));
         });
 
-        await RunAsync(gm, $".{subcommand} {Heal} triggered");
+        List<(WorldOpcode Opcode, byte[] Payload)> replies = await RunAsync(gm, $".{subcommand} {Heal} triggered");
         List<(WorldOpcode Opcode, byte[] Payload)> seenByTheCaster = await caster.CollectAsync(Quiet);
 
+        Assert.Equal($"Cast spell {Heal}.", ReplyTexts(replies).Last());
         float after = await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Fpcast")!.Orientation);
         List<(ulong Guid, byte Type, float Angle)> turns = FacingMoves(seenByTheCaster, casterGuid);
-        if (moving)
+        if (taxi)
         {
             Assert.Equal(1f, after);
             Assert.Empty(turns);
@@ -171,6 +184,24 @@ public sealed class CastFacingWorldTests
         {
             Assert.Equal(expected, after, 0.001);
             Assert.Equal(expected, Assert.Single(turns).Angle, 0.001);
+            Assert.Equal(1u, ParseDuration(seenByTheCaster, casterGuid)); // vmangos MoveSpline: a zero-length spline is forced to 1 ms
         }
+    }
+
+    private static uint ParseDuration(IEnumerable<(WorldOpcode Opcode, byte[] Payload)> packets, ulong guid)
+    {
+        foreach ((WorldOpcode opcode, byte[] payload) in packets)
+        {
+            if (opcode != WorldOpcode.SmsgMonsterMove || ParseMonsterMove(payload).Guid != guid)
+            {
+                continue;
+            }
+
+            // mask byte + packed guid bytes, start point (12), spline id (4), type (1), facing angle (4), move flags (4), duration (4)
+            int offset = 1 + System.Numerics.BitOperations.PopCount(payload[0]) + 12 + 4 + 1 + 4 + 4;
+            return BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(offset));
+        }
+
+        throw new InvalidOperationException("no SMSG_MONSTER_MOVE for the caster");
     }
 }

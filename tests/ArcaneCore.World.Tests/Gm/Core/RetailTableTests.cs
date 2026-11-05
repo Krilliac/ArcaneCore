@@ -144,6 +144,22 @@ public sealed class RetailTableTests
     }
 
     [Fact]
+    public void TheCastChildren_NeedTheSameLevelAsCast_WhetherRetailLevelsAreOnOrOff()
+    {
+        foreach (bool retail in new[] { true, false })
+        {
+            CommandTable table = ChatCommands.CreateTable(new GmOptions { RetailLevels = retail });
+            int cast = table.Find("cast")!.RequiredLevel(table.Gm);
+            foreach (string child in new[] { "cast self", "cast target", "cast back", "cast dist" })
+            {
+                Assert.True(cast == table.Find(child)!.RequiredLevel(table.Gm), $"retail={retail}: {child} needs a different level than cast ({cast})");
+            }
+
+            Assert.Equal(retail ? 5 : table.Gm.LevelOf(AccountSecurity.Administrator), cast); // the stored Administrator tier when the retail table is off
+        }
+    }
+
+    [Fact]
     public async Task UnavailableUnknownAndSubcommandReplies_UseTheRetailTexts()
     {
         await using WorldTestHost host = WorldTestHost.Start();

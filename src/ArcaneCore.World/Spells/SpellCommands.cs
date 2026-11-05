@@ -29,12 +29,13 @@ public sealed class SpellCommands : ICommandGroup
         new ChatCommand("unlearn", AccountSecurity.GameMaster, "Syntax: .unlearn #spell — make the selected player or yourself forget a spell.", Unlearn),
         new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist.", Cast, Children:
         [
-            // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (retail level 5, as the .cast entry itself); the stored
-            // security stays Administrator, the highest tier this server stores.
-            new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]\nMake the selected unit cast a spell on itself.", CastSelf, RetailLevel: 5),
-            new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]\nMake the selected unit cast a spell on its victim.", CastTarget, RetailLevel: 5),
-            new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]\nMake the selected unit cast a spell on you.", CastBack, RetailLevel: 5),
-            new ChatCommand("dist", AccountSecurity.Administrator, "Syntax: .cast dist #spell #distance [triggered]\nCast a spell at a point the given distance in front of you.", CastDist, RetailLevel: 5),
+            // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (retail level 5, as the .cast entry itself). No RetailLevel is declared
+            // here: RetailCommandLevels.Apply gives the level 5 (entries "cast self" etc.), and with World:GmCommands:RetailLevels off the stored Administrator
+            // security applies to .cast and to each child alike.
+            new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]\nMake the selected unit cast a spell on itself.", CastSelf),
+            new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]\nMake the selected unit cast a spell on its victim.", CastTarget),
+            new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]\nMake the selected unit cast a spell on you.", CastBack),
+            new ChatCommand("dist", AccountSecurity.Administrator, "Syntax: .cast dist #spell #distance [triggered]\nCast a spell at a point the given distance in front of you.", CastDist),
         ]),
         new ChatCommand("unaura", AccountSecurity.GameMaster, "Syntax: .unaura #spell|all — remove auras from the selected player or yourself.", Unaura),
         new ChatCommand("cooldown", AccountSecurity.Administrator, "Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself.", Cooldown, Children:
@@ -196,9 +197,13 @@ public sealed class SpellCommands : ICommandGroup
 
     /// <summary>
     /// The unit turns to the invoker before it casts (vmangos Unit::SetFacingToObject, Unit.cpp:2796-2804, which runs on any Unit but only while it is stopped, and
-    /// Unit::SetFacingTo, Unit.cpp:2785-2794: the orientation, and a facing spline with no path that SMSG_MONSTER_MOVE carries to the observers). A creature is stopped
-    /// when it has no spline; a player when it holds no movement flag of MOVEFLAG_MASK_MOVING (a player's own client then receives the spline too, as it does for
-    /// any unit it controls under a server move).
+    /// Unit::SetFacingTo, Unit.cpp:2785-2794: the orientation, and a facing spline with no path that SMSG_MONSTER_MOVE carries to the observers). vmangos
+    /// Unit::IsStopped (Unit.h:1401) is !HasUnitState(UNIT_STATE_MOVING), and UNIT_STATE_MOVING (UnitDefines.h:407) is set only by the roaming, chase, follow and
+    /// fleeing motion generators, never by a player's own client-driven walking: so a player walking under client control counts as stopped and does turn. A
+    /// creature is stopped when it has no spline. Two limits of this server, with no vmangos counterpart: a player in taxi flight is left alone (its flight
+    /// spline is held by the client, and a one-point spline would cancel it), and so is a player on a transport (vmangos sends SMSG_MONSTER_MOVE_TRANSPORT there,
+    /// with transport-local coordinates, which this command does not build; the creature SetFacingTo has the same gap). A player's own client receives the
+    /// spline too.
     /// </summary>
     private static void FaceInvoker(CommandContext context, Unit caster)
     {
@@ -214,12 +219,14 @@ public sealed class SpellCommands : ICommandGroup
             return;
         }
 
-        if (caster is Player { Map: { } map } player && (player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+        if (caster is Player { Map: { } map } player && (player.UnitFlags & ArcaneCore.Game.UnitFlags.TaxiFlight) == 0
+            && !player.Movement.HasFlag(MovementFlags.OnTransport))
         {
             player.Orientation = angle;
             uint id = unchecked((uint)Interlocked.Increment(ref s_facingSplineId));
+            // Duration 1 ms: vmangos MoveSpline.cpp:122,127 (minimal_duration 1) and :164-167 (a zero-length spline is forced to length 1); the creature path writes 1 too.
             byte[] packet = CreatureMovePackets.BuildPath(player.Guid, new Vector3(player.X, player.Y, player.Z), id, SplineFacing.ToAngle(angle),
-                run: !player.Movement.HasFlag(MovementFlags.WalkMode), durationMs: 0, [new Vector3(player.X, player.Y, player.Z)]);
+                run: !player.Movement.HasFlag(MovementFlags.WalkMode), durationMs: 1, [new Vector3(player.X, player.Y, player.Z)]);
             player.Session.Send(WorldOpcode.SmsgMonsterMove, packet);
             map.BroadcastToObservers(player, WorldOpcode.SmsgMonsterMove, packet);
         }
@@ -227,8 +234,8 @@ public sealed class SpellCommands : ICommandGroup
 
     /// <summary>
     /// vmangos SpellMgr::IsSpellValid (SpellMgr.cpp:2298), checked by cast, cast self and cast dist (LANG_COMMAND_SPELL_BROKEN, an error rather than a syntax
-    /// reply): a spell that creates, needs or teaches an item or spell that does not exist is refused with a reply. The text is mangos_string 483 of vmangos
-    /// (Language.h:497, LANG_COMMAND_SPELL_BROKEN, "Spell %u broken and not allowed to cast or learn!").
+    /// reply): a spell that creates, needs or teaches an item or spell that does not exist is refused with a reply. The text is mangos_string 483
+    /// (LANG_COMMAND_SPELL_BROKEN, "Spell %u broken and not allowed to cast or learn!"), from mangos-classic sql/base/mangos.sql:3835.
     /// </summary>
     private static bool SpellIsValid(CommandContext context, uint spellId)
     {
@@ -363,7 +370,7 @@ public sealed class SpellCommands : ICommandGroup
         if (height is not null)
         {
             float ground = height(x, y, z);
-            if (float.IsFinite(ground) && ground > TerrainTile.InvalidHeightValue)
+            if (float.IsFinite(ground) && ground > TerrainTile.InvalidHeight)
             {
                 z = ground + 0.05f;
             }

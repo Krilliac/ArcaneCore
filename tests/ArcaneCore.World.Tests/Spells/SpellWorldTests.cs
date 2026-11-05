@@ -273,6 +273,59 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task CastDist_SendsTheSpellGoDestination_AtTheClosePoint_NotAtThePlainPointInFront()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CDDGM", "Cddgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        (float px, float py, float o, float radius, float expectedZ) = await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Cddgm")!;
+            return (p.X, p.Y, p.Orientation, p.BoundingRadius, SpellCommands.ClosePoint(p, 5f).Z);
+        });
+        Assert.True(radius > 0f);
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast dist {Heal} 5 triggered");
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await gm.CollectAsync(TimeSpan.FromMilliseconds(400));
+
+        byte[] go = Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload;
+        (SpellCastTargetFlags mask, float x, float y, float z) = ParseSpellGoDestination(go);
+        Assert.Equal(SpellCastTargetFlags.DestLocation, mask);
+        Assert.Equal(px + (MathF.Cos(o) * (5f + radius)), x, 0.001); // distance plus the caster's bounding radius (GetClosePoint), not PointInFront's plain 5
+        Assert.Equal(py + (MathF.Sin(o) * (5f + radius)), y, 0.001);
+        Assert.Equal(expectedZ, z, 0.001); // the ground z of ClosePoint (the caster's own z where the map knows no height there)
+        Assert.NotEqual(px + (MathF.Cos(o) * 5f), x, 3);
+    }
+
+    // SMSG_SPELL_GO (SpellPackets.BuildSpellGo): packed item-or-caster guid, packed caster guid, u32 spell, u16 flags, u8 hits + u64 each, u8 misses + (u64, u8) each, then the targets.
+    private static (SpellCastTargetFlags Mask, float X, float Y, float Z) ParseSpellGoDestination(byte[] payload)
+    {
+        int offset = 0;
+        for (int i = 0; i < 2; i++)
+        {
+            offset += 1 + System.Numerics.BitOperations.PopCount(payload[offset]);
+        }
+
+        offset += 4 + 2;
+        offset += 1 + (payload[offset] * 8);
+        int misses = payload[offset++];
+        for (int i = 0; i < misses; i++)
+        {
+            offset += 9;
+            if (payload[offset - 1] == (byte)SpellMissInfo.Reflect)
+            {
+                offset++;
+            }
+        }
+
+        var mask = (SpellCastTargetFlags)BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(offset));
+        offset += 2;
+        Assert.Equal(SpellCastTargetFlags.DestLocation, mask); // no guid precedes the destination
+        return (mask, BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset)), BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset + 4)),
+            BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset + 8)));
+    }
+
+    [Fact]
     public async Task TheCastSubcommands_AcceptASpellShiftClickLink()
     {
         await using var host = WorldTestHost.Start();
