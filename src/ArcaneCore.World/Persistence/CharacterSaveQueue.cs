@@ -421,9 +421,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
     /// <summary>
     /// A handoff's flush succeeded: the takeover may land at any moment from here on, and only <see cref="UnsealWrites"/> (the handoff aborted) or <see cref="RetireEveryCharacter"/> decides how
-    /// it ended. Until then writes are still attempted (before the takeover they land), but a fence refusal of any character is dropped, not terminal, and so is an ownership loss reported
-    /// through <see cref="FailTerminal"/>. Nothing is lost by that: a refused write could never have been written, and if A lost the ownership some other way and resumes, its next write
-    /// is refused and goes terminal as ever. Idempotent. Any thread.
+    /// it ended. Until then writes are still attempted (before the takeover they land), but a fence refusal of any character is not terminal, and neither is an ownership loss reported
+    /// through <see cref="FailTerminal"/>. A snapshot refused in the window is retained (not deferred, so no timer retries it into the fence): an aborted handoff resumes this world and the next barrier
+    /// or newer snapshot writes it, and the retirement drops it without the lost-save warning. If A lost the ownership some other way and resumes, its next write is refused and goes terminal as ever. Idempotent. Any thread.
     /// </summary>
     public void SealWrites()
     {

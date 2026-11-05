@@ -315,6 +315,9 @@ public sealed class CharacterPersistenceBarrier
             open.UnionWith(barrier.SettlingCharacters);
         foreach (ICharacterPersistenceParticipant participant in _services.GetServices<ICharacterPersistenceParticipant>())
             open.UnionWith(participant.OpenCharacterIds);
+        // A quest settlement outlives its session, so a disconnected character's is named here (the freeze only refuses for online players).
+        if (_services.GetService<QuestNpcFeature>() is { } questFeature)
+            open.UnionWith(questFeature.SettlingCharacters);
 
         async Task AddAsync(Func<Task> drain, Func<IEnumerable<int>> retained)
         {

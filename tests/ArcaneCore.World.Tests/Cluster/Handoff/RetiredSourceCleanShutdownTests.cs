@@ -242,7 +242,7 @@ public sealed class RetiredSourceCleanShutdownTests
 
     /// <summary>
     /// The takeover commits and then the commit call throws (the connection died on the reply): the journal says committed, so the coordinator rolls forward, with the real source and queues. A retained
-    /// retry of the save queue and a retained keyed write are refused in the window between the commit and the retirement; both are dropped by the seal, not terminal, and the retirement ends the rest.
+    /// retry of the save queue and a retained keyed write are refused in the window between the commit and the retirement; neither is terminal: the save queue retains its refused snapshot until the retirement drops it, the keyed queue drops its refusal at once, and the retirement ends the rest.
     /// </summary>
     [Fact]
     public async Task ACommitThatThrowsAfterItCommitted_RollsForward_AndDropsTheRefusalsOfTheSaveQueueAndAKeyedQueue()

@@ -40,6 +40,21 @@ public sealed partial class QuestNpcFeature
         }
     }
 
+    /// <summary>
+    /// The characters with a quest settlement in flight, online or not: a settlement outlives its session (it is adopted by the world after a disconnect), so a cluster handoff names these
+    /// (<c>CharacterPersistenceBarrier.OpenCharacterIdsAsync</c>) and flushes behind each. A snapshot, any thread. Not an <see cref="ArcaneCore.World.Characters.ICharacterSettlementBarrier"/>: login and delete wait on this feature directly.
+    /// </summary>
+    public IReadOnlyCollection<int> SettlingCharacters
+    {
+        get
+        {
+            lock (_settlementGate)
+            {
+                return [.. _settlements.Keys];
+            }
+        }
+    }
+
     public Guid? PendingOperationId(int characterId)
     {
         lock (_settlementGate)
