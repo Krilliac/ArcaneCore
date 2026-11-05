@@ -50,6 +50,33 @@ public sealed class TravelWalkableTests
         Assert.True(PlayerbotTravel.Joined(low, high, 0, false, 0, false, null));
     }
 
+    /// <summary>
+    /// <see cref="PlayerbotTravel.Joined"/> needs only one unplaced place to fall back to the trigger test (the doc once said two): a placed
+    /// place on one level and an unplaced one on the other are not joined, whichever is which, while two placed places answer by component.
+    /// </summary>
+    [Fact]
+    public void OnePlacedAndOneUnplacedPlace_AtTheTwoLevelsOfATallTrigger_AreNotJoined()
+    {
+        var low = new TravelPlace(1, new Vector3(8800f, 970f, 40f));
+        var high = new TravelPlace(1, new Vector3(9900f, 2600f, 1310f));
+        Assert.False(PlayerbotTravel.Joined(low, high, 3, true, 0, false, [RuttheranToUpperLevel]));
+        Assert.False(PlayerbotTravel.Joined(low, high, 0, false, 3, true, [RuttheranToUpperLevel]));
+        Assert.True(PlayerbotTravel.Joined(low, high, 3, true, 0, false, []));
+        Assert.True(PlayerbotTravel.Joined(low, high, 3, true, 3, true, [RuttheranToUpperLevel]));
+    }
+
+    /// <summary>A trigger of one map separates nothing on another map, even when the heights match its two levels.</summary>
+    [Fact]
+    public void ATriggerOfOneMap_SeparatesNoPlacesOfAnotherMap()
+    {
+        var low = new TravelPlace(0, new Vector3(8800f, 970f, 40f));
+        var high = new TravelPlace(0, new Vector3(9900f, 2600f, 1310f));
+        var mixed = new TravelPlace(1, new Vector3(9900f, 2600f, 1310f));
+        Assert.False(PlayerbotTravel.TriggerSeparates(low, high, [RuttheranToUpperLevel]));
+        Assert.False(PlayerbotTravel.TriggerSeparates(low, mixed, [RuttheranToUpperLevel]));
+        Assert.True(PlayerbotTravel.Joined(low, high, 0, false, 0, false, [RuttheranToUpperLevel]));
+    }
+
     /// <summary>A small hop (a trigger moving the bot under 150 yards in height) joins no two levels, and placed places answer by component alone.</summary>
     [Fact]
     public void ALowTrigger_SeparatesNothing_AndPlacedPlacesAnswerByComponent()
