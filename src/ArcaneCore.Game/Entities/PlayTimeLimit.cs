@@ -107,6 +107,21 @@ public static class PlayTimeLimit
         }
     }
 
+    /// <summary>
+    /// vmangos <c>Player::LootMoney</c> (Player.cpp:21793-21797): a NO_PLAY_TIME player gets no looted money, a PARTIAL_PLAY_TIME player half (integer
+    /// division); the flags exist only under <c>World:LimitPlayTime</c>.
+    /// </summary>
+    public static uint ApplyToLootedMoney(Player player, uint copper)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            return 0;
+        }
+
+        return (player.Flags & PlayerFlags.PartialPlayTime) != 0 ? copper / 2 : copper;
+    }
+
     private static void Approaching(Player player, uint flag, uint secondsLeft)
     {
         player.Session.Send(WorldOpcode.SmsgPlayTimeWarning, WarningBody(flag, (int)secondsLeft));

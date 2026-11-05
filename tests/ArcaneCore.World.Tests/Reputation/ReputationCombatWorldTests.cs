@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Reputation;
@@ -21,6 +22,8 @@ namespace ArcaneCore.World.Tests.Reputation;
 public sealed class ReputationCombatWorldTests
 {
     private const uint Stormwind = 72;
+    private const uint BootyBay = 21;
+    private const uint GoblinEntry = 2587;
     private const uint GuardEntry = 68;
     private const uint GuardSpawnGuid = 7700;
 
@@ -29,6 +32,7 @@ public sealed class ReputationCombatWorldTests
     [
         new FactionTemplateRecord(1, 1, 0, OwnMask: 1, FriendlyMask: 2, HostileMask: 8),
         new FactionTemplateRecord(11, Stormwind, 0, OwnMask: 2, FriendlyMask: 1, HostileMask: 8),
+        new FactionTemplateRecord(12, BootyBay, 0, OwnMask: 4, FriendlyMask: 0, HostileMask: 0), // a neutral Booty Bay goblin: faction 21 is reputation list 0
     ]);
 
     private static WorldTestHost Start(bool factions, bool templates, out CreatureTestContext context)
@@ -111,6 +115,34 @@ public sealed class ReputationCombatWorldTests
         ReputationCombatFeature combat = CombatFeature(host);
         Assert.False(combat.IsActive);
         Assert.Contains("FactionTemplateDbcPath", combat.InactiveReason);
+    }
+
+    [Fact]
+    public async Task ACreatureEnteringCombat_PutsItsFactionAtWar_AndTheClientIsToldAtTheStartAndTheEndOfTheFight()
+    {
+        // SMSG_SET_FACTION_ATWAR from the combat hooks the feature installed (vmangos Creature::OnEnterCombat, Creature.cpp:3678-3686; Player::SendFactionAtWar;
+        // the end of the fight is Unit::ClearInCombat -> Player::ClearTemporaryWarWithFactions, Player.cpp:22736-22750). The hook is called directly: starting a
+        // real aggro needs a reputation-hostile template, which this fixture does not define.
+        await using WorldTestHost host = Start(factions: true, templates: true, out _);
+        await using WorldTestClient client = await host.EnterWorldAsync("REPWAR", "Repwar");
+        await client.CollectAsync();
+
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Repwar")!;
+            var template = new CreatureTemplate { Entry = GoblinEntry, Name = "Booty Bay goblin", Faction = 12, MinLevelHealth = 100, MaxLevelHealth = 100 };
+            var system = new CreatureMapSystem(player.Map!, new CreatureContent([template], [], [], [], []), random: new Random(1));
+            player.Map!.AddUpdater(system);
+            Creature goblin = system.SpawnTemporary(template, player.X + 1, player.Y, player.Z, 0);
+            var hooks = Assert.IsType<ReputationCombatHooks>(CombatHooks.For(host.World));
+            hooks.OnCreatureEnteredCombat(goblin, player);
+        });
+        Assert.Equal(ReputationPackets.SetFactionAtWar(0, atWar: true), await client.ReadUntilAsync(WorldOpcode.SmsgSetFactionAtwar));
+        Assert.True(await host.PlayerStateAsync("Repwar", p => ((WorldSession)p.Session).Services.GetRequiredService<ReputationFeature>().Service.IsAtWar(p, BootyBay)));
+
+        await host.OnWorldAsync(() => MapCombat.ClearInCombat(host.World.FindOnlinePlayer("Repwar")!));
+        Assert.Equal(ReputationPackets.SetFactionAtWar(0, atWar: false), await client.ReadUntilAsync(WorldOpcode.SmsgSetFactionAtwar));
+        Assert.False(await host.PlayerStateAsync("Repwar", p => ((WorldSession)p.Session).Services.GetRequiredService<ReputationFeature>().Service.IsAtWar(p, BootyBay)));
     }
 
     private static ulong GuardGuid() => ObjectGuid.WithEntry(HighGuid.Unit, GuardEntry, GuardSpawnGuid).Value;

@@ -1490,6 +1490,13 @@ public sealed partial class LootService : IViewerFieldFilter
 
     private void GiveMoney(Player player, uint amount)
     {
+        // Player::LootMoney (Player.cpp:21793-21797): the play-time flags remove or halve what this player receives; the share notify still names the full share (LootHandler.cpp:322-323).
+        amount = PlayTimeLimit.ApplyToLootedMoney(player, amount);
+        if (amount == 0)
+        {
+            return;
+        }
+
         player.Money = (uint)Math.Min((ulong)player.Money + amount, MaxMoneyAmount);
         Quests?.MoneyLooted(player);
     }

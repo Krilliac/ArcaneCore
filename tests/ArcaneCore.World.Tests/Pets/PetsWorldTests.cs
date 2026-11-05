@@ -164,4 +164,66 @@ public sealed class PetsWorldTests
             return true;
         });
     }
+
+    /// <summary>
+    /// CMSG_PET_ACTION with COMMAND_DISMISS on a summoned warlock demon reaches SMSG_PET_DISMISS_SOUND at the owner's socket (mangos-classic Pet::PlayDismissSound,
+    /// Pet.cpp:1401-1422, from HandlePetAction COMMAND_DISMISS, PetHandler.cpp:259-263): sound 0 for a pet whose summoning spell has no sound entry, then the pet's
+    /// position.
+    /// </summary>
+    [Fact]
+    public async Task TheDismissCommand_OverTheWire_SendsThePetDismissSoundToTheOwner()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = PetTestServices.Entry, Name = "Dismiss Follower", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], MinLevelHealth = PetTestServices.Health, MaxLevelHealth = PetTestServices.Health, Faction = 35,
+        };
+        CreatureTestStore.Current.Value = new CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        WorldTestHost prepared;
+        try { prepared = WorldTestHost.Start(); }
+        finally { CreatureTestStore.Current.Value = null; }
+        await using WorldTestHost host = prepared;
+        await using WorldTestClient client = await host.EnterWorldAsync("DEMONDIS", "Demondis");
+        const uint summonSpell = 991003;
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Demondis")!;
+            player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
+            {
+                Id = summonSpell, Name = "Summon dismiss follower", Effects = [new SpellEffectInfo
+                {
+                    Effect = SpellEffectName.SummonPet, MiscValue = (int)PetTestServices.Entry, TargetA = SpellImplicitTarget.UnitCaster,
+                    BasePoints = 0, BaseDice = 1, DieSides = 1,
+                }],
+            }], [], []);
+            feature.Spellbook.LearnSpell(player, summonSpell);
+            return true;
+        });
+        await client.CollectAsync();
+        var cast = new PacketWriter();
+        cast.WriteUInt32(summonSpell);
+        cast.WriteUInt16(0);
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, cast.ToArray());
+        await client.ReadUntilAsync(WorldOpcode.SmsgPetSpells);
+        (ObjectGuid petGuid, float petX, float petY) = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Demondis")!;
+            Creature demon = Assert.IsType<Creature>(player.Map!.FindObject(player.PetGuid));
+            return (demon.Guid, demon.X, demon.Y);
+        });
+
+        var action = new PacketWriter(20);
+        action.WriteUInt64(petGuid.Value);
+        action.WriteUInt32(((uint)0x07 << 24) | (uint)CommandState.Dismiss);
+        action.WriteUInt64(0);
+        await client.SendAsync(WorldOpcode.CmsgPetAction, action.ToArray());
+
+        byte[] sound = await client.ReadUntilAsync(WorldOpcode.SmsgPetDismissSound);
+        Assert.Equal(16, sound.Length);
+        Assert.Equal(0u, BitConverter.ToUInt32(sound, 0));
+        Assert.InRange(BitConverter.ToSingle(sound, 4), petX - 10f, petX + 10f);
+        Assert.InRange(BitConverter.ToSingle(sound, 8), petY - 10f, petY + 10f);
+    }
 }
