@@ -5,12 +5,18 @@ using ArcaneCore.World.Cluster.Peer;
 
 namespace ArcaneCore.World.Cluster.Social;
 
+/// <summary>The authority answered over a live link that it will not do this: sending it again would get the same answer.</summary>
+public sealed class PresenceRefusedException(string message) : InvalidOperationException(message);
+
+/// <summary>The node reached does not hold the Social lease, so it executed nothing: a link failure as far as the sender goes, which keeps the command and tries again.</summary>
+public sealed class PresenceNotHolderException() : IOException("the node reached does not hold the Social lease");
+
 /// <summary>
 /// Presence and social routing of the Social lease holder as seen from another worker: every call is one request over the <see cref="PeerLinkClient"/> to the holder's
 /// <see cref="PresenceHolderService"/> (<see cref="PresenceWireCodec"/>). Implements the async <see cref="IPresenceAuthority"/> for the publisher and the synchronous
 /// <see cref="IRealmPresenceDirectory"/> / <see cref="IClusterSocialRouter"/> for readers such as <c>.cluster</c> commands; the synchronous members block the calling thread for
 /// up to the link's request timeout and must not be called on the world thread. A lost link, a timeout or a refusal surfaces as <see cref="IOException"/>,
-/// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
+/// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/> (a refusal by the authority is <see cref="PresenceRefusedException"/>; a node without the lease is <see cref="PresenceNotHolderException"/>, an <see cref="IOException"/>). A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.
 /// </summary>
 public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
@@ -18,15 +24,15 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
     /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
     public const int MaxDrainBatches = 64;
 
-    private async Task<BinaryReader> SendAsync(PresenceOp op, Action<BinaryWriter>? write, CancellationToken cancellationToken = default)
+    private async Task<BinaryReader> SendAsync(PresenceOp op, Action<BinaryWriter>? write, CancellationToken cancellationToken = default, long? idempotencyId = null)
     {
-        byte[] reply = await link.EchoAsync(PresenceWireCodec.EncodeRequest(op, write), cancellationToken: cancellationToken).ConfigureAwait(false);
+        byte[] reply = await link.EchoAsync(PresenceWireCodec.EncodeRequest(op, write), idempotencyId, cancellationToken: cancellationToken).ConfigureAwait(false);
         return PresenceWireCodec.OpenReply(reply);
     }
 
-    private T Send<T>(PresenceOp op, Action<BinaryWriter>? write, Func<BinaryReader, T> read)
+    private T Send<T>(PresenceOp op, Action<BinaryWriter>? write, Func<BinaryReader, T> read, long? idempotencyId = null)
     {
-        using BinaryReader r = Task.Run(() => SendAsync(op, write)).GetAwaiter().GetResult();
+        using BinaryReader r = Task.Run(() => SendAsync(op, write, idempotencyId: idempotencyId)).GetAwaiter().GetResult();
         return read(r);
     }
 
@@ -35,7 +41,8 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     // ---- IGroupAuthorityTransport --------------------------------------------------------------------------------------------------------------
 
-    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+    /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
         => Send(
             PresenceOp.GroupCommand,
             w =>
@@ -43,7 +50,8 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
                 w.Write(workerId);
                 GroupWireCodec.WriteCommand(w, command);
             },
-            static _ => true);
+            static _ => true,
+            idempotencyId: -commandId); // negative: the link's own ids count up from 1
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GroupDrain, w => w.Write(workerId), GroupWireCodec.ReadEvents);
@@ -312,15 +320,16 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
 
     public Task<IReadOnlyList<PresenceKick>> DrainKicksAsync(string workerId, CancellationToken cancellationToken = default) => Authority.DrainKicksAsync(workerId, cancellationToken);
 
-    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+    /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
     {
         if (holdsSocial())
         {
-            local.ExecuteGroupCommand(workerId, command);
+            local.ExecuteGroupCommand(workerId, command, commandId);
         }
         else
         {
-            Remote.ExecuteGroupCommand(workerId, command);
+            Remote.ExecuteGroupCommand(workerId, command, commandId);
         }
     }
 

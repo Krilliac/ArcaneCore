@@ -50,6 +50,7 @@ internal static class PresenceWireCodec
 
     private const byte StatusOk = 0;
     private const byte StatusError = 1;
+    private const byte StatusNotHolder = 2;
 
     // ---- framing -------------------------------------------------------------------------------------------------------------------------------
 
@@ -89,14 +90,41 @@ internal static class PresenceWireCodec
         return stream.ToArray();
     }
 
-    /// <summary>Opens a reply for reading; throws <see cref="InvalidOperationException"/> carrying the authority's message when the status is an error.</summary>
+    /// <summary>The answer of a node that does not serve the request because it does not hold the Social lease: nothing was executed, and a retry can succeed.</summary>
+    public static byte[] EncodeNotHolder() => [StatusNotHolder];
+
+    /// <summary>
+    /// Whether the host should remember <paramref name="reply"/> for a retry of <paramref name="request"/>: only a non-relay group command the holder took. Those are the only requests sent again with the same id
+    /// (<see cref="ClusterGroupRouting"/>), so the rest would just push them out of the bounded cache, and a "not the holder" answer must not be replayed to a retry that this node, now the holder, can serve.
+    /// </summary>
+    public static bool IsRetriableAndTaken(ReadOnlyMemory<byte> request, byte[] reply)
+    {
+        if (reply is not [StatusOk, ..] || request.Length == 0 || (PresenceOp)request.Span[0] != PresenceOp.GroupCommand)
+        {
+            return false;
+        }
+
+        using var r = new BinaryReader(new MemoryStream(request.ToArray(), 1, request.Length - 1, writable: false), Encoding.UTF8);
+        _ = r.ReadString(); // the worker; a taken request parsed, so this cannot fail
+        return (ArcaneCore.Game.Groups.GroupCommandKind)r.ReadByte() != ArcaneCore.Game.Groups.GroupCommandKind.Relay;
+    }
+
+    /// <summary>
+    /// Opens a reply for reading. Throws <see cref="PresenceRefusedException"/> carrying the authority's message when the status is an error, and <see cref="PresenceNotHolderException"/> (an <see cref="IOException"/>,
+    /// so it reads as a link failure and is retried) when the node does not hold the Social lease.
+    /// </summary>
     public static BinaryReader OpenReply(byte[] reply)
     {
         var r = new BinaryReader(new MemoryStream(reply, writable: false), Encoding.UTF8);
         byte status = r.ReadByte();
+        if (status == StatusNotHolder)
+        {
+            throw new PresenceNotHolderException();
+        }
+
         if (status != StatusOk)
         {
-            throw new InvalidOperationException("the presence authority refused the request: " + r.ReadString());
+            throw new PresenceRefusedException("the presence authority refused the request: " + r.ReadString());
         }
 
         return r;
@@ -631,12 +659,17 @@ internal static class PresenceWireCodec
             case PresenceOp.GroupCommand:
             {
                 string worker = r.ReadString();
-                service.Groups.Execute(worker, GroupWireCodec.ReadCommand(r));
-                return EncodeReply();
+                ArcaneCore.Game.Groups.GroupCommand command = GroupWireCodec.ReadCommand(r);
+                return service.HoldsSocial && service.Groups.TryExecute(worker, command) ? EncodeReply() : EncodeNotHolder();
             }
 
             case PresenceOp.GroupDrain:
             {
+                if (!service.HoldsSocial)
+                {
+                    return EncodeNotHolder();
+                }
+
                 IReadOnlyList<ArcaneCore.Game.Groups.GroupEvent> events = service.Groups.Drain(r.ReadString());
                 return EncodeReply(w => GroupWireCodec.WriteEvents(w, events));
             }

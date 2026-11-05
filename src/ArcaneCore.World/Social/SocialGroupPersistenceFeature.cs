@@ -37,6 +37,9 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
     private const int ReloadRetryDelayMs = 1000;
 
+    /// <summary>Most held commands replayed in one world tick after an install, so a full backlog (<see cref="GroupAuthority.MaxCommandsHeldForReload"/>) does not stall the tick and the peers waiting on the table's lock.</summary>
+    internal const int ReplayBatch = 1024;
+
     private readonly ILogger _logger = loggers.CreateLogger<SocialGroupPersistenceFeature>();
     private readonly Dictionary<uint, GroupRecord> _written = [];
     private readonly CancellationTokenSource _stop = new();
@@ -52,6 +55,8 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private WorldRuntime? _world;
     private TimeProvider _clock = TimeProvider.System;
     private long _lastSweep = long.MinValue;
+    private int _replayFailed; // world thread
+    private bool _replaying; // world thread
 
     /// <summary>The write queue (exposed for health reporting and tests); null without a store.</summary>
     public KeyedStoreWriteQueue<IGroupStore>? Writes { get; private set; }
@@ -156,7 +161,12 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             await reload.ConfigureAwait(false);
         }
 
-        _authority?.DropHeldCommands();
+        // The table stays closed, not open: a command arriving now (the peer link may still be up, whatever the stop order) must not land on a table that was never loaded. Held commands were acked to their senders, so they are lost here.
+        int lost = _authority?.CloseHeldTable() ?? 0;
+        if (lost > 0)
+        {
+            _logger.LogWarning("Stopping before the group table was loaded: {Count} held group commands are lost", lost);
+        }
 
         // The world thread no longer runs (IWorldFeature.StopAsync), so the group table is quiet.
         Sync();
@@ -171,6 +181,11 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
     private void OnUpdated(uint diffMs)
     {
+        if (_replaying)
+        {
+            ReplayHeldCommands();
+        }
+
         long now = _clock.GetUtcNow().ToUnixTimeSeconds();
         if (now == _lastSweep)
         {
@@ -192,7 +207,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         if (_authority is { } authority)
         {
             // Not the holder (yet): the table is held from attach and the holder writes. A holder never turns into a non-holder on a running node: a lost lease keeps its token in the keeper and stops the process
-            // (RealmAuthorityLeaseKeeper.Lose), and the leases are only given back after the features have stopped. So the hold is lifted only by an install.
+            // (RealmAuthorityLeaseKeeper.Lose), and the leases are only given back after the features have stopped. So the hold is lifted only by an install; a stop closes the table instead (StopAsync).
             if (!HoldsSocial())
             {
                 return;
@@ -322,8 +337,27 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         }
 
         _holding = true;
-        int failed = authority.ReleaseHeldCommands();
-        _logger.LogInformation("Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped, {Failed} held commands failed)", result.Restored.Count, result.Dropped.Count, failed);
+        _replaying = true;
+        _replayFailed = 0;
+        _logger.LogInformation(
+            "Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped); {Held} held commands to run, {Evicted} pushed out of the hold by its cap",
+            result.Restored.Count, result.Dropped.Count, authority.HeldCommandCount, authority.CommandsEvictedWhileHeld);
+        ReplayHeldCommands();
+    }
+
+    /// <summary>World thread: the next batch of held commands. Commands arriving meanwhile queue behind the backlog, so the order holds; the hold ends with the last one.</summary>
+    private void ReplayHeldCommands()
+    {
+        GroupAuthority authority = _authority!;
+        _replayFailed += authority.ReleaseHeldCommands(ReplayBatch);
+        if (authority.HeldCommandCount == 0)
+        {
+            _replaying = false;
+            if (_replayFailed > 0)
+            {
+                _logger.LogWarning("{Failed} held group commands failed when they were replayed", _replayFailed);
+            }
+        }
     }
 
     private static string Key(uint groupId) => "group:" + groupId;

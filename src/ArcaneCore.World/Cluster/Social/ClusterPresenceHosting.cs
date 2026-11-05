@@ -35,7 +35,8 @@ public static class ClusterPresenceHosting
         services.TryAddSingleton(sp => new InMemoryClusterSocialRouter(sp.GetRequiredService<InMemoryRealmPresenceDirectory>()));
         services.TryAddSingleton(sp => new PresenceHolderService(
             sp.GetRequiredService<InMemoryRealmPresenceDirectory>(),
-            sp.GetRequiredService<InMemoryClusterSocialRouter>()));
+            sp.GetRequiredService<InMemoryClusterSocialRouter>(),
+            sp.GetService<RealmAuthorityLeaseKeeper>() is { } keeper ? () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null : null));
         services.TryAddSingleton(sp =>
         {
             RealmAuthorityLeaseKeeper? keeper = sp.GetService<RealmAuthorityLeaseKeeper>();

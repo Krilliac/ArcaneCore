@@ -85,6 +85,7 @@ public sealed class GroupAuthorityTests
             full.Execute("worker-a", Loot(LootMethod.RoundRobin));
         }
 
+        Assert.Equal(1, full.CommandsEvictedWhileHeld);
         Assert.Equal(0, full.ReleaseHeldCommands());
         Assert.False(fullGroup.IsRaid); // the cap was exceeded by one: the oldest went
 
@@ -96,20 +97,66 @@ public sealed class GroupAuthorityTests
             exact.Execute("worker-a", Loot(LootMethod.RoundRobin));
         }
 
+        Assert.Equal(0, exact.CommandsEvictedWhileHeld);
         Assert.Equal(0, exact.ReleaseHeldCommands());
         Assert.True(exactGroup.IsRaid); // exactly the cap: all kept
     }
 
     [Fact]
-    public void Dropping_the_held_commands_runs_none_of_them_and_applies_later_ones()
+    public void A_release_in_batches_stays_held_until_the_last_and_a_later_command_waits_behind_the_backlog()
+    {
+        GroupAuthority authority = AuthorityWithGroup(out Group group);
+        authority.HoldForReload();
+        authority.Execute("worker-a", Loot(LootMethod.FreeForAll));
+        authority.Execute("worker-a", Loot(LootMethod.RoundRobin));
+
+        Assert.Equal(0, authority.ReleaseHeldCommands(1));
+        Assert.Equal(LootMethod.FreeForAll, group.LootMethod);
+        Assert.Equal(1, authority.HeldCommandCount);
+
+        authority.Execute("worker-a", Loot(LootMethod.MasterLoot)); // still held: it must not overtake RoundRobin
+        Assert.Equal(LootMethod.FreeForAll, group.LootMethod);
+        Assert.Equal(2, authority.HeldCommandCount);
+
+        Assert.Equal(0, authority.ReleaseHeldCommands(1));
+        Assert.Equal(LootMethod.RoundRobin, group.LootMethod);
+        Assert.Equal(0, authority.ReleaseHeldCommands(1));
+        Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
+        Assert.Equal(0, authority.HeldCommandCount);
+
+        authority.Execute("worker-a", Loot(LootMethod.GroupLoot)); // the hold ended with the last one
+        Assert.Equal(LootMethod.GroupLoot, group.LootMethod);
+    }
+
+    [Fact]
+    public void Closing_a_held_table_loses_what_was_held_and_applies_nothing_from_then_on()
     {
         GroupAuthority authority = AuthorityWithGroup(out Group group);
         authority.HoldForReload();
         authority.Execute("worker-a", ConvertToRaid());
-        authority.DropHeldCommands();
+        authority.Execute("worker-a", Loot(LootMethod.FreeForAll));
+
+        Assert.Equal(2, authority.CloseHeldTable());
+        Assert.Equal(0, authority.CloseHeldTable()); // idempotent: nothing is counted twice
+
         authority.Execute("worker-a", Loot(LootMethod.RoundRobin));
+        Assert.False(authority.TryExecute("worker-a", Loot(LootMethod.RoundRobin)));
+        authority.HoldForReload();
+        Assert.Equal(0, authority.ReleaseHeldCommands());
 
         Assert.False(group.IsRaid);
+        Assert.Equal(LootMethod.GroupLoot, group.LootMethod);
+        Assert.Equal(1, authority.CommandsRefusedAfterClose);
+    }
+
+    [Fact]
+    public void Closing_a_table_that_is_not_held_changes_nothing()
+    {
+        GroupAuthority authority = AuthorityWithGroup(out Group group);
+
+        Assert.Equal(0, authority.CloseHeldTable());
+        authority.Execute("worker-a", Loot(LootMethod.RoundRobin));
+
         Assert.Equal(LootMethod.RoundRobin, group.LootMethod);
     }
 }

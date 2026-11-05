@@ -32,6 +32,9 @@ public sealed class SocialGroupTakeoverTests
     private static GroupCommand ConvertToRaid(int actor)
         => new(GroupCommandKind.ConvertToRaid, ObjectGuid.Player((uint)actor).Value, "Char" + actor, 0, false);
 
+    private static GroupCommand Loot(LootMethod method)
+        => new(GroupCommandKind.SetLootMethod, ObjectGuid.Player(1).Value, "Char1", 0, false, Value: (uint)method, Value2: ArcaneCore.Game.Groups.Group.DefaultLootThreshold);
+
     [Fact]
     public async Task Groups_of_characters_this_worker_never_heard_of_survive_the_takeover()
     {
@@ -172,7 +175,7 @@ public sealed class SocialGroupTakeoverTests
     }
 
     [Fact]
-    public async Task A_stop_during_the_read_drops_what_was_held_and_installs_nothing()
+    public async Task A_stop_during_the_read_loses_what_was_held_installs_nothing_and_applies_nothing_afterwards()
     {
         await using Rig rig = await Rig.CreateAsync();
         rig.Rows.Seed(Group(1, 1, 2));
@@ -193,10 +196,44 @@ public sealed class SocialGroupTakeoverTests
 
         Assert.False(rig.Persistence.AuthorityLoaded);
         Assert.Equal(0, rig.Holder.Groups.PendingFor("worker-c")); // the held invite did not run
-        rig.Holder.Groups.Execute("worker-c", invite); // the hold is over: this one applies (BadPlayerName)
-        Assert.Equal(1, rig.Holder.Groups.PendingFor("worker-c"));
+        rig.Holder.Groups.Execute("worker-c", invite); // the peer link may still be up: this table was never loaded, so nothing runs on it
+        Assert.Equal(0, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Equal(1, rig.Holder.Groups.CommandsRefusedAfterClose);
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
+        Assert.False(rig.Holder.Groups.TryExecute("worker-c", invite));
         Assert.Empty(rig.Holder.Groups.Snapshots());
         Assert.Equal(0, rig.Rows.Writes);
+    }
+
+    [Fact]
+    public async Task A_backlog_over_one_batch_is_replayed_over_several_ticks_in_order()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.Rows.Seed(Group(1, 1, 2));
+        rig.Characters.HoldReads();
+        rig.TakeOver();
+        await rig.OnWorld(() =>
+        {
+            rig.Persistence.SyncNow();
+            return true;
+        });
+        await rig.Characters.ReadHeld.WaitAsync(Budget);
+        for (int i = 0; i < SocialGroupPersistenceFeature.ReplayBatch; i++)
+        {
+            rig.Holder.Groups.Execute("worker-c", Loot(LootMethod.FreeForAll));
+        }
+
+        rig.Holder.Groups.Execute("worker-c", Loot(LootMethod.RoundRobin)); // the last of the backlog, past the first batch
+        rig.Characters.ReleaseReads();
+        await rig.WaitUntilLoadedAsync();
+
+        using var timeout = new CancellationTokenSource(Budget);
+        while (rig.Holder.Groups.HeldCommandCount > 0)
+        {
+            await Task.Delay(5, timeout.Token); // the world's own ticks run the next batch
+        }
+
+        Assert.Equal((byte)LootMethod.RoundRobin, Assert.Single(rig.Holder.Groups.Snapshots()).LootMethod);
     }
 
     [Fact]
