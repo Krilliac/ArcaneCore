@@ -181,6 +181,9 @@ public sealed class DepthsNpcScriptTests
         Assert.Equal(Voidwalker, guardian.Template.Entry);
         Assert.IsType<PetAI>(guardian.AI); // the summon service attached it after the hook ran
         Assert.Same(player, guardian.Combat.Victim);
+
+        kit.Run(200); // PetAI.OnUpdate / NeedToStop keeps the victim the hook chose
+        Assert.Same(player, guardian.Combat.Victim);
     }
 
     [Fact]
@@ -223,12 +226,14 @@ public sealed class DepthsNpcScriptTests
     public void TheThelrinBannerSpell_FindsTheNotSelectableTriggerByTargetSearch_AndMovesTheRingOfLawToTheBannerState()
     {
         // ClassicDB z2815 spell_template 27517: effect 1 SUMMON_OBJECT_WILD (game object 181058, not modelled here), effect 2 DUMMY with target 38
-        // (TARGET_UNIT_SCRIPT_NEAR_CASTER); spell_script_target (27517, 1, 16079, 0). The spell's cast range (index 7) is not decoded: 100 yd is
-        // used, and the triggered cast skips its spell-focus requirement (1360).
+        // (TARGET_UNIT_SCRIPT_NEAR_CASTER); spell_script_target (27517, 1, 16079, 0). Spell.dbc 5875 gives range index 7 (SpellRange.dbc: 0-10 yd)
+        // and radius index 0 for effect 2, so the search radius is the 10 yd range maximum plus both combat reaches (SpellSystem.FindScriptLocationTarget).
+        // The cast here is a triggered cast by a creature: the real one is an item cast by a player, it skips the spell-focus requirement (1360)
+        // and effect 1 (the game object 181058 summon) is not modelled. This proves the not-selectable trigger is found by the target search.
         using var spells = new SpellTestKit(
             SpellTestKit.Spell(TheldrenTriggerAI.BannerSpell, new SpellEffectInfo(),
                 SpellTestKit.Effect(SpellEffectName.Dummy, 1, SpellImplicitTarget.UnitScriptNearCaster))
-                with { StartRecoveryCategory = 0, StartRecoveryTime = 0, Range = new SpellRange(0, 100) });
+                with { StartRecoveryCategory = 0, StartRecoveryTime = 0, RangeIndex = 7, Range = new SpellRange(0, 10) });
         spells.System.Store = new SpellStore(spells.Store.All, [], [],
             [new SpellStore.ScriptTarget(TheldrenTriggerAI.BannerSpell, 1, Theldren, 0)]);
         SpellScriptDispatcher.Install(spells.System, SpellScriptRegistry.Discover(typeof(ThelrinBannerSpellScript).Assembly));
@@ -236,12 +241,13 @@ public sealed class DepthsNpcScriptTests
         var data = Assert.IsType<BlackrockDepthsInstance>(run.Data);
         Creature caster = run.Creature(Doomrel);
         Creature trigger = run.Creature(Theldren);
-        trigger.UnitFlags |= UnitFlags.NotSelectable; // the template's UNIT_FLAG_NOT_SELECTABLE (33554432)
+        trigger.UnitFlags |= UnitFlags.NotSelectable; // the template's UNIT_FLAG_NOT_SELECTABLE (0x2000000; the DB template also carries 0x8000, not modelled)
         Assert.Equal(EncounterState.NotStarted, data.GetData(BlackrockDepthsInstance.TypeRingOfLaw));
 
-        // out of range of the search: nothing is found and the state stays
-        run.Creatures.NearTeleport(trigger, caster.X + 300f, caster.Y, caster.Z, 0);
-        spells.System.CastSpell(caster, TheldrenTriggerAI.BannerSpell, SpellCastTargets.ForSelf(), triggered: true);
+        // just past the reach of the search (10 yd range plus both combat reaches): nothing is found, the cast is refused and the state stays
+        float reach = 10f + CombatReachOf(caster) + CombatReachOf(trigger);
+        run.Creatures.NearTeleport(trigger, caster.X + reach + 1f, caster.Y, caster.Z, 0);
+        Assert.NotEqual(SpellCastResult.CastOk, spells.System.CastSpell(caster, TheldrenTriggerAI.BannerSpell, SpellCastTargets.ForSelf(), triggered: true));
         ResolveSpellBatch(spells);
         Assert.Equal(EncounterState.NotStarted, data.GetData(BlackrockDepthsInstance.TypeRingOfLaw));
 
@@ -252,7 +258,14 @@ public sealed class DepthsNpcScriptTests
         Assert.Equal(5u, data.GetData(BlackrockDepthsInstance.TypeRingOfLaw)); // DATA_BANNER_BEFORE_EVENT
     }
 
-    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    /// <summary>The combat reach the spell search uses for a unit (the field, or the default when unset).</summary>
+    private static float CombatReachOf(Unit unit)
+    {
+        float reach = unit.GetFloat(UpdateFields.UnitFieldCombatreach);
+        return reach > 0 ? reach : Player.DefaultCombatReach;
+    }
+
+    /// <summary>Triggered casts are not batchable (SpellSystem.Batching IsBatchable), so this only advances time when a batch window is configured; kept as a safeguard.</summary>
     private static void ResolveSpellBatch(SpellTestKit kit)
     {
         if (kit.System.SpellBatchWindowMs != 0)

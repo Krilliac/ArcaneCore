@@ -16,7 +16,7 @@ public sealed class TheldrenTriggerAI(Creature creature) : CreatureAI(creature)
 
     public const uint Entry = 16079;
 
-    /// <summary>Spell 27517 "Summon Thelrin DND", the banner whose script effect this unit is the target of.</summary>
+    /// <summary>Spell 27517 "Summon Thelrin DND", the banner whose dummy effect (effect index 1, SPELL_EFFECT_DUMMY, target 38) finds this unit through its spell_script_target row.</summary>
     public const uint BannerSpell = 27517;
 
     protected override bool CallsGuardsOnSight => false;
