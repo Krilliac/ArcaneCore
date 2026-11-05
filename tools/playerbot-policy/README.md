@@ -19,7 +19,10 @@ rewards or examples produced by Claude or any other LLM (Anthropic's terms prohi
    ```
 
    Each record is one decision with its outcome `OutcomeMinutes` (5) later. The folder is bounded (`MaxFiles` x `MaxFileBytes`,
-   16 x 16 MiB by default), so copy it out before it rotates if the run is long.
+   16 x 16 MiB by default), so copy it out before it rotates if the run is long. In a split cluster each world worker writes its own
+   subfolder `maps-<owned map ranges>` of that folder (each bounded on its own), and the tools read one flat folder and do not
+   recurse: point `TELEMETRY_DIR` at one worker's subfolder, never at the parent. Policy files left in the parent folder by a run
+   from before the subfolders are not pruned any more; delete them by hand.
 
 2. **Train.**
 

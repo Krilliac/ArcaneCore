@@ -473,8 +473,8 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
             catch (UnauthorizedAccessException) { break; }
         }
         if (kept > _maxFiles - 1) return false;
-        // Several processes (the workers of a split cluster) may write one folder: the next number is the highest on disk, not the highest this writer made,
-        // and a file another process made between the scan and the create is skipped, not an error.
+        // Workers normally write separate folders (WorkerDirectory); where several processes still share one (an operator pointing two at the same path), the next number is the highest on disk,
+        // not the highest this writer made, and a file another process made between the scan and the create is skipped, not an error.
         if (files.Length > 0) _sequence = Math.Max(_sequence, SequenceOf(files[^1]));
         // At most MaxCreateAttempts creates; when every number was taken by another process the line is refused (no file), not an exception.
         for (int attempt = 0; attempt < MaxCreateAttempts; attempt++)

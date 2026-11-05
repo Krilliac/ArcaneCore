@@ -1151,7 +1151,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // A split worker fills its own share of the realm-wide target (see PopulationMapScope.ShareOf), never above its own running cap (MaxBots);
         // combined mode keeps all of it.
         if (_world is { } scopeWorld && ScopeOf(scopeWorld) is { OwnsEverything: false } shareScope)
-            effectiveTarget = Math.Min(shareScope.ShareOf(pop.TargetOnline), Math.Max(0, _options.MaxBots));
+        {
+            // The weight of a map is its creature spawn count in the shared world data, which every worker holds for every allowed map (no terrain survey);
+            // without content the share falls back to the even split.
+            CreatureContent? shareContent = services.GetService<CreatureWorldFeature>()?.Content;
+            Func<uint, int>? capacity = shareContent is null ? null : map => shareContent.GetSpawns(map).Count;
+            effectiveTarget = Math.Min(shareScope.ShareOf(pop.TargetOnline, capacity), Math.Max(0, _options.MaxBots));
+        }
         // Filled once the membership is read: a band counts only the population's own bots (PopulationCounts), which leaves out
         // the pending-deletion members.
         int[] desired = new int[input.Bands.Length];

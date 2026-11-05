@@ -973,7 +973,7 @@ public sealed class PlayerbotPopulationFeatureTests
             Assert.Contains(log.Infos, line => line.StartsWith("Playerbot population:", StringComparison.Ordinal)
                 && line.Contains("held back: waiting for the graveyard terrain lookup", StringComparison.Ordinal));
             AnomalyNotice notice = Assert.Single(capture.Notices);
-            Assert.Contains("note=waiting for the graveyard terrain lookup", notice.Detail, StringComparison.Ordinal);
+            Assert.Contains("held back: waiting for the graveyard terrain lookup", notice.Detail, StringComparison.Ordinal);
         }
         finally
         {
