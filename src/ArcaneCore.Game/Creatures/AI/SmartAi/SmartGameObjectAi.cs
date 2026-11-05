@@ -89,7 +89,7 @@ public sealed class SmartGameObjectAi(Func<SmartScriptCatalog> catalog) : IGameO
     }
 
     /// <summary>
-    /// SmartGameObjectAI::SetData (SmartAI.cpp:1524-1537): SMART_EVENT_DATA_SET with the setter (the sending creature, null for an object) as invoker,
+    /// SmartGameObjectAI::SetData (SmartAI.cpp:1524-1537): SMART_EVENT_DATA_SET with the setter (the sending creature; null when an object sends, because the invoker is a Unit) as invoker,
     /// var0 the data id and var1 the value. Raised by SMART_ACTION_SET_DATA (45).
     /// </summary>
     public void SetData(GameObjectMapSystem objects, GameObject go, uint id, uint value, Unit? setter = null)

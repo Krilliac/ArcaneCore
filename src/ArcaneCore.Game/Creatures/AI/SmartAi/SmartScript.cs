@@ -706,7 +706,9 @@ public sealed class SmartScript
                 case SmartAction.SetData:
                 {
                     // SmartScript.cpp:1469-1495 (SMART_ACTION_SET_DATA): each smart creature or game object target gets SetData(param1, param2),
-                    // the sender being `me`, else the game object. Needs a base object, as AC's (me || go). A target with no smart AI has no
+                    // the sender being `me`; AC passes the game object when there is no `me`, but the invoker here is a Unit, so a game object
+                    // sender arrives as null (and the receiver's row then falls back to its own LastInvoker). Needs a base object, as AC's
+                    // (me || go): a defence in depth, not reachable for creature or object scripts today. A target with no smart AI has no
                     // SetData seam here and is skipped (AC calls CreatureAI::SetData, a no-op for the scripted AIs that do not override it).
                     if (_owner.Base is null) break;
                     foreach (WorldObject t in targets)

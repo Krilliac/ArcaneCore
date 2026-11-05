@@ -54,7 +54,27 @@ public sealed class SmartAiSlice4Tests
     }
 
     [Fact]
-    public void SetData_OnAGameObjectTarget_RaisesItsDataSetEvent()
+    public void SetData_ActionOnAGameObjectScript_TargetingItself_RaisesItsOwnDataSetRow_WithANullInvoker()
+    {
+        // Source type 1: JUST_CREATED -> action 45 (target 1 = self) -> event 38 on the same object -> action 22 sets phase 5.
+        using var rig = SmartRig.Start(
+            [
+                Make((int)SmartRig.ObjectEntry, 1, 0, 63, 45, 1, a1: 3, a2: 7),
+                Make((int)SmartRig.ObjectEntry, 1, 1, 38, 22, 1, e1: 3, e2: 7, a1: 5),
+                Make((int)SmartRig.ObjectEntry, 1, 2, 38, 22, 1, e1: 3, e2: 8, a1: 9),
+            ],
+            creatureSpawns: [], objectSpawns: [GameObjectTestKit.GoSpawn(1, SmartRig.ObjectEntry, 0, 2)]);
+        GameObject go = rig.ObjectBySpawn(1);
+        Assert.Empty(rig.Catalog.Rejected);
+
+        SmartScript script = rig.ObjectScript(go);
+
+        Assert.Equal(5u, script.Phase);
+        Assert.Null(script.LastInvoker);
+    }
+
+    [Fact]
+    public void SetData_DirectCallOnAGameObjectAi_RaisesItsDataSetEvent()
     {
         using var rig = SmartRig.Start(
             [Make((int)SmartRig.ObjectEntry, 1, 0, 38, 22, 1, e1: 3, e2: 7, a1: 5)],
