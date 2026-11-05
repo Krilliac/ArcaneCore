@@ -191,6 +191,65 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     }
 
     /// <summary>
+    /// Audit cid 44: 53 different bots dead-end-pinned one cell of Deadwind Pass in under three hours (at the peak 21 in 30 minutes, the live logs of
+    /// 2026-10) and no world pin formed, because the cell lies in a cut region (the split stage's <c>world-dead-end-pin-unshared</c> line of 2026-11-05 names
+    /// region 126021 of 4323 polygons in zone 41) and every stall in a cut region was dropped. Size cannot tell such a region from the tunnel: Timbermaw's
+    /// largest region holds 4882 polygons. The number of bots can: no Timbermaw cell had more than 2 different bots in 30 minutes.
+    /// </summary>
+    [Fact]
+    public void ACrowdOfBotsPinningOneCellOfACutRegion_MakesAWorldPin()
+    {
+        NavRegionGraph deadwind = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 4323, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        Assert.True(PlayerbotNavigation.IsCutRegion(deadwind, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+
+        var pins = new PlayerbotSharedPins();
+        string? created = null;
+        for (ulong bot = 1; bot <= 4; bot++)
+        {
+            Assert.False(pins.IsWorldPin(0, 0, -11153.8f, -1878.6f, 1_000), $"no world pin before bot {bot}");
+            var watch = new PlayerbotStallWatch { SharedPins = pins };
+            created = watch.ReportDeadEndPin(bot, 0, 0, -11153.8f, -1878.6f, 1_000, deadwind, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons);
+            if (bot < 4) Assert.Null(created);
+        }
+
+        Assert.NotNull(created);
+        Assert.Contains("30 min", created, StringComparison.Ordinal);
+        Assert.True(pins.IsWorldPin(0, 0, -11153.8f, -1878.6f, 1_000), "the fourth different bot makes the cell a world pin");
+    }
+
+    /// <summary>The same crowd through the brain: three other bots pinned the tunnel cell, and this bot's own pin there is the one that makes it a world pin.</summary>
+    [Fact]
+    public async Task ABotsOwnPinInACutRegion_CompletesACrowdThroughTheBrain()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true };
+        var pins = new PlayerbotSharedPins { World = world.Host.World };
+        await world.PlaceAsync(InB);
+        var bot = new PlayerbotBrain(world.Session, options) { SharedPins = pins };
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+            for (ulong other = 1; other <= 3; other++)
+            {
+                var watch = new PlayerbotStallWatch { SharedPins = pins };
+                Assert.Null(watch.ReportDeadEndPin(world.Player.Guid.Value + other, 0, 0, InB.X, InB.Y, now, inCutRegion: true));
+            }
+
+            for (int i = 0; i < 2; i++)
+            {
+                bot.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+                bot.GiveUpStalledGoal(world.Player, shareable: false);
+            }
+
+            Assert.True(pins.IsWorldPin(0, 0, InB.X, InB.Y, now), "three other bots and this one are a crowd");
+            return true;
+        });
+    }
+
+    /// <summary>
     /// The plan side of the same rule (<c>PlayerbotNavigation.PinRefuses</c>, asked for a plan's destination and for a partial route's end):
     /// a cell that is a dead-end pin of the bot refuses, except when it lies in a cut region, where it is the way through.
     /// </summary>
