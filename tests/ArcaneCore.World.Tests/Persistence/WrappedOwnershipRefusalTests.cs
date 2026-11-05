@@ -101,9 +101,6 @@ public sealed class WrappedOwnershipRefusalTests
         Assert.Null(OwnershipRefusal.Find(new InvalidOperationException("not a refusal", new IOException("neither"))));
         Assert.Null(OwnershipRefusal.Find(new CharacterClaimRejectedException(5, "world")));
         Assert.Null(OwnershipRefusal.Find(null));
-        Assert.True(OwnershipRefusal.TryFind(new DbUpdateException("wrapped", refusal), out CharacterOwnershipRejectedException? found));
-        Assert.Same(refusal, found);
-        Assert.False(OwnershipRefusal.TryFind(new IOException(), out _));
     }
 
     private interface IWriteQueue
@@ -119,10 +116,10 @@ public sealed class WrappedOwnershipRefusalTests
 
     private sealed class Env : IAsyncDisposable
     {
-        private readonly string _directory;
+        private readonly TempDirectory _directory;
         private readonly ServiceProvider _services;
 
-        private Env(string directory, ServiceProvider services)
+        private Env(TempDirectory directory, ServiceProvider services)
         {
             _directory = directory;
             _services = services;
@@ -132,11 +129,10 @@ public sealed class WrappedOwnershipRefusalTests
 
         public static async Task<Env> CreateAsync(bool wrapped)
         {
-            string directory = Path.Combine(Path.GetTempPath(), "arcanecore-wrappedrefusal-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
+            var directory = new TempDirectory("arcanecore-wrappedrefusal-", sqlite: true);
             DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(new SqliteConnectionStringBuilder
             {
-                DataSource = Path.Combine(directory, "characters.sqlite"), Pooling = false, DefaultTimeout = 5,
+                DataSource = Path.Combine(directory.Path, "characters.sqlite"), Pooling = false, DefaultTimeout = 5,
             }.ToString()).Options;
             await using (var setup = new CharacterDbContext(options))
             {
@@ -199,14 +195,7 @@ public sealed class WrappedOwnershipRefusalTests
         public async ValueTask DisposeAsync()
         {
             await _services.DisposeAsync();
-            SqliteConnection.ClearAllPools();
-            try
-            {
-                Directory.Delete(_directory, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
+            _directory.Dispose(); // clears the pooled SQLite connections, then deletes the directory
         }
     }
 

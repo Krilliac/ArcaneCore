@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using ArcaneCore.Kernel.Characters;
 
 namespace ArcaneCore.World.Persistence;
@@ -6,7 +5,7 @@ namespace ArcaneCore.World.Persistence;
 /// <summary>
 /// Finds a fence refusal (<see cref="CharacterOwnershipRejectedException"/>) in an exception a store raised. EF Core may wrap what an interceptor or a commit-time check throws (a
 /// <c>DbUpdateException</c>, an <c>InvalidOperationException</c>), and a write queue that matched the exact type would then treat a refusal as an ordinary failure: retained and retried
-/// instead of dropped (sealed or retired source) or terminal (lost ownership). Every queue that decides on a refusal asks here, so they all agree on what a refusal is.
+/// instead of dropped (sealed or retired source) or terminal (lost ownership). The instance, social and reputation write queues ask here; other queues still match the exact type (CharacterKeyedWriteQueue, CharacterSaveQueue, HonorWriteQueue, QuestNpcPersistence, SkillSaveCoordinator, SpellbookCache, SpellStatePersistence, TalentPersistence) and do not see a wrapped refusal.
 /// </summary>
 internal static class OwnershipRefusal
 {
@@ -37,12 +36,5 @@ internal static class OwnershipRefusal
         }
 
         return null;
-    }
-
-    /// <summary>True when <paramref name="failure"/> is, or wraps, a fence refusal; <paramref name="refusal"/> is that refusal.</summary>
-    public static bool TryFind(Exception? failure, [NotNullWhen(true)] out CharacterOwnershipRejectedException? refusal)
-    {
-        refusal = Find(failure);
-        return refusal is not null;
     }
 }

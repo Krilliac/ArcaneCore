@@ -247,6 +247,7 @@ public sealed class RetiredSourceCleanShutdownTests
     [Fact]
     public async Task ACommitThatThrowsAfterItCommitted_RollsForward_AndDropsTheRefusalsOfTheSaveQueueAndAKeyedQueue()
     {
+        bool retiredBeforeTheStep = true;
         await using var rig = new HandoffRig();
         using WorldRuntime world = rig.StartWorld();
         using var source = rig.Source(world);
@@ -256,9 +257,9 @@ public sealed class RetiredSourceCleanShutdownTests
         {
             Assert.True(rig.RestWrites.PostRetainedSweepForTest());
             await rig.WaitForRefusalsAsync(2);
+            retiredBeforeTheStep = rig.Queue.IsQuarantined(5); // read where the commit-threw path can run: the retirement has not happened yet
             throw new IOException("the connection dropped after the takeover committed");
         };
-        bool retiredBeforeTheStep = true;
 
         async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
         {
@@ -268,10 +269,6 @@ public sealed class RetiredSourceCleanShutdownTests
                 await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained after the flush");
                 rig.RestWrites.Save(5, Rest(1f));
                 await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(5), "the busy rest write of character 5 to be retained after the flush");
-            }
-            else if (stage == WorldHandoffStage.EpochTakeover)
-            {
-                retiredBeforeTheStep = rig.Queue.IsQuarantined(5);
             }
         }
 
@@ -380,8 +377,8 @@ public sealed class RetiredSourceCleanShutdownTests
                 Assert.True(rig.RestWrites.PostRetainedSweepForTest());
                 Assert.True(rig.PostSharedSweep(kind));
                 await WorldTestHost.WaitForAsync(
-                    () => rig.Refusals >= 2 || rig.RestWrites.TerminalFailure is not null || rig.SharedTerminal(kind) is not null,
-                    "the fence to refuse the keyed and the shared write");
+                    () => (rig.Retirement.DroppedCount("RestWriteQueue") == 1 && rig.SharedDrops(kind) == 1) || rig.RestWrites.TerminalFailure is not null || rig.SharedTerminal(kind) is not null,
+                    "the keyed and the shared refusal to be dropped by the seal");
                 throw new InvalidOperationException("the coordinator died after the commit");
             }
         }
@@ -389,7 +386,7 @@ public sealed class RetiredSourceCleanShutdownTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(id, AfterStage));
         Assert.Null(rig.RestWrites.TerminalFailure);
         Assert.Null(rig.SharedTerminal(kind));
-        Assert.True(rig.Refusals >= 2);
+        Assert.Equal(2, rig.Refusals);
 
         WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RecoverAsync(id);
 

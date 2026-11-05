@@ -289,9 +289,10 @@ public sealed class WorldHostCharacterFencingTests
         kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
         await kit.Host.StartAsync(CancellationToken.None);
 
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 2); // the startup check, then the watch's immediate first read: the sighting has happened
         kit.SaveQueue.RetireEveryCharacter();
         kit.Ownership.Owned = true;
-        await Task.Delay(300); // the first sighting of the claim has long happened
+        await Task.Delay(300); // the watch (25 ms interval) has had many intervals to see the retirement and return
         int reads = kit.Ownership.IsOwnedCalls;
         await Task.Delay(300);
 

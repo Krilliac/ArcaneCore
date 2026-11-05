@@ -219,7 +219,8 @@ public sealed class WorldHostWorkerScopeTests
     {
         using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
         await using Scratch db = await Scratch.CreateAsync(directory);
-        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25));
+        var beats = new RefusedBeats();
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25), configure: services => CountRefusedBeats(services, beats));
         var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         worker.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
         await worker.Host.StartAsync(CancellationToken.None);
@@ -228,8 +229,8 @@ public sealed class WorldHostWorkerScopeTests
         worker.SaveQueue.SealWrites(); // a handoff has flushed and not decided
         await TakeOverAsync(worker, mine);
 
-        // Many intervals pass with the row refusing every beat: the queue is sealed, so nothing stops.
-        await Task.Delay(TimeSpan.FromMilliseconds(400));
+        // Several beats are refused while the queue is sealed (observed, not assumed): the loop must still be running after them, and nothing stops.
+        await WorldTestHost.WaitForAsync(() => beats.Count >= 4, "four heartbeats to be refused while the queue is sealed");
         Assert.False(fatal.Task.IsCompleted);
         Assert.Null(worker.SaveQueue.TerminalFailure);
 
@@ -246,7 +247,8 @@ public sealed class WorldHostWorkerScopeTests
     {
         using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
         await using Scratch db = await Scratch.CreateAsync(directory);
-        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25));
+        var beats = new RefusedBeats();
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(25), configure: services => CountRefusedBeats(services, beats));
         var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
         worker.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
         await worker.Host.StartAsync(CancellationToken.None);
@@ -254,10 +256,64 @@ public sealed class WorldHostWorkerScopeTests
 
         worker.SaveQueue.RetireEveryCharacter();
         await TakeOverAsync(worker, mine);
-        await Task.Delay(TimeSpan.FromMilliseconds(400));
+        await WorldTestHost.WaitForAsync(() => beats.Count >= 1, "a heartbeat to be refused after the retirement"); // the refusal really reached the queue's decision; whether the loop then ends is not asserted here
 
         Assert.False(fatal.Task.IsCompleted);
         Assert.Null(worker.SaveQueue.TerminalFailure);
+    }
+
+    /// <summary>Counts the heartbeats the ownership row refused, so a test can wait for a refused beat instead of a fixed delay.</summary>
+    private sealed class RefusedBeats
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Add() => Interlocked.Increment(ref _count);
+    }
+
+    private static void CountRefusedBeats(IServiceCollection services, RefusedBeats beats)
+        => services.Replace(ServiceDescriptor.Scoped<ICharacterOwnershipStore>(sp => new CountingOwnershipStore(new EfCharacterOwnershipStore(sp.GetRequiredService<CharacterDbContext>()), beats)));
+
+    /// <summary>The real ownership store with every member forwarded (the interface's defaults throw), counting the heartbeats that returned false.</summary>
+    private sealed class CountingOwnershipStore(EfCharacterOwnershipStore inner, RefusedBeats beats) : ICharacterOwnershipStore
+    {
+        public Task<bool> IsOwnedAsync(string scope, CancellationToken cancellationToken = default) => inner.IsOwnedAsync(scope, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> GetCurrentAsync(string scope, CancellationToken cancellationToken = default) => inner.GetCurrentAsync(scope, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, CancellationToken cancellationToken = default)
+            => inner.TryAcquireAsync(scope, ownerNode, incarnation, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
+            => inner.TryTakeoverAsync(observed, ownerNode, newIncarnation, cancellationToken);
+
+        public Task<bool> IsAnyOwnedAsync(CancellationToken cancellationToken = default) => ((ICharacterOwnershipStore)inner).IsAnyOwnedAsync(cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryAcquireAsync(scope, ownerNode, incarnation, ownedMaps, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryTakeoverAsync(observed, ownerNode, newIncarnation, ownedMaps, cancellationToken);
+
+        public Task<CharacterOwnershipToken?> TryReclaimAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).TryReclaimAsync(observed, ownerNode, newIncarnation, ownedMaps, cancellationToken);
+
+        public Task<bool> ReapAsync(CharacterOwnershipToken observed, long nowUnixMs, long minHeartbeatAgeMs, CancellationToken cancellationToken = default)
+            => ((ICharacterOwnershipStore)inner).ReapAsync(observed, nowUnixMs, minHeartbeatAgeMs, cancellationToken);
+
+        public async Task<bool> HeartbeatAsync(CharacterOwnershipToken token, long nowUnixMs, CancellationToken cancellationToken = default)
+        {
+            bool beat = await ((ICharacterOwnershipStore)inner).HeartbeatAsync(token, nowUnixMs, cancellationToken).ConfigureAwait(false);
+            if (!beat)
+            {
+                beats.Add();
+            }
+
+            return beat;
+        }
+
+        public Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default) => inner.ReleaseAsync(token, cancellationToken);
     }
 
     /// <summary>The takeover a handoff's commit performs on the shard's ownership row: the epoch moves on under another incarnation, so the old token's heartbeat is refused.</summary>
