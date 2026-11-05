@@ -10,8 +10,8 @@ namespace ArcaneCore.Kernel.Tests.Ops;
 
 /// <summary>
 /// The supervisor token is taken out of the environment at the start of every daemon (<see cref="SupervisorProtocol.CaptureProcessToken"/>) and the readers take it from the
-/// captured copy: these tests go through the production paths (the production <see cref="HeartbeatWriter"/> constructor, the host's configuration builder, the daemon entry
-/// points) instead of injecting an environment, so a reader reverted to the live environment, or a daemon that stops capturing, fails here.
+/// captured copy: these tests go through the production paths (the public <see cref="HeartbeatWriter"/> seam plus a source-text pin on the daemon's writer constructor, the host's configuration
+/// builder, the daemon entry points) instead of injecting an environment, so a reader reverted to the live environment, or a daemon that stops capturing, fails here.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 public sealed class SupervisorTokenWiringTests
@@ -35,8 +35,7 @@ public sealed class SupervisorTokenWiringTests
     {
         string? previousToken = Environment.GetEnvironmentVariable(Token);
         string? previousProtocol = Environment.GetEnvironmentVariable(SupervisorProtocol.EnvironmentVariable);
-        TextWriter previousOut = Console.Out;
-        var stdout = new StringWriter();
+        var stdout = new StringWriter(); // a private writer handed to the production plan: nothing else writes to it, so the line count is exact and the process-wide Console.Out is never swapped
         try
         {
             SupervisorProtocol.ResetCapturedToken();
@@ -44,9 +43,15 @@ public sealed class SupervisorTokenWiringTests
             Environment.SetEnvironmentVariable(SupervisorProtocol.EnvironmentVariable, "1");
             SupervisorProtocol.CaptureProcessToken(); // what Main does first
             Assert.Null(Environment.GetEnvironmentVariable(Token));
-            Console.SetOut(stdout);
 
-            var writer = new HeartbeatWriter(new WatchdogOptions(), [], new CounterRegistry(), NullLogger<HeartbeatWriter>.Instance); // the constructor the daemons use
+            // The production plan resolver with the production token reader (the same two arguments the daemon constructor passes), only stdout is the private writer.
+            var options = new WatchdogOptions();
+            var writer = new HeartbeatWriter(
+                options.Heartbeat,
+                [],
+                new CounterRegistry(),
+                NullLogger<HeartbeatWriter>.Instance,
+                () => HeartbeatPlan.Resolve(options.Heartbeat, SupervisorProtocol.ProcessEnvironment, Environment.ProcessId, AppContext.BaseDirectory, stdout));
             writer.Start();
             writer.Check(1_000_000);
 
@@ -61,11 +66,19 @@ public sealed class SupervisorTokenWiringTests
         }
         finally
         {
-            Console.SetOut(previousOut);
             SupervisorProtocol.ResetCapturedToken();
             Environment.SetEnvironmentVariable(Token, previousToken);
             Environment.SetEnvironmentVariable(SupervisorProtocol.EnvironmentVariable, previousProtocol);
         }
+    }
+
+    // The test above hands the plan its own stdout, so the daemon constructor's own wiring is pinned here: it resolves the plan with the captured-token reader.
+    [Fact]
+    public void TheDaemonHeartbeatWriterConstructor_ResolvesItsPlanWithTheCapturedTokenReader()
+    {
+        string text = File.ReadAllText(RepoFile("src/ArcaneCore.Kernel/Ops/Watchdog/Heartbeat/HeartbeatWriter.cs"));
+
+        Assert.Contains("HeartbeatPlan.Resolve(options.Heartbeat, SupervisorProtocol.ProcessEnvironment,", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -93,7 +106,7 @@ public sealed class SupervisorTokenWiringTests
     }
 
     [Fact]
-    public void ANativeGrandchild_StartedAfterTheCapture_DoesNotInheritTheToken()
+    public void AManagedProcessStartInfo_CreatedAfterTheCapture_DoesNotCarryTheToken()
     {
         string? previous = Environment.GetEnvironmentVariable(Token);
         try

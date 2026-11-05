@@ -31,8 +31,28 @@ public sealed class ClusterSupervisorHostedService : IHostedService
     /// <summary>The delay seam of the memory wait; tests replace it. Called from the host's start thread only.</summary>
     internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } = static (delay, ct) => Task.Delay(delay, ct);
 
-    /// <summary>The memory the host can offer in MiB (physical, or the container limit), 0 when unknown; tests replace it. A reserve not below it can never be met.</summary>
-    internal Func<long> TotalMemoryMb { get; set; } = static () => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024 * 1024);
+    /// <summary>
+    /// The most times a start that was refused for free memory after some children were launched waits and tries again before it gives up: about ten minutes at <see cref="MemoryRetryInterval"/>,
+    /// plus up to <see cref="ClusterSupervisorOptions.StartGroupReadySeconds"/> per retry while the group in progress is not ready (that wait repeats every retry). The budget is shared by the whole start:
+    /// it is never reset when a retry makes progress. Giving up drains every child already launched and exits 1, even when the cluster already met <see cref="ClusterSupervisorOptions.MinClusterProcesses"/>
+    /// (a process denied at plan time, by contrast, is merely skipped once the minimum is met).
+    /// </summary>
+    internal const int MaxMidStartMemoryRetries = 20;
+
+    /// <summary>
+    /// The total physical memory of the host in MiB, 0 when unknown; tests replace it. It is read from the same host-wide scope as the admission probe
+    /// (<see cref="HostMemory"/>), so a reserve plus the smallest start that is not below it can never be met. Only when the OS has no total here does it fall back to
+    /// the runtime's figure (<see cref="GCMemoryInfo.TotalAvailableMemoryBytes"/>, which a container limit or a GC heap hard limit lowers). See <see cref="ResolveTotalMemoryMb"/>.
+    /// </summary>
+    internal Func<long> TotalMemoryMb { get; set; } = static () => ResolveTotalMemoryMb(HostMemory.TryGetTotalBytes, static () => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes);
+
+    /// <summary>The total memory in MiB: the host-wide figure <paramref name="hostTotal"/> (bytes) when the OS has one, else <paramref name="runtimeTotal"/> (bytes), which is never read when the host figure exists.</summary>
+    internal static long ResolveTotalMemoryMb(Func<long?> hostTotal, Func<long> runtimeTotal)
+    {
+        ArgumentNullException.ThrowIfNull(hostTotal);
+        ArgumentNullException.ThrowIfNull(runtimeTotal);
+        return (hostTotal() ?? runtimeTotal()) / (1024L * 1024L);
+    }
 
     /// <summary>Why the supervisor stopped itself (below its minimum), or null when the stop came from outside (a stop signal). Read after the host has stopped.</summary>
     internal string? SelfStopReason => Volatile.Read(ref _selfStopReason);
@@ -90,12 +110,22 @@ public sealed class ClusterSupervisorHostedService : IHostedService
                     $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}), and free memory would not cure it; nothing was launched.");
             }
 
-            // A reserve at or above all the memory the host (or its container limit) has can never be met: waiting would never end, so it is a configuration error too.
+            // A reserve at or above all the memory the host has can never be met: waiting would never end, so it is a configuration error too.
             long totalMb = TotalMemoryMb();
             if (totalMb > 0 && _options.MinFreeMemoryReserveMb >= totalMb)
             {
                 throw new InvalidOperationException(
                     $"Cluster:Supervisor:MinFreeMemoryReserveMb ({_options.MinFreeMemoryReserveMb} MiB) is not below the memory this host can offer ({totalMb} MiB), so no process can ever be admitted; lower it. Nothing was launched.");
+            }
+
+            // The reserve must also leave room for the processes the minimum needs: the plan admits a process only while available - planned - RequiredMemoryMb stays at the reserve
+            // or above, and available can never exceed the total, so the MinClusterProcesses smallest RequiredMemoryMb values plus the reserve are a floor no free memory can cure.
+            // Limit: the plan charges adopted children that are already active nothing, yet this floor counts them, so after a restart that adopted children under a changed config it can refuse a start that only needed to wait.
+            long smallestMinimumMb = _options.Processes.Values.Select(p => (long)p.RequiredMemoryMb).Order().Take(Math.Max(_options.MinClusterProcesses, 0)).Sum();
+            if (totalMb > 0 && smallestMinimumMb > 0 && _options.MinFreeMemoryReserveMb + smallestMinimumMb > totalMb)
+            {
+                throw new InvalidOperationException(
+                    $"Cluster:Supervisor:MinFreeMemoryReserveMb ({_options.MinFreeMemoryReserveMb} MiB) plus RequiredMemoryMb of the {_options.MinClusterProcesses} smallest process(es) ({smallestMinimumMb} MiB) is above the memory this host can offer ({totalMb} MiB), so Cluster:Supervisor:MinClusterProcesses can never be reached; lower the reserve or the requirement. Nothing was launched.");
             }
 
             _logger.LogWarning(
@@ -108,6 +138,7 @@ public sealed class ClusterSupervisorHostedService : IHostedService
         _supervisor.BelowMinimum += OnBelowMinimum;
         IReadOnlyList<string> pending = plan.Admitted;
         var launched = new HashSet<string>(StringComparer.Ordinal);
+        int retries = 0;
         while (true)
         {
             try
@@ -124,15 +155,39 @@ public sealed class ClusterSupervisorHostedService : IHostedService
             }
             catch (InvalidOperationException ex) when (ClusterHostSupervisor.IsMemoryReserveRefusal(ex.Message))
             {
-                // A child already launched took the memory the plan counted on: launch the rest once it is free (the group-ready wait of the group in progress is not repeated).
+                // A child already launched took the memory the plan counted on: launch the rest once it is free. The refusal threw out of StartInGroupsAsync before it reached the
+                // group-ready wait of the group in progress, so that wait is repeated here, and the minimum is watched through the whole wait once enough children are up.
                 pending = [.. pending.Where(n => !launched.Contains(n))];
+                if (++retries > MaxMidStartMemoryRetries)
+                {
+                    throw new InvalidOperationException(
+                        $"Free memory did not return in {MaxMidStartMemoryRetries} waits of {(int)MemoryRetryInterval.TotalSeconds} s; {pending.Count} process(es) were never launched ({ex.Message}). The supervisor gives up so the operator sees the refusal.");
+                }
+
+                // While fewer than the minimum have launched the watch stays off (arming it would trip at once), so an exit during that wait is seen only when the final BeginMinimumWatch arms.
+                if (launched.Count >= _options.MinClusterProcesses)
+                {
+                    _supervisor.BeginMinimumWatch(); // an exit while waiting must stop the supervisor, not leave it waiting on a cluster below its minimum
+                }
+
+                int nextOrder = StartOrderOf(pending[0]);
+                string[] inProgress = [.. launched.Where(n => StartOrderOf(n) == nextOrder)];
+                if (inProgress.Length > 0)
+                {
+                    await _supervisor.WaitForGroupReadyAsync(inProgress, cancellationToken).ConfigureAwait(false);
+                }
+
                 _logger.LogWarning("Supervisor waits for free memory before launching {Remaining} more process(es): {Reason} Planning again in {Seconds} s", pending.Count, ex.Message, (int)MemoryRetryInterval.TotalSeconds);
                 await DelayAsync(MemoryRetryInterval, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started
+        _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started (only a wait for memory arms the watch earlier, once the minimum is up)
     }
+
+    /// <summary>The <see cref="SupervisedProcessConfig.StartOrder"/> of the configured process named <paramref name="name"/>, 0 when none is.</summary>
+    private int StartOrderOf(string name)
+        => _options.Processes.Values.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.Ordinal))?.StartOrder ?? 0;
 
     private void OnBelowMinimum(SupervisorBelowMinimum report)
     {
@@ -248,8 +303,11 @@ public static class ClusterSupervisorHosting
 
     /// <summary>
     /// Runs the supervisor until the host is stopped. Refuses (78) inside a supervised child, so a copied key cannot make a child
-    /// supervise again; returns 1 when the start is refused (below <c>MinClusterProcesses</c> for a reason free memory cannot cure; a refusal for the memory reserve alone waits instead), else 0. A stop signal that
-    /// cancels the start between two launches is a clean stop: the children already launched are drained and 0 is returned.
+    /// supervise again; returns 1 when the start is refused: below <c>MinClusterProcesses</c> for a reason free memory cannot cure, a memory reserve that no free memory can meet
+    /// (at or above the host total, or with the smallest <c>MinClusterProcesses</c> requirements above it), or free memory that did not return after some children were launched
+    /// (<see cref="ClusterSupervisorHostedService.MaxMidStartMemoryRetries"/> waits; every child is then drained). A refusal for the reserve alone before any launch waits and plans again instead.
+    /// A stop signal that cancels the start between two launches is a clean stop: the children already launched are drained and 0 is returned, unless the supervisor stopped itself
+    /// (a child given up on during the start), which returns its own exit code.
     /// </summary>
     public static async Task<int> RunAsync(HostApplicationBuilder builder, TextWriter error)
     {
@@ -312,7 +370,7 @@ public static class ClusterSupervisorHosting
         WriteExit(log, error, null, $"unhandled exception{(e.IsTerminating ? " (the runtime is terminating the process)" : string.Empty)}: {crash?.GetType().Name}: {crash?.Message}", crash, flush);
     }
 
-    /// <summary>Flushes every <see cref="ArcaneLoggerProvider"/> of <paramref name="services"/> (5 s at most each); never throws.</summary>
+    /// <summary>Flushes every <see cref="ArcaneLoggerProvider"/> of <paramref name="services"/> (5 s at most each); never throws except <see cref="OutOfMemoryException"/>.</summary>
     internal static void FlushLogProviders(IServiceProvider services)
     {
         try
@@ -322,15 +380,15 @@ public static class ClusterSupervisorHosting
                 provider.Flush(TimeSpan.FromSeconds(5));
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Runs inside a crash or exit hook: a provider or container already torn down must not turn the report into a second failure.
+            // Runs inside a crash or exit hook: a provider or container already torn down must not turn the report into a second failure. Running out of memory is not swallowed.
         }
     }
 
     /// <summary>
     /// Writes the supervisor's exit line (the exit code, or that the runtime picks it when <paramref name="code"/> is null, and why) to <paramref name="log"/> and
-    /// <paramref name="error"/>, then runs <paramref name="flush"/> so a queued log line is on disk; never throws.
+    /// <paramref name="error"/>, then runs <paramref name="flush"/> so a queued log line is on disk; never throws except <see cref="OutOfMemoryException"/> (which also skips the stderr line when the logger raised it).
     /// </summary>
     internal static void WriteExit(ILogger log, TextWriter error, int? code, string reason, Exception? exception, Action? flush = null)
     {
@@ -347,9 +405,9 @@ public static class ClusterSupervisorHosting
                 log.LogError(exception, "Supervisor exiting {Code}: {Reason}", codeText, reason);
             }
         }
-        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // The logging providers are already down: stderr below still says it.
+            // The logging providers are already down (or a sink threw something of its own): stderr below still says it.
         }
 
         try
@@ -357,9 +415,9 @@ public static class ClusterSupervisorHosting
             error.WriteLine(text);
             error.Flush();
         }
-        catch (Exception ex) when (ex is ObjectDisposedException or IOException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // stderr is gone: nothing left to tell.
+            // stderr is gone (or its writer threw something of its own): nothing left to tell.
         }
 
         flush?.Invoke();
@@ -373,8 +431,13 @@ public static class ClusterSupervisorHosting
         }
         catch (OperationCanceledException)
         {
-            // Ctrl+C or SIGTERM during the launches: ApplicationStopping is linked into StartAsync's token, so the next launch throws.
-            await error.WriteLineAsync("ArcaneCore.World supervisor start was cancelled by a stop signal; draining the processes already launched.").ConfigureAwait(false);
+            // Ctrl+C or SIGTERM during the launches: ApplicationStopping is linked into StartAsync's token, so the next launch (or wait) throws. The supervisor's own stop
+            // (a child given up on while the start waits for memory) raises ApplicationStopping the same way, so the service says which of the two it was.
+            ClusterSupervisorHostedService? startedService = host.Services.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().FirstOrDefault();
+            string? selfStopDuringStart = startedService?.SelfStopReason;
+            await error.WriteLineAsync(selfStopDuringStart is null
+                ? "ArcaneCore.World supervisor start was cancelled by a stop signal; draining the processes already launched."
+                : $"ArcaneCore.World supervisor stopped itself during its start ({selfStopDuringStart}); draining the processes already launched.").ConfigureAwait(false);
             try
             {
                 await host.StopAsync().ConfigureAwait(false);
@@ -383,6 +446,11 @@ public static class ClusterSupervisorHosting
             {
                 await error.WriteLineAsync($"ArcaneCore.World supervisor stop after the cancelled start failed: {stopEx.Message}").ConfigureAwait(false);
                 return (ExitCodes.Failure, $"the start was cancelled by a stop signal and the stop that followed failed: {stopEx.Message}");
+            }
+
+            if (startedService is not null && selfStopDuringStart is not null)
+            {
+                return (startedService.RequestedExitCode, "the supervisor stopped itself during its start: " + selfStopDuringStart);
             }
 
             return (ExitCodes.Success, "the start was cancelled by a stop signal; the processes already launched were drained");
