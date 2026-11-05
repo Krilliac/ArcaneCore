@@ -331,8 +331,12 @@ public sealed class NpcServicesFeatureTaxiTests
             CharacterSaveQueue saves = services.GetRequiredService<CharacterSaveQueue>();
             saves.Start();
             var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saves, NullLogger<WorldRuntime>.Instance);
+            // The quest feature is built first: its ctor extends the NPC feature with an empty store. NpcServicesFeature.Node prefers the
+            // quest feature's store, so that store takes the taxi content too, and Extend then leaves Flights on the same content.
+            QuestNpcFeature? questFeature = questNpcs ? services.GetRequiredService<QuestNpcFeature>() : null;
             NpcServicesFeature npcs = services.GetRequiredService<NpcServicesFeature>();
             npcs.Attach(world);
+            questFeature?.Services.ReplaceNpcs(new NpcStore(TaxiContent));
             npcs.Extend(new QuestNpcDependencies(), new NpcStore(TaxiContent));
             return new Rig(services, store, characters, saves, world, npcs, record.Id);
         }

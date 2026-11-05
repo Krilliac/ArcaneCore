@@ -127,7 +127,7 @@ Config-gated and default-off or retail: `Forms:ResetFistAttackTimeOnFormLoss` (o
 Not switchable (flagged for a decision; none is default-on non-retail by intent, but these are unswitched deviations):
 
 * Pet and totem casts never spend the owner's spell-mod charges (retail leaves a stuck -1 mod); `PassiveReapply` depth cap of 2.
-* `EffectHealthLeech` and the periodic leech tick treat an unset multiple value as 1.0 (vmangos heals 0).
+* `EffectHealthLeech` treats an unset multiple value as 1.0 (vmangos heals 0, `SpellEffects.cpp:1863`). The periodic leech tick matches vmangos (`SpellAuras.cpp:5979`).
 * `SpellInfo.GetCastTime` ignores the all-zero cast time row, so Throw and Multi-Shot miss the +500 ms ranged slot time.
 * With `Auras:ProcEngineBreaksDamageAuras=false` (no proc engine exists) the damage break still removes auras that carry proc flags so Polymorph, Sap, Gouge and Freezing Trap stay breakable; Wyvern Sting (19386, 24132, 24133) is spared only because it carries proc flags (vmangos `checkProcFlags`), and Prowl breaks through the damage flag like Polymorph. No spell is special-cased by id. Set the key once a proc engine exists.
 * Enchant spells fail closed with no `SpellItemEnchantment.dbc` or `Enchanting:Enabled=false` (no retail counterpart; safe direction).
@@ -151,7 +151,9 @@ Each item was re-checked against the code at the uc2 integration branch (Y96). R
 * Per-entry `.reload creature_template <entry>` (and gameobject_template): the entry is accepted and the whole table is reloaded, a superset of vmangos'
   single-template reload (`ServerCommands.cpp:1758-1785`); the reply says so and the entry is no longer taken for the reason text. An entry-aware
   `IContentReloadable` contract is not built: a full reload is the stricter result.
-* Spell mods: the leech multiplier follows vmangos (MULTIPLE_VALUE, `docs/areas/spell-mods.md`). Whether pet/totem casts should spend the owner's charges and
+* Spell mods: `EffectHealthLeech` deviates from vmangos, which uses the raw `EffectMultipleValue` (`SpellEffects.cpp:1863`; unset heals 0), while
+  `SpellSystem.Combat.cs` substitutes 1.0 when it is not above 0; the periodic leech matches vmangos (`SpellAuras.cpp:5979`, `> 0 ? value : 1`). The effect
+  deviation is unswitched and awaits a developer decision (`docs/areas/spell-mods.md`). Whether pet/totem casts should spend the owner's charges and
   whether `PassiveReapply` should be uncapped are recorded there as unswitched deviations awaiting a developer decision (neither retail behaviour is a sensible default).
 * Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest (a real client is needed).
 * Battlegrounds S3, S5, S6 and S7: delivered since (`BattlegroundFeature`, `CharacterBattlegroundDataModule`); the schema numbers were assigned in merge order.
