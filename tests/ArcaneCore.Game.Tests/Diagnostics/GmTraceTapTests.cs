@@ -576,6 +576,67 @@ public sealed class GmTraceTapTests
     }
     // --- melee spells (the spell-owned SMSG_ATTACKERSTATEUPDATE), environmental damage, game-object targets ----
 
+    private const uint NextSwingStrike = 993_001;
+
+    /// <summary>A Heroic-Strike-shaped next-melee spell (Attributes 0x4, melee damage class) of <paramref name="school"/>, as MeleeSpellLoopTests builds it.</summary>
+    private static SpellInfo NextSwingSpell(SpellSchool school) => Spell(NextSwingStrike, Effect(SpellEffectName.SchoolDamage, 11, SpellImplicitTarget.UnitEnemy)) with
+    {
+        Attributes = (SpellAttributes)0x4 | SpellAttributes.IsAbility,
+        RangeIndex = SpellConstants.RangeIndexCombat,
+        Range = new SpellRange(0, 5),
+        PowerType = (int)PowerType.Rage,
+        ManaCost = 15,
+        DamageClass = SpellDamageClass.Melee,
+        School = school,
+    };
+
+    /// <summary>Queue the next-swing spell and let the main-hand swing cast it: the spell system sends its own SMSG_ATTACKERSTATEUPDATE (SpellSystem.MeleeSpellPackets).</summary>
+    private static (List<(string Channel, GmTraceSubject Subject, string Line)> Lines, byte[] Packet) SwingNextMeleeSpell(SpellSchool school)
+    {
+        using var kit = new SpellTestKit(NextSwingSpell(school));
+        (Player caster, FakeSession casterSession) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 3, 0, race: Race.Orc);
+        target.Map!.Combat.TogglePvp(target, true);
+        kit.Spellbook.Teach(caster, NextSwingStrike);
+        caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + 1, 1000);
+        SpellSystem.SetPower(caster, PowerType.Rage, 100);
+        CombatEnvironment.Register(kit.World, new CombatEnvironment(new CombatOptions(), null, new SpellSystemMeleeHooks(kit.System)));
+        kit.World.RunTick(0);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, NextSwingStrike, SpellCastTargets.ForUnit(target.Guid)));
+        caster.Map!.Combat.Attack(caster, target);
+        casterSession.Clear();
+        var sink = new RecordingTraceSink(GmStreamChannels.Damage);
+        kit.World.GmTrace = sink;
+
+        kit.World.RunTick(50); // the first swing is due at once and casts the queued spell
+
+        byte[] packet = Assert.Single(Packets(casterSession, WorldOpcode.SmsgAttackerstateupdate)); // the spell-owned packet went out, no white swing
+        return (sink.Lines, packet);
+    }
+
+    [Fact]
+    public void ANextMeleeSpellOfThePhysicalSchool_IsTracedAsPhysical_ThroughTheRealMeleeSpellPacket()
+    {
+        // The sub-damage school is a school index on the wire (vmangos Combat.cpp:203, cmangos-classic Unit.cpp:6112: GetFirstSchoolInMask);
+        // a producer writing the mask (Normal's mask is 1) made this line, and the client, read "Holy".
+        (string channel, GmTraceSubject subject, string line) = Assert.Single(SwingNextMeleeSpell(SpellSchool.Normal).Lines, l => l.Line.Contains(" melee via spell ", StringComparison.Ordinal)); // the spell's own damage log is a second line
+
+        Assert.Equal(GmStreamChannels.Damage, channel);
+        Assert.Equal($"P1(Player:1) -> P2(Player:2) melee via spell {NextSwingStrike} 11 Physical (absorb 0, resist 0, block 0)", line);
+        Assert.Equal((new ObjectGuid(1), new ObjectGuid(2)), (subject.Actor, subject.Other));
+    }
+
+    [Fact]
+    public void ANextMeleeSpellOfAMagicSchool_IsTracedWithThatSchool_ThroughTheRealMeleeSpellPacket()
+    {
+        // Fire's mask is 4, which read as an index would be "Frost".
+        string line = Assert.Single(SwingNextMeleeSpell(SpellSchool.Fire).Lines, l => l.Line.Contains(" melee via spell ", StringComparison.Ordinal)).Line;
+
+        Assert.StartsWith($"P1(Player:1) -> P2(Player:2) melee via spell {NextSwingStrike} ", line, StringComparison.Ordinal);
+        Assert.Contains(" Fire (absorb ", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("Frost", line, StringComparison.Ordinal);
+    }
+
     /// <summary>Environmental mitigation with fixed absorb and resist for fire and nature damage.</summary>
     private sealed class FixedMitigation(uint absorb, int resist) : IEnvironmentalDamageMitigation
     {

@@ -30,7 +30,7 @@ public static class GmStreamChannels
         new(Procs, "proc chance rolls: aura, chance, roll, result", AllowsAll: true),
         new(Spells, "cast start, fail with reason, go with hit/miss per target, spell misses", AllowsAll: true),
         new(Moves, "movement opcodes with position and speed (target or near only)", AllowsAll: false),
-        new(AntiCheat, "anticheat findings with score and verdict", AllowsAll: true),
+        new(AntiCheat, "anticheat findings with score and verdict (no producer yet: nothing publishes here until the anticheat wiring lands)", AllowsAll: true),
     ];
 
     /// <summary>Every channel, in the order they are listed to a GM.</summary>

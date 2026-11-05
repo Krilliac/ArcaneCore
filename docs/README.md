@@ -35,7 +35,7 @@ no invented API surface, unfinished parts documented as limits).
 | [Live launch diagnostics](ops/live-diagnostics.md) | `launch-daemon.ps1 -Diagnostics Max` (the default): crash dumps, hang stacks, a counters CSV sidecar and the repo's diagnostic options at their most informative safe values, the disk caps, and what was left out and why. |
 | [Crash dumps](ops/crash-dumps.md) | WER LocalDumps setup (`register-crash-dumps.ps1`), the `dumping` heartbeat grace in the supervisors, and the verify-once two-dump recipe |
 | [Redeploy prefers hot reload](ops/redeploy.md) | How `tools/ops/live/redeploy.ps1` plans a redeploy (None, Hot, Restart, Blocked), the deploy record, the hot apply through the World's control pipe and when it falls back to the hard restart. |
-| [GM live stream](ops/gm-stream.md) | `.arcane stream`: the damage, procs, spells, moves and anticheat channels a GM can follow in chat, the target/near/all scopes, the range, and the rate limit and timeout. |
+| [GM live stream](ops/gm-stream.md) | `.arcane stream`: the damage, procs, spells, moves and anticheat channels (anticheat has no producer yet) a GM can follow in chat, the target/near/all scopes, the range, and the rate limit and timeout. |
 | [Wiring audit](ops/wiring-audit.md) | `.server wiring` and the start-up summary line: client opcodes with no handler, options asked for but never configured, config checks `check-config` does not run, handlers on server-only opcodes; the CI guards behind them. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Realm PIN, TOTP and client integrity](security/realm-pin-integrity.md) | Account login factors, Administrator commands, and opt-in client integrity checks. |

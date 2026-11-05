@@ -23,7 +23,7 @@ An unknown channel is refused with the list of channels that exist. `on` and `of
 | `procs` | target, near, all | Proc chance rolls: aura, chance, roll, result. |
 | `spells` | target, near, all | Cast start, fail with reason, go with hit and miss per target, spell misses and interrupts. |
 | `moves` | target, near | Movement opcodes with position and speed. Not available for everyone: it would flood the chat. |
-| `anticheat` | target, near, all | Anticheat findings with score and verdict. |
+| `anticheat` | target, near, all | Anticheat findings with score and verdict. Limit: no producer publishes to this channel yet, so following it stays silent; that is not "no findings". The note goes away when the anticheat wiring lands. |
 
 The `damage`, `spells` and `moves` channels are fed from the packets the server sends to the players who can see a unit, so they show what a
 client would be told, also for units nobody is watching. Spell lines show the spell id (a name where the spell code has it: cast failures and procs).
@@ -48,4 +48,4 @@ For a multi-target spell go, the `target` scope matches on the caster and the fi
 * A subscription turns itself off 10 minutes after it was last started or renewed, and when you log out; you are told when it times out.
 * At most 8 channels per GM at a time.
 * Zero cost when nobody follows a channel: the producers check a lock-free flag before decoding or formatting anything. The limits, the
-  timeout and the range are options of the stream (`GmStreamOptions`).
+  timeout and the range are code defaults of `GmStreamOptions`; no configuration key binds them.
