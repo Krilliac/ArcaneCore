@@ -20,7 +20,7 @@ public sealed class EconomyConfigChecks : IConfigCheck
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var issues = new List<ConfigIssue>();
-        foreach (IConfigurationSection entry in configuration.GetSection(Key).GetChildren())
+        foreach (IConfigurationSection entry in configuration.GetSection(EconomyFeature.SectionName + ":AuctionHouses").GetChildren())
         {
             foreach (string field in Fields)
             {

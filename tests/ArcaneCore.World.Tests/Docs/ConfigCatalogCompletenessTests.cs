@@ -934,7 +934,8 @@ public sealed class ConfigCatalogCompletenessTests
                 continue;
             }
 
-            foreach (ConfigEntry entry in ConfigProduction.Catalog.Entries.Where(e => e.Path == section.Path || e.Path.StartsWith(section.Path + ":", StringComparison.Ordinal)))
+            // By section, not by path prefix: Diagnostics:PacketCapture sits below Diagnostics but is another options type, which the daemon does not bind.
+            foreach (ConfigEntry entry in ConfigProduction.Catalog.Entries.Where(e => e.Section == section.Path))
             {
                 if ((entry.Daemons & daemon) == 0)
                 {
