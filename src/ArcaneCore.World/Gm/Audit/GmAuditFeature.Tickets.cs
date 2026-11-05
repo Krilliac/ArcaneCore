@@ -152,6 +152,7 @@ public sealed partial class GmAuditFeature
     public GmTicketRecord? CreateTicket(int characterId, string text, byte category, uint mapId, float x, float y, float z)
     {
         GmTicketRecord ticket;
+        bool held;
         lock (_gate)
         {
             if (_tickets.Values.Any(t => t.CharacterId == characterId))
@@ -162,10 +163,12 @@ public sealed partial class GmAuditFeature
             long now = NowUnixSeconds;
             ticket = new GmTicketRecord(NextTicketId(), characterId, text, category, mapId, x, y, z, now, now, GmTicketStatus.Open, string.Empty, string.Empty, 0);
             _tickets[ticket.Id] = ticket;
+            GmTicketRecord filed = ticket;
+            held = HoldTicketChange("file:" + filed.Id, filed.Id, () => RestoreHeldTicket(filed));
         }
 
         TouchQueue();
-        PersistTicket(ticket);
+        PersistTicket(ticket, held);
         return ticket;
     }
 
@@ -180,6 +183,7 @@ public sealed partial class GmAuditFeature
     public GmTicketRecord? UpdateTicketText(int characterId, string text, byte? category, out bool changed)
     {
         GmTicketRecord updated;
+        bool held;
         lock (_gate)
         {
             GmTicketRecord? ticket = _tickets.Values.FirstOrDefault(t => t.CharacterId == characterId);
@@ -198,10 +202,11 @@ public sealed partial class GmAuditFeature
 
             updated = ticket with { Text = text, Category = newCategory, UpdatedAt = NowUnixSeconds };
             _tickets[updated.Id] = updated;
+            held = HoldTicketChange("text:" + characterId, updated.Id, () => UpdateTicketText(characterId, text, newCategory, out _));
         }
 
         TouchQueue();
-        PersistTicket(updated);
+        PersistTicket(updated, held);
         changed = true;
         return updated;
     }
@@ -210,6 +215,7 @@ public sealed partial class GmAuditFeature
     public GmTicketRecord? RespondToTicket(int ticketId, string response)
     {
         GmTicketRecord updated;
+        bool held;
         lock (_gate)
         {
             if (!_tickets.TryGetValue(ticketId, out GmTicketRecord? ticket))
@@ -219,10 +225,11 @@ public sealed partial class GmAuditFeature
 
             updated = ticket with { Response = response, UpdatedAt = NowUnixSeconds };
             _tickets[ticketId] = updated;
+            held = HoldTicketChange("answer:" + ticketId, ticketId, () => RespondToTicket(ticketId, response));
         }
 
         TouchQueue();
-        PersistTicket(updated);
+        PersistTicket(updated, held);
         return updated;
     }
 
@@ -233,6 +240,7 @@ public sealed partial class GmAuditFeature
     public GmTicketRecord? CloseTicket(int ticketId, string closedBy, string? response)
     {
         GmTicketRecord closed;
+        bool held;
         lock (_gate)
         {
             if (!_tickets.Remove(ticketId, out GmTicketRecord? ticket))
@@ -249,10 +257,11 @@ public sealed partial class GmAuditFeature
                 ClosedAt = now,
                 UpdatedAt = now,
             };
+            held = HoldTicketChange("close:" + ticketId, ticketId, () => CloseTicket(ticketId, closedBy, response));
         }
 
         TouchQueue();
-        PersistTicket(closed);
+        PersistTicket(closed, held);
         return closed;
     }
 
@@ -269,21 +278,25 @@ public sealed partial class GmAuditFeature
     private GmTicketRecord? RemoveTicket(int ticketId)
     {
         GmTicketRecord? removed;
+        bool held = false;
         lock (_gate)
         {
-            _tickets.Remove(ticketId, out removed);
+            if (_tickets.Remove(ticketId, out removed))
+            {
+                held = HoldTicketChange("delete:" + ticketId, ticketId, () => RemoveTicket(ticketId));
+            }
         }
 
         if (removed is not null)
         {
             TouchQueue();
-            Writes.Save(TicketKey(ticketId), store => store.DeleteTicketAsync(ticketId));
+            Writes.Save(TicketKey(ticketId), held ? RefuseHeldTicketWrite : store => store.DeleteTicketAsync(ticketId));
         }
 
         return removed;
     }
 
-    private void PersistTicket(GmTicketRecord ticket) => Writes.Save(TicketKey(ticket.Id), store => store.SaveTicketAsync(ticket));
+    private void PersistTicket(GmTicketRecord ticket, bool held) => Writes.Save(TicketKey(ticket.Id), held ? RefuseHeldTicketWrite : store => store.SaveTicketAsync(ticket));
 
     private static string TicketKey(int ticketId) => "ticket:" + ticketId;
 

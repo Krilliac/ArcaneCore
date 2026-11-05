@@ -33,7 +33,8 @@ this document that names gRPC, a Login/Realm/CharServer chain, or separate socia
   The Social and Economy leases are taken over at run time like the others: every map worker attaches AutoBroadcast and the auction house bot dormant,
   and when the holder dies and its lease lapses a surviving worker takes the scope with a new fencing token and starts them without a restart. The bot
   first reads the custody ledger and the `ahbot_items` rows, and the economy feature replaces its auction cache with a fresh snapshot, before either the bot
-  or the expiry sweep acts. Limit: two survivors can split the two scopes if the leases lapse on different ticks, so the peer-link locator would reach only the
+  or the expiry sweep acts. The new Social holder rebuilds its groups from storage and rereads the GM ticket queue, holding every ticket write until that read is done; its guilds and petitions continue from the read replica, with no reread
+  (`docs/ops/realm-liveness.md`, "What a new holder writes from"). Limit: two survivors can split the two scopes if the leases lapse on different ticks, so the peer-link locator would reach only the
   Social holder; no production code assigns the holder link yet, so nothing depends on one node holding both today.
   The Silithyst totals are the one world-state row written by the Kalimdor owner instead of the worldstate holder, since only that worker runs the Silithus zone script.
 - **D4 Transfers.** A player moves between processes only at far teleports and instance entry (the 1.12.1 client already shows a

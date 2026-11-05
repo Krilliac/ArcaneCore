@@ -141,11 +141,12 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
-    public async Task Auction_listed_on_this_node_while_the_takeover_snapshot_is_read_stays_listed_after_the_snapshot_is_applied()
+    public async Task Auction_listed_on_this_node_after_the_takeover_snapshot_was_read_stays_listed_when_the_snapshot_is_applied()
     {
         (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
         await using var keeperScope = keeper;
-        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper,
+        var gate = new HeldAuctionSnapshot();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
             extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
         for (int i = 0; i < 4; i++)
         {
@@ -153,28 +154,71 @@ public sealed class AuctionBotFeatureTests
         }
 
         Assert.True(keeper.Holds(EconomyScope));
+        gate.HoldNextFullRead();
+        Assert.False(await fixture.OnWorld(fixture.Economy.EnsureAuctionCacheCurrent));
+        AuctionSnapshot read = await gate.Taken.WaitAsync(Fixture.Budget);
+        Assert.DoesNotContain(read.Auctions, a => a.Id == 90); // the snapshot is taken and misses the listing, which does not exist yet
+
+        // The listing commits and completes while the snapshot waits to be handed back, so the snapshot is applied after the listing's completion.
         var listed = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
         long expire = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (48 * 3600);
-
-        // One world-thread turn: the snapshot read starts off the world thread, and the listing is committed locally while it runs, so the snapshot is applied after the listing.
-        // The read may or may not have seen the new row; the cache must hold the listing either way (before the fix a snapshot without it dropped it).
         await fixture.OnWorld(() =>
         {
-            Assert.False(fixture.Economy.EnsureAuctionCacheCurrent());
             fixture.Economy.StartBotListing(House, 90, new ItemInstanceData { Guid = 900, Entry = Fixture.Entry, Count = 1 }, 500, 1000, expire,
                 Guid.NewGuid(), outcome => listed.TrySetResult(outcome));
             return true;
         });
         Assert.Equal(EconomyOutcome.After, await listed.Task.WaitAsync(Fixture.Budget));
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(90)));
 
-        using var timeout = new CancellationTokenSource(Fixture.Budget);
-        while (!await fixture.OnWorld(() => fixture.Economy.EnsureAuctionCacheCurrent()).WaitAsync(timeout.Token))
-        {
-            await Task.Delay(10, timeout.Token);
-        }
+        gate.ReleaseRead();
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
 
+        Assert.Equal(1, gate.FullReads); // that snapshot is the one applied: a failed read and a retry would prove nothing
         Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(90)));
         Assert.Equal(2, await fixture.OnWorld(() => fixture.Economy.Auctions.Count)); // the fixture's player auction and the listing
+    }
+
+    [Fact]
+    public async Task Auction_busy_when_the_takeover_snapshot_read_starts_keeps_the_commit_that_finishes_during_the_read()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        var gate = new HeldAuctionSnapshot();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        gate.HoldNextFullRead();
+        gate.HoldNextCommit();
+
+        // One world-thread turn: the bid starts first, so the auction is busy when the read starts and the bid's change is not noted as made during the read.
+        var bid = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await fixture.OnWorld(() =>
+        {
+            fixture.Economy.StartBotBid(1, 600, Guid.NewGuid(), outcome => bid.TrySetResult(outcome));
+            Assert.True(fixture.Economy.IsAuctionBusy(1));
+            Assert.False(fixture.Economy.EnsureAuctionCacheCurrent());
+            return true;
+        });
+
+        // The commit is held until the snapshot is taken, so the snapshot has the row from before the bid.
+        AuctionSnapshot read = await gate.Taken.WaitAsync(Fixture.Budget);
+        Assert.Equal(0u, read.Auctions.Single(a => a.Id == 1).Bid);
+
+        gate.ReleaseCommit();
+        Assert.Equal(EconomyOutcome.After, await bid.Task.WaitAsync(Fixture.Budget));
+        Assert.Equal(600u, await fixture.OnWorld(() => fixture.Economy.FindAuction(1)!.Bid));
+
+        gate.ReleaseRead();
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
+
+        Assert.Equal(1, gate.FullReads);
+        Assert.Equal(600u, await fixture.OnWorld(() => fixture.Economy.FindAuction(1)!.Bid)); // not rolled back to the snapshot's row
     }
 
     [Fact]
@@ -868,6 +912,95 @@ public sealed class AuctionBotFeatureTests
 
             public Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
                 => inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+
+            public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default)
+                => inner.GetIdSeedAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Orders a takeover snapshot against a local commit, so the order is the test's and not the scheduler's: the next full auction read takes its snapshot, reports it through <see cref="Taken"/> and then keeps it until
+    /// <see cref="ReleaseRead"/> (for at most the fixture budget, ignoring the read's own cancellation; <see cref="FullReads"/> shows a retry if a held read ever failed). The next commit waits for <see cref="ReleaseCommit"/> before it reaches the store.
+    /// </summary>
+    private sealed class HeldAuctionSnapshot
+    {
+        private readonly TaskCompletionSource<AuctionSnapshot> _taken = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _readRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _commitRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _holdRead;
+        private int _holdCommit;
+        private int _fullReads;
+
+        public Task<AuctionSnapshot> Taken => _taken.Task;
+
+        /// <summary>Full auction reads from the held one on.</summary>
+        public int FullReads => Volatile.Read(ref _fullReads);
+
+        public void HoldNextFullRead() => Volatile.Write(ref _holdRead, 1);
+
+        public void HoldNextCommit() => Volatile.Write(ref _holdCommit, 1);
+
+        public void ReleaseRead() => _readRelease.TrySetResult();
+
+        public void ReleaseCommit() => _commitRelease.TrySetResult();
+
+        public IEconomyStore Wrap(IEconomyStore inner) => new Store(inner, this);
+
+        private sealed class Store(IEconomyStore inner, HeldAuctionSnapshot owner) : IEconomyStore
+        {
+            public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+            {
+                AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+                if (filter.AuctionId is not null)
+                {
+                    return snapshot;
+                }
+
+                if (Interlocked.Exchange(ref owner._holdRead, 0) == 1)
+                {
+                    Interlocked.Increment(ref owner._fullReads);
+                    owner._taken.TrySetResult(snapshot);
+                    await owner._readRelease.Task.WaitAsync(Fixture.Budget); // bounded, so a failed assertion cannot hang the fixture's disposal on this read
+                }
+                else if (owner._taken.Task.IsCompleted)
+                {
+                    Interlocked.Increment(ref owner._fullReads);
+                }
+
+                return snapshot;
+            }
+
+            public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+            {
+                if (Interlocked.Exchange(ref owner._holdCommit, 0) == 1)
+                {
+                    await owner._commitRelease.Task.WaitAsync(cancellationToken);
+                }
+
+                return await inner.CommitAsync(request, cancellationToken);
+            }
+
+            public Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+                => inner.IsCommittedAsync(operationId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+                => inner.GetMailsAsync(receiverId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+                => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+                => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+            public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+                => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+            public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+                => inner.GetAuctionsAsync(cancellationToken);
+
+            public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+                CancellationToken cancellationToken = default)
+                => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
 
             public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default)
                 => inner.GetIdSeedAsync(cancellationToken);
