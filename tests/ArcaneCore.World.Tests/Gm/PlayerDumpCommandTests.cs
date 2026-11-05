@@ -36,10 +36,17 @@ public sealed class PlayerDumpCommandTests : IDisposable
 
     private CharacterDbContext Db() => new(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(_connection).Options);
 
+    /// <summary>
+    /// Hang guard of one reply. <c>.pdump</c> replies come from pool-thread database and file work posted back to the world thread, so a
+    /// host starved by a full gate (gate 1c7134022: this test took 84 s while minute-long scenario tests ran beside it; alone it takes
+    /// under a second) can exceed the client's 10 s default with nothing wrong. The reply text is still asserted exactly.
+    /// </summary>
+    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(60);
+
     private static async Task<string> RunAsync(WorldTestClient client, string command)
     {
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return (await client.ReadChatAsync()).Text;
+        return (await client.ReadChatAsync(ReplyTimeout)).Text;
     }
 
     [Fact]
