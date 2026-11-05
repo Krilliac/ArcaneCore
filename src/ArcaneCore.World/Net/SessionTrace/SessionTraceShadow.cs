@@ -138,7 +138,7 @@ internal sealed class SessionTraceShadow(SessionTrace trace)
 
         MovementAntiCheat checks = ChecksFor(feature.Options);
         _findings.Clear();
-        checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, _findings);
+        checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _findings);
         Report(reason);
     }
 

@@ -72,9 +72,8 @@ public sealed class AntiCheatWorldTests
     /// <summary>
     /// Apply <paramref name="options"/> with no baseline gap. The mover paces itself in real time, but every check judges a step by the
     /// client's own elapsed time capped by the receive interval plus slack, so a late packet never makes a legitimate step look fast.
-    /// The one wall-clock rule is the baseline gap: a pause over <see cref="AntiCheatOptions.BaselineGapMs"/> (3 s) re-baselines (AFK, a
-    /// loading screen), and a test continuation the thread pool held back that long under full-suite load sent the blink as a fresh
-    /// baseline, which is never scored. With the gap out of reach every result here depends only on the packets.
+    /// <see cref="AntiCheatOptions.BaselineGapMs"/> only caps the time-skip credit now (a silence is no longer a free baseline); a large value
+    /// keeps a thread pool stall under full-suite load from widening what a skip can be credited with.
     /// </summary>
     private static Task ApplyAsync(WorldTestHost host, AntiCheatOptions options)
     {
@@ -160,6 +159,7 @@ public sealed class AntiCheatWorldTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // the forged arm needs the 500 ms silence to read as at least 500 ms on the receive clock, so a stalled thread pool changes the verdict
     public async Task ASkipBackedByRealSilence_BuysTheStepItsSilenceCovers_ButNotAfterAnotherWorldPacketClosedTheSilence()
     {
         // Control: no packet between the last movement and the skip, so the 500 ms of silence backs the 400 ms skip.

@@ -67,7 +67,10 @@ public sealed class AntiCheatOptions
     /// </summary>
     public int SpeedChangeGraceMs { get; set; } = 2000;
 
-    /// <summary>A gap this long (milliseconds) between two movement packets starts a new baseline (loading screen, AFK). Default 3000.</summary>
+    /// <summary>
+    /// Caps the time-skip credit (milliseconds): all the skips the evidence supports in ten seconds together earn at most this much. A silence
+    /// between two movement packets is never a free baseline; the step after it is judged against the time that passed. Default 3000.
+    /// </summary>
     public int BaselineGapMs { get; set; } = 3000;
 
     /// <summary>Movement packets per second, by the receive clock AND the client's own clock, that count as a burst. Default 50.</summary>

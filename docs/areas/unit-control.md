@@ -48,7 +48,8 @@ Behaviour, in the order vmangos runs it:
   (vmangos: "allowed to move self"), nothing while the player is possessed or charmed. A possessed creature is relocated (never while the server
   moves it on a spline) and the block is relayed to its observers except the possessor, a possessed player through its own locomotion observers
   and to its own client. CMSG_SET_ACTIVE_MOVER and CMSG_MOVE_NOT_ACTIVE_MOVER follow vmangos (the latter ignores the block while the moved
-  player, not the sender, is being teleported). The creature system runs the AI of a possessed creature and, while a fear or confuse holds it,
+  player, not the sender, is being teleported, on a taxi flight or inside the reject window, and runs the anticheat first). A controlled unit's
+  blocks are scored by the anticheat against the controller ([anticheat](anticheat.md)). The creature system runs the AI of a possessed creature and, while a fear or confuse holds it,
   that crowd-control generator (vmangos `ModConfuseSpell` starts it whoever controls the unit and `UpdateMotion` runs it: UNIT_STATE_POSSESSED is
   not in UNIT_STATE_CAN_NOT_MOVE); no leash and no generator of its own, and the default generator is not resumed when the crowd control ends
   (vmangos installs none for a possessed unit, MotionMaster.cpp:56). PetAI skips return movement and autocast while it is possessed.

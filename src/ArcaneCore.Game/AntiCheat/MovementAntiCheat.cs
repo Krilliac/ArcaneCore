@@ -19,8 +19,9 @@ namespace ArcaneCore.Game.AntiCheat;
 /// <item>Geometry (only where the data is loaded): swimming with no water, climbing into the air, walking through walls.</item>
 /// </list>
 /// A new baseline is taken (the next packet is trusted) on the first packet, after <see cref="NotifyServerRelocation"/>
-/// (teleports, the server moving the player), after a knockback and after a gap longer than
-/// <see cref="AntiCheatOptions.BaselineGapMs"/>. A time skip is not a baseline: the step that spans it is judged against
+/// (teleports, the server moving the player) and after a knockback. A silence, however long, is not a baseline: the step after it is
+/// judged against the time that passed (the client's own elapsed time, capped by the receive interval plus the latency slack), so holding
+/// packets and then jumping buys only what the silence covers. A time skip is not a baseline either: the step that spans it is judged against
 /// real elapsed time (<see cref="NotifyTimeSkip(uint, uint, List{AntiCheatFinding})"/>). Pure and world-thread only.
 /// </summary>
 public sealed class MovementAntiCheat
@@ -180,8 +181,7 @@ public sealed class MovementAntiCheat
 
         long skipBudgetMs = _skipSpanBudgetMs;
         _skipSpanBudgetMs = 0;
-        bool gap = _hasLast && unchecked(now - _lastReceived) > (uint)Options.BaselineGapMs;
-        if (!_hasLast || _trustNext || gap)
+        if (!_hasLast || _trustNext)
         {
             Baseline(m, now, airborne, onTransport, sample.Transport != TransportClaim.Fake);
             if (!HasPositionFinding(findings, before))
