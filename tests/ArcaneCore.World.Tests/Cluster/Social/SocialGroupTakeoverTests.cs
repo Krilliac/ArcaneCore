@@ -250,7 +250,7 @@ public sealed class SocialGroupTakeoverTests
         });
         await rig.Characters.ReadHeld.WaitAsync(Budget);
 
-        // Each failed invite leaves one event, so the event count says how many ran. 4096 commands: four batches, and no more than the worker's event queue keeps.
+        // Each command below leaves one event for worker-c (a failed invite its answer, the loot change the update of its actor), so the event count says how many ran. 4096 commands: four batches, under the event queue's cap.
         var invite = new GroupCommand(GroupCommandKind.Invite, ObjectGuid.Player(1).Value, "Char1", 0, false, TargetName: "Nobody");
         int invites = (4 * SocialGroupPersistenceFeature.ReplayBatch) - 1;
         for (int i = 0; i < invites; i++)
@@ -270,7 +270,7 @@ public sealed class SocialGroupTakeoverTests
         await rig.Persistence.StopAsync();
 
         Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
-        Assert.Equal(invites, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Equal(invites + 1, rig.Holder.Groups.PendingFor("worker-c"));
         Assert.Equal((byte)LootMethod.RoundRobin, Assert.Single(rig.Holder.Groups.Snapshots()).LootMethod);
         Assert.Equal((byte)LootMethod.RoundRobin, rig.Rows.Group(1)!.LootMethod); // the final write has it
 
