@@ -73,7 +73,12 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
             await honor.WeekGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance); // refuses (throws, nothing written) when the lease was lost or given back since the check above; the store then verifies the lease row itself
+                // The weekly job is a sweep: it stops with the holder (IsHolder, not the commit fence's answer), so a lease lost or given back since the check above refuses it before anything is written; the store then verifies the lease row itself
+                if (!LeaseFencedWrite.IsHolder(keeper, RealmAuthorityScopes.Maintenance))
+                {
+                    throw new RealmLeaseNotHeldException(RealmAuthorityScopes.Maintenance);
+                }
+
                 await store.ApplyMaintenanceAsync(
                     new HonorMaintenanceBatch(plan.Updates, period.DeleteCpBefore, new HonorMaintenanceState(period.NewLast, period.NewNext, false), protectors),
                     cancellationToken).ConfigureAwait(false);

@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World.Clustering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -97,7 +99,7 @@ internal static class WorldStartup
 
         if (startup != 0)
         {
-            await DisposeAsync(host).ConfigureAwait(false);
+            await DisposeAsync(host, logger).ConfigureAwait(false);
             return startup;
         }
 
@@ -105,10 +107,10 @@ internal static class WorldStartup
         {
             int code = exitCode();
             logger.LogWarning("World start-up stopped on request ({Request}) before the world started; exit code {ExitCode}", stopped, code);
-            await DisposeAsync(host).ConfigureAwait(false);
-            return code;
+            return Finish(code, await DisposeAsync(host, logger).ConfigureAwait(false));
         }
 
+        bool disposeFailed = false;
         try
         {
             bool started = false;
@@ -128,10 +130,10 @@ internal static class WorldStartup
         }
         finally
         {
-            await DisposeAsync(host).ConfigureAwait(false);
+            disposeFailed = await DisposeAsync(host, logger).ConfigureAwait(false);
         }
 
-        return exitCode();
+        return Finish(exitCode(), disposeFailed);
     }
 
     /// <summary>
@@ -155,11 +157,32 @@ internal static class WorldStartup
         ]);
     }
 
-    private static async Task DisposeAsync(IHost host)
+    /// <summary>
+    /// Disposes the host. Disposing a started host stops it, so a failure of the stop (a hosted service that throws, a lease release that hangs and times out) escapes from here; unhandled out of
+    /// an async <c>Main</c> it becomes a fail-fast with a full dump and a restart delay, although the stop was already underway and nothing is left to protect. Any exception but OutOfMemoryException
+    /// is logged critical, recorded once in the <see cref="FaultLedger"/> (site <c>world.host-dispose</c>), turns a still-zero exit code into <see cref="ExitCodes.Failure"/> (so the supervisor
+    /// restarts the process; in Combined mode with no supervisor the process just ends with that code) and is NOT rethrown. Runtime errors elsewhere keep the crash handler's fail-fast.
+    /// </summary>
+    /// <returns>True when the dispose threw.</returns>
+    private static async Task<bool> DisposeAsync(IHost host, ILogger logger)
     {
-        if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-        else host.Dispose();
+        try
+        {
+            if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            else host.Dispose();
+            return false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogCritical(ex, "Disposing the host failed ({Type}); exiting with a failure code instead of crashing", ex.GetType().Name);
+            FaultLedger.Shared.Record("world.host-dispose", ex);
+            if (ExitCodes.Current == ExitCodes.Success) ExitCodes.Current = ExitCodes.Failure;
+            return true;
+        }
     }
+
+    /// <summary>The code to return: the supervisor-visible one, but never 0 after a failed dispose.</summary>
+    private static int Finish(int code, bool disposeFailed) => disposeFailed && code == ExitCodes.Success ? ExitCodes.Failure : code;
 
     private sealed class SignalRegistrations(PosixSignalRegistration[] registrations) : IDisposable
     {

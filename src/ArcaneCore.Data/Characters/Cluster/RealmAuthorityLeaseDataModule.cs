@@ -1,3 +1,4 @@
+using ArcaneCore.Data;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Cluster.Social;
@@ -81,19 +82,68 @@ public sealed class RealmAuthorityLeaseDataModule : IDataModule, ICharacterDataC
 /// <see cref="IRealmAuthorityLeaseStore"/> over the characters database. Every call opens its own scope and context, so the store is a singleton
 /// that any thread may call; each decision is one conditional UPDATE inside a transaction, so two nodes on one database cannot both be granted.
 /// Fencing tokens are the row's high-water mark and only ever grow. <paramref name="commandTimeout"/> bounds every database command (null: the provider
-/// default), so a hung database fails a renewal in time for the keeper to stop the node before the lease lapses.
+/// default), so a hung database fails a renewal in time for the keeper to stop the node before the lease lapses. With <paramref name="contextFactory"/> (see <see cref="DedicatedContextFactory"/>) every call uses a context of that factory instead of the general one, so the lease connections are their own pool.
+/// A renewal on PostgreSQL commits with <c>synchronous_commit = off</c> (see <see cref="TryRenew"/>).
 /// </summary>
-public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, TimeSpan? commandTimeout = null) : IRealmAuthorityLeaseStore
+public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, TimeSpan? commandTimeout = null, Func<CharacterDbContext>? contextFactory = null) : IRealmAuthorityLeaseStore
 {
-    private CharacterDbContext Open(IServiceScope serviceScope)
+    /// <summary>A context for one call and what must be disposed with it: a scope of the general pool, or a context of the dedicated lease pool (the store's context factory).</summary>
+    private sealed class LeaseDb(CharacterDbContext db, IServiceScope? scope) : IDisposable
     {
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        public CharacterDbContext Db { get; } = db;
+
+        public void Dispose()
+        {
+            if (scope is null)
+                Db.Dispose(); // a context of the dedicated factory is ours; a scoped one is returned with its scope
+            scope?.Dispose();
+        }
+    }
+
+    private LeaseDb Open()
+    {
+        IServiceScope? serviceScope = null;
+        CharacterDbContext db;
+        if (contextFactory is not null)
+        {
+            db = contextFactory();
+        }
+        else
+        {
+            serviceScope = scopes.CreateScope();
+            db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        }
+
         if (commandTimeout is { } timeout)
         {
             db.Database.SetCommandTimeout(timeout);
         }
 
-        return db;
+        return new LeaseDb(db, serviceScope);
+    }
+
+    /// <summary>
+    /// A factory of contexts that connect through their OWN connection pool, or null when the provider is not PostgreSQL (then the store uses the general context pool). Npgsql pools connections per
+    /// connection string, so the string gets a distinct application name (visible in pg_stat_activity), a small <paramref name="maxPoolSize"/> and a short connect/pool-wait
+    /// <paramref name="connectTimeout"/>: a general pool that is saturated or stalled cannot starve a renewal, and the node's lease connections stay a handful (at most
+    /// <paramref name="maxPoolSize"/> per process). The contexts carry no interceptors: every lease call is exempt from the characters write fence anyway. The options are built once and shared.
+    /// </summary>
+    public static Func<CharacterDbContext>? DedicatedContextFactory(DatabaseConnectionOptions connection, string applicationName, int maxPoolSize, TimeSpan connectTimeout)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (connection.Provider != DatabaseProvider.PostgreSql || string.IsNullOrWhiteSpace(connection.ConnectionString))
+            return null;
+
+        var builder = new Npgsql.NpgsqlConnectionStringBuilder(connection.ConnectionString)
+        {
+            ApplicationName = applicationName,
+            Pooling = true,
+            MinPoolSize = 0,
+            MaxPoolSize = Math.Max(1, maxPoolSize),
+            Timeout = Math.Max(1, (int)Math.Ceiling(connectTimeout.TotalSeconds)),
+        };
+        DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseNpgsql(builder.ConnectionString).Options;
+        return () => new CharacterDbContext(options);
     }
 
     public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
@@ -102,8 +152,8 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         long now = nowUtc.ToUnixTimeMilliseconds();
         long expires = now + TtlMs(ttl);
         string incarnation = ownerIncarnation.ToString("D");
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
 
@@ -139,10 +189,11 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         long now = nowUtc.ToUnixTimeMilliseconds();
         long expires = now + TtlMs(ttl);
         string incarnation = ownerIncarnation.ToString("D");
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
+        RelaxCommitDurability(db);
 
         int renewed = db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.ExpiresAtUnixMs > now
@@ -162,12 +213,25 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         return new AuthorityLeaseResult(sameOwner ? AuthorityLeaseOutcome.RejectedStaleToken : AuthorityLeaseOutcome.RejectedHeldByOther, active);
     }
 
+    /// <summary>
+    /// PostgreSQL only: this transaction's commit does not wait for the WAL flush (<c>SET LOCAL synchronous_commit = off</c>, scoped to the transaction). A stalled WAL disk made every commit take seconds and a
+    /// five-scope round outlast the keeper's deadline. It stays safe because a renewal's durability is not what fences: the row is visible to every session at once, and if PostgreSQL crashes the
+    /// renewal can be lost (for at most about three wal_writer_delay, roughly 0.6 s), which leaves the row showing an OLDER expiry than the node believes. A takeover (<see cref="TryAcquire"/>, which commits synchronously)
+    /// still needs <c>!active || expires &lt;= now</c> on the row and always increments the fencing token, and the commit fence (<see cref="LeaseFencedWrite"/>) compares the token and owner, never the expiry, so a node
+    /// whose lease was taken over is refused at commit whatever it believes. WAL is flushed in order, so a later synchronous commit (a takeover, a release) also makes every earlier renewal durable.
+    /// </summary>
+    private static void RelaxCommitDurability(CharacterDbContext db)
+    {
+        if (db.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL")
+            db.Database.ExecuteSqlRaw("SET LOCAL synchronous_commit = off");
+    }
+
     public AuthorityLeaseResult TryRelease(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken)
     {
         ValidateScopeAndOwner(scope, ownerNodeId);
         string incarnation = ownerIncarnation.ToString("D");
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
 
@@ -189,8 +253,8 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         if (string.IsNullOrWhiteSpace(scope) || string.IsNullOrWhiteSpace(ownerNodeId) || fencingToken <= 0)
             return false;
         long now = nowUtc.ToUnixTimeMilliseconds();
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
             .Any(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.ExpiresAtUnixMs > now && r.OwnerNode == ownerNodeId);
@@ -202,8 +266,8 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
             return false;
         long now = nowUtc.ToUnixTimeMilliseconds();
         string incarnation = ownerIncarnation.ToString("D");
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
             .Any(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.ExpiresAtUnixMs > now
@@ -214,8 +278,8 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     {
         if (string.IsNullOrWhiteSpace(scope))
             return null;
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope) is { } row ? ActiveLease(row, nowUtc.ToUnixTimeMilliseconds()) : null;
     }
@@ -224,8 +288,8 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     {
         if (string.IsNullOrWhiteSpace(scope))
             return 0;
-        using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = Open(serviceScope);
+        using LeaseDb lease = Open();
+        CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope)?.FencingToken ?? 0;
     }
