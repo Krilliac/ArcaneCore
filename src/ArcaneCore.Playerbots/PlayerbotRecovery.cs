@@ -567,8 +567,12 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     /// CMSG_SPIRIT_HEALER_ACTIVATE from where the ghost stands (<see cref="ServerReachProbeYards"/>).</param>
     /// <param name="graveyardInReach">The ghost already stands within <see cref="SpiritHealerReachYards"/> of the graveyard: walking to it
     /// cannot close (live 2026-10-16, "graveyard 129 0.6 yd away cannot be reached"), so it is the body or the wait for a healer.</param>
+    /// <param name="healerRequested">The healer was asked for by a death loop (<see cref="TakeSpiritHealer"/>): a stalled walk to a healer in
+    /// sight is then the fault, whose first step puts the ghost onto the healer (<see cref="TryRelocateToHealer"/>), not the body it keeps
+    /// dying at (live 2026-10-16, Sentinel Hill and Ratchet).</param>
     internal static PlayerbotSpiritHealerStep DecideSpiritHealer(bool healerKnown, bool healerInReach, bool graveyardKnown, bool stalled,
-        bool bodyRunLeft = false, bool detourLeft = false, bool serverAccepts = false, bool graveyardInReach = false)
+        bool bodyRunLeft = false, bool detourLeft = false, bool serverAccepts = false, bool graveyardInReach = false,
+        bool healerRequested = false)
     {
         // A graveyard the ghost stands on is nothing to walk to: no healer stands there (or it would be in sight).
         if (!healerKnown && graveyardKnown && graveyardInReach)
@@ -581,7 +585,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         {
             if (healerKnown && serverAccepts) return PlayerbotSpiritHealerStep.Activate;
             if ((healerKnown ? !healerInReach : graveyardKnown) && detourLeft) return PlayerbotSpiritHealerStep.DetourToHealer;
-            return bodyRunLeft ? PlayerbotSpiritHealerStep.ResumeCorpseRun : PlayerbotSpiritHealerStep.Fault;
+            // A death loop's healer in sight is not given up for the body it keeps dying at: the fault relocates onto the healer.
+            return bodyRunLeft && !(healerKnown && healerRequested) ? PlayerbotSpiritHealerStep.ResumeCorpseRun : PlayerbotSpiritHealerStep.Fault;
         }
         if (healerKnown) return healerInReach ? PlayerbotSpiritHealerStep.Activate : PlayerbotSpiritHealerStep.WalkToHealer;
         if (graveyardKnown) return PlayerbotSpiritHealerStep.WalkToGraveyard;
@@ -1231,7 +1236,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
             : graveyard is not null && !graveyardInReach && _graveyardDetourTriedFor != graveyard.Id;
         PlayerbotSpiritHealerStep step = DecideSpiritHealer(healer is not null, inReach, graveyard is not null, stalled,
             bodyRunLeft: bodyHere && corpse is { } bodyForRun && _corpseRunResumedFor != bodyForRun.Guid, detourLeft: detourLeft,
-            serverAccepts: serverAccepts, graveyardInReach: graveyardInReach);
+            serverAccepts: serverAccepts, graveyardInReach: graveyardInReach, healerRequested: _healerRequested);
         if (step == PlayerbotSpiritHealerStep.DetourToHealer)
         {
             PlayerbotThinkProbe.Phase("recovery healer detour");
@@ -1275,7 +1280,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
 
             // No way round within the bounds either: the body, else the fault.
             step = DecideSpiritHealer(healer is not null, false, graveyard is not null, stalled: true,
-                bodyRunLeft: bodyHere && corpse is { } bodyAfterDetour && _corpseRunResumedFor != bodyAfterDetour.Guid, graveyardInReach: graveyardInReach);
+                bodyRunLeft: bodyHere && corpse is { } bodyAfterDetour && _corpseRunResumedFor != bodyAfterDetour.Guid, graveyardInReach: graveyardInReach,
+                healerRequested: _healerRequested);
         }
 
         LastSpiritHealerStep = step;
