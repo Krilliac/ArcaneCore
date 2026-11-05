@@ -76,32 +76,26 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     /// <summary>
     /// The body of the interrupted-upgrade-step theory; the slice classes each run a share of <see cref="UpgradeSteps"/> through it, so the rows run in parallel.
     /// The legacy database and the steps before this one are replayed once, and every fault runs on its own clone of the result, because the replay is the same for every fault of the step.
-    /// The fault list is still measured on the replay itself, and the clone is checked against the replay for every step.
+    /// For every step a clone is compared with the replay, and after the faults the replay itself runs the step and must issue the DDL count the fault list was built from.
     /// </summary>
     private protected async Task RunInterruptedUpgradeStepAsync(DatabaseProvider provider, string component, int stepVersion)
     {
         DatabaseConnectionOptions replay = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-        DatabaseConnectionOptions master = await _databases.CloneAsync(await TestDatabases.CaptureAsync(replay));
         try
         {
-            await AssertSameDatabaseAsync(replay, master, $"{provider} {component} clone before step {stepVersion}");
-            TestDatabases.DatabaseImage image = await TestDatabases.CaptureAsync(master);
+            TestDatabases.DatabaseImage image = await TestDatabases.CaptureAsync(replay);
+            DatabaseConnectionOptions probe = await _databases.CloneAsync(image);
+            await AssertSameDatabaseAsync(replay, probe, $"{provider} {component} clone before step {stepVersion}");
 
-            // How many DDL statements does this step issue? Measured, not assumed, on the replayed database.
+            // How many DDL statements does this step issue? Measured, not assumed.
             var counter = new CommandTap();
-            await EnsureAsync(component, replay, stepVersion, counter);
+            await EnsureAsync(component, probe, stepVersion, counter);
+            await _databases.ReleaseAsync(probe);
             int ddl = counter.Ddl;
             // A placeholder step that holds a reserved version open (a lane schema gap class) has no changes, and a content step (world 64, the shipped bot ladder)
             // only inserts missing rows and issues no DDL: in both only the row writes and the version write can be interrupted.
             SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
             Assert.True(ddl > 0 || step.Changes.All(c => c is EnsureRowChange), $"{component} step {stepVersion} issued no DDL");
-
-            // A clone that took another path through the step would have other crash points than the ones below.
-            DatabaseConnectionOptions probe = await _databases.CloneAsync(image);
-            var cloneCounter = new CommandTap();
-            await EnsureAsync(component, probe, stepVersion, cloneCounter);
-            await _databases.ReleaseAsync(probe);
-            Assert.True(ddl == cloneCounter.Ddl, $"{provider} {component} step {stepVersion}: the replay issued {ddl} DDL statements, its clone {cloneCounter.Ddl}");
 
             Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
                 && CommandTap.IsWrite(sql, "UPDATE", "INSERT");
@@ -140,11 +134,15 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
                     await _databases.ReleaseAsync(connection);
                 }
             });
+
+            // The source stayed untouched for the clones. A clone that took another path through the step than the replay had other crash points than the real step, so the list above would be short.
+            var onReplay = new CommandTap();
+            await EnsureAsync(component, replay, stepVersion, onReplay);
+            Assert.True(ddl == onReplay.Ddl, $"{provider} {component} step {stepVersion}: the clone issued {ddl} DDL statements, the replay {onReplay.Ddl}");
         }
         finally
         {
             await _databases.ReleaseAsync(replay);
-            await _databases.ReleaseAsync(master);
         }
     }
 
