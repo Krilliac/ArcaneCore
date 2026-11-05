@@ -343,7 +343,7 @@ public sealed class PlayerbotRoutePlanWatchTests
 
         await RecordRefusalsAsync(world, origin, goal);
         await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
-        Assert.True(await Refused(world, origin, goal), "second hold: 30 s, still held 11 s after the suppression");
+        Assert.True(await Refused(world, origin, goal), "second hold: 30 s, still held 12 s after the suppression");
         await world.Host.World.AdvanceClockAsync(25_000);
         Assert.False(await Refused(world, origin, goal), "second hold over after 30 s");
 
@@ -363,6 +363,41 @@ public sealed class PlayerbotRoutePlanWatchTests
         await RecordRefusalsAsync(world, origin, goal);
         await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
         Assert.False(await Refused(world, origin, goal), "after a successful plan the hold is 10 s again");
+    }
+
+    /// <summary>
+    /// Only the duty policy forgets a pair's strikes on a successful plan. A replan loop under the default policy is held after plans that
+    /// succeed, so forgetting there would restart every hold at the first span instead of doubling it.
+    /// </summary>
+    [Fact]
+    public async Task DefaultPolicy_PlannedOutcomeBetweenHolds_KeepsTheStrike_SoTheSecondHoldIsLonger()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+
+        (Vector3 origin, Vector3 goal) = await SeedRefusalsAsync(world, null);
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        Assert.False(await Refused(world, origin, goal), "first hold over");
+
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotRoutePlanWatch.RecordOutcome(world.Player, origin, goal, planned: true, route: null, world.Host.World.NowMs);
+            return true;
+        });
+        for (int i = 0; i < PlayerbotRoutePlanWatch.MaxConsecutiveRefusals; i++)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                PlayerbotRoutePlanWatch.RecordOutcome(world.Player, origin, goal, planned: false, route: null, world.Host.World.NowMs);
+                return true;
+            });
+            await world.Host.World.AdvanceClockAsync(1_000);
+        }
+
+        Assert.True(await Refused(world, origin, goal), "second hold has begun");
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressMs + 1);
+        Assert.True(await Refused(world, origin, goal), "second hold outlives the first span: the strike survived the planned outcome");
+        await world.Host.World.AdvanceClockAsync(PlayerbotRoutePlanWatch.SuppressionSpanMs(2));
+        Assert.False(await Refused(world, origin, goal), "second hold is over after twice the first span");
     }
 
     [Fact]

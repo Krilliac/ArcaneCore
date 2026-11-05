@@ -178,7 +178,7 @@ internal static partial class PlayerbotRoutePlanWatch
         PruneExpired(state, now);
 
         uint mapId = player.Map?.MapId ?? player.MapId;
-        if (planned) ForgetStrikes(state, mapId, origin, goal, now);
+        if (planned && (policy ?? Policy.Default).DutyBackoff) ForgetStrikes(state, mapId, origin, goal, now);
         float distNow = FlatDistance(origin, goal);
         Vector3 routeEnd = route is { Points.Count: > 0 } ? route.Points[^1] : goal;
 
