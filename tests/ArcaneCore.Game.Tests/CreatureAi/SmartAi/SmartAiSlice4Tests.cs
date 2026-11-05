@@ -12,7 +12,7 @@ using static ArcaneCore.Game.Tests.CreatureTestKit;
 namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
 /// <summary>
-/// SmartAI slice 4: actions SET_DATA (45) and CLOSE_GOSSIP (72) (AzerothCore SmartScript.cpp:1469-1495 and :2010-2016). Rows use raw AzerothCore ids.
+/// SmartAI slice 4: actions SET_DATA (45) and CLOSE_GOSSIP (72) (AzerothCore SmartScript.cpp:1469-1502 and :2010-2016). Rows use raw AzerothCore ids.
 /// </summary>
 public sealed class SmartAiSlice4Tests
 {
@@ -161,7 +161,7 @@ public sealed class SmartAiSlice4Tests
         rig.WolfAi.OnAggro(rig.Player);
 
         Assert.Contains(capture.Failures, f => f.Message.Contains("SmartScript recursive action depth", StringComparison.Ordinal));
-        Assert.Equal(0, rig.Script.Unsupported.Count);
+        Assert.Empty(rig.Script.Unsupported);
     }
 
     [Fact]
