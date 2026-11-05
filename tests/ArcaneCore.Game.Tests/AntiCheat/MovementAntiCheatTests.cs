@@ -485,16 +485,19 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
-    public void TimeSkips_AnOversizedOrSpammedSkipScores_AnOrdinaryOneDoesNot_AndItsClockJumpIsTrusted()
+    public void TimeSkips_AnOversizedOrSpammedSkipScores_AnOrdinaryOneDoesNot_AndAnHonestFreezeAfterItIsClean()
     {
         var client = new Client();
         client.Send(WorldOpcode.MsgMoveStartForward);
         client.RunFor(4, Run);
+
+        // An honest 2 s freeze: the client sent nothing (the receive clock moved too), then reported the skip.
+        client.Received += 2000;
         var findings = new List<AntiCheatFinding>();
         client.Checks.NotifyTimeSkip(2000, client.Received, findings);
         Assert.Empty(findings);
 
-        // The client's movement clock jumped by the skip; the next packet is trusted.
+        // Its movement clock jumped by the skip; the step that spans it is judged against real time and passes.
         client.ClientTime += 2000;
         client.RunFor(4, Run);
         Assert.Empty(client.All);
@@ -512,7 +515,7 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
-    public void AnAcknowledgementWhoseTimestampGoesBack_ScoresPacketTiming_ExceptRightAfterATimeSkip()
+    public void AnAcknowledgementWhoseTimestampGoesBack_ScoresPacketTiming_EvenRightAfterATimeSkip()
     {
         var checks = new MovementAntiCheat(new AntiCheatOptions());
         var findings = new List<AntiCheatFinding>();
@@ -522,12 +525,223 @@ public sealed class MovementAntiCheatTests
         checks.NotifyAcknowledgement(90_000, 12_000, findings);
         Assert.True(Has(findings, AntiCheatViolation.PacketTiming));
 
+        // A stalled client's clock only runs forward: a skip is no licence for an acknowledgement to go back.
         var skipped = new MovementAntiCheat(new AntiCheatOptions());
-        var none = new List<AntiCheatFinding>();
-        skipped.NotifyAcknowledgement(100_000, 10_000, none);
-        skipped.NotifyTimeSkip(1500, 10_100, none);
-        skipped.NotifyAcknowledgement(99_000, 10_200, none);
-        Assert.Empty(none);
+        var after = new List<AntiCheatFinding>();
+        skipped.NotifyAcknowledgement(100_000, 10_000, after);
+        skipped.NotifyTimeSkip(1500, 10_100, after);
+        Assert.Empty(after);
+        skipped.NotifyAcknowledgement(99_000, 10_200, after);
+        Assert.True(Has(after, AntiCheatViolation.PacketTiming));
+
+        // An acknowledgement after an honest freeze, its clock ahead by the skip, is clean.
+        var honest = new MovementAntiCheat(new AntiCheatOptions());
+        var clean = new List<AntiCheatFinding>();
+        honest.NotifyAcknowledgement(100_000, 10_000, clean);
+        honest.NotifyTimeSkip(1500, 11_600, clean);
+        honest.NotifyAcknowledgement(101_700, 11_700, clean);
+        Assert.Empty(clean);
+    }
+
+    // --- time skips buy no baseline -------------------------------------------------------------------------------
+
+    [Fact]
+    public void TimeSkip_ThenABlink_IsScoredAsTeleport()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        float cleanX = client.X;
+        var skip = new List<AntiCheatFinding>();
+        client.Checks.NotifyTimeSkip(1, client.Received, skip);
+        Assert.Empty(skip);
+
+        List<AntiCheatFinding> blink = client.Step(500, 100);
+        Assert.True(Has(blink, AntiCheatViolation.Teleport));
+        Assert.True(client.Checks.TryGetLastValid(out float x, out _, out _, out _));
+        Assert.Equal(cleanX, x); // the blink is not the rubberband target
+    }
+
+    [Fact]
+    public void TimeSkip_LagZero_GrantsNothing()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        var skip = new List<AntiCheatFinding>();
+        client.Checks.NotifyTimeSkip(0, client.Received, skip);
+        Assert.Empty(skip);
+        Assert.True(Has(client.Step(500, 100), AntiCheatViolation.Teleport));
+    }
+
+    [Fact]
+    public void TenCheapSkipsInTenSeconds_EachFollowedByABlink_AllScore()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        var skips = new List<AntiCheatFinding>();
+        int teleports = 0;
+        for (int i = 0; i < 10; i++)
+        {
+            client.Checks.NotifyTimeSkip(1, client.Received, skips);
+            if (Has(client.Step(900, 100), AntiCheatViolation.Teleport))
+            {
+                teleports++;
+            }
+        }
+
+        Assert.Empty(skips); // ten in ten seconds is under the spam threshold: only the blinks score
+        Assert.Equal(10, teleports);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TimeSkip_ThenAnHonestRun_IsClean(bool clockJumped)
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // A 2000 ms freeze, then the next heartbeat 2100 ms after the last one by the receive clock. Whether or not the
+        // client's clock included the skip, and whether or not it simulated movement meanwhile, wall time bounds the step.
+        client.Received += 2000;
+        var skip = new List<AntiCheatFinding>();
+        client.Checks.NotifyTimeSkip(2000, client.Received, skip);
+        Assert.Empty(skip);
+        client.Step(clockJumped ? 2100u : 100u, Run * 2.1f, receivedMs: 100);
+        client.RunFor(30, Run);
+        Assert.Empty(client.All);
+    }
+
+    [Fact]
+    public void SpeedHack_WithACheapSkipEvery4s_StillFires()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+
+        // The whole client runs 1.5x for 60 s, and reports a 1 ms skip every eight heartbeats (4 s real) to keep the
+        // independent clock from ever filling its window.
+        var skips = new List<AntiCheatFinding>();
+        for (int i = 0; i < 120; i++)
+        {
+            if (i % 8 == 7)
+            {
+                client.Checks.NotifyTimeSkip(1, client.Received, skips);
+            }
+
+            client.ClientTime += 750;
+            client.Received += 500;
+            client.X += Run * 0.75f;
+            client.Send();
+        }
+
+        Assert.Empty(skips);
+        Assert.Contains(client.All, f => f.Type == AntiCheatViolation.TimeSync && f.Detail == "client clock runs fast (independent clock)");
+    }
+
+    [Fact]
+    public void ForgedSkip_WithoutASilence_IsCreditedOnlyTheJitter_SoItsClockJumpStillFires()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+
+        // An honest-speed clock that jumps 3 s ahead every 4 s, each jump covered by a 3000 ms skip that no silence backs.
+        var skips = new List<AntiCheatFinding>();
+        for (int i = 0; i < 120; i++)
+        {
+            if (i % 8 == 7)
+            {
+                client.Checks.NotifyTimeSkip(3000, client.Received, skips);
+                client.ClientTime += 3000;
+            }
+
+            client.ClientTime += 500;
+            client.Received += 500;
+            client.X += Run * 0.5f;
+            client.Send();
+        }
+
+        Assert.Empty(skips);
+        Assert.Contains(client.All, f => f.Type == AntiCheatViolation.TimeSync);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TimeSkip_TheSessionsPreviousPacket_NarrowsTheSilenceItIsCreditedFor(bool sessionStamp)
+    {
+        var options = new AntiCheatOptions();
+        options.SpeedClock.Window = 4;
+        options.SpeedClock.MinSamples = 2;
+        options.SpeedClock.SustainWindows = 1;
+        var client = new Client(options);
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // No movement for 2 s, but the session kept receiving other packets (chat, a cast) until 10 ms before the skip.
+        // A 3000 ms skip then covers a 3000 ms forward jump of the client clock.
+        client.Received += 2000;
+        client.ClientTime += 2000;
+        var skip = new List<AntiCheatFinding>();
+        if (sessionStamp)
+        {
+            client.Checks.NotifyTimeSkip(3000, client.Received, client.Received - 10, skip);
+        }
+        else
+        {
+            client.Checks.NotifyTimeSkip(3000, client.Received, skip);
+        }
+
+        client.ClientTime += 3000;
+        client.Step(500, Run * 0.5f);
+        Assert.Empty(skip);
+
+        // With the session's stamp the silence was 10 ms, so only 10 ms + the latency slack is credited and the jump reads
+        // as a fast clock; measured from the last movement alone, the 2 s silence covers the skip.
+        Assert.Equal(sessionStamp, Has(client.All, AntiCheatViolation.TimeSync));
+    }
+
+    [Fact]
+    public void MaxUintSkip_GrantsNoGraceAndNoCredit()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        var findings = new List<AntiCheatFinding>();
+        client.Checks.NotifyAcknowledgement(500_000, client.Received, findings);
+        client.Checks.NotifyTimeSkip(uint.MaxValue, client.Received, findings);
+        Assert.Contains(findings, f => f.Type == AntiCheatViolation.PacketTiming && f.Detail == "impossible move time skip");
+        Assert.Contains(findings, f => f.Type == AntiCheatViolation.TimeSync); // the oversized finding stays
+
+        // Not the 999 ms grace a wrapped (lag + 1000) gave: an acknowledgement going back is scored...
+        findings.Clear();
+        client.Checks.NotifyAcknowledgement(498_000, client.Received + 100, findings);
+        Assert.True(Has(findings, AntiCheatViolation.PacketTiming));
+
+        // ...and the next step is judged, not trusted.
+        Assert.True(Has(client.Step(500, 100), AntiCheatViolation.Teleport));
+    }
+
+    [Fact]
+    public void SkipAcrossReceiveClockWrap_WindowsCorrect()
+    {
+        var honest = new Client { Received = 0xFFFF_F400 };
+        honest.Send(WorldOpcode.MsgMoveStartForward);
+        honest.RunFor(4, Run); // the receive clock is now 0xFFFF_FBD0
+        honest.Received += 1500; // a freeze across the wrap
+        var skip = new List<AntiCheatFinding>();
+        honest.Checks.NotifyTimeSkip(1500, honest.Received, skip);
+        honest.ClientTime += 1500;
+        honest.RunFor(6, Run);
+        Assert.Empty(skip);
+        Assert.Empty(honest.All);
+
+        var cheat = new Client { Received = 0xFFFF_FF00 };
+        cheat.Send(WorldOpcode.MsgMoveStartForward);
+        cheat.Checks.NotifyTimeSkip(1, cheat.Received, skip);
+        Assert.True(Has(cheat.Step(500, 100), AntiCheatViolation.Teleport)); // received at 0x000001F4
     }
 
     // --- terrain-dependent ----------------------------------------------------------------------------------------

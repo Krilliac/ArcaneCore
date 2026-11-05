@@ -37,6 +37,7 @@ public sealed class SpeedHackDetector
     private int _consecutiveHot;
     private bool _inCooldown;
     private uint _cooldownUntil;
+    private uint _credit;
 
     public SpeedHackDetector(SpeedClockOptions options)
     {
@@ -48,7 +49,7 @@ public sealed class SpeedHackDetector
     /// <summary>The options this detector was built with (a reload builds a new detector).</summary>
     public SpeedClockOptions Options => _options;
 
-    /// <summary>Forget everything (a teleport, a reported time skip, a re-baseline).</summary>
+    /// <summary>Forget everything (a teleport, a re-baseline). A reported time skip does not reset: it is credited (<see cref="Credit"/>).</summary>
     public void Reset()
     {
         Array.Clear(_ring);
@@ -63,6 +64,17 @@ public sealed class SpeedHackDetector
         _consecutiveHot = 0;
         _inCooldown = false;
         _cooldownUntil = 0;
+        _credit = 0;
+    }
+
+    /// <summary>
+    /// Credit skipped client time (a reported time skip, already capped by the evidence) to the next fed pair: its client
+    /// delta is reduced by up to <paramref name="ms"/>, but never below its real delta, so a credit only cancels client time
+    /// that ran ahead of the receive clock and can never make a pair read as slow. Credits add up until a pair consumes them.
+    /// </summary>
+    public void Credit(uint ms)
+    {
+        _credit = (uint)Math.Min(uint.MaxValue, (ulong)_credit + ms);
     }
 
     /// <summary>Feed one packet: the client's timestamp and the server's receive time.</summary>
@@ -78,6 +90,11 @@ public sealed class SpeedHackDetector
         {
             uint clientDelta = unchecked(clientTime - _previousClient);
             uint realDelta = unchecked(receivedMs - _previousReal);
+            if (_credit > 0 && clientDelta > realDelta)
+            {
+                clientDelta -= Math.Min(_credit, clientDelta - realDelta);
+            }
+
             uint maxGap = (uint)Math.Max(0, _options.MaxGapMs);
             bool guarded = realDelta == 0
                 || (maxGap > 0 && realDelta > maxGap)
@@ -88,7 +105,8 @@ public sealed class SpeedHackDetector
             }
         }
 
-        // The previous sample always advances, even for a discarded pair.
+        // The previous sample always advances, even for a discarded pair, and a credit is spent by the pair it reached.
+        _credit = 0;
         _previousClient = clientTime;
         _previousReal = receivedMs;
         _havePrevious = true;

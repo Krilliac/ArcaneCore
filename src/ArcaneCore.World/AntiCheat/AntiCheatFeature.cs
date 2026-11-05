@@ -211,7 +211,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
         PlayerState state = StateOf(player);
         _scratch.Clear();
-        state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, _scratch);
+        state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
         RecordAll(session, player, state);
     }
 
