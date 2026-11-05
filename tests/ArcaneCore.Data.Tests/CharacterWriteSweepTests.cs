@@ -105,7 +105,7 @@ public sealed class CharacterWriteSweepTests
     /// Zero-based line numbers of the synchronous write calls in <paramref name="text"/>. Matched on the whole text, so a call split across lines
     /// ("SaveChanges" then "(", or "Database" then ".BeginTransaction(") is found; a hit is attributed to the line its name starts on and skipped
     /// when that line is a comment. Limit: the sweep only reads files whose text contains <c>CharacterDbContext</c>, so a file that reaches a characters
-    /// context some other way (a generic or a base type) is not scanned; the set-based sweep above is line-based as well.
+    /// context some other way (a generic or a base type) is not scanned. The set-based sweep above is line-based and this sweep is whole-text; the file filter limits both.
     /// </summary>
     private static IReadOnlyList<int> FindSyncWriteLines(string text)
     {
@@ -183,6 +183,20 @@ public sealed class CharacterWriteSweepTests
     {
         Assert.Matches(SyncWrite, "        db.SaveChanges\n            ();");
         Assert.Matches(SyncWrite, "        using var t = db.Database.BeginTransaction\r\n            ();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database\n            .BeginTransaction();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database.\n            BeginTransaction();");
+    }
+
+    [Fact]
+    public void FindSyncWriteLines_AttributesASplitCallToItsFirstLine_AndSkipsAComment()
+    {
+        string split = "class C\n{\n    void M(Db db)\n    {\n        using var t = db.Database\n            .BeginTransaction();\n        db.SaveChanges\n            ();\n    }\n}";
+        Assert.Equal(new[] { 4, 6 }, FindSyncWriteLines(split));
+
+        string commented = "    void M(Db db)\n    {\n        // db.SaveChanges();\n        db.SaveChanges();\n    }";
+        Assert.Equal(new[] { 3 }, FindSyncWriteLines(commented));
+
+        Assert.Empty(FindSyncWriteLines("        await db.SaveChangesAsync(ct);\n        // db.Database.BeginTransaction();"));
     }
 
     [Fact]
@@ -197,7 +211,7 @@ public sealed class CharacterWriteSweepTests
             string file = Path.Combine(src, key[..cut]);
             Assert.True(File.Exists(file), $"stale synchronous exemption {key}: the file is gone");
             string member = key[(cut + 2)..];
-            Assert.True(Regex.IsMatch(File.ReadAllText(file), $@"\b{Regex.Escape(member)}\s*\("),
+            Assert.True(Regex.IsMatch(File.ReadAllText(file), $@"\b(?:private|internal|public|protected)\b[^;(=]*\b{Regex.Escape(member)}\s*\("),
                 $"stale synchronous exemption {key}: the member is gone from the file");
         }
 
