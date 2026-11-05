@@ -88,6 +88,13 @@ public sealed class SmartGameObjectAi(Func<SmartScriptCatalog> catalog) : IGameO
         return false;
     }
 
+    /// <summary>
+    /// SmartGameObjectAI::SetData (SmartAI.cpp:1524-1537): SMART_EVENT_DATA_SET with the setter (the sending creature, null for an object) as invoker,
+    /// var0 the data id and var1 the value. Raised by SMART_ACTION_SET_DATA (45).
+    /// </summary>
+    public void SetData(GameObjectMapSystem objects, GameObject go, uint id, uint value, Unit? setter = null)
+        => ScriptFor(objects, go).ProcessEventsFor(SmartEvent.DataSet, setter, id, null, value);
+
     /// <summary>A trap's target is not a smart event; the trap casts as it would without a script.</summary>
     public bool OnTrapTarget(GameObjectMapSystem objects, GameObject go, Unit target) => false;
 }

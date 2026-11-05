@@ -5,6 +5,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures;
 
@@ -702,6 +703,32 @@ public sealed class SmartScript
                         objects.Summon(r.ActionParam1, r.TargetX, r.TargetY, r.TargetZ, r.TargetO, r.ActionParam2);
                     break;
                 }
+                case SmartAction.SetData:
+                {
+                    // SmartScript.cpp:1469-1495 (SMART_ACTION_SET_DATA): each smart creature or game object target gets SetData(param1, param2),
+                    // the sender being `me`, else the game object. Needs a base object, as AC's (me || go). A target with no smart AI has no
+                    // SetData seam here and is skipped (AC calls CreatureAI::SetData, a no-op for the scripted AIs that do not override it).
+                    if (_owner.Base is null) break;
+                    foreach (WorldObject t in targets)
+                    {
+                        switch (t)
+                        {
+                            case Creature { AI: CreatureSmartAI smartTarget }:
+                                smartTarget.SetData(r.ActionParam1, r.ActionParam2, me);
+                                break;
+                            case GameObject targetObject when targetObject.Map?.FindUpdater<GameObjectMapSystem>() is { } objectSystem
+                                && objectSystem.AiFor(targetObject) is SmartGameObjectAi smartObject:
+                                smartObject.SetData(objectSystem, targetObject, r.ActionParam1, r.ActionParam2, me);
+                                break;
+                        }
+                    }
+
+                    break;
+                }
+                case SmartAction.CloseGossip:
+                    // SmartScript.cpp:2010-2016 (SMART_ACTION_CLOSE_GOSSIP): every player target's gossip window closes (SMSG_GOSSIP_COMPLETE).
+                    foreach (Player closing in targets.OfType<Player>()) closing.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+                    break;
                 case SmartAction.CallTimedActionList:
                 case SmartAction.CallRandomTimedActionList:
                 case SmartAction.CallRandomRangeTimedActionList:
