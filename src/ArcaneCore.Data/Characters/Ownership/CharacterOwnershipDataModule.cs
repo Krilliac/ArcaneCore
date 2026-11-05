@@ -5,6 +5,7 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Characters.Ownership;
@@ -381,9 +382,11 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             _ => throw new NotSupportedException($"no ownership heartbeat upsert for provider {db.Database.ProviderName}"),
         };
         using IDisposable exempt = CharacterWriteFence.Exempt();
-        await db.Database.ExecuteSqlRawAsync(
-            $"INSERT INTO {table} ({scopeColumn}, {beatColumn}) VALUES ({{0}}, {{1}}) {conflict}",
-            new object[] { scope, nowUnixMs }, cancellationToken).ConfigureAwait(false);
+        // The identifiers are provider-delimited constants of this module, never user input; scope and beat travel as parameters {0} and {1}.
+        string statement = $"INSERT INTO {table} ({scopeColumn}, {beatColumn}) VALUES ({{0}}, {{1}}) {conflict}";
+#pragma warning disable EF1002 // identifiers only (see above); values are parameters
+        await db.Database.ExecuteSqlRawAsync(statement, new object[] { scope, nowUnixMs }, cancellationToken).ConfigureAwait(false);
+#pragma warning restore EF1002
     }
 
     public async Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default)
