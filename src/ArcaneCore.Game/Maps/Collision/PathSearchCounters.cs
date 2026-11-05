@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Maps.Collision;
 
@@ -168,4 +170,121 @@ public readonly record struct PathSearchTotals(long Searches, long Nodes, long E
 
     /// <summary>The time of every installation in milliseconds.</summary>
     public double SyncTileReadMs => (TileLoadTicks + GridTileLoadTicks) * 1000.0 / Stopwatch.Frequency;
+}
+
+/// <summary>Which kind of thread made a synchronous tile file read (<see cref="SyncTileReadCounters"/>).</summary>
+public enum SyncReadCaller
+{
+    /// <summary>Not inside a map's update: the world thread's own services (teleports, logins, bot planning) or any other thread.</summary>
+    OutsideMapUpdate = 0,
+
+    /// <summary>The world thread, inside a map's update.</summary>
+    WorldThread = 1,
+
+    /// <summary>A map worker thread in the parallel phase, not holding the serial gate.</summary>
+    MapWorker = 2,
+
+    /// <summary>A map worker holding the world's single serial gate: every other map waits behind its read.</summary>
+    MapWorkerHoldingGate = 3,
+}
+
+/// <summary>Which tile file a synchronous read was for.</summary>
+public enum SyncReadFile
+{
+    /// <summary>A terrain <c>.map</c> file.</summary>
+    Terrain = 0,
+
+    /// <summary>A vmap tile file (<c>.vmtile</c>).</summary>
+    VMap = 1,
+}
+
+/// <summary>
+/// Terrain and vmap tile files read synchronously, that is a prefetch miss: the loader read and parsed the file on the thread that needed
+/// the tile, inside a tick (<c>_land/design-terrain-io.md</c> section 3.1; the navigation mesh's own reads are in
+/// <see cref="PathSearchCounters"/>). Counted per caller kind (<see cref="SyncReadCaller"/>) with the time they took; a read over
+/// <see cref="AnomalyMs"/> is also reported to the anomaly ledger as <c>sync-tile-read</c> (subsystem <c>terrain</c> or <c>collision</c>).
+/// <para>
+/// Thread affinity: any thread. The per-thread totals are thread-static (a caller takes <see cref="Current"/> before and after a piece
+/// of work and subtracts); the process totals are interlocked. Each read adds a few integer increments; nothing allocates unless the
+/// anomaly fires.
+/// </para>
+/// </summary>
+public static class SyncTileReadCounters
+{
+    /// <summary>A synchronous read over this many milliseconds is reported as an anomaly.</summary>
+    public const double AnomalyMs = 100;
+
+    private const int CallerKinds = 4;
+    private const int FileKinds = 2;
+
+    [ThreadStatic] private static long t_reads;
+    [ThreadStatic] private static long t_ticks;
+    [ThreadStatic] private static long t_gateReads;
+    private static readonly long[] s_reads = new long[CallerKinds * FileKinds];
+    private static readonly long[] s_ticks = new long[CallerKinds * FileKinds];
+
+    /// <summary>This thread's totals so far.</summary>
+    public static SyncFileReadTotals Current => new(t_reads, t_ticks, t_gateReads);
+
+    /// <summary>Reads and time (<see cref="Stopwatch"/> ticks) made so far by any thread, of one caller kind and file kind.</summary>
+    public static (long Reads, long Ticks) Process(SyncReadCaller caller, SyncReadFile file)
+    {
+        int slot = SlotOf(caller, file);
+        return (Interlocked.Read(ref s_reads[slot]), Interlocked.Read(ref s_ticks[slot]));
+    }
+
+    /// <summary>The kind of the calling thread: by the map update it is inside (<see cref="TickOwner"/>) and whether it holds the serial gate.</summary>
+    public static SyncReadCaller CallerKind()
+    {
+        WorldRuntime? world = TickOwner.CurrentWorld;
+        if (world is null)
+        {
+            return SyncReadCaller.OutsideMapUpdate;
+        }
+
+        if (world.IsWorldThread)
+        {
+            return SyncReadCaller.WorldThread;
+        }
+
+        return world.HoldsSerialGate ? SyncReadCaller.MapWorkerHoldingGate : SyncReadCaller.MapWorker;
+    }
+
+    /// <summary>A tile file was read on the calling thread (a prefetch miss), taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks).</summary>
+    internal static void Record(SyncReadFile file, long ticks, uint mapId, int tileX, int tileY)
+        => Record(CallerKind(), file, ticks, mapId, tileX, tileY);
+
+    /// <summary><see cref="Record(SyncReadFile, long, uint, int, int)"/> for a given caller kind (tests).</summary>
+    internal static void Record(SyncReadCaller caller, SyncReadFile file, long ticks, uint mapId, int tileX, int tileY)
+    {
+        int slot = SlotOf(caller, file);
+        Interlocked.Increment(ref s_reads[slot]);
+        Interlocked.Add(ref s_ticks[slot], ticks);
+        t_reads++;
+        t_ticks += ticks;
+        if (caller == SyncReadCaller.MapWorkerHoldingGate)
+        {
+            t_gateReads++;
+        }
+
+        double ms = ticks * 1000.0 / Stopwatch.Frequency;
+        if (ms > AnomalyMs)
+        {
+            AnomalyLedger.Shared.Report(file == SyncReadFile.Terrain ? "terrain" : "collision", "sync-tile-read",
+                string.Create(CultureInfo.InvariantCulture, $"map {mapId} tile ({tileX}, {tileY}) by {caller}"),
+                string.Create(CultureInfo.InvariantCulture, $"{file} tile read on the {caller} thread took {ms:F0} ms: the prefetch missed"));
+        }
+    }
+
+    private static int SlotOf(SyncReadCaller caller, SyncReadFile file) => ((int)caller * FileKinds) + (int)file;
+}
+
+/// <summary>A snapshot of <see cref="SyncTileReadCounters.Current"/>; the difference of two is the work between them.</summary>
+public readonly record struct SyncFileReadTotals(long Reads, long Ticks, long ReadsHoldingGate)
+{
+    public static SyncFileReadTotals operator -(SyncFileReadTotals a, SyncFileReadTotals b)
+        => new(a.Reads - b.Reads, a.Ticks - b.Ticks, a.ReadsHoldingGate - b.ReadsHoldingGate);
+
+    /// <summary>The reads' time in milliseconds.</summary>
+    public double Ms => Ticks * 1000.0 / Stopwatch.Frequency;
 }

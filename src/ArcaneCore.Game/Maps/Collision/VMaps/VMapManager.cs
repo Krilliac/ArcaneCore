@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Diagnostics;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Numerics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -112,7 +113,13 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         string path = Path.Combine(_directory, VMapFormat.TileFileName(mapId, tileX, tileY));
         if (!_prefetch.TryTake(mapId, tileX, tileY, out List<(ModelSpawn Spawn, uint Slot)> spawns))
         {
+            long readStarted = Stopwatch.GetTimestamp();
             byte[]? bytes = ReadFile(path, missingIsNormal: true, out bool missing);
+            if (!missing)
+            {
+                SyncTileReadCounters.Record(SyncReadFile.VMap, Stopwatch.GetTimestamp() - readStarted, mapId, tileX, tileY);
+            }
+
             if (bytes is null)
             {
                 if (missing)

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Grid;
@@ -510,7 +511,23 @@ public sealed class TerrainManager
             return prefetched;
         }
 
-        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+        // A prefetch miss: the file is read and parsed on this thread, inside whatever tick asked. Counted per caller kind, and reported
+        // as an anomaly past SyncTileReadCounters.AnomalyMs (docs: _land/design-terrain-io.md section 3.1). A missing file is no read.
+        long started = Stopwatch.GetTimestamp();
+        TerrainTile loaded = ReadTileOnThisThread(mapId, tileX, tileY, out bool fileRead);
+        if (fileRead)
+        {
+            SyncTileReadCounters.Record(SyncReadFile.Terrain, Stopwatch.GetTimestamp() - started, mapId, tileX, tileY);
+        }
+
+        return loaded;
+    }
+
+    /// <summary>The synchronous half of <see cref="LoadTile"/>; <paramref name="fileRead"/> is false when there was no file to read.</summary>
+    private TerrainTile ReadTileOnThisThread(uint mapId, int tileX, int tileY, out bool fileRead)
+    {
+        fileRead = false;
+        string path = Path.Combine(_mapsDirectory!, TerrainTile.FileName(mapId, tileX, tileY));
         byte[] bytes;
         try
         {
@@ -519,6 +536,7 @@ public sealed class TerrainManager
                 return TerrainTile.Empty;
             }
 
+            fileRead = true;
             bytes = File.ReadAllBytes(path);
         }
         catch (IOException ex)
