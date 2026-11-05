@@ -1,8 +1,7 @@
 # CLAUDE.md: working in ArcaneCore
 
 This is the operating guide for agents and humans changing this repository. It is a summary with pointers. Where it and a linked
-document disagree, the linked document wins: [charter](ARCANECORE_CHARTER.md), [contributing](docs/guide/contributing.md),
-[conventions](docs/conventions.md).
+document disagree, the linked document wins: [contributing](docs/guide/contributing.md) (the binding rules), [conventions](docs/conventions.md).
 
 ## What this is
 
@@ -10,20 +9,19 @@ ArcaneCore is a from-scratch World of Warcraft **1.12.1 (client build 5875)** se
 (`global.json`, `Directory.Build.props`). It ships two daemons, logon/realm (`ArcaneCore.Realm`) and world (`ArcaneCore.World`),
 plus an optional client-socket Gateway, a playerbot pack, and tools. Its databases are SQLite, MariaDB and PostgreSQL through EF Core.
 
-### Charter prime directives (summary of [ARCANECORE_CHARTER.md](ARCANECORE_CHARTER.md) section 1)
+### Prime directives (binding text: [contributing](docs/guide/contributing.md#the-prime-directives))
 
 1. **Ground truth over generation.** Verify every protocol detail (opcode, struct layout, field order, hash) against a real
-   reference (charter section 4: vmangos, cmangos/mangos-classic, wow_messages, ...) and cite it in a comment.
-2. **Incremental and gated.** Milestone gating was relaxed after M4 (charter section 9). Scope and order are in `docs/ROADMAP.md`.
-3. **Verified against a real client.** Automated tests make an area *implemented*, not *accepted*.
-4. **Complete within scope, absent outside it.** No TODOs, stubs or placeholders in delivered scope. Write down what is not delivered as a limit.
-5. **No invented API surface.** Never guess a method, packet field, opcode or DBC column. Read a reference or ask.
+   reference ([the reference list](docs/guide/contributing.md#references-and-citations): vmangos, cmangos/mangos-classic, wow_messages, ...) and cite it in a comment.
+2. **Verified against a real client.** Automated tests make an area *implemented*, not *accepted* ([real-client acceptance](docs/guide/client-acceptance.md)). Scope and order are in `docs/ROADMAP.md`.
+3. **Complete within scope, absent outside it.** No TODOs, stubs or placeholders in delivered scope. Write down what is not delivered as a limit.
+4. **No invented API surface.** Never guess a method, packet field, opcode or DBC column. Read a reference or ask.
 
 Hard rules that follow from these:
 - **Never change the wire format, opcode values or packet field order** in a refactor. Packet builders that "look the same" are
   pinned by golden byte tests first.
 - Match retail 1.12.1. A deliberate deviation sits behind an option that **defaults to retail**.
-- Reference projects are GPL and read-only. Re-express their behaviour; never copy their code or data.
+- Reference projects are GPL and read-only. Re-express their behaviour; never copy their code or data. Only 1.12.1 (5875) values: later-expansion references inform design, never wire values.
 
 ## Project graph
 

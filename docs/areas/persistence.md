@@ -3,7 +3,7 @@
 Lane `claude/w19-persistence`. How character snapshots reach the database when a couple of hundred players (or bots) are online, what
 the queue guarantees, and which knobs and log lines tell an operator that it is falling behind. Everything here is ArcaneCore's own
 persistence design: vmangos saves players synchronously through its async-query worker threads and has no equivalent queue, so nothing
-in this page claims retail fidelity. The charter rule it serves is "never lose a save".
+in this page claims retail fidelity. The project rule it serves is "never lose a save".
 
 Code: `src/ArcaneCore.World/Persistence/CharacterSaveQueue.cs`, `src/ArcaneCore.World/Spells/SpellbookCache.cs`,
 `src/ArcaneCore.Data/Resilience/SqliteConnectionPragmaInterceptor.cs`, `src/ArcaneCore.Data/Stores/EfCharacterStore.cs` (the
@@ -166,7 +166,7 @@ change has to be deliberate.
 - **WAL** (`PRAGMA journal_mode=WAL`, applied by the schema bootstrap): kept. Readers never block the writer and the writer never blocks
   readers. `WalAndSynchronousFullArePinned` asserts it.
 - **`synchronous=FULL`** (SQLite's default, value 2): kept. In WAL mode `NORMAL` skips the fsync at commit and can lose the most recent
-  committed transactions on power loss or an OS crash. The charter rule is "never lose a save", and the save queue reports a snapshot as
+  committed transactions on power loss or an OS crash. The project rule is "never lose a save", and the save queue reports a snapshot as
   written once the store call returns, so a commit that can silently vanish would break the retained-failure logic that depends on it.
   It is also not where the time goes: a full snapshot measured about 0.7 ms on disk (`SaveQueueLoadBenchmarkTests`, below).
   **Opt-in `NORMAL`.** On a disk where the WAL fsync stalls for seconds (`SlowTransactionInterceptor` reports it as "N ms inside the end call"

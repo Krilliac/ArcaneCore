@@ -2,9 +2,35 @@
 
 Eight source-checked ScriptDev2 escorts now use embedded waypoint action data (Erland, Phizzlethorpe, Dalinda, Gilthares, Therylune, Paoka, Lakota and Kaya). Their exact sources, ClassicDB path tests, and remaining limits are in [the escort integration record](../integration/escorts-data-20261008.md).
 
-M13a loads and persists journals, serves quest/text queries, and expires timed quests.
-[M13b](../../MILESTONE_M13B.md) adds the bounded live-creature status/details/accept/abandon
-surface. [Acceptance](../M13B_ACCEPTANCE.md) documents the mock and later client procedures.
+The journal layer loads and persists quest journals, serves quest and NPC text queries, and expires timed quests. A bounded live-creature
+status/details/accept/abandon surface sits on top of it. The mock procedure is in [the mock client](mock-client.md), the real-client checks are in
+[real-client acceptance](../guide/client-acceptance.md), and the reward slice is [QUEST_REWARD_ACCEPTANCE.md](../QUEST_REWARD_ACCEPTANCE.md).
+
+### Journal, queries and timers
+
+- **Login** loads the persisted quest rows before the self-create packet: objective counters, completed and failed state and absolute timed deadlines. Self visibility includes group-only quest ids; unrelated observers do not receive them.
+- **Content** (quest and NPC text stores) is immutable and loaded at daemon attachment. A registered store that fails stops startup; empty stores stay supported for development.
+- **Queries.** A logged-in `CMSG_QUEST_QUERY` and `CMSG_NPC_TEXT_QUERY` produce the vanilla responses. An unknown quest gets no reply, unknown NPC text gets the vanilla fallback, an invalid request length disconnects, and
+  a session on the character screen cannot use either handler.
+- **Timers** are checked on the world thread after login and on every map, including maps created after attachment. Expiry fails the quest once and persists a cleared deadline. A far transfer keeps the journal and resumes
+  the checks at the destination's acknowledgement.
+- **Persistence.** Ordered quest and taxi writes use fresh scopes off the world thread. Login barriers recover retained snapshots after a failed write, and monotonic revisions reject a stale asynchronous load after a reconnect.
+- **Shutdown.** Discovered world features drain in reverse order after the world stops, and quest saves drain before host shutdown succeeds; a failed recovery stays visible.
+
+### Live-creature interactions
+
+Requests run on the authoritative map thread. The creature must exist in the player's current map and visible GUID set. Interaction needs the live questgiver flag, liveness, selectability, no charmer, no creature combat, a known
+non-hostile faction reaction, and a strict 3D distance below five yards after both bounding radii. `FactionTemplateCatalog` is immutable and injectable for synthetic fixtures; the optional `Quests:FactionTemplateDbcPath` loads a
+developer-supplied WDBC file, a configured unreadable or malformed file stops attachment, and absent data denies NPC interaction. Four handlers exist: status query, details query, accept and remove-from-log. Acceptance creates a
+log slot and saves the journal delta; repeating it changes nothing; timed acceptance records a fresh deadline; abandonment clears the slot and deadline, removes timed tracking and saves status NONE.
+
+Only non-repeatable ordinary Type 0 quests without source items or spells, deliver or source-item objectives, reputation objectives, party confirmation or automatic rewards can be accepted or abandoned by this surface. Rewarded
+history rows are denied mutation when their stored status is NONE, so acceptance cannot create a journal that completion or expiry would ignore or that a relog would discard. Details are read-only and skip the eligibility check, as the
+pinned vmangos query handler does; status uses visibility and known hostility, so a visible dead or distant known-faction creature can still return status, and an unknown reaction gets no reply.
+
+Behaviour was read from vmangos `QuestHandler.cpp`, `QueryHandler.cpp`, `Player.cpp` (`_LoadQuestStatus`, `Update`, `AddQuest`, `RemoveQuestAtSlot`), `Object.cpp` (`GetUpdateFieldFlagsForTarget`, reaction state and distance), `DBCStructure.h`
+(FactionTemplate, fourteen fields, enemy/friend precedence) and `DBCEnums.h` (contested guard bit `0x1000`), cross-checked with the gtker quest and query definitions. The tests are `FactionTemplateDbcTests`,
+`QuestCreatureAdapterTests`, `QuestInteractionWorldTests` and the three-provider `QuestStoreTests`.
 
 The creature adapter reads the actual player map, visible GUID set, creature template entry,
 spawn ID, current NPC flags, health/death state, combat, selectability, charmer, position, and
@@ -13,7 +39,7 @@ FactionTemplate.dbc establishes hostility. Unknown, nonzero NPC faction IDs, and
 templates deny interaction until their reputation/PvP state adapters exist.
 
 No schema version is introduced. CreatureTemplateRow's version-2 model remains unchanged.
-Gossip-menu and trainer metadata do not exist in that model, so these M13a/M13b creature adapters
+Gossip-menu and trainer metadata do not exist in that model, so these creature adapters
 never consume those fields or register gossip, vendor, trainer, completion, or reward behavior themselves.
 That behaviour was delivered later by separate features on newer schema modules: gossip routing, vendors,
 repair, trainers, innkeepers, bankers, spirit healers and flight masters are described in

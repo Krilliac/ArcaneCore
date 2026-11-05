@@ -8,7 +8,7 @@ If you do edit a shared file, keep the change minimal and additive, and record i
 
 All discovery is **reflection over one assembly**. It picks up non-abstract classes with a
 parameterless constructor and orders them by full type name, so the order is deterministic.
-Registering a duplicate fails at startup. Nothing fails silently (charter: fail closed).
+Registering a duplicate fails at startup. Nothing fails silently (fail closed).
 
 | Need | Seam | Where | Shared file you no longer touch |
 |---|---|---|---|
@@ -47,7 +47,7 @@ These additive edits are in `Game/Maps/WorldRuntime.cs`,
 The quest login hook stages isolated player fields on the session task; its
 world-owned registry is populated only after the normal login packet sequence.
 The scoped implementation, visibility correction, and remaining adapters are
-documented in [M13a](../../MILESTONE_M13A.md).
+documented in [quests-npc](../areas/quests-npc.md#journal-queries-and-timers).
 
 Each component's versions are a single contiguous sequence (a gap fails startup, see
 `DataModules.Compose`), so a number cannot be reserved before the branch that uses it is

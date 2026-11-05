@@ -1,9 +1,9 @@
 # ArcaneCore Roadmap
 
-Last updated: 2026-10-31.
+Last updated: 2026-11-04.
 
 This file says what is in ArcaneCore, what is still open, and the decisions that shape it.
-The charter's prime directives still hold: ground truth over generation, no invented API
+The prime directives in [contributing](guide/contributing.md#the-prime-directives) hold: ground truth over generation, no invented API
 surface, complete within scope.
 
 ## How work is gated
@@ -17,10 +17,10 @@ surface, complete within scope.
   SQLite runs.
 - Two statuses stay separate. **Implemented** means the automated tests pass.
   **Client-accepted** means the area was run against a real 1.12.1 (build 5875) client.
-  Automated tests never make an area accepted. No area is client-accepted yet: every root
-  `MILESTONE_*.md` records real-client acceptance as pending (see Open work 1).
-- Per-milestone `MILESTONE_*.md` files stopped after M13b and the mock client. Status now
-  lives in PRs and in `docs/integration` and `docs/areas`.
+  Automated tests never make an area accepted. No area is client-accepted yet (see Open work 1).
+- The per-milestone `MILESTONE_*.md` files and `docs/M*_ACCEPTANCE.md` pages (M1 to M6, M13a, M13b, the mock client) were retired on 2026-11-04. Status now
+  lives in PRs and in `docs/integration` and `docs/areas`; what the old pages still taught moved to
+  [protocol decisions](areas/protocol-decisions.md), [real-client acceptance](guide/client-acceptance.md) and the [mock client](areas/mock-client.md). Git history keeps the old text.
 - Bot QA files defects as GitHub issues labelled `bot-qa` (`src/ArcaneCore.Playerbots/Qa`).
 
 ## Decisions that still hold
@@ -40,7 +40,7 @@ surface, complete within scope.
 | Live reload | Content, config and code reload on a running server where documented ([tiers](design/hot-reload-tiers.md)). Reloads swap immutable snapshots on the owning thread. | Snapshots are never mutated in place, so readers on the world thread stay consistent. |
 | Extensibility | Assembly-level pack discovery for features, updaters and commands. There is no generic event bus or plugin API. | A plugin API without callers would be invented surface. |
 | Clustering | A separate gateway process plus world workers, with local single-process mode kept ([design](CLUSTERING_DESIGN.md)). | Requested by the developer on 2026-10-03; build-5875 compatibility and local mode must survive. |
-| License | GPL-3.0. Behaviour and wire formats are reimplemented; no GPL or AGPL code is copied. | Charter section 4. |
+| License | GPL-3.0. Behaviour and wire formats are reimplemented; no GPL or AGPL code is copied. | [Contributing](guide/contributing.md#references-and-citations). |
 
 ## Verification policy
 
@@ -59,17 +59,20 @@ surface, complete within scope.
 | mangoszero/server | 1.12.x | GPL-2 | Vanilla cross-check |
 | gtker/wow_messages | 1.12 (+TBC/WotLK) | MIT/Apache-2 | Machine-readable packet layouts, opcodes, update fields — permissive, so it is the source for generated tables |
 | AscEmu/AscEmu | 1.12.1 … 5.4.8 | AGPL-3 / MIT (per file) | Third 1.12.1 cross-check; MIT-headed files only for anything beyond facts |
-| MangosServer/MangosSharp | 1.12.x | GPL-3 | .NET idioms and the cluster split (lineage, charter §0) |
+| MangosServer/MangosSharp | 1.12.x | GPL-3 | .NET idioms and the cluster split (lineage only; design input, nothing copied) |
 | mangosvb/serverZero | 1.12.x | GPL-2 | .NET lineage cross-check |
 | TrinityCore (3.3.5 branch) | 3.3.5a | GPL-2 | Architecture only (map update, grids, movement splines, AI design) |
 | arcemu/arcemu (Ascent lineage) | 3.3.5a | AGPL-3 | Architecture only |
 | Worldforge (the developer's client-tools repository) | 1.12.1 client side | (developer's) | Client file formats (ADT/WDT/DBC/MPQ) for future terrain/height work |
 | wowdev/noggit3, Noggit Red (gitlab prophecy-rp) | 1.12–3.3.5 map editors | GPL-3 | ADT/WDT terrain + liquid layout for height and terrain tooling |
+| gtker/wow_srp | 1.12 and later | MIT/Apache-2 | SRP6 and header-cipher known-answer vectors (the Cryptography tests) |
+| EmberEmu/Ember | vanilla auth | (not recorded; read only) | Clean modern C++ vanilla auth daemon reference |
+| WCell | (architecture) | (not recorded; read only) | C#/.NET architecture idioms; the auto-create-on-login mechanism |
 | wowdev.wiki | all | CC | Neutral format and protocol documentation |
 | [WoWWiki archive: patch 1.12.1](https://wowwiki-archive.fandom.com/wiki/Patch_1.12.1) | Original 1.12.1 / build 5875 when the cited revision confirms it | Site terms; research facts, do not vendor content | Patch notes, historical mechanics and revision history |
 | [Wowhead Classic](https://www.wowhead.com/classic) | Version-selected Classic data; verify original 1.12.1 applicability | Site terms; research facts, do not vendor content | Item, spell and quest data, tooltips, dated historical observations |
 
-Use the source-version policy in charter §4: identify the patch/expansion,
+Use the source-version policy in [contributing](guide/contributing.md#references-and-citations): identify the patch/expansion,
 page ID, date and supporting vanilla reference. Evolving wiki pages and
 Wowhead comments may include TBC/WotLK, Classic Era, Hardcore, Season of
 Discovery or PTR behavior. Those do not establish original build-5875 values.
@@ -77,17 +80,16 @@ Corroborate gameplay observations against original client/data or vanilla
 references; byte-level protocol values retain the existing verified sources.
 
 **WotLK-era references (TrinityCore, ArcEmu) never supply 1.12.1 wire values** — opcodes,
-update fields and packet layouts differ by build (charter §2). They inform design only.
+update fields and packet layouts differ by build. They inform design only.
 
 ## Delivered
 
-Every row is implemented on `main`. No area is client-accepted: each root `MILESTONE_*.md`
-(M1-M6, M13A, M13B) records real-client acceptance as pending, with its procedure in the matching
-`docs/M*_ACCEPTANCE.md`.
+Every row is implemented on `main`. No area is client-accepted; the shared checklist is
+[real-client acceptance](guide/client-acceptance.md).
 
 | Area | Main source | Notes |
 |---|---|---|
-| Runtime core and sessions | `src/ArcaneCore.World/Net`, `src/ArcaneCore.Kernel` | Opcode registry, session states, world tick, update fields, chat, GM commands. Implemented, not client-accepted ([M5](../MILESTONE_M5.md), [M5 acceptance procedure](M5_ACCEPTANCE.md)). |
+| Runtime core and sessions | `src/ArcaneCore.World/Net`, `src/ArcaneCore.Kernel` | Opcode registry, session states, world tick, update fields, chat, GM commands. Implemented, not client-accepted ([protocol decisions](areas/protocol-decisions.md), [acceptance checklist](guide/client-acceptance.md)). |
 | Realm and login | `src/ArcaneCore.Realm` | SRP login and realm list. Autopatcher exists, off by default (`AutoPatchOptions`). |
 | Teleports | `src/ArcaneCore.Game/Teleport` | Near and far teleports, area triggers. Scope and gaps: [grid-terrain](integration/grid-terrain.md). |
 | Content import | `src/ArcaneCore.Data/Content/Import/Cli` (commands), `tools/ArcaneCore.ContentImporter` (13-line host), `src/ArcaneCore.Data/ClientData` | Commands include `plan`, `import`, `import-dbc`, `import-map-dbc`, `verify`, `class-masks`, `proc-events`, `spell-threat`, `refresh` and `refresh-portals`. |
@@ -145,7 +147,7 @@ Not ranked by a measured score. Evidence is a file or audit line in this repo.
 
 | # | Item | Scope | Evidence / how to check |
 |---|---|---|---|
-| 1 | Real-client acceptance | No area is accepted. Run the implemented areas against a build 5875 client. | Every root `MILESTONE_*.md` records acceptance as pending. Procedures: `docs/M1_ACCEPTANCE.md` to `docs/M6_ACCEPTANCE.md`, `docs/M13A_ACCEPTANCE.md`, `docs/M13B_ACCEPTANCE.md`, [MOCK_CLIENT_ACCEPTANCE.md](MOCK_CLIENT_ACCEPTANCE.md), [quest-client-acceptance.md](integration/quest-client-acceptance.md). |
+| 1 | Real-client acceptance | No area is accepted. Run the implemented areas against a build 5875 client. | No area page records a real-client run. Procedures: [real-client acceptance](guide/client-acceptance.md), [mock client](areas/mock-client.md), [CLUSTER_ACCEPTANCE.md](CLUSTER_ACCEPTANCE.md), [quest-client-acceptance.md](integration/quest-client-acceptance.md). |
 | 2 | Bot QA defects | Work the open `bot-qa` issues. | `gh issue list --label bot-qa` |
 | 3 | Clustering closure gaps | The seamless reroute; Warden on the gateway instead of the worker; a gateway conf catalog entry, `.conf.dist`, `--check-config` and metrics; real-client acceptance of the gateway path; the movement anticheat receive time stamped on the worker (link jitter is added); manifest schema and content versions that are operator labels, not read from the databases; the restart of a gateway or World dropping every client, with no authenticated operator trigger; the link protocol living in `ArcaneCore.World` with no shared assembly. | [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond); closure criteria in [CLUSTERING_DESIGN.md](CLUSTERING_DESIGN.md#phased-implementation-and-acceptance). |
 | 4 | SmartAI remaining events and actions | Events 38 (DATA_SET), 40 (ESCORT_REACHED, needs action 53 WP_START and an escort) and 52 (TEXT_OVER); MOVEMENTINFORM; (event 20 and actions 34 and 50 landed in slice 3e); action 53 (WP_START), 72 and 45; the other rejected events, actions and targets. Landed since: the area-trigger handler now ends once a script ran, and a game object needs no AIName column (`SmartGameObjectAi` runs its source type 1 rows). Basis (recounted 2026-10-31, row level): 9,977 of 12,448 `smart_scripts` rows of imported creatures can run in full (80.1 %), 3,225 entries fully runnable. | Not in the enums in `src/ArcaneCore.Game/Creatures/AI/SmartAi/SmartTypes.cs`; list and counts in [smartai-slice3-20261012.md](integration/smartai-slice3-20261012.md), "Still open" and "Followups (2026-10-31)". |

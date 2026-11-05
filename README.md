@@ -18,33 +18,40 @@ If you liked the original incarnation of World of Warcraft and want to run it yo
 logon (realm) server that manages accounts and the realm list, and a world server that serves the game, the way the 1.12 retail
 servers did. It targets build 5875 only: other client builds are not supported.
 
-The binding design rules are in [`ARCANECORE_CHARTER.md`](ARCANECORE_CHARTER.md). Behaviour follows retail 1.12.1, checked against
-the [mangos, cmangos and vmangos](#credits) families and other references; a deliberate deviation sits behind an option that defaults
-to retail.
+Behaviour follows retail 1.12.1, checked against the [mangos, cmangos and vmangos](#credits) families and other references; a
+deliberate deviation sits behind an option that defaults to retail. The rules every change follows (ground truth from the references,
+no invented API surface, GPL references read but never copied) are in [`docs/guide/contributing.md`](docs/guide/contributing.md).
 
 ## Features and status
 
-- **Two daemons**: `ArcaneCore.Realm` (logon, TCP 3724) and `ArcaneCore.World` (world, TCP 8085), plus an optional client-socket
-  gateway (`ArcaneCore.Gateway`, [Gateway passthrough](docs/areas/gateway.md), not accepted with a real client).
-- **Playerbots**: a bot pack that the world executable loads from its own directory.
-- **Databases**: MariaDB (primary), MySQL, PostgreSQL 16 and SQLite, with schema creation, additive upgrades and an operator upgrade
-  tool (`arcane-db`).
-- **Operations**: `.conf` files in the mangos style, a `check-config` verb, Prometheus metrics ([metrics](docs/ops/metrics.md)),
-  watchdog heartbeat, Docker images and a production compose file.
-- **Tools**: account CLI (`arcane-account`), content importer (`arcane-content-importer`), `arcane-db`, a mock client
+- **Two daemons**: `ArcaneCore.Realm` (logon, realm list, TCP 3724) and `ArcaneCore.World` (the world, TCP 8085). They share the auth
+  database and nothing else at run time. By default the world runs as one process (`Combined`).
+- **Gateway and split cluster**: the optional `ArcaneCore.Gateway` owns the client socket (default port 8086) and forwards to world
+  workers, so the world can be split across processes by map (Eastern Kingdoms, Kalimdor, instances) with character handoff between
+  workers. `tools/ops/live/start-cluster.ps1 -Topology Split -Transfers` starts one locally (`-Plan` prints what would start; a real
+  split start needs PostgreSQL). See [Gateway passthrough](docs/areas/gateway.md), the [clustering design](docs/CLUSTERING_DESIGN.md) and
+  the [cluster run checklist](docs/CLUSTER_ACCEPTANCE.md). The gateway is built and tested with the mock client, not yet accepted with a real client.
+- **Playerbots**: server-owned bot players that log in through the real handlers (a pack the world executable loads from its own
+  directory; off by default, `World:Playerbots:Enabled`). They group, quest, run dungeons and battlegrounds, trade and use the auction
+  house; see [Playerbots](docs/areas/playbots.md).
+- **Game content**: spells and auras, melee and ranged combat, creature AI (EventAI, SmartAI and C# scripts), quests, items and
+  inventory, loot, vendors and trainers, pets, groups, guilds and channels, mail, auctions, instances, battlegrounds, transports,
+  the grid and terrain, collision and pathing, anti-cheat and Warden. Each area has a page in [`docs/areas`](docs/areas) with what is delivered and its limits.
+- **Databases**: three logical databases (auth, characters, world) on MariaDB (primary), MySQL, PostgreSQL 16 or SQLite through EF Core,
+  with versioned schema modules, generated per-provider SQL in [`sql/updates`](sql/updates/README.md) and an operator upgrade tool (`arcane-db`).
+- **Operations**: `.conf` files in the mangos style, a `check-config` verb, live reload of content, configuration and code,
+  Prometheus metrics ([metrics](docs/ops/metrics.md)), watchdogs, Docker images and a production compose file.
+- **Tools**: account CLI (`arcane-account`), content importer (`arcane-content-importer`), `arcane-db`, a native mock client
   (`arcane-mock`) and the Atlas map and collision visualizer (`arcane-atlas`, [Atlas](docs/areas/atlas.md)).
 
-> Status: **M1-M6** implemented and automatically verified (M5: world-thread runtime, generated protocol tables, persistence,
-> multi-engine schema management; M6: logout, chat, /who, account settings, action bars, GM commands); awaiting real-client
-> acceptance. Scope and order of the next milestones: [`docs/ROADMAP.md`](docs/ROADMAP.md). Everything beyond M6 is likewise verified
-> by automated tests only. The documentation index is [`docs/README.md`](docs/README.md); every configuration key and default is in
-> the generated [configuration reference](docs/reference/configuration.md).
+Status: everything above is implemented and covered by automated tests, and **no area has been accepted against a real 1.12.1 client
+yet** ([real-client acceptance](docs/guide/client-acceptance.md)). The [roadmap](docs/ROADMAP.md) lists what is delivered, the
+decisions that hold and the open work. The documentation index is [`docs/README.md`](docs/README.md); every configuration key and
+default is in the generated [configuration reference](docs/reference/configuration.md).
 
-Integration records, takeover ledgers and the milestone follow-up notes are in [the status notes](docs/integration/status-notes.md).
-
-The native [mock client](MILESTONE_MOCK_CLIENT.md) exercises the real realm and world sessions with synthetic SQLite content and
-independent client packets. [Mock checks](docs/MOCK_CLIENT_ACCEPTANCE.md) run in CI; actual build 5875 UI and content acceptance will
-follow separately. After building Release, run its bounded authentication, character, journal and reconnect scenario with:
+The native [mock client](docs/areas/mock-client.md) exercises the real realm and world sessions with synthetic SQLite content and
+independent client packets, and runs in CI. After building Release, run its bounded authentication, character, quest and reconnect
+scenario with:
 
 ```bash
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
@@ -135,13 +142,17 @@ Contributors: [`docs/guide/contributing.md`](docs/guide/contributing.md), [`CLAU
 
 ```
 src/
-  ArcaneCore.Kernel         domain models + data seams (clustering boundary)
+  ArcaneCore.Kernel         domain models, storage contracts and configuration
   ArcaneCore.Cryptography   WoW-flavor SRP6 (verified against KAT vectors)
   ArcaneCore.Protocol       generated opcodes, packet reader/writer, MovementInfo, header cipher
-  ArcaneCore.Game           world thread (WorldRuntime), maps, objects, generated update fields
-  ArcaneCore.Data           EF Core stores, schema bootstrapper; MariaDB / MySQL / PostgreSQL / SQLite
+  ArcaneCore.Game           world simulation: world thread (WorldRuntime), maps, objects, spells, combat, AI, generated update fields
+  ArcaneCore.Data           EF Core stores, schema modules and bootstrapper; MariaDB / MySQL / PostgreSQL / SQLite
   ArcaneCore.Realm          logon/realm daemon (TCP 3724)
-  ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, chat commands, save queue
+  ArcaneCore.World          world daemon (TCP 8085): sessions, opcode table, handlers, features, chat commands, save queue
+  ArcaneCore.World.Contracts  versioned feature and bot interfaces shared by the world and the bot pack
+  ArcaneCore.Playerbots     the playerbot pack, copied beside the world executable and loaded at run time
+  ArcaneCore.Cluster.Protocol  gateway-to-worker link types
+  ArcaneCore.Gateway        client-socket daemon in front of world workers (default port 8086)
 tools/
   ArcaneCore.AccountTool    account create / set-password / set-gmlevel / list CLI (`db ...` forwards to arcane-db)
   ArcaneCore.Atlas          arcane-atlas: 3D map, collision, navmesh, diff and live world visualizer (Web UI / CLI / MCP)
@@ -152,9 +163,11 @@ tests/
   ArcaneCore.Atlas.Tests          Atlas visualizer, reference readers, diff, headless renderer and live feed tests
   ArcaneCore.Cryptography.Tests   SRP6 known-answer + round-trip tests
   ArcaneCore.Realm.Tests          logon loopback handshake tests
-  ArcaneCore.Game.Tests           update pipeline, maps, world runtime (no sockets)
+  ArcaneCore.Game.Tests           game rules, maps, world runtime (no sockets)
   ArcaneCore.Data.Tests           schema + stores on SQLite, MariaDB, PostgreSQL
-  ArcaneCore.World.Tests          end-to-end world daemon over loopback
+  ArcaneCore.World.Tests          end-to-end world daemon over loopback, playerbots, docs checks
+  ArcaneCore.Gateway.Tests        gateway daemon and link tests
+  ArcaneCore.Cluster.E2E.Tests    split-cluster end-to-end tests
   ArcaneCore.MockClient.Tests     independent client vectors and realm/world lifecycle
 ```
 
@@ -170,8 +183,8 @@ in the [Docker guide](docs/guide/docker.md).
 The full walk-through is [`docs/guide/installation.md`](docs/guide/installation.md). In short, from a download or a build:
 
 1. **Database**: provision a MariaDB/MySQL/PostgreSQL database (or use SQLite) and set the connection strings (below). Each
-   component keeps a version row (`auth_schema`, `characters_schema`, `world_schema`). Startup creates missing schemas, adopts M1-M4
-   databases, applies additive upgrades and **refuses to start** on anything else. World data (start positions, race appearance,
+   component keeps a version row (`auth_schema`, `characters_schema`, `world_schema`). Startup creates missing schemas, applies
+   known upgrade steps and **refuses to start** on anything else. World data (start positions, race appearance,
    class stats) is seeded into the world database until the content importer fills it. Upgrading a production database between
    versions is an operator procedure with a dry run, a backup gate and a drift check, `arcane-db` (see
    [docs/ops/database-upgrade.md](docs/ops/database-upgrade.md)). By default every start still creates and upgrades the schema;
@@ -189,12 +202,11 @@ The full walk-through is [`docs/guide/installation.md`](docs/guide/installation.
    database with the realm daemon (it reads the session key produced at logon), so its `Database:Auth` connection must point at the
    same database as the realm's.
 5. **Client**: put `set realmlist 127.0.0.1` (or your host) in the client's `realmlist.wtf`, log in, pick the realm and create a
-   character. Acceptance procedures: [`docs/M1_ACCEPTANCE.md`](docs/M1_ACCEPTANCE.md), `docs/M2_ACCEPTANCE.md` ...
-   `docs/M6_ACCEPTANCE.md`.
+   character. A checklist for a real-client run is in [`docs/guide/client-acceptance.md`](docs/guide/client-acceptance.md).
 
 The three logical databases each have their own provider and connection string under `Database:Auth`, `Database:Characters` and
-`Database:World` (they may point at one server or even one database). A component without its own section falls back to the M1-M4
-style `Database:Provider` / `Database:ConnectionString`.
+`Database:World` (they may point at one server or even one database). A component without its own section falls back to the older
+single-database `Database:Provider` / `Database:ConnectionString`.
 
 | Provider | Value | Use |
 |---|---|---|
@@ -249,8 +261,8 @@ imported from cmangos classic-db or vmangos dumps with `arcane-content-importer`
 ## License
 
 ArcaneCore is licensed under the GNU General Public License v3.0 (see [`LICENSE`](LICENSE)). It remains an independent
-implementation: the GPL references named below are read for behaviour and exact values and reimplemented, not copied (charter
-section 4). Third-party code imported under GPL-3.0-compatible licenses is listed in
+implementation: the GPL references named below are read for behaviour and exact values and reimplemented, not copied
+([contributing](docs/guide/contributing.md#references-and-citations)). Third-party code imported under GPL-3.0-compatible licenses is listed in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Credits

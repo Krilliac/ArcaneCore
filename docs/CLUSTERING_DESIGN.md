@@ -396,7 +396,7 @@ validates and applies them on its own tick. Common rules (planned):
   `<Service>` is `BotChat`, `BotPlanner` or `AuctionHouseBot`, with an endpoint key
   beside it. These keys are planned and not in the configuration catalog. Local
   mode keeps today's in-process code behind the same contract interface, as the
-  charter's seam rule requires (`ARCANECORE_CHARTER.md:135-139`). The combined
+  seam rule requires (components talk through an abstraction, not direct calls; [seams](integration/seams.md)). The combined
   World executable always runs Local.
 - **Transport.** The M15.1 custom TCP link transport (`GatewayLinkChannel`, HMAC challenge), with the membership/readiness family:
   versioned registration, a unique service incarnation, authentication

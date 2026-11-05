@@ -20,7 +20,7 @@ public sealed class DocDriftTests
         using JsonDocument realm = JsonDocument.Parse(Read("src/ArcaneCore.Realm/appsettings.json"));
         Assert.False(realm.RootElement.GetProperty("Auth").GetProperty("AutocreateAccounts").GetBoolean());
 
-        foreach (string page in new[] { "README.md", "docs/M1_ACCEPTANCE.md" })
+        foreach (string page in new[] { "README.md", "docs/guide/client-acceptance.md" })
         {
             string text = Read(page);
             Assert.Contains("AutocreateAccounts", text, StringComparison.Ordinal);

@@ -26,7 +26,7 @@ Status: approved 2026-10-23; P1 implemented; P6a (cross-faction emotes and the r
 
 ## 3. Hard constraints the design keeps
 
-- **No wire-format change** (charter, `CLAUDE.md:23`): every new behaviour is an existing CMSG on the bot's own session (chat, trade, invite, cast).
+- **No wire-format change** (`CLAUDE.md`, hard rules): every new behaviour is an existing CMSG on the bot's own session (chat, trade, invite, cast).
 - **Layering**: all behaviour in `ArcaneCore.Playerbots`; storage contracts in `Kernel`, EF stores + `*DataModule` in `Data` (next schema version after 59); options under `World:Playerbots`.
 - **Policy data rule** (`docs/design/playerbot-policy-phases.md:7`): no label, reward or training example may come from an LLM. "Learning" below is a **fact and relationship memory**, never model training; an LLM may at most *parse* a player's answer into a structured claim, and every claim is checked against server ground truth before it changes behaviour.
 - **Chat safety stays in charge**: `RequireOptIn`, "ai off", strike/mute, AI disclosure, speech limiter and per-player budgets apply to every new line. Anything a bot starts unprompted toward a specific player is opt-in (see decision D2).

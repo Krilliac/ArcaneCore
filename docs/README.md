@@ -1,8 +1,8 @@
 # ArcaneCore documentation
 
-Start with the [project README](../README.md) for what ArcaneCore is and how to build it, and with the
-[charter](../ARCANECORE_CHARTER.md) for the rules every change follows (retail 1.12.1 fidelity, no invented API surface,
-unfinished parts documented as limits).
+Start with the [project README](../README.md) for what ArcaneCore is and how to build it, and with
+[Contributing](guide/contributing.md) for the rules every change follows (ground truth from the references, retail 1.12.1 fidelity,
+no invented API surface, unfinished parts documented as limits).
 
 ## For operators
 
@@ -53,14 +53,17 @@ unfinished parts documented as limits).
 
 ## Acceptance procedures (real client or mock client)
 
-[M1](M1_ACCEPTANCE.md), [M2](M2_ACCEPTANCE.md), [M3](M3_ACCEPTANCE.md), [M4](M4_ACCEPTANCE.md),
-[M5](M5_ACCEPTANCE.md), [M6](M6_ACCEPTANCE.md), [M13a](M13A_ACCEPTANCE.md), [M13b](M13B_ACCEPTANCE.md),
-[quest rewards](QUEST_REWARD_ACCEPTANCE.md), the [mock client](MOCK_CLIENT_ACCEPTANCE.md) and the [real-client cluster run](CLUSTER_ACCEPTANCE.md). No area has a
+[Real-client acceptance](guide/client-acceptance.md) (the shared checklist), the [mock client](areas/mock-client.md) (automated protocol checks), [quest rewards](QUEST_REWARD_ACCEPTANCE.md),
+the [real-client cluster run](CLUSTER_ACCEPTANCE.md), [character fencing](CHARACTER_FENCING_ACCEPTANCE.md) and [async navigation](ASYNC_NAVIGATION_ACCEPTANCE.md). No area has a
 recorded real-client run unless its acceptance page says so.
+
+The per-milestone pages (`MILESTONE_*.md` at the repository root and `docs/M*_ACCEPTANCE.md`, M1 to M6, M13a, M13b and the mock client) were retired on 2026-11-04. What they recorded that still holds moved
+to [protocol decisions](areas/protocol-decisions.md), [real-client acceptance](guide/client-acceptance.md), the [mock client](areas/mock-client.md) and [quests-npc](areas/quests-npc.md); git history keeps the
+old text (`git log --diff-filter=D --name-only -- 'MILESTONE_*.md' 'docs/M*_ACCEPTANCE.md'`).
 
 ## For developers: how to contribute
 
-[Contributing](guide/contributing.md): the charter rules in practice, build and CI commands, the seams a feature plugs into, schema module rules, the
+[Contributing](guide/contributing.md): the binding rules (ground truth, real-client acceptance, scope, no invented API surface, the reference list and the GPL read-only rule), build and CI commands, the seams a feature plugs into, schema module rules, the
 hosted-CI database rule, the flake rule, repository hygiene, and how the generated documentation is regenerated.
 
 [Naming and style conventions](conventions.md): the naming standard (fields, role suffixes, AI casing, namespaces, files, tests), its
@@ -111,6 +114,8 @@ Each area page has a Delivered section, its limits, and the references it follow
 | Group loot and group experience | [group-loot-xp](areas/group-loot-xp.md) |
 | Fishing and special loot | [fishing-special-loot](areas/fishing-special-loot.md) |
 | Quest and NPC adapters | [quests-npc](areas/quests-npc.md) (NPC services: [npc-services](integration/npc-services.md)) |
+| Protocol decisions and reference discrepancies (SRP6, handshake, update fields, chat, commands) | [protocol-decisions](areas/protocol-decisions.md) |
+| Native mock client (`arcane-mock`) | [mock-client](areas/mock-client.md) |
 | Social: friends, groups, guilds, channels | [social](areas/social.md) |
 | Chat languages, gates and channels | [chat](areas/chat.md) |
 | Character creation and deletion rules | [character-creation](areas/character-creation.md) |

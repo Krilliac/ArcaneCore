@@ -3,7 +3,7 @@
 This is the manual acceptance run for the 3a exit criterion and the cross-worker transfer work: one real WoW 1.12.1 (build 5875) client
 logs in through `ArcaneCore.Gateway` and plays on a split cluster. Until the results table below is filled in, the gateway and the
 transfer path are accepted by the mock client and the in-process tests only ([gateway](areas/gateway.md),
-[mock client](MOCK_CLIENT_ACCEPTANCE.md)).
+[mock client](areas/mock-client.md)).
 
 **Who does what.** The operator (the maintainer) starts the cluster and the client and fills in the table. Nothing in the repository starts a
 server or a client for this run.

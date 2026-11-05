@@ -5,7 +5,7 @@
       [--out path.json] [--job C-diff-reviewer] [--dry-run]
 
 Sends the branch diff (base...head, chunked by file, new-side line numbers annotated) to the strongest
-model in the claude-api skill (claude-fable-5-1) with the repo charter/rules as a cached system prefix,
+model in the claude-api skill (claude-fable-5-1) with the repo rules as a cached system prefix,
 and writes structured findings (file, line, severity, claim, why) to JSON plus a ranked markdown table.
 Every request goes through llmlib's ledger: worst case reserved first, refused if over --budget-usd or the
 global cap.  Read-only on the repo (git diff / git show only).
@@ -24,7 +24,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import opsenv  # noqa: E402
 import llmlib  # noqa: E402
 
-DEFAULT_CONTEXT = ["ARCANECORE_CHARTER.md", "CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"]
+DEFAULT_CONTEXT = ["CLAUDE.md", "docs/guide/contributing.md", "AGENTS.md", "CONTRIBUTING.md"]
 SEV = {"blocker": 0, "major": 1, "minor": 2, "nit": 3}
 CONF = {"high": 0, "medium": 1, "low": 2}
 
@@ -56,7 +56,7 @@ Report only things a strong human reviewer would block or fix:
 - severity: blocker = wrong behaviour in normal use or data loss/crash; major = wrong in a plausible edge case or a test that gives false assurance; minor = robustness/maintainability with a concrete risk; nit = only if cheap and clearly right.
 - Prefer a few correct findings over many speculative ones. An empty findings list is a valid answer.
 
-Repository rules and charter follow.
+Repository rules follow.
 """
 
 

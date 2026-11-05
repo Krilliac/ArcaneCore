@@ -13,7 +13,7 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.World.Net;
 
 /// <summary>
-/// TCP listener for the world daemon (default port 8085, charter §3). Each connection gets
+/// TCP listener for the world daemon (default port 8085). Each connection gets
 /// its own DI scope and a <see cref="WorldSession"/>. Admission (connection caps, per-address
 /// connection rate) and the per-address failure budget live in one <see cref="NetGuard"/> built
 /// from <c>Net:Protection</c> when the listener starts (docs/ops/netguard.md); a missing

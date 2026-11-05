@@ -73,7 +73,7 @@ these is started.
 | B2 | Schema authority: per-engine advisory lock around `EnsureAsync`, validate-only mode for serving nodes, fix the Realm/World auth-init race | defer; medium | Edits `SchemaBootstrapper.cs`, which the index-repair lane also edits. Needs a real concurrent-startup test on MariaDB/PostgreSQL |
 | B3 | Durable allocators for guild, group, instance, then mail/auction/item-text ids | defer | Mail/auction/text overlap the economy lanes |
 | B4 | Apply the same fence to non-core stores (quest, spell, social, reputation, instance, economy) | defer; large | A fence on core rows alone does **not** stop an old owner writing those rows; reporting "fenced persistence" after A2 would be wrong |
-| B5 | Docs: stale instance paragraph and core-queue claim, `MILESTONE_M15_0.md` | the two corrections are done here; `MILESTONE_M15_0.md` only when code lands (charter 8.5) | |
+| B5 | Docs: stale instance paragraph and core-queue claim, `MILESTONE_M15_0.md` | the two corrections are done here; `MILESTONE_M15_0.md` only when code lands (the then-current rule: a milestone note per milestone) | |
 
 ## Deliberately deferred, and out of scope
 
@@ -90,8 +90,8 @@ these is started.
 
 ## Decisions that need an explicit go
 
-The 2026-10-02 charter amendment removes per-milestone waiting (`ARCANECORE_CHARTER.md`,
-section 9, "Blanket go-ahead"), but `ROADMAP.md:146-149` still says this request
+The 2026-10-02 charter amendment (the "Blanket go-ahead"; the charter has since been retired, see
+[contributing](../guide/contributing.md#retired-rules)) removed per-milestone waiting, but `ROADMAP.md:146-149` still says this request
 authorizes research and planning, with runtime code only in its bounded phase. Ask once,
 explicitly, before any A-item code.
 

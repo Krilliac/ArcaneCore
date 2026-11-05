@@ -16,7 +16,7 @@ namespace ArcaneCore.Cryptography;
 ///   * the interleave strips an even number of leading (low-order) zero bytes from the
 ///     little-endian S — the canonical client algorithm (vmangos simplifies this to a
 ///     fixed 32 bytes, which differs only when S's least-significant byte is zero;
-///     recorded in MILESTONE_M1.md).
+///     recorded in docs/areas/protocol-decisions.md).
 /// </summary>
 internal static class Srp6Math
 {
