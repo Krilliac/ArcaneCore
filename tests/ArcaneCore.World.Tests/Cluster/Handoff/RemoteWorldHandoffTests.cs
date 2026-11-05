@@ -39,6 +39,7 @@ public sealed class RemoteWorldHandoffTests
         "A.Flush",
         "stage:Flushed",
         "stage:EpochTakeover",
+        "A.RetireWrites",
         "A.ReleaseWriterLock",
         "B.Promote",
         "router.Reroute",
@@ -581,6 +582,12 @@ public sealed class RemoteWorldHandoffTests
         {
             Interlocked.Increment(ref _retires);
             events.Add("A.Retire");
+            return Task.CompletedTask;
+        }
+
+        public Task RetireWritesAsync(CancellationToken cancellationToken)
+        {
+            events.Add("A.RetireWrites");
             return Task.CompletedTask;
         }
 

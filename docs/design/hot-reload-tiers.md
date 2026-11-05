@@ -697,12 +697,12 @@ workers. It is a separate process from every world, so the coordinators it hosts
 
 - **Control channel.** Frames 28 to 32 of the gateway link (`ControlRequest`, `ControlReply`, `ControlSubmit`, `ControlSubmitReply`,
   `ControlNotice`; frames 24 to 27 are unchanged) carry one request per verb. Handoff verbs: `Describe`, `Warm`, `StopAdmissions`, `Freeze`,
-  `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
+  `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
   `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
   once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
-  120 s `Promote`). The link contract version is 5, so a gateway and its workers upgrade together.
+  120 s `Promote`). The link contract version is 6, so a gateway and its workers upgrade together.
 - **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
-  `ResumeSource` is refused once the row is Committed; `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
+  `ResumeSource` is refused once the row is Committed; `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
   its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
   only the abort and roll-forward verbs are repeated, by recovery.
 - **Opt-in keys, all `false` by default:** `Cluster:Worker:Handoff:Enabled` and `Cluster:Worker:Transfers:Enabled` on a worker (it answers

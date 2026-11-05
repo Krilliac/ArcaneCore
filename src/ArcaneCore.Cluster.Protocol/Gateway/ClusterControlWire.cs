@@ -16,7 +16,7 @@ public enum ControlKind : byte
 }
 
 /// <summary>
-/// What a control request asks the worker to do. Handoff verbs are 1..9 and transfer verbs 17..24, so a verb alone names its <see cref="ControlKind"/>
+/// What a control request asks the worker to do. Handoff verbs are 1..10 and transfer verbs 17..24, so a verb alone names its <see cref="ControlKind"/>
 /// (<see cref="ClusterControlWire.KindOf"/>); a frame whose kind and verb disagree is malformed. The values are wire format and never change.
 /// </summary>
 public enum ControlVerb : byte
@@ -31,6 +31,7 @@ public enum ControlVerb : byte
     ReleaseWriterLock = 7,
     Retire = 8,
     Promote = 9,
+    RetireWrites = 10,
 
     // Transfer (kind 2): sent to the target or the source worker of one transfer.
     TargetDescribe = 17,
@@ -174,7 +175,7 @@ public enum ControlTransferOptions : byte
 /// <summary>Verb arguments of a <see cref="ControlRequest"/>. The concrete type is fixed by the verb.</summary>
 public abstract record ControlArguments;
 
-/// <summary>No arguments: Describe, StopAdmissions, Freeze, Flush, Resume, ReleaseWriterLock, Retire, TargetDescribe, Install (the tokens and bundles come from the journal).</summary>
+/// <summary>No arguments: Describe, StopAdmissions, Freeze, Flush, Resume, ReleaseWriterLock, RetireWrites, Retire, TargetDescribe, Install (the tokens and bundles come from the journal).</summary>
 public sealed record ControlNoArguments : ControlArguments
 {
     public static ControlNoArguments Instance { get; } = new();
@@ -297,7 +298,7 @@ public static class ClusterControlWire
     /// <summary>The kind a verb belongs to, or null for a value that is not a verb.</summary>
     public static ControlKind? KindOf(ControlVerb verb) => verb switch
     {
-        >= ControlVerb.Describe and <= ControlVerb.Promote => ControlKind.WorldHandoff,
+        >= ControlVerb.Describe and <= ControlVerb.RetireWrites => ControlKind.WorldHandoff,
         >= ControlVerb.TargetDescribe and <= ControlVerb.RetireSource => ControlKind.PlayerTransfer,
         _ => null,
     };

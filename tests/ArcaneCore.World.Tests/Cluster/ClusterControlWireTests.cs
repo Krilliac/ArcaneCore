@@ -66,7 +66,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Equal(new[] { 1, 2 }, Values<ControlSubmitKind>());
         Assert.Equal(new[] { 1, 2 }, Values<ControlNoticeKind>());
         Assert.Equal(new[] { 0, 1, 2, 3, 4 }, Values<ControlNoticeOutcome>());
-        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 17, 18, 19, 20, 21, 22, 23, 24 }, Values<ControlVerb>());
+        Assert.Equal(new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 17, 18, 19, 20, 21, 22, 23, 24 }, Values<ControlVerb>());
         Assert.Equal(1, (byte)ControlTransferOptions.NotLeaveTransport);
 
         Assert.Equal(ControlVerb.Describe, (ControlVerb)1);
@@ -78,6 +78,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Equal(ControlVerb.ReleaseWriterLock, (ControlVerb)7);
         Assert.Equal(ControlVerb.Retire, (ControlVerb)8);
         Assert.Equal(ControlVerb.Promote, (ControlVerb)9);
+        Assert.Equal(ControlVerb.RetireWrites, (ControlVerb)10);
         Assert.Equal(ControlVerb.TargetDescribe, (ControlVerb)17);
         Assert.Equal(ControlVerb.Reserve, (ControlVerb)18);
         Assert.Equal(ControlVerb.Install, (ControlVerb)19);
@@ -94,24 +95,24 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         }
 
         Assert.Null(ClusterControlWire.KindOf((ControlVerb)0));
-        Assert.Null(ClusterControlWire.KindOf((ControlVerb)10));
+        Assert.Null(ClusterControlWire.KindOf((ControlVerb)11));
         Assert.Null(ClusterControlWire.KindOf((ControlVerb)16));
         Assert.Null(ClusterControlWire.KindOf((ControlVerb)25));
         Assert.Equal(16 * 1024, ClusterControlWire.MaxBundleBytes);
     }
 
     [Fact]
-    public void ContractVersion5_RefusesAVersion4Peer_AtAdmission()
+    public void ContractVersion6_RefusesAVersion5Peer_AtAdmission()
     {
         ClusterNodeManifest worker = GatewayLinkManifest.Create(ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         ClusterNodeManifest gateway = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
-        Assert.Equal(5, GatewayLinkManifest.ContractVersion);
-        Assert.Equal(5, gateway.ContractVersion);
+        Assert.Equal(6, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(6, gateway.ContractVersion);
         Assert.True(worker.TryAdmit(gateway, out _));
-        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 4 }, out string? reason));
+        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 5 }, out string? reason));
         Assert.Contains("contract version mismatch", reason);
-        Assert.Contains("v4", reason);
-        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 4 }, out _));
+        Assert.Contains("v5", reason);
+        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 5 }, out _));
     }
 
     // ------------------------------------------------------------------ golden bytes

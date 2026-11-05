@@ -6,7 +6,8 @@ namespace ArcaneCore.World.Cluster.Gateway;
 public static class GatewayLinkManifest
 {
     /// <summary>
-    /// The contract version both ends of a gateway link advertise. 5: the unified control frames 28-32 (ControlRequest, ControlReply, ControlSubmit,
+    /// The contract version both ends of a gateway link advertise. 6: the handoff verb RetireWrites (10), which a worker of version 5 would refuse, so a handoff's roll-forward would stop at its
+    /// first step; the gateway and its workers upgrade together. 5: the unified control frames 28-32 (ControlRequest, ControlReply, ControlSubmit,
     /// ControlSubmitReply, ControlNotice; the last two end with a reason-code byte, ControlReasonCode); the link closes on any unknown frame, so a version 4 peer is refused at admission instead.
     /// 4: the worker sends WorkerStatus frames (tick counter, sessions, countdown state) for
     /// the gateway's realm liveness writer; a gateway of version 3 would close the link on the unknown frame, so it is refused at admission instead.
@@ -16,7 +17,7 @@ public static class GatewayLinkManifest
     /// after its payload and the gateway opens the link with a LinkClock frame; an older peer is refused at admission
     /// (<see cref="ClusterNodeManifest.TryAdmit"/>) instead of misreading the frames.
     /// </summary>
-    public const int ContractVersion = 5;
+    public const int ContractVersion = 6;
 
     public static ClusterNodeManifest Create(
         ClusterRole role, string nodeId, Guid incarnation, int realmId, string contentRevision, int charactersSchemaVersion, int worldSchemaVersion,

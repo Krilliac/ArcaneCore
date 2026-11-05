@@ -83,7 +83,7 @@ public sealed class RetiredSourceCleanShutdownTests
         var store = new FencedStore(moved: 5) { BusyOnce = 5 }; // the first write of 5 finds the database locked (retained); every later write is refused by the fence
         await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
         var logger = new CaptureLogger();
-        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), logger) { BusyBackoff = [TimeSpan.FromHours(1)] }; // no retry of its own before the retirement
         Exception? fatal = null;
         queue.FatalFailure += ex => fatal = ex;
         using WorldRuntime world = new(new WorldRuntimeOptions(), NullSaveQueue.Instance, NullLogger<WorldRuntime>.Instance);
@@ -111,7 +111,7 @@ public sealed class RetiredSourceCleanShutdownTests
     {
         var store = new FencedStore(moved: 5) { BusyOnce = 5 };
         await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
-        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger());
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger()) { BusyBackoff = [TimeSpan.FromHours(1)] }; // no retry of its own before the retirement
 
         queue.Enqueue(State(5, 55));
         queue.Start();
@@ -146,6 +146,112 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.Null(queue.TerminalFailure);
         Assert.Empty(queue.RetainedCharacterIds());
         Assert.Empty(store.Saved);
+    }
+
+    /// <summary>
+    /// The coordinator's real order against the real source and queue. A snapshot of an offline character turns up after the flush (the flush itself would have written it) and is retained
+    /// as locked. The store keeps answering "locked" until the target's promotion starts, where the takeover has long fenced A out; from there the fence refuses it. So the retry cannot race the
+    /// commit, and the promotion holds the window open until the consumer, past its busy pause, has either written the retry into the fence or looked and found nothing it may retry. With the
+    /// step run anywhere after the promotion the retry is refused and the queue goes terminal.
+    /// </summary>
+    [Fact]
+    public async Task ARetainedRetryInsideTheRollForwardWindow_IsNotAttempted_BecauseTheWritesRetireRightAfterTheCommit()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.Queue.Enqueue(State(5, 55));
+                await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained after the flush");
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, rig.HoldingTarget, new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.True(rig.HoldingTarget.Promoted);
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>The same window on a recovery: the handoff is journalled as committed and a coordinator of this process finishes it; the retained snapshot was never flushed by this run.</summary>
+    [Fact]
+    public async Task ARetainedRetryInsideTheWindow_IsNotAttempted_OnARecoveredRollForward()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.UnstartedWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Enqueue(State(5, 55));
+        rig.Queue.Start();
+        await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained");
+        Guid id = Guid.NewGuid();
+        rig.Journal.SeedCommitted(id);
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, rig.HoldingTarget, new NoRouter()).RecoverAsync(id);
+
+        Assert.True(rig.HoldingTarget.Promoted);
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>A failure that is not a locked database is retained and never retried by the idle consumer: only the flush can write it, and it does, while A still owns the character.</summary>
+    [Fact]
+    public async Task TheFlush_WritesARetainedSnapshotOfAnOfflineCharacter_BeforeTheCommit()
+    {
+        await using var rig = new HandoffRig();
+        rig.Write = _ => new InvalidOperationException("the disk said no");
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Enqueue(State(5, 55));
+        rig.Queue.Start();
+        await WorldTestHost.WaitForAsync(() => rig.Store.Attempts.Count >= 3 && rig.Queue.Pending == 0, "the inline attempts of character 5 to end");
+        rig.Write = _ => null;
+        bool durableAtFlushed = false;
+
+        Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                durableAtFlushed = rig.Store.Saved.Any(s => s.Id == 5);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.True(durableAtFlushed);
+        Assert.Empty(rig.Queue.RetainedCharacterIds());
+        await rig.Queue.StopAsync();
+        Assert.Null(rig.Queue.TerminalFailure);
+    }
+
+    /// <summary>A save the flush cannot write fails the handoff before the commit: A resumes, still owns the character, keeps the snapshot and writes it once the store recovers.</summary>
+    [Fact]
+    public async Task ARetainedSnapshotTheFlushCannotWrite_AbortsTheHandoff_AndStaysAWriteOfTheSource()
+    {
+        await using var rig = new HandoffRig();
+        rig.Write = _ => new InvalidOperationException("the disk said no");
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Enqueue(State(5, 55));
+        rig.Queue.Start();
+        await WorldTestHost.WaitForAsync(() => rig.Store.Attempts.Count >= 3 && rig.Queue.Pending == 0, "the inline attempts of character 5 to end");
+
+        WorldHandoffAbortedException aborted = await Assert.ThrowsAsync<WorldHandoffAbortedException>(
+            () => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid()));
+
+        Assert.Equal(PlayerTransferDecisionState.Aborted, aborted.Record.DecisionState);
+        Assert.Null(aborted.Record.TargetOwnershipToken);
+        Assert.Equal(new[] { 5 }, rig.Queue.RetainedCharacterIds());
+        Assert.False(rig.Queue.IsQuarantined(5)); // the retirement never ran
+        rig.Write = _ => null;
+        await rig.Queue.StopAsync();
+        Assert.Contains(rig.Store.Saved, s => s.Id == 5 && s.Money == 55);
     }
 
     [Fact]
@@ -319,6 +425,203 @@ public sealed class RetiredSourceCleanShutdownTests
         public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
+    /// <summary>
+    /// A real queue and a real source around a store whose answers the test scripts. By default character 5's writes find the database locked until the holding target's promotion starts,
+    /// and are refused by the fence from then on.
+    /// </summary>
+    private sealed class HandoffRig : IAsyncDisposable
+    {
+        private readonly ServiceProvider _services;
+        private readonly TaskCompletionSource _nothingToRetry = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _fenceMoved;
+        private int _promoting;
+        private int _refusals;
+        private Exception? _fatal;
+
+        public HandoffRig()
+        {
+            Store = new FencedStore(moved: 0) { Answer = state => Write(state) };
+            Write = state => state.Id != 5 ? null : LockedOrRefused();
+            _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
+            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger()) { BusyBackoff = [TimeSpan.FromMilliseconds(10)] };
+            Queue.FatalFailure += ex => _fatal = ex;
+            Queue.AfterIdleRetainedScanForTesting = picked =>
+            {
+                if (picked is null && Volatile.Read(ref _promoting) == 1)
+                {
+                    _nothingToRetry.TrySetResult();
+                }
+            };
+            HoldingTarget = new HoldingTarget(HoldTheWindowOpenAsync);
+        }
+
+        public FencedStore Store { get; }
+
+        public Func<CharacterState, Exception?> Write { get; set; }
+
+        public CharacterSaveQueue Queue { get; }
+
+        public HandoffJournal Journal { get; } = new();
+
+        public HoldingTarget HoldingTarget { get; }
+
+        public WorldRuntime UnstartedWorld() => new(new WorldRuntimeOptions(), NullSaveQueue.Instance, NullLogger<WorldRuntime>.Instance)
+        {
+            CharacterOwnership = new CharacterOwnershipToken("world", 3, Guid.NewGuid()),
+        };
+
+        public WorldRuntime StartWorld()
+        {
+            WorldRuntime world = UnstartedWorld();
+            world.Start();
+            return world;
+        }
+
+        public LocalWorldHandoffSource Source(WorldRuntime world) => new(new WorkerNodeId("w1"), world, Queue, new WorkerAdmission(), new WorldWriterGuard());
+
+        public async Task AssertCleanStopAsync()
+        {
+            Assert.Null(_fatal);
+            Assert.Null(Queue.TerminalFailure);
+            Assert.Equal(0, Volatile.Read(ref _refusals));
+            Assert.Empty(Queue.RetainedCharacterIds());
+            await Queue.StopAsync(); // must not throw
+            Assert.Null(Queue.TerminalFailure);
+            Assert.DoesNotContain(Store.Saved, s => s.Id == 5);
+        }
+
+        public async ValueTask DisposeAsync() => await _services.DisposeAsync();
+
+        private Exception LockedOrRefused()
+        {
+            if (Volatile.Read(ref _fenceMoved) == 0)
+            {
+                return new SqliteException("SQLite Error 5: 'database is locked'.", 5);
+            }
+
+            Interlocked.Increment(ref _refusals);
+            return new CharacterOwnershipRejectedException("world", 7);
+        }
+
+        private async Task HoldTheWindowOpenAsync()
+        {
+            Volatile.Write(ref _fenceMoved, 1);
+            Volatile.Write(ref _promoting, 1);
+            await WorldTestHost.WaitForAsync(() => _nothingToRetry.Task.IsCompleted || Queue.TerminalFailure is not null, "the consumer to retry character 5 or to find nothing to retry");
+        }
+    }
+
+    private sealed class HoldingTarget(Func<Task> whilePromoting) : PlainTarget
+    {
+        private int _promoted;
+
+        public bool Promoted => Volatile.Read(ref _promoted) == 1;
+
+        public override async Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
+        {
+            await whilePromoting().ConfigureAwait(false);
+            Volatile.Write(ref _promoted, 1);
+        }
+    }
+
+    private class PlainTarget : IWorldHandoffTarget
+    {
+        public WorkerNodeId WorkerId { get; } = new("w2");
+
+        public string OwnerNode => "w2";
+
+        public Guid Incarnation { get; } = Guid.NewGuid();
+
+        public Task WarmAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public virtual Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class NoRouter : IWorldHandoffRouter
+    {
+        public Task RerouteAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class HandoffJournal : IWorldHandoffStore
+    {
+        private readonly Lock _gate = new();
+        private readonly Dictionary<Guid, WorldHandoffRecord> _records = [];
+
+        public void SeedCommitted(Guid id)
+        {
+            var source = new CharacterOwnershipToken("world", 3, Guid.NewGuid());
+            Put(new WorldHandoffRecord(id, new WorkerNodeId("w1"), new WorkerNodeId("w2"), WorldHandoffStage.EpochTakeover, PlayerTransferDecisionState.Committed, source,
+                source with { Epoch = 4 }, "w2", null, 0, 0));
+        }
+
+        private WorldHandoffRecord Current(Guid id)
+        {
+            lock (_gate)
+            {
+                return _records[id];
+            }
+        }
+
+        private WorldHandoffRecord Put(WorldHandoffRecord record)
+        {
+            lock (_gate)
+            {
+                _records[record.HandoffId] = record;
+            }
+
+            return record;
+        }
+
+        public Task<WorldHandoffRecord> BeginAsync(Guid handoffId, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default)
+            => Task.FromResult(Put(new WorldHandoffRecord(handoffId, sourceWorkerId, targetWorkerId, WorldHandoffStage.Begun, PlayerTransferDecisionState.PreCommit, sourceOwnershipToken, null, null, null, 0, 0)));
+
+        public Task<WorldHandoffRecord> AdvancePreCommitAsync(Guid handoffId, WorldHandoffStage nextStage, CancellationToken cancellationToken = default)
+            => Task.FromResult(Put(Current(handoffId) with { Stage = nextStage }));
+
+        public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
+        {
+            WorldHandoffRecord before = Current(handoffId);
+            var taken = new CharacterOwnershipToken(before.SourceOwnershipToken.Scope, before.SourceOwnershipToken.Epoch + 1, targetIncarnation);
+            return Task.FromResult<WorldHandoffRecord?>(Put(before with
+            {
+                Stage = WorldHandoffStage.EpochTakeover,
+                DecisionState = PlayerTransferDecisionState.Committed,
+                TargetOwnershipToken = taken,
+                TargetOwnerNode = targetOwnerNode,
+            }));
+        }
+
+        public Task<WorldHandoffRecord> MarkReroutedAsync(Guid handoffId, CancellationToken cancellationToken = default)
+            => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Rerouted }));
+
+        public Task<WorldHandoffRecord> MarkRetiredAsync(Guid handoffId, CancellationToken cancellationToken = default)
+            => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Retired, DecisionState = PlayerTransferDecisionState.Completed }));
+
+        public Task<WorldHandoffRecord> AbortAsync(Guid handoffId, string reason, CancellationToken cancellationToken = default)
+            => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Aborted, DecisionState = PlayerTransferDecisionState.Aborted, AbortReason = reason }));
+
+        public Task<WorldHandoffRecord?> GetAsync(Guid handoffId, CancellationToken cancellationToken = default)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult(_records.GetValueOrDefault(handoffId));
+            }
+        }
+
+        public Task<IReadOnlyList<WorldHandoffRecord>> GetUnresolvedAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_gate)
+            {
+                return Task.FromResult<IReadOnlyList<WorldHandoffRecord>>([.. _records.Values.Where(r => !r.IsResolved)]);
+            }
+        }
+
+        public Task<IReadOnlyList<Guid>> GetTransferIdsAsync(Guid handoffId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<Guid>>([]);
+
+        public ITransferDecisionStore ForHandoff(Guid handoffId) => throw new NotSupportedException();
+    }
+
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>
     private sealed class FencedStore(int moved) : ICharacterStore
     {
@@ -332,12 +635,17 @@ public sealed class RetiredSourceCleanShutdownTests
         /// <summary>The character whose first write fails as a locked database (retained by the queue) before the fence logic applies; null for none.</summary>
         public int? BusyOnce { get; set; }
 
+        /// <summary>The failure of this write, scripted by the test; null lets the rules below decide.</summary>
+        public Func<CharacterState, Exception?>? Answer { get; init; }
+
         private int _busyDone;
 
         public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
         {
             Attempts.Enqueue(state);
             OnSave?.Invoke(state);
+            if (Answer?.Invoke(state) is { } scripted)
+                return Task.FromException(scripted);
             if (BusyOnce == state.Id && Interlocked.Exchange(ref _busyDone, 1) == 0)
                 return Task.FromException(new SqliteException("SQLite Error 5: 'database is locked'.", 5));
             if (state.Id == moved)

@@ -243,6 +243,15 @@ public sealed class WorkerControlService(
                 MarkEnded(request);
                 await h.Source!.ResumeAsync(ct).ConfigureAwait(false);
                 return Ok(request);
+            case ControlVerb.RetireWrites:
+                refusal = RowNamesSource(record, h.Source) ?? Committed(record);
+                if (refusal is not null)
+                {
+                    return Reply(request, ControlStatus.Refused, refusal);
+                }
+
+                await h.Source!.RetireWritesAsync(ct).ConfigureAwait(false);
+                return Ok(request);
             case ControlVerb.ReleaseWriterLock:
                 refusal = RowNamesSource(record, h.Source) ?? Committed(record);
                 if (refusal is not null)

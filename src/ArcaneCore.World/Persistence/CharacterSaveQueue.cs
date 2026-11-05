@@ -84,6 +84,9 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     // Test seam: observe the hand-off to waiters before the consumer takes another slot.
     internal Action? BeforeWaitersCompletedForTesting { get; set; }
 
+    // Test seam: the consumer, idle and past any busy pause, just looked for a retained snapshot to retry: the character it picked, or null when it found none it may retry.
+    internal Action<int?>? AfterIdleRetainedScanForTesting { get; set; }
+
     /// <param name="scopes">Where the scoped <see cref="ICharacterStore"/> comes from.</param>
     /// <param name="logger">Diagnostics.</param>
     /// <param name="options">Backlog warning thresholds (<c>World:SaveQueueWarnDepth</c>, <c>World:SaveQueueWarnAgeMs</c>); the defaults when null.</param>
@@ -421,6 +424,28 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
     }
 
+    /// <summary>
+    /// The characters with a save still to settle: a snapshot waiting, a write in flight or a retained failure. A quarantined character is left out: its snapshots are never written, so it
+    /// has nothing a flush could settle and no retry that could reach the fence. A handoff's flush drains these while the source still owns them. Ascending. Any thread.
+    /// </summary>
+    public int[] UnsettledCharacterIds()
+    {
+        lock (_gate)
+        {
+            var open = new SortedSet<int>(_failed.Keys);
+            foreach (Slot slot in _slots.Values)
+            {
+                if (slot.State is not null || slot.InFlight)
+                {
+                    open.Add(slot.Id);
+                }
+            }
+
+            open.ExceptWith(_quarantined);
+            return [.. open];
+        }
+    }
+
     public bool IsHeld(int characterId)
     {
         lock (_gate)
@@ -512,6 +537,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             MaybeReport();
             Slot? slot = null;
             long pauseTicks = 0;
+            bool idleScan = false;
             lock (_gate)
             {
                 long now = Stopwatch.GetTimestamp();
@@ -545,6 +571,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                     if (slot is null)
                     {
                         slot = TakeRetained(); // idle: retry the retained busy failures
+                        idleScan = true;
                     }
                     else
                     {
@@ -556,6 +583,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                         break;
                     }
                 }
+            }
+
+            if (idleScan)
+            {
+                AfterIdleRetainedScanForTesting?.Invoke(slot?.Id);
             }
 
             if (slot is null)

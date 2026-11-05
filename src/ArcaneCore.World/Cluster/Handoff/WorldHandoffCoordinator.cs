@@ -20,7 +20,7 @@ public interface IWorldHandoffSource
     /// <summary>Freeze the simulation at a tick boundary, capturing every online player's save as at logout. Idempotent.</summary>
     Task FreezeAsync(CancellationToken cancellationToken);
 
-    /// <summary>Wait until every save captured by the freeze is durable.</summary>
+    /// <summary>Wait until every save captured by the freeze, and every other save A still has open, is durable; throws, before the commit, when one cannot be.</summary>
     Task FlushAsync(CancellationToken cancellationToken);
 
     /// <summary>Abort before the point of no return: unfreeze and admit sessions again, under the unchanged ownership. Idempotent.</summary>
@@ -28,6 +28,13 @@ public interface IWorldHandoffSource
 
     /// <summary>After the point of no return: A never runs or admits again (its late writes are fenced anyway). Idempotent.</summary>
     Task RetireAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write A could still attempt for the characters that moved, so a retry that fires while B is being
+    /// promoted is skipped instead of being refused by the fence, which A would take for a lost ownership and stop on. Runs only after the commit (A still owned them before it) and on every
+    /// roll-forward, a recovery included. Idempotent. <see cref="RetireAsync"/> includes it, for a world that retires without a coordinator. A source with no such queue (the default) does nothing.
+    /// </summary>
+    Task RetireWritesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
     /// After the epoch takeover and before B is promoted: give up the characters database's process-lifetime writer lock (SQLite sidecar file or server advisory lock), which B's promotion
@@ -99,7 +106,7 @@ public sealed class WorldHandoffAbortedException(WorldHandoffRecord record, Exce
 /// <item>Begun; B warm (<see cref="IWorldHandoffTarget.WarmAsync"/>);</item>
 /// <item>A stops admissions, freezes at a tick boundary, and flushes the forced saves;</item>
 /// <item>the epoch takeover: the ownership moves from A (epoch N) to B (N + 1) in one transaction with the decision. Point of no return;</item>
-/// <item>B is promoted, the gateway reroutes, A retires.</item>
+/// <item>A retires its writes of the moved characters, B is promoted, the gateway reroutes, A retires.</item>
 /// </list>
 /// Any failure before the takeover aborts: the journal records it and A resumes under its unchanged ownership. After the takeover the handoff
 /// only rolls forward; a failure leaves it committed for <see cref="RecoverAsync"/> (or a repeat of it) to finish. One coordinator drives one
@@ -218,6 +225,11 @@ public sealed class WorldHandoffCoordinator(
     {
         CharacterOwnershipToken takenOver = record.TargetOwnershipToken
             ?? throw new InvalidOperationException($"committed world handoff {record.HandoffId} has no target ownership token");
+        // First of all, and on every path here (a recovery too): from the commit on, A's save retries are refused by the fence, and only this step makes that refusal expected.
+        // The journal does not record it: every roll-forward repeats it, and the repeat changes nothing.
+        if (record.Stage < WorldHandoffStage.Retired)
+            await source.RetireWritesAsync(cancellationToken).ConfigureAwait(false);
+
         if (record.Stage < WorldHandoffStage.Rerouted)
         {
             // The takeover has fenced A out of the database: it gives up the writer lock so B's promotion can take it (a source still alive elsewhere would keep it and B would be refused).

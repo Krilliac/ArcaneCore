@@ -33,6 +33,9 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>The admission closed reason of a retired A.</summary>
     public const string RetiredReason = "retired";
 
+    /// <summary>Times the flush goes over the save queue's open characters before it gives up: nothing should open after the first pass, because the simulation is parked.</summary>
+    private const int OpenSavePasses = 3;
+
     private readonly Lock _gate = new();
     private readonly ManualResetEventSlim _release = new(false);
     private readonly List<int> _heldHere = [];
@@ -95,19 +98,46 @@ public sealed class LocalWorldHandoffSource(
             frozen = _frozen ?? throw new InvalidOperationException("the source world is not frozen; nothing to flush");
         IReadOnlyList<Task> saves = await frozen.WaitAsync(cancellationToken).ConfigureAwait(false);
         await Task.WhenAll(saves).WaitAsync(cancellationToken).ConfigureAwait(false);
-        if (barrier is null)
-            return;
 
         // Then every other per-character queue and settlement (explored zones, rest, quests, taxi, honor, ...): what B will read must be durable.
-        int[] characters;
-        lock (_gate)
-            characters = [.. _frozenCharacters];
-        foreach (int id in characters)
+        if (barrier is not null)
         {
-            CharacterPersistenceFlushResult flushed = await barrier.TryFlushCharacterAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (!flushed.IsDurable)
-                throw new InvalidOperationException($"character {id} is not durable ({string.Join(", ", flushed.FailedQueues)}); the handoff cannot commit");
+            int[] characters;
+            lock (_gate)
+                characters = [.. _frozenCharacters];
+            foreach (int id in characters)
+                await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
         }
+
+        // Then what the save queue still has open for characters the freeze did not capture: an offline character's retained, waiting or in-flight save. A still owns them here and can
+        // write them; after the commit the fence would refuse them. One that cannot be written fails the flush, and the handoff aborts with nothing lost. A quarantined character has none
+        // open: its retained snapshot is superseded by design and never retried. The simulation is parked, so a pass adds nothing new; the repeat catches a late settlement's write.
+        for (int pass = 0; ; pass++)
+        {
+            int[] open = saveQueue.UnsettledCharacterIds();
+            if (open.Length == 0)
+                return;
+            if (pass == OpenSavePasses)
+                throw new InvalidOperationException($"characters {string.Join(", ", open)} still have saves open after the flush; the handoff cannot commit");
+            foreach (int id in open)
+                await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    // Every queue of the character through the barrier; without one, the save queue alone, under the barrier's time limit: a locked database must fail the handoff, not hold it open.
+    private async Task FlushCharacterAsync(int id, CancellationToken cancellationToken)
+    {
+        if (barrier is null)
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            budget.CancelAfter(CharacterPersistenceBarrier.DefaultTimeout);
+            await saveQueue.FlushCharacterAsync(id, budget.Token).ConfigureAwait(false);
+            return;
+        }
+
+        CharacterPersistenceFlushResult flushed = await barrier.TryFlushCharacterAsync(id, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (!flushed.IsDurable)
+            throw new InvalidOperationException($"character {id} is not durable ({string.Join(", ", flushed.FailedQueues)}); the handoff cannot commit");
     }
 
     public Task ResumeAsync(CancellationToken cancellationToken)
@@ -128,21 +158,29 @@ public sealed class LocalWorldHandoffSource(
         return Task.CompletedTask;
     }
 
-    public Task RetireAsync(CancellationToken cancellationToken)
+    public async Task RetireAsync(CancellationToken cancellationToken)
+    {
+        // The self-heal reaches this without the coordinator's earlier step, so it runs here too; repeating it changes nothing.
+        await RetireWritesAsync(cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+            admission.Close(RetiredReason);
+    }
+
+    /// <summary>The save-queue part of the retirement. Only after the commit: before it, these are writes A still owns. From here on A does not resume either.</summary>
+    public Task RetireWritesAsync(CancellationToken cancellationToken)
     {
         int[] moved;
         lock (_gate)
         {
             _retired = true;
-            admission.Close(RetiredReason);
             moved = [.. _frozenCharacters];
         }
 
         // The characters this world froze now belong to the new owner: every write queue of this process drops their writes silently and counts them
         // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
-        // (one informational line), instead of attempting writes the fence must refuse. The frozen characters are named, and so are the offline characters whose last save is retained
-        // (their retry would be refused too); any other character keeps its writes.
-        int[] retiring = [.. moved, .. saveQueue.RetainedCharacterIds()];
+        // (one informational line), instead of attempting writes the fence must refuse. The frozen characters are named, and so is every offline character the save queue still holds
+        // anything for: retained, waiting or in flight (the flush normally leaves none; each would be refused too). Any other character keeps its writes.
+        int[] retiring = [.. moved, .. saveQueue.RetainedCharacterIds(), .. saveQueue.UnsettledCharacterIds()];
         retirement?.Retire(retiring);
         saveQueue.RetireCharacters(retiring);
         return Task.CompletedTask;

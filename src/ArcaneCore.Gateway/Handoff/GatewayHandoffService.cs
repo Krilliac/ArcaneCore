@@ -296,7 +296,7 @@ internal sealed class GatewayHandoffSlot : IDisposable
 /// <list type="bullet">
 /// <item><description>Opt-in: it exists only with <c>Gateway:Handoff:Enabled</c>; the journal is the characters database, read validate-only.</description></item>
 /// <item><description>One handoff or recovery per slot at a time; a handoff past its epoch takeover is not cancellable and a host stop waits for it (bounded by the stop token).</description></item>
-/// <item><description><c>Resume</c>, <c>ReleaseWriterLock</c> and <c>Retire</c> are best effort when the worker's link is gone (a dead process holds no lock and cannot resume); the journal, not the verb, decides.</description></item>
+/// <item><description><c>Resume</c>, <c>RetireWrites</c>, <c>ReleaseWriterLock</c> and <c>Retire</c> are best effort when the worker's link is gone (a dead process holds no lock and cannot resume); the journal, not the verb, decides.</description></item>
 /// </list>
 /// Thread-safe. Disposing stops it like <see cref="StopAsync"/>.
 /// </summary>
@@ -772,6 +772,8 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         public Task ResumeAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.Resume, cancellationToken);
 
         public Task RetireAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.Retire, cancellationToken);
+
+        public Task RetireWritesAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.RetireWrites, cancellationToken);
 
         public Task ReleaseWriterLockAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.ReleaseWriterLock, cancellationToken);
 
