@@ -126,7 +126,7 @@ public sealed class PlayerbotSummonWorldTests
 
             foreach ((Guid id, string name) in members.Prepend(leader))
             {
-                PlayerbotOperationResult leashed = world.Bots.Leash(id, master, stay: true);
+                var leashed = world.Bots.Leash(id, master, stay: true);
                 Assert.True(leashed.Success, $"{name}: leash refused ({leashed.Code})");
             }
 
