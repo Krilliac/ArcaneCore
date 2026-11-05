@@ -46,7 +46,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         if (options.Enabled)
         {
             issues.AddRange(CheckFencing(options, configuration));
-            issues.AddRange(CheckRealmRowLabels(options, configuration));
+            issues.AddRange(CheckRealmRowLabels(options));
         }
 
         return issues;
@@ -169,11 +169,12 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
 
     /// <summary>
     /// Fail closed on the realm-list row: a child labelled social or coordinator is a whole World executable (see <see cref="CheckFencing"/>), so with
-    /// <c>World:Realm:Id</c> above 0 (the default is 1) it would flip the realm's row Online and Offline beside the world that really serves it. Such a child
-    /// must set <c>--World:Realm:Id=0</c> in its Arguments (or the shared configuration must). A value that is missing is the default 1 and one that is not a
-    /// whole number is refused too, so nothing unreadable is taken for 0.
+    /// <c>World:Realm:Id</c> above 0 (the default is 1) it could flip the realm's row Online and Offline beside the world that really serves it. Such a child
+    /// must carry <c>--World:Realm:Id=0</c> in its own Arguments: the supervisor does not forward its own command line or configuration, and the child may
+    /// have another working directory and conf, so the shared configuration is not trusted. Any mention of the key that is not the exact <c>--Key=value</c>
+    /// form (space form, slash form) is unreadable here and refused, as is a value that is not 0.
     /// </summary>
-    private static IEnumerable<ConfigIssue> CheckRealmRowLabels(ClusterSupervisorOptions options, IConfiguration configuration)
+    private static IEnumerable<ConfigIssue> CheckRealmRowLabels(ClusterSupervisorOptions options)
     {
         foreach ((string key, SupervisedProcessConfig process) in options.Processes.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
         {
@@ -183,16 +184,48 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 continue;
             }
 
-            IReadOnlyDictionary<string, string> args = ParseArguments(process.Arguments);
-            string? idText = args.GetValueOrDefault("World:Realm:Id") ?? configuration["World:Realm:Id"];
-            bool writesRow = idText is null || !int.TryParse(idText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0;
+            string resolved = ResolveChildRealmId(process.Arguments ?? string.Empty, out bool writesRow);
             if (writesRow)
             {
                 yield return new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Processes:{key}:Arguments",
-                    $"world child '{key}' is labelled {process.Role} but does not set World:Realm:Id=0, so it would write realm 1's realm-list row (Online, Offline, population) beside the world that serves the realm.",
-                    "pass --World:Realm:Id=0 in the child's Arguments, so only the combined world or the gateway writes the realm row");
+                    $"world child '{key}' is labelled {process.Role} but its own Arguments do not set World:Realm:Id=0 (found {resolved}), so a world with a realm id above 0 could write that realm's realm-list row (Online, Offline, population) beside the world that serves the realm.",
+                    "pass --World:Realm:Id=0 in the child's Arguments (exact --Key=value form), so only the combined world or the gateway writes the realm row");
             }
         }
+    }
+
+    /// <summary>The realm id the child's Arguments set, for the message; <paramref name="writesRow"/> is false only when every mention of the key is an exact <c>--World:Realm:Id=0</c>.</summary>
+    private static string ResolveChildRealmId(string arguments, out bool writesRow)
+    {
+        const string KeyName = "World:Realm:Id";
+        string? last = null;
+        bool unreadable = false;
+        bool nonZero = false;
+        foreach (string token in arguments.Split(WhitespaceSeparators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string text = token.Trim('"');
+            if (text.IndexOf(KeyName, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                continue;
+            }
+
+            string prefix = "--" + KeyName + "=";
+            if (!text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                unreadable = true;
+                continue;
+            }
+
+            string value = text[prefix.Length..].Trim('"');
+            last = value;
+            if (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0)
+            {
+                nonZero = true;
+            }
+        }
+
+        writesRow = last is null || unreadable || nonZero;
+        return unreadable ? "an argument form the supervisor cannot read" : last ?? "no value, so the default 1";
     }
 
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];

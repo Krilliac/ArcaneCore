@@ -71,6 +71,13 @@ public sealed class ClusterSupervisorConfigChecksTests
     [InlineData("social", "--Cluster:Fencing:Enabled=true --World:Realm:Id=1", null)]
     [InlineData("coordinator", "--Cluster:Fencing:Enabled=true --World:Realm:Id=abc", null)]
     [InlineData("social", "--Cluster:Fencing:Enabled=true", "2")]
+    [InlineData("social", "--Cluster:Fencing:Enabled=true", "0")]
+    [InlineData("social", "--World:Realm:Id=1", "0")]
+    [InlineData("social", "--World:Realm:Id 1", "0")]
+    [InlineData("social", "--World:Realm:Id=0 /World:Realm:Id=1", "0")]
+    [InlineData("social", "--World:Realm:Id=0 --World:Realm:Id=1", null)]
+    [InlineData("coordinator", "--World:Realm:Id=-1", null)]
+    [InlineData("Coordinator", "--World:Realm:Id=2", null)]
     public void ASocialOrCoordinatorLabelledChild_ThatCouldWriteTheRealmRow_IsRefused(string role, string arguments, string? sharedRealmId)
     {
         Dictionary<string, string?> values = Base();
@@ -87,7 +94,7 @@ public sealed class ClusterSupervisorConfigChecksTests
     [Theory]
     [InlineData("social", "--World:Realm:Id=0", null)]
     [InlineData("coordinator", "--World:Realm:Id=0", null)]
-    [InlineData("social", "", "0")]
+    [InlineData("Social", "--World:Realm:Id=0", null)]
     public void ASocialOrCoordinatorLabelledChild_WithRealmIdZero_IsNotRefusedForTheRealmRow(string role, string arguments, string? sharedRealmId)
     {
         Dictionary<string, string?> values = Base();
@@ -97,6 +104,16 @@ public sealed class ClusterSupervisorConfigChecksTests
         }
 
         AddWorld(values, "b", role, arguments + " --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        Assert.False(RealmRowRefused(Errors(values), "b"));
+    }
+
+    [Fact]
+    public void ASocialChild_WithSupervisorDisabled_IsNotRefusedForTheRealmRow()
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "b", "social", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+        values["Cluster:Supervisor:Enabled"] = "false";
 
         Assert.False(RealmRowRefused(Errors(values), "b"));
     }
