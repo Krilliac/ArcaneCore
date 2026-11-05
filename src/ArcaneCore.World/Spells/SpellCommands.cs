@@ -3,6 +3,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
