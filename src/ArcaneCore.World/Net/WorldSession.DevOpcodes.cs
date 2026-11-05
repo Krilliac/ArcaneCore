@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Net;
 /// The drop of a stripped developer opcode (<see cref="ArcaneCore.World.Handlers.StrippedDevOpcodes"/>): the 1.12.1 release client never sends one, so whoever does is
 /// running a modified client or a tool. The payload is never read and nothing is answered. It is counted (<see cref="DevOpcodeTracker"/>, never in
 /// <see cref="UnhandledOpcodeTracker"/>), and then: a tool injection, a bot or a non-staff player is a <c>packet/dev-opcode</c> finding (the heuristics
-/// rate-limit it per session and opcode; with the heuristics off, which is the shipped default, the counter and the log line naming the account are all
+/// rate-limit it per session and opcode; with the heuristics switched off, the counter and the log line naming the account are all
 /// that is left); a staff session is written to the GM audit log with no action. Both the log line and the staff audit entry are limited to one per interval
 /// per session (and, for staff, per opcode), so a flooding client cannot flood the log or push real GM command lines out of the audit tail, and cannot
 /// hide another client's attribution.

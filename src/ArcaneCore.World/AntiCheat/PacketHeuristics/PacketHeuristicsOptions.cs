@@ -3,7 +3,7 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// <summary>
 /// The <c>World:PacketHeuristics</c> section (docs/areas/packet-heuristics.md): report-only analysis of the packets sessions send to
 /// the server. Every finding goes to the anomaly ledger (subsystem <c>packet</c>); a packet is never dropped, changed, delayed or
-/// answered differently because of a finding, and no finding feeds the AntiCheat score. Off by default; <c>.packetcheck on</c> and
+/// answered differently because of a finding, and no finding feeds the AntiCheat score. On by default (set <c>Enabled</c> to false to switch it off); <c>.packetcheck on</c> and
 /// <c>.packetcheck off</c> switch it at runtime until the next restart.
 /// </summary>
 public sealed class PacketHeuristicsOptions
@@ -14,8 +14,8 @@ public sealed class PacketHeuristicsOptions
     /// <summary>Largest opcode value the per-opcode tables cover (the 1.12.1 opcode space ends at 827).</summary>
     internal const int OpcodeSpace = 1024;
 
-    /// <summary>Run the checks at all. Default false: with it off a packet costs one volatile read and no per-session state exists.</summary>
-    public bool Enabled { get; set; }
+    /// <summary>Run the checks at all. Default true: a server with no section runs them; false switches them off, and then a packet costs one volatile read and no per-session state exists.</summary>
+    public bool Enabled { get; set; } = true;
 
     /// <summary>The server's own managed playerbot sessions are not checked. Default true; with false their traffic is checked and counted as bot traffic.</summary>
     public bool ExemptBots { get; set; } = true;
