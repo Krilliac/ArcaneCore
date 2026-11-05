@@ -14,7 +14,9 @@ namespace ArcaneCore.Game.Rules.WorldEvent;
 /// entries are owned here; a catalog swap (<c>.reload rules</c>) rebinds every running event to the new catalog with a fresh state, so a
 /// rule that already fired may fire again and a delayed run in flight is dropped. A stopped event keeps its entry until its delayed
 /// actions ran, so a stop rule's delays complete; a stop does not cancel the delayed runs parked earlier (they continue whichever rule
-/// parked them), a stop from the event's own rule keeps the entry until that rule's later delayed actions ran, and a start of the same event again replaces the entry and drops whatever the previous run left pending. A change that
+/// parked them), a stop made while the entry's own rule or resumed run is executing keeps the entry (not running, until the tick's
+/// end) so that run's later delayed actions still park, and a start of the same event again replaces the entry and drops whatever
+/// the previous run left pending. A change that
 /// arrives past <see cref="MaxNesting"/> is still recorded in the entries and only fires no rules.
 /// </para>
 /// <para>
@@ -63,7 +65,7 @@ public sealed class WorldEventRuleRunner : IGameEventListener
         _logger = logger;
     }
 
-    /// <summary>The events with an entry (running, or stopped with delayed actions left).</summary>
+    /// <summary>The events with an entry (running, or stopped with delayed actions left; a stop made inside the entry's own rule leaves it until that tick's end).</summary>
     public int EntryCount => _entries.Count;
 
     /// <summary>How many rule firings were skipped by the nesting limit.</summary>
@@ -152,6 +154,9 @@ public sealed class WorldEventRuleRunner : IGameEventListener
                 continue;
             }
 
+            // A resumed run clears its pending slot before it executes, so a stop it makes would find no pending run and remove the entry
+            // while the run's later delayed actions still park: hold Firing across the evaluator update, the tail below removes the entry.
+            entry.Firing++;
             try
             {
                 _evaluator.Update(entry.State, entry.Subject, now);
@@ -159,6 +164,10 @@ public sealed class WorldEventRuleRunner : IGameEventListener
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 Faulted("update", entry, ex);
+            }
+            finally
+            {
+                entry.Firing--;
             }
 
             if (!entry.Running && entry.State.PendingCount == 0 && IsCurrent(entry))

@@ -253,11 +253,41 @@ public sealed class WorldEventHostTests
     }
 
     [Fact]
-    public void AnEntryRemovedByItsOwnUpdateRule_IsNotUpdatedOrRemovedAgain()
+    public void AnEntryRemovedByAnotherEntrysUpdateRule_IsNotUpdatedOrRemovedAgain()
     {
-        // Event 7's Update rule stops event 7: the stop has no delayed action left, so the entry is removed inside the rule. The tick must not
-        // touch it afterwards, and later ticks find nothing. A removed entry has Running false and no due run, so this guards double update and
-        // double removal only; it cannot tell the two IsCurrent checks apart.
+        // Event 7's Update rule stops event 9, which has no pending run: entry 9 is removed in the middle of the tick, before the loop reaches
+        // it in _scratch (the entries are visited in creation order). The tick must not touch it afterwards, and later ticks find only event 7.
+        // A removed entry has Running false and no due run, so this guards double update and double removal only; it cannot tell the removed
+        // branch of IsCurrent apart from the unguarded path.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 9)],
+            [Act(1, WorldEventRuleIds.StopEvent, 9), Act(2, SayAction, 1)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        h.Runner.OnEventChanged(9, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 9", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 9", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryStoppedByItsOwnUpdateRule_IsRemovedAtTheTickTail_NotInsideTheRule()
+    {
+        // Event 7's Update rule stops event 7: the entry is kept while the rule runs (Firing) and the tick tail removes it, so the tick does not
+        // touch it afterwards and later ticks find nothing.
         var h = new Harness(Content(
             [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 7)],
             [Act(1, WorldEventRuleIds.StopEvent, 7), Act(2, SayAction, 1)]));
@@ -305,6 +335,38 @@ public sealed class WorldEventHostTests
         h.Runner.Update();
 
         Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AResumedRunThatStopsItsEvent_StillParksAndRunsItsLaterDelayedAction()
+    {
+        // Actions: say hello after 100 ms, stop event 7, say bye 100 ms later. The resumed run clears its pending slot before it runs, so when
+        // it stops its own event nothing is pending; the entry must still survive until the last action parked and ran.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7)],
+            [Act(1, SayAction, 1, delayMs: 100), Act(1, WorldEventRuleIds.StopEvent, 7, seq: 1), Act(1, SayAction, 2, seq: 2, delayMs: 100)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 0;
+        h.Runner.Update(); // the Update rule fires and parks its first action
+        Assert.Empty(h.Control.Log);
+
+        h.Now = 100;
+        h.Runner.Update(); // resumed: hello, stop, then parks bye
+
+        Assert.Equal(["say hello", "stop 7"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "stop 7", "say bye"], h.Control.Log);
         Assert.Equal(0, h.Runner.EntryCount);
     }
 
