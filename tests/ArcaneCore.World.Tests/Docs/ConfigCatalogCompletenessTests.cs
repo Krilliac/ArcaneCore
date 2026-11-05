@@ -567,7 +567,9 @@ public sealed class ConfigCatalogCompletenessTests
     /// <summary>
     /// A daemon that binds an options type must find its keys in its own .conf.dist: the type has to name that daemon in [ConfigDaemons], and so does
     /// every catalog key below its section (the catalog decides which dist files carry a key and which daemon warns about a foreign key). The scan
-    /// covers every Configure, PostConfigure and AddOptions call under src/ArcaneCore.Gateway and src/ArcaneCore.Realm.
+    /// covers every Configure, PostConfigure and AddOptions call (qualified type names included) written in the text under src/ArcaneCore.Gateway and
+    /// src/ArcaneCore.Realm. Limit: binds reached through shared helpers in other projects (AddArcaneCoreLogging, AddAuthDatabase, UseArcaneDiagnostics,
+    /// AddDatabaseResilience) and keys read straight from IConfiguration (AddCharacterDatabase) are not seen; those attributes are checked by hand.
     /// </summary>
     [Theory]
     [InlineData("src/ArcaneCore.Gateway/", ConfigDaemon.Gateway)]
@@ -577,13 +579,19 @@ public sealed class ConfigCatalogCompletenessTests
         var bound = new SortedSet<string>(StringComparer.Ordinal);
         foreach ((string path, string text) in ConfigProduction.SourceFiles().Where(f => f.Path.StartsWith(sourceRoot, StringComparison.Ordinal)))
         {
-            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text, @"(?:Configure|AddOptions)<(\w+)>\("))
+            // [\w.]+ so a fully qualified bind (services.Configure<ArcaneCore.World.Warden.WardenOptions>) is seen; the last segment is the type name.
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text, @"(?:Configure|PostConfigure|AddOptions)<([\w.]+)>\("))
             {
-                bound.Add(match.Groups[1].Value);
+                bound.Add(match.Groups[1].Value.Split('.')[^1]);
             }
         }
 
         Assert.True(bound.Count >= 2, "expected " + sourceRoot + " to bind several options types; found " + bound.Count);
+        if (daemon == ConfigDaemon.Gateway)
+        {
+            Assert.Contains("WardenOptions", bound);
+        }
+
         var wrong = new List<string>();
         IReadOnlyList<ConfigSection> sections = ConfigExceptionTable.Sections();
         foreach (string typeName in bound)

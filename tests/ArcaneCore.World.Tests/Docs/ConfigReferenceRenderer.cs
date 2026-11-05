@@ -125,7 +125,7 @@ internal static class ConfigReferenceRenderer
 
         sb.Append("- `Logging` (for example `Logging:LogLevel:<category>`) and `HostOptions` (`HostOptions:ShutdownTimeout`) belong to the .NET host, not to ArcaneCore; see the .NET documentation for their keys. "
             + "The checks accept every key below them and never report one as unknown; `Logging:ArcaneCore` is not part of this and is documented above.\n");
-        sb.Append("- `hostBuilder:reloadConfigOnChange` is a .NET host key that ArcaneCore reads when it attaches the `.conf` file: `true` (the default when unset or unparsable) makes a running daemon watch `world.conf`, `realm.conf` or `gateway.conf` and pick up an edit, ")
+        sb.Append("- `hostBuilder:reloadConfigOnChange` is a .NET host key that ArcaneCore reads when it attaches the `.conf` file: `true` (the default when unset; ArcaneCore's own read also takes an unparsable value as true) makes a running daemon watch `world.conf`, `realm.conf` or `gateway.conf` and pick up an edit, ")
             .Append("`false` reads the file once at start. It also governs the `appsettings*.json` files.\n");
         return sb.ToString();
     }
@@ -144,7 +144,7 @@ internal static class ConfigReferenceRenderer
             sb.Append("| Field | Type | Default | Meaning |\n|---|---|---|---|\n");
             foreach (ConfigElementField field in entry.ElementFields!)
             {
-                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning).Append(" |\n");
+                sb.Append("\|"| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning.Replace("|", "\\|",StringComparison.Ordinal)).Append(" |\n");
             }
 
             sb.Append('\n');
