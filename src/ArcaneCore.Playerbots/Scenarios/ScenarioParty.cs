@@ -123,7 +123,8 @@ public sealed class PartyScenario : IPlayerbotScenario
                 await InviteAsync().ConfigureAwait(false);
                 Vector3 home = await context.ReadAsync(() => Position(Master)).ConfigureAwait(false);
                 Creature target = await FindTargetAsync(targetEntry).ConfigureAwait(false);
-                Vector3 away = Away(home, new Vector3(target.X, target.Y, target.Z), 40f);
+                Vector3 targetAt = await context.ReadAsync(() => Position(target)).ConfigureAwait(false);
+                Vector3 away = Away(home, targetAt, 40f);
                 await context.StepAsync("the bot follows a 40-yard walk", async () =>
                 {
                     await WalkMasterAsync(away).ConfigureAwait(false);
@@ -209,22 +210,27 @@ public sealed class PartyScenario : IPlayerbotScenario
                 .FirstOrDefault() ?? throw new ScenarioAssertionException(entry == 0 ? "no hostile creature within 100 yards" : $"no creature {entry} within 100 yards");
         }));
 
-        private Task AttackAsync(Creature target) => context.StepAsync($"{master.Name} targets {target.Template.Name} and whispers 'attack'; the bot fights", async () =>
+        private async Task AttackAsync(Creature target)
+        {
+            // Creature.Template may swap to the event template and writes its cache: read the name once on the world thread.
+            string name = await context.ReadAsync(() => target.Template.Name).ConfigureAwait(false);
+            await context.StepAsync($"{master.Name} targets {name} and whispers 'attack'; the bot fights", async () =>
         {
             // Within group reward range of the kill (the loot roll below is among both), out of the creature's aggro range.
             (Vector3 at, Vector3 from) = await context.ReadAsync(() => (Position(target), Position(Master))).ConfigureAwait(false);
             if (Vector3.Distance(at, from) > 25f) await WalkMasterAsync(Away(at, from, -25f)).ConfigureAwait(false);
             await WaitBesideMasterAsync("stands beside", 6f).ConfigureAwait(false);
             await master.SendAsync(WorldOpcode.CmsgSetSelection, Guid(target.Guid)).ConfigureAwait(false);
-            await context.WaitUntilAsync($"{master.Name} has {target.Template.Name} selected", () => Master.Selection == target.Guid).ConfigureAwait(false);
+            await context.WaitUntilAsync($"{master.Name} has {name} selected", () => Master.Selection == target.Guid).ConfigureAwait(false);
             long mark = master.Mark();
             await WhisperAsync("attack").ConfigureAwait(false);
             await WaitForWhisperAsync(mark, text => text.StartsWith("Attacking", StringComparison.Ordinal)).ConfigureAwait(false);
-            await context.WaitUntilAsync($"{BotName} attacks {target.Template.Name}", () => ReferenceEquals(Bot.Combat.Victim, target) || !target.IsAlive).ConfigureAwait(false);
+            await context.WaitUntilAsync($"{BotName} attacks {name}", () => ReferenceEquals(Bot.Combat.Victim, target) || !target.IsAlive).ConfigureAwait(false);
             ScenarioContext.Expect(await context.ReadAsync(() => !target.IsAlive || Inspect().Goal == PlayerbotGoalKind.Assist).ConfigureAwait(false),
                 "the bot's goal is not Assist while it fights");
-            await context.WaitUntilAsync($"{target.Template.Name} dies", () => !target.IsAlive, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
-        });
+            await context.WaitUntilAsync($"{name} dies", () => !target.IsAlive, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        }
 
         /// <summary>The master opens the corpse: a group roll starts, the bot votes at once, and the master's vote ends it (no roll timer).</summary>
         private Task LootRollAsync(Creature corpse) => context.StepAsync("the group loot roll does not wait for the bot", async () =>

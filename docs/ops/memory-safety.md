@@ -30,6 +30,34 @@ count is silent, one beyond it fails the build, and a count above what the code 
 The diagnostic message prints the exact line. Fix new findings; do not add lines for new code. After fixing old ones, or when adding a rule,
 run `powershell -NoProfile -File scripts/safety-baseline.ps1`.
 
+### ARC0002 baseline assessment (reissued entry by entry)
+
+Every remaining ARC0002 baseline entry (19 entries, 27 occurrences) was checked against the code. None is a race. Two classes, plus two single reads of immutable state. This replaces the earlier summary. Three findings that were real races (`ScenarioParty` position read of a live creature, `Creature.Template` read off-thread four times) were fixed with `await context.ReadAsync(...)` and their baseline lines removed.
+
+Class A: the `Player` is still loading. `ICharacterHooks.OnPlayerLoadingAsync`/`OnPlayerLoadedAsync` (and `ISpellbookLoadObserver.OnSpellbookLoadedAsync`, called from `SpellFeature.OnPlayerLoadingAsync`) run only from `CharacterHandlers.HandlePlayerLoginAsync` (:579, :586) and `TransferShadowHooks.RunAsync` (`WorkerTransferTarget.cs`:67, :72), before the player is added to a map or visible to the world thread; the player is built a few lines earlier and nothing else holds it. A pool continuation touching it cannot race. The same holds for the two object initializers on a freshly constructed `Player`.
+
+| Entry | Lines | Reason |
+|---|---|---|
+| `CharacterHandlers.HandlePlayerLoginAsync` `Player.Home`, `Player.CharacterOwnership` | `CharacterHandlers.cs`:550, :551 | Object initializer of the `new Player(...)` at :548, assigned after the awaits of the login; the player is unpublished. |
+| `CharacterHooksShadowLoader.LoadForSessionAsync` `Player.Home`, `Player.CharacterOwnership` | `WorkerTransferTarget.cs`:160, :161 | Same: initializer of the shadow `Player` built at :158, returned to the caller only after the hooks ran. |
+| `BattlegroundFeature.OnPlayerLoadingAsync` `WorldObject.MapId`, `Unit.Relocate` | `BattlegroundFeature.cs`:1205, :1206 | Loading hook; the player has no map yet, so `Relocate` moves an unpublished object (no `Map.OnObjectMoved`). |
+| `CharacterLifeFeature.OnPlayerLoadedAsync` `Player.LoadedLife` | `CharacterLifeFeature.cs`:68 | Loaded hook, unpublished player. `LoadedLife` is consumed later by `OnPlayerLoggedIn` (:76-:87), after the player has entered the world. |
+| `QuestNpcFeature.OnPlayerLoadingAsync` `Player.CharacterOwnership` | `QuestNpcFeature.cs`:215 | Loading hook, unpublished player (the property is set once at construction, see above). |
+| `ItemsFeature.OnPlayerLoadingAsync` `Player.Inventory` (6) | `ItemsFeature.cs`:248, :249, :250, :251, :265, :270 | Loading hook; `Inventory` is the player's own container, filled before the player is published. |
+| `HonorFeature.OnPlayerLoadingAsync` `Player.Inventory` | `HonorFeature.cs`:185 | `HonorItemRequirements.Install(player.Inventory, service)` in the loading hook (not `HonorService.Track`, which the analyzer does not flag). |
+| `ReputationFeature.OnPlayerLoadingAsync` `Player.Inventory` (2) | `ReputationFeature.cs`:135 | Read and write of `Inventory.Requirements` on one line, loading hook. |
+| `SkillsFeature.OnSpellbookLoadedAsync` `Player.AttachSkills`, `Player.Inventory` (2), `Unit.Race`, `Unit.Class`, `Player.Name` | `SkillsFeature.cs`:160 (Race, Class), :166 (AttachSkills), :167 (Inventory, read and write), :183 (Name) | Spellbook-loaded observer inside the loading hook, unpublished player. |
+| `StatsFeature.OnPlayerLoadingAsync` `Player.Skills` | `StatsFeature.cs`:180 | Loading hook. The `SkillChanged` subscription it adds only calls `system.UpdateAll(player)` later from the skill owner's thread; the read of `Skills` itself is on the unpublished player. |
+
+Class B: the `Player` is in the world and the member is get-only, so the value cannot change.
+
+| Entry | Lines | Reason |
+|---|---|---|
+| `ManagedPlayerbotFeature.StartCoreAsync` `Player.Name` (2) | `ManagedPlayerbotFeature.cs`:2011, :2103 | `session.Player?.Name` on a player in the world. `Player.Name` is `{ get; }` (`Player.cs`:121), assigned in the constructor, so reading it from the pool is safe. The `session.Player` reference read is a single reference load that is either the player or null (the `??` fallback covers null). |
+| `ShipCrossingScenario.RunAsync` `ShipTransport.Period` | `ScenarioTransports.cs`:134 | `Period` is `{ get; }`, set once in the constructor from `template.PathTime` (`ShipTransport.cs`:51, :79). |
+
+Not accepted as safe: `Creature.Template` (can swap to `EventTemplate` and writes `_template` and `_templateVersion`, `Creature.cs`:96-112) and `WorldObject.X/Y/Z` of a live in-map object. Both were read in `PartyScenario.Run` and are now read inside `ReadAsync`.
+
 ### Suppressing a finding
 
 When a report is a false positive or the object is genuinely not world-owned yet (for example a player being loaded, not in a map), suppress that one statement with a reason; do not add a baseline line for new code:

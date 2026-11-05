@@ -3,10 +3,6 @@
 # The file may only shrink: a count above what the code has is itself an error (ARC9001). Do not add lines for new code; fix the code.
 # Regenerate with scripts/safety-baseline.ps1 only after fixing findings or when a new rule lands.
 ARC0002|src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs|ManagedPlayerbotFeature.StartCoreAsync|Player.Name|2
-ARC0002|src/ArcaneCore.Playerbots/Scenarios/ScenarioParty.cs|PartyScenario.Run.AttackAsync|Creature.Template|3
-ARC0002|src/ArcaneCore.Playerbots/Scenarios/ScenarioParty.cs|PartyScenario.Run.ExecuteAsync|WorldObject.X|1
-ARC0002|src/ArcaneCore.Playerbots/Scenarios/ScenarioParty.cs|PartyScenario.Run.ExecuteAsync|WorldObject.Y|1
-ARC0002|src/ArcaneCore.Playerbots/Scenarios/ScenarioParty.cs|PartyScenario.Run.ExecuteAsync|WorldObject.Z|1
 ARC0002|src/ArcaneCore.Playerbots/Scenarios/ScenarioTransports.cs|ShipCrossingScenario.RunAsync|ShipTransport.Period|1
 ARC0002|src/ArcaneCore.World/Battlegrounds/BattlegroundFeature.cs|BattlegroundFeature.OnPlayerLoadingAsync|Unit.Relocate|1
 ARC0002|src/ArcaneCore.World/Battlegrounds/BattlegroundFeature.cs|BattlegroundFeature.OnPlayerLoadingAsync|WorldObject.MapId|1
