@@ -47,7 +47,7 @@ public sealed class ObserverFeedTests
     [Fact]
     public void Hello_AnswersProtocolOneWithThePidAndTheMap()
     {
-        JsonObject hello = ObserverFrames.Hello(4242, View());
+        JsonObject hello = JsonNode.Parse(ObserverFrames.Hello(4242, View()).ToJsonString())!.AsObject();
 
         Assert.Equal("hello", (string?)hello["op"]);
         Assert.Equal(1, (int?)hello["protocol"]);
@@ -61,7 +61,7 @@ public sealed class ObserverFeedTests
     [Fact]
     public void AFrame_CarriesSixteenDigitGuids_KindsPositionsAndEntries_AndHonoursTheKindFilter()
     {
-        JsonObject frame = ObserverFrames.Frame(3, 1500, View(), null);
+        JsonObject frame = JsonNode.Parse(ObserverFrames.Frame(3, 1500, View(), null).ToJsonString())!.AsObject();
 
         Assert.Equal("frame", (string?)frame["op"]);
         Assert.Equal(3, (long?)frame["seq"]);

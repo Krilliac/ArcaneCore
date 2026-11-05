@@ -282,7 +282,7 @@ public sealed class PublicFeedPoolTests
         rig.Feed.CapsAnswer = new JsonObject
         {
             ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = false, ["liveServer"] = false, ["role"] = "web",
-            ["templates"] = new JsonArray(), ["summonTemplates"] = new JsonArray(17, 18),
+            ["templates"] = new JsonArray(), ["summonTemplates"] = JsonNode.Parse("[17,18]"),
         };
         await rig.Pool.StartAsync(CancellationToken.None);
         using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
