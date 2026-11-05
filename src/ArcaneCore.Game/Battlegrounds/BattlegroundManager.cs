@@ -271,7 +271,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
     internal IBattlegroundManagerHost Host { get; }
 
-    /// <summary>The manager clock in milliseconds: the sum of the <see cref="Update"/> diffs. Advanced only by <see cref="Update"/>, which the world thread runs from the world-tick phase, before the maps phase and the queued commands of the same thread: nothing that reads it runs at the same time, and a method that needs it twice reads it once into a local.</summary>
+    /// <summary>The manager clock in milliseconds: the sum of the <see cref="Update"/> diffs. Advanced only by <see cref="Update"/>, which the world thread runs from the world-tick phase, after the tick's commands and the cluster pump and before the maps phase. Map workers (opcode handlers in the Packets stage, gated or not, when map updates run in parallel) run only inside the maps phase, which the world thread starts after the world tick and waits on, so no reader overlaps the writer; a method that needs it twice reads it once into a local.</summary>
     public uint NowMs { get; private set; }
 
     // ------------------------------------------------------------------ templates and types
