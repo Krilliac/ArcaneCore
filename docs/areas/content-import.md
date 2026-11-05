@@ -65,7 +65,7 @@ than write them with their vmangos ids. The vmangos dump is GPL data and is neve
 only into an effect slot the world's `spell_template` leaves empty. The vmangos dump (db-4641790) has 371 rows: 291 rewrite effects
 classic-db defines, 27 name spells classic-db lacks, and 53 fill empty slots, most of them vmangos' way of implementing spells ArcaneCore
 implements in code (Bloodthirst's heal trigger, Blade Flurry). `refresh` therefore writes only the spells in
-`SpellEffectModDumpImporter.ReviewedSpells` (16468 Mother's Milk: a 12 s periodic trigger of 15474 Web Explosion) and names every
+`SpellEffectModDumpImporter.ReviewedSpells` (16468 Mother's Milk: a 12 s periodic trigger of 15474 Web Explosion; 8892 and 13141 rocket boots: a 1 s periodic trigger of the explosion, rolled 1 in 100 by `PeriodicTriggerAuraModule`) and names every
 other spell in a warning line. A spell joins the list once its row is checked against both cores and ArcaneCore's own scripts.
 
 Limits:
