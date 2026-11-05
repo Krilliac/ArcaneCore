@@ -69,10 +69,8 @@ internal static partial class PlayerbotRoutePlanWatch
 
     private static readonly uint[] DutyBackoffSteps = [DutySuppressMs, 30_000, 60_000];
 
-    /// <summary>The hold (ms) of a duty pair suppressed again: its 1st, 2nd and further suppressions (the last step repeats), so a goal that stays refused is asked about less often without being shelved; a successful plan for the pair starts it over.</summary>
-    internal static ReadOnlySpan<uint> DutyBackoffMs => DutyBackoffSteps;
-
-    /// <summary>The hold (ms) of a pair's <paramref name="strikes"/>-th suppression under <see cref="HoldMode.DutyBackoff"/> (<see cref="DutyBackoffMs"/>).</summary>
+    // The hold (ms) of a duty pair suppressed again: its 1st, 2nd and further suppressions (the last step repeats), so a goal that stays refused is asked about less often without being shelved; a successful plan for the pair starts it over.
+    /// <summary>The hold (ms) of a pair's <paramref name="strikes"/>-th suppression under <see cref="HoldMode.DutyBackoff"/>.</summary>
     internal static uint DutySpanMs(int strikes) => DutyBackoffSteps[Math.Clamp(strikes - 1, 0, DutyBackoffSteps.Length - 1)];
 
     /// <summary>How long a suppressed pair is held; exactly one applies per <see cref="Policy"/>.</summary>
@@ -84,7 +82,7 @@ internal static partial class PlayerbotRoutePlanWatch
         /// <summary>Doubled per earlier strike of the pair (<see cref="SuppressionSpanMs"/>).</summary>
         Doubling,
 
-        /// <summary>Stepped through <see cref="DutyBackoffMs"/>, and a successful plan for the pair forgets its strikes.</summary>
+        /// <summary>Stepped through <see cref="DutySpanMs"/>, and a successful plan for the pair forgets its strikes.</summary>
         DutyBackoff,
     }
 

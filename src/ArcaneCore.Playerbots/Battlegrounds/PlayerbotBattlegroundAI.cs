@@ -457,10 +457,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         };
         // A bot that swings at its enemy in reach fights (the swing puts it in combat a moment later); one that only stands beside it does not.
         bool engaged = player.Combat.IsInCombat || (fighting is not null && (_pvp.Attacking || _pvp.Target is not null))
-            || _route is not null || PlayerbotMotion.IsActive(player) || Casting(player)
-            // Waiting for navigation tiles still being read (PlanOutcome.Pending, bounded by TileWait.MaxMs) is a walk under way: a loaded host
-            // reads them slower than the game clock runs, and the bot stood still for the whole wait.
-            || _tileWait.Active;
+            || _route is not null || PlayerbotMotion.IsActive(player) || Casting(player);
         float enemyYards = fighting is not null ? Distance(player, fighting)
             : named is not null && order.Duty is PlayerbotWsgDuty.HuntCarrier or PlayerbotWsgDuty.DefendFlagRoom or PlayerbotWsgDuty.Midfield
                 ? Distance(player, named) : float.MaxValue;
