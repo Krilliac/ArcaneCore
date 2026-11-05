@@ -1,8 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Text;
 
 namespace ArcaneCore.Kernel.Diagnostics;
@@ -30,6 +28,17 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
     private const uint MbSetForeground = 0x00010000;
     private const uint MbTopMost = 0x00040000;
 
+    /// <summary>The <c>MessageBoxW</c> type the fallback box is opened with: OK, error icon, foreground, top-most.</summary>
+    internal const uint MessageBoxType = MbOk | MbIconError | MbSetForeground | MbTopMost;
+
+    private static Func<bool> s_isWindows = static () => OperatingSystem.IsWindows();
+
+    /// <summary>Whether <see cref="Show"/> may open a window. A seam for tests (pass null to restore); the real answer is <see cref="OperatingSystem.IsWindows"/>.</summary>
+    internal static void UseWindowsProbe(Func<bool>? probe)
+        => Volatile.Write(ref s_isWindows, probe ?? (static () => OperatingSystem.IsWindows()));
+
+    private static bool IsWindows() => Volatile.Read(ref s_isWindows)();
+
     private MessageBoxCrashDialogPresenter()
     {
     }
@@ -40,7 +49,7 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
     {
         ArgumentNullException.ThrowIfNull(title);
         ArgumentNullException.ThrowIfNull(text);
-        if (!OperatingSystem.IsWindows())
+        if (!IsWindows())
         {
             throw new PlatformNotSupportedException("the crash dialog is a Win32 message box and exists only on Windows");
         }
@@ -53,9 +62,9 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
         ReportFallback(failure);
 
         // MessageBoxW returns 0 when it could not create the box (no desktop, a non-interactive window station).
-        if (MessageBoxW(IntPtr.Zero, text, title, MbOk | MbIconError | MbSetForeground | MbTopMost) == 0)
+        if (CrashDialogTaskDialog.Native.MessageBox(text, title, MessageBoxType, out int error) == 0)
         {
-            throw new Win32Exception(Marshal.GetLastPInvokeError());
+            throw new Win32Exception(error);
         }
     }
 
@@ -71,12 +80,6 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
             // Standard error is gone; the plain message box still opens.
         }
     }
-
-#pragma warning disable SYSLIB1054 // LibraryImport needs AllowUnsafeBlocks; this call runs only on Windows behind OperatingSystem.IsWindows
-    [SupportedOSPlatform("windows")]
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
-    private static extern int MessageBoxW(IntPtr hWnd, string lpText, string lpCaption, uint uType);
-#pragma warning restore SYSLIB1054
 }
 
 /// <summary>What decides whether this process may open a dialog: the platform and whether a person is sitting at it.</summary>

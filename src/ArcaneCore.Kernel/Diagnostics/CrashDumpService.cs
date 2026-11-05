@@ -136,6 +136,7 @@ public sealed class CrashDumpService
     {
         EnsureDirectory(directory, log);
         string path = UniquePath(directory, FileNameFor(daemon, Environment.ProcessId, utcNow));
+        // Math.Max(1, ..) is a defence for options built in code: the start-up check (CrashDumpConfigChecks) refuses a TimeoutSeconds below 1, so a configured value is never raised to 1 here.
         TimeSpan timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds));
         CrashDumpMode requested = options.Mode;
         CrashDumpMode attempt = requested;
@@ -200,6 +201,7 @@ public sealed class CrashDumpService
     }
 
     /// <summary>The most seconds the crash path waits for a dump in total, across every attempt of the fallback chain: the answer timeout, then as long as the file grows, capped at three times the timeout. The heartbeat grace of the supervisors is sized from this.</summary>
+    // The Math.Max(1, ..) matches WriteChain: a configured value below 1 is refused at start-up and never reaches here.
     public static int MaxWaitSeconds(CrashDumpOptions options) => checked(3 * Math.Max(1, options.TimeoutSeconds));
 
     private readonly record struct AttemptResult(string? Error, bool StopChain);

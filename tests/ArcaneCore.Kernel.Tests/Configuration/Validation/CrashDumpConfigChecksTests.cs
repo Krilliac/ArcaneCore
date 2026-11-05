@@ -41,6 +41,7 @@ public sealed class CrashDumpConfigChecksTests
     }
 
     [Fact]
-    public void TheLargestAcceptedTimeout_TimesThree_DoesNotOverflow()
-        => Assert.True(checked(3 * CrashDumpConfigChecks.MaxTimeoutSeconds) > 0);
+    public void TheLargestAcceptedTimeout_GivesTheChainsMaximum_WithoutOverflow()
+        => Assert.Equal(3 * CrashDumpConfigChecks.MaxTimeoutSeconds,
+            ArcaneCore.Kernel.Diagnostics.CrashDumpService.MaxWaitSeconds(new ArcaneCore.Kernel.Configuration.CrashDumpOptions { TimeoutSeconds = CrashDumpConfigChecks.MaxTimeoutSeconds }));
 }
