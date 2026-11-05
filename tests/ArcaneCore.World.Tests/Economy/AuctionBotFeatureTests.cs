@@ -52,7 +52,9 @@ public sealed class AuctionBotFeatureTests
     [InlineData(true, 20u)]
     public async Task The_dynamic_level_cap_counts_staff_characters_unless_ignore_gm_accounts_is_on(bool ignoreGm, uint expected)
     {
-        await using var fixture = await Fixture.CreateAsync(extra: new Dictionary<string, string?>
+        // A directory makes the fixture register ICharacterStore, so the stop-time saves of the two online players (their rows do not exist in the
+        // test database: EfCharacterStore.StageStateAsync skips a deleted character) complete and the queue drains instead of retaining them.
+        await using var fixture = await Fixture.CreateAsync(directory: new ArcaneCore.World.Characters.CharacterDirectory(), extra: new Dictionary<string, string?>
         {
             ["AuctionHouseBot:DynamicMaxRequiredLevel"] = "true",
             ["AuctionHouseBot:DynamicIgnoreGmAccounts"] = ignoreGm ? "true" : "false",

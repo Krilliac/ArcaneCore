@@ -44,8 +44,8 @@ public sealed class ChickenCluckTests
     private const string SecondCluck = "Cluck cluck, second line";
 
     /// <summary>
-    /// The chicken's creature_ai_texts lines, so what it says can be asserted. Its template carries the quest-giver flag (2) from the start:
-    /// the AI must clear it on its first update, so a chicken that never reset would read as offering before any emote.
+    /// The chicken's creature_ai_texts lines, so what it says can be asserted. Its template carries the quest-giver flag (2): spawning runs
+    /// AddToWorld, which calls the AI's OnRespawn (a Reset that clears the flag) synchronously, so a chicken that never reset would read as offering before any emote.
     /// </summary>
     private static CreatureAiContent ClucksAiContent() => new([], [new CreatureAiText(ChickenCluckAI.SayClucks1, FirstCluck, 0, 0, 0), new CreatureAiText(ChickenCluckAI.SayClucks2, SecondCluck, 0, 0, 0)]);
 
@@ -55,7 +55,6 @@ public sealed class ChickenCluckTests
         (WorldRuntime world, Map _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = quests });
         (Player player, FakeSession session) = AddPlayer(world, 1, 2, 0);
         Creature chicken = Assert.Single(system.Creatures);
-        Assert.Equal(QuestGiverFlag, chicken.NpcFlags); // the template flag is on the creature until the AI's first update
         world.RunTick(100);
         return (world, chicken, player, Assert.IsType<ChickenCluckAI>(chicken.AI), session);
     }
