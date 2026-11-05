@@ -649,6 +649,35 @@ public sealed class PlayerbotChatSafetyTests
     }
 
     [Fact]
+    public async Task ATermsFileThatCannotBeRead_IsRetriedOncePerCheckInterval_NotOnEveryLine()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "arcane-safety-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, "{}");
+        try
+        {
+            await using var rig = new Rig();
+            int reads = 0;
+            rig.Chat.Safety.LoadTerms = (file, replace, timeout) =>
+            {
+                Interlocked.Increment(ref reads);
+                throw new IOException("the file is locked");
+            };
+
+            rig.Safety.TermsFile = path;
+            for (int line = 0; line < 5; line++) await rig.Chat.Safety.SettleFilter(); // five lines of chat, no time passes
+            Assert.Equal(1, Volatile.Read(ref reads));
+
+            rig.Time.Advance(PlayerbotChatSafety.TermsFileCheck);
+            await rig.Chat.Safety.SettleFilter();
+            Assert.Equal(2, Volatile.Read(ref reads)); // the next interval retries once
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task ATermsFileRead_ThatEndsAfterANewerOptionsChange_IsDropped_NotPublishedOverIt()
     {
         string path = Path.Combine(Path.GetTempPath(), "arcane-safety-" + Guid.NewGuid().ToString("N") + ".json");
