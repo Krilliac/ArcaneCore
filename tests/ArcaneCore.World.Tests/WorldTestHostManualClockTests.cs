@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
@@ -48,7 +49,7 @@ public sealed class WorldTestHostManualClockTests
     public async Task TwoRunsWithTheSameSeedAndSteps_ProduceIdenticalOutboundBytes()
     {
         // A scripted login, chat and played-time interaction over fixed steps. The damage cast and the swing are in the next two tests, with seeded dice;
-        // loot is in none of them: GameObjectLootFeature draws from a private new Random() with no seam to seed.
+        // loot determinism is ChestGoldAndConditionTests.ChestGold_IsReproducibleFromTheLootServiceSeed (Game.Tests), through the seeded Random of LootService.
         List<(WorldOpcode Opcode, byte[] Payload)> first = await RunScriptedAsync();
         List<(WorldOpcode Opcode, byte[] Payload)> second = await RunScriptedAsync();
 
@@ -83,7 +84,7 @@ public sealed class WorldTestHostManualClockTests
         Assert.True(first.AsSpan().SequenceEqual(second), "SMSG_ATTACKERSTATEUPDATE differs between two identical scripted swings");
     }
 
-    private sealed class HostileHooks : ArcaneCore.Game.Combat.CombatHooks
+    private sealed class HostileHooks : CombatHooks
     {
         public override bool IsFriendly(Unit a, Unit b) => false;
     }
@@ -124,6 +125,7 @@ public sealed class WorldTestHostManualClockTests
         {
             SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
             feature.System.Random = new Random(7);
+            feature.System.CombatRules = SpellCombatRules.Neutral; // deterministic hit and crit: the amount is the only seeded draw the test depends on
             feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
             {
                 Id = 994011, Name = "Synthetic Random Damage", School = SpellSchool.Fire, RangeIndex = 4, Range = new SpellRange(0, 20),
