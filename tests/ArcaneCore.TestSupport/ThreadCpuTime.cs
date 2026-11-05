@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.TestSupport;
 
@@ -10,6 +11,7 @@ namespace ArcaneCore.TestSupport;
 /// <c>/proc/thread-self/schedstat</c> (ns); Windows calls <c>GetThreadTimes</c> (kernel plus user, 100 ns units, advanced at the scheduler
 /// tick, so measure windows of a second or so). Null where neither is available: the caller then falls back to wall time and says so.
 /// </summary>
+[AuditedUnsafe("two kernel32 P/Invokes (GetCurrentThread returns the thread pseudo-handle, GetThreadTimes writes four out longs); called only on Windows behind OperatingSystem.IsWindows, the result is checked and no handle is owned or freed")]
 public static class ThreadCpuTime
 {
     /// <summary>The calling thread's CPU time so far, or null when the platform gives none.</summary>

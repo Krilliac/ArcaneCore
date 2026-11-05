@@ -3,6 +3,7 @@ using System.Numerics.Tensors;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.World.Playerbots.Chat.Inference;
 
@@ -13,6 +14,7 @@ namespace ArcaneCore.World.Playerbots.Chat.Inference;
 /// and Q5_0 block and of a Q4_K/Q6_K sub-block run) where the hardware has it; the scalar decoders are the reference the vector
 /// ones are tested against, and run where it does not.
 /// </summary>
+[AuditedUnsafe("MemoryMarshal.Cast views a row's bytes as float/Half/sbyte (all blittable, no alignment requirement on x86-64 and ARM64), and MemoryMarshal.GetReference with Unsafe.As feeds Vector.LoadUnsafe/StoreUnsafe; every decoder first runs CheckLengths, which throws unless the source holds the whole row, and the block offsets then stay inside it; the scalar decoders are the reference the vector ones are tested against")]
 internal static class GgmlQuant
 {
     public const int QK = 32;     // weights per Q4_0 / Q5_0 / Q8_0 block

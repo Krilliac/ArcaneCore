@@ -73,8 +73,8 @@ public sealed class PlayerbotQaInteractionCapsTests : IDisposable
         Assert.Equal(4, transport.Created.Count(c => c.Title.Contains("object unsupported", StringComparison.Ordinal)));
         Assert.Equal(3, transport.Created.Count(c => c.Title.Contains("opcode unhandled", StringComparison.Ordinal)));
 
-        // A new day: the cap frees and one more of each kind opens. The gaps were met by this build, so they may open however long ago
-        // (GitHub:CreateWithinHours bounds only findings the running build has not met).
+        // A new day: the cap frees and one more of each kind opens. The gaps were met by this build since this publisher started (CountOnBuild > 0 and LastSeenUtc >= start-up, PlayerbotQaPublisher.MayCreate), so they may open however long ago
+        // (GitHub:CreateWithinHours bounds the others: findings from another build, or last seen before this start-up, such as ones replayed from the store).
         time.Advance(TimeSpan.FromHours(24));
         await publisher.RunAsync(findings.Snapshot(), CancellationToken.None);
         Assert.Equal(9, transport.Created.Count); // one more of each

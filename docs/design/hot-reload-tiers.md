@@ -337,7 +337,7 @@ operation queued on the lock just as the quiesce released it is refused the same
 Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests` reads the World assembly's IL
 (`System.Reflection.Metadata`: signatures, attributes, constraints, locals, catch types, every IL token) and fails if a
 core type (outermost type outside `ArcaneCore.World.Playerbots`) references a pack type and is not on the allowlist,
-or if an allowlist entry no longer references the pack (the list only shrinks). A positive control
+or if an allowlist entry no longer references the pack (a stale entry fails; a new use fails until a reasoned entry is added). A positive control
 (`ScannerFindsKnownReferences`) proves the scanner sees references at all. Before this lane it listed 17 core types.
 **Allowlist left (4)** at the end of 2a; **0** after 2b (section 4.6):
 
@@ -431,7 +431,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    lines changed there, because those files belong to another lane.
 5. **The 2a seam types are now public**: `PlayerbotExploreAtlas`, `PlayerbotItemScore`, `PlayerbotStatWeights`,
    `PlayerbotWeaponStyle` and `PlayerbotTalentBuild(s)`. They are core API that the pack calls.
-6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack still uses 44 internal core members:
+6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack uses 49 internal core members (it was 44 when 2b landed; later features added five, each a reasoned list entry such as `IManagedPacketTap` and `BattlegroundFeature.HoldsQueueState`):
    - managed-session `WorldSession` members
    - battleground internals
    - GM boost and death helpers
@@ -442,7 +442,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    `InternalsVisibleTo` across a version skew is not safe for a collectible pack. The list is pinned by
    `PlayerbotCoreBoundaryTests.PackUsesOnlyTheAllowlistedCoreInternals`. That test resolves every type and member token
    in the pack and fails on any non-public core or contracts member that is not on the list. It also fails on a list
-   entry that is no longer used, so the list can only shrink.
+   entry that is no longer used. A new use is refused until someone adds a reasoned entry, so the list does not grow unnoticed, and 2c is meant to shrink it.
 7. **The executable cycle.** World is both the core library and the daemon executable: deploy, Docker, the dev runner
    and the cluster supervisor all run `ArcaneCore.World.dll`. So the host cannot reference its own pack. Instead:
    - The pack's build target `CopyPackBesideWorldHost` copies `ArcaneCore.Playerbots.dll` and `.pdb` next to World's
@@ -471,7 +471,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
 What remains for 2c:
 
 - Load the pack collectibly through `ModuleHost`, and remove it from the startup set.
-- Turn the 44 internals into public seams or contracts.
+- Turn the 49 internals into public seams or contracts.
 - Move the handover values that are still World or pack types (`PlayerbotSetAside`, `PlayerbotHome`, the private
   `Quarantine`) into contracts.
 - Check the contracts version when the pack loads.

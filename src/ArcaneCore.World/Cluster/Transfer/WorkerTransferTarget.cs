@@ -155,11 +155,13 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
         }
 
         IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(characterId, cancellationToken).ConfigureAwait(false);
+#pragma warning disable ARC0002 // the shadow player is built here and returned only after the load hooks ran, so no world thread owns Home or CharacterOwnership yet
         var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
         {
             Home = home,
             CharacterOwnership = session.World.CharacterOwnership,
         };
+#pragma warning restore ARC0002
 
         await TransferShadowHooks.RunAsync(session.Services.GetServices<ICharacterHooks>(), session, character, player).ConfigureAwait(false);
         return player;
@@ -648,7 +650,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         }
         else if (load.IsCompletedSuccessfully)
         {
+#pragma warning disable ARC0006 // IsCompletedSuccessfully was checked in the same condition, so Result does not block
             ReleaseShadow(load.Result);
+#pragma warning restore ARC0006
         }
     }
 

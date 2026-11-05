@@ -47,9 +47,11 @@ public sealed class PlayerDumpCommandTests : IDisposable
 
     /// <summary>
     /// Sends <paramref name="command"/> and reads its reply with the client's default 10 s bound. The step time is written to the test
-    /// output; when the reply misses the bound, the failure says how long a thread-pool item and a world-thread command waited right
-    /// then and when the reply came after all, so a stall reads as pool queueing, a stalled world tick or slow import work (the reply
-    /// itself is posted to the world thread, so it needs both).
+    /// output. When the reply misses the bound, a second read is started at once (before any probe, so its time is when the line really
+    /// arrived, not when the probes finished) while a thread-pool item and a world-thread command are timed; the failure then says how long
+    /// each waited and what came late, with the text of the late line, so a stall reads as pool queueing, a stalled world tick, slow import
+    /// work or an unrelated line. A connection that ends or a read that is cancelled instead of timing out is reported with its type, the
+    /// step time and the command, in the primary read and in the late one.
     /// </summary>
     private async Task<string> RunAsync(WorldTestClient client, string command)
     {
@@ -64,20 +66,34 @@ public sealed class PlayerDumpCommandTests : IDisposable
         catch (TimeoutException ex)
         {
             long waited = step.ElapsedMilliseconds;
+            Task<string> lateRead = ReadLateAsync(client, step);
             long pool = await ProbeAsync(() => Task.Run(() => 0));
             long world = _host is null ? -1 : await ProbeAsync(() => _host.World.InvokeAsync(() => 0));
-            string late;
-            try
-            {
-                await client.ReadChatAsync(TimeSpan.FromSeconds(60));
-                late = $"{step.ElapsedMilliseconds} ms after the send";
-            }
-            catch (TimeoutException)
-            {
-                late = "not within 60 s more";
-            }
+            string late = await lateRead;
+            throw new TimeoutException($"{command}: no reply within {waited} ms; a pool item then waited {pool} ms, a world-thread command {world} ms (-1: none); late read: {late}", ex);
+        }
+        catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException or OperationCanceledException)
+        {
+            // Not the read bound: the connection ended or the read was cancelled. Say which, when, and for what command.
+            throw new InvalidOperationException($"{command}: the read ended with {ex.GetType().Name} after {step.ElapsedMilliseconds} ms ({ex.Message})", ex);
+        }
+    }
 
-            throw new TimeoutException($"{command}: no reply within {waited} ms; a pool item then waited {pool} ms, a world-thread command {world} ms (-1: none); reply came {late}", ex);
+    /// <summary>The next chat line up to 60 s more, described: when it came (ms since the send, taken inside the read), its text, or why none came.</summary>
+    private static async Task<string> ReadLateAsync(WorldTestClient client, Stopwatch step)
+    {
+        try
+        {
+            string text = (await client.ReadChatAsync(TimeSpan.FromSeconds(60))).Text;
+            return $"a line came {step.ElapsedMilliseconds} ms after the send: \"{text}\"";
+        }
+        catch (TimeoutException)
+        {
+            return "no chat line within 60 s more";
+        }
+        catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException or OperationCanceledException)
+        {
+            return $"the read ended with {ex.GetType().Name} after {step.ElapsedMilliseconds} ms ({ex.Message})";
         }
     }
 

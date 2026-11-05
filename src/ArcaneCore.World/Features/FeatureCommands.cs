@@ -69,11 +69,13 @@ public static class FeatureCommands
                 CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
             // The commit is posted to this very (world) thread: never block on it. Answer from the next tick.
+#pragma warning disable ARC0006 // Result is read only in the IsCompletedSuccessfully branch of a continuation, so the task is already finished and nothing blocks
             _ = task.ContinueWith(
                 finished => context.World.Post(() => context.Reply(finished.IsCompletedSuccessfully
                     ? $"Feature {verb} {(finished.Result.Ok ? "done" : finished.Result.Result == HotSwapResult.Rejected ? "rejected" : "failed")}: {finished.Result.Detail}"
                     : $"Feature {verb} failed: {finished.Exception?.GetBaseException().Message}")),
                 TaskScheduler.Default);
+#pragma warning restore ARC0006
             context.Reply($"Feature {verb} requested.");
             return true;
         });

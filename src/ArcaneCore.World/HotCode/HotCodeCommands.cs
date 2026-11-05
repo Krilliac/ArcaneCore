@@ -37,11 +37,13 @@ public static class HotCodeCommands
                         CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
                     // The commit is posted to this very (world) thread: never block on it. Answer from the next tick.
+#pragma warning disable ARC0006 // Result is read only in the IsCompletedSuccessfully branch of a continuation, so the task is already finished and nothing blocks
                     _ = task.ContinueWith(
                         finished => context.World.Post(() => context.Reply(finished.IsCompletedSuccessfully
                             ? $"Refresh {finished.Result.Status}: {finished.Result.Detail}"
                             : $"Refresh failed: {finished.Exception?.GetBaseException().Message}")),
                         TaskScheduler.Default);
+#pragma warning restore ARC0006
                     context.Reply("Refresh requested.");
                     return true;
                 }),

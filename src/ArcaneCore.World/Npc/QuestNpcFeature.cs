@@ -212,7 +212,9 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             : CharacterQuestData.Empty;
         // Own the lists across the session/world handoff even if a custom store reuses buffers.
         var data = new CharacterQuestData(loaded.Quests.ToArray(), loaded.TaxiMask.ToArray());
+#pragma warning disable ARC0002 // the player is still loading: no map holds it and nothing else writes CharacterOwnership until activation, so the pool continuation cannot race
         Persistence.LoadCharacter(character.Id, data, revision, player.CharacterOwnership);
+#pragma warning restore ARC0002
         new PlayerQuestLog(player).Load(data.Quests, Services.Quests);
         _staged.Remove(player);
         _staged.Add(player, data);

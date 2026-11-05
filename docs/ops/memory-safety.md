@@ -32,17 +32,14 @@ run `powershell -NoProfile -File scripts/safety-baseline.ps1`.
 
 ### ARC0002 baseline assessment (reissued entry by entry)
 
-Every remaining ARC0002 baseline entry (19 entries, 27 occurrences) was checked against the code. None is a race. They fall into two classes: A (the `Player` is still loading) and B (the member is immutable). Real races found by the same check (the `ScenarioParty` position read of a live creature, and `Creature.Template` read off-thread four times) were fixed with `await context.ReadAsync(...)` and their baseline lines removed.
+Every remaining ARC0002 baseline entry (14 entries, 22 occurrences) was checked against the code, and the three object initializers or statements that touch a freshly built or still-loading player (`CharacterHandlers.cs`, `WorkerTransferTarget.cs`, `QuestNpcFeature.cs`) now carry a reasoned `#pragma warning disable ARC0002` instead of a baseline line. None is a race. They fall into two classes: A (the `Player` is still loading) and B (the member is immutable). Real races found by the same check (the `ScenarioParty` position read of a live creature, and `Creature.Template` read off-thread four times) were fixed with `await context.ReadAsync(...)` and their baseline lines removed.
 
 Class A: the `Player` is still loading. `ICharacterHooks.OnPlayerLoadingAsync`/`OnPlayerLoadedAsync` (and `ISpellbookLoadObserver.OnSpellbookLoadedAsync`, called from `SpellFeature.OnPlayerLoadingAsync`) run only from `CharacterHandlers.HandlePlayerLoginAsync` (:579, :586) and `TransferShadowHooks.RunAsync` (`WorkerTransferTarget.cs`:67, :72), before the player is added to a map or visible to the world thread; the player is built a few lines earlier and has not been handed to the session, a map or the world. The only other references are a weak key in the claim service's ticket table (`CharacterClaimService.BindTicket`, which never reads the player's state) and, for the shadow, the honor service's tracking (`HonorFeature.OnPlayerLoadingAsync`). Neither touches the members below. A pool continuation touching the player cannot race. The same holds for the two object initializers on a freshly constructed `Player`.
 
 | Entry | Lines | Reason |
 |---|---|---|
-| `CharacterHandlers.HandlePlayerLoginAsync` `Player.Home`, `Player.CharacterOwnership` | `CharacterHandlers.cs`:550, :551 | Object initializer of the `new Player(...)` at :548, assigned after the awaits of the login; the player is unpublished. |
-| `CharacterHooksShadowLoader.LoadForSessionAsync` `Player.Home`, `Player.CharacterOwnership` | `WorkerTransferTarget.cs`:160, :161 | Same: initializer of the shadow `Player` built at :158, returned to the caller only after the hooks ran. |
 | `BattlegroundFeature.OnPlayerLoadingAsync` `WorldObject.MapId`, `Unit.Relocate` | `BattlegroundFeature.cs`:1205, :1206 | Loading hook; the player has no map yet, so `Relocate` moves an unpublished object (no `Map.OnObjectMoved`). |
 | `CharacterLifeFeature.OnPlayerLoadedAsync` `Player.LoadedLife` | `CharacterLifeFeature.cs`:68 | Loaded hook, unpublished player. `LoadedLife` is consumed later by `OnPlayerLoggedIn` (:76-:87), after the player has entered the world. |
-| `QuestNpcFeature.OnPlayerLoadingAsync` `Player.CharacterOwnership` | `QuestNpcFeature.cs`:215 | Loading hook, unpublished player. `CharacterOwnership` is `{ get; set; }` (`Player.cs`:111); the only later write is `WorkerTransferTarget.cs`:888 at activation, after the load has finished. |
 | `ItemsFeature.OnPlayerLoadingAsync` `Player.Inventory` (6) | `ItemsFeature.cs`:248, :249, :250, :251, :265, :270 | Loading hook; `Inventory` is the player's own container, filled before the player is published. |
 | `HonorFeature.OnPlayerLoadingAsync` `Player.Inventory` | `HonorFeature.cs`:185 | `HonorItemRequirements.Install(player.Inventory, service)` in the loading hook (not `HonorService.Track`, which the analyzer does not flag). |
 | `ReputationFeature.OnPlayerLoadingAsync` `Player.Inventory` (2) | `ReputationFeature.cs`:135 | Read and write of `Inventory.Requirements` on one line, loading hook. |
@@ -57,6 +54,16 @@ Class B: the member is get-only and assigned in the constructor, so the value ca
 | `ShipCrossingScenario.RunAsync` `ShipTransport.Period` | `ScenarioTransports.cs`:134 | `Period` is `{ get; }`, set once in the constructor from `template.PathTime` (`ShipTransport.cs`:51, :79). |
 
 Not accepted as safe: `Creature.Template` (can swap to `EventTemplate` and writes `_template` and `_templateVersion`, `Creature.cs`:96-112) and `WorldObject.X/Y/Z` of a live in-map object. Both were read in `PartyScenario.Run` and are now read inside `ReadAsync`.
+
+### ARC0003 and ARC0006 baseline assessment
+
+ARC0003: every Marshal, MemoryMarshal, Unsafe and P/Invoke use that was baselined at landing (HostMemory, MapFeedClientIdentity, GgmlQuant, ChatInferenceContext.MatMulJob, the Atlas GeometryWire and MpqCompression.Inflate, TestSupport's ThreadCpuTime) now carries an `[AuditedUnsafe("reason")]` on its type or member, as the Kernel uses do, and its lines are gone. Only the two `assembly:` entries (AllowUnsafeBlocks in World and Playerbots) remain.
+
+ARC0006: the three entries that looked like blocking on a hot or world path were read against their callers. `PeerPresenceClient.Send` is the documented synchronous entry of the peer-link client; its callers are the cluster sender and pump tasks (`Task.Run` loops in `ClusterGroupRouting`, `PeerGuildHolderLink`, `ClusterBattlegroundLink`, and the chat router's `Enqueue`), never the world thread, and `ClusterCommands.DirectoryEntryCount` avoids it on the world thread. `WorkerTransferTarget.ReleaseFinished` and `FeatureCommands.Verb` read `Task.Result` only after `IsCompletedSuccessfully`, so nothing blocks; the same holds for `HotCodeCommands`, `HotModuleCommands`, `TicketAssistantCommands.Describe`, `TilePrefetchCache.TryTake` and `PlayerbotWorldDestinations.ConsumeNavigation`. All of these are now reasoned `#pragma warning disable ARC0006` statements, not baseline lines. What remains is startup `Attach`/`Load` waits, disposal and console waits, which run off the tick.
+
+`RepoBaselineTests` pins this: a pragma for an ARC rule in shipping code must carry a reason comment, an `[AuditedUnsafe]` reason must not be empty, and the baseline has a per-rule ceiling (entries and occurrences) that may only be lowered.
+
+`scripts/safety-baseline.ps1` builds Release and Debug and merges the findings; a finding whose count differs between the two (code under `#if DEBUG`) stops the script, because one baseline line cannot satisfy both compilations.
 
 ### Suppressing a finding
 

@@ -89,9 +89,11 @@ public sealed class TicketAssistantCommands : ICommandExtension
             return $"The ticket assistant could not handle ticket {id}.";
         }
 
+#pragma warning disable ARC0006 // faulted and canceled tasks returned above, so the task is finished and Result does not block
         return done.Result is { } outcome
             ? $"Ticket {id}: {outcome.Category} -> {outcome.Action}{(outcome.Closed ? " (closed)" : " (left open)")}: {outcome.Detail}."
             : $"Ticket {id} is not open.";
+#pragma warning restore ARC0006
     }
 
     private static void Record(CommandContext context, string command, string line)

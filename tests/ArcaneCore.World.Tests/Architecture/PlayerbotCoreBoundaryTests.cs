@@ -17,7 +17,7 @@ namespace ArcaneCore.World.Tests.Architecture;
 /// reload types, now on the options in the contracts assembly).
 /// <para>
 /// The other direction is pinned too: the pack may use core internals (World and the contracts grant it <c>InternalsVisibleTo</c>) only
-/// from the explicit list below, which may only shrink. Tier 2c turns each entry into a public seam or a contract before the pack is
+/// from the explicit list below (49 entries, each with a reason: a new use fails until a reasoned entry is added, a stale entry fails, so it does not grow unnoticed). Tier 2c turns each entry into a public seam or a contract before the pack is
 /// loaded collectibly (a pack compiled against changed internals would fail at JIT time, mid-tick, rather than at load).
 /// </para>
 /// </summary>
@@ -25,7 +25,7 @@ public sealed class PlayerbotCoreBoundaryTests
 {
     /// <summary>
     /// Core internals (declaring type full name, then <c>.Member</c>; a type alone when the type itself is internal) the pack still
-    /// uses, and why. Shrink only: a new use fails, and so does an entry the pack no longer uses (delete it).
+    /// uses, and why. A new use fails until a reasoned entry is added here, and so does an entry the pack no longer uses (delete it); 2c is meant to shrink the list.
     /// </summary>
     private static readonly SortedDictionary<string, string> AllowedInternals = new(StringComparer.Ordinal)
     {
