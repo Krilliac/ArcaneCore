@@ -6,7 +6,7 @@ namespace ArcaneCore.World.Tests.SpellMods;
 
 /// <summary>
 /// The class-mask overlay file (<c>Spells:Mods:ClassMaskFile</c>): "spell effect 0xmask" per line. A malformed line or a duplicate
-/// (spell, effect) fails the load (charter: fail closed): a silently skipped line would give a talent the wrong spells.
+/// (spell, effect) fails the load (fail closed): a silently skipped line would give a talent the wrong spells.
 /// </summary>
 public sealed class FileClassMaskSourceTests
 {

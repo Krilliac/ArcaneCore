@@ -160,6 +160,31 @@ public sealed class BattlegroundInstancesWorldTests
             BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(21), 2);
             ScenarioContext.ExpectEqual(Convert.ToHexString(expected), Convert.ToHexString(list), "SMSG_BATTLEFIELD_LIST body");
         });
+
+        await context.StepAsync("SMSG_BATTLEFIELD_LIST for an asker in another bracket carries that bracket and none of these ids", async () =>
+        {
+            uint minLevel = await context.ReadAsync(() => Manager(context).TemplateOf(BattlegroundType.WarsongGulch)!.MinLevel);
+            ScenarioBot other = await AllianceAsync(context, "Bgtwootherbracket");
+
+            // Move the asker ten levels away from the running matches' bracket (down if there is room, else up); the matches stay where they are.
+            uint otherLevel = await other.ReadAsync(p =>
+            {
+                uint level = BattlegroundConstants.BracketOfLevel(p.Level, minLevel) >= 1 ? (uint)p.Level - 10 : (uint)p.Level + 10;
+                p.Level = (byte)level;
+                return level;
+            });
+            int otherBracket = BattlegroundConstants.BracketOfLevel(otherLevel, minLevel);
+            ScenarioContext.Expect(otherBracket >= 0 && otherBracket != first.Bracket, $"the asker's bracket {otherBracket} is the matches' bracket {first.Bracket}");
+
+            (ObjectGuid master, byte[] list) = await HelloAsync(context, other);
+
+            // The same layout as above: the asker's bracket in the byte after the map, then a count of 0 because no match runs in that bracket.
+            byte[] expected = new byte[8 + 4 + 1 + 4];
+            BinaryPrimitives.WriteUInt64LittleEndian(expected.AsSpan(0), master.Value);
+            BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(8), Wsg);
+            expected[12] = (byte)otherBracket;
+            ScenarioContext.ExpectEqual(Convert.ToHexString(expected), Convert.ToHexString(list), "SMSG_BATTLEFIELD_LIST body for the other bracket");
+        });
     });
 
     /// <summary>

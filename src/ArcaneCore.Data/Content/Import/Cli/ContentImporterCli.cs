@@ -610,8 +610,9 @@ public static partial class ContentImporterCli
             {
                 try
                 {
-                    // A dump row wins (cmangos `o` is the facing the DBC lacks, and classic-db corrects coordinates and names);
-                    // the DBC only fills ids the dump never had, as vmangos, which has no world_safe_locs table, needs.
+                    // A dump row wins, because cmangos `o` is the facing the DBC lacks. The dump supplies only that facing: its coordinates match
+                    // the DBC to rounding and its names are the DBC names (two truncated at 50 characters). The DBC only fills ids the dump
+                    // never had, as vmangos, which has no world_safe_locs table, needs.
                     graveyards.AddMissingSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
                 }
                 catch (InvalidDataException ex)
@@ -664,7 +665,7 @@ public static partial class ContentImporterCli
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
-                    await WorldStateDumpImporter.WriteAsync(db, worldState, replace, token).ConfigureAwait(false);
+                    await WorldStateDumpImporter.WriteAsync(db, worldState, replace, cancellationToken: token).ConfigureAwait(false);
                     await gameEvents.WriteAsync(db, replace, token).ConfigureAwait(false);
                     graveyardReport = await graveyards.WriteAsync(db, replace, token).ConfigureAwait(false);
                     totemReport = await totems.WriteAsync(db, replace, token).ConfigureAwait(false);

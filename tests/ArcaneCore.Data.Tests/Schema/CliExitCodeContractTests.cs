@@ -7,7 +7,7 @@ namespace ArcaneCore.Data.Tests;
 /// <summary>
 /// The numeric exit codes of <c>arcane-db</c> and <c>arcane-content-importer</c>. Operators and scripts read them from each tool's usage
 /// text and docs/ops/database-upgrade.md (DbUpgradeExitCodes.cs lists them). Two in-repo scripts branch on specific values: pg-cutover.ps1
-/// counts a table that differs on <c>arcane-db verify</c> by exit 9 (any other non-zero code stops the cutover), and verify-classic-db.ps1
+/// counts a component that differs on <c>arcane-db verify</c> (one or more tables differ) by exit 9 (any other non-zero code stops the cutover), and verify-classic-db.ps1
 /// requires importer verify to exit 6 (anything else throws). The other scripts only test zero versus non-zero. This pins the numbers so
 /// they do not change when the CLI code moves between assemblies.
 /// </summary>

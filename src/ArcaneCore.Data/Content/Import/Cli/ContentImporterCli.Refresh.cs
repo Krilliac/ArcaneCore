@@ -444,7 +444,7 @@ public static partial class ContentImporterCli
 
                     if (worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0)
                     {
-                        await WorldStateDumpImporter.WriteAsync(db, worldState, replace: true, token, onlyCarried: true).ConfigureAwait(false);
+                        await WorldStateDumpImporter.WriteAsync(db, worldState, replace: true, onlyCarried: true, cancellationToken: token).ConfigureAwait(false);
                     }
 
                     await taverns.ReplaceAsync(db, token).ConfigureAwait(false);

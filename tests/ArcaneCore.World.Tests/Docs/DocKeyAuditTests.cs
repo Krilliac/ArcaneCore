@@ -23,7 +23,7 @@ public sealed partial class DocKeyAuditTests
         ["Traps:PvpOwnerRule"] = "docs/areas/hunter.md states that this option does not exist",
         ["Traps:OneActivePerSlot"] = "docs/areas/hunter.md states that this option does not exist",
         ["Combo:ClearOnSelectionChange"] = "docs/areas/rogue.md: a possible option whose choice is pending; not delivered",
-        ["Cluster:Fencing:Enabled"] = "docs/integration/cluster-m15-0.md: a designed switch of the clustering work, not delivered",
+        ["Cluster:Fencing:Enabled"] = "read straight from IConfiguration by DataServiceCollectionExtensions.FencingEnabledKey, no options class (docs/integration/cluster-m15-0.md)",
         ["Characters:CrossVersion"] = "docs/design/multi-version.md decision 6: designed, delivered after S5/S7",
         ["Characters:CrossVersion:FillEmptySlots"] = "docs/design/multi-version.md decision 6: designed, delivered after S5/S7",
         ["Bans:RequireNotHigherSecurityTarget"] = "docs/security/live-bans.md: designed and not delivered (the retail ban commands have no hierarchy check)",

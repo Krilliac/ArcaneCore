@@ -471,7 +471,7 @@ code was copied.
 - No vmangos generic-script AI (`creature_ai_events`/`creature_ai_scripts` in vmangos format). Only cmangos EventAI rows are imported.
 - Hostility comes from the faction template only. Reputation, at-war and forced reactions are not used; that seam is for the reputation area.
 - Paths and line of sight come from `map.Collision` (feat/vmap-los). Without installed vmaps or mmaps they are straight and always clear. There is no re-path while a long path is being walked, other than chase's own re-check timer.
-- Evade removes the auras vmangos removes on evade (`Creatures:EvadeResetsAuras`, default on: everything except a non-permanent positive aura cast by a player; `KEEP_POSITIVE_AURAS_ON_EVADE` removes only the negative ones). Switch the option off to keep every aura.
+- Evade removes the auras vmangos removes on evade (`Creatures:EvadeResetsAuras`, default on: everything except a non-permanent positive aura cast by a player; `KEEP_POSITIVE_AURAS_ON_EVADE` removes only the negative ones). Switch the option off to keep every aura. A script's own evade through `ResetAurasOnEvade` (`CreatureMapSystem.Evade.cs`) ignores that option and always resets the auras.
 - Creature-versus-creature aggro reads the faction templates only (the reputation seam answers for players); creature stealth
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).

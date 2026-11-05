@@ -319,7 +319,7 @@ do: they refuse to start on a database that lacks migrations and make the operat
 A refused start prints one line (`database schema refused: ...`, passwords removed) and exits 4 (7 for a lock timeout)
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
 (or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
-under the component schema lock (and skipped entirely under `Policy=Never` and under `ValidateOnly`: neither runs DDL or seed inserts).
+under the component schema lock (and skipped entirely under `Policy=Never` and under `ValidateOnly`: neither runs DDL or seed inserts; this includes the tuning tables, which the world's tuning feature seeds at start only when both allow writes).
 
 The content importer (`arcane-content-importer`) does not read `Database:Upgrade`; it has its own gate. `refresh` refuses a world whose schema is behind the importer's unless `--migrate` is given. `import`, `import-dbc`, `import-map-dbc`, `proc-events` and `spell-threat` use the same gate in its `CreateOnly` form: they still create a database that holds no schema, but refuse to upgrade an existing one (exit 3, nothing written) unless `--migrate` is given. Production worlds migrate through `arcane-db upgrade`; pass `--migrate` only for a throwaway or staging world.
 

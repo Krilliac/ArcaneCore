@@ -34,7 +34,7 @@ public static class SpellHandlerModules
     /// <summary>
     /// Every concrete <see cref="ISpellHandlerModule"/> of <paramref name="assembly"/>, ordered by full
     /// type name (ordinal) so the order never depends on reflection enumeration. A module that cannot be
-    /// created (no parameterless constructor) fails here instead of being skipped (charter: fail closed).
+    /// created (no parameterless constructor) fails here instead of being skipped (fail closed).
     /// </summary>
     public static IReadOnlyList<Type> Discover(Assembly assembly)
     {
