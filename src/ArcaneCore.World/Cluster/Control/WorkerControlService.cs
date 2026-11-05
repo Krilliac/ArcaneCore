@@ -82,8 +82,9 @@ public sealed class WorkerControlService(
     WorkerControlTransfer? transfers,
     Func<WorkerControlIdentity> identity,
     ILogger? logger = null,
-    Func<WorkerNodeId?, WorkerPromotedParticipants>? onPromoted = null,
-    Func<bool>? promotionCompleted = null) : IGatewayControlHandler
+    Func<WorkerPromotedParticipants>? onPromoted = null,
+    Func<bool>? promotionCompleted = null,
+    WorkerTransferName? transferName = null) : IGatewayControlHandler
 {
     /// <summary>How many operations' replies and tombstones are remembered. A suspend reply holds up to 16 KiB, so the bound also bounds memory.</summary>
     private const int Remembered = 512;
@@ -96,11 +97,9 @@ public sealed class WorkerControlService(
     private readonly Queue<(Guid Operation, ControlKind Kind)> _endedOrder = new();
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
     // A standby has no draining handoff source and no transfer participants (it is the handoff's target and takes no players). Promotion makes it an active worker, so the participants
-    // are built then, once, by onPromoted and swapped in under _attachGate; null once attached (or for a worker that was never a standby). _promotedSlot is the slot the gateway's
-    // Promote named: onPromoted names the transfer participants by it, because the gateway's journal rows and verbs name a worker by slot, never by a standby's own node id.
+    // are built then, once, by onPromoted and swapped in under _attachGate; null once attached (or for a worker that was never a standby).
     private readonly Lock _attachGate = new();
-    private Func<WorkerNodeId?, WorkerPromotedParticipants>? _onPromoted = onPromoted;
-    private WorkerNodeId? _promotedSlot;
+    private Func<WorkerPromotedParticipants>? _onPromoted = onPromoted;
     private WorkerControlHandoff? _handoff = handoff;
     private WorkerControlTransfer? _transfers = transfers;
 
@@ -118,9 +117,8 @@ public sealed class WorkerControlService(
 
     /// <summary>
     /// The participants now: those the service was built with, until the promotion has completed (<c>promotionCompleted</c>; without it, until the worker no longer reports Standby). The promotion
-    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds, given the slot
-    /// the gateway's Promote named (null: the world was promoted without that verb, so it has no slot and answers under its own name). A build that throws attaches nothing and is
-    /// retried by the next call (the request that hit it is answered Failed). Thread-safe: callers on any thread see either the standby's participants or the promoted ones, never a mix.
+    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds.
+    /// A build that throws attaches nothing and is retried by the next call (the request that hit it is answered Failed). Thread-safe: callers on any thread see either the standby's participants or the promoted ones, never a mix.
     /// </summary>
     private (WorkerControlHandoff? Handoff, WorkerControlTransfer? Transfers) Current()
     {
@@ -130,7 +128,7 @@ public sealed class WorkerControlService(
             {
                 if (_onPromoted is not null)
                 {
-                    WorkerPromotedParticipants promoted = build(_promotedSlot);
+                    WorkerPromotedParticipants promoted = build();
                     _handoff = promoted.Handoff ?? _handoff;
                     _transfers = promoted.Transfers ?? _transfers;
                     Volatile.Write(ref _onPromoted, null);
@@ -140,6 +138,19 @@ public sealed class WorkerControlService(
 
         lock (_attachGate)
             return (_handoff, _transfers);
+    }
+
+    /// <summary>
+    /// The gateway named the slot this process serves: Promote does for a standby, and every worker link does right after admission (the LinkSlot frame), which is what reaches a promoted process that was
+    /// relaunched as active with its own node id and no Promote coming. Journal rows, bundles and transfer verbs name the slot, so the transfer participants answer under it from now on. Thread-safe; any link's receive loop calls it.
+    /// </summary>
+    public void ServeSlot(string slotNode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(slotNode);
+        if (transferName?.Assign(new WorkerNodeId(slotNode)) == true)
+        {
+            _logger.LogInformation("This worker now answers transfers as slot {Slot}", slotNode);
+        }
     }
 
     /// <summary>How many repeats of a single-shot verb joined an identical request that was still running or already answered (instead of calling the participant again). A test seam and a diagnostic.</summary>
@@ -328,12 +339,8 @@ public sealed class WorkerControlService(
                     return Reply(request, ControlStatus.Refused, refusal);
                 }
 
-                // Before the promotion runs: the attach that follows it names the transfer participants by this slot.
-                lock (_attachGate)
-                {
-                    _promotedSlot = new WorkerNodeId(args.SlotNode);
-                }
-
+                // Before the promotion runs: the transfer participants the attach builds answer under this slot from their first verb.
+                ServeSlot(args.SlotNode);
                 await h.Target!.PromoteAsync(args.Token, ct).ConfigureAwait(false);
                 return Ok(request);
             }

@@ -29,7 +29,8 @@ namespace ArcaneCore.Gateway.Tests;
 /// Y10 end to end: a real player transfer through a standby the gateway promoted. Three real worlds on one set of databases behind one real gateway with handoffs and transfers on: slot "w-east" (map 0) is
 /// served by node "w-east" and has the standby node "w-east-standby", slot "w-kalimdor" (map 1) has no standby. A whole-World handoff moves the east slot to the standby, so the slot's active process has a
 /// node id that differs from the slot's, as it always does in production. Nothing here builds a request or a journal row by hand: a teleport reaches the gateway's <see cref="GatewayTransferService"/>, which runs
-/// <see cref="PlayerTransferCoordinator"/> over the control channels and journals the slot names, and the promoted standby answers them only because its Promote named the slot.
+/// <see cref="PlayerTransferCoordinator"/> over the control channels and journals the slot names, and the promoted standby answers them only because the gateway named the slot: in its Promote, and, once the process has
+/// been relaunched as active with its own node id and no Promote coming, on the worker link.
 /// </summary>
 public sealed class PromotedStandbyTransferTests
 {
@@ -95,6 +96,56 @@ public sealed class PromotedStandbyTransferTests
             () => Task.FromResult(cluster.Gateway.Workers[0].Link!.SessionCount == 1 && cluster.Gateway.Workers[1].Link!.SessionCount == 0), cts.Token);
     }
 
+    /// <summary>The source half after a relaunch: the promoted process crashed or was restarted as active, so it starts with its own node id, the standby key off and no Promote; the worker link names the slot.</summary>
+    [Fact]
+    public async Task ATeleportFromTheRelaunchedPromotedProcess_CompletesThroughTheGateway_WithItAsTheSource()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartPromotedAsync(cts.Token);
+        await cluster.RelaunchThePromotedProcessAsActiveAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("RELAUNCHSOURCE", "Relaunchsource", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(Cluster.TeleportsOf(cluster.Promoted).ClusterFarRouter is not null), cts.Token);
+        GatewayClusterFarTeleportRouter router = Cluster.RouterOf(cluster.Promoted);
+
+        Assert.True(await Cluster.TeleportAsync(cluster.Promoted, guid, KalimdorLanding));
+
+        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        Assert.Equal(KalimdorLanding.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+
+        await cluster.AssertCompletedAsync(router.LastTransferId, EastSlot, KalimdorNode, cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token);
+        Assert.False(await cluster.Promoted.World.InvokeAsync(() => cluster.Promoted.World.IsOnline(guid), cts.Token));
+    }
+
+    /// <summary>The target half after a relaunch: Reserve, Install and Activate reach the relaunched process, which answers them under the slot the worker link named.</summary>
+    [Fact]
+    public async Task ATeleportToTheRelaunchedPromotedProcess_CompletesThroughTheGateway_WithItAsTheTarget()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartPromotedAsync(cts.Token);
+        await cluster.RelaunchThePromotedProcessAsActiveAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterKalimdorAsync("RELAUNCHTARGET", "Relaunchtarget", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(Cluster.TeleportsOf(cluster.Kalimdor).ClusterFarRouter is not null), cts.Token);
+        GatewayClusterFarTeleportRouter router = Cluster.RouterOf(cluster.Kalimdor);
+
+        Assert.True(await Cluster.TeleportAsync(cluster.Kalimdor, guid, EasternLanding));
+
+        WorldFrame newWorld = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        Assert.Equal(EasternLanding.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Promoted.World.InvokeAsync(() => cluster.Promoted.World.FindOnlinePlayer(guid) is { Map.MapId: 0 }, cts.Token), cts.Token);
+
+        await cluster.AssertCompletedAsync(router.LastTransferId, KalimdorNode, EastSlot, cts.Token);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token);
+        Assert.False(await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.IsOnline(guid), cts.Token));
+    }
+
     /// <summary>Three real worlds behind one real gateway, after the handoff of the east slot. The gateway and its journals use the Kalimdor world's container: it stays an ordinary worker throughout, while the east slot's first process is retired.</summary>
     private sealed class Cluster : IAsyncDisposable
     {
@@ -111,7 +162,7 @@ public sealed class PromotedStandbyTransferTests
         /// <summary>The east slot's first process, retired by the handoff.</summary>
         public SyntheticArcaneServer Retired { get; private set; } = null!;
 
-        /// <summary>The east slot's standby, now its active process.</summary>
+        /// <summary>The east slot's standby, now its active process (after a relaunch, the new process in its place).</summary>
         public SyntheticArcaneServer Promoted { get; private set; } = null!;
 
         public SyntheticArcaneServer Kalimdor { get; private set; } = null!;
@@ -220,6 +271,30 @@ public sealed class PromotedStandbyTransferTests
             WorkerControlService control = Promoted.Services.GetRequiredService<WorkerControlService>();
             Assert.Equal(EastSlot, control.Transfers!.Source!.WorkerId.Value);
             Assert.Equal(EastSlot, control.Transfers.Target!.WorkerId.Value);
+        }
+
+        /// <summary>
+        /// What the supervisor does to a promoted child that crashed or hung, and what RestartProcessAsync(name, false) does: the process goes away and a new one starts on the same link port with the same node id,
+        /// the standby argument cleared. Nothing promotes it; the gateway's worker link, already pointed at this port, reconnects to it.
+        /// </summary>
+        public async Task RelaunchThePromotedProcessAsActiveAsync(CancellationToken token)
+        {
+            int linkPort = _promotedEndpoint.Host!.BoundEndPoint.Port;
+            await _promotedEndpoint.StopAsync(CancellationToken.None);
+            await Promoted.DisposeAsync();
+
+            Promoted = await SyntheticArcaneServer.StartAsync(
+                new SyntheticServerOptions { SharedDatabaseDirectory = Retired.DataDirectory, Configuration = Worker(EastStandby, "0", shard: EastSlot, standby: false, handoff: true, linkPort: linkPort) }, configureServices: null, token);
+            Promoted.World.Ownership = Owns("0");
+            _promotedEndpoint = Promoted.Services.GetRequiredService<GatewayWorkerEndpoint>();
+            await _promotedEndpoint.StartAsync(token);
+            Assert.False(StandbyWorkerTests.Host(Promoted).IsStandby);
+
+            // The name the process starts with is its own; only the gateway's link can make it the slot's.
+            WorkerControlService control = Promoted.Services.GetRequiredService<WorkerControlService>();
+            await WaitUntilAsync(() => Task.FromResult(control.Transfers!.Source!.WorkerId.Value == EastSlot && control.Transfers.Target!.WorkerId.Value == EastSlot), token);
+            await Gateway.WaitForAllLinksAsync(token);
+            await WaitUntilAsync(() => Task.FromResult(Gateway.Workers[0].Link is not null && _handoffs.ActiveChannel(EastSlot) is not null), token);
         }
 
         /// <summary>The journal says the transfer completed, it names the two slots, and nothing of it is left for recovery (which reads those names: GatewayTransferService's journal scan keeps rows between two slots).</summary>
@@ -390,7 +465,7 @@ public sealed class PromotedStandbyTransferTests
         }
 
         /// <summary>A Worker-scope world as start-cluster.ps1 -Standby -Transfers launches it: its own node id and owner node, the slot's shard on the slot's two processes, and the transfer key on all of them.</summary>
-        private static Dictionary<string, string?> Worker(string nodeId, string ownedMaps, string? shard, bool standby, bool handoff)
+        private static Dictionary<string, string?> Worker(string nodeId, string ownedMaps, string? shard, bool standby, bool handoff, int? linkPort = null)
         {
             var configuration = new Dictionary<string, string?>
             {
@@ -402,7 +477,7 @@ public sealed class PromotedStandbyTransferTests
                 ["Cluster:Worker:NodeId"] = nodeId,
                 ["Cluster:Worker:OwnedMaps"] = ownedMaps,
                 ["Cluster:Worker:AllowInstanceMaps"] = "false",
-                ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Cluster:Worker:Port"] = (linkPort ?? ArcaneCore.TestSupport.LoopbackPorts.Next()).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["Cluster:Worker:LinkSecret"] = Secret,
                 ["Cluster:Worker:Transfers:Enabled"] = "true",
                 ["Cluster:Node:Role"] = "MapWorker",

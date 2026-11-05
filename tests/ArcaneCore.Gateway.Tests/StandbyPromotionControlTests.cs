@@ -124,7 +124,7 @@ public sealed class StandbyPromotionControlTests
             transfersEnabled: false,
             transfers: null,
             identity: () => new WorkerControlIdentity(new WorkerNodeId("window-worker"), false, incarnation, "owner", "scope", Array.Empty<uint>()),
-            onPromoted: _ =>
+            onPromoted: () =>
             {
                 builds++;
                 return new WorkerPromotedParticipants(waiting with { Source = null }, null);

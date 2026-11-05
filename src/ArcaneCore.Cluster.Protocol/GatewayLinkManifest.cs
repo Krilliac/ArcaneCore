@@ -7,7 +7,7 @@ public static class GatewayLinkManifest
 {
     /// <summary>
     /// The contract version both ends of a gateway link advertise. 7: Promote carries the slot the standby takes over (ControlPromoteArguments), a longer frame a version 6 worker would refuse, so a handoff
-    /// would stop at the promotion; refused at admission instead. 6: the handoff verb RetireWrites (10), which a worker of version 5 would refuse, so a handoff's roll-forward would stop at its
+    /// would stop at the promotion, and a worker link names its slot after admission (the LinkSlot frame, 33), on which a version 6 worker closes the link; refused at admission instead. 6: the handoff verb RetireWrites (10), which a worker of version 5 would refuse, so a handoff's roll-forward would stop at its
     /// first step; the gateway and its workers upgrade together. 5: the unified control frames 28-32 (ControlRequest, ControlReply, ControlSubmit,
     /// ControlSubmitReply, ControlNotice; the last two end with a reason-code byte, ControlReasonCode); the link closes on any unknown frame, so a version 4 peer is refused at admission instead.
     /// 4: the worker sends WorkerStatus frames (tick counter, sessions, countdown state) for

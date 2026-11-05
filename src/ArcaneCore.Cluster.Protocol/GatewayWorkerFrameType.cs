@@ -60,4 +60,8 @@ internal enum GatewayWorkerFrameType : byte
     ControlSubmit = 30,
     ControlSubmitReply = 31,
     ControlNotice = 32,
+
+    // The slot a worker link serves (gateway to worker), sent once after admission on every worker link (contract 7): transfer rows and verbs name the slot, and the process
+    // behind the link keeps its own Cluster:Worker:NodeId, which differs from the slot's after a handoff and across any relaunch of the promoted process.
+    LinkSlot = 33,
 }
