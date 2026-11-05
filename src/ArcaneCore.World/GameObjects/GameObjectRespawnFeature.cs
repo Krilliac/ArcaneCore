@@ -17,7 +17,7 @@ namespace ArcaneCore.World.GameObjects;
 /// (vmangos MapPersistentStateManager::LoadGameobjectRespawnTimes, Maps/MapPersistentStateMgr.cpp:1149-1156; rows that expired, or belong to a
 /// dungeon instance that is gone, are dropped by the store), hands them to every map's <see cref="GameObjectMapSystem"/> through
 /// <see cref="Persistence"/>, drains the write queue at shutdown after every system saved the objects that are still despawned (it throws if a
-/// write is still not durable), and clears a deleted instance's times through <see cref="GameObjectRespawnQueue.ForgetInstance"/>.
+/// write is still not durable), and clears a deleted instance's times through <see cref="RespawnWriteQueue{TRecord, TKey, TStore}.ForgetInstance"/>.
 /// Inactive without a store or with <c>GameObjects:PersistRespawn=false</c>: the timers are then kept in memory only, as before. The clock is the creature feature's
 /// <see cref="IRespawnClock"/> registration, else the system clock.
 /// </summary>
