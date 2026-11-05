@@ -1085,12 +1085,12 @@ public sealed class PlayerbotQuestGoalsTests
     /// With <c>offeredRequiredClasses</c> the offered quest is class-restricted (<see cref="AllClasses"/> is every class, so the bot qualifies).
     /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
     /// </summary>
-    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0, int offeredLevel = 10, uint offeredPrevQuest = 0) : IQuestContentStore
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0, int offeredLevel = 10, int offeredPrevQuest = 0) : IQuestContentStore
     {
         public const uint Filler = 910_000;
         public const uint Offered = 910_100;
 
-        /// <summary>A RequiredClasses mask of every 1.12 class: nonzero (so the quest counts as class-restricted) and satisfied by any bot.</summary>
+        /// <summary>A RequiredClasses mask covering every 1.12 class (a superset): nonzero (so the quest counts as class-restricted) and satisfied by any bot.</summary>
         public const uint AllClasses = 0x5FF;
 
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
@@ -1105,7 +1105,7 @@ public sealed class PlayerbotQuestGoalsTests
             var templates = new List<QuestTemplate>(content.Templates);
             for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
                 templates.Add(i == exemptIndex ? Kill(Filler + (uint)i, 3, requiredClasses, prevQuest) : Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
-            templates.Add(Kill(Offered, offeredLevel, offeredRequiredClasses, (int)offeredPrevQuest));
+            templates.Add(Kill(Offered, offeredLevel, offeredRequiredClasses, offeredPrevQuest));
             var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
             return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
                 [.. content.Enders, offered]);
@@ -1473,9 +1473,9 @@ public sealed class PlayerbotQuestGoalsTests
     /// IsGreyForBot site in FindCandidate to IsGrey fails the first two cases.
     /// </summary>
     [Theory]
-    [InlineData(FullLogQuests.AllClasses, 0u)]
-    [InlineData(0u, FullLogQuests.Filler + 1)]
-    public async Task AFullLog_ShedsItsFailedQuest_ForAGreyClassOrChainOffer_WhenDropGreyQuestsIsOn(uint offeredClasses, uint offeredPrev)
+    [InlineData(FullLogQuests.AllClasses, 0)]
+    [InlineData(0u, -((int)FullLogQuests.Filler + 1))]
+    public async Task AFullLog_ShedsItsFailedQuest_ForAGreyClassOrChainOffer_WhenDropGreyQuestsIsOn(uint offeredClasses, int offeredPrev)
     {
         Assert.True(await FullLogAbandonsAFailedQuestForAGreyOffer(offeredClasses, offeredPrev));
     }
@@ -1484,7 +1484,7 @@ public sealed class PlayerbotQuestGoalsTests
     public async Task AFullLog_DoesNotShedItsFailedQuest_ForAPlainGreyOffer_WhenDropGreyQuestsIsOn()
         => Assert.False(await FullLogAbandonsAFailedQuestForAGreyOffer(0, 0));
 
-    private static async Task<bool> FullLogAbandonsAFailedQuestForAGreyOffer(uint offeredClasses, uint offeredPrev)
+    private static async Task<bool> FullLogAbandonsAFailedQuestForAGreyOffer(uint offeredClasses, int offeredPrev)
     {
         // Level 10 bot: grey level 4, so the level 3 offer is grey while the level 10 fillers are not (the grey shed has nothing to drop).
         await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0,
@@ -1496,6 +1496,7 @@ public sealed class PlayerbotQuestGoalsTests
             PlayerNpcState state = FillTheLog(quest, player);
             Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Offered)!));
             Assert.False(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!));
+            Assert.True(quest.Feature.Services.CanTakeQuest(player, FullLogQuests.Offered)); // precondition: the offer is takeable, so it wants room (negative prev = current quest)
             state.Quests.Get(FullLogQuests.Filler)!.Status = QuestStatus.Failed;
             int abandons = 0;
             quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
