@@ -166,14 +166,14 @@ public sealed partial class QuestNpcServices
         {
             LogMissing("SellItem", vendorGuid);
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(ObjectGuid.Empty, itemGuid, SellResult.CantFindVendor));
-            Refused(player, InteractionFailure.SellVendorUnreachable, (int)SellResult.CantFindVendor, vendorGuid.Entry, ItemEntryOf(player, itemGuid));
+            RefusedSale(player, InteractionFailure.SellVendorUnreachable, (int)SellResult.CantFindVendor, vendorGuid.Entry, itemGuid);
             return;
         }
 
         if (Deps.Items is not { } items)
         {
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(npc.Guid, itemGuid, SellResult.CantFindItem));
-            Refused(player, InteractionFailure.SellNoItemService, (int)SellResult.CantFindItem, npc.Entry, ItemEntryOf(player, itemGuid));
+            RefusedSale(player, InteractionFailure.SellNoItemService, (int)SellResult.CantFindItem, npc.Entry, itemGuid);
             return;
         }
 
@@ -181,7 +181,7 @@ public sealed partial class QuestNpcServices
         if (sale.Error is { } error)
         {
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(npc.Guid, itemGuid, error));
-            Refused(player, InteractionFailure.SellRefused, (int)error, npc.Entry, ItemEntryOf(player, itemGuid)); // a refused item is still in the bags
+            RefusedSale(player, InteractionFailure.SellRefused, (int)error, npc.Entry, itemGuid); // a refused item is still in the bags
         }
         else if (sale.Sold)
         {
@@ -282,6 +282,15 @@ public sealed partial class QuestNpcServices
     /// <summary>Tell bot QA (<see cref="QuestNpcDependencies.Qa"/>) that a vendor or trainer request of <paramref name="player"/> was refused.</summary>
     private void Refused(Player player, InteractionFailure failure, int code, uint npcEntry, uint item, uint spell = 0)
         => Deps.Qa?.OnInteractionFailed(player, failure, code, npcEntry, item, spell);
+
+    /// <summary>
+    /// <see cref="Refused"/> for a sale: the item entry is looked up in the bags only when bot QA would report the refusal, so a real
+    /// player's refused sale does no inventory lookup for it.
+    /// </summary>
+    private void RefusedSale(Player player, InteractionFailure failure, int code, uint npcEntry, ObjectGuid itemGuid)
+    {
+        if (Deps.Qa is { } qa && qa.Observes(player)) qa.OnInteractionFailed(player, failure, code, npcEntry, ItemEntryOf(player, itemGuid), 0);
+    }
 
     /// <summary>The entry of the item <paramref name="itemGuid"/> in the player's bags, 0 when it is not there.</summary>
     private static uint ItemEntryOf(Player player, ObjectGuid itemGuid) => player.Inventory.GetItemByGuid(itemGuid)?.Entry ?? 0;

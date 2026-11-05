@@ -308,4 +308,123 @@ public sealed class PlayerbotElevatorApproachClockTests
             if (await clock(Floor, lift, 1000u)) lookOfTimeout = look;
         Assert.Equal(20, lookOfTimeout);
     }
+
+    private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
+
+    /// <summary>The repair world of <see cref="ARepairNpcAwayFromTheLift_IsNotSetAside_WhileTheBotWalksToTheLift"/>: boots worn out, the repairer on the plateau, the bot on the canyon floor.</summary>
+    private sealed class RepairRun(ElevatorTestWorld world, PlayerbotTownGoals goals, IDisposable items) : IAsyncDisposable
+    {
+        public ElevatorTestWorld World { get; } = world;
+
+        public PlayerbotTownGoals Goals { get; } = goals;
+
+        public async ValueTask DisposeAsync()
+        {
+            await World.DisposeAsync();
+            items.Dispose();
+        }
+
+        public T Field<T>(string name) => (T)typeof(PlayerbotTownGoals).GetField(name, Private)!.GetValue(Goals)!;
+
+        public void SetField(string name, object? value) => typeof(PlayerbotTownGoals).GetField(name, Private)!.SetValue(Goals, value);
+
+        public Task<int> StepAsync() => World.TickAsync(() =>
+        {
+            Goals.BeginThink();
+            World.Session.ManagedBudget = new ManagedActionBudget(1);
+            Goals.Update(World.Player, 100);
+            return 0;
+        });
+    }
+
+    private static async Task<RepairRun> RepairRunAsync()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 9212, Name = "boots", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
+            InventoryType = (uint)InventoryType.Feet, Armor = 10, MaxDurability = 20, ItemLevel = 10, Quality = 1, Stackable = 1,
+            AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue,
+        });
+        IDisposable itemScope = items.Use();
+        var content = new CreatureContent(
+            [new CreatureTemplate { Entry = 951, Name = "armorer", Faction = 900011, NpcFlags = (uint)NpcFlags.Repair, DisplayIds = [49] }],
+            [new CreatureSpawn { Guid = 95101, Entry = 951, MapId = ElevatorTestData.Kalimdor, X = Plateau.X, Y = Plateau.Y, Z = Plateau.Z }], [], [], []);
+        ElevatorTestWorld world = await ElevatorTestWorld.StartAsync(creatures: content, configure: services =>
+        {
+            services.AddSingleton(new RepairCostTable([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]));
+            services.AddSingleton(new FactionTemplateCatalog([new FactionTemplateRecord(1, 1, 0, 1, 0, 0), new FactionTemplateRecord(900011, 0, 0, 8, 0, 0)]));
+        });
+        await world.OnWorldAsync(() => WorldCollision.Of(world.Host.World).Install(pathfinder: new ElevatorTestWorld.DensePathfinder()));
+        await world.PlaceAsync(Floor);
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            player.Level = 10;
+            PlayerbotEquipmentTests.EquipFromBags(player, 9212);
+            player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
+            player.Money = 100;
+        });
+        return new RepairRun(world, new PlayerbotTownGoals(world.Session, Options()), itemScope);
+    }
+
+    /// <summary>Thinks until the repair walk holds a walk to a lift's landing (the aim is then the landing, one change of aim).</summary>
+    private static async Task HoldLiftWalkAsync(RepairRun run)
+    {
+        bool held = false;
+        for (int step = 0; step < 6_000 && !held; step++)
+        {
+            await run.StepAsync();
+            held = await run.World.OnWorldAsync(() => run.Field<PlayerbotRoute?>("_repairRoute") is { ToLiftLanding: true }
+                && PlayerbotElevator.TripOf(run.World.Player) is null
+                && run.Field<PlayerbotProgressAim>("_repairAim").Landing is not null); // Retarget runs at the start of the think after the one that stored the route
+        }
+
+        Assert.True(held, "the repair walk never held a walk to the lift: the check proves nothing");
+        PlayerbotProgressAim aim = await run.World.OnWorldAsync(() => run.Field<PlayerbotProgressAim>("_repairAim"));
+        Assert.NotNull(aim.Landing);
+    }
+
+    /// <summary>
+    /// A think with no route (between legs, a pending tile) is no change of aim: Retarget(null) would drop a held landing and count a change, so
+    /// a few brief pauses on the way to the lift used up the bound on the changes of aim and the walk was measured to the NPC again.
+    /// </summary>
+    [Fact]
+    public async Task ABriefPauseWithNoRoute_IsNoChangeOfAim_ForTheRepairWalk()
+    {
+        await using RepairRun run = await RepairRunAsync();
+        await HoldLiftWalkAsync(run);
+        int before = (await run.World.OnWorldAsync(() => run.Field<PlayerbotProgressAim>("_repairAim"))).Changes;
+        for (int pause = 0; pause < PlayerbotProgressAim.MaxChanges; pause++)
+        {
+            await run.World.OnWorldAsync(() => { run.SetField("_repairRoute", null); return 0; });
+            await run.StepAsync(); // the think that finds no route
+            await run.StepAsync(); // the think that holds the replanned one
+        }
+
+        PlayerbotProgressAim after = await run.World.OnWorldAsync(() => run.Field<PlayerbotProgressAim>("_repairAim"));
+        Assert.True(after.Changes <= before + 1, $"{PlayerbotProgressAim.MaxChanges} pauses made {after.Changes - before} changes of aim");
+    }
+
+    /// <summary>
+    /// A change of aim is no progress for the repair clock either: a walk that made no headway for 3 seconds keeps those seconds when it is handed a
+    /// walk to a lift's landing, as the destinations' clock does (<see cref="AChangeOfAim_KeepsTheTimeAlreadyRun"/>).
+    /// </summary>
+    [Fact]
+    public async Task AChangeOfAim_KeepsTheRepairClockTimeAlreadyRun()
+    {
+        await using RepairRun run = await RepairRunAsync();
+        await HoldLiftWalkAsync(run);
+        await run.World.OnWorldAsync(() =>
+        {
+            run.SetField("_repairStuckMs", 3_000u);
+            run.SetField("_repairAim", default(PlayerbotProgressAim)); // the next think meets the held lift walk as a new aim
+            return 0;
+        });
+        await run.StepAsync();
+
+        uint stuck = await run.World.OnWorldAsync(() => run.Field<uint>("_repairStuckMs"));
+        Assert.True(stuck >= 3_000u, $"the change of aim started the clock over: {stuck} ms");
+        Assert.True(await run.World.OnWorldAsync(() => run.Field<PlayerbotProgressAim>("_repairAim").Changes) >= 1, "no change of aim was seen: the check proves nothing");
+    }
 }

@@ -325,6 +325,7 @@ Detachable bot features (`IDetachableWorldFeature`, every subscription through t
 | `PlayerbotBattlegroundCoordinator` | Stateless | nothing to stop | bots in a match leave it, queue state cleared |
 | `PlayerbotSocialFeature` | Stateless | start no new registry refresh (a flag the next attach clears), one world-thread hop, wait for the refresh in flight | conversations and chatter stopped, map and guild subscriptions undone |
 | `PlayerbotQaFeature` | Stateless | cancel the background pass and wait for it and the publish as long as the host allows (a pass still running fails the quiesce, it is not abandoned), then save and export | findings reloaded from the store file; hang sink and cast observer re-registered; a new pass starts only after the old one ended |
+| `PlayerbotQaInteractionFeature` | Stateless | nothing to stop | every map's kill handler and the map events go through the bag; the kill counters live in the monitor (a DI singleton) |
 
 A quiesce of `ManagedPlayerbotFeature` that fails (an operation such as a fleet reset, a start or a slow checkpoint holds
 the operation lock past the host's quiesce timeout) is undone safely (fix cycle 1 of the tier 2 review): `Detach`
