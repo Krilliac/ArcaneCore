@@ -34,7 +34,7 @@ public static class ClientDbcConsumers
         new("Creatures:FactionTemplateDbcPath", "FactionTemplate.dbc", "creature hostility", "nobody aggroes on sight unless a catalog is registered"),
         new("Enchanting:SpellItemEnchantmentDbcPath", "SpellItemEnchantment.dbc", "enchanting", Off),
         new("GameObjects:TransportAnimationDbcPath", "TransportAnimation.dbc", "elevator and tram animation", "their progress stays 0"),
-        new("ItemRandomProperties:DbcPath", "ItemRandomProperties.dbc", "random item properties (also needs EnchantmentTemplateDumpPath)", "no item gets a random property"),
+        new("ItemRandomProperties:DbcPath", "ItemRandomProperties.dbc", "random item properties (also needs the item_enchantment_template rows of the world database)", "no item gets a random property"),
         new("ItemSets:DbcPath", "ItemSet.dbc", "item set bonuses", "no item set bonuses"),
         new("Items:CharStartOutfitDbcPath", "CharStartOutfit.dbc", "starting outfits", "the SQL starting items only"),
         new("Names:NamesProfanityDbcPath", "NamesProfanity.dbc", "character and pet name rules", "only the SQL reserved names", "Names"),

@@ -15,12 +15,14 @@
   The readable pages (page_text) and the random property groups (item_enchantment_template) are tables of the world database
   (world schema 70), filled by arcane-content-importer import or refresh from the content dump (refresh-world-content.ps1 does it);
   the world no longer reads the dump and the keys PageText:DumpPath and ItemRandomProperties:EnchantmentTemplateDumpPath are retired.
-  The script
+  The dump only feeds that import, so the script still checks it (preflight) when -Dump names one: both tables need INSERT rows, or a
+  wrong or truncated dump would leave the tables empty after the import. The script
 
     1. checks each DBC in -DbcDirectory: present, a WDBC file with the build-5875 field count, and listed with the right SHA-256 in
        the directory's SHA256SUMS when it has one (client-dbc-5875-effective does);
-    2. copies appsettings.json to -BackupPath (default: appsettings.json.<stamp>.bak next to it) and checks the copy's SHA-256;
-    3. sets the five keys, keeps every other value, and reads the file back to confirm them.
+    2. checks that -Dump holds INSERT rows for page_text and item_enchantment_template (nothing is written to the world from it here);
+    3. copies appsettings.json to -BackupPath (default: appsettings.json.<stamp>.bak next to it) and checks the copy's SHA-256;
+    4. sets the five keys, keeps every other value, and reads the file back to confirm them.
 
   -DryRun runs the checks and prints the keys without writing anything. Nothing is downloaded. Stop the world server before running
   it for real, then start it: the keys are read at startup (they are not hot-reloadable).
@@ -33,7 +35,9 @@
   client-dbc-5875-effective. The world reads them at every start, so not a temporary directory.
 
 .PARAMETER Dump
-  Accepted and ignored, so callers that still pass it (refresh-world-content.ps1) keep working: the world no longer reads a dump.
+  The classic-db or vmangos world dump (.sql or .sql.gz) that the importer reads. Checked only (both tables must have INSERT rows); no
+  appsettings key is written for it. Default: $env:ARCANECORE_CLASSICDB_DUMP, else <ARCANECORE_REFS_ROOT>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz.
+  When no dump is given or defaulted the check is skipped with a warning.
 
 .PARAMETER BackupPath
   Where the pre-change copy of appsettings.json goes. Default: <AppSettings>.<yyyyMMdd-HHmmss>.bak.
@@ -106,6 +110,10 @@ $AppSettings = [System.IO.Path]::GetFullPath($AppSettings)
 $DbcDirectory = [System.IO.Path]::GetFullPath($DbcDirectory)
 if (-not (Test-Path -LiteralPath $AppSettings -PathType Leaf)) { throw "appsettings not found: $AppSettings" }
 if (-not (Test-Path -LiteralPath $DbcDirectory -PathType Container)) { throw "DBC directory not found: $DbcDirectory" }
+if ($Dump) {
+    $Dump = [System.IO.Path]::GetFullPath($Dump)
+    if (-not (Test-Path -LiteralPath $Dump -PathType Leaf)) { throw "dump not found: $Dump" }
+}
 
 # 1. The DBCs.
 $manifest = Join-Path $DbcDirectory 'SHA256SUMS'
@@ -138,7 +146,33 @@ foreach ($name in $dbcs.Keys) {
     $values[$dbcs[$name].Key] = $file
 }
 
-# 2-3. The settings.
+# 2. The dump: both tables must have rows (the importer would otherwise leave page_text or item_enchantment_template empty without failing).
+if ($Dump) {
+    $dumpTables = @('page_text', 'item_enchantment_template')
+    $dumpFile = [System.IO.File]::OpenRead($Dump)
+    try {
+        $source = if ($Dump.EndsWith('.gz', [System.StringComparison]::OrdinalIgnoreCase)) {
+            New-Object System.IO.Compression.GZipStream($dumpFile, [System.IO.Compression.CompressionMode]::Decompress)
+        }
+        else { $dumpFile }
+        $reader = New-Object System.IO.StreamReader($source)
+        $missing = New-Object System.Collections.Generic.HashSet[string]
+        foreach ($table in $dumpTables) { [void]$missing.Add($table) }
+        while ($missing.Count -gt 0 -and $null -ne ($line = $reader.ReadLine())) {
+            if (-not $line.StartsWith('INSERT INTO `')) { continue }
+            foreach ($table in @($missing)) {
+                if ($line.StartsWith("INSERT INTO ``$table``")) { [void]$missing.Remove($table) }
+            }
+        }
+        $reader.Dispose()
+    }
+    finally { $dumpFile.Dispose() }
+    if ($missing.Count -gt 0) { throw "$Dump has no rows for: $([string]::Join(', ', @($missing)))" }
+    Write-Host "$Dump has page_text and item_enchantment_template rows (sha256 $(Get-Sha256 $Dump))"
+}
+else { Write-Warning 'no -Dump: page_text and item_enchantment_template rows were not checked' }
+
+# 3-4. The settings.
 $json = Get-Content -LiteralPath $AppSettings -Raw | ConvertFrom-Json
 $changed = 0
 foreach ($key in $values.Keys) {

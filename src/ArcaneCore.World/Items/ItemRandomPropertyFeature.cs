@@ -17,7 +17,7 @@ public sealed class ItemRandomPropertyOptions
 
     /// <summary>
     /// The build-5875 ItemRandomProperties.dbc (16 fields), supplied by the developer and never downloaded by the daemon. Empty: no item gets a
-    /// random property. A configured file that is unreadable or has another layout refuses startup.
+    /// random property. The file is read only when the item_enchantment_template table has rows; a file that is unreadable or has another layout then refuses startup.
     /// </summary>
     public string? DbcPath { get; set; }
 }

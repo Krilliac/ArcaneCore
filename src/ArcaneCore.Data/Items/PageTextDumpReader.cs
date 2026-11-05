@@ -6,7 +6,7 @@ namespace ArcaneCore.Data.Items;
 
 /// <summary>
 /// Parses the <c>page_text</c> rows (<c>entry</c>, <c>text</c>, <c>next_page</c>; vmangos and cmangos classic-db use the same names) of a MySQL
-/// world dump, plain or <c>.gz</c>, through <see cref="MySqlDumpReader"/>: the front end of <see cref="ArcaneCore.Data.Content.Import.ItemTextDumpImporter"/>,
+/// world dump (plain SQL text; the importer's input layer unpacks <c>.gz</c>), through <see cref="MySqlDumpReader"/>: the front end of <see cref="ArcaneCore.Data.Content.Import.ItemTextDumpImporter"/>,
 /// which writes them to the world database (the world no longer reads a dump; <c>PageText:DumpPath</c> is retired). Every other table of the dump is
 /// skipped. A row without an entry or with a value that is not a number refuses the file rather than guessing.
 /// </summary>
