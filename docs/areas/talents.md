@@ -191,7 +191,7 @@ numbers; run the server with the talent DBCs configured and read them.
 | Class check on wipe | none (`SkillHandler.cpp:37-56`) | `CanTrainAndResetTalentsOf` (`:51`) | `RequireClassTrainerForWipe` = true |
 | Price decay | multiplier decays one step a month, mutated on every read | a different model: last cost + 5 gold steps, decaying 5 gold a month to a 10 gold floor, computed without mutation (`Entities/Player.cpp:3720-3745`) | vmangos model; `IdempotentRespecDecay` = false |
 | Trainer visual spell | 14867 | 14867; wow_messages comment says 14876 | 14867 (classic-db has 14867, not 14876) |
-| Unresolved prerequisite | silently satisfied (`Player.cpp:20727-20740`) | same | catalog load fails (charter: fail closed) |
+| Unresolved prerequisite | silently satisfied (`Player.cpp:20727-20740`) | same | catalog load fails (fail closed) |
 | Reset-at-login request | `characters.character_flags` 0x100 (`Player.h:296`) | `characters.at_login` `AT_LOGIN_RESET_TALENTS` 0x04 (mangos-classic `Player.h:502`) | the mangos bit, in `character_at_login` |
 | `.reset all` argument | any (`CharacterCommands.cpp:3969-3986` ignores it) | `talents` or `spells` (mangos-classic `Level3.cpp`) | `talents` only |
 

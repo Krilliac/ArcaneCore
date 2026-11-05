@@ -7,7 +7,7 @@ Code: `src/ArcaneCore.Game/Honor/` (rules and world-thread state), `src/ArcaneCo
 schema renumbering note: [integration/honor.md](../integration/honor.md).
 
 Evidence: automated tests against the references cited below, loopback clients through the real world host, and SQLite for the stores.
-**Not verified against a real 1.12.1 client** (charter 1.3); the checklist at the end is what a client pass has to confirm.
+**Not verified against a real 1.12.1 client** (see [real-client acceptance](../guide/client-acceptance.md)); the checklist at the end is what a client pass has to confirm.
 **MariaDB and PostgreSQL were not exercised on this machine** (no server): the store tests are provider theories that run on hosted CI, and
 the SQLite results do not prove the other two (see "Hosted CI").
 
