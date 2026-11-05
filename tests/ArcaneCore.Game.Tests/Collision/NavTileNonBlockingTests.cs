@@ -19,7 +19,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private const int TileRow = 30;
 
     // Guards against a hang, not behaviour: the gated reads never finish on their own, so a call that blocked would wait forever. Background
-    // work runs on the thread pool, which a busy full-suite run (other tests blocking pool threads) can starve for many seconds.
+    // the test thread and any pool continuations can be starved for many seconds by a busy full-suite run (other tests blocking pool threads).
     private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(120);
 
     private readonly NavMeshFixture _fixture = new();
@@ -28,6 +28,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private int _running;
     private int _peak;
     private int _lastReadThread;
+    private int _readsOnPoolThread;
     private Func<string, bool> _gated = _ => true;
 
     public void Dispose()
@@ -56,6 +57,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
 
                 Interlocked.Increment(ref _reads);
                 Volatile.Write(ref _lastReadThread, Environment.CurrentManagedThreadId);
+                if (Thread.CurrentThread.IsThreadPoolThread) Interlocked.Increment(ref _readsOnPoolThread);
                 int now = Interlocked.Increment(ref _running);
                 int seen;
                 while ((seen = Volatile.Read(ref _peak)) < now && Interlocked.CompareExchange(ref _peak, now, seen) != seen)
@@ -89,8 +91,8 @@ public sealed class NavTileNonBlockingTests : IDisposable
     {
         NavMeshPathfinder nav = Gated();
 
-        // A dedicated thread, never a pool thread: the background read runs on the pool, and a pool thread that finished the call could
-        // legitimately pick the read up afterwards (the assertion below was flaky when the two shared a thread).
+        // A dedicated thread, never a pool thread, so the caller's thread id cannot be a reader's: the reader threads are dedicated
+        // too, and a thread id is only reused after its thread has exited.
         int callThread = 0;
         var answer = new TaskCompletionSource<PathResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         // The thread stays alive until the test ends, pass or fail: an exited thread's ManagedThreadId can be reused by a new pool thread.
@@ -117,7 +119,49 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.Equal(1, _reads);
         Assert.Equal(1, nav.TileReadsStarted);
         Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
-        Assert.NotEqual(callThread, Volatile.Read(ref _lastReadThread)); // read on the pool, not here
+        Assert.NotEqual(callThread, Volatile.Read(ref _lastReadThread)); // read on a reader thread, not here
+    }
+
+    [Fact]
+    public async Task ABackgroundRead_NeverRunsOnAThreadPoolThread()
+    {
+        _gated = _ => false;
+        NavMeshPathfinder nav = Gated();
+
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
+        Task read = nav.PendingTileRead(0, 31, 31)!;
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+        await read;
+
+        Assert.Equal(1, _reads);
+        Assert.Equal(0, Volatile.Read(ref _readsOnPoolThread));
+    }
+
+    [Fact]
+    public void ABackgroundRead_FinishesWhileEveryThreadPoolWorkerIsBusy()
+    {
+        _gated = _ => false;
+        NavMeshPathfinder nav = Gated();
+        using var release = new ManualResetEventSlim();
+        int blockers = Environment.ProcessorCount * 4 + 8;
+        try
+        {
+            for (int i = 0; i < blockers; i++)
+            {
+                ThreadPool.QueueUserWorkItem(_ => release.Wait());
+            }
+
+            Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
+            Task read = nav.PendingTileRead(0, 31, 31)!;
+            Assert.True(read.Wait(HangGuard), "the read did not finish while the shared pool was held busy");
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        Assert.Equal(1, _reads);
+        Assert.Equal(0, Volatile.Read(ref _readsOnPoolThread));
     }
 
     /// <summary>
