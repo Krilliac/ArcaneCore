@@ -4,6 +4,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Duel;
@@ -259,6 +261,17 @@ public sealed class TrapSystemTests : IDisposable
         _hunter.Flags |= PlayerFlags.FfaPvp;
         mate.Flags |= PlayerFlags.FfaPvp;
         Assert.True(TrapRules.OwnerMayTrigger(_hunter, pet));
+    }
+
+    [Fact]
+    public void ATrapOwnerMayTrigger_IsFalse_OnAPlayerMindControlledByACreature_WhenTheOwnerIsUnflagged()
+    {
+        // Unit.cpp:4806-4813 GetCharmerOrOwnerPlayerOrPlayerItself: the charmer guid is a creature, so the victim is still the player himself.
+        Player victim = TestWorld.CreatePlayer(4, 0, 0, new FakeSession(4));
+        Creature controller = Wolf(0);
+        CharmService.SetCharmerGuid(victim, controller.Guid);
+        Assert.Equal(0, (int)(_hunter.UnitFlags & UnitFlags.Pvp));
+        Assert.False(TrapRules.OwnerMayTrigger(_hunter, victim));
     }
 
     [Fact]

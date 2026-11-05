@@ -75,7 +75,7 @@ public sealed partial class WorldRuntime
     /// handlers and bots, which run under the serial gate). A caller already inside the gate, or outside the parallel phase, gets a
     /// no-op scope. A caller outside the gate during the parallel phase (for example a map-local or ungated stage) is reported once per
     /// <paramref name="table"/> to the anomaly ledger (subsystem "parallel", code "ungated-read"), counted as an owner violation, and
-    /// made to take the gate for the read, so the read is never racy. Dispose the scope to leave.
+    /// made to take the gate for the read. That excludes every writer that also runs under the gate; a writer that World:Parallel:Ungated=Packets lets run ungated is not excluded. Dispose the scope to leave.
     /// </summary>
     public SerialScope EnterSerialForRead(string table)
     {
