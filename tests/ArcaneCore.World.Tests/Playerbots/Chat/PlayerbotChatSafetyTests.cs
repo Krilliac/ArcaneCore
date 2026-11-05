@@ -633,6 +633,7 @@ public sealed class PlayerbotChatSafetyTests
             Assert.Equal(first.AllPatterns.Count(), first.WarmedPatterns);
 
             rig.Safety.TermsFile = path;
+            await rig.Chat.Safety.SettleFilter(); // the file is read on the thread pool; wait for the swap
             PlayerbotChatSafetyFilter reloaded = rig.Chat.Safety.Filter();
             Assert.NotSame(first, reloaded);
             Assert.True(reloaded.WarmUpStarted);
@@ -640,6 +641,46 @@ public sealed class PlayerbotChatSafetyTests
             Assert.Equal(reloaded.AllPatterns.Count(), reloaded.WarmedPatterns);
             Assert.Equal(first.AllPatterns.Count() + 1, reloaded.WarmedPatterns); // the operator's pattern too
             Assert.Same(reloaded.Warmed, reloaded.Warmed); // once per filter
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ATermsFileRead_ThatEndsAfterANewerOptionsChange_IsDropped_NotPublishedOverIt()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "arcane-safety-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{ "categories": { "Harassment": { "patterns": [ "\\bstale file\\b" ] } } }""");
+        try
+        {
+            await using var rig = new Rig();
+            using var reading = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            rig.Chat.Safety.LoadTerms = (file, replace, timeout) =>
+            {
+                reading.Set();
+                release.Wait(TimeSpan.FromSeconds(30)); // hold the read open until the newer options change is in force
+                return PlayerbotChatSafetyFilter.Load(file, replace, timeout);
+            };
+
+            // The file check starts on the thread pool and is held inside the read.
+            rig.Safety.TermsFile = path;
+            Task refresh = rig.Chat.Safety.SettleFilter();
+            Assert.True(reading.Wait(TimeSpan.FromSeconds(30)));
+
+            // A newer change: no file and another deadline. Built and published at once, while the older read is still open.
+            rig.Safety.TermsFile = string.Empty;
+            rig.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
+            PlayerbotChatSafetyFilter newer = rig.Chat.Safety.Filter();
+            Assert.Equal(TimeSpan.FromMilliseconds(250), newer.MatchTimeout);
+
+            // The older read ends last: it must not overwrite the newer filter.
+            release.Set();
+            await refresh.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Same(newer, rig.Chat.Safety.PublishedFilter);
+            Assert.Null(newer.Screen("a stale file line", PlayerbotChatSafetyCategories.All).Category); // the stale file's pattern is not in force
         }
         finally
         {
@@ -922,13 +963,42 @@ public sealed class PlayerbotChatSafetyTests
             await using var rig = new Rig();
             Assert.Equal("fake reply", (await rig.AnswerAsync("first banned phrase"))!.Text);
             rig.Safety.TermsFile = path; // what a reload does
+            await rig.Chat.Safety.SettleFilter();
             Assert.Equal("Builtin", (await rig.AnswerAsync("first banned phrase"))!.Provider);
 
             File.WriteAllText(path, """{ "categories": { "Harassment": { "terms": [ "second banned phrase" ] } } }""");
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));
             rig.Time.Advance(PlayerbotChatSafety.TermsFileCheck);
+            await rig.Chat.Safety.SettleFilter();
             Assert.Equal("Builtin", (await rig.AnswerAsync("second banned phrase"))!.Provider);
             Assert.Equal("fake reply", (await rig.AnswerAsync("first banned phrase"))!.Text);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task TheTermsFile_IsReadOffTheCallingThread_TheCallerKeepsThePreviousFilterUntilTheSwap()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "arcane-safety-" + Guid.NewGuid().ToString("N") + ".json");
+        File.WriteAllText(path, """{ "categories": { "Harassment": { "terms": [ "off thread phrase" ] } } }""");
+        try
+        {
+            await using var rig = new Rig();
+            PlayerbotChatSafetyFilter before = rig.Chat.Safety.Filter();
+            rig.Safety.TermsFile = path;
+
+            // The call that notices the change does no file I/O: it returns the filter it had and starts the reload on the pool.
+            Assert.Same(before, rig.Chat.Safety.Filter());
+            Assert.False(before.Screen("off thread phrase", PlayerbotChatSafetyCategories.All).Flagged);
+
+            await rig.Chat.Safety.SettleFilter();
+            PlayerbotChatSafetyFilter after = rig.Chat.Safety.Filter();
+            Assert.NotSame(before, after);
+            Assert.True(after.Screen("off thread phrase", PlayerbotChatSafetyCategories.All).Flagged);
+            Assert.Same(after, rig.Chat.Safety.Filter()); // published whole; no further reload until the file changes
         }
         finally
         {

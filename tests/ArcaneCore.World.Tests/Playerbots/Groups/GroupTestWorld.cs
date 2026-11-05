@@ -160,7 +160,9 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             spells.System.Store = new SpellStore([.. spells.System.Store.All, TauntSpell(), ResurrectionSpell()], [], []);
             return true;
         });
-        return new GroupTestWorld(world, options);
+        var started = new GroupTestWorld(world, options);
+        await started.Coordinator.EncounterLoading.WaitAsync(TimeSpan.FromSeconds(30)); // the instance_encounter rows are read off the attach
+        return started;
     }
 
     /// <summary>
