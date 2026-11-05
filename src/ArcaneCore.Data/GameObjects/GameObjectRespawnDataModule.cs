@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +12,7 @@ namespace ArcaneCore.Data.GameObjects;
 /// written by MapPersistentState::SaveGORespawnTime, Maps/MapPersistentStateMgr.cpp:103-123). The key is the spawn guid within a map
 /// instance (0 = the shared world copy).
 /// </summary>
-public sealed class GameObjectRespawnRow
+public sealed class GameObjectRespawnRow : IRespawnRow
 {
     public int InstanceId { get; set; }
 
