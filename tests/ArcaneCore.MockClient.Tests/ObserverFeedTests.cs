@@ -103,6 +103,18 @@ public sealed class ObserverFeedTests
     private static async Task SendAsync(Stream pipe, string line, CancellationToken ct)
         => await pipe.WriteAsync(Encoding.UTF8.GetBytes(line + "\n"), ct).ConfigureAwait(false);
 
+    private static async Task IgnoreBrokenPipeAsync(Task write)
+    {
+        try
+        {
+            await write;
+        }
+        catch (IOException)
+        {
+            // The server closed while the client was still writing: that is the point of the test.
+        }
+    }
+
     [Fact]
     public async Task OverARealPipe_HelloSubscribeFramesQueryAndRefusals_FollowTheMapFeedProtocol()
     {
@@ -175,9 +187,12 @@ public sealed class ObserverFeedTests
         await pipe.ConnectAsync(ct);
         using var reader = new StreamReader(pipe, Encoding.UTF8);
 
-        await SendAsync(pipe, new string('x', ObserverFeedServer.MaxLineBytes + 1), ct);
+        // The pipe has no buffer, so the write stays pending until the server reads; the server stops reading at the limit, answers and closes.
+        // Start the send, read the answer, then let the rest of the write find a closed pipe (the same pattern as the daemon's pipe tests).
+        Task send = SendAsync(pipe, new string('x', ObserverFeedServer.MaxLineBytes + 1), ct);
 
         Assert.Equal("line-too-long", (string?)(await ReadAsync(reader, ct))["code"]);
+        await IgnoreBrokenPipeAsync(send);
         Assert.Null(await reader.ReadLineAsync(ct)); // closed
     }
 

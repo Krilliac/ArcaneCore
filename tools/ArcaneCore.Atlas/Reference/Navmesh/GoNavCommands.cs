@@ -107,7 +107,7 @@ public static class GoNavCommands
         {
             throw new CommandException(CommandException.Failed, $"{Name}: {FileName(displayId)} was refused: {e.Message}", e);
         }
-        catch (IOException e)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             throw new CommandException(CommandException.Failed, $"{Name}: {FileName(displayId)} could not be read: {e.Message}", e);
         }

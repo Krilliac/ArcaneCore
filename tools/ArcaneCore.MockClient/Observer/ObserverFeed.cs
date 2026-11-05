@@ -152,6 +152,10 @@ internal static class ObserverFrames
     public static JsonObject Error(string code, string message)
         => new() { ["op"] = "error", ["code"] = code, ["message"] = message };
 
+    /// <summary>An error that carries the id of the request it refuses, so a caller waiting on that id is answered at once.</summary>
+    public static JsonObject Error(string code, string message, long id)
+        => new() { ["op"] = "error", ["id"] = id, ["code"] = code, ["message"] = message };
+
     /// <summary>A refused query (the client has no collision data, so every query is refused).</summary>
     public static JsonObject Refused(long id, string code, string message)
         => new() { ["op"] = "result", ["id"] = id, ["ok"] = false, ["code"] = code, ["message"] = message };
@@ -217,9 +221,9 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
         {
             await _loop.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception e) when (e is OperationCanceledException or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
-            // the stop
+            // the stop, or a loop that already ended on a pipe fault: disposing the feed must never throw, since the playbot disposes it before its logout
         }
 
         _stop.Dispose();
@@ -356,7 +360,10 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
                 }
                 else
                 {
-                    reply = ObserverFrames.Error("unknown-op", "the observer channel serves hello, subscribe, unsubscribe and query");
+                    const string UnknownOpMessage = "the observer channel serves hello, subscribe, unsubscribe and query";
+                    reply = request["id"] is JsonValue unknownId && unknownId.TryGetValue(out long askedId)
+                        ? ObserverFrames.Error("unknown-op", UnknownOpMessage, askedId)
+                        : ObserverFrames.Error("unknown-op", UnknownOpMessage);
                     ok = false;
                 }
 
@@ -414,12 +421,14 @@ internal sealed class ObserverFeedServer : IAsyncDisposable
         {
             if (JsonNode.Parse(line, documentOptions: new JsonDocumentOptions { MaxDepth = 16 }) is JsonObject request)
             {
+                // The reads below are what throw on a line with a repeated key, so they happen here and not later in the serve loop.
+                _ = request["id"];
                 return (request, request["op"] is JsonValue v && v.TryGetValue(out string? op) ? op : null);
             }
         }
-        catch (JsonException)
+        catch (Exception e) when (e is JsonException or ArgumentException)
         {
-            // not JSON
+            // not JSON, or a repeated key: both are a line that is not a usable request
         }
 
         return (null, null);

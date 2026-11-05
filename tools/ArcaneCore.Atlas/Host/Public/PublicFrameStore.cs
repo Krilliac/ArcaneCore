@@ -37,7 +37,7 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
 
     private readonly Dictionary<uint, MapState> _maps = [];
     private readonly Lock _gate = new();
-    private HashSet<uint> _seedSummonEntries = [];
+    private readonly HashSet<uint> _seedSummonEntries = [];
 
     /// <summary>Raised after a map's projection or state changed (called on the feed reader thread; must not block).</summary>
     public event Action<uint>? Updated;
@@ -91,7 +91,6 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
             lock (state)
             {
                 state.Projector.SeedSummonEntries(entries);
-                state.StaffProjector.SeedSummonEntries(entries);
             }
         }
     }
@@ -154,7 +153,6 @@ internal sealed class PublicFrameStore(PublicOptions options, TimeProvider time)
             {
                 state = new MapState(new GuestFrameProjector(options.Guest, time), new GuestFrameProjector(StaffPolicy(options.Guest), time));
                 state.Projector.SeedSummonEntries(_seedSummonEntries);
-                state.StaffProjector.SeedSummonEntries(_seedSummonEntries);
                 _maps[map] = state;
             }
 

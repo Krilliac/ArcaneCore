@@ -297,7 +297,7 @@ public sealed class PublicFeedPoolTests
         PublicMapStatus status = rig.Store.Status(0);
         Assert.True(status.Reduced); // links is still missing
         Assert.Equal([501UL], status.Projection!.Entities.Select(e => e.Guid).ToArray());
-        Assert.Equal([501UL], status.StaffProjection!.Entities.Select(e => e.Guid).ToArray());
+        Assert.Equal([500UL, 501UL, 502UL], status.StaffProjection!.Entities.Select(e => e.Guid).Order().ToArray()); // the staff view shows players, so it is never reduced and is not seeded
     }
 
     [Fact]

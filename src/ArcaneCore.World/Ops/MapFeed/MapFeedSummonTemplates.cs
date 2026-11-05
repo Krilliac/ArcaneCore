@@ -14,8 +14,10 @@ namespace ArcaneCore.World.Ops.MapFeed;
 /// pet species that first appears during an outage is still recognised.
 /// <para>
 /// A template is in the set when it is a totem or non-combat pet by creature type (CreatureType.dbc 11 and 12), a row of <c>totem_spell</c>
-/// (<see cref="TotemContent"/>), or a creature with pet level stats or create spells (<see cref="PetContent"/>; this includes tameable beasts, so a
-/// wild creature of such an entry is dropped too when the listener fails closed, which is the safe side). Pure data: content is immutable once loaded,
+/// (<see cref="TotemContent"/>), a creature with pet level stats or create spells (<see cref="PetContent"/>; these are only the few shared pet
+/// rows, not the species a hunter can tame), or a tameable beast: creature type beast with the tameable type flag, the repo's own predicate
+/// (<c>SummonService.IsTameable</c>). A hunter pet reads the shared pet rows, not its own entry, so the tameable test is what puts its species in
+/// the set. A wild creature of a tameable entry is dropped too when the listener fails closed, which is the safe side. Pure data: content is immutable once loaded,
 /// so the answer is the same on every ask until a content reload, and the function needs no world thread.
 /// </para>
 /// </summary>
@@ -27,6 +29,12 @@ internal static class MapFeedSummonTemplates
     /// <summary>CreatureType.dbc: non-combat pet.</summary>
     public const uint NonCombatPetCreatureType = 12;
 
+    /// <summary>CreatureType.dbc: beast; with <see cref="TameableTypeFlag"/> it is a creature a hunter can tame (SummonService.IsTameable).</summary>
+    public const uint BeastCreatureType = 1;
+
+    /// <summary>CREATURE_TYPEFLAGS_TAMEABLE (vmangos CreatureInfo::IsTameable).</summary>
+    public const uint TameableTypeFlag = 0x1;
+
     /// <summary>The set from the three content tables, sorted ascending and without repeats. Any table may be null.</summary>
     public static uint[] Compute(CreatureContent? creatures, TotemContent? totems, PetContent? pets)
     {
@@ -35,7 +43,8 @@ internal static class MapFeedSummonTemplates
         {
             foreach (CreatureTemplate template in creatures.Templates)
             {
-                if (template.CreatureType is TotemCreatureType or NonCombatPetCreatureType)
+                if (template.CreatureType is TotemCreatureType or NonCombatPetCreatureType
+                    || (template.CreatureType == BeastCreatureType && (template.TypeFlags & TameableTypeFlag) != 0))
                 {
                     entries.Add(template.Entry);
                 }

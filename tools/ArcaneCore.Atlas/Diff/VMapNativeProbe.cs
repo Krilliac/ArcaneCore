@@ -227,6 +227,7 @@ public static class VMapNativeProbe
                 if (!process.HasExited)
                 {
                     process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000); // so the temp folder is not still held open when the caller deletes it
                 }
             }
             catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)

@@ -14,8 +14,17 @@ namespace ArcaneCore.World.Tests.Ops.MapFeed;
 /// </summary>
 public sealed class MapFeedSummonTemplatesTests
 {
-    private static CreatureTemplate Template(uint entry, uint creatureType)
-        => new() { Entry = entry, Name = "T" + entry, CreatureType = creatureType, DisplayIds = [1], MinLevelHealth = 1, MaxLevelHealth = 1 };
+    private static CreatureTemplate Template(uint entry, uint creatureType, uint typeFlags = 0)
+        => new() { Entry = entry, Name = "T" + entry, CreatureType = creatureType, TypeFlags = typeFlags, DisplayIds = [1], MinLevelHealth = 1, MaxLevelHealth = 1 };
+
+    [Fact]
+    public void ATameableBeast_IsInTheSet_ButAPlainBeastAndATameableNonBeastAreNot()
+    {
+        var creatures = new CreatureContent(
+            [Template(10, 1, 0x1), Template(11, 1, 0x2), Template(12, 7, 0x1), Template(13, 1, 0x3)], [], [], [], []);
+
+        Assert.Equal([10u, 13u], MapFeedSummonTemplates.Compute(creatures, null, null));
+    }
 
     [Fact]
     public void TheSet_IsTotemAndNonCombatPetTypes_TotemSpellRows_AndPetRows_SortedWithoutRepeats()
@@ -56,6 +65,7 @@ public sealed class MapFeedSummonTemplatesTests
         Assert.True(caps.Ok(), caps.ToString());
         JsonElement templates = caps.GetProperty("summonTemplates");
         Assert.Equal(JsonValueKind.Array, templates.ValueKind);
-        Assert.DoesNotContain(templates.EnumerateArray(), e => e.GetUInt32() == FeedWorld.WolfEntry); // the test world's only creature is a plain beast
+        Assert.DoesNotContain(templates.EnumerateArray(), e => e.GetUInt32() == FeedWorld.WolfEntry); // a plain beast
+        Assert.Contains(templates.EnumerateArray(), e => e.GetUInt32() == FeedWorld.TotemTemplateEntry); // proves the DI wiring resolved the creature content
     }
 }

@@ -123,6 +123,9 @@ internal sealed class FeedWorld : IAsyncDisposable
 
     public const uint WolfEntry = 299;
 
+    /// <summary>A totem-type template with no spawn, so the summon-template set of the caps answer is not empty.</summary>
+    public const uint TotemTemplateEntry = 298;
+
     public const uint WolfSpawn = 4242;
 
     public const uint ChestEntry = 2843;
@@ -236,7 +239,11 @@ internal sealed class FeedWorld : IAsyncDisposable
                 spawns.Add(spawn with { Guid = ExtraSpawnBase + (uint)i, Y = -131f + (i * 0.5f) });
             }
 
-            creatures = new CreatureTestContext(new CreatureContent([wolf], spawns, [], [], []));
+            creatures = new CreatureTestContext(new CreatureContent([wolf, new CreatureTemplate
+            {
+                Entry = TotemTemplateEntry, Name = "Test Totem", MinLevel = 1, MaxLevel = 1, DisplayIds = [904], Faction = 35, CreatureType = 11,
+                MinLevelHealth = 5, MaxLevelHealth = 5,
+            }], spawns, [], [], []));
 
             var chest = new GameObjectTemplate { Entry = ChestEntry, Type = (uint)GameObjectType.Chest, DisplayId = 10, Name = "Battered Chest", Data = new uint[GameObjectTemplate.DataCount] };
             var chestSpawn = new GameObjectSpawn { Guid = ChestSpawn, Entry = ChestEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };
