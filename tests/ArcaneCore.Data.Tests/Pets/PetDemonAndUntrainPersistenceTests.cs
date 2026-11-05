@@ -14,7 +14,7 @@ namespace ArcaneCore.Data.Tests.Pets;
 
 /// <summary>
 /// Characters schema 76 (<c>character_pet.CreatedBySpell</c>, <c>ResetTalentsCost</c>, <c>ResetTalentsTime</c>; vmangos created_by_spell, reset_talents_cost,
-/// reset_talents_time, Pet.cpp:580-583) and world schema 70 (<c>pet_name_generation</c>, vmangos ObjectMgr::LoadPetNames, ObjectMgr.cpp:8530). The rows are
+/// reset_talents_time, Pet.cpp:580-583) and world schema 72 (<c>pet_name_generation</c>, vmangos ObjectMgr::LoadPetNames, ObjectMgr.cpp:8530). The rows are
 /// invented test data.
 /// </summary>
 public sealed class PetDemonAndUntrainPersistenceTests
@@ -103,7 +103,7 @@ public sealed class PetDemonAndUntrainPersistenceTests
     }
 
     [Fact]
-    public void Step70_IsThePetNameGenerationTable()
+    public void Step72_IsThePetNameGenerationTable()
     {
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == PetNameGenerationWorldDataModule.Version);
         Assert.Equal(["pet_name_generation"], step.Changes.OfType<CreateTableChange>().Select(c => c.Table));

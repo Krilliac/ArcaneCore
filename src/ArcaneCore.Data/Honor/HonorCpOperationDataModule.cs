@@ -6,14 +6,14 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Honor;
 
 /// <summary>
-/// Characters schema 76: <c>character_honor_cp.operation_id</c> (nullable, unique per character), the write identity <c>HonorWriteQueue</c> stamps on every
+/// Characters schema 77: <c>character_honor_cp.operation_id</c> (nullable, unique per character), the write identity <c>HonorWriteQueue</c> stamps on every
 /// contribution row so that a retried batch whose first commit succeeded appends nothing twice (<see cref="EfHonorStore.AppendCpAsync"/>).
 /// The column and its unique index are declared by the model of <see cref="CharacterHonorDataModule"/>; this step adds them to databases created
 /// before it. Existing rows keep a null id, which the unique index allows any number of times.
 /// </summary>
 public sealed class HonorCpOperationDataModule : IDataModule, ICharacterDataCleanup
 {
-    public const int Version = 76;
+    public const int Version = PetUntrainAndDemonDataModule.Version + 1;
 
     public DatabaseComponent Component => DatabaseComponent.Characters;
 

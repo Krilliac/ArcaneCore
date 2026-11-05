@@ -12,13 +12,13 @@ namespace ArcaneCore.Data.World.Creatures;
 /// <c>gameobject.guid</c> of the object used (<see cref="GameObjectUseScriptRow"/>), <c>dbscripts_on_go_template_use</c> by its template entry
 /// (<see cref="GameObjectTemplateUseScriptRow"/>).
 /// <para>
-/// <b>World version 70</b>, after the spell script target condition column (69). Tests read <see cref="Version"/>, never a literal.
+/// <b>World version 71</b>, after the page text and item enchantment template tables (70, <see cref="Content.Items.ItemTextWorldDataModule"/>). Tests read <see cref="Version"/>, never a literal.
 /// </para>
 /// </summary>
 public sealed class DbGameObjectScriptDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = SpellScriptTargetConditionDataModule.Version + 1;
+    public const int Version = Content.Items.ItemTextWorldDataModule.Version + 1;
 
     public DatabaseComponent Component => DatabaseComponent.World;
 

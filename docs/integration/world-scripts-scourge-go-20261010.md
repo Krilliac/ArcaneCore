@@ -53,7 +53,7 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   quest-end dbscript command 9 (7491 -> guid 40134, 7496 -> 40135, 7782 -> 40151, 7784 -> 40150). ArcaneCore fires on the respawn
   transition only and does not fire for a head that is merely loaded dormant.
 - **Coffer `dbscripts_on_go_template_use` 122088 (command 40, despawn self) now runs.** It did not when this lane landed: ArcaneCore had no
-  importer, table or runner for `dbscripts_on_go_template_use` or `dbscripts_on_go_use`. World schema 70 (`DbGameObjectScriptDataModule`)
+  importer, table or runner for `dbscripts_on_go_template_use` or `dbscripts_on_go_use`. World schema 71 (`DbGameObjectScriptDataModule`)
   adds both tables, the content importer reads them from the classic-db dump, and `GameObjectMapSystem` starts them as mangos-classic
   `GameObject::Use` does (GameObject.cpp:1490 template script for every type; :1506, :1529, :1703 the guid script of a door, button and
   goober), with the user as source and the object as target, on the map's DB script executor. The coffer therefore toggles, fires its trap

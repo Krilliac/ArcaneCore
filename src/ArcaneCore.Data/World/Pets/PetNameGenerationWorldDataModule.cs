@@ -21,13 +21,13 @@ public sealed class PetNameGenerationRow
 }
 
 /// <summary>
-/// World schema 70: the <c>pet_name_generation</c> table, read into <see cref="ArcaneCore.Kernel.WorldData.Pets.PetContent"/> by
-/// <see cref="EfPetDataStore"/>. A database upgraded to 70 holds no rows until the dump is imported, so demons keep the creature name.
+/// World schema 72: the <c>pet_name_generation</c> table, read into <see cref="ArcaneCore.Kernel.WorldData.Pets.PetContent"/> by
+/// <see cref="EfPetDataStore"/>. A database upgraded to 72 holds no rows until the dump is imported, so demons keep the creature name.
 /// </summary>
 public sealed class PetNameGenerationWorldDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = 70;
+    public const int Version = DbGameObjectScriptDataModule.Version + 1;
 
     public const string Table = "pet_name_generation";
 
