@@ -58,9 +58,10 @@ public sealed class EventScenarioWorldTests
                     {
                         Guid = Objective, Entry = Objective, MapId = 0, X = Origin.X + 70f, Y = Origin.Y, Z = Origin.Z, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600,
                     })]);
-            // The tables are read off the attach and applied on a world tick; run until they are in.
+            // The tables are read on the thread pool and applied by an action posted to the world thread, which a manual clock runs on a
+            // zero-diff tick. Wait for that in real time without advancing game time, so the game clock does not depend on pool timing.
             PlayerbotEventScenarioFeature feature = started.World.Services.GetRequiredService<PlayerbotEventScenarioFeature>();
-            Assert.True(await started.RunUntilAsync(30_000, () => feature.Loading.IsCompleted));
+            await feature.Loading.WaitAsync(TimeSpan.FromSeconds(30));
             return started;
         }
         finally

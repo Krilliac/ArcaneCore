@@ -439,7 +439,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private uint _nextGreyShedMs;
 
     /// <summary>
-    /// The lowest-level incomplete quest in the log that is grey for the player (<see cref="IsGrey"/>), skipping refused ones; zero when none.
+    /// The lowest-level incomplete quest in the log that <see cref="PlayerbotOptions.DropGreyQuests"/> may drop (<see cref="IsDroppableGrey"/>: grey and neither class-restricted nor a chain step), skipping refused ones; zero when none.
     /// A complete (not yet rewarded) grey quest is kept for its turn-in, and a failed one is the full-log shed's business.
     /// </summary>
     internal static uint GreyQuestToDrop(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null)
@@ -518,7 +518,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         => IsGrey(player, quest) && !IsClassOrChainQuest(quest);
 
     /// <summary>Grey for every decision of this controller: <see cref="IsGrey"/>, except that with <see cref="PlayerbotOptions.DropGreyQuests"/> on a class or chain quest is treated as worth keeping and taking (never grey).</summary>
-    private bool IsGreyForBot(Player player, Quest quest)
+    internal bool IsGreyForBot(Player player, Quest quest)
         => _options.DropGreyQuests ? IsDroppableGrey(player, quest) : IsGrey(player, quest);
 
     internal static bool ReasonableReturnTrip(PlayerbotHomeArea home, uint mapId, float playerX, float playerY,
@@ -1110,7 +1110,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         continue;
                     }
                     // A full log is refused by the server (SMSG_QUESTLOG_FULL; GitHub #786): the giver is not asked. A quest worth
-                    // taking (not grey) is what a full log makes room for (Update, TryMakeRoomInFullLog); a grey one is skipped.
+                    // taking is what a full log makes room for (Update, TryMakeRoomInFullLog); a quest that is grey for the bot (IsGreyForBot: with DropGreyQuests on a
+                    // grey class or chain quest does not count as grey) is skipped.
                     if (!hasFreeSlot)
                     {
                         if (!IsGreyForBot(player, quest)) _roomWanted = true;

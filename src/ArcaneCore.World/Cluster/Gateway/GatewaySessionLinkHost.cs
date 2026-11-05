@@ -269,6 +269,11 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     /// </summary>
     public IGatewayControlHandler? ControlHandler { get; set; }
 
+    /// <summary>
+    /// Called on a link's receive loop for the gateway's LinkSlot frame, with the slot that link serves. Set once, before <see cref="Start"/>; must not block. Null: the name is ignored (a worker with no control service has no use for it).
+    /// </summary>
+    public Action<string>? SlotNamed { get; set; }
+
     /// <summary>Test seam: awaited before every accept; an exception it throws behaves like a failed accept.</summary>
     internal Func<CancellationToken, ValueTask>? BeforeAcceptForTests { get; set; }
 
@@ -446,6 +451,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                         break;
                     case GatewayWorkerFrameType.WardenPosture:
                         OnWardenPosture(link, body.Span);
+                        break;
+                    case GatewayWorkerFrameType.LinkSlot:
+                        SlotNamed?.Invoke(GatewaySessionWire.DecodeLinkSlot(body.Span));
                         break;
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);

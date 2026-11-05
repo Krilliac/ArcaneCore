@@ -412,6 +412,22 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
+    /// Store the movement block of an honoured solicited acknowledgement. A flight owns the player's position (TaxiFlightSystem relocates it on every
+    /// step and ends the flight when the stored position drifts), so during a flight the acknowledgement is honoured (the order is no longer pending)
+    /// but its block is not stored: a pending order cannot be used to leave the flight at a chosen position. vmangos likewise erases the order first and
+    /// handles the position separately (HandleMoveRootAck, MovementHandler.cpp:671-723).
+    /// </summary>
+    internal static void ApplyObservedAck(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
+    {
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return;
+        }
+
+        ApplyObserved(session, player, opcode, movement);
+    }
+
+    /// <summary>
     /// Store a client's movement block with the locomotion observers around it (vmangos HandleMovementOpcodes
     /// :333-344 and HandleMoverRelocation :1062-1170): the Before observers see the previously stored block and
     /// may correct the incoming one, the After observers see the stored result. Shared with the movement-change

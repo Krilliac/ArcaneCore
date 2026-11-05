@@ -335,7 +335,9 @@ public sealed class SqliteCheckpointService : BackgroundService
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(_options.IntervalMs), _clock);
         try
         {
+#pragma warning disable ARC0006 // runs on this database's dedicated LongRunning thread (never a pool, world or host thread), so blocking for the next tick is intended
             while (timer.WaitForNextTickAsync(stoppingToken).AsTask().GetAwaiter().GetResult())
+#pragma warning restore ARC0006
             {
                 Run(checkpointer, final: false);
             }

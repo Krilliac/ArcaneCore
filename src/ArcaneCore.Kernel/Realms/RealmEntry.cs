@@ -69,7 +69,7 @@ public sealed class RealmEntry
 
     public RealmFlags Flags { get; set; } = RealmFlags.None;
 
-    /// <summary>Population hint (0.0 low .. higher = busier).</summary>
+    /// <summary>Population hint: while a world reports in, sessions / player limit * 2 (0 is empty, 2 is full); the seeded value until then.</summary>
     public float Population { get; set; }
 
     /// <summary>Realm category id (timezone grouping) for the build-5875 list layout.</summary>

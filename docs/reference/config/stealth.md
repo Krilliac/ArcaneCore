@@ -1,0 +1,16 @@
+# Stealth options
+
+5 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `World:Stealth`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `GroupVisibilityMode` | StealthGroupVisibility | `SameGroup` | SameGroup \| SameRaid \| SameTeam | World | start | Who always sees a non-hostile stealthed player (vmangos Visibility.GroupMode, World.cpp:689; Player::IsGroupVisibleFor, Player.cpp:2924-2935). Default `StealthGroupVisibility.SameGroup`: only the same 5-man (sub)group. Values: `SameGroup`, `SameRaid`, `SameTeam`. |
+| `ImprovedSapRollPerPhase` | bool | `false` | true \| false | World | start | Improved Sap rolls twice per cast, as the vmangos code does (once at cast start, once at completion), instead of once. Default false (the talent text: 30/60/90 percent chance to remain stealthed). |
+| `IncludeStrengthContribution` | bool | `false` | true \| false | World | start | When true, adds `0.3 * Strength` of the stealthed target to its stealth skill (mangos-classic ObjectVisibility.cpp:152-178). Default false (vmangos 1.12.1 Unit::CanDetectStealthOf). |
+| `MaxCreatureDetectRange` | float | `30` | a number, '.' is the decimal point | World | start | Beyond this distance a creature never detects a stealthed unit (vmangos CONFIG_FLOAT_MAX_CREATURES_STEALTH_DETECT_RANGE). |
+| `MaxPlayerDetectRange` | float | `30` | a number, '.' is the decimal point | World | start | Beyond this distance a player never detects a stealthed unit (vmangos CONFIG_FLOAT_MAX_PLAYERS_STEALTH_DETECT_RANGE). |

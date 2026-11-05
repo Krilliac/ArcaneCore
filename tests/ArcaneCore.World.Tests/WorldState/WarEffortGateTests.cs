@@ -231,6 +231,77 @@ public sealed class WarEffortGateTests
         Assert.Equal(1, rig.Store.PhaseWrites);
     }
 
+    [Fact]
+    public async Task HandoffFlushWritesAQueuedPhaseWhoseInFlightWriteFailed()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailFirstPhaseWrite = true;
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false); // the write throws and the phase stays queued
+        Assert.Equal(0, rig.Store.PhaseWrites);
+        rig.War.CaptureForHandoff(); // what the freeze's Park does on the world thread
+
+        await rig.War.FlushStateWritesAsync(); // no world thread: the store, not the apply step, makes it durable
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public async Task HandoffFlushWaitsForTheJobInFlightAndRetriesItsPhaseWhenItFails()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailFirstPhaseWrite = true;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.War.StoreOffload = work => Task.Run(async () =>
+        {
+            await gate.Task;
+            await work();
+        });
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        rig.War.CaptureForHandoff();
+
+        Task flush = rig.War.FlushStateWritesAsync();
+        Assert.False(flush.IsCompleted); // the job in flight has not finished
+        gate.SetResult();
+        await flush.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public async Task HandoffFlushDoesNotRewriteAPhaseTheJobInFlightPersisted()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.War.StoreOffload = work => Task.Run(async () =>
+        {
+            await gate.Task;
+            await work();
+        });
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        rig.War.CaptureForHandoff(); // the phase is still queued: the world thread never ran the job's apply step
+
+        Task flush = rig.War.FlushStateWritesAsync();
+        gate.SetResult();
+        await flush.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+    }
+
+    [Fact]
+    public async Task HandoffFlushFailsWhileThePhaseWriteKeepsFailing()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailPhaseWrites = true;
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        rig.War.CaptureForHandoff();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.War.FlushStateWritesAsync());
+
+        Assert.Equal(0, rig.Store.PhaseWrites);
+    }
+
     private sealed class Rig : IDisposable
     {
         private readonly ServiceProvider _provider;

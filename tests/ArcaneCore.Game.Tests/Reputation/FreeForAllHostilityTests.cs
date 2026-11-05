@@ -75,8 +75,8 @@ public sealed class FreeForAllHostilityTests
         Assert.True(rig.Hooks.CanAttack(rig.A, rig.B));
         Assert.True(rig.Hooks.CanAttack(rig.B, rig.A));
         Assert.True(rig.Hooks.IsHostileTo(rig.A, rig.B));
-        Assert.True(rig.Resolver.TryGetReaction(rig.A, rig.B, out ArcaneCore.Kernel.Reputation.ReputationRank rank));
-        Assert.Equal(ArcaneCore.Kernel.Reputation.ReputationRank.Hostile, rank);
+        Assert.True(rig.Resolver.TryGetReaction(rig.A, rig.B, out ArcaneCore.Game.Reputation.ReputationRank rank));
+        Assert.Equal(ArcaneCore.Game.Reputation.ReputationRank.Hostile, rank);
     }
 
     [Fact]

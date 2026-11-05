@@ -203,6 +203,7 @@ where the row's random-action and combat-action choice is applied to the action.
 | 57 | `creature.set_ranged_mode` | P1 mode, P2 chase distance | none |
 | 58 | `creature.set_walk` | P1 walk or run | none |
 | 59 | `creature.set_facing` | P2 reset | P1 (none when P2 is set) |
+| 60 | `creature.set_spell_list` | P1 spell list id (0 clears it) | none |
 | 61 | `creature.set_immobilized` | P1 apply, P2 combat only | none |
 | 63 | `creature.set_immunity_set` | P1 immunity set id | none |
 | 64 | `creature.set_follow_movement` | P1 state | none |

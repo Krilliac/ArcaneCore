@@ -481,7 +481,7 @@ public sealed partial class EconomyFeature
             .OrderBy(v => v.Auction.ExpireTime).Take(ExpiryBatch).ToList())
         {
             AuctionRecord auction = view.Auction;
-            AuctionHouseEntry house = Options.AuctionHouses.FirstOrDefault(h => h.Id == auction.HouseId) ?? new AuctionHouseEntry(auction.HouseId, 0, 0);
+            AuctionHouseEntry house = AuctionHouseRules.House(Options, auction.HouseId) ?? new AuctionHouseEntry(auction.HouseId, 0, 0);
             bool sold = auction.BidderId != 0 && CharacterExists(auction.BidderId);
             bool botWon = HasBotBid(auction);
             var letters = new List<MailView>();

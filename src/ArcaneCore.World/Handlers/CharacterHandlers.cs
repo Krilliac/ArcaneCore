@@ -494,6 +494,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                         return;
                     }
 
+                    // Race, gender and class are fixed once a character exists; only when they differ from the record read before the claim (never in normal play) is the data
+                    // looked up again. Otherwise the race and class rows already read stand, and only the bind point (which the previous owner's save may have moved) is recomputed.
+                    bool sameKeys = fresh.Race == character.Race && fresh.Gender == character.Gender && fresh.Class == character.Class;
                     character = fresh;
 
                     // The checks made on the record read before the claim are made again on this one: the rename gate, the race and class data, and the bind point (the previous
@@ -505,7 +508,15 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                         return;
                     }
 
-                    (raceInfo, classInfo, home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+                    if (sameKeys)
+                    {
+                        home = await LoadHomeAsync(worldData, character).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        (raceInfo, classInfo, home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+                    }
+
                     if (raceInfo is null || classInfo is null || home.IsUnset)
                     {
                         session.Logger.LogError("[{Endpoint}] missing world data for character {Guid}", session.RemoteEndpoint, character.Id);
@@ -606,13 +617,19 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
     {
         RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
         ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
+        return (raceInfo, classInfo, await LoadHomeAsync(worldData, character).ConfigureAwait(false));
+    }
+
+    /// <summary>The bind point of <paramref name="character"/>: its stored one, or the race and class start position when none is stored. Session task.</summary>
+    private static async Task<HomeBind> LoadHomeAsync(IWorldDataStore worldData, CharacterRecord character)
+    {
         var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
         if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
         {
             home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
         }
 
-        return (raceInfo, classInfo, home);
+        return home;
     }
 
     /// <summary>

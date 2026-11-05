@@ -179,11 +179,19 @@ public sealed class FaultLedger
     /// <paramref name="terminating"/>: the process ends because of this fault (the crash hooks say so); carried on <see cref="FaultNotice.Terminating"/>.
     /// </summary>
     public FaultRecording Record(string site, Exception exception, bool terminating = false)
+        => Record(site, exception, null, terminating);
+
+    /// <summary>
+    /// <see cref="Record(string, Exception, bool)"/> for an exception that was constructed but never thrown (an invariant report): the frames of the
+    /// signature come from <paramref name="capturedAt"/> (the stack where the fault was detected) instead of the exception's own empty trace.
+    /// Methods marked <see cref="StackTraceHiddenAttribute"/> are left out of the signature, so a reporting helper does not become the call site.
+    /// </summary>
+    public FaultRecording Record(string site, Exception exception, StackTrace? capturedAt, bool terminating = false)
     {
         ArgumentNullException.ThrowIfNull(exception);
         try
         {
-            return RecordCore(string.IsNullOrWhiteSpace(site) ? "unknown" : site, exception, terminating);
+            return RecordCore(string.IsNullOrWhiteSpace(site) ? "unknown" : site, exception, terminating, capturedAt);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -317,11 +325,16 @@ public sealed class FaultLedger
 
     /// <summary>The signature text for <paramref name="exception"/> at <paramref name="site"/> (exposed for tests and the show command).</summary>
     public static string SignatureOf(string site, Exception exception, out string type, out IReadOnlyList<string> frames)
+        => SignatureOf(site, exception, null, out type, out frames);
+
+    private static string SignatureOf(string site, Exception exception, StackTrace? capturedAt, out string type, out IReadOnlyList<string> frames)
     {
         ArgumentNullException.ThrowIfNull(exception);
         Exception root = Unwrap(exception);
         type = root.GetType().FullName ?? root.GetType().Name;
-        frames = CollectFrames(root);
+        frames = capturedAt is null
+            ? CollectFrames(root)
+            : CollectFrames(capturedAt.GetFrames(), TopFrames, skipCrashHooks: false);
         var text = new StringBuilder(128);
         text.Append(type).Append('|').Append(site);
         foreach (string frame in frames.Take(SignatureFrames))
@@ -639,9 +652,9 @@ public sealed class FaultLedger
         DateTimeOffset AtUtc,
         string? Process = null);
 
-    private FaultRecording RecordCore(string site, Exception exception, bool terminating)
+    private FaultRecording RecordCore(string site, Exception exception, bool terminating, StackTrace? capturedAt = null)
     {
-        string signature = SignatureOf(site, exception, out string type, out IReadOnlyList<string> frames);
+        string signature = SignatureOf(site, exception, capturedAt, out string type, out IReadOnlyList<string> frames);
         string id = HashOf(signature);
         RecordedExceptions.AddOrUpdate(exception, id);
         Exception root = Unwrap(exception);
@@ -759,6 +772,11 @@ public sealed class FaultLedger
             }
 
             if (skipCrashHooks && (declaring == typeof(CrashHandler) || declaring == typeof(FaultObservers)))
+            {
+                continue;
+            }
+
+            if (method.IsDefined(typeof(StackTraceHiddenAttribute), false) || declaring.IsDefined(typeof(StackTraceHiddenAttribute), false))
             {
                 continue;
             }
@@ -1118,6 +1136,7 @@ public static class FaultMeters
         _faults = meter.CreateCounter<long>("arcanecore.faults", "{fault}", "Exceptions caught by the server's catch-and-log sites, by site and exception type.");
         meter.CreateObservableGauge("arcanecore.faults.distinct", () => (long)FaultLedger.Shared.Distinct, "{signature}", "Distinct fault signatures in the fault ledger.");
         meter.CreateObservableCounter("arcanecore.invariant.failures", () => Invariant.FailureCount, "{failure}", "Failed Invariant.Assert and Invariant.Check calls since start.");
+        meter.CreateObservableCounter("arcanecore.thread_affinity.violations", () => Safety.ThreadAffinity.Violations, "{violation}", "World-owned objects changed off the world thread (the thread-affinity backstop, docs/ops/memory-safety.md).");
         return meter;
     }
 }

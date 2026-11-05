@@ -232,6 +232,16 @@ public sealed partial class SpellSystem
 
     /// <summary>Cast with the originating spell/aura's reagent policy (vmangos IgnoreItemRequirements).</summary>
     public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell)
+        => CastSpell(caster, spellId, targets, triggered, triggeringSpell, originalCaster: null);
+
+    /// <summary>
+    /// Cast on behalf of <paramref name="originalCaster"/> (vmangos Unit::CastSpell's originalCaster argument, Spell::m_originalCasterGUID):
+    /// <paramref name="caster"/> is the unit that casts, the original caster the one that caused it. A wild-summon effect (SPELL_EFFECT_SUMMON_WILD) hands
+    /// the summoned creature to the original caster (<see cref="SpellCast.OriginalCaster"/>); the guardian, critter and demon summons do not. Limit: a
+    /// non-triggered cast queued as a next-swing or auto-repeat spell builds its own cast and drops the original caster. Null or <paramref name="caster"/>
+    /// itself means the caster is its own original caster. Cast thread only.
+    /// </summary>
+    public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell, Unit? originalCaster)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(targets);
@@ -243,7 +253,7 @@ public sealed partial class SpellSystem
 
         if (!triggered)
         {
-            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell, originalCaster: originalCaster);
         }
 
         // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Real data has
@@ -276,7 +286,7 @@ public sealed partial class SpellSystem
         _triggerStack.Add(spellId);
         try
         {
-            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell, originalCaster: originalCaster);
         }
         finally
         {
@@ -575,7 +585,7 @@ public sealed partial class SpellSystem
     private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool autoRepeatShot = false, Item? castItem = null,
         SpellInfo? triggeringSpell = null, byte itemSpellIndex = 0, int? itemCooldownMs = null, int? itemCategoryCooldownMs = null,
         uint? itemCategory = null, bool itemEquipCast = false, bool itemTriggeredCast = false,
-        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false)
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false, Unit? originalCaster = null)
     {
         if (!StackGuard.TryEnter("spell.cast-chain"))
         {
@@ -650,7 +660,8 @@ public sealed partial class SpellSystem
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
             { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura,
-              CasterGameObject = TakeCastingObject(caster) };
+              CasterGameObject = TakeCastingObject(caster),
+              OriginalCasterOverride = ReferenceEquals(originalCaster, caster) ? null : originalCaster };
         cast.AutoRepeatShot = autoRepeatShot;
         cast.InItemUseDispatch = castItem is not null && CurrentItemUseDispatch(castItem) is not null;
         if (!triggered)
@@ -785,6 +796,7 @@ public sealed partial class SpellSystem
 
                 caster.SetUInt64(UpdateFields.UnitFieldChannelObject, (unitTarget ?? caster).Guid.Value);
                 caster.SetUInt32(UpdateFields.UnitChannelSpell, spell.Id);
+                SendChannelChainTargets(cast, targetEffects);
             }
 
             ApplyToTargets(cast, targetEffects, ref currentFaultTarget);
@@ -888,10 +900,12 @@ public sealed partial class SpellSystem
         {
             // Spell::AddUnitTarget removes immune effects before WriteSpellGoTargets. A target
             // with no surviving effects is listed as IMMUNE2 rather than a successful hit.
+            // A game object carrier (target A 46) is no unit target: vmangos runs HandleEffects(nullptr, nullptr, go) with no immunity test.
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
                 if ((entry.EffectMask & (1 << i)) != 0
                     && spell.Effects[i].Effect != SpellEffectName.ActivateObject
+                    && !IsObjectCarriedEffect(cast, i, target)
                     && ImmunityRules.IsImmuneToSpellEffect(this, target, spell, i, ReferenceEquals(target, caster)))
                 {
                     entry.EffectMask &= ~(1 << i);
@@ -929,9 +943,12 @@ public sealed partial class SpellSystem
         }
 
         // Spell::WriteSpellGoTargets includes selected game objects alongside unit hits.
-        foreach (ObjectGuid guid in cast.ObjectTargetsByEffect.Values.SelectMany(guids => guids).Distinct())
+        if (cast.ObjectTargetsOrNull is { } selectedObjects)
         {
-            if (!hits.Contains(guid)) hits.Add(guid);
+            foreach (ObjectGuid guid in selectedObjects.Values.SelectMany(guids => guids).Distinct())
+            {
+                if (!hits.Contains(guid)) hits.Add(guid);
+            }
         }
     }
 
@@ -957,6 +974,14 @@ public sealed partial class SpellSystem
                 }
 
                 entry.EffectMask = unitMask;
+            }
+
+            if (IsCarrierOnlyEntry(cast, target, entry.EffectMask))
+            {
+                // vmangos DoAllEffectOnTarget for a GOTargetInfo (Spell.cpp:1841-1843) runs HandleEffects(nullptr, nullptr, go, i) and nothing else: no hit
+                // roll, no immunity, no threat, no item procs, no damage shields, no outcome notice. The caster only stands in for the missing unit.
+                ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers, carrier: true);
+                continue;
             }
 
             if (entry.Miss == SpellMissInfo.Reflect)
@@ -1614,7 +1639,9 @@ public sealed partial class SpellSystem
             // explicit selector inside the per-effect loop, CanTargetAliveState, BAD_TARGETS; SpellEntry.h:273-287 lists explicit selectors
             // only). A spell with TARGET_UNIT_CASTER, an area or cone selector, or none is not covered: a creature cast aimed with ForUnit
             // at a victim who dies during the cast bar must still land.
-            if (!unitTarget.IsAlive && !spell.CanTargetDead
+            // CanTargetAliveState refuses both ways: a dead unit unless the spell can target the dead, and a living one for a death-only spell.
+            bool aliveStateRefused = unitTarget.IsAlive ? spell.IsDeathOnly : !spell.CanTargetDead;
+            if (aliveStateRefused
                 && spell.Effects.Any(effect => !effect.IsEmpty && effect.TargetA == SpellImplicitTarget.LocationCasterTargetPosition))
             {
                 return SpellCastResult.BadTargets;
@@ -1644,20 +1671,6 @@ public sealed partial class SpellSystem
         if (objectRange != SpellCastResult.CastOk)
         {
             return objectRange;
-        }
-
-        // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers
-        // SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). Runs after the Items phase (spell focus, Spell.cpp:7243): vmangos reaches CheckScriptTargeting only from SetTargetMap at cast time (:2848-2860). A spell-specific selector for the target owns its own targeting.
-        // Not at prepare (strict): vmangos refuses only when the cast goes off, from SetTargetMap, so the target may still come into range while the cast bar runs.
-        if (!strict && HasScriptLocationTargetWithoutRows(spell))
-        {
-            return SpellCastResult.BadTargets;
-        }
-
-        // With rows but no listed unit or object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered), targets 38 and 46.
-        if (!strict && ScriptLocationTargetMissing(caster, spell, unitTarget))
-        {
-            return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
         }
 
         if (needsUnit)
@@ -1701,6 +1714,21 @@ public sealed partial class SpellSystem
             {
                 return sight;
             }
+        }
+
+        // TARGET_UNIT_SCRIPT_NEAR_CASTER (38) and TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos
+        // Spell::CheckScriptTargeting answers SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). It is reached only from SetTargetMap when the cast goes off
+        // (:2848-2860), after CheckCast's spell focus (:7243), range and line of sight checks, so it runs here, after them. A spell-specific selector for the
+        // target owns its own targeting. Not at prepare (strict): the target may still come into range while the cast bar runs.
+        if (!strict && HasScriptTargetWithoutRows(spell))
+        {
+            return SpellCastResult.BadTargets;
+        }
+
+        // With rows but no listed unit or object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered), targets 38 and 46.
+        if (!strict && ScriptLocationTargetMissing(caster, spell, unitTarget))
+        {
+            return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
         }
 
         SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict, castItem);
@@ -2110,6 +2138,46 @@ public sealed partial class SpellSystem
     /// </summary>
     private static void SendInterrupted(SpellCast cast)
         => SendToSet(cast.Caster, WorldOpcode.SmsgSpellFailedOther, SpellPackets.BuildSpellFailedOther(cast.Caster.Guid, cast.Spell.Id), includeSelf: true);
+
+    /// <summary>
+    /// The visual ids (SpellVisual.dbc) whose ChannelKit is set, or null when that client table is not loaded. SMSG_SPELL_UPDATE_CHAIN_TARGETS is only
+    /// sent for a channel whose visual has a kit (vmangos Spell::SendChannelStart, Spell.cpp:4880-4906), so a null predicate sends nothing.
+    /// World thread; set once at attach.
+    /// </summary>
+    public Func<uint, bool>? HasChannelKit { get; set; }
+
+    /// <summary>
+    /// SMSG_SPELL_UPDATE_CHAIN_TARGETS at channel start (vmangos Spell::SendChannelStart, Spell.cpp:4880-4906; mangos-classic Spell.cpp:4277, build > 1.11.2):
+    /// for a channel with the IS_CHANNELED attribute whose SpellVisual has a ChannelKit, the guid list of the unit targets that are not the caster
+    /// (the caster itself counts only when a cast item is used and effect 0 hit), sent to the caster's observers and the caster. Nothing is sent
+    /// for an empty list. Called on the world thread after the targets are rolled. Deviation: vmangos tests the caster-as-target entry's
+    /// <c>reflectResult == SPELL_MISS_NONE</c> (Spell.cpp:4894-4895); <see cref="SpellTargetEntry"/> has no reflect field, so its <c>Miss</c> is used.
+    /// It only matters when the caster is its own target on a cast-item channel. Depends on the GM option <c>World:GmCommands:LiveFx</c> (the
+    /// ChannelKit table is read by the live-fx data feature) and on SpellVisual.dbc being present.
+    /// </summary>
+    private void SendChannelChainTargets(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects)
+    {
+        SpellInfo spell = cast.Spell;
+        if (!spell.HasAttribute(SpellAttributesEx.IsChanneled) || HasChannelKit is not { } hasKit || !hasKit(spell.SpellVisual))
+        {
+            return;
+        }
+
+        var targets = new List<ulong>();
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
+        {
+            bool effectZeroHit = (entry.EffectMask & 1) != 0 && entry.Miss == SpellMissInfo.None && cast.CastItem is not null;
+            if (effectZeroHit || target.Guid != cast.Caster.Guid)
+            {
+                targets.Add(target.Guid.Value);
+            }
+        }
+
+        if (targets.Count > 0)
+        {
+            SendToSet(cast.Caster, WorldOpcode.SmsgSpellUpdateChainTargets, SpellPackets.BuildSpellUpdateChainTargets(cast.Caster.Guid.Value, spell.Id, targets), includeSelf: true);
+        }
+    }
 
     /// <summary>vmangos WorldObject::SendMessageToSet: the unit's own client (when asked) and every player that sees it.</summary>
     internal static void SendToSet(Unit unit, WorldOpcode opcode, byte[] payload, bool includeSelf)

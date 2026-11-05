@@ -120,6 +120,7 @@ internal sealed class GameObjectTypeRig
     public const uint InUseEventGoober = 325; // the same with a 5 s auto-close time (data3), in use until it runs out
     public const uint EventRestockChest = 326; // a restocking chest (30 s) with a chest.eventId (data6), as the Stones of Binding
     public const uint Lever295 = 327;         // a button with display 295, the Scarlet Monastery levers
+    public const uint Banner = 328;           // a goober whose lock has SLOW_OPEN in its second slot, as the Arathi Basin capture banners
     public const uint KeyRestockChest = 391;  // a key-locked (expendable key) restocking chest (30 s)
     public const uint ChestEvent = 9043;
     public const uint ChestQuest = 696;
@@ -130,6 +131,7 @@ internal sealed class GameObjectTypeRig
     public const uint ExpendableKeyLock = 40;
     public const uint PlainKeyLock = 41;
     public const uint VeinLock = 42;
+    public const uint BannerLock = 43;
     public const uint TrapSpell = 7001;
     public const uint GooberSpell = 7002;
     public const uint PortalSpell = 17334;
@@ -144,6 +146,7 @@ internal sealed class GameObjectTypeRig
         new(ExpendableKeyLock, [1, 0, 0, 0, 0, 0, 0, 0], [ExpendableKey, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]),
         new(PlainKeyLock, [1, 0, 0, 0, 0, 0, 0, 0], [PlainKey, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]),
         new(VeinLock, [2, 0, 0, 0, 0, 0, 0, 0], [(uint)LockType.Mining, 0, 0, 0, 0, 0, 0, 0], [175, 0, 0, 0, 0, 0, 0, 0]),
+        new(BannerLock, [2, 2, 0, 0, 0, 0, 0, 0], [(uint)LockType.Open, (uint)LockType.SlowOpen, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0]),
     ];
 
     public static ItemTemplateStore Items { get; } = new(
@@ -210,6 +213,7 @@ internal sealed class GameObjectTypeRig
             GoTemplate(EventRestockChest, GameObjectType.Chest, (1, ChestLoot), (2, 30), (6, ChestEvent)),
             GoTemplate(KeyRestockChest, GameObjectType.Chest, (0, ExpendableKeyLock), (1, ChestLoot), (2, 30)),
             GoTemplate(Lever295, GameObjectType.Button) with { DisplayId = 295 },
+            GoTemplate(Banner, GameObjectType.Goober, (0, BannerLock)),
             GoTemplate(EventGoober, GameObjectType.Goober, (2, ChestEvent)),
             GoTemplate(InUseEventGoober, GameObjectType.Goober, (2, ChestEvent), (3, 5 * 0x10000)),
         ];

@@ -95,6 +95,53 @@ public sealed class PetLifecycleFidelityTests
     }
 
     [Fact]
+    public void TheDismissCommand_SendsThePetDismissSoundWithThePetPosition_ToAHunterPetAndADemonAlike()
+    {
+        // mangos-classic HandlePetAction COMMAND_DISMISS: pet->PlayDismissSound() runs for every Pet before the hunter-pet check
+        // (PetHandler.cpp:259-263); a pet whose summoning spell has no sound entry sends sound 0 (Pet.cpp:1401-1422).
+        using var kit = new PetTestKit();
+        (Player hunter, var hunterSession) = kit.AddPlayer(1);
+        hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Cast(hunter, PetSpell);
+        Creature hunterPet = SummonOf(kit, SummonKind.Pet);
+        hunterSession.Clear();
+
+        kit.Controller.HandleCommand(hunterPet, CommandState.Dismiss, null);
+
+        Assert.Same(hunterPet, kit.Creatures.FindCreature(hunterPet.Guid)); // the command left the hunter pet
+        Assert.Equal(
+            PetPackets.BuildDismissSound(0, hunterPet.X, hunterPet.Y, hunterPet.Z),
+            Assert.Single(Packets(hunterSession, WorldOpcode.SmsgPetDismissSound)));
+
+        (Player warlock, var warlockSession) = kit.AddPlayer(2);
+        kit.Cast(warlock, PetSpell);
+        Creature demon = Assert.Single(kit.Creatures.Creatures, c => c.OwnerGuid == warlock.Guid);
+        warlockSession.Clear();
+        (float x, float y, float z) = (demon.X, demon.Y, demon.Z);
+
+        kit.Controller.HandleCommand(demon, CommandState.Dismiss, null);
+
+        Assert.Equal(PetPackets.BuildDismissSound(0, x, y, z), Assert.Single(Packets(warlockSession, WorldOpcode.SmsgPetDismissSound)));
+    }
+
+    [Fact]
+    public void TheDismissCommand_SendsTheSoundOfTheSummoningSpell_ForAVoidwalker()
+    {
+        // mangos-classic Pet::PlayDismissSound (Pet.cpp:1401-1422): UNIT_CREATED_BY_SPELL 697 (Voidwalker) plays sound 162.
+        using var kit = new PetTestKit();
+        (Player warlock, var session) = kit.AddPlayer(1);
+        kit.Cast(warlock, PetSpell);
+        Creature demon = Assert.Single(kit.Creatures.Creatures, c => c.OwnerGuid == warlock.Guid);
+        demon.SetUInt32(UpdateFields.UnitCreatedBySpell, 697);
+        session.Clear();
+        (float x, float y, float z) = (demon.X, demon.Y, demon.Z);
+
+        kit.Controller.HandleCommand(demon, CommandState.Dismiss, null);
+
+        Assert.Equal(PetPackets.BuildDismissSound(162, x, y, z), Assert.Single(Packets(session, WorldOpcode.SmsgPetDismissSound)));
+    }
+
+    [Fact]
     public void Guardian_TakesItsOwnersPlayerControlledAndPvpFlags()
     {
         // vmangos Pet::InitStatsForLevel (Pet.cpp:1472-1479), called by EffectSummonGuardian for every guardian (SpellEffects.cpp:2884):

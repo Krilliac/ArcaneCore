@@ -404,23 +404,9 @@ public sealed class WorkerTransferTargetTests : IDisposable
         Assert.False(target.WasActivated(id));
     }
 
-    private static long[] LiveTickets(CharacterClaimService claims)
-    {
-        var live = (Dictionary<int, List<long>>)typeof(CharacterClaimService).GetField("_liveTickets", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!;
-        lock (typeof(CharacterClaimService).GetField("_pendingGate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!)
-        {
-            return [.. live.Values.SelectMany(tickets => tickets).Order()];
-        }
-    }
+    private static long[] LiveTickets(CharacterClaimService claims) => claims.LiveTicketsSnapshot();
 
-    private static int LiveTicketCount(CharacterClaimService claims)
-    {
-        var live = (Dictionary<int, List<long>>)typeof(CharacterClaimService).GetField("_liveTickets", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!;
-        lock (typeof(CharacterClaimService).GetField("_pendingGate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!)
-        {
-            return live.Values.Sum(tickets => tickets.Count);
-        }
-    }
+    private static int LiveTicketCount(CharacterClaimService claims) => claims.LiveTicketsSnapshot().Length;
 
     [Fact]
     public async Task ADisconnectBeforeTheWorldportAck_ResumesTheHeldSaves_AndSavesThePlayerAtItsArrivalPosition()

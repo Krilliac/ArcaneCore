@@ -41,6 +41,13 @@ public sealed class GatewayCrossWorkerTeleportTests
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(150);
     private static readonly TeleportDestination Landing = new(1, -1196.22f, 29.0f, 176.949f, 3.1f);
 
+    /// <summary>
+    /// Blocks the gateway's read-loop thread inside a test hook until <paramref name="released"/> holds (the route switch completed and nothing is staged) or the test is cancelled.
+    /// A bounded spin-then-yield wait (<see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/>), not a fixed-length sleep per poll. It still polls and holds the hook's thread while it waits (no signal exists to wait on; the router exposes only these two counters), bounded by <see cref="Deadline"/> and by the test's own token.
+    /// </summary>
+    private static void HoldUntil(Func<bool> released, CancellationToken cancellation)
+        => SpinWait.SpinUntil(() => cancellation.IsCancellationRequested || released(), Deadline);
+
     [Fact]
     public async Task ATeleportToKalimdor_OnTheEasternKingdomsWorker_MovesThePlayerToTheKalimdorWorker_AndTheJournalSaysCompleted()
     {
@@ -97,7 +104,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             Player player = cluster.Eastern.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
             player.Health = 0;
             player.Map!.Combat.KillPlayer(player);
-            Assert.True(player.Map.Combat.RepopPlayer(player));
+            Assert.True(player.Map!.Combat.RepopPlayer(player));
             return PlayerLife.Capture(player).Corpse ?? throw new InvalidOperationException("the release made no body");
         }, cts.Token);
         Assert.Equal(0u, body.MapId);
@@ -259,10 +266,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             Interlocked.Exchange(ref ackReadUnder, read);
             Volatile.Write(ref ackReadWhileStaged, cluster.Gateway.Transfers.StagedCount == 1);
             ackRead.Set();
-            while (!cts.IsCancellationRequested && (connection.SessionGeneration == read || cluster.Gateway.Transfers.StagedCount != 0))
-            {
-                Thread.Sleep(5);
-            }
+            HoldUntil(() => connection.SessionGeneration != read && cluster.Gateway.Transfers.StagedCount == 0, cts.Token);
 
             Interlocked.Exchange(ref ackRoutedAfter, connection.SessionGeneration);
         };
@@ -316,10 +320,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             long read = connection.SessionGeneration;
             Interlocked.Exchange(ref readUnder, read);
             passed.Set();
-            while (!cts.IsCancellationRequested && (connection.SessionGeneration == read || cluster.Gateway.Transfers.StagedCount != 0))
-            {
-                Thread.Sleep(5);
-            }
+            HoldUntil(() => connection.SessionGeneration != read && cluster.Gateway.Transfers.StagedCount == 0, cts.Token);
         };
 
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);

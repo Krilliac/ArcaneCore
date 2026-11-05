@@ -65,6 +65,7 @@ public sealed class MovementBypassTests
     // --- B2: CMSG_MOVE_NOT_ACTIVE_MOVER for the player itself ----------------------------------------------------------------
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ANotActiveMoverNamingThePlayerItself_IsJudgedByTheAntiCheat_EveryTimeItIsReArmed()
     {
         await using var host = WorldTestHost.Start();
@@ -145,6 +146,7 @@ public sealed class MovementBypassTests
     // --- B3: a possessed unit moved by its controller ------------------------------------------------------------------------
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task APossessedCreature_BlinkedByItsController_IsScoredAgainstTheController()
     {
         await using var host = WorldTestHost.Start();
@@ -184,6 +186,7 @@ public sealed class MovementBypassTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task APossessedPlayer_BlinkedByItsController_IsScoredAgainstTheController_NotTheVictim()
     {
         await using var host = WorldTestHost.Start();
@@ -313,6 +316,7 @@ public sealed class MovementBypassTests
         (ulong guid, float x, float y, float z) = await host.OnWorldAsync(() =>
         {
             host.WorldServices.GetRequiredService<PetsFeature>().Service.Charms.ModPossess(player, victim, apply: true, AuraRemoveMode.Default, spell: null);
+            Assert.Same(victim, player.GetMover()); // the possession took: the block below really names a controlled unit
             return (victim.Guid.Value, victim.X, victim.Y, victim.Z);
         });
         await client.SendAsync(WorldOpcode.CmsgSetActiveMover, Guid64(guid));
@@ -327,5 +331,50 @@ public sealed class MovementBypassTests
         await client.CollectThroughBarrierAsync();
 
         Assert.Equal(x, await host.OnWorldAsync(() => victim.X));
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task APossessedPlayer_CarryingAFlagTheVictimIsGranted_IsNotScored_ButOneOnlyTheControllerIsGranted_Is()
+    {
+        await using var host = WorldTestHost.Start();
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = await ArmAsync(host);
+        await using WorldTestClient client = await host.EnterWorldAsync("GRANTCTL", "Grantctl");
+        await using WorldTestClient victimClient = await host.EnterWorldAsync("GRANTVIC", "Grantvic");
+        await client.CollectAsync();
+        await victimClient.CollectAsync();
+        Player player = await host.PlayerAsync("Grantctl");
+        Player victim = await host.PlayerAsync("Grantvic");
+        (ulong guid, float x, float y, float z) = await host.OnWorldAsync(() =>
+        {
+            host.WorldServices.GetRequiredService<PetsFeature>().Service.Charms.ModPossess(player, victim, apply: true, AuraRemoveMode.Default, spell: null);
+            Assert.Same(victim, player.GetMover());
+            FeatureOf(host).Grant(victim, MovementFlags.WaterWalking, on: true);
+            return (victim.Guid.Value, victim.X, victim.Y, victim.Z);
+        });
+
+        await client.SendAsync(WorldOpcode.CmsgSetActiveMover, Guid64(guid));
+        uint time = 100_000;
+        await client.SendAsync(WorldOpcode.MsgMoveStartForward, Block(time, x, y, z));
+        await Task.Delay(100);
+        time += 100;
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(time, x + 0.7f, y, z, MovementFlags.Forward | MovementFlags.WaterWalking));
+        await client.CollectThroughBarrierAsync();
+
+        // The victim's own grant covers the flag (a GM tool water-walking the victim); the controller holds none. RED on the base: the controller's grants were used.
+        Assert.DoesNotContain(seen, s => s.Finding.Type == AntiCheatViolation.Flag);
+
+        await host.OnWorldAsync(() =>
+        {
+            FeatureOf(host).Grant(victim, MovementFlags.WaterWalking, on: false);
+            FeatureOf(host).Grant(player, MovementFlags.WaterWalking, on: true);
+        });
+        await Task.Delay(100);
+        time += 100;
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(time, x + 1.4f, y, z, MovementFlags.Forward | MovementFlags.WaterWalking));
+        await client.CollectThroughBarrierAsync();
+
+        // A grant on the controller alone does not cover a block that moves another unit: scored against the controller.
+        Assert.Contains(seen, s => s.Player == "Grantctl" && s.Finding.Type == AntiCheatViolation.Flag);
     }
 }

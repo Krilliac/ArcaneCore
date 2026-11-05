@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -48,5 +49,18 @@ public sealed class ProcCooldownBoundTests : IDisposable
         Assert.False(_kit.System.IsProcSpellReady(_unit, spell));
         _kit.Now = addedAt + SpellSystem.MaxReasonableCooldownMs;
         Assert.True(_kit.System.IsProcSpellReady(_unit, spell));
+    }
+
+    [Fact]
+    public void ProcCooldownBeyondTheBound_IsReportedOnce_AndOneAtTheBoundIsSilent()
+    {
+        SpellInfo spell = _kit.System.Store.Get(ProcSpell)!;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/cooldown-invalid" && n.Subject == SpellSystem.FormatSpellSubject(ProcSpell));
+
+        _kit.System.AddProcCooldown(_unit, spell, SpellSystem.MaxReasonableCooldownMs);
+        Assert.False(capture.Any("spell/cooldown-invalid"), capture.Describe());
+
+        _kit.System.AddProcCooldown(_unit, spell, SpellSystem.MaxReasonableCooldownMs + 1u);
+        Assert.Equal(1, capture.Count("spell/cooldown-invalid"));
     }
 }

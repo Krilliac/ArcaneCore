@@ -338,10 +338,14 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
     /// <summary>How long a dropper found unreachable is not looked at again (ms): the bot may have crossed to another walking component since.</summary>
     internal const uint UnreachableRecheckMs = 300_000;
 
-    private const int MaxUnreachableMemo = 64;
+    /// <summary>Droppers remembered as unreachable at most; a full memo is cleared before the next one is added.</summary>
+    internal const int MaxUnreachableMemo = 64;
 
-    /// <summary>Droppers found unreachable, with the world clock they are looked at again (wrapping compare).</summary>
-    private readonly Dictionary<uint, uint> _unreachableUntil = [];
+    /// <summary>
+    /// Droppers found unreachable, keyed by (map, creature entry) since the same entry spawns on several maps and a walk component is per map,
+    /// with the world clock they are looked at again (wrapping compare).
+    /// </summary>
+    private readonly Dictionary<(uint MapId, uint Entry), uint> _unreachableUntil = [];
 
     /// <summary>Test hook: answers "no walk reaches this point" in place of <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>. World thread.</summary>
     internal Func<Vector3, bool>? ReachabilityProbe { get; set; }
@@ -379,11 +383,12 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
 
     private bool SpawnsUnreachable(Player player, uint dropper, IReadOnlyList<CreatureSpawn> spawns, uint now)
     {
-        if (_unreachableUntil.TryGetValue(dropper, out uint until))
+        (uint MapId, uint Entry) key = (player.MapId, dropper);
+        if (_unreachableUntil.TryGetValue(key, out uint until))
         {
             if (unchecked((int)(until - now)) > 0)
                 return true;
-            _unreachableUntil.Remove(dropper);
+            _unreachableUntil.Remove(key);
         }
 
         bool all = ReachabilityProbe is { } probe ? AllSpawnsUnreachable(spawns, probe) : AllSpawnsUnreachable(player, spawns);
@@ -391,7 +396,7 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             if (_unreachableUntil.Count >= MaxUnreachableMemo)
                 _unreachableUntil.Clear();
-            _unreachableUntil[dropper] = unchecked(now + UnreachableRecheckMs);
+            _unreachableUntil[key] = unchecked(now + UnreachableRecheckMs);
         }
 
         return all;

@@ -1,8 +1,13 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.AntiCheat;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -175,5 +180,109 @@ public sealed class SessionTraceAntiCheatTests
         // The block from the new spot was judged (its move line is there) and found nothing.
         await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Event == "move" && l.Detail.Contains($" clientTime={mover.Time} ", StringComparison.Ordinal), "the move line of the block after the relocation");
         Assert.DoesNotContain(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task AnAckDuringAFlight_DoesNotHideTheFlightFromTheShadow()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using WorldTestHost host = SessionTraceTestKit.Start(new FakeTimeProvider(), logs);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAC8", "Flyinggm", AccountSecurity.GameMaster);
+        await ApplyAsync(host, new AntiCheatOptions());
+        await gm.CollectAsync();
+        Assert.StartsWith("Session trace on for Flyinggm", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session on"), StringComparison.Ordinal);
+
+        TraceMover mover = await SessionTraceTestKit.MoverAsync(host, gm, "Flyinggm");
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Flyinggm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // A root order, then a flight step with no teleport packet; the honest ack reports where the flight has the player, and the flight ends there.
+        const float Jump = 200f;
+        (ulong guid, uint counter) = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Flyinggm")!;
+            MovementControl.Request(player, MovementChangeType.Root, apply: true);
+            player.UnitFlags |= UnitFlags.TaxiFlight;
+            player.Relocate(player.X + Jump, player.Y, player.Z, player.Orientation, host.World.NowMs);
+            return (player.Guid.Value, player.MovementCounter - 1);
+        });
+        mover.X += Jump;
+        await Task.Delay(100);
+        mover.Time += 100;
+        var ack = new PacketWriter(64);
+        ack.WriteUInt64(guid);
+        ack.WriteUInt32(counter);
+        new MovementInfo { Flags = MovementFlags.Root, Time = mover.Time, X = mover.X, Y = mover.Y, Z = mover.Z }.Write(ack);
+        await gm.SendAsync(WorldOpcode.CmsgForceMoveRootAck, ack.ToArray());
+        await gm.CollectThroughBarrierAsync();
+        Assert.False(await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Flyinggm")!.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)));
+        await host.OnWorldAsync(() =>
+        {
+            host.World.FindOnlinePlayer("Flyinggm")!.UnitFlags &= ~UnitFlags.TaxiFlight;
+        });
+
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Flyinggm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // Had the ack advanced the shadow's stored marker, this block would be measured from before the flight.
+        await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Event == "move" && l.Detail.Contains($" clientTime={mover.Time} ", StringComparison.Ordinal), "the move line of the block after the flight");
+        Assert.DoesNotContain(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task AKnockbackAck_DuringAFlight_OpensNoBaselineInTheShadow()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using WorldTestHost host = SessionTraceTestKit.Start(new FakeTimeProvider(), logs);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAC9", "Knockedgm", AccountSecurity.GameMaster);
+        await ApplyAsync(host, new AntiCheatOptions());
+        await gm.CollectAsync();
+        Assert.StartsWith("Session trace on for Knockedgm", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session on"), StringComparison.Ordinal);
+
+        TraceMover mover = await SessionTraceTestKit.MoverAsync(host, gm, "Knockedgm");
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Knockedgm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // A knockback order, then a flight that moves the player nowhere: only the ack could make the blink below a trusted baseline.
+        SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+        (ulong guid, uint counter) = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Knockedgm")!;
+            Assert.True(KnockbackService.KnockBack(spells, player, 0f, 7.5f, 5f));
+            player.UnitFlags |= UnitFlags.TaxiFlight;
+            return (player.Guid.Value, player.MovementCounter - 1);
+        });
+        await gm.ReadUntilAsync(WorldOpcode.SmsgMoveKnockBack);
+        await Task.Delay(100);
+        mover.Time += 100;
+        var ack = new PacketWriter(64);
+        ack.WriteUInt64(guid);
+        ack.WriteUInt32(counter);
+        new MovementInfo
+        {
+            Flags = MovementFlags.Jumping, Time = mover.Time, X = mover.X, Y = mover.Y, Z = mover.Z,
+            JumpCosAngle = 1f, JumpSinAngle = 0f, JumpXySpeed = 7.5f, JumpZSpeed = -5f,
+        }.Write(ack);
+        await gm.SendAsync(WorldOpcode.CmsgMoveKnockBackAck, ack.ToArray());
+        await gm.CollectThroughBarrierAsync();
+        Assert.False(await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Knockedgm")!.Locomotion.Pending.HasPendingOfType(MovementChangeType.KnockBack)));
+        await host.OnWorldAsync(() =>
+        {
+            host.World.FindOnlinePlayer("Knockedgm")!.UnitFlags &= ~UnitFlags.TaxiFlight;
+        });
+
+        await mover.StepAsync(100, 80f);
+        await SessionTraceTestKit.SettledAsync(host, "Knockedgm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // The flight kept the position, so nothing was launched: the shadow trusts no block after it, and the blink is written like any other.
+        await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal), "the Teleport line of the blink after the flight");
     }
 }

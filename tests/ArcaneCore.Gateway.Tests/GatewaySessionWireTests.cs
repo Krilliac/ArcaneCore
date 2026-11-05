@@ -183,6 +183,20 @@ public sealed class GatewaySessionWireTests
     }
 
     [Fact]
+    public void LinkSlot_GoldenAndRoundTrip()
+    {
+        byte[] frame = GatewaySessionWire.EncodeLinkSlot("w-1");
+        Assert.Equal(Convert.FromHexString("21" + "03000000" + "772D31"), frame);
+        Assert.Equal("w-1", GatewaySessionWire.DecodeLinkSlot(frame.AsSpan(1)));
+        Assert.Throws<ArgumentException>(() => GatewaySessionWire.EncodeLinkSlot(string.Empty));
+        Assert.Throws<ArgumentException>(() => GatewaySessionWire.EncodeLinkSlot(new string('x', GatewaySessionWire.MaxTextBytes + 1)));
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeLinkSlot(new byte[4])); // an empty name
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeLinkSlot(new byte[3]));
+        byte[] longer = [.. frame, 0];
+        Assert.Throws<InvalidDataException>(() => GatewaySessionWire.DecodeLinkSlot(longer.AsSpan(1)));
+    }
+
+    [Fact]
     public void WorkerStatus_GoldenAndRoundTrip()
     {
         // type 23 (0x17), ticks 0x0102030405060708 (int64), sessions 300 (int32), player limit 100 (int32), flags Restarting | Standby (byte).
@@ -224,7 +238,7 @@ public sealed class GatewaySessionWireTests
         var worker = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         var current = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
         var old = current with { ContractVersion = 1 };
-        Assert.Equal(6, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(7, GatewayLinkManifest.ContractVersion);
         Assert.Equal(GatewayLinkManifest.ContractVersion, current.ContractVersion);
         Assert.True(worker.TryAdmit(current, out _));
         Assert.False(worker.TryAdmit(old, out string? reason));

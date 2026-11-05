@@ -240,6 +240,47 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     }
 
     private WarEffortPhase? _inFlightPhase;
+    private HandoffCapture? _handoffCapture;
+
+    /// <summary>What the world thread held in memory when a handoff froze it: the queued phase, the phase of the job in flight and the pending Colossus deaths.</summary>
+    private sealed record HandoffCapture(WarEffortPhase? Queued, WarEffortPhase? InFlight, int[] Deaths);
+
+    /// <summary>
+    /// Copies the queues a store job would write, for <see cref="FlushStateWritesAsync"/>. Called by the handoff source's Park on the world thread, between two ticks, so the
+    /// queues are quiet and the copy is a consistent view; the flush then never reads a collection the world thread may mutate again if the freeze is resumed.
+    /// </summary>
+    internal void CaptureForHandoff()
+    {
+        if (!_hasStore || _store is null) return;
+        Volatile.Write(ref _handoffCapture, new HandoffCapture(_queuedPhase, _inFlightPhase, [.. _pendingBossDeaths]));
+    }
+
+    /// <summary>
+    /// The handoff flush: waits for the store job in flight, then writes the phase start and Colossus deaths <see cref="CaptureForHandoff"/> saw, the same writes <see cref="StopAsync"/> makes. Neither needs the
+    /// world thread (a parked one is the same quiet state a stopped world is in): only the job's apply step does, and durability does not depend on it. A failed or cancelled job in flight is
+    /// retried here, because its writes are in the capture. A write that still fails throws, so the flush fails and the handoff aborts. A non-holder of the world-state lease writes
+    /// nothing (its writes are not checked). Every store call is idempotent, so a job that resumes after an aborted handoff writes them again. Does nothing when the freeze captured nothing.
+    /// </summary>
+    internal async Task FlushStateWritesAsync()
+    {
+        if (!_hasStore || _store is null || Volatile.Read(ref _handoffCapture) is not { } captured) return;
+        bool inFlightFailed = false;
+        try
+        {
+            await _store.InFlight.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            inFlightFailed = true;
+            logger.LogFault(LogLevel.Warning, "war-effort.flush-inflight", ex, "the AQ war-effort store job in flight at the handoff flush failed; its writes are retried");
+        }
+
+        WarEffortPhase? phase = !inFlightFailed && captured.Queued == captured.InFlight ? null : captured.Queued;
+        if (phase is null && captured.Deaths.Length == 0) return;
+        var result = new RefreshResult();
+        await RunStoreAsync(phase, captured.Deaths, full: false, UtcNowUnix(), result).ConfigureAwait(false);
+        if (result.BossDeathFailure is { } failure) ExceptionDispatchInfo.Capture(failure).Throw();
+    }
 
     private void OnTick(uint diffMs)
     {

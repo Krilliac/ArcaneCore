@@ -1,0 +1,23 @@
+# Talents options
+
+12 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `Talents`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `EmptyConfirmCost` | TalentEmptyConfirmCost | `Current` | Current \| Zero | World | start | The cost field of the empty confirmation sent when a reset is refused (nothing spent, or not enough money). vmangos fills it with the current price; mangos-classic sends zero. Default = vmangos, the primary reference. Values: `Current`, `Zero`. |
+| `IdempotentRespecDecay` | bool | `false` | true \| false | World | start | Deviation switch, off = vmangos. vmangos mutates the stored multiplier on every price read without advancing the last-respec time, so reading the price twice in a later month decays it twice (Player.cpp:4028-4051). When true the decay is applied once per elapsed month: it is computed from the stored state and only persisted by an actual respec. |
+| `PointsRate` | double | `1` | a number, '.' is the decimal point | World | start | Multiplier on the talent points a level grants (vmangos Rate.Talent, default 1). |
+| `RequireClassTrainerForWipe` | bool | `true` | true \| false | World | start | Whether the wipe confirmation requires a class trainer of the player's own class (mangos-classic SkillHandler.cpp:51). vmangos checks only that the NPC is a reachable trainer (SkillHandler.cpp:37-56); the gossip offer, which both references share, already enforces the class, so a genuine client never notices. Default true (fail closed); false matches vmangos exactly. |
+| `RespecBaseCostGold` | uint | `1` | a whole number, 0 to 4294967295 | World | start | Gold charged by the first (or fully decayed) respec (vmangos Rate.RespecBaseCost, default 1). |
+| `RespecMaxMultiplier` | uint | `10` | a whole number, 0 to 4294967295 | World | start | Cap of the multiplier (vmangos Rate.RespecMaxMultiplier, default 10: 50 gold). |
+| `RespecMinMultiplier` | uint | `2` | a whole number, 0 to 4294967295 | World | start | Floor the decay never drops below once the multiplier had reached it (vmangos Rate.RespecMinMultiplier, default 2). |
+| `RespecMultiplicativeCostGold` | uint | `5` | a whole number, 0 to 4294967295 | World | start | Gold per multiplier step (vmangos Rate.RespecMultiplicativeCost, default 5). |
+| `RespecPriceDecay` | bool | `true` | true \| false | World | start | Respec price decays one step per elapsed 30-day month. Always on for build 5875: vmangos gates it with `!NoRespecPriceDecay \|\| patch &gt;= 1.11` (Player.cpp:4056) and 5875 is patch 1.12. A switch for emulating earlier patches. |
+| `TalentDbcPath` | string | `(empty)` | text | World | start | Path of the developer-supplied build-5875 Talent.dbc (never committed or downloaded). Unset together with `TalentTabDbcPath`: the talent system is inert (no points, the unlearn option stays hidden, CMSG_LEARN_TALENT is ignored) and a warning is logged. One set without the other, or an unreadable or invalid file, fails startup. |
+| `TalentTabDbcPath` | string | `(empty)` | text | World | start | Path of the developer-supplied TalentTab.dbc (see `TalentDbcPath`). |
+| `WipeRefusalAlsoSendsEmptyConfirm` | bool | `true` | true \| false | World | start | After a refused reset (nothing spent, or not enough money) also send the empty confirmation that means "you have not spent any talent points" (vmangos SkillHandler.cpp:50-53). Not verified against a real client; false sends only the SMSG_BUY_FAILED of the money case. |

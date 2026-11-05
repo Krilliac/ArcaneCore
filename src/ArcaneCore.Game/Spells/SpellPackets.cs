@@ -250,6 +250,21 @@ public static class SpellPackets
         return writer.ToArray();
     }
 
+    /// <summary>SMSG_SPELL_UPDATE_CHAIN_TARGETS: u64 caster, u32 spell, u32 count, count x u64 target (vmangos WorldPackets::Spell::SpellUpdateChainTargets, Spell.cpp:622-629).</summary>
+    public static byte[] BuildSpellUpdateChainTargets(ulong casterGuid, uint spellId, IReadOnlyList<ulong> targets)
+    {
+        var writer = new PacketWriter(16 + (targets.Count * 8));
+        writer.WriteUInt64(casterGuid);
+        writer.WriteUInt32(spellId);
+        writer.WriteUInt32((uint)targets.Count);
+        foreach (ulong target in targets)
+        {
+            writer.WriteUInt64(target);
+        }
+
+        return writer.ToArray();
+    }
+
     /// <summary>MSG_CHANNEL_UPDATE (server form): u32 remaining ms (vmangos WorldPackets::Spell::ChannelUpdate).</summary>
     public static byte[] BuildChannelUpdate(uint remainingMs)
     {

@@ -116,9 +116,7 @@ public sealed class GmStreamScopeTests
         }
 
         Run(50);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run(1000);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(() => Run(1000), 0, "a scoped publish nobody matches");
         Assert.Empty(Drain(stream));
     }
 

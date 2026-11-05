@@ -49,6 +49,12 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
     public const uint ResponseUpdateError = 5;
     public const uint ResponseDeleted = 9;
 
+    /// <summary>SMSG_GM_TICKET_STATUS_UPDATE status: the ticket changed (mangos-classic GMTicketMgr.h GMTICKET_STATUS_UPDATED = 1).</summary>
+    public const uint StatusUpdateUpdated = 1;
+
+    /// <summary>SMSG_GM_TICKET_STATUS_UPDATE status: the ticket was closed (mangos-classic GMTICKET_STATUS_CLOSED = 2).</summary>
+    public const uint StatusUpdateClosed = 2;
+
     /// <summary>vmangos SharedDefines.h TicketType GMTICKET_MAX: types run 1 (stuck) to 10 (character).</summary>
     public const byte TicketTypeLimit = 11;
 
@@ -86,6 +92,15 @@ public sealed class GmTicketHandlers : IOpcodeHandlerGroup
     }
 
     private static float Age(long now, long then) => Math.Max(0, now - then) / SecondsPerDay;
+
+    /// <summary>
+    /// SMSG_GM_TICKET_STATUS_UPDATE (0x328): one u32 status, <see cref="StatusUpdateUpdated"/> or <see cref="StatusUpdateClosed"/>. mangos-classic
+    /// sends it to the ticket's author on a ticket's first save (GMTicketMgr.cpp:1012-1018), on the first assignment of a responding GM
+    /// (GMTicketMgr.cpp:1145-1149, status updated) and on close (GMTicketMgr.cpp:1329-1333, status closed); WorldSession::SendGMTicketResult,
+    /// GMTicketHandler.cpp:28-33. vmangos has no sender. ArcaneCore has no assignment, so it sends "updated" on every <c>.ticket respond</c>
+    /// (the client only re-queries its ticket on it) and "closed" on <c>.ticket close</c> and <c>.ticket delete</c>. Status 3 (survey) is not sent.
+    /// </summary>
+    public static byte[] BuildStatusUpdate(uint status) => BuildResponse(status);
 
     private static byte[] BuildResponse(uint code)
     {

@@ -96,6 +96,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         collection.AddWorldFeatures();
         WorldTestServices.RegisterAll(collection);
+        // Packet heuristics are on by default in production; a test host pins them off so tests about something else see no per-session state or
+        // ledger findings. Tests of the heuristics switch them on (PacketHeuristicsTestKit.Enable); configureServices can register its own options.
+        collection.AddSingleton(Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.AntiCheat.PacketHeuristics.PacketHeuristicsOptions { Enabled = false }));
         if (clock.IsManual)
         {
             // Game time for features that take a time provider; a TimeProvider registered by the test (configureServices) replaces this one.

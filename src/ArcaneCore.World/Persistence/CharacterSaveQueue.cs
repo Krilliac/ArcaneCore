@@ -339,7 +339,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// queue could still attempt for them would be refused by the characters fence, so their waiting and retained snapshots are dropped and later ones are
     /// skipped silently (the same suppression as <see cref="QuarantineCharacter"/>, without the staff announcement), and the queue shuts down cleanly instead
     /// of entering terminal failure. Characters not named here are untouched: a character this world still owns keeps every write. One informational line
-    /// says how many characters and snapshots were dropped. Idempotent per character; there is no way back (do not <see cref="ResumeCharacter"/> them).
+    /// says how many characters and snapshots were dropped; when a retained snapshot (a save that failed and was never written) is among them, a warning names those characters, because their last save is lost. Idempotent per character; there is no way back (do not <see cref="ResumeCharacter"/> them).
     /// Returns the number of waiting or retained snapshots dropped. Any thread.
     /// </summary>
     public int RetireCharacters(IReadOnlyCollection<int> characterIds)
