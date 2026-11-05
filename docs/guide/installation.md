@@ -68,8 +68,8 @@ address to the one clients will use. Ports and bind addresses are `Auth:Port`, `
 
 The world daemon keeps its own row current, as vmangos mangosd does: `World:Realm:Id` (default 1, vmangos `RealmID`) names the row. The row says
 offline while the world is starting and until it accepts connections, online while its loop is ticking, and offline again when it stops cleanly.
-A world that dies or hangs without saying so is shown offline once its heartbeat (`World:Realm:HeartbeatIntervalSeconds`, default 10) is older than
-`Realm:Liveness:HeartbeatStaleSeconds` (default 60), and a realm shows red while a `.server restart` countdown runs; the realm list also carries
+A world that dies or hangs without saying so is not shown offline at once: the row keeps its last state until its heartbeat (`World:Realm:HeartbeatIntervalSeconds`, default 10) is older than
+`Realm:Liveness:HeartbeatStaleSeconds` (default 60; 0 turns the check off, and then a crashed world stays online until its row is edited), and a realm shows red while a `.server restart` countdown runs; the realm list also carries
 the account's character count per realm, which the client shows as a green realm name ([realm list liveness](../ops/realm-liveness.md)). Each new
 session writes the population hint, 2 x sessions / `World:Realm:PlayerLimit` (default 100, vmangos `PlayerLimit`); the count is every session in the session registry, bot sessions included. A world with no matching row logs
 a warning and runs on; `World:Realm:Id = 0` turns the writes off. A gateway worker (`Cluster:Worker:Enabled`) does not write the row; in that

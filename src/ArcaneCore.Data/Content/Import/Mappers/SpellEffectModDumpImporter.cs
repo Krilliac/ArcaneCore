@@ -24,8 +24,8 @@ public sealed class SpellEffectModDumpImporter
     /// The spells whose vmangos corrections are written, each checked: the effect slot is empty in Spell.dbc and classic-db, no core and no
     /// ArcaneCore code implements the behaviour another way, and every spell the row names exists in 1.12.1 data.
     /// <list type="bullet">
-    /// <item>16468 Mother's Milk: effect 2 a periodic trigger of 15474 Web Explosion every 11999 ms. classic-db has only the DUMMY aura of
-    /// effect 1; neither cmangos nor vmangos code names the spell (grep of both trees) and ArcaneCore has no handler, so without the row the
+    /// <item>16468 Mother's Milk: effect 2 (counted from 1: <c>EffectIndex</c> 1 in the dump and the row) a periodic trigger of 15474 Web
+    /// Explosion every 11999 ms. classic-db has only the DUMMY aura of effect 1; neither cmangos nor vmangos code names the spell (grep of both trees) and ArcaneCore has no handler, so without the row the
     /// debuff does nothing.</item>
     /// </list>
     /// </summary>
