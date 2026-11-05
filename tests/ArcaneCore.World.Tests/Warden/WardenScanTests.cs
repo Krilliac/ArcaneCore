@@ -444,6 +444,33 @@ public sealed class WardenScanTests
     }
 
     [Fact]
+    public void ConfirmFailedScans_AnUnnumberedCheckIsNotConfirmable_SoItsFailureActsAtOnce()
+    {
+        // Id 0 is the unset default; MaNGOS Zero confirms only a non-zero check id, and the per-id bookkeeping could hide a finding.
+        var check = new WardenCheckOptions { Id = 0, Kind = WardenCheckKind.Memory, Address = 0x00400000, Expected = "558BEC" };
+        var rig = new Rig(Confirming(check));
+        rig.Handshake();
+        rig.Warden.Update(61_000);
+        Assert.Equal("02008C0000004000037F", Hex(rig.Next()));
+        rig.Reply(0x00, 0x00, 0x00, 0x00);
+        WardenVerdict verdict = Assert.Single(rig.Verdicts);
+        Assert.Equal(WardenAction.Kick, verdict.Action);
+        Assert.Equal(0u, verdict.CheckId);
+        Assert.Equal(0, rig.Warden.QueuedScans);
+        Assert.False(rig.HasUnread);
+    }
+
+    [Fact]
+    public void Merge_KeepsEveryConfiguredCheckWithIdZero()
+    {
+        WardenCheckOptions a = new() { Id = 0, Kind = WardenCheckKind.Memory, Address = 0x00400000, Expected = "558BEC" };
+        WardenCheckOptions b = new() { Id = 0, Kind = WardenCheckKind.Memory, Address = 0x00401000, Expected = "8BFF55" };
+        WardenCheckOptions numbered = new() { Id = 5, Kind = WardenCheckKind.Memory, Address = 0x00402000, Expected = "90" };
+        List<WardenCheckOptions> merged = WardenCheckRows.Merge([], [a, numbered, b], 5875);
+        Assert.Equal([numbered, a, b], merged);
+    }
+
+    [Fact]
     public void WithoutConfirmFailedScans_AFailedScanStillActsAtOnce()
     {
         var options = Confirming(new WardenCheckOptions { Id = 1, Kind = WardenCheckKind.Memory, Address = 0x00400000, Expected = "558BEC" });

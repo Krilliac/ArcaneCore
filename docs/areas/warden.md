@@ -116,4 +116,6 @@ Without the option a failed scan takes its action at once, as before.
 - **Evidence classes are fixed per kind** (memory and MPQ integrity, Lua corroboration, page, driver, module and API hook threat
   signature). MaNGOS Zero lets each catalogue row choose its class; ArcaneCore has no per-check override. Confirmation dispositions are
   log lines, not MaNGOS Zero's persisted audit and incident rows.
+- **SFileCloseFile address disagrees between references.** The API-hook scan of `SFileCloseFile` uses the address MaNGOS Zero lists (0x248730); vmangos lists 0x253900. Only the real 5875 client binary can settle it, so it is Nathan's client check (it can ride along with the first live 5875 run).
+- **Id 0 is never confirmed.** A check with id 0 (the unset default, also used by scripted and timing scans) is not rescanned under `ConfirmFailedScans`, as in MaNGOS Zero (confirms only a non-zero check id); its failure acts at once. Give configured checks distinct non-zero ids to get the confirmation.
 - **Request size.** Queued (login, scripted, confirmation) requests keep to vmangos's 256-byte reply limit; the rotation does not check it.

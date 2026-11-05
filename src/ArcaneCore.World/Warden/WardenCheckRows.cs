@@ -86,7 +86,7 @@ public static class WardenCheckRows
         return problem is null ? check : null;
     }
 
-    /// <summary>The table's scans for <paramref name="build"/>, then the configured ones; a configured id replaces the row with that id.</summary>
+    /// <summary>The table's scans for <paramref name="build"/>, then the configured ones; a configured id replaces the row with that id. Configured scans with id 0 (unset) are all kept, after the others, in the order given.</summary>
     public static List<WardenCheckOptions> Merge(IEnumerable<WardenCheckRow> rows, IEnumerable<WardenCheckOptions> configured, uint build, Action<WardenCheckRow, string>? skipped = null)
     {
         var byId = new SortedDictionary<uint, WardenCheckOptions>();
@@ -102,11 +102,19 @@ public static class WardenCheckRows
             }
         }
 
+        List<WardenCheckOptions> unnumbered = [];
         foreach (WardenCheckOptions check in configured)
         {
-            byId[check.Id] = check;
+            if (check.Id == 0)
+            {
+                unnumbered.Add(check);
+            }
+            else
+            {
+                byId[check.Id] = check;
+            }
         }
 
-        return [.. byId.Values];
+        return [.. byId.Values, .. unnumbered];
     }
 }
