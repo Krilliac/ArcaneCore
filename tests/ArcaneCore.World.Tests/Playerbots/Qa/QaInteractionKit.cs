@@ -66,6 +66,12 @@ internal sealed class QaInteractionTransport : IQaIssueTransport
 
     public Task ReopenAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
 
+    public Task CloseAsDuplicateAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task CloseAsCompletedAsync(int number, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task EditBodyAsync(int number, string body, CancellationToken cancellationToken) => Task.CompletedTask;
+
     public void Dispose()
     {
     }

@@ -229,7 +229,9 @@ Five kinds are reported straight to the sink (`IPlayerbotQaSink`), never through
 * `CMSG_LOOT`: `GameObjectLootHandlers` hands a bot's refused `LootResult` to the monitor.
 * `WorldSession.TryManagedAction`: an opcode a bot sent with no world handler (none at all, or a session-task one only) is reported
   before it is refused as before.
-* The bot's packets: `WorldSession.CaptureManagedPacket` hands every packet of a playerbot session to `IManagedPacketTap`. The tap
+* The bot's packets: `WorldSession.CaptureManagedPacket` hands the packets of a playerbot session to `IManagedPacketTap`: every
+  packet in Full fidelity, and in Lean fidelity (the default, whose intake drops most packets) only the four below, which are delivered
+  before the lean drop and copied for that purpose alone. The tap
   switches on the opcode and returns for all but `SMSG_QUESTUPDATE_ADD_KILL`, `SMSG_QUESTUPDATE_ADD_ITEM`, `SMSG_ITEM_PUSH_RESULT` and
   `SMSG_INVENTORY_CHANGE_FAILURE`, allocation-free (a test measures it); the session resolves the tap once and keeps an inert one when
   QA is off. Only packets sent on the world thread are looked at.

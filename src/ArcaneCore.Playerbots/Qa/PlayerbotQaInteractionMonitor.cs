@@ -32,7 +32,7 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// </list>
 /// Every entry first asks whether QA is on and the unit is a managed playerbot (<see cref="PlayerbotQaBots.Identify"/>); a real player or a creature returns
 /// there, so nothing a real player does is reported (a script gap has no player and is reported for the content). The packet tap
-/// (<see cref="OnPacket"/>) runs for every packet a bot receives: it switches on the opcode first and returns for every opcode but five, allocation-free;
+/// (<see cref="OnPacket"/>) runs for the packets a bot receives (the four it looks at even under Lean fidelity): it switches on the opcode first and returns for every other opcode, allocation-free;
 /// the kill hook returns for a killer that is not a bot. The counters are value-keyed dictionaries under one lock, bounded by <see cref="MaxTracked"/>; a
 /// signal is built only when one is reported, and each (bot, kind, reason, ids) at most once per <see cref="ThrottleMs"/>. World thread (the game's
 /// sites, the handlers and the kill events run there; a packet sent from another thread is ignored by the stateful cases).
@@ -65,7 +65,7 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
     private readonly Dictionary<QaRepeatKey, long> _reported = [];
     private readonly Dictionary<QaRepeatKey, (int Count, long FirstMs)> _repeats = [];
     private readonly Dictionary<(ulong Bot, byte Credit, uint Entry), (int Count, uint Quest, int Objective)> _attempts = [];
-    private (ulong Bot, int Code) _explainedInventory;
+    private readonly Dictionary<ulong, int> _explainedInventory = [];
 
     /// <summary>The production monitor: the QA sink, and the quest services looked up per use (they are built when the quest feature attaches).</summary>
     public PlayerbotQaInteractionMonitor(IPlayerbotQaSink sink, IServiceProvider services)
@@ -103,7 +103,11 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
         if (failure is InteractionFailure.BuyCannotStore or InteractionFailure.BuybackCannotStore)
         {
             // The equip error that follows explains this refusal; the packet tap must not count it a second time.
-            lock (_gate) _explainedInventory = (player.Guid.Value, code);
+            lock (_gate)
+            {
+                if (_explainedInventory.Count >= MaxTracked) _explainedInventory.Clear();
+                _explainedInventory[player.Guid.Value] = code;
+            }
         }
 
         Interaction(bot, player, failure, code, npcEntry, 0, item, spell);
@@ -300,7 +304,7 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
     // --- the packet tap ------------------------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A packet a managed bot session captured (WorldSession.CaptureManagedPacket, under its send lock). Every opcode but five returns at the switch.
+    /// A packet a managed bot session captured (WorldSession.CaptureManagedPacket, under its send lock). Every opcode but four returns at the switch.
     /// </summary>
     public void OnPacket(WorldSession session, WorldOpcode opcode, byte[] payload)
     {
@@ -349,9 +353,9 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
         int code = payload[0];
         lock (_gate)
         {
-            if (_explainedInventory == (player.Guid.Value, code))
+            if (_explainedInventory.TryGetValue(player.Guid.Value, out int explained) && explained == code)
             {
-                _explainedInventory = default; // a purchase that could not be stored, reported by the vendor
+                _explainedInventory.Remove(player.Guid.Value); // a purchase that could not be stored, reported by the vendor
                 return;
             }
         }

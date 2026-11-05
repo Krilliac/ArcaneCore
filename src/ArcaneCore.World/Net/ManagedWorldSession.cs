@@ -270,6 +270,8 @@ public sealed partial class WorldSession
         // Lean bot: nothing reads this packet back, so it is neither copied nor queued (the ring is not read for other opcodes).
         if (IsLeanBot && BotPolicy is { } policy && !policy.KeepsPacket(opcode) && !HasPacketObserver)
         {
+            // Bot QA still needs the few quest and inventory packets the lean intake drops (the copy is made for those opcodes only).
+            if (IsPlayerbot && IManagedPacketTap.WantsOpcode(opcode)) QaTap.OnPacket(this, opcode, payload.ToArray());
             BotLeanStats.SkippedRingPacket(payload.Length);
             Interlocked.Increment(ref _leanRingPacketsSkipped);
             return;
@@ -282,7 +284,7 @@ public sealed partial class WorldSession
             CapturePacket(false, opcode, payload);
             ManagedPacketObserver?.Invoke(opcode, copy);
             _outboundPacketObserver?.Observe(opcode, copy);
-            if (IsPlayerbot) QaTap.OnPacket(this, opcode, copy); // bot QA: switches on the opcode, returns at once for all but five
+            if (IsPlayerbot) QaTap.OnPacket(this, opcode, copy); // bot QA: switches on the opcode, returns at once for all but four (a lean bot's skipped packets reach it above)
             // Bounded transport: no socket writer or unconsumed unbounded channel exists for bots.
             while (_managedPackets.Count > 0 && (_managedPackets.Count >= 128 || _managedPacketBytes + payload.Length > 1_048_576))
                 _managedPacketBytes -= _managedPackets.Dequeue().Payload.Length;
