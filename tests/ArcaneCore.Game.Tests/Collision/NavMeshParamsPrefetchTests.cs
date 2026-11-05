@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.TestSupport;
@@ -91,5 +92,42 @@ public sealed class NavMeshParamsPrefetchTests : IDisposable
         await nav.MapPrefetch(9)!.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.False(nav.HasNavigationData(9));
         Assert.Equal(1, reads);
+    }
+
+    [Fact]
+    public async Task ACreatedMapView_PrefetchesItsMapsParameters_ASecondViewDoesNotReadAgain_AndADetachedViewReadsNothing()
+    {
+        _fixture.WriteParams(0);
+        int reads = 0;
+        var nav = new NavMeshPathfinder(_fixture.Directory)
+        {
+            FileReader = path =>
+            {
+                Interlocked.Increment(ref reads);
+                return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            },
+        };
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        WorldCollision collision = WorldCollision.Of(world);
+        collision.Install(null, nav);
+        Map map = world.GetMap(0);
+
+        // The followed view (what the map holds) starts the read at its creation.
+        Assert.Null(nav.MapPrefetch(0));
+        _ = new MapCollision(map, collision);
+        Task prefetch = nav.MapPrefetch(0) ?? throw new InvalidOperationException("the view did not prefetch its map");
+        await prefetch.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, Volatile.Read(ref reads));
+
+        // Another view of the same map, then the first query: both take the bytes already read.
+        _ = new MapCollision(map, collision);
+        Assert.True(nav.HasNavigationData(0));
+        Assert.Equal(1, Volatile.Read(ref reads));
+
+        // A detached view subscribes to nothing and prefetches nothing.
+        var other = new NavMeshPathfinder(_fixture.Directory) { FileReader = _ => throw new InvalidOperationException("a detached view read a file") };
+        collision.Install(null, other);
+        _ = new MapCollision(map, collision, followGrids: false);
+        Assert.Null(other.MapPrefetch(0));
     }
 }
