@@ -124,6 +124,7 @@ internal static class WorldStartup
             {
                 host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(WorldStartup).FullName!)
                     .LogWarning("Shutdown was requested while the world was starting; stopping in order");
+            }
             catch (Exception ex) when (IsPortInUse(ex))
             {
                 // The early probe in WorldHost or the real bind in WorldServer: a failed start, ended with a failure code instead of an unhandled exception (the crash handler's fail-fast and dump).

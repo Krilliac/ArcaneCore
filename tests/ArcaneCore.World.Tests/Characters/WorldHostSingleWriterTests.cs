@@ -264,7 +264,7 @@ public sealed class WorldHostSingleWriterTests
             string database = Path.Combine(directory.Path, "characters.db");
             await using Kit kit = Kit.Create(DatabaseOptions(database), fencing: true, world: new WorldOptions { BindAddress = "127.0.0.1", Port = port });
 
-            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Host.StartAsync(CancellationToken.None));
+            InvalidOperationException failure = await Assert.ThrowsAsync<ArcaneCore.World.Net.WorldPortInUseException>(() => kit.Host.StartAsync(CancellationToken.None));
 
             Assert.Contains($"127.0.0.1:{port}", failure.Message);
             Assert.False(kit.Feature.Attached);

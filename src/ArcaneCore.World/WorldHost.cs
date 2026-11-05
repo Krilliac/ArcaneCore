@@ -135,7 +135,7 @@ public sealed class WorldHost(
         }
         catch
         {
-            // The host never calls StopAsync for a failed start: give back only a lock this start took itself. A lock WorldStartup took stays held
+            // The host never calls StopAsync for a failed start, except that WorldStartup.RunAsync stops the host after a port-in-use refusal (that stop takes the not-attached branch and does nothing): give back only a lock this start took itself. A lock WorldStartup took stays held
             // until the container disposes it (after the hosted services stop), which in production is the end of the process.
             if (acquiredHere) writerGuard?.Dispose();
             throw;
@@ -533,7 +533,7 @@ public sealed class WorldHost(
     /// <summary>
     /// Stop the bots, the world thread and the features, drain the save queue, then give back the ownership. Runs once: a start that failed has already
     /// stopped the world itself (<see cref="StopAfterFailedStartAsync"/>), and the host still stops it when the stop was requested during start
-    /// (<see cref="WorldStartup.RunAsync"/>); later calls return the first stop's task.
+    /// (<see cref="WorldStartup.RunAsync"/>) or the start was refused because its port is in use (nothing was attached, so that stop does nothing); later calls return the first stop's task.
     /// </summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
