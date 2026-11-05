@@ -305,4 +305,50 @@ public sealed class SpellMagnetTests
         kit.Advance(3000);
         Assert.Equal(100u, victim.Health);
     }
+
+    private static SpellCastTargets ClientNamed(ObjectGuid unit)
+    {
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(unit.Value);
+        var reader = new PacketReader(wire.ToArray());
+        return SpellCastTargets.Read(ref reader);
+    }
+
+    private sealed class TargetsAtFinish : ISpellCastObserver
+    {
+        public SpellCastTargets? Seen { get; private set; }
+
+        public void OnFinished(SpellCast cast, bool completed) => Seen = cast.Targets;
+    }
+
+    [Fact]
+    public void ClientNamedCast_IsNotRedirectedOntoAMagnetTheCasterMayNotAttack()
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        var (attacker, _, victim, magnet) = AddPlayers(kit);
+        ((FakeRelations)kit.System.Relations).Hostile.Add(magnet.Guid); // the magnet reads as a friend of the attacker, the victim as a foe
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), true));
+
+        Assert.Equal(100u, magnet.Health);
+        Assert.Equal(85u, victim.Health);
+        Assert.True(kit.System.HasAura(victim, Protection)); // no charge was spent on the refused redirect
+    }
+
+    [Fact]
+    public void ClientNamedCast_RedirectedOntoAnAttackableMagnet_KeepsFromClient()
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        var (attacker, _, victim, magnet) = AddPlayers(kit);
+        var seen = new TargetsAtFinish();
+        kit.System.RegisterObserver(seen);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), true));
+
+        Assert.Equal(85u, magnet.Health);
+        Assert.NotNull(seen.Seen);
+        Assert.Equal(magnet.Guid, seen.Seen!.Unit);
+        Assert.True(seen.Seen.FromClient); // a child re-aimed at the magnet through ForUnit(guid, parent) is still client-named
+    }
 }

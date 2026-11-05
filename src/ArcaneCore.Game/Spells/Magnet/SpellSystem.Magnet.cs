@@ -41,8 +41,14 @@ public sealed partial class SpellSystem
             if (holder.IsRemoved || !holder.HasAura(AuraType.SpellMagnet)
                 || ResolveAuraCaster(holder) is not { IsAlive: true } magnet
                 || !ReferenceEquals(magnet.Map, cast.Caster.Map) || IsQuestSettlementPending(magnet)
-                || !IsMagnetTargetEligible(spell, magnet, casterSelector: !updateExplicitTarget))
+                || !IsMagnetTargetEligible(spell, magnet, casterSelector: !updateExplicitTarget)
+                || (updateExplicitTarget && (!cast.IsTriggered || cast.Targets.FromClient)
+                    && CheckExplicitHostileTargetRules(cast.Caster, spell, magnet) != SpellCastResult.CastOk))
             {
+                // The last test re-applies the explicit-hostile-target gate to the magnet itself: the landing CheckCast ran against the
+                // client's original unit, so a magnet the caster may not attack (a crafted block, a friendly or unflagged magnet) is
+                // skipped here instead of redirecting a hostile spell onto it. Same scope as CheckCast: non-triggered casts and
+                // client-named blocks; a server-chosen triggered cast is left alone.
                 continue;
             }
 
@@ -50,8 +56,7 @@ public sealed partial class SpellSystem
             if (updateExplicitTarget)
             {
                 // The redirect keeps FromClient, so a later reader of the block (SpellCastTargets.ForUnit(guid, parentCast), which re-aims a
-                // child at the unit) sees a client-named target. The landing CheckCast runs before SelectTargets, so nothing re-checks the
-                // magnet itself in the Cast path; a magnet is gated only by IsMagnetTargetEligible (an open limit, see docs/areas/spells.md).
+                // child at the unit) sees a client-named target and gates it again. The magnet itself was gated in the loop above.
                 cast.Targets.Unit = magnet.Guid;
             }
             if (holder.Charges > 0)
