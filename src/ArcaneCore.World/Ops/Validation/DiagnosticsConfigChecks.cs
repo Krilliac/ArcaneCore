@@ -5,7 +5,7 @@ using Microsoft.Extensions.Configuration;
 namespace ArcaneCore.World.Ops.Validation;
 
 /// <summary>
-/// The <c>Diagnostics</c> section (docs/ops/invariants.md): every policy must be one of its enum's
+/// The <c>Diagnostics</c> section (docs/ops/invariants.md; its <c>CrashDump</c> subsection is <c>CrashDumpConfigChecks</c> in the Kernel): every policy must be one of its enum's
 /// names and the invariant log limit must not be negative. Checked by <c>check-config</c> and at every
 /// start, so an unknown policy name is one listed line and exit 78 instead of a binder exception.
 /// </summary>

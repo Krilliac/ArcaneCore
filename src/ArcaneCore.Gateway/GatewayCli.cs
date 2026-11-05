@@ -67,11 +67,11 @@ internal static class GatewayCli
         return null;
     }
 
-    /// <summary>Every problem of the gateway's configuration: the .conf key check, then <see cref="GatewayConfigCheck"/>.</summary>
+    /// <summary>Every problem of the gateway's configuration: the .conf key check, then <see cref="GatewayConfigCheck"/>, then <see cref="CrashDumpConfigChecks"/> (the gateway binds <c>Diagnostics:CrashDump</c> like every daemon).</summary>
     internal static ConfigReport Validate(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        return ConfigReport.Run(configuration, [new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.Gateway), new GatewayConfigCheck()]);
+        return ConfigReport.Run(configuration, [new ConfKeyCheck(ConfCatalog.Embedded, ConfigDaemon.Gateway), new GatewayConfigCheck(), new CrashDumpConfigChecks()]);
     }
 
     /// <summary>Turns the <c>--check-config</c> flag into the <c>check-config</c> verb the shared parser knows (the verb must be the first argument).</summary>
