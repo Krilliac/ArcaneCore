@@ -195,7 +195,8 @@ public sealed class HealMechanicalAndEvadeEffectTests
     }
 
     /// <summary>
-    /// A spell that may target the dead passes the CheckCast gate, so the effect's own dead-target guard is the only thing that stops the heal.
+    /// A spell that may target the dead passes the CheckCast gate and reaches the effect. The effect's own dead-target guard then
+    /// suppresses the heal log (SMSG_SPELLHEALLOG); the damage sinks also refuse to heal a dead unit, so health alone cannot prove the guard.
     /// </summary>
     [Fact]
     public void HealMechanical_OnADeadTargetOfASpellThatCanTargetTheDead_StillHealsNothing()
@@ -203,15 +204,18 @@ public sealed class HealMechanicalAndEvadeEffectTests
         SpellInfo deadOk = Instant(962105, Effect(SpellEffectName.HealMechanical, 100, SpellImplicitTarget.UnitFriend))
             with { AttributesEx2 = SpellAttributesEx2.AllowDeadTarget };
         using SpellTestKit kit = new(deadOk);
-        (Player caster, _) = kit.AddPlayer(1);
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
         (Player target, _) = kit.AddPlayer(2, 2);
         target.MaxHealth = 2_000;
         target.Health = 0;
+        session.Clear();
 
-        kit.System.CastSpell(caster, 962105, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        SpellCastResult result = kit.System.CastSpell(caster, 962105, SpellCastTargets.ForUnit(target.Guid), triggered: true);
         FlushSpellBatch(kit);
 
+        Assert.Equal(SpellCastResult.CastOk, result);
         Assert.Equal(0u, target.Health);
+        Assert.Empty(Packets(session, WorldOpcode.SmsgSpellheallog));
     }
 
     /// <summary>The caster is dead: a triggered cast is not exempt from CheckCast's caster-dead refusal, so nothing happens.</summary>
