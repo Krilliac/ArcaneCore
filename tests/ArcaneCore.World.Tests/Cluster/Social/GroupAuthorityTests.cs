@@ -32,7 +32,7 @@ public sealed class GroupAuthorityTests
     {
         var authority = new GroupAuthority(new InMemoryRealmPresenceDirectory());
         authority.Restore(
-            [new GroupRecord(1, 1, 0, 1, Group.DefaultLootThreshold, false, new ulong[8], [new GroupMemberRecord(1, 0, false), new GroupMemberRecord(2, 0, false)])],
+            [new GroupRecord(1, 1, (byte)LootMethod.GroupLoot, 1, Group.DefaultLootThreshold, false, new ulong[8], [new GroupMemberRecord(1, 0, false), new GroupMemberRecord(2, 0, false)])],
             new Lookup());
         Group group = authority.GetGroup(ObjectGuid.Player(1))!;
         Assert.Equal(LootMethod.GroupLoot, group.LootMethod);
