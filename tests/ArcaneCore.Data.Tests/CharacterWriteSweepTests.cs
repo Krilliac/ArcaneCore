@@ -56,6 +56,7 @@ public sealed class CharacterWriteSweepTests
         ["ArcaneCore.Data/Economy/AuctionBotDataModules.cs::DeleteAsync"] = "EfAuctionBotItemStore writes the world database (WorldDbContext)",
 
         // Deletion lifetime fence: removes only rows of an id that has no characters row (a race with deletion), whoever owns the database.
+        ["ArcaneCore.Data/Characters/Cluster/RealmAuthorityLeaseDataModule.cs::RelaxCommitDurability"] = "SET LOCAL changes a transaction setting, it writes no row; the renewal UPDATE it precedes is the lease's own compare on owner and token",
         ["ArcaneCore.Data/Characters/Spells/CharacterSpellStateDataModule.cs::DeleteCharacterAsync"] = "lifetime fence, exempt by CharacterWriteFence.Exempt at the call",
     };
 

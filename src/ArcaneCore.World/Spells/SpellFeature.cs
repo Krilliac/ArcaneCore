@@ -118,7 +118,12 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             System.CombatRules = scope.ServiceProvider.GetService<ISpellCombatRules>() ?? new VanillaSpellCombatRules();
             System.Summons = scope.ServiceProvider.GetService<ISpellSummonSink>();
             SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
-            System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);
+            var worldGroups = new WorldSpellGroups(() => social?.Context.Groups);
+            System.Groups = social is null ? NoGroupResolver.Instance : worldGroups;
+            if (social is not null)
+            {
+                CombatHooks.RegisterSameGroup(world, worldGroups.AreInSameGroup);
+            }
             System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
             FactionTemplateCatalog? factionTemplates = scope.ServiceProvider.GetService<FactionTemplateCatalog>();
             if (factionTemplates is null)

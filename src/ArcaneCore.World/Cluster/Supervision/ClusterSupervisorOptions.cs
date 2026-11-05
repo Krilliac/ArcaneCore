@@ -77,7 +77,11 @@ public static class WorldStopBudget
     /// <summary>The drain timeout below which <see cref="ClusterSupervisorOptions.Warnings"/> warns for a child that runs a world.</summary>
     public static readonly TimeSpan Recommended = Bounded + BotStopAllowance;
 
-    /// <summary>True for the roles whose child hosts a world and so runs this stop sequence (everything but the realm, the gateway and a nested supervisor).</summary>
+    /// <summary>
+    /// True for the roles whose child hosts a world and so runs this stop sequence (everything but the realm, the gateway and a nested supervisor). The <c>social</c> and
+    /// <c>coordinator</c> roles are labels on a World executable (<c>ClusterNodeOptions.Validate</c> refuses a dedicated social or economy node, so such a child either does not start or
+    /// runs the whole world), which is why they count: whatever starts under them stops through <c>WorldHost.StopCoreAsync</c>.
+    /// </summary>
     public static bool RunsWorld(string? role) =>
         !string.Equals(role, SupervisedRoles.Realm, StringComparison.OrdinalIgnoreCase)
         && !string.Equals(role, SupervisedRoles.Gateway, StringComparison.OrdinalIgnoreCase)
@@ -325,6 +329,7 @@ public sealed class ClusterSupervisorOptions
     /// The exemption is <c>min(announced max + 60, this)</c>: the child's own <c>max=</c> from its authenticated line, bounded by this value. Keep it
     /// above three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c> plus a minute, or the cap cuts a long dump short.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number of seconds, 1 to 3600")]
     public int DumpGraceSeconds { get; set; } = 420;
 
     /// <summary>The dotnet-stack executable for <c>HangCapture=Stacks</c> (default empty: none; required when any child uses Stacks).</summary>

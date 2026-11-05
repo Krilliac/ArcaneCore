@@ -706,8 +706,7 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             byte[] orphanReply = await ReadExactAsync(client, 2);
             Assert.Equal([(byte)AuthCommand.LogonProof, (byte)AuthResult.UnknownAccount], orphanReply);
 
-            // 2. Out-of-order RealmList before authentication -> ignored without reply.
-            await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 });
+            // 2. Out-of-order RealmList before authentication closes the connection (PreAuthRefusalCloseTests), so it is not sent mid-sequence.
 
             // 3. Degenerate SRP account -> FailNoAccess.
             await client.WriteAsync(BuildChallengePacket("DEGENERATE"));

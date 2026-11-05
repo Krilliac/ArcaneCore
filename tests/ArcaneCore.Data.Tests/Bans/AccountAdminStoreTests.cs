@@ -36,6 +36,25 @@ public sealed class AccountAdminStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task Delete_RemovesOnlyTheNamedAccount_AndReportsUnknownAccounts(DatabaseProvider provider)
+    {
+        await using Fixture f = await Fixture.CreateAsync(_databases, provider);
+        Account alice = await f.Accounts.CreateAsync(NewAccount("ALICE"));
+        Account bob = await f.Accounts.CreateAsync(NewAccount("BOB"));
+
+        Assert.True(await f.Admin.DeleteAsync("alice"));
+        Assert.False(await f.Admin.DeleteAsync("ALICE"));
+        Assert.False(await f.Admin.DeleteAsync("NOBODY"));
+
+        Assert.Null(await f.Accounts.FindByUsernameAsync("ALICE"));
+        Account? survivor = await f.Accounts.FindByUsernameAsync("BOB");
+        Assert.NotNull(survivor);
+        Assert.Equal(bob.Id, survivor.Id);
+        Assert.NotEqual(alice.Id, bob.Id);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task StatusChanged_FiresOncePerRealChange_AfterCommit_AndASubscriberFaultIsIsolated(DatabaseProvider provider)
     {
         var events = new AccountStatusEvents();

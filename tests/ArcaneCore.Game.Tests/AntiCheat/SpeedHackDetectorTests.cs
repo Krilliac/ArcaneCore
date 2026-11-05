@@ -187,4 +187,70 @@ public sealed class SpeedHackDetectorTests
             Assert.False(on.Feed(client += 750, real += 500).Fire); // fewer pairs than MinSamples after the reset
         }
     }
+
+    [Fact]
+    public void Credit_CancelsOnlyTheClientTimeAheadOfReal_OnTheNextPairOnly()
+    {
+        SpeedClockOptions options = Defaults();
+        uint client = 100000, real = 5000;
+        var detector = new SpeedHackDetector(options);
+        for (int i = 0; i < options.MinSamples; i++)
+        {
+            detector.Feed(client += 500, real += 500);
+        }
+
+        // A pair 1000 ms ahead of real, credited 5000: only the 1000 ms excess is cancelled, never more (the pair is not
+        // made to read slow), so the window stays at exactly 1.0.
+        detector.Credit(5000);
+        Assert.Equal(1.0, detector.Feed(client += 1500, real += 500).Ratio, 9);
+
+        // The credit was spent by that pair: the next excess counts in full.
+        SpeedHackDecision next = detector.Feed(client += 1500, real += 500);
+        Assert.True(next.Ratio > 1.0);
+
+        // A credit on an honest pair changes nothing, and is spent by it.
+        var honest = new SpeedHackDetector(options);
+        client = 100000;
+        real = 5000;
+        for (int i = 0; i < options.MinSamples; i++)
+        {
+            honest.Feed(client += 500, real += 500);
+        }
+
+        honest.Credit(300);
+        Assert.Equal(1.0, honest.Feed(client += 500, real += 500).Ratio, 9);
+        Assert.True(honest.Feed(client += 800, real += 500).Ratio > 1.0);
+    }
+
+    [Fact]
+    public void Credit_AddedPastUintMax_SaturatesInsteadOfWrapping()
+    {
+        SpeedClockOptions options = Defaults();
+        var detector = new SpeedHackDetector(options);
+        uint client = 0, real = 0;
+        for (int i = 0; i < options.MinSamples; i++)
+        {
+            detector.Feed(client += 500, real += 500);
+        }
+
+        detector.Credit(1);
+        detector.Credit(uint.MaxValue); // a wrapping sum would be 0 and leave the pair below hot
+        Assert.Equal(1.0, detector.Feed(client += 1500, real += 500).Ratio, 9);
+    }
+
+    [Fact]
+    public void Credit_IsForgottenByReset()
+    {
+        SpeedClockOptions options = Defaults();
+        var detector = new SpeedHackDetector(options);
+        detector.Credit(uint.MaxValue);
+        detector.Reset();
+        uint client = 0, real = 0;
+        for (int i = 0; i < options.MinSamples; i++)
+        {
+            detector.Feed(client += 500, real += 500);
+        }
+
+        Assert.True(detector.Feed(client += 1500, real += 500).Ratio > 1.0); // the reset dropped the credit
+    }
 }

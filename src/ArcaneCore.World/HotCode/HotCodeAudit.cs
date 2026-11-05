@@ -17,7 +17,8 @@ namespace ArcaneCore.World.HotCode;
 /// that fails is counted in the <see cref="FaultLedger"/> (<c>hotcode.audit-write</c>) and its lines are lost; a flush that times out is counted as
 /// <c>hotcode.audit-flush</c> (and logged). The queue is bounded (a wedged disk cannot grow it): when it is full <see cref="Record"/> drops the line
 /// and counts it as <c>hotcode.audit-dropped</c> instead of blocking the world thread. A failure while reporting a failed write is
-/// counted as <c>hotcode.audit-report</c>.
+/// counted as <c>hotcode.audit-report</c>. Which ledger and logger get the writer's own faults (write, drop) is the latest instance that supplied one
+/// (every instance on a path shares the writer); a flush timeout is reported to the ledger and logger of the instance that flushed.
 /// </para>
 /// </summary>
 public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null, ILogger? logger = null, FaultLedger? ledger = null)

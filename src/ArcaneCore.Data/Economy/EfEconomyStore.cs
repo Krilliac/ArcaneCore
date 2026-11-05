@@ -50,9 +50,10 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         // The expiry operations (and the auction house bot's removals) are the realm's, not a character's: no participant, and they delete an auction or a letter. A clustered node
         // that has no economy fence is refused outright (writer-lock design section 2b, economy row: RequireFence on the expiry operations); one that holds a fence but was marked lost locally is left to the commit fence below, which
         // refuses it exactly when another node took the lease over, whatever its sweep thinks.
+        RealmLeaseFence? sweepFence = null;
         if (IsRealmSweep(request))
         {
-            LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Economy);
+            sweepFence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Economy);
         }
 
         // Worker fencing scope: as the transaction begins, the write fence also proves that every participant's per-character claim is held by a live worker
@@ -75,7 +76,7 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         try
         {
             // A clustered node that holds the economy lease proves, in this transaction, that nobody took the scope over; a former holder is refused before anything is read or written.
-            if (leaseFences?.FenceFor(RealmAuthorityScopes.Economy) is { } fence)
+            if ((sweepFence ?? leaseFences?.FenceFor(RealmAuthorityScopes.Economy)) is { } fence) // a sweep keeps the fence its RequireFence read: a release since would otherwise leave it unchecked
             {
                 await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
             }

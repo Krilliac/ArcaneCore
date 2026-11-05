@@ -47,7 +47,7 @@ public interface IPlayerHooks : IScriptHooks
     /// <summary>The player is leaving the world, still in its map and before the save (<c>OnPlayerLogout</c>).</summary>
     void OnLogout(Player player) { }
 
-    /// <summary>The player's level changed through <see cref="Progression.PlayerProgression.GiveLevel"/> (<c>OnPlayerLevelChanged</c>).</summary>
+    /// <summary>The player's level changed through <see cref="Progression.PlayerProgression.GiveLevel"/> or by experience (<c>GiveXp</c>, once per level gained) (<c>OnPlayerLevelChanged</c>). For a multi-level experience gain every call sees <c>player.Level</c> as the final level; only <paramref name="oldLevel"/> differs per call.</summary>
     void OnLevelChanged(Player player, byte oldLevel) { }
 
     /// <summary>The player killed a unit, player or creature (<c>OnPlayerPVPKill</c> / <c>OnPlayerCreatureKill</c>).</summary>

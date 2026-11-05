@@ -87,6 +87,19 @@ public class CombatHooks
     /// <summary>The hooks registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static CombatHooks For(Maps.WorldRuntime world) => s_registered.TryGetValue(world, out CombatHooks? hooks) ? hooks : Default;
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Maps.WorldRuntime, Func<Player, Player, bool>> s_sameGroup = new();
+
+    /// <summary>
+    /// The group test the free-for-all rule needs (vmangos Player::IsInRaidWith): two players of one group stay friends in an arena.
+    /// Per world; without one nobody is grouped. Called by the spell feature when it attaches and the social area is present.
+    /// </summary>
+    public static void RegisterSameGroup(Maps.WorldRuntime world, Func<Player, Player, bool> sameGroup)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(sameGroup);
+        s_sameGroup.AddOrUpdate(world, sameGroup);
+    }
+
     /// <summary>
     /// vmangos Unit::IsFriendlyTo. Default until faction templates are loaded: players of the
     /// same team are friendly; everything else is not.
@@ -114,20 +127,30 @@ public class CombatHooks
     internal static bool BothResolveToPlayers(Unit a, Unit b) => DuelRules.ControllingPlayer(a) is not null && DuelRules.ControllingPlayer(b) is not null;
 
     /// <summary>
-    /// Player pair friendliness. Uncharmed players share a team (<c>Player.Team</c> never changes under charm, so it is not trusted
-    /// for a charmed one). When either is charmed, each side is resolved to the player controlling it (vmangos GetAffectingPlayer)
-    /// and those players' teams are compared; a side with no controlling player (charmed by a creature) is not friendly.
-    /// vmangos adds same group or raid (IsInRaidWith, Object.cpp:3654-3664); no group resolver is reachable from the hooks, so teams stand in.
+    /// Player pair friendliness (vmangos WorldObject::GetReactionTo, Object.cpp:3614-3666). Each side is resolved to the player it acts for
+    /// (GetAffectingPlayer): a mind-controlled player acts for its charmer, whatever its own race says, and one charmed by a creature
+    /// resolves to none and is not friendly. The player himself and a group mate are friends first; two free-for-all flagged players
+    /// (an arena or a free-for-all realm) are then hostile whatever their teams; otherwise the same team is friendly.
+    /// <see cref="Player.Team"/> never changes under charm, so the teams compared are those of the controlling players.
     /// </summary>
     private static bool PlayersFriendly(Player pa, Player pb)
     {
-        if (!EitherCharmed(pa, pb))
+        if (DuelRules.ControllingPlayer(pa) is not { } ca || DuelRules.ControllingPlayer(pb) is not { } cb)
         {
-            return pa.Team == pb.Team;
+            return false;
         }
 
-        return DuelRules.ControllingPlayer(pa) is { } ca && DuelRules.ControllingPlayer(pb) is { } cb && ca.Team == cb.Team;
+        if (ReferenceEquals(ca, cb) || (pa.Map?.World is { } world && s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup) && sameGroup(ca, cb)))
+        {
+            return true;
+        }
+
+        return !AreBothFreeForAll(ca, cb) && ca.Team == cb.Team;
     }
+
+    /// <summary>Both players carry the free-for-all PvP flag (vmangos IsFFAPvP on each, GetReactionTo and IsValidAttackTarget).</summary>
+    private static bool AreBothFreeForAll(Player a, Player b)
+        => (a.Flags & PlayerFlags.FfaPvp) != 0 && (b.Flags & PlayerFlags.FfaPvp) != 0;
 
     /// <summary>
     /// vmangos Unit::IsHostileTo (GetReactionTo(target) &lt;= REP_HOSTILE): the FACTION reaction, which unlike
@@ -175,7 +198,7 @@ public class CombatHooks
         // Player vs player outside duels needs the victim flagged for PvP (vmangos
         // Unit::IsValidAttackTarget → player targets must be IsPvP unless FFA/duel). A started duel is
         // checked first and does not test Finished (Object.cpp:3797-3800), so it holds for the whole finishing tick.
-        if (DuelRules.ControllingPlayer(attacker) is { } pa && DuelRules.ControllingPlayer(victim) is { } pv && !ReferenceEquals(pa, pv) && (pv.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(pa, pv))
+        if (DuelRules.ControllingPlayer(attacker) is { } pa && DuelRules.ControllingPlayer(victim) is { } pv && !ReferenceEquals(pa, pv) && (pv.UnitFlags & UnitFlags.Pvp) == 0 && !AreBothFreeForAll(pa, pv) && !DuelRules.IsInDuelWith(pa, pv))
         {
             return false;
         }

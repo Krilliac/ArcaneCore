@@ -98,7 +98,7 @@ public sealed class QueuedMeleeBlockTests
         w.WritePackedGuid(rig.Victim.Guid.Value);
         w.WriteUInt32(dealt);
         w.WriteByte(1);
-        w.WriteUInt32(1);       // physical school mask
+        w.WriteUInt32(0);       // physical school index (0 = Normal; the wire carries the index, not a mask)
         w.WriteSingle(dealt);
         w.WriteUInt32(dealt);
         w.WriteUInt32(0);       // absorbed
@@ -117,7 +117,7 @@ public sealed class QueuedMeleeBlockTests
         w.WritePackedGuid(rig.Caster.Guid.Value);
         w.WriteUInt32(HeroicStrike);
         w.WriteUInt32(dealt);
-        w.WriteByte((byte)SpellSchool.Normal); // physical school (the school index, 0; the attacker state above carries the mask)
+        w.WriteByte((byte)SpellSchool.Normal); // physical school (the school index, 0; the attacker state above carries the same index)
         w.WriteUInt32(0);       // absorbed
         w.WriteUInt32(0);       // resisted
         w.WriteByte(0);         // periodic

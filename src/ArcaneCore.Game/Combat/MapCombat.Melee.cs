@@ -623,7 +623,11 @@ public sealed partial class MapCombat
             damage = Dither(rolled);
         }
 
-        uint afterArmor = Dither(MeleeHitTable.ApplyArmor(damage, victim.GetInt32(UpdateFields.UnitFieldResistances), attacker.Level));
+        // The armor is the victim's plus the attacker's physical MOD_TARGET_RESISTANCE (Serrated Blades, Bonereaver's Edge; Unit.cpp:1373 -> SpellCaster.cpp:1121-1145).
+        uint reduced = SpellMitigation is { } penetration
+            ? Spells.Procs.Talents.TalentProcSupport.ArmorReducedDamage(penetration, attacker, victim, damage)
+            : MeleeHitTable.ApplyArmor(damage, victim.GetInt32(UpdateFields.UnitFieldResistances), attacker.Level);
+        uint afterArmor = Dither(reduced);
         uint clean = damage > afterArmor ? damage - afterArmor : 0;
         damage = afterArmor;
 

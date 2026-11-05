@@ -49,6 +49,9 @@ public sealed partial class SpellSystem
             cast.MagnetTarget = magnet;
             if (updateExplicitTarget)
             {
+                // The redirect keeps FromClient, so a later reader of the block (SpellCastTargets.ForUnit(guid, parentCast), which re-aims a
+                // child at the unit) sees a client-named target. The landing CheckCast runs before SelectTargets, so nothing re-checks the
+                // magnet itself in the Cast path; a magnet is gated only by IsMagnetTargetEligible (an open limit, see docs/areas/spells.md).
                 cast.Targets.Unit = magnet.Guid;
             }
             if (holder.Charges > 0)

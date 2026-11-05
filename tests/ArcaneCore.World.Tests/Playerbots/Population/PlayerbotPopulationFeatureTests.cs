@@ -1194,7 +1194,7 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Contains("bands 1-10 want 1 have 1", first);
         await world.WaitForSettledAsync(1);
 
-        // A pass that changes nothing logs nothing; a second change inside the interval is held for the next line.
+        // A pass that changes nothing and holds nothing back logs nothing; a second change inside the interval is held for the next line.
         world.Ticks.Set(200, 10);
         await world.PassAsync();
         world.Population.TargetOnline = 2;

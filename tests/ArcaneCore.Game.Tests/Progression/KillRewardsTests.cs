@@ -184,11 +184,38 @@ public sealed class KillRewardsTests
         Assert.Equal([(byte)1], hook.OldLevels);
     }
 
+    [Fact]
+    public void GiveXp_SeveralLevels_FireTheHookPerLevel_AfterTheLevelChangedEvent()
+    {
+        // Like GiveLevel (LevelChanged, then the script hook), a script that runs for an XP level-up sees talents and skills already updated.
+        using var kit = new Kit(creatureLevel: 10);
+        Player player = kit.AddPlayer(1, 5, 0, level: 1);
+        var progression = new PlayerProgression(new ProgressionOptions());
+        progression.InitializeLoadedPlayer(player);
+        var order = new List<string>();
+        progression.LevelChanged += _ => order.Add("event");
+        var hook = new LevelProbe { OnCalled = () => order.Add("hook") };
+        kit.World.Scripts.Register(hook);
+
+        uint needed = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
+        progression.GiveXp(player, needed + PlayerXpTable.XpForLevel(2, new ProgressionOptions().MaxPlayerLevel), ObjectGuid.Empty);
+
+        Assert.Equal(3, player.Level);
+        Assert.Equal([(byte)1, (byte)2], hook.OldLevels);
+        Assert.Equal(["event", "hook", "hook"], order);
+    }
+
     private sealed class LevelProbe : ArcaneCore.Game.Scripting.IPlayerHooks
     {
         public List<byte> OldLevels { get; } = [];
 
-        public void OnLevelChanged(Player player, byte oldLevel) => OldLevels.Add(oldLevel);
+        public Action? OnCalled { get; init; }
+
+        public void OnLevelChanged(Player player, byte oldLevel)
+        {
+            OldLevels.Add(oldLevel);
+            OnCalled?.Invoke();
+        }
     }
 
     [Fact]

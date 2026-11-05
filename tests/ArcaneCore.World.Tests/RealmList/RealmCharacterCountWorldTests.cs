@@ -114,5 +114,19 @@ public sealed class RealmCharacterCountWorldTests
             _counts[(realmId, accountId)] = count;
             return Task.CompletedTask;
         }
+
+        public Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+        {
+            int removed = 0;
+            foreach ((int Realm, int Account) key in _counts.Keys.Where(k => k.Account == accountId))
+            {
+                if (_counts.TryRemove(key, out _))
+                {
+                    removed++;
+                }
+            }
+
+            return Task.FromResult(removed);
+        }
     }
 }

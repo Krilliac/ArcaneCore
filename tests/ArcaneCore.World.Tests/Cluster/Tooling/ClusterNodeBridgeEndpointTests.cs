@@ -63,6 +63,22 @@ public sealed class ClusterNodeBridgeEndpointTests
     }
 
     [Fact]
+    public void DefaultSpec_ListsTheDeeprunTramOnTheInstancesWorker()
+    {
+        string instances = ClusterNodeBridgeFeature.DefaultEndpointsSpec.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Single(e => e.StartsWith("worker:instances|", StringComparison.Ordinal));
+
+        uint[] maps = [.. instances.Split('|')[3].Split(',').Select(uint.Parse)];
+
+        // 369 (Deeprun Tram), 449/450 (the PvP barracks) and 35 (map_template name "<unused>StormwindPrison", reached by
+        // areatrigger_teleport 107 "Stormwind Vault Entrance") are Common maps with live teleport triggers: Owns(map, 0) succeeds only for a listed map.
+        Assert.Contains(35u, maps);
+        Assert.Contains(369u, maps);
+        Assert.Contains(449u, maps);
+        Assert.Contains(450u, maps);
+    }
+
+    [Fact]
     public async Task SupervisorChildren_AreExactlyTheNodesTheBridgeLists()
     {
         IConfiguration configuration = SupervisorChildren(

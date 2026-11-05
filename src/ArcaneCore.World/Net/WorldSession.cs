@@ -166,6 +166,9 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly LogGate _packetGate = new(TimeSpan.FromSeconds(10));
     private int _latencyMs = -1;
     private uint _currentPacketReceivedMs;
+    private uint _previousPacketReceivedMs;
+    private bool _hasPreviousPacket;
+    private bool _hasCurrentPacket;
 
     public WorldSession(
         Stream stream,
@@ -212,6 +215,13 @@ public sealed partial class WorldSession : IPlayerSession
     /// does not bunch up. Set on the world thread before each handler runs; meaningless outside a handler.
     /// </summary>
     public uint CurrentPacketReceivedMs => _currentPacketReceivedMs;
+
+    /// <summary>
+    /// When the in-world packet handled before the current one arrived (same clock as <see cref="CurrentPacketReceivedMs"/>),
+    /// or null before the second one. The anti-cheat measures the silence before a CMSG_MOVE_TIME_SKIPPED with it: a stalled
+    /// client main loop sends nothing. Set on the world thread before each handler runs; meaningless outside a handler.
+    /// </summary>
+    public uint? PreviousPacketReceivedMs => _hasPreviousPacket ? _previousPacketReceivedMs : null;
 
     /// <summary>Fold one latency sample from a CMSG_PING into <see cref="LatencyMs"/> (samples above 60 s are clamped).</summary>
     internal void RecordLatencySample(uint latency)
@@ -497,7 +507,10 @@ public sealed partial class WorldSession : IPlayerSession
 
             HeuristicsWorldPacket(player, packet.Handler.Opcode);
             long handlerStart = Stopwatch.GetTimestamp();
+            _previousPacketReceivedMs = _currentPacketReceivedMs;
+            _hasPreviousPacket = _hasCurrentPacket;
             _currentPacketReceivedMs = packet.ReceivedMs;
+            _hasCurrentPacket = true;
             try
             {
                 packet.Handler.World!(this, player, packet.Payload);

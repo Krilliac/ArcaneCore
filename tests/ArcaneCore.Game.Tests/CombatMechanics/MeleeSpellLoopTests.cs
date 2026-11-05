@@ -18,7 +18,7 @@ public sealed class MeleeSpellLoopTests
 {
     private const uint HeroicStrike = 930001;   // Attributes 0x4 (the classic-db Heroic Strike shape)
 
-    private static SpellInfo Strike(bool twoDamageEffects = false, bool zeroDamage = false)
+    private static SpellInfo Strike(bool twoDamageEffects = false, bool zeroDamage = false, SpellSchool school = SpellSchool.Normal)
     {
         SpellEffectInfo[] effects = zeroDamage
             ? [Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)]
@@ -33,6 +33,7 @@ public sealed class MeleeSpellLoopTests
             PowerType = (int)PowerType.Rage,
             ManaCost = 15,
             DamageClass = SpellDamageClass.Melee,
+            School = school,
         };
         return spell;
     }
@@ -52,9 +53,9 @@ public sealed class MeleeSpellLoopTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig(bool linked = true, CombatOptions? options = null, bool twoDamageEffects = false, bool zeroDamage = false)
+        public Rig(bool linked = true, CombatOptions? options = null, bool twoDamageEffects = false, bool zeroDamage = false, SpellSchool school = SpellSchool.Normal)
         {
-            Kit = new SpellTestKit(Strike(twoDamageEffects, zeroDamage));
+            Kit = new SpellTestKit(Strike(twoDamageEffects, zeroDamage, school));
             (Caster, CasterSession) = Kit.AddPlayer(1);
             (Target, _) = Kit.AddPlayer(2, 3, 0, race: Race.Orc);
             // The white swing rolls the melee hit table on MapCombat.Random; the default is the unseeded Random.Shared, so a test
@@ -117,7 +118,7 @@ public sealed class MeleeSpellLoopTests
         Assert.True(((HitInfo)packet.HitInfo).HasFlag(HitInfo.NoAction));
         Assert.Equal(11u, packet.TotalDamage);
         Assert.Equal(11u, packet.SubDamage);
-        Assert.Equal(1u, packet.SubDamageSchool);                         // SpellSchool.Normal -> SPELL_SCHOOL_MASK_NORMAL
+        Assert.Equal(0u, packet.SubDamageSchool);                         // school INDEX on the wire: Normal = 0 (vmangos Combat.cpp:203)
         Assert.Contains(WorldOpcode.SmsgSpellGo, Opcodes(rig.CasterSession));
 
         rig.Tick(2000);   // the next swing is a normal white one again
@@ -140,7 +141,7 @@ public sealed class MeleeSpellLoopTests
         Assert.Equal(18u, packet.TotalDamage);
         Assert.Equal(18u, packet.SubDamage);
         Assert.Equal(1, packet.SubDamageCount); // vmangos coalesces one school for a spell
-        Assert.Equal(1u, packet.SubDamageSchool);
+        Assert.Equal(0u, packet.SubDamageSchool); // school index, not mask
         Assert.True(((HitInfo)packet.HitInfo).HasFlag(HitInfo.NoAction));
         Assert.Equal(42u, rig.Target.Health);
         Assert.Equal(2, Packets(rig.CasterSession, WorldOpcode.SmsgSpellnonmeleedamagelog).Count);
@@ -392,11 +393,51 @@ public sealed class MeleeSpellLoopTests
         Assert.Equal(18u, packet.TotalDamage);
         Assert.Equal(18u, packet.SubDamage);
         Assert.Equal(1, packet.SubDamageCount);
-        Assert.Equal(1u, packet.SubDamageSchool);
+        Assert.Equal(0u, packet.SubDamageSchool); // school index, not mask
         Assert.Equal(2, Packets(rig.CasterSession, WorldOpcode.SmsgSpellnonmeleedamagelog).Count);
         List<WorldOpcode> opcodes = [.. Opcodes(rig.CasterSession)];
         Assert.True(opcodes.IndexOf(WorldOpcode.SmsgAttackerstateupdate) < opcodes.IndexOf(WorldOpcode.SmsgSpellnonmeleedamagelog));
         Assert.Equal(85u, SpellSystem.GetPower(rig.Caster, PowerType.Rage));
+    }
+
+    [Theory]
+    [InlineData(SpellSchool.Normal, 0u)]
+    [InlineData(SpellSchool.Holy, 1u)]
+    [InlineData(SpellSchool.Fire, 2u)]
+    [InlineData(SpellSchool.Nature, 3u)]
+    [InlineData(SpellSchool.Frost, 4u)]
+    [InlineData(SpellSchool.Shadow, 5u)]
+    [InlineData(SpellSchool.Arcane, 6u)]
+    public void QueuedNextSwingSpell_WritesSchoolIndexOnTheWire(SpellSchool school, uint expectedIndex)
+    {
+        using var rig = new Rig(school: school);
+        Assert.Equal(SpellCastResult.CastOk, rig.QueueHeroicStrike());
+        rig.Combat.Attack(rig.Caster, rig.Target);
+        rig.CasterSession.Clear();
+
+        rig.Tick(50);
+
+        var packet = ReadAttackerState(Assert.Single(rig.AttackerStatePackets));
+        Assert.Equal(HeroicStrike, packet.SpellId);
+        Assert.Equal(1, packet.SubDamageCount);
+        Assert.True(packet.SubDamage > 0);
+        Assert.Equal(expectedIndex, packet.SubDamageSchool);
+    }
+
+    [Fact]
+    public void QueuedNextSwingSpell_TwoDamageEffects_NonPhysicalSchool_GroupsIntoOneIndexedComponent()
+    {
+        using var rig = new Rig(twoDamageEffects: true, school: SpellSchool.Fire);
+        Assert.Equal(SpellCastResult.CastOk, rig.QueueHeroicStrike());
+        rig.Combat.Attack(rig.Caster, rig.Target);
+        rig.CasterSession.Clear();
+
+        rig.Tick(50);
+
+        var packet = ReadAttackerState(Assert.Single(rig.AttackerStatePackets));
+        Assert.Equal(1, packet.SubDamageCount);
+        Assert.Equal(packet.TotalDamage, packet.SubDamage);
+        Assert.Equal(2u, packet.SubDamageSchool);
     }
 
     private sealed class FixedMissRules(SpellMissInfo miss) : ISpellCombatRules

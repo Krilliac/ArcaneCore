@@ -12,4 +12,10 @@ public interface IRealmCharacterCountStore
 
     /// <summary>Record that <paramref name="accountId"/> has <paramref name="count"/> characters on <paramref name="realmId"/> (insert or replace; negative counts are stored as 0).</summary>
     Task SetCountAsync(int realmId, int accountId, int count, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Remove every count row of <paramref name="accountId"/>, on all realms (vmangos deletes the account's <c>realmcharacters</c> rows
+    /// when it deletes the account, AccountMgr.cpp:105). Other accounts' rows are untouched. Returns the number of rows removed.
+    /// </summary>
+    Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default);
 }

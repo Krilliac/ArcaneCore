@@ -62,7 +62,7 @@ public sealed class InboundQueueCapTests
         const int limit = 50;
         var log = new CapturingLogger();
         await using var host = WorldTestHost.Start(
-            sessionOptions: new WorldSessionOptions { MaxQueuedWorldPackets = limit, MaxQueuedWorldBytes = 0 },
+            sessionOptions: new WorldSessionOptions { MaxQueuedWorldPackets = limit, MaxQueuedWorldBytes = 0, WorldCloseGrace = StalledWorldCloseGrace },
             sessionLogger: log);
         (WorldTestClient client, WorldSession session) = await EnterAsync(host, "Flooder");
         await using (client)
@@ -104,7 +104,7 @@ public sealed class InboundQueueCapTests
     {
         const int limitBytes = 200; // 16 packets of 12 bytes fit, the 17th does not
         await using var host = WorldTestHost.Start(
-            sessionOptions: new WorldSessionOptions { MaxQueuedWorldPackets = 0, MaxQueuedWorldBytes = limitBytes });
+            sessionOptions: new WorldSessionOptions { MaxQueuedWorldPackets = 0, MaxQueuedWorldBytes = limitBytes, WorldCloseGrace = StalledWorldCloseGrace });
         (WorldTestClient client, WorldSession session) = await EnterAsync(host, "Heavy");
         await using (client)
         {
@@ -220,6 +220,9 @@ public sealed class InboundQueueCapTests
         Assert.Equal(123, bound.MaxQueuedWorldPackets);
         Assert.Equal(4567, bound.MaxQueuedWorldBytes);
     }
+
+    /// <summary>These floods hold the world thread, so the closing session waits out its whole world-close bound before the socket closes. The default bound (10 s) equals the client's close timeout.</summary>
+    private static readonly TimeSpan StalledWorldCloseGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>Parks the world thread so queued packets cannot drain until released.</summary>
     private sealed class WorldThreadGate(WorldTestHost host) : IDisposable

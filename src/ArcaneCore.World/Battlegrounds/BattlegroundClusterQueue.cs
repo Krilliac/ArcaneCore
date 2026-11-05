@@ -234,6 +234,8 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
 
     public IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId) => local.CreateMatchHost(type, instanceId);
 
+    public bool CanCreateMatch(uint mapId) => local.CanCreateMatch(mapId);
+
     public uint AllocateInstanceId() => local.AllocateInstanceId();
 
     public void SendStatus(ObjectGuid player, uint queueSlot, BattlegroundStatusSubject subject, BattlegroundStatus status, uint time1, uint time2)

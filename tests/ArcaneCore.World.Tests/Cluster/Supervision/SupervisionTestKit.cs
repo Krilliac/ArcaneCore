@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
 
 namespace ArcaneCore.World.Tests.Cluster.Supervision;
@@ -233,7 +234,9 @@ internal sealed class ScriptedProcess : ISupervisedProcess
 
     public void Emit(string line, bool isStdErr = false) => OutputLineReceived?.Invoke(line, isStdErr);
 
-    public void Beat(string state = "alive") => Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={ProcessId} {state}");
+    /// <summary>A beat the way a real child writes it: carrying the supervisor's token (<paramref name="withToken"/> false: the token-less line a forger could log). A state that already carries its own text, such as a dumping line, is sent as given.</summary>
+    public void Beat(string state = "alive", bool withToken = true)
+        => Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={ProcessId} {(withToken && state is "ready" or "alive" or "stopping" ? SupervisorProtocol.FormatAuthenticatedState(state, Token) : state)}");
 
     public void ExitWith(int code) => _exit.TrySetResult(code);
 

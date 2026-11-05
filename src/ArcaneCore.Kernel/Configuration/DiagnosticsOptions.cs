@@ -179,10 +179,11 @@ public sealed class CrashDumpOptions
     /// unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is
     /// still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an
     /// unreachable diagnostics endpoint (<c>DOTNET_EnableDiagnostics=0</c>), is not retried with a smaller type; a type the runtime refuses is.
-    /// While it dumps the daemon publishes the heartbeat state <c>dumping</c>, which supervisors honour for a grace of this long plus a margin.
-    /// Default 120.
+    /// While it dumps the daemon publishes the heartbeat state <c>dumping</c>, which supervisors honour for the announced maximum (three times this) plus a minute, bounded by their own cap
+    /// (<c>Cluster:Supervisor:DumpGraceSeconds</c>, default 420; raise it with this value). Default 120.
+    /// Checked at start (1 to 3600) so the product cannot overflow.
     /// </summary>
-    [ConfigAllowed("a whole number of seconds, 1 or more (a lower value is raised to 1)")]
+    [ConfigAllowed("a whole number of seconds, 1 to 3600")]
     public int TimeoutSeconds { get; set; } = 120;
 }
 

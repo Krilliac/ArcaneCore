@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -154,6 +156,227 @@ public sealed class ExplicitHostileTargetTests
         Assert.True(SpellCastTargets.ForUnit(named.Guid, parent).FromClient);
         Assert.False(SpellCastTargets.ForUnit(other.Guid, parent).FromClient);
         Assert.False(SpellCastTargets.ForUnit(named.Guid).FromClient);
+    }
+
+    // --- the production relations: who really is attackable -------------------------------------------------------------------------
+
+    [Fact]
+    public void FreeForAllSameTeamPlayers_CanCastHostileSpellsAtEachOther()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player rival, _) = kit.AddPlayer(2, 3);
+        kit.Spellbook.Teach(caster, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        caster.Flags |= PlayerFlags.FfaPvp;
+        rival.Flags |= PlayerFlags.FfaPvp;
+
+        // RED without the free-for-all rule in CombatHooks.IsFriendly: two Humans are friends and the cast is BAD_TARGETS (an arena is unusable).
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(rival.Guid)));
+    }
+
+    [Fact]
+    public void FreeForAllGroupMates_StayFriends()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player mate, _) = kit.AddPlayer(2, 3);
+        kit.Spellbook.Teach(caster, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        caster.Flags |= PlayerFlags.FfaPvp;
+        mate.Flags |= PlayerFlags.FfaPvp;
+        CombatHooks.RegisterSameGroup(kit.World, (a, b) => true);
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(mate.Guid)));
+    }
+
+    [Fact]
+    public void OneSidedFreeForAll_DoesNotOpenSameTeamAttacks()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, 3);
+        kit.Spellbook.Teach(caster, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        caster.Flags |= PlayerFlags.FfaPvp;
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(ally.Guid)));
+    }
+
+    [Fact]
+    public void AMindControlledAlly_IsAnEnemyToItsFormerFriends_AndTheCharmerIsItsFriend()
+    {
+        using var kit = NewKit();
+        (Player friend, _) = kit.AddPlayer(1);
+        (Player controlled, _) = kit.AddPlayer(2, 3);
+        (Player charmer, _) = kit.AddHostilePlayer(3, 6);   // an Orc, PvP-flagged
+        kit.Spellbook.Teach(friend, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        CharmService.SetCharmerGuid(controlled, charmer.Guid);
+
+        // Team (race) alone would not decide this (the base already resolves the controlling player): the Human friend and the Human under control are the same team, so the friend cannot hit it.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(friend, Bolt, SpellCastTargets.ForUnit(controlled.Guid)));
+        Assert.True(CombatHooks.Default.IsFriendly(controlled, charmer));
+        Assert.False(CombatHooks.Default.IsFriendly(controlled, friend));
+    }
+
+    [Fact]
+    public void AMindControlledPlayer_CanCastHostileSpellsAtItsFormerFriends_ThroughThePetBar()
+    {
+        using var kit = NewKit();
+        (Player friend, _) = kit.AddPlayer(1);
+        (Player controlled, _) = kit.AddPlayer(2, 3);
+        (Player charmer, _) = kit.AddHostilePlayer(3, 6);
+        SpellTestKit.FlagForPvp(friend);   // the charmer acts for the Horde side, so the Human it aims at must be attackable by it
+        kit.Spellbook.Teach(controlled, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        CharmService.SetCharmerGuid(controlled, charmer.Guid);
+        var wire = new PacketWriter();
+        wire.WriteUInt16((ushort)SpellCastTargetFlags.Unit);
+        wire.WritePackedGuid(friend.Guid.Value);
+        var reader = new PacketReader(wire.ToArray());
+        SpellCastTargets fromClient = SpellCastTargets.Read(ref reader);
+
+        // Team alone would not decide this (the base already resolves the controlling player): the controlled Human and the friend are the same team and the pet-bar cast is BAD_TARGETS.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(controlled, Bolt, fromClient));
+    }
+
+    [Fact]
+    public void DestinationSelectorAtAnUnflaggedAlly_IsBadTargets_ButAtAnAttackableFoeIsNot()
+    {
+        using var kit = new SpellTestKit(
+            Spell(Relay, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player ally, _) = kit.AddPlayer(2, 3);
+        (Player foe, _) = kit.AddHostilePlayer(3, 6);
+        kit.Spellbook.Teach(caster, Relay);
+        kit.System.Relations = CombatHookRelations.Instance;
+
+        // TARGET_LOCATION_CASTER_TARGET_POSITION needs no unit target of its own, so it used to skip the gate.
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Relay, SpellCastTargets.ForUnit(ally.Guid)));
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Relay, SpellCastTargets.ForUnit(foe.Guid)));
+    }
+
+    [Fact]
+    public void ProductionRelations_AllowTheAttackableTargets()
+    {
+        using var kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);          // the opposing team, PvP-flagged
+        (Player dueller, _) = kit.AddPlayer(3, 6);             // the same team, in a started duel
+        kit.Spellbook.Teach(caster, Bolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        caster.Duel = new DuelInfo(caster, dueller) { StartTimeSeconds = 1 };
+        dueller.Duel = new DuelInfo(caster, caster) { StartTimeSeconds = 1 };
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid)));
+        kit.Advance(2000);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(dueller.Guid)));
+    }
+
+    [Fact]
+    public void DestinationSelectorAtADeadAttackableTarget_IsBadTargets_UnlessTheSpellCanTargetTheDead()
+    {
+        const uint DeadRelay = 900424;
+        SpellInfo relay = Spell(Relay, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+        using var kit = new SpellTestKit(relay, relay with { Id = DeadRelay, AttributesEx2 = SpellAttributesEx2.AllowDeadTarget });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, Relay, DeadRelay);
+        kit.System.Relations = CombatHookRelations.Instance;
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Relay, SpellCastTargets.ForUnit(foe.Guid)));
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, DeadRelay, SpellCastTargets.ForUnit(foe.Guid)));
+    }
+
+    [Theory]
+    [InlineData(SpellImplicitTarget.UnitCaster)]
+    [InlineData(SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc)]
+    public void CastTimeSpellWithoutAnExplicitSelector_AimedAtATargetThatDiesBeforeLanding_StillLands(SpellImplicitTarget selector)
+    {
+        // A creature cast at another unit is built with ForUnit(target) whatever the selector is, and the victim may die during the
+        // cast bar (a boss volley at a tank). Only the destination selector (53) refuses a dead target (vmangos Spell.cpp:5572).
+        const uint Volley = 900425;
+        using var kit = new SpellTestKit(
+            Spell(Volley, Effect(SpellEffectName.Dummy, 0, selector)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+                CastTime = new SpellCastTime(2000, 0, 0),
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, Volley);
+        kit.System.Relations = CombatHookRelations.Instance;
+        var finished = new FinishRecorder();
+        kit.System.RegisterObserver(finished);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Volley, SpellCastTargets.ForUnit(foe.Guid)));
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+        kit.Advance(2500);
+
+        Assert.Equal(new[] { true }, finished.Completed);
+    }
+
+    private sealed class FinishRecorder : ISpellCastObserver
+    {
+        public List<bool> Completed { get; } = [];
+
+        public void OnFinished(SpellCast cast, bool completed) => Completed.Add(completed);
+    }
+
+    [Fact]
+    public void ADestinationSpellAimedAtTheCaster_IsNotRefusedByTheGate()
+    {
+        using var kit = new SpellTestKit(
+            Spell(Relay, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        kit.Spellbook.Teach(caster, Relay);
+        kit.System.Relations = CombatHookRelations.Instance;
+
+        // The self-cast exemption: the caster is never "attackable" by itself, yet naming itself is not a hostile aim.
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, Relay, SpellCastTargets.ForUnit(caster.Guid)));
+    }
+
+    [Fact]
+    public void AHostileSpellThatCanTargetTheDead_IsNotRefusedAtADeadAttackableTarget_ButOneThatCannotIsTargetsDead()
+    {
+        const uint DeadBolt = 900423;
+        using var kit = new SpellTestKit(
+            BoltSpell(),
+            BoltSpell() with { Id = DeadBolt, AttributesEx2 = SpellAttributesEx2.AllowDeadTarget });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, Bolt, DeadBolt);
+        kit.System.Relations = CombatHookRelations.Instance;
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+
+        Assert.Equal(SpellCastResult.TargetsDead, kit.System.HandleCastRequest(caster, Bolt, SpellCastTargets.ForUnit(foe.Guid)));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, DeadBolt, SpellCastTargets.ForUnit(foe.Guid)));
     }
 
     private sealed class SwitchRelations : ISpellTargetRelations

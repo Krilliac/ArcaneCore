@@ -3,6 +3,7 @@ using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Honor;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
@@ -50,6 +51,8 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
     public bool IsOnline(ObjectGuid player) => Online(player) is not null;
 
     public IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId) => feature.CreateMatch(type, instanceId);
+
+    public bool CanCreateMatch(uint mapId) => feature.World.Owns(mapId, InstanceManager.FirstInstanceId);   // any non-zero instance id: a match map is an instance copy
 
     public uint AllocateInstanceId()
         => feature.Services.GetService<InstanceFeature>() is { } instances

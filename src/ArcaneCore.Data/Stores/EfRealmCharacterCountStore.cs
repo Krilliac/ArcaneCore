@@ -39,6 +39,11 @@ public sealed class EfRealmCharacterCountStore(AuthDbContext db) : IRealmCharact
         }
     }
 
+    public async Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+        => await db.Set<RealmCharacterCountRow>()
+            .Where(r => r.AccountId == accountId)
+            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
     /// <summary>True when the row exists (and now holds <paramref name="value"/>); false when there is no row to update.</summary>
     private async Task<bool> TryUpdateAsync(int realmId, int accountId, int value, CancellationToken cancellationToken)
     {

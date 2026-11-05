@@ -61,6 +61,17 @@ public sealed class DiagnosticsWiringTests
         Assert.True(report.IsInvalid);
     }
 
+    [Theory]
+    [InlineData("Diagnostics:CrashDump:Mode", "Everything")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "0")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "2000000000")]
+    public void TheWorldValidation_RejectsABadCrashDumpValue_ThroughTheKernelCheck(string key, string value)
+    {
+        ConfigReport report = OpsCli.Validate(Config((key, value)));
+        Assert.Contains(report.Issues, i => i.Key == key && i.Severity == ConfigSeverity.Error);
+        Assert.True(report.IsInvalid);
+    }
+
     [Fact]
     public void WorldCrashContext_CountsTicksFromTheWorldTickHook_AndDescribesTheWorld()
     {
