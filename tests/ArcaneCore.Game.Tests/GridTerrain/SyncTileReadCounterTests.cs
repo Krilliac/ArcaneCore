@@ -1,7 +1,11 @@
 using System.Diagnostics;
+using System.Numerics;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.GridTerrain;
@@ -17,8 +21,13 @@ public sealed class SyncTileReadCounterTests : IDisposable
     private static readonly TimeSpan PrefetchTimeout = TimeSpan.FromSeconds(30);
     private readonly string _dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-sync-reads-" + Guid.NewGuid().ToString("N"));
 
+    private const uint VMapMapId = 0;
+    private const int VMapRow = 30;
+    private VMapFixture? _models;
+
     public void Dispose()
     {
+        _models?.Dispose();
         if (Directory.Exists(_dataDir))
         {
             Directory.Delete(_dataDir, recursive: true);
@@ -105,6 +114,107 @@ public sealed class SyncTileReadCounterTests : IDisposable
         Assert.Equal(1, delta.Reads);
         Assert.Equal(1, delta.ReadsHoldingGate);
         Assert.Equal(1_000, delta.Ticks);
+    }
+
+    private VMapManager VMapsWithTiles(params int[] tilesX)
+    {
+        _models = new VMapFixture();
+        _models.Place("wall", VMapFixture.Box(new Vector3(-1, -10, 0), new Vector3(1, 10, 10)), new Vector3(0, 0, 0));
+        _models.Write(VMapMapId);
+        foreach (int x in tilesX)
+        {
+            _models.WriteTile(VMapMapId, x, VMapRow, []);
+        }
+
+        return new VMapManager(_models.Directory);
+    }
+
+    [Fact]
+    public void AVMapTileTheLoaderReadsItself_IsCountedWithItsTime_AsAVMapRead()
+    {
+        VMapManager vmaps = VMapsWithTiles(1);
+        (long reads, long ticks) process = SyncTileReadCounters.Process(SyncReadCaller.OutsideMapUpdate, SyncReadFile.VMap);
+        SyncFileReadTotals before = SyncTileReadCounters.Current;
+
+        Assert.True(vmaps.LoadTile(VMapMapId, 1, VMapRow));
+
+        SyncFileReadTotals delta = SyncTileReadCounters.Current - before;
+        Assert.Equal(1, delta.Reads);
+        Assert.True(delta.Ticks > 0, "the read took measurable time");
+        Assert.True(SyncTileReadCounters.Process(SyncReadCaller.OutsideMapUpdate, SyncReadFile.VMap).Reads >= process.reads + 1);
+    }
+
+    [Fact]
+    public void AVMapTileTakenFromAFinishedPrefetch_IsNotCounted()
+    {
+        VMapManager vmaps = VMapsWithTiles(2);
+        vmaps.Prefetch(VMapMapId, 2, VMapRow);
+        var clock = Stopwatch.StartNew();
+        while (!vmaps.IsPrefetchFinished(VMapMapId, 2, VMapRow) && clock.Elapsed < PrefetchTimeout)
+        {
+            Thread.Sleep(5);
+        }
+
+        Assert.True(vmaps.IsPrefetchFinished(VMapMapId, 2, VMapRow), "the background read finished");
+        SyncFileReadTotals before = SyncTileReadCounters.Current;
+
+        Assert.True(vmaps.LoadTile(VMapMapId, 2, VMapRow));
+
+        Assert.Equal(0, (SyncTileReadCounters.Current - before).Reads);
+        Assert.Equal(1, vmaps.PrefetchHits);
+    }
+
+    [Fact]
+    public void AMissingVMapTileFile_IsNotCountedAsARead()
+    {
+        VMapManager vmaps = VMapsWithTiles(3);
+        File.Delete(_models!.PathOf(VMapFormat.TileFileName(VMapMapId, 3, VMapRow)));
+        SyncFileReadTotals before = SyncTileReadCounters.Current;
+
+        Assert.False(vmaps.LoadTile(VMapMapId, 3, VMapRow));
+
+        Assert.Equal(0, (SyncTileReadCounters.Current - before).Reads);
+    }
+
+    [Fact]
+    public void Describe_NamesTheFileReads_AndTheOnesMadeHoldingTheSerialGate()
+    {
+        var diagnostics = new MapUpdateDiagnostics();
+        diagnostics.Reset();
+        diagnostics.BeginTiles();
+        diagnostics.Begin();
+        long oneMs = Stopwatch.Frequency / 1000;
+
+        SyncTileReadCounters.Record(SyncReadCaller.MapWorker, SyncReadFile.Terrain, oneMs, 7, 1, 1);
+        SyncTileReadCounters.Record(SyncReadCaller.MapWorkerHoldingGate, SyncReadFile.VMap, oneMs, 7, 2, 2);
+        diagnostics.Complete();
+
+        string text = diagnostics.Describe();
+        Assert.Contains("terrain/vmap tile file reads (prefetch misses): 2 (2.0 ms), holding the serial gate 1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Describe_HasNoFileReadSegment_WhenNoneWereMade()
+    {
+        var diagnostics = new MapUpdateDiagnostics();
+        diagnostics.Reset();
+        diagnostics.BeginTiles();
+        diagnostics.Begin();
+        diagnostics.Complete();
+
+        Assert.DoesNotContain("tile file reads", diagnostics.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DescribeProcess_NamesEachCallerKindThatReadAFile()
+    {
+        long oneMs = Stopwatch.Frequency / 1000;
+        SyncTileReadCounters.Record(SyncReadCaller.MapWorkerHoldingGate, SyncReadFile.Terrain, oneMs, 7, 1, 1);
+
+        string text = SyncTileReadCounters.DescribeProcess();
+
+        Assert.StartsWith("terrain/vmap tile file reads since start (prefetch misses): ", text, StringComparison.Ordinal);
+        Assert.Contains("MapWorkerHoldingGate ", text, StringComparison.Ordinal);
     }
 
     [Fact]

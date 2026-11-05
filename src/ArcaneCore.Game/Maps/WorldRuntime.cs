@@ -736,7 +736,10 @@ public sealed partial class WorldRuntime : IDisposable
                 GcSnapshot gcBeforeMap = diagnostics is not null ? GcSource() : default;
                 try
                 {
-                    map.Update(diffMs, diagnostics);
+                    using (Collision.SyncTileReadCounters.EnterMapUpdate())
+                    {
+                        map.Update(diffMs, diagnostics);
+                    }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

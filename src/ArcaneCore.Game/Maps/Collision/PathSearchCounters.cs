@@ -172,19 +172,19 @@ public readonly record struct PathSearchTotals(long Searches, long Nodes, long E
     public double SyncTileReadMs => (TileLoadTicks + GridTileLoadTicks) * 1000.0 / Stopwatch.Frequency;
 }
 
-/// <summary>Which kind of thread made a synchronous tile file read (<see cref="SyncTileReadCounters"/>).</summary>
+/// <summary>Which kind of caller made a synchronous tile file read (<see cref="SyncTileReadCounters"/>).</summary>
 public enum SyncReadCaller
 {
     /// <summary>Not inside a map's update: the world thread's own services (teleports, logins, bot planning) or any other thread.</summary>
     OutsideMapUpdate = 0,
 
-    /// <summary>The world thread, inside a map's update.</summary>
+    /// <summary>The world thread, inside a map's update (the serial maps loop, or a map it runs itself in the parallel phase) without the serial gate.</summary>
     WorldThread = 1,
 
     /// <summary>A map worker thread in the parallel phase, not holding the serial gate.</summary>
     MapWorker = 2,
 
-    /// <summary>A map worker holding the world's single serial gate: every other map waits behind its read.</summary>
+    /// <summary>Any thread inside a parallel-phase map update while it holds the world's single serial gate (the world thread included): every other map waits behind its read.</summary>
     MapWorkerHoldingGate = 3,
 }
 
@@ -220,6 +220,7 @@ public static class SyncTileReadCounters
     [ThreadStatic] private static long t_reads;
     [ThreadStatic] private static long t_ticks;
     [ThreadStatic] private static long t_gateReads;
+    [ThreadStatic] private static int t_serialMapUpdateDepth;
     private static readonly long[] s_reads = new long[CallerKinds * FileKinds];
     private static readonly long[] s_ticks = new long[CallerKinds * FileKinds];
 
@@ -233,21 +234,70 @@ public static class SyncTileReadCounters
         return (Interlocked.Read(ref s_reads[slot]), Interlocked.Read(ref s_ticks[slot]));
     }
 
-    /// <summary>The kind of the calling thread: by the map update it is inside (<see cref="TickOwner"/>) and whether it holds the serial gate.</summary>
+    /// <summary>
+    /// The kind of the calling thread. Inside a parallel-phase map update (<see cref="TickOwner"/>) a thread holding the serial gate is
+    /// <see cref="SyncReadCaller.MapWorkerHoldingGate"/> whichever thread it is (the world thread runs maps in the parallel phase too, and every
+    /// other map still waits behind its read); otherwise the world thread is <see cref="SyncReadCaller.WorldThread"/> and any other thread
+    /// <see cref="SyncReadCaller.MapWorker"/>. The serial maps loop has no <see cref="TickOwner"/>: it marks itself with <see cref="EnterMapUpdate"/>.
+    /// </summary>
     public static SyncReadCaller CallerKind()
     {
         WorldRuntime? world = TickOwner.CurrentWorld;
         if (world is null)
         {
-            return SyncReadCaller.OutsideMapUpdate;
+            return t_serialMapUpdateDepth > 0 ? SyncReadCaller.WorldThread : SyncReadCaller.OutsideMapUpdate;
         }
 
-        if (world.IsWorldThread)
+        if (world.IsParallelPhase && world.HoldsSerialGate)
         {
-            return SyncReadCaller.WorldThread;
+            return SyncReadCaller.MapWorkerHoldingGate;
         }
 
-        return world.HoldsSerialGate ? SyncReadCaller.MapWorkerHoldingGate : SyncReadCaller.MapWorker;
+        return world.IsMainWorldThread ? SyncReadCaller.WorldThread : SyncReadCaller.MapWorker;
+    }
+
+    /// <summary>Marks the calling thread as inside a map's update in the serial maps loop (no <see cref="TickOwner"/> there) until disposed; nests.</summary>
+    internal static MapUpdateScope EnterMapUpdate()
+    {
+        t_serialMapUpdateDepth++;
+        return default;
+    }
+
+    /// <summary>A map update in the serial loop; disposing it leaves the update.</summary>
+    internal readonly struct MapUpdateScope : IDisposable
+    {
+        public void Dispose() => t_serialMapUpdateDepth--;
+    }
+
+    /// <summary>
+    /// The process totals as one line for the hang and overrun detail (empty until a read happened): per caller kind, the reads of both
+    /// file kinds with their time. Reads outside a map update are in it, which no map's slow-update line can show.
+    /// </summary>
+    public static string DescribeProcess()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int caller = 0; caller < CallerKinds; caller++)
+        {
+            long reads = 0;
+            long ticks = 0;
+            for (int file = 0; file < FileKinds; file++)
+            {
+                (long r, long t) = Process((SyncReadCaller)caller, (SyncReadFile)file);
+                reads += r;
+                ticks += t;
+            }
+
+            if (reads == 0)
+            {
+                continue;
+            }
+
+            sb.Append(sb.Length == 0 ? "terrain/vmap tile file reads since start (prefetch misses): " : ", ")
+                .Append((SyncReadCaller)caller).Append(' ').Append(reads.ToString(CultureInfo.InvariantCulture)).Append(" (")
+                .Append((ticks * 1000.0 / Stopwatch.Frequency).ToString("F1", CultureInfo.InvariantCulture)).Append(" ms)");
+        }
+
+        return sb.ToString();
     }
 
     /// <summary>A tile file was read on the calling thread (a prefetch miss), taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks).</summary>

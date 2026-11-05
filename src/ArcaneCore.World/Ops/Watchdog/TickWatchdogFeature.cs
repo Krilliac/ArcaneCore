@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Watchdog;
@@ -432,6 +433,11 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
                     }
                 }
             }
+        }
+
+        if (SyncTileReadCounters.DescribeProcess() is { Length: > 0 } fileReads)
+        {
+            text.Append("; ").Append(fileReads);
         }
 
         if (services.GetService<CharacterSaveQueue>() is { } saves)
