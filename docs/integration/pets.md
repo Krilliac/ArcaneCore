@@ -286,8 +286,9 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   (`SummonService.ForgetOwner` on `WorldRuntime.PlayerLoggingOut`: vmangos keeps it on the Player object). A warlock gets a fresh demon
   of that entry (a new demon, with a new generated name). A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard does not apply to it.
 * **Reagents back (wave 2).** A pet whose owner dies, that lost its owner, was left beyond the leash or whose owner has no pet any
-  more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). Not done: the
-  talent reset, taxi and far-control triggers of the same mode.
+  more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). A talent reset
+  also sends a warlock's demon out of the current slot (the demon is kept under its entry and comes back at full health and mana when its entry is summoned
+  again, Pet.cpp:360-364, 415). Not done: the reagent refund of the talent reset, taxi and far-control triggers of the same mode.
 * **Pet data gaps.** A hunter pet reads the creature id `1` rows of `pet_levelstats` (a hunter without that row falls back to the pet's own entry); any other pet whose creature has no `pet_levelstats` row keeps its template health, damage,
   armor and stats: vmangos falls back to `creature_classlevelstats` (`GetClassLevelStats`), a table of the
   stats lane that this build does not have. Not ported: the owner's stat inheritance and `UpdateAllStats`

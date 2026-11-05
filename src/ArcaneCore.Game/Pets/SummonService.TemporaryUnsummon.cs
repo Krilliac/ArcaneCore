@@ -168,6 +168,7 @@ public sealed partial class SummonService
             charm.SetActionBar(i, button.Action, button.Type);
         }
 
+        RestorePetCooldowns(pet, remembered.Cooldowns); // before the pet bar is built, so SMSG_PET_SPELLS carries them
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
         SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
@@ -198,5 +199,6 @@ public sealed partial class SummonService
         IReadOnlyList<uint> ActionBar,
         IReadOnlyList<KeyValuePair<uint, ActionType>> Spells,
         string Name,
-        uint Experience);
+        uint Experience,
+        IReadOnlyList<PersistentPetCooldown>? Cooldowns = null);
 }

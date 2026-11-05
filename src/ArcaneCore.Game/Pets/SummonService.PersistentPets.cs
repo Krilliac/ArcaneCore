@@ -91,8 +91,17 @@ public sealed partial class SummonService
     /// </summary>
     public PersistentPetSnapshot? CaptureCurrentPet(Player owner)
     {
+        return owner.Map?.FindObject(owner.PetGuid) is Creature pet ? CapturePet(owner, pet) : null;
+    }
+
+    /// <summary>
+    /// The pet's state as the owner's current pet, taken from the creature itself, so a pet that already left the map (a corpse decayed first) is
+    /// captured with the health it died with (0). Null for anything <see cref="CaptureCurrentPet"/> excludes. World thread.
+    /// </summary>
+    private PersistentPetSnapshot? CapturePet(Player owner, Creature pet)
+    {
         if ((owner.Class != Class.Hunter && owner.Class != Class.Warlock)
-            || owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: { } charm } links } pet
+            || pet is not { Summon: { Kind: SummonKind.Pet, Charm: { } charm } links }
             || pet.OwnerGuid != owner.Guid)
         {
             return null;
@@ -179,9 +188,18 @@ public sealed partial class SummonService
     }
 
     /// <summary>Capture on the world thread; the queue slot is taken here, the store write runs on the thread pool in per-character order.</summary>
-    public void QueueCurrentPetSave(Player owner)
+    public void QueueCurrentPetSave(Player owner) => QueueCapturedPetSave(owner, CaptureCurrentPet(owner));
+
+    /// <summary>
+    /// <see cref="QueueCurrentPetSave(Player)"/> for <paramref name="pet"/> after it left the map: only when it is still the owner's current pet link (a decayed
+    /// corpse is released after this call), so the row keeps the health 0 it died with and a relog does not restore it alive.
+    /// </summary>
+    internal void QueueCurrentPetSave(Player owner, Creature pet)
+        => QueueCapturedPetSave(owner, owner.PetGuid == pet.Guid ? CapturePet(owner, pet) : null);
+
+    private void QueueCapturedPetSave(Player owner, PersistentPetSnapshot? captured)
     {
-        if (CaptureCurrentPet(owner) is { } snapshot)
+        if (captured is { } snapshot)
         {
             lock (_cacheGate)
             {
@@ -210,13 +228,16 @@ public sealed partial class SummonService
         byEntry[snapshot.Entry] = snapshot with { IsCurrent = false };
     }
 
-    /// <summary>The owner's saved, living demon of <paramref name="entry"/> (vmangos LoadPetFromDB(owner, petEntry), Pet.cpp:150-156), or null. Reads only memory.</summary>
+    /// <summary>
+    /// The owner's saved demon of <paramref name="entry"/> (vmangos LoadPetFromDB(owner, petEntry), Pet.cpp:146-153: selected by owner and entry only), or null.
+    /// A demon that died is found too: a SUMMON_PET loaded by entry is not dead on load (Pet.cpp:415), so it keeps its name and number. Reads only memory.
+    /// </summary>
     private PersistentPetSnapshot? FindSavedDemon(Player owner, uint entry)
     {
         lock (_cacheGate)
         {
             return _demonCache.TryGetValue((int)owner.Guid.Low, out Dictionary<uint, PersistentPetSnapshot>? byEntry)
-                && byEntry.TryGetValue(entry, out PersistentPetSnapshot? saved) && saved.Health > 0 && saved.PetNumber != 0 && saved.Entry == entry
+                && byEntry.TryGetValue(entry, out PersistentPetSnapshot? saved) && saved.PetNumber != 0 && saved.Entry == entry
                 ? saved
                 : null;
         }
@@ -908,13 +929,7 @@ public sealed partial class SummonService
             return null;
         }
 
-        Creature? pet = RestoreSummonedPet(owner, remembered);
-        if (pet is not null)
-        {
-            RestorePetCooldowns(pet, snapshot);
-        }
-
-        return pet;
+        return RestoreSummonedPet(owner, remembered); // restores the cooldowns before the pet bar is sent
     }
 
     /// <summary>The saved demon <paramref name="snapshot"/> as the pet <see cref="RestoreSummonedPet"/> rebuilds, summoned by <paramref name="spellId"/>.</summary>
@@ -922,30 +937,31 @@ public sealed partial class SummonService
         snapshot.PetNumber, snapshot.Entry, spellId, null, snapshot.Health, snapshot.Mana,
         (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2), snapshot.ActionBar,
         [.. snapshot.Spells.Select(s => new KeyValuePair<uint, ActionType>(s.SpellId, s.Passive ? ActionType.Passive : s.Autocast ? ActionType.Enabled : ActionType.Disabled))],
-        snapshot.Name, snapshot.Experience);
+        snapshot.Name, snapshot.Experience, snapshot.Cooldowns);
 
     /// <summary>
     /// Unit::EffectSummonPet's <c>LoadPetFromDB(player, petEntry)</c> (SpellEffects.cpp:3221) for a demon the owner saved before: the pet comes back with its
-    /// number, name, spells, bar, health and mana, and the Demonic Sacrifice buffs end as for any known pet (SpellEffects.cpp:3222-3228). Null when the load fails.
+    /// number, name, spells and bar at full health and mana (a SUMMON_PET that is not the current load starts full, Pet.cpp:360-364, and is never loaded dead,
+    /// Pet.cpp:415), and the Demonic Sacrifice buffs end as for any known pet (SpellEffects.cpp:3222-3228). Null when the load fails.
     /// </summary>
     private Creature? SummonSavedDemon(Player owner, PersistentPetSnapshot saved, uint spellId)
     {
-        if (RestoreSummonedPet(owner, RememberedDemon(saved, spellId)) is not { } pet)
+        // RestoreSummonedPet clamps health and mana to the maximums, so the largest value is "full"
+        if (RestoreSummonedPet(owner, RememberedDemon(saved, spellId) with { Health = uint.MaxValue, Mana = uint.MaxValue }) is not { } pet)
         {
             return null;
         }
 
-        RestorePetCooldowns(pet, saved);
         RemoveDemonicSacrifice(owner);
         QueueCurrentPetSave(owner); // Pet::SavePetToDB at the end of the summon: it is the current pet again
         return pet;
     }
 
-    private void RestorePetCooldowns(Creature pet, PersistentPetSnapshot snapshot)
+    private void RestorePetCooldowns(Creature pet, IReadOnlyList<PersistentPetCooldown>? cooldowns)
     {
-        if (_spells is { } restoreSpells && snapshot.Cooldowns is { Count: > 0 })
+        if (_spells is { } restoreSpells && cooldowns is { Count: > 0 })
         {
-            restoreSpells.RestoreCooldowns(pet, snapshot.Cooldowns.Select(c => new PersistedCooldown(
+            restoreSpells.RestoreCooldowns(pet, cooldowns.Select(c => new PersistedCooldown(
                 c.Kind == 0 ? SpellCooldownKind.Spell : SpellCooldownKind.Category,
                 c.Kind == 0 ? c.SpellId : c.Category, c.EndsAtUnixMs)), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         }
@@ -1102,7 +1118,7 @@ public sealed partial class SummonService
             // they are not in the snapshot, so they are derived again from the create spells, which skips what the owner already knows.
             InitTeachSpells(owner, pet, snapshot.Entry);
         }
-        RestorePetCooldowns(pet, snapshot);
+        RestorePetCooldowns(pet, snapshot.Cooldowns);
         for (int i = 0; i < Math.Min(snapshot.ActionBar.Count, CharmInfo.ActionBarSize); i++)
         {
             ActionButton button = new(snapshot.ActionBar[i]);

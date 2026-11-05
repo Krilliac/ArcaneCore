@@ -189,10 +189,10 @@ Persistence and names (Z16): a player's demon is saved as the current `character
 needed) with its summoning spell and comes back at login with its pet number, name, health, mana, experience, react state, spells, bar and cooldowns at the owner's level.
 Every demon is also kept under its creature entry (a `character_pet_stable` row from slot 100, vmangos PET_SAVE_NOT_IN_SLOT; `EfPersistentPetStore.WriteDemonRowAsync`, no new
 table), and a summon looks there first (`Unit::EffectSummonPet` -> `LoadPetFromDB(player, petEntry)`, `SpellEffects.cpp:3221`): after a dismissal (the dismiss command, Enslave
-Demon's dismiss-first), a replacement by another demon, or a reagent-refund unsummon the Imp comes back with the same pet number, name, spells and health, and only a first
-summon (or a saved demon at 0 health) creates a new pet with a generated name (`GeneratePetName`, `SpellEffects.cpp:3293`). Those unsummons save the final state and delete only the
+Demon's dismiss-first), a replacement by another demon, a reagent-refund unsummon, a death or a talent reset the Imp comes back with the same pet number, name and spells at full health and mana (a SUMMON_PET that is not the current load starts full, `Pet.cpp:360-364`, and is never loaded dead, `Pet.cpp:415`; only a relog's current load keeps the saved health), and only a first
+summon creates a new pet with a generated name (`GeneratePetName`, `SpellEffects.cpp:3293`). Those unsummons save the final state and delete only the
 current-slot row, so a login does not restore the demon. A login with the owner dead or on a taxi flight does not summon it either: like `IsPetNeedBeTemporaryUnsummoned`
-(`Pet.cpp:217`, `Player.cpp:20941`) it is remembered for `ResummonTemporarilyUnsummonedPet`. A dead demon is not restored. A demon is named from `pet_name_generation`
+(`Pet.cpp:217`, `Player.cpp:20941`) it is remembered for `ResummonTemporarilyUnsummonedPet`. A demon that is dead at login is not restored as the current pet, but is still summoned by its entry. A demon is named from `pet_name_generation`
 (world schema 70, read from a vmangos dump by the content importer) when its entry has rows in both halves.
 
 Limits, recorded: (1) a demon whose entry has no `pet_name_generation` rows keeps its creature name (vmangos then answers the creature family's pet name; no CreatureFamily pet-name table is loaded); (2) the Soul Shard reagent of Summon Voidwalker/Succubus/Felhunter and every other reagent is a cross-lane

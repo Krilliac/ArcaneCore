@@ -42,6 +42,11 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadCurrentAsync(id, ct).ConfigureAwait(false);
         };
+        pets.Service.LoadDemonsPersistence = async (id, ct) =>
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadDemonsAsync(id, ct).ConfigureAwait(false);
+        };
         pets.Service.LoadCallablePersistence = async (id, ct) =>
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();

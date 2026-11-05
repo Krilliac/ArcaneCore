@@ -37,7 +37,7 @@ public sealed partial class SummonService
     /// (override class script 2228) of the owner end.
     /// <para>
     /// A player first tries the demon of that entry it saved before (<c>LoadPetFromDB(player, petEntry)</c>, SpellEffects.cpp:3221; <see cref="SummonSavedDemon"/>): an
-    /// Imp keeps its name, number, spells and health across a dismissal, a Voidwalker swap or a relog. Only without a saved demon is a new one made, with a generated
+    /// Imp keeps its name, number and spells across a dismissal, a Voidwalker swap, its death or a relog, and comes back at full health and mana (a SUMMON_PET that is not the current load, Pet.cpp:360-364, 415; a relog's current load keeps the saved health instead). Only without a saved demon is a new one made, with a generated
     /// name (<c>ObjectMgr::GeneratePetName</c>, <see cref="PetContent.GeneratePetName"/>, SpellEffects.cpp:3293) and a new pet number. Either way it is saved as the
     /// owner's current pet (<see cref="QueueCurrentPetSave"/>; <c>SavePetToDB</c>) and a relog brings it back (<c>SummonService.PersistentPets.cs</c>). A dismissal or a
     /// replacement saves its final state under its entry and leaves the current slot (<see cref="AbandonSavedDemon"/>; PET_SAVE_NOT_IN_SLOT, Unit.cpp:5129-5136).

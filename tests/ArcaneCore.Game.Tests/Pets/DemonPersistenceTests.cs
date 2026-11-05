@@ -4,12 +4,15 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Pets.PetAuras;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Spells.Utility.Targets;
+using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Talents;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
 using Xunit;
@@ -95,7 +98,17 @@ public sealed class DemonPersistenceTests : IDisposable
 
         public void Wire(SummonService service)
         {
-            service.SavePersistence = (snapshot, _) => { Row = snapshot; return Task.CompletedTask; };
+            service.SavePersistence = (snapshot, _) =>
+            {
+                Row = snapshot;
+                if (snapshot.CreatedBySpell != 0) // EfPersistentPetStore.WriteDemonRowAsync: the demon's per-entry row is written with the current row
+                {
+                    Demons.RemoveAll(d => d.Entry == snapshot.Entry);
+                    Demons.Add(snapshot with { IsCurrent = false });
+                }
+
+                return Task.CompletedTask;
+            };
             service.DeletePersistence = (_, _) => { Row = null; return Task.CompletedTask; };
             service.LoadPersistence = (_, _) => Task.FromResult(Row);
             service.LoadDemonsPersistence = (_, _) => Task.FromResult<IReadOnlyList<PersistentPetSnapshot>>([.. Demons]);
@@ -302,6 +315,174 @@ public sealed class DemonPersistenceTests : IDisposable
         Assert.Null(store.Row);
         Assert.Null(await _service.ReadCurrentPetAsync(warlock));
         Assert.Equal(1u, Shards(warlock));
+    }
+
+    [Fact]
+    public async Task AWoundedDemon_DismissedAndSummonedAgain_ComesBackAtFullHealthAndMana()
+    {
+        // vmangos Pet::LoadPetFromDB: a SUMMON_PET that is not the current load starts full (Pet.cpp:360-364); only the login's current load keeps saved values
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        imp.Health = 10;
+        imp.SetUInt32(UpdateFields.UnitFieldPower1, 0);
+
+        _service.AbandonSavedDemon(warlock, imp);
+        _service.Unsummon(imp, PetUnsummonReason.Dismissed);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Creature again = SummonDemon(warlock, SummonImp);
+
+        Assert.Equal(number, again.Summon!.Charm!.PetNumber);
+        Assert.True(again.MaxHealth > 10u);
+        Assert.Equal(again.MaxHealth, again.Health);
+        Assert.Equal(again.GetUInt32(UpdateFields.UnitFieldMaxpower1), again.GetUInt32(UpdateFields.UnitFieldPower1));
+    }
+
+    [Fact]
+    public void AWoundedDemon_ThatLogsInAsTheCurrentPet_KeepsItsSavedHealth()
+    {
+        Player warlock = Warlock();
+        PersistentPetSnapshot current = new(1, 77, Imp, 10, 0, 33, 10, 0, 1, [], [], CreatedBySpell: SummonImp);
+
+        Creature back = Assert.IsType<Creature>(_service.RestoreCurrentPet(warlock, current));
+
+        Assert.Equal(33u, back.Health);
+    }
+
+    [Fact]
+    public async Task ADemonThatDiedAndDecayed_KeepsItsNumberAndName_WhenItsEntryIsSummonedAgain()
+    {
+        // vmangos loads a saved SUMMON_PET by owner and entry only (Pet.cpp:146-153) and applies the dead state only to a current load (Pet.cpp:415)
+        _service.Content = new PetContent([], [], [new PetNamePart(Imp, false, "Zor"), new PetNamePart(Imp, true, "ax")]);
+        CurrentRow store = new();
+        store.Wire(_service);
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        string name = imp.Summon.Charm.Name;
+
+        _creatures.KillCreature(imp);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(0u, Assert.IsType<PersistentPetSnapshot>(store.Row).Health);
+
+        _creatures.Despawn(imp); // the corpse decayed before the pet system's tick
+        _map.Pets!.Update(_map, 1);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(warlock.PetGuid.IsEmpty);
+        PersistentPetSnapshot row = Assert.IsType<PersistentPetSnapshot>(store.Row);
+        Assert.Equal(0u, row.Health); // the row keeps the death: a relog does not restore it alive
+        Assert.Null(_service.RestoreCurrentPet(warlock, row));
+
+        Creature again = SummonDemon(warlock, SummonImp);
+
+        Assert.Equal((number, name), (again.Summon!.Charm!.PetNumber, again.Summon.Charm.Name));
+        Assert.Equal(again.MaxHealth, again.Health);
+    }
+
+    [Fact]
+    public async Task ADemonThatDiedBeforeALogout_IsNotRestoredAtLogin_ButSummonedByItsEntryWithItsNumber()
+    {
+        CurrentRow store = new();
+        store.Wire(_service);
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        _creatures.KillCreature(imp);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        _service.Unsummon(imp, PetUnsummonReason.OwnerLeft);
+
+        PersistentPetSnapshot current = Assert.IsType<PersistentPetSnapshot>(await _service.ReadCurrentPetAsync(warlock)); // the login read
+        Assert.Null(_service.RestoreCurrentPet(warlock, current));
+
+        Assert.Equal(number, SummonDemon(warlock, SummonImp).Summon!.Charm!.PetNumber);
+    }
+
+    [Fact]
+    public async Task ADemonDismissedBeforeALogout_IsSummonedByItsEntryAfterTheRelog_WithItsNumberAndName()
+    {
+        // the login read loads the saved demons from the store (the production wiring is pinned in World.Tests), so a dismissed demon is not lost at the relog
+        CurrentRow store = new();
+        store.Wire(_service);
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        imp.Summon.Charm.Name = "Kept";
+        _service.AbandonSavedDemon(warlock, imp);
+        _service.Unsummon(imp, PetUnsummonReason.Dismissed);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Null(store.Row);
+        Assert.Single(store.Demons);
+
+        Assert.Null(await _service.ReadCurrentPetAsync(warlock)); // the relog
+        Creature again = SummonDemon(warlock, SummonImp);
+
+        Assert.Equal((number, "Kept"), (again.Summon!.Charm!.PetNumber, again.Summon.Charm.Name));
+    }
+
+    [Fact]
+    public async Task TheDismissCommandAndAbandon_LeaveTheCurrentSlot_AndTheDemonIsKeptByItsEntry()
+    {
+        CurrentRow store = new();
+        store.Wire(_service);
+        PetController controller = new(_service, () => _spells.System, new Random(5));
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+
+        controller.HandleCommand(imp, CommandState.Dismiss, null); // the pet bar's dismiss
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Null(_creatures.FindCreature(imp.Guid));
+        Assert.Null(store.Row);
+        Assert.Null(await _service.ReadCurrentPetAsync(warlock));
+
+        Creature second = SummonDemon(warlock, SummonImp);
+        Assert.Equal(number, second.Summon!.Charm!.PetNumber);
+        controller.HandleAbandon(warlock, second.Guid); // CMSG_PET_ABANDON on a demon dismisses it
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Null(_creatures.FindCreature(second.Guid));
+        Assert.Null(store.Row);
+        Assert.Null(await _service.ReadCurrentPetAsync(warlock));
+        Assert.Equal(number, SummonDemon(warlock, SummonImp).Summon!.Charm!.PetNumber);
+    }
+
+    [Fact]
+    public async Task ATalentReset_SendsTheDemonOutOfTheCurrentSlot_SoARelogDoesNotRestoreIt()
+    {
+        // vmangos Player::ResetTalents ends with RemovePet(PET_SAVE_REAGENTS) (Player.cpp:4146), stored as PET_SAVE_NOT_IN_SLOT (Pet.cpp:1050)
+        CurrentRow store = new();
+        store.Wire(_service);
+        Player warlock = Warlock();
+        Creature imp = SummonDemon(warlock, SummonImp);
+        uint number = imp.Summon!.Charm!.PetNumber;
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.NotNull(store.Row);
+        using TalentService talents = new(new TalentCatalog([], []), _spells.System, new TalentOptions(), () => 1_800_000_000);
+        using TalentPetHooks hooks = TalentPetHooks.Attach(talents, _service, _spells.System);
+
+        hooks.OnTalentsReset(warlock);
+        await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(warlock.PetGuid.IsEmpty);
+        Assert.Null(_creatures.FindCreature(imp.Guid));
+        Assert.Null(store.Row);
+        Assert.Null(await _service.ReadCurrentPetAsync(warlock)); // the relog: nothing to restore
+        Assert.Equal(number, SummonDemon(warlock, SummonImp).Summon!.Charm!.PetNumber); // and the demon is still its entry's saved one
+    }
+
+    [Fact]
+    public void ADemonRememberedAtATaxiLogin_ComesBackWithItsSavedCooldowns()
+    {
+        Player warlock = Warlock();
+        long ends = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000;
+        PersistentPetSnapshot current = new(1, 77, Imp, 10, 0, 50, 10, 0, 1, [], [], CreatedBySpell: SummonImp,
+            Cooldowns: [new PersistentPetCooldown(0, SummonImp, 0, ends)]);
+        warlock.UnitFlags |= UnitFlags.TaxiFlight;
+        Assert.Null(_service.RestoreCurrentPet(warlock, current));
+        warlock.UnitFlags &= ~UnitFlags.TaxiFlight;
+
+        Creature back = Assert.IsType<Creature>(_service.ResummonTemporarilyUnsummonedPet(warlock));
+
+        Assert.NotEmpty(_spells.System.GetActiveCooldowns(back));
     }
 
     [Fact]
