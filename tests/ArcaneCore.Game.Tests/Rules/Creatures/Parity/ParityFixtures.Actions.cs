@@ -48,8 +48,10 @@ internal static partial class ParityFixtures
                 Row(125, 4, a1: Act(53, 99, Self)),
                 Row(126, 4, a1: Act(34, 3, 4), a2: Act(35, 5, Invoker), a3: Act(56, (int)ParityScenario.SummonEntry)),
                 Row(127, 1, 300, 300, 0, 0, a1: Act(59, 0, 1)),
-                Row(128, 4, a1: Act(60, 0)),
+                Row(128, 4, a1: Act(60, (int)ParityScenario.ListId)),
+                Row(129, 7, a1: Act(60, 0)),
             ],
+            SpellLists = [new CreatureSpellList(ParityScenario.ListId, "parity", 0, 0, [new CreatureSpellListEntry(1, ParityScenario.ListSpell, CreatureSpellListFlags.None, CreatureSpellListTargets.Current, 0, 100, 0, 200, 200, 1000, 1000)])],
             Steps =
             [
                 Wait(500),

@@ -110,6 +110,20 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void SetSpellListWithANegativeListId_IsReported_AndNeverClamped()
+    {
+        EventAiConversion conversion = Convert(
+            Row(1, action: new CreatureAiAction(60, 0, 0, 0)),
+            Row(2, action: new CreatureAiAction(60, -1, 0, 0)));
+
+        RuleRecord kept = OnlyRule(conversion);
+        Assert.Equal((1 << 30) + 1, kept.Id);
+        EventAiConversionIssue issue = Assert.Single(conversion.Issues);
+        Assert.Equal((2u, EventAiConversionOutcome.Unconvertible), (issue.SourceId, issue.Outcome));
+        Assert.Contains("negative", issue.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ARepeatMaximumBelowTheMinimum_BecomesAOneShotRow()
     {
         EventAiConversion conversion = Convert(Row(1, eventType: 8, p3: 5000, p4: 1000));

@@ -52,6 +52,10 @@ public sealed class PlayerDumpCommandTests : IDisposable
     /// each waited and what came late, with the text of the late line, so a stall reads as pool queueing, a stalled world tick, slow import
     /// work or an unrelated line. A connection that ends or a read that is cancelled instead of timing out is reported with its type, the
     /// step time and the command, in the primary read and in the late one.
+    /// <para>
+    /// The probes run after the bound has passed, so they measure the host at that moment, not the stall itself: a stall that ended before the
+    /// bound shows about 0 ms on both and leaves the late line's arrival time and text as the only evidence of what the reply waited for.
+    /// </para>
     /// </summary>
     private async Task<string> RunAsync(WorldTestClient client, string command)
     {
@@ -70,7 +74,7 @@ public sealed class PlayerDumpCommandTests : IDisposable
             long pool = await ProbeAsync(() => Task.Run(() => 0));
             long world = _host is null ? -1 : await ProbeAsync(() => _host.World.InvokeAsync(() => 0));
             string late = await lateRead;
-            throw new TimeoutException($"{command}: no reply within {waited} ms; a pool item then waited {pool} ms, a world-thread command {world} ms (-1: none); late read: {late}", ex);
+            throw new TimeoutException($"{command}: no reply within {waited} ms; a pool item then waited {pool} ms, a world-thread command {world} ms (-1: no host, -2: cancelled, the world had stopped); late read: {late}", ex);
         }
         catch (Exception ex) when (ex is IOException or EndOfStreamException or ObjectDisposedException or OperationCanceledException)
         {
@@ -107,6 +111,10 @@ public sealed class PlayerDumpCommandTests : IDisposable
         catch (TimeoutException)
         {
             return 30_000;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+            return -2; // the world stopped under the probe (WorldRuntime.InvokeAsync cancels): the diagnostic must still be composed
         }
 
         return watch.ElapsedMilliseconds;

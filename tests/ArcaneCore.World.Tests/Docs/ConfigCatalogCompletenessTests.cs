@@ -875,6 +875,8 @@ public sealed class ConfigCatalogCompletenessTests
     /// and of the same-file methods those call. It sees Configure, PostConfigure and AddOptions (qualified type names too), GetSection(X.SectionName).Bind/.Get/.GetValue,
     /// section.Get&lt;T&gt;, and keys read straight from IConfiguration by a literal or a constant of the same file. Limits: a helper not in the table is not followed (a
     /// World type a daemon uses, or a helper in a file not listed); a section chosen at run time, a key held in a variable, and a local section variable bound with .Bind are not seen;
+    /// GetSection("Literal").Bind (a quoted section name rather than a constant) and configuration.GetValue&lt;T&gt;("key") called directly on IConfiguration are not seen
+    /// either; a helper that has several overloads is followed through its first overload only;
     /// a section whose type has a property-level [ConfigDaemons] is checked at type level only, plus the keys read by name. It is a guard against the known styles, not a proof.
     /// </summary>
     [Theory]
