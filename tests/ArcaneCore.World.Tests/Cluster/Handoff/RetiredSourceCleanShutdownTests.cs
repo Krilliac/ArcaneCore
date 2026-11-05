@@ -375,6 +375,29 @@ public sealed class RetiredSourceCleanShutdownTests
         }
     }
 
+    /// <summary>
+    /// A resume releases the parked simulation thread and an immediate second freeze starts a new park: the second freeze must not un-set the release the first park is still waiting on,
+    /// or the simulation thread stays in the old park and the new one never runs (a timed-out freeze). Repeated, because the lost wake-up is a race.
+    /// </summary>
+    [Fact]
+    public async Task AFreezeRightAfterAResume_ParksAgain_WithoutWaitingForTheOldParkToEnd()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+
+        for (int round = 0; round < 50; round++)
+        {
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await source.FreezeAsync(budget.Token);
+            await source.ResumeAsync(CancellationToken.None);
+            await source.FreezeAsync(budget.Token); // no wait for the first park to end in between
+            await source.ResumeAsync(CancellationToken.None);
+            await world.InvokeAsync(() => true, budget.Token); // the simulation thread is free again: neither park is stranded
+        }
+    }
+
     /// <summary>A refusal after a late flush is a lost ownership: in the save queue and in a queue that asks the registry, also when a new freeze has begun meanwhile (that freeze has not flushed).</summary>
     [Theory]
     [InlineData(false)]
