@@ -46,7 +46,7 @@ public sealed class EventScenarioWorldTests
         GameEventTestStore.Current.Value = new GameEventContent([new GameEventRecord(EventId, 0, 60, 60, 0, 0, "Scenario test")], [], [], [], [], [], []);
         try
         {
-            return await GroupTestWorld.StartAsync([], null,
+            GroupTestWorld started = await GroupTestWorld.StartAsync([], null,
                 services: collection => collection.AddScoped<IGameEventPlayerbotStore>(_ => new FixtureStore(content)),
                 extraCreatures: [(
                     new CreatureTemplate
@@ -58,6 +58,10 @@ public sealed class EventScenarioWorldTests
                     {
                         Guid = Objective, Entry = Objective, MapId = 0, X = Origin.X + 70f, Y = Origin.Y, Z = Origin.Z, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600,
                     })]);
+            // The tables are read off the attach and applied on a world tick; run until they are in.
+            PlayerbotEventScenarioFeature feature = started.World.Services.GetRequiredService<PlayerbotEventScenarioFeature>();
+            Assert.True(await started.RunUntilAsync(30_000, () => feature.Loading.IsCompleted));
+            return started;
         }
         finally
         {

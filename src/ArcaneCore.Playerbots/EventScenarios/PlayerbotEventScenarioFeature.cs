@@ -26,7 +26,8 @@ internal sealed class EventScenarioTimings
 /// Lifecycle (hot-reloadable pack, docs/design/hot-reload-tiers.md): <see cref="DetachKind.Stateless"/>. The game-event listener and the
 /// tick go through the subscription bag, so a detach removes both and a re-attach leaves exactly one listener; claims are memory only and
 /// are rebuilt from the tables and the running events, so a bot already placed is recognised by where it stands. With no valid rows the
-/// feature subscribes to nothing.
+/// feature subscribes to nothing. The tables are read on the thread pool at attach and applied on the world thread when the read ends
+/// (<see cref="Loading"/>); until then the scenario set is empty.
 /// </para>
 /// Thread affinity: attach, detach, the listener, the tick and the commands run on the world thread; <see cref="QuiesceAsync"/> does not.
 /// </summary>
@@ -42,6 +43,7 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     private uint _sinceMs;
     private int _faults;
     private volatile bool _quiesced;
+    private int _loadGeneration;
 
     /// <summary>The intervals in use.</summary>
     internal EventScenarioTimings Timings { get; } = new();
@@ -64,6 +66,12 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     /// <summary>Test seam: replaces the real host (a fake world).</summary>
     internal Func<IEventScenarioHost?>? HostFactory { get; set; }
 
+    /// <summary>
+    /// The table read of the last attach: completed once its result was applied on the world thread (or it found nothing to apply).
+    /// If the world stops before it drains its queue the task stays pending (tests wait on it).
+    /// </summary>
+    internal Task Loading { get; private set; } = Task.CompletedTask;
+
     public DetachKind DetachKind => DetachKind.Stateless;
 
     public void Attach(WorldRuntime world) => AttachFrom(world, null, new FeatureSubscriptions(nameof(PlayerbotEventScenarioFeature)));
@@ -79,9 +87,35 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         _engine = null;
         _host = null;
         _catalog = EventScenarioCatalog.Empty;
+        _content = GameEventPlayerbotContent.Empty;
+        Loading = Task.CompletedTask;
+        _read = Task.CompletedTask;
+        int generation = Interlocked.Increment(ref _loadGeneration); // a read still running for an earlier attach is ignored when it ends
         if (services.GetService<IOptions<PlayerbotOptions>>()?.Value is not { Enabled: true }) return;
-        _content = LoadContent();
-        if (_content.Groups.Count == 0) return; // no rows: nothing to listen to and no tick
+        if (ContentSource is { } source)
+        {
+            ApplyContent(world, subscriptions, source());
+            return;
+        }
+
+        if (services.GetService<IServiceScopeFactory>() is not { } scopes) return;
+
+        // The tables are read on the thread pool and applied on the world thread when the read ends: an attach (a hot re-attach on a
+        // live world included) never waits on the database. Until then the scenario set is empty and nothing listens or ticks.
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Loading = done.Task;
+        _read = Task.Run(() => LoadAsync(world, subscriptions, scopes, generation, done));
+    }
+
+    // The pool read of the last attach (ends once the result is posted, not once the world applied it): quiesce waits on this, never on
+    // Loading, which stays pending when the world stops.
+    private Task _read = Task.CompletedTask;
+
+    /// <summary>World thread: take <paramref name="content"/> and, when it has rows, start listening and ticking.</summary>
+    private void ApplyContent(WorldRuntime world, FeatureSubscriptions subscriptions, GameEventPlayerbotContent content)
+    {
+        _content = content;
+        if (content.Groups.Count == 0) return; // no rows: nothing to listen to and no tick
         subscriptions.OnUpdated(world, Update);
         if (services.GetService<GameEventFeature>() is not { } events)
         {
@@ -96,6 +130,7 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     public async Task QuiesceAsync(CancellationToken cancellationToken)
     {
         _quiesced = true;
+        await _read.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (_host is { } host) await host.IdleAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -127,23 +162,45 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         _catalog = EventScenarioCatalog.Empty;
     }
 
-    /// <summary>Read the four tables (blocking, like the other content loads of an attach). A read that fails is an empty scenario set, logged.</summary>
-    private GameEventPlayerbotContent LoadContent()
+    /// <summary>
+    /// Thread pool: read the four tables, then post the result to the world thread (<see cref="ApplyContent"/>). A read that fails is an
+    /// empty scenario set, logged. A result that arrives after a detach or a newer attach is dropped.
+    /// </summary>
+    private async Task LoadAsync(WorldRuntime world, FeatureSubscriptions subscriptions, IServiceScopeFactory scopes, int generation, TaskCompletionSource done)
     {
-        if (ContentSource is { } source) return source();
-        if (services.GetService<IServiceScopeFactory>() is not { } scopes) return GameEventPlayerbotContent.Empty;
         try
         {
-            using IServiceScope scope = scopes.CreateScope();
-            if (scope.ServiceProvider.GetService<IGameEventPlayerbotStore>() is not { } store) return GameEventPlayerbotContent.Empty;
-            return store.LoadAsync().GetAwaiter().GetResult();
+            GameEventPlayerbotContent content;
+            await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+            {
+                if (scope.ServiceProvider.GetService<IGameEventPlayerbotStore>() is not { } store)
+                {
+                    done.TrySetResult();
+                    return;
+                }
+
+                content = await store.LoadAsync().ConfigureAwait(false);
+            }
+
+            world.Post(() =>
+            {
+                try
+                {
+                    if (generation == Volatile.Read(ref _loadGeneration) && ReferenceEquals(_world, world) && !subscriptions.IsDisposed)
+                        ApplyContent(world, subscriptions, content);
+                }
+                finally
+                {
+                    done.TrySetResult();
+                }
+            });
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("playerbot.event-scenarios", ex);
-            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenarios", $"{ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
+            AnomalyLedger.Shared.Report("bot-event", "scenario-fault", "event-scenarios", $"{ex.GetType().Name}: {ex.Message}", origin: world.Identity);
             logger.LogWarning(ex, "Bot event scenarios: the game_event_playerbot tables could not be read ({Type}: {Message}); no scenario will run", ex.GetType().Name, ex.Message);
-            return GameEventPlayerbotContent.Empty;
+            done.TrySetResult();
         }
     }
 
@@ -209,7 +266,9 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         => _engine is { } engine ? engine.StatusLines(eventId, Describe) : NotLoaded();
 
     private IReadOnlyList<string> NotLoaded()
-        => _content.Groups.Count == 0
+        => !Loading.IsCompleted
+            ? ["The bot event scenarios are still being read from the world database; try again in a moment."]
+            : _content.Groups.Count == 0
             ? ["No bot event scenario is configured (the game_event_playerbot_group table is empty, or the playerbots are off)."]
             : ["The bot event scenarios are read on the first world tick after startup; try again in a moment."];
 }

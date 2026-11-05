@@ -297,7 +297,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         Social?.Note(kicked, kicker, BotSocial.PlayerbotSocialEvent.Kicked);
     }
 
-    public Task QuiesceAsync(CancellationToken cancellationToken) => Task.CompletedTask; // world-thread only: nothing runs in the background
+    // The only background work is the instance_encounter read started at attach (it touches the core catalogue and the log): wait for it,
+    // bounded by the token, so a detach or pack swap leaves no code of this feature running.
+    public Task QuiesceAsync(CancellationToken cancellationToken) => _encounterLoad.WaitAsync(cancellationToken);
 
     public void Detach(FeatureHandover handover)
     {

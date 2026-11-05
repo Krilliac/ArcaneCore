@@ -33,6 +33,26 @@ public sealed class EventScenarioFeatureWiringTests
         => ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore(),
             manualClock: true, extraServices: services => services.AddScoped<IGameEventPlayerbotStore>(_ => new FixtureStore(content)));
 
+    private static readonly TimeSpan LoadWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>A store whose read ends when the test says so (the feature reads it off the attach).</summary>
+    private sealed class GatedStore(GameEventPlayerbotContent content) : IGameEventPlayerbotStore
+    {
+        public volatile TaskCompletionSource<bool> Gate = Opened();
+        public static TaskCompletionSource<bool> Opened()
+        {
+            var open = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            open.SetResult(true);
+            return open;
+        }
+
+        public async Task<GameEventPlayerbotContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            await Gate.Task.ConfigureAwait(false);
+            return content;
+        }
+    }
+
     private static GameEventPlayerbotContent OneGroup() => new(
         [new GameEventPlayerbotGroupRow { Event = 2, GroupId = 1, NamePrefix = "Guard", Count = 2, Team = 1, ClassSpec = "2:1", Level = 60, Provision = true, Role = 1 }],
         [new GameEventPlayerbotPostRow { Event = 2, GroupId = 1, PostId = 1, Map = 0, X = 1, Y = 2, Z = 3, Radius = 40 }],
@@ -45,6 +65,7 @@ public sealed class EventScenarioFeatureWiringTests
         FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
         GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();
         PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
+        await feature.Loading.WaitAsync(LoadWait);
         int listeners = events.ListenerCount;
         int subscriptions = features.Find(nameof(PlayerbotEventScenarioFeature))!.Subscriptions;
         Assert.True(feature.Listening);
@@ -54,10 +75,37 @@ public sealed class EventScenarioFeatureWiringTests
         {
             FeatureResult cycled = await features.CycleAsync(nameof(PlayerbotEventScenarioFeature));
             Assert.True(cycled.Ok, cycled.Detail);
+            await feature.Loading.WaitAsync(LoadWait);
             Assert.Equal(listeners, events.ListenerCount);
             Assert.Equal(subscriptions, features.Find(nameof(PlayerbotEventScenarioFeature))!.Subscriptions);
         }
 
+        Assert.True(feature.Listening);
+    }
+
+    [Fact]
+    public async Task Attach_DoesNotWaitForTheTables_TheSetIsEmptyUntilTheReadEnds_ThenTheFeatureListens()
+    {
+        var store = new GatedStore(OneGroup());
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore(),
+            manualClock: true, extraServices: services => services.AddScoped<IGameEventPlayerbotStore>(_ => store));
+        FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
+        PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
+        await feature.Loading.WaitAsync(LoadWait);
+        Assert.True(feature.Listening);
+
+        // Hold the next read: a hot re-attach returns while the store is still working, and nothing listens until it ends.
+        store.Gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<FeatureResult> cycling = features.CycleAsync(nameof(PlayerbotEventScenarioFeature));
+        FeatureResult cycled = await cycling.WaitAsync(LoadWait); // would never return if the attach waited on the gate
+        Assert.True(cycled.Ok, cycled.Detail);
+        Assert.False(feature.Loading.IsCompleted);
+        Assert.False(feature.Listening);
+        Assert.Equal(0, feature.Catalog.GroupCount);
+        Assert.Contains("still being read", Assert.Single(feature.ListLines()), StringComparison.Ordinal);
+
+        store.Gate.SetResult(true);
+        await feature.Loading.WaitAsync(LoadWait);
         Assert.True(feature.Listening);
     }
 
@@ -68,6 +116,7 @@ public sealed class EventScenarioFeatureWiringTests
         FeatureHost features = host.WorldServices.GetRequiredService<FeatureHost>();
         PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
         GameEventFeature events = host.WorldServices.GetRequiredService<GameEventFeature>();
+        await feature.Loading.WaitAsync(LoadWait);
         int listeners = events.ListenerCount;
 
         Assert.False(feature.Listening);
@@ -211,6 +260,7 @@ public sealed class EventScenarioFeatureWiringTests
             extraServices: services => services.AddScoped<IGameEventPlayerbotStore>(_ => new ThrowingStore(marker)));
 
         PlayerbotEventScenarioFeature feature = host.WorldServices.GetRequiredService<PlayerbotEventScenarioFeature>();
+        await feature.Loading.WaitAsync(LoadWait);
         Assert.False(feature.Listening);
         Assert.True(HoldsMarker(FaultLedger.Shared, marker));
         Assert.Equal(1, capture.Count("bot-event/scenario-fault"));

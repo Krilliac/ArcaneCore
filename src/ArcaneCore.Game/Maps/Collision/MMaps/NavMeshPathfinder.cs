@@ -26,7 +26,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// </para>
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
-public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch, ISharedTiledPathSearch,
+public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ICollisionMapPrefetch, ISharedPathSearch, ISharedTiledPathSearch,
     ISharedMeshPointQuery, ISharedMeshFloorQuery, ICollisionTileDemand
 {
     /// <summary>
@@ -56,6 +56,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     public NavMeshDatasetDescriptor Dataset { get; }
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
+    private readonly ConcurrentDictionary<uint, Task<byte[]?>> _paramsPrefetch = new();
 
     /// <summary>
     /// Held for reading by every <see cref="FindPathShared"/> search (path-job workers) and for writing by every change of the loaded
@@ -319,7 +320,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         NavMesh? mesh = null;
         string path = Path.Combine(_directory, NavMeshFormat.ParamsFileName(mapId));
-        if (ReadFile(path) is { } bytes)
+        if (ReadParams(mapId, path) is { } bytes)
         {
             try
             {
@@ -346,6 +347,29 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         return mesh;
     }
+
+    /// <summary>
+    /// Read <c>NNN.mmap</c> on the thread pool (called when the map is created), so that <see cref="GetNavMesh"/>'s first call for the map
+    /// finds the bytes instead of reading the file on the calling thread. A read still running when the first query comes is not waited
+    /// for: the query reads the file itself, as it always did. Any thread.
+    /// </summary>
+    public void PrefetchMap(uint mapId)
+    {
+        if (_paramsPrefetch.ContainsKey(mapId))
+        {
+            return;
+        }
+
+        string path = Path.Combine(_directory, NavMeshFormat.ParamsFileName(mapId));
+        _paramsPrefetch.TryAdd(mapId, Task.Run(() => ReadFile(path)));
+    }
+
+    /// <summary>The map's prefetch read (null when none was started); tests await it.</summary>
+    internal Task<byte[]?>? MapPrefetch(uint mapId) => _paramsPrefetch.GetValueOrDefault(mapId);
+
+    /// <summary>The map's <c>.mmap</c> bytes: the finished prefetch's, else read here (no prefetch, or it has not finished). The entry stays, so a second instance of the map does not read the file again.</summary>
+    private byte[]? ReadParams(uint mapId, string path)
+        => _paramsPrefetch.TryGetValue(mapId, out Task<byte[]?>? read) && read.IsCompletedSuccessfully ? read.Result : ReadFile(path);
 
     /// <summary>Load a terrain tile's navmesh tile (vmangos <c>MMapManager::loadMap</c>). False when nothing was loaded.</summary>
     public bool LoadTile(uint mapId, int tileX, int tileY)

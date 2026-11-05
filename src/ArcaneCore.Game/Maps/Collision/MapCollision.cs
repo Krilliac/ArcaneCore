@@ -69,6 +69,24 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
             map.Grids.GridCreated += OnGridCreated;
             map.Grids.GridUnloaded += OnGridUnloaded;
             map.Grids.GridApproaching += OnGridApproaching;
+            PrefetchNavigationParameters();
+        }
+    }
+
+    /// <summary>Map creation: start reading the pathfinder's per-map parameter file in the background, so the first path query does not.</summary>
+    private void PrefetchNavigationParameters()
+    {
+        try
+        {
+            if (_services.Pathfinder is ICollisionMapPrefetch prefetch)
+            {
+                prefetch.PrefetchMap(Map.MapId);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("collision.map-prefetch", ex);
+            Map.Logger.LogFault("map-collision", ex, "MapCollision fault prefetching navigation parameters on map {MapId}", Map.MapId);
         }
     }
 
