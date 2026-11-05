@@ -182,7 +182,7 @@ public sealed partial class SpellSystem
         [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
         [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),
         [SpellEffectName.DualWield] = static context => (context.Target as Player)?.StatState.SetCanDualWield(true),
-        [SpellEffectName.Spawn] = static context => Rules.CrowdControl.CcState.RefreshStun(context.System, context.Target),
+        [SpellEffectName.Spawn] = EffectSpawn,
         [SpellEffectName.Detect] = static _ => { },
         [SpellEffectName.TransDoor] = static _ => { },
         [SpellEffectName.Attack] = EffectAttack,
@@ -491,10 +491,30 @@ public sealed partial class SpellSystem
     /// <summary>
     /// vmangos Spell::EffectTeleportUnits: the destination comes from implicit target B —
     /// TARGET_LOCATION_DATABASE (spell_target_position) or TARGET_LOCATION_CASTER_HOME_BIND
-    /// (the player's bind point); <see cref="ITeleportSink"/> moves the unit.
+    /// (the player's bind point); <see cref="ITeleportSink"/> moves the unit. A unit on a taxi flight is skipped, and
+    /// TARGET_LOCATION_CASTER_DEST moves the caster to the target's position.
     /// </summary>
     private void EffectTeleportUnits(SpellEffectContext context)
     {
+        // vmangos SpellEffects.cpp:1597-1600: a unit on a taxi flight is never teleported.
+        if ((context.Target.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return;
+        }
+
+        // vmangos SpellEffects.cpp:1627-1636: with TARGET_LOCATION_CASTER_DEST the caster, not the target, is moved: to the
+        // target's position, keeping the caster's own orientation (spells 21463, 23139, 22935, 24700).
+        if (context.Effect.TargetB == SpellImplicitTarget.LocationCasterDest)
+        {
+            Unit mover = context.Caster;
+            if (!Teleports.Teleport(mover, mover.MapId, context.Target.X, context.Target.Y, context.Target.Z, mover.Orientation, keepCombat: true))
+            {
+                ReportUnsupported("teleport to map", mover.MapId, context.Spell.Id);
+            }
+
+            return;
+        }
+
         if (!TryResolveTeleportDestination(context.Spell, context.EffectIndex, context.Target, context.Cast.Targets,
                 out SpellTargetPosition d))
         {
@@ -559,15 +579,35 @@ public sealed partial class SpellSystem
         LearnSpell(player, spellId);
     }
 
-    /// <summary>vmangos Spell::EffectTriggerSpell: the caster casts EffectTriggerSpell, triggered, at the same target.</summary>
+    /// <summary>
+    /// vmangos Spell::EffectSpawn (SpellEffects.cpp:2990-2998): a creature target leaves the spawn animation state
+    /// (UNIT_FLAG_SPAWNING is cleared; the reference also forces visibility on, which this server does not model per unit).
+    /// A player or other target is ignored.
+    /// </summary>
+    private static void EffectSpawn(SpellEffectContext context)
+    {
+        if (context.Target is Creatures.Creature creature)
+        {
+            creature.UnitFlags &= ~UnitFlags.Spawning;
+        }
+    }
+
+    /// <summary>
+    /// vmangos Spell::EffectTriggerSpell (SpellEffects.cpp:1571,1576): the formal caster is the effect's target when the triggered
+    /// spell takes all its targets around the caster (<see cref="SpellCasterSourceTargets.IsCasterSourceTargetsOnly"/>), the cast's
+    /// caster otherwise; the cast is triggered, at the same target, on behalf of the original caster.
+    /// </summary>
     private void EffectTriggerSpell(SpellEffectContext context)
     {
         uint spellId = context.Effect.TriggerSpell;
-        if (Store.Get(spellId) is not null)
+        if (Store.Get(spellId) is not { } triggered)
         {
-            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell,
-                originalCaster: context.Cast.OriginalCaster);
+            return;
         }
+
+        Unit formalCaster = SpellCasterSourceTargets.IsCasterSourceTargetsOnly(triggered) ? context.Target : context.Caster;
+        CastSpell(formalCaster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell,
+            originalCaster: context.Cast.OriginalCaster);
     }
 
     /// <summary>
@@ -582,6 +622,14 @@ public sealed partial class SpellSystem
         if (IsQuestSettlementPending(player) || Spellbook is null || !NotifyBeforeLearn(player, spellId) || !Spellbook.LearnSpell(player, spellId))
         {
             return false;
+        }
+
+        // vmangos Player::AddSpell (Player.cpp:3640-3680): a rank that replaces a known lower rank tells the client with
+        // SMSG_SUPERCEDED_SPELL before SMSG_LEARNED_SPELL (the previous rank is the spell whose forward link is this one).
+        uint previousRank = RankChains.Previous(spellId);
+        if (previousRank != 0 && Spellbook.HasSpell(player, previousRank))
+        {
+            player.Session.Send(WorldOpcode.SmsgSupercededSpell, SpellPackets.BuildSupercededSpell(previousRank, spellId));
         }
 
         AnnounceLearnedSpell(player, spellId);

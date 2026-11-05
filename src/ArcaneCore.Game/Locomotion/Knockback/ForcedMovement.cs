@@ -185,9 +185,11 @@ public static class ForcedMovement
     /// within 1.6 yd of the floor) needs a path that is neither <see cref="PathType.NoPath"/> nor <see cref="PathType.Incomplete"/> to the
     /// target's position; the cast fails with SPELL_FAILED_NOPATH otherwise. A charge the water shortcut covers
     /// (<see cref="ChargeSwims"/>) is let through, and <see cref="ChargePath"/> then answers the straight line for it: both read the same
-    /// decision, so a cast that passes the check always launches a spline. The path length cap of the reference (:5931) is not modelled.
+    /// decision, so a cast that passes the check always launches a spline. A positive <paramref name="maxRange"/> (the spell range's maximum)
+    /// also refuses a path longer than <c>(maxRange + 1) * 1.5</c> yards (:5931), which the reference applies to any caster out of the water,
+    /// on the ground or not; 0 leaves the length uncapped.
     /// </summary>
-    public static bool ChargeHasNoPath(Unit caster, Unit target)
+    public static bool ChargeHasNoPath(Unit caster, Unit target, float maxRange = 0f)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
@@ -205,13 +207,20 @@ public static class ForcedMovement
         }
 
         float ground = map.Collision.GetHeight(start.X, start.Y, start.Z);
-        if (ground <= TerrainTile.InvalidHeight || MathF.Abs(ground - start.Z) >= 1.6f)
+        bool onGround = ground > TerrainTile.InvalidHeight && MathF.Abs(ground - start.Z) < 1.6f;
+        if (!onGround && maxRange <= 0f)
         {
             return false;
         }
 
         PathResult path = map.Collision.FindPath(start, destination, options);
-        return (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0;
+        if (onGround && (path.Type & (PathType.Incomplete | PathType.NoPath)) != 0)
+        {
+            return true;
+        }
+
+        // "Dans tous les cas, on interdit un chemin trop long": the reference caps the path at (maxRange + 1) * 1.5 (Spell.cpp:5931).
+        return maxRange > 0f && path.Length > (maxRange + 1f) * 1.5f;
     }
 
     /// <summary>

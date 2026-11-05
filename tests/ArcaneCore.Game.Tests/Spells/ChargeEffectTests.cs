@@ -782,4 +782,43 @@ public sealed class ChargeEffectTests
         caster.UnitFlags |= UnitFlags.TaxiFlight;
         Assert.Equal(SpellCastResult.NotOnTaxi, kit.System.HandleCastRequest(caster, FaceTeleport, SpellCastTargets.ForUnit(target.Guid)));
     }
+
+    // --- the charge delay and the path cap (vmangos Spell.cpp:8274-8275, :5931) -----------------------------------------------------
+
+    [Fact]
+    public void ChargeSwingDelay_AddsTwoHundredPlusFortyPerYardToBothHands()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        caster.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack, 100);
+        caster.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack, 0);
+
+        ChargeEffects.ChargeSwingDelay(caster, 10f);
+
+        Assert.Equal(700u, caster.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack));
+        Assert.Equal(600u, caster.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack));
+    }
+
+    [Fact]
+    public void ChargeHasNoPath_RefusesAPathLongerThanOnePointFiveTimesTheRangePlusOne_OnlyWhenARangeIsGiven()
+    {
+        using var dry = new Locomotion.HazardTestKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player target = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath(new Vector3(walker.X + 200f, walker.Y, walker.Z)));
+
+        Assert.True(ForcedMovement.ChargeHasNoPath(walker, target, maxRange: 25f));  // 200 yd out and back: far over (25 + 1) * 1.5 = 39
+        Assert.False(ForcedMovement.ChargeHasNoPath(walker, target));               // no range: uncapped, as before
+    }
+
+    [Fact]
+    public void ChargeHasNoPath_AcceptsAPathWithinTheCap()
+    {
+        using var dry = new Locomotion.HazardTestKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player target = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath());
+
+        Assert.False(ForcedMovement.ChargeHasNoPath(walker, target, maxRange: 25f));
+    }
 }

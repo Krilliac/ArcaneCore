@@ -44,6 +44,8 @@ public sealed class ChargeEffects : ISpellHandlerModule
             return;
         }
 
+        // The distance the delay below uses is the one before the caster moves (vmangos Spell.cpp:8274-8275 runs before MoveCharge).
+        float distance = WorldGeometry.DistanceMinusRadii(caster, target);
         Vector3 destination = ForcedMovement.ContactPoint(target, caster, ForcedMovement.ChargeContactGap);
         if (target is Creatures.Creature creature)
         {
@@ -56,6 +58,25 @@ public sealed class ChargeEffects : ISpellHandlerModule
         if (!context.Spell.IsPositiveSpell(context.System.Store.Get))
         {
             map.Combat.Attack(caster, target);
+        }
+
+        // vmangos Spell.cpp:8272-8276 "Delay attack, otherwise player makes instant attack after cast": both swing timers of a player
+        // grow by 200 + 40 * distance ms, so the white hit lands after the charge spline.
+        if (caster is Player)
+        {
+            ChargeSwingDelay(caster, distance);
+        }
+    }
+
+    /// <summary>
+    /// The swing-timer delay of a player's charge (vmangos Spell.cpp:8274-8275): <c>timer + 200 + 40 * distance</c>, computed in float and
+    /// truncated into the unsigned timer, for the main hand and the off hand.
+    /// </summary>
+    internal static void ChargeSwingDelay(Unit caster, float distance)
+    {
+        foreach (WeaponAttackType hand in new[] { WeaponAttackType.BaseAttack, WeaponAttackType.OffAttack })
+        {
+            caster.Combat.SetAttackTimer(hand, (uint)(caster.Combat.GetAttackTimer(hand) + 200f + (40f * distance)));
         }
     }
 
@@ -111,7 +132,7 @@ public sealed class ChargeEffects : ISpellHandlerModule
                     case SpellEffectName.Charge when IsRooted(caster):
                         return SpellCastResult.Rooted;
                     case SpellEffectName.Charge when !context.Triggered && context.Target is { } chargeTarget
-                        && ForcedMovement.ChargeHasNoPath(caster, chargeTarget):
+                        && ForcedMovement.ChargeHasNoPath(caster, chargeTarget, context.Spell.Range.Max):
                         return SpellCastResult.Nopath;
                     case SpellEffectName.Leap or SpellEffectName.TeleportUnitsFaceCaster:
                         if ((caster.UnitFlags & UnitFlags.TaxiFlight) != 0)
