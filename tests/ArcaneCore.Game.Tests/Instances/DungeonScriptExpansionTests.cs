@@ -234,7 +234,7 @@ public sealed partial class DungeonScriptExpansionTests
         script.SetData(BlackrockDepthsInstance.TypeVault, EncounterState.Special);
         Assert.Equal(12, script.CofferDoorsOpened);
         Assert.Equal(EncounterState.InProgress, script.GetData(BlackrockDepthsInstance.TypeVault));
-        Assert.NotNull(SpellScriptRegistry.Discover(typeof(BlackrockDepthsInstance).Assembly).Find(27517));
+        Assert.NotNull(SpellScriptRegistry.Discover(typeof(BlackrockDepthsInstance).Assembly).Find(ArcaneCore.Game.Instances.Scripts.BlackrockDepths.TheldrenTriggerAI.BannerSpell));
     }
 
     [Fact]

@@ -6,7 +6,7 @@ using ArcaneCore.Game.Spells.Scripts;
 namespace ArcaneCore.Game.Instances.Scripts.BlackrockDepths;
 
 /// <summary>mangos-classic blackrock_depths/blackrock_depths.cpp SummonThelrinDnd::OnEffectExecute (27517 effect 1).</summary>
-[SpellScript(27517)]
+[SpellScript(TheldrenTriggerAI.BannerSpell)]
 public sealed class ThelrinBannerSpellScript : ISpellScript
 {
     public void OnEffectExecute(SpellEffectContext context)
