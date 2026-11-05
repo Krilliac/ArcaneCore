@@ -256,9 +256,53 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task CastDist_CastsAtThePointInFront_AndReplies()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CDOKGM", "Cdokgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+
+        Assert.Equal($"Cast spell {Heal}.", await RunCommandAsync(gm, $".cast dist {Heal} 5 triggered"));
+        Assert.Equal($"Cast spell {Heal}.", await RunCommandAsync(gm, $".cast dist |cff71d5ff|Hspell:{Heal}|h[Test Heal]|h|r 5 triggered")); // the shift-click link form
+    }
+
+    [Fact]
+    public async Task TheCastSubcommands_AcceptASpellShiftClickLink()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("LNKGM", "Lnkgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await SelectAsync(host, "Lnkgm", "Lnkgm");
+
+        Assert.Equal($"Cast spell {Renew}.", await RunCommandAsync(gm, $".cast self |cff71d5ff|Hspell:{Renew}|h[Test Renew]|h|r triggered"));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lnkgm")!.GetUInt32(UpdateFields.UnitFieldAura) == Renew, "aura from a linked .cast self");
+        Assert.Equal($"Cast spell {Renew}.", await RunCommandAsync(gm, $".cast |cff71d5ff|Hspell:{Renew}|h[Test Renew]|h|r"));
+    }
+
+    [Fact]
+    public async Task ClosePoint_AddsTheCastersBoundingRadius_ToTheDistanceAheadOfIt()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CPGM", "Cpgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+
+        (float px, float py, float o, float radius, float x, float y, float z) = await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Cpgm")!;
+            (float cx, float cy, float cz) = SpellCommands.ClosePoint(p, 4f);
+            return (p.X, p.Y, p.Orientation, p.BoundingRadius, cx, cy, cz);
+        });
+
+        Assert.True(radius > 0f);
+        Assert.Equal(px + (MathF.Cos(o) * (4f + radius)), x, 0.001);
+        Assert.Equal(py + (MathF.Sin(o) * (4f + radius)), y, 0.001);
+        Assert.True(float.IsFinite(z)); // the player's own height, or the ground there plus 0.05 when the map knows one
+    }
+
+    [Fact]
     public async Task TheCastSubcommands_RefuseAHigherSecurityPlayer_AsTheSelectionAndAsTheVictim()
     {
-        // .cast needs level 6; mapping GameMaster to it lets a lower-security GM run the command so the target check is what is under test.
+        // .cast and its subcommands need retail level 5; mapping GameMaster to 6 lets a lower-security GM run them so the target check is what is under test.
         await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?>
             {
