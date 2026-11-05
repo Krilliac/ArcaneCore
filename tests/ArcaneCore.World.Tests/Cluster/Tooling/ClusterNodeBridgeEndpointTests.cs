@@ -63,6 +63,15 @@ public sealed class ClusterNodeBridgeEndpointTests
     }
 
     [Fact]
+    public void DefaultSpec_ListsTheDeeprunTramOnTheInstancesWorker()
+    {
+        string instances = ClusterNodeBridgeFeature.DefaultEndpointsSpec.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Single(e => e.StartsWith("worker:instances|", StringComparison.Ordinal));
+
+        Assert.Contains(369u, instances.Split('|')[3].Split(',').Select(uint.Parse));
+    }
+
+    [Fact]
     public async Task SupervisorChildren_AreExactlyTheNodesTheBridgeLists()
     {
         IConfiguration configuration = SupervisorChildren(

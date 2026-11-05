@@ -24,6 +24,13 @@ public interface IBattlegroundManagerHost
     /// <summary>The effects channel of one match (broadcasts to its players, spawns its objects).</summary>
     IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId);
 
+    /// <summary>
+    /// Whether this process may build a match on <paramref name="mapId"/> (it owns instance copies of that map). A split cluster worker that does
+    /// not own the map answers false and the manager creates no match, instead of the map creation throwing after the match object exists.
+    /// The default, true, is the combined behaviour.
+    /// </summary>
+    bool CanCreateMatch(uint mapId) => true;
+
     /// <summary>A new map instance id for a match (the shared instance id generator, vmangos <c>MapManager::CreateBgMap</c>).</summary>
     uint AllocateInstanceId();
 
@@ -363,6 +370,11 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
             || !_templates.TryGetValue(type, out BattlegroundTemplate? template))
         {
             return null;
+        }
+
+        if (!Host.CanCreateMatch(template.MapId))
+        {
+            return null;   // split stopgap: another worker owns this map, so a match built here could never get its map
         }
 
         uint instanceId = Host.AllocateInstanceId();

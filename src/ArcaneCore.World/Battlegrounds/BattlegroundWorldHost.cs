@@ -51,6 +51,8 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
 
     public IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId) => feature.CreateMatch(type, instanceId);
 
+    public bool CanCreateMatch(uint mapId) => feature.World.Owns(mapId, 1);   // any non-zero instance id: a match map is an instance copy
+
     public uint AllocateInstanceId()
         => feature.Services.GetService<InstanceFeature>() is { } instances
             ? instances.Instances.AllocateInstanceId()
