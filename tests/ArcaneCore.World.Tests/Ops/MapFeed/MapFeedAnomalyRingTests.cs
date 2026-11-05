@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Ops.MapFeed;
 using Xunit;
 
@@ -331,6 +332,22 @@ public sealed class MapFeedAnomalyRingTests
         ring.Offer(PacketNotice("account 0"));
 
         Assert.Equal(MapFeedAnomalyRing.PacketPerWindow + 1, ring.Query(0, MapFeedAnomalyRing.Capacity).Slots.Length);
+    }
+
+    [Fact]
+    public void ARealLedgerPacketReport_IsUnowned_AndIsHeldToThePerAccountBudget()
+    {
+        var ledger = new AnomalyLedger();
+        using var ring = new MapFeedAnomalyRing(ledger, new object(), keepUnowned: true, new ManualTimeProvider(1_700_000_000));
+
+        for (int i = 0; i < MapFeedAnomalyRing.PacketPerSubjectPerWindow + 4; i++)
+        {
+            ledger.Report(PacketChecks.Subsystem, "shape", "account 7", "detail " + i.ToString(CultureInfo.InvariantCulture));
+        }
+
+        Assert.Equal(MapFeedAnomalyRing.PacketPerSubjectPerWindow, ring.Accepted);
+        Assert.Equal(4, ring.PacketDropped);
+        Assert.Equal(0, ring.Refused);
     }
 
     [Fact]

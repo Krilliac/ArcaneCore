@@ -148,7 +148,7 @@ are `Interlocked`.
 What the bounds cover. The ns-per-packet and ms-per-tick bounds in that test are on `OnClientPacket` only (shape, cadence and replay on the
 network path). `OnWorldPacket`, the incapacitated-action hook every world packet passes on the world thread, has its own test
 (`TheWorldPacketHook_PaysAdmitAndTheOpcodeMask_AndAllocatesNothing`, `PERF world-hook` line), which prices `Admit` plus the opcode mask lookup
-with an opcode that needs no player state; a packet that does reach the player (dead, taxi or far-transfer check) adds two field reads and,
+with an opcode that needs no player state; a packet that does reach the player (dead, taxi or far-transfer check) reads the player's life state and unit flags and,
 for the far-transfer case, a service lookup, and is not separately bounded. `Admit` itself is a volatile settings read, the session flags and the
 state lookup, and is part of both measurements.
 
@@ -158,7 +158,9 @@ the next packet; it is never held while reporting) and, for the replay check, on
 
 The anomaly ring the Atlas map feed keeps (`MapFeedAnomalyRing`) bounds packet findings separately: they carry no owner, so each account
 may put at most 16 in the ring per minute and all accounts together 512, otherwise one client cycling opcodes would overwrite the ring's 4096
-slots. The ledger still counts every finding; only the ring's copy is limited, and the ring counts what it turned away.
+slots. The ledger still counts every finding; only the ring's copy is limited. The ring keeps a count of what it turned away (`PacketDropped`), but only tests read it: Atlas's `Lost` figure covers overwritten notices, not these, so an operator cannot see from Atlas that packet findings were dropped (the ledger's own counts and logs still show them).
+
+Limits of that bound. The 512 total ignores severity, so an Error `malformed` finding is turned away like an Info one once the window is full. 32 accounts at 16 each fill the window and starve every other client's packet findings until the next minute; at 512 per minute packet findings can still turn over the whole 4096-slot ring in about 8 minutes. Findings of other subsystems are never budgeted. The single-client flood is closed; a flood from many accounts is only slowed.
 
 ## Movement-clock drift and possessed units
 
