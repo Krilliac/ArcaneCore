@@ -2,7 +2,6 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData;
@@ -260,5 +259,59 @@ public sealed class BattlegroundFeatureClusterLinkTests
         Assert.False(worker.Link.IsHolder);
         Assert.Null(hub.Holder);
         Assert.False(worker.Feature.HoldsQueueState);
+    }
+
+    private static uint ListedInstances(RecordingPlayerSession session)
+    {
+        byte[] payload = session.Sent.Last(p => p.Opcode == WorldOpcode.SmsgBattlefieldList).Payload;
+        return BitConverter.ToUInt32(payload, 13);   // u64 battlemaster, u32 map, u8 bracket, then the u32 count
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("30,489,529", true)]
+    [InlineData("0,1", false)]
+    [InlineData("489,529", false)]
+    public void ListsBattlegroundMaps_NeedsAllThreeOnTheList(string owned, bool expected)
+    {
+        Assert.True(MapOwnership.TryParse(owned, false, out MapOwnership ownership, out string? error), error);
+
+        Assert.Equal(expected, BattlegroundFeature.ListsBattlegroundMaps(ownership));
+    }
+
+    [Fact]
+    public async Task OnlyTheNodeThatListsTheMaps_IsPreferredForTheHolderRole()
+    {
+        var hub = new BattlegroundHub();
+        using var lists = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
+        using var everything = new Node("worker:everything", "", allowInstanceMaps: false, hub);
+
+        Assert.True(lists.Link.Preferred);
+        Assert.True(everything.Link.CanHold);
+        Assert.False(everything.Link.Preferred);
+        await Eventually(() => hub.Holder == HolderNode, lists, everything);
+        Assert.True(lists.Link.IsHolder);
+    }
+
+    [Fact]
+    public async Task APlainWorkersBattlemasterList_NamesNoInstance_WhileTheHoldersListsItsRunningMatch()
+    {
+        var hub = new BattlegroundHub();
+        using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
+        // Instance copies on: this worker's own manager can build a match, which a plain worker must still not list.
+        using var worker = new Node(WorkerNode, "0,1", allowInstanceMaps: true, hub);
+        (Player holderPlayer, RecordingPlayerSession holderSession) = holder.AddPlayer(2, DeeprunTramMap, DeeprunTramZone);
+        (Player workerPlayer, RecordingPlayerSession workerSession) = worker.AddPlayer(1);
+        await Eventually(() => holder.Link.IsHolder, holder, worker);
+        int holderBracket = BattlegroundConstants.BracketOfLevel(holderPlayer.Level, 10);
+        int workerBracket = BattlegroundConstants.BracketOfLevel(workerPlayer.Level, 10);
+        Assert.NotNull(holder.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, holderBracket));
+        Assert.NotNull(worker.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, workerBracket));
+
+        holder.Feature.SendBattlefieldList(holderPlayer, ObjectGuid.Empty, BattlegroundType.WarsongGulch);
+        worker.Feature.SendBattlefieldList(workerPlayer, ObjectGuid.Empty, BattlegroundType.WarsongGulch);
+
+        Assert.Equal(1u, ListedInstances(holderSession));
+        Assert.Equal(0u, ListedInstances(workerSession));
     }
 }

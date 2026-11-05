@@ -17,6 +17,9 @@ namespace ArcaneCore.World.Cluster.Social;
 /// <see cref="Deliver"/> queues the holder's notices for a second sender task that posts them to the hub. A node that is not (or no longer) the holder drops notices.</item>
 /// </list>
 /// Failure handling: a command or notice whose send fails is dropped with a log line (counted in <see cref="SendFailed"/>); players retry, as they do after a lost packet.
+/// The exception is Login and Logout: those are kept (bounded by <see cref="MaxRetained"/>) and resent first when the hub is reachable again, and a holder runs its own players' commands
+/// without the hub at all, so a lost Logout does not leave a queue slot behind. A worker the hub has not heard from for <see cref="BattlegroundHub.DefaultWorkerTtl"/> is reported to the holder
+/// (<see cref="BattlegroundWorkerGoneCommand"/>), which logs out every player it served for that worker.
 /// A holder that cannot reach the hub for longer than <see cref="BattlegroundHub.DefaultHolderTtl"/> stops acting as holder (another node can take over). Queues are in memory:
 /// a hub move (the Social lease changing owner) or a holder change loses the waiting commands and the queue state of the old holder's manager.
 /// <para>Thread-safety: <see cref="Submit"/> and <see cref="Deliver"/> are safe from any thread and never block (bounded channels, a full channel drops and counts). The sender and pump tasks run on the
@@ -33,6 +36,9 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
     /// <summary>Most encoded bytes per send (the peer link's payload limit is 64 KiB).</summary>
     public const int MaxBatchBytes = 48 * 1024;
 
+    /// <summary>Most Login and Logout commands kept for a resend after a failed send (under the retain gate; the sender task and the pump flush them).</summary>
+    public const int MaxRetained = 1024;
+
     /// <summary>Most batches one <see cref="PumpOnce"/> takes or drains per direction.</summary>
     public const int MaxPumpBatches = 16;
 
@@ -44,6 +50,8 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
         new BoundedChannelOptions(MaxQueued) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
     private readonly Channel<(string WorkerId, BattlegroundNotice Notice)> _notices = Channel.CreateBounded<(string, BattlegroundNotice)>(
         new BoundedChannelOptions(MaxQueued) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = false });
+    private readonly Lock _retainGate = new();
+    private readonly List<(string WorkerId, BattlegroundCommand Command)> _retained = [];
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _commandSender;
     private readonly Task _noticeSender;
@@ -51,6 +59,7 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
     private Action<string, BattlegroundCommand>? _submitToQueue;
     private Action<BattlegroundNotice>? _receive;
     private bool _canHold;
+    private bool _preferred;
     private int _isHolder;
     private long _lastTakeOk;
     private long _commandsDropped;
@@ -83,6 +92,9 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
     /// <summary>True when this node can run matches, so the pump asks the hub for the holder role.</summary>
     public bool CanHold => _canHold;
 
+    /// <summary>True when this node's map list names the battleground maps, so the gateway sends the transfers here: it wins the holder election over a node that merely owns everything.</summary>
+    public bool Preferred => _preferred;
+
     /// <summary>Commands dropped because the send queue was full or the command has no wire form.</summary>
     public long CommandsDropped => Interlocked.Read(ref _commandsDropped);
 
@@ -94,9 +106,10 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
 
     /// <summary>
     /// Connect the feature: <paramref name="submitToQueue"/> hands a taken command to the holder's queue (any thread), <paramref name="receive"/> hands a drained notice to the
-    /// worker side (any thread; it posts to the world thread), <paramref name="canHold"/> is whether this node owns the battleground maps. Call once, before <see cref="Start"/>.
+    /// worker side (any thread; it posts to the world thread), <paramref name="canHold"/> is whether this node owns the battleground maps, <paramref name="preferred"/> whether its
+    /// map list names them (the gateway's first choice). Call once, before <see cref="Start"/>.
     /// </summary>
-    public void Bind(Action<string, BattlegroundCommand> submitToQueue, Action<BattlegroundNotice> receive, bool canHold)
+    public void Bind(Action<string, BattlegroundCommand> submitToQueue, Action<BattlegroundNotice> receive, bool canHold, bool preferred = false)
     {
         ArgumentNullException.ThrowIfNull(submitToQueue);
         ArgumentNullException.ThrowIfNull(receive);
@@ -108,12 +121,23 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
         _submitToQueue = submitToQueue;
         _receive = receive;
         _canHold = canHold;
+        _preferred = canHold && preferred;
     }
 
     public void Submit(string workerId, BattlegroundCommand command)
     {
         ArgumentNullException.ThrowIfNull(workerId);
         ArgumentNullException.ThrowIfNull(command);
+
+        // This node is the holder and the command is its own player's: it goes straight to the holder's queue. A round trip through the hub could drop it while the hub is
+        // unreachable (a Logout lost that way would leave the player's slot in the queue for good), and the hub adds nothing for a command that ends up here anyway.
+        // Only a window around becoming the holder can reorder: this node's older commands still waiting at the hub arrive with the first take.
+        if (IsHolder && Volatile.Read(ref _disposed) == 0 && string.Equals(workerId, NodeId, StringComparison.Ordinal) && _submitToQueue is { } submit)
+        {
+            submit(workerId, command);
+            return;
+        }
+
         if (Volatile.Read(ref _disposed) != 0 || !_commands.Writer.TryWrite((workerId, command)))
         {
             Interlocked.Increment(ref _commandsDropped);
@@ -144,6 +168,8 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
             return 0;
         }
 
+        FlushRetained();
+
         int handed = 0;
         if (_canHold)
         {
@@ -152,7 +178,7 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
                 BattlegroundTakeResult taken;
                 try
                 {
-                    taken = _hub.TakeBattlegroundCommands(NodeId);
+                    taken = _hub.TakeBattlegroundCommands(NodeId, _preferred);
                 }
                 catch (Exception ex) when (IsTransportFailure(ex))
                 {
@@ -286,10 +312,89 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
         }
     }
 
+    /// <summary>A command that must not be lost: the holder learns who is online and who left from these, and a lost Logout leaves a queue slot behind.</summary>
+    private static bool IsPresenceCommand(BattlegroundCommand command) => command is BattlegroundLoginCommand or BattlegroundLogoutCommand;
+
+    /// <summary>Keep the presence commands of a batch that could not be sent, in order, for the next send (bounded; the oldest go first when full). Takes the retain gate.</summary>
+    private void Retain(string workerId, List<BattlegroundCommand> commands)
+    {
+        lock (_retainGate)
+        {
+            foreach (BattlegroundCommand command in commands)
+            {
+                if (!IsPresenceCommand(command))
+                {
+                    continue;
+                }
+
+                if (_retained.Count >= MaxRetained)
+                {
+                    _retained.RemoveAt(0);
+                }
+
+                _retained.Add((workerId, command));
+            }
+        }
+    }
+
+    /// <summary>Resend the retained presence commands ahead of new ones; false when they could not be sent (they stay retained). Blocking; takes the retain gate; never call on the world thread.</summary>
+    private bool FlushRetained()
+    {
+        lock (_retainGate)
+        {
+            while (_retained.Count > 0)
+            {
+                string worker = _retained[0].WorkerId;
+                var batch = new List<BattlegroundCommand>();
+                foreach ((string WorkerId, BattlegroundCommand Command) item in _retained)
+                {
+                    if (!string.Equals(item.WorkerId, worker, StringComparison.Ordinal) || batch.Count >= MaxBatchItems)
+                    {
+                        break;
+                    }
+
+                    batch.Add(item.Command);
+                }
+
+                try
+                {
+                    _hub.SubmitBattlegroundCommands(worker, batch);
+                }
+                catch (Exception ex) when (IsTransportFailure(ex))
+                {
+                    return false;
+                }
+                catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+                {
+                    // The hub refused the batch itself: resending it would fail the same way, so it is dropped.
+                    Interlocked.Increment(ref _sendFailed);
+                    _logger.LogFault("cluster.battleground-send", ex, "A retained battleground command batch failed at the hub; it is dropped");
+                }
+
+                _retained.RemoveRange(0, batch.Count);
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>Commands waiting for a resend after a failed send (diagnostics, tests).</summary>
+    public int RetainedCommands
+    {
+        get
+        {
+            lock (_retainGate)
+            {
+                return _retained.Count;
+            }
+        }
+    }
+
     private void SendCommands(string workerId, List<BattlegroundCommand> commands)
     {
-        if (!_hub.IsAuthorityReachable)
+        if (!_hub.IsAuthorityReachable || !FlushRetained())
         {
+            Retain(workerId, commands);
             Lost(commands.Count, "no link to the Social holder's battleground hub");
             return;
         }
@@ -312,6 +417,7 @@ internal sealed class ClusterBattlegroundLink : IBattlegroundHolderLink, IBattle
         }
         catch (Exception ex) when (IsTransportFailure(ex))
         {
+            Retain(workerId, commands);
             Lost(commands.Count, ex.Message);
         }
         catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))

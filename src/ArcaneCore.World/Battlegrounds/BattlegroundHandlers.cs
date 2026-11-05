@@ -322,7 +322,9 @@ public sealed partial class BattlegroundFeature
         }
 
         int bracket = BattlegroundConstants.BracketOfLevel(player.Level, template.MinLevel);
-        IReadOnlyList<uint> ids = bracket < 0 ? [] : Manager.ClientInstanceIds(type, bracket);
+        // A node that does not hold the queue state (a plain worker, or a holder that stepped down) has no running matches of its own to list: its manager is empty or stale, so the
+        // client gets the empty list (a plain "join" window) instead of ids that name no match the holder runs.
+        IReadOnlyList<uint> ids = bracket < 0 || !HoldsQueueState ? [] : Manager.ClientInstanceIds(type, bracket);
         player.Session.Send(WorldOpcode.SmsgBattlefieldList,
             BattlegroundPackets.BuildBattlefieldList(source, template.MapId, (byte)Math.Max(bracket, 0), ids));
     }

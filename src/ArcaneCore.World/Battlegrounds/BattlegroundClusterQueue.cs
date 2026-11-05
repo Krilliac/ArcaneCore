@@ -30,6 +30,12 @@ public sealed record BattlegroundLoginCommand(BattlegroundMember Member) : Battl
 /// <summary>A player left the world on the worker: its queue entries go.</summary>
 public sealed record BattlegroundLogoutCommand(ObjectGuid Player) : BattlegroundCommand;
 
+/// <summary>
+/// The hub saw no sign of a worker for its time to live (the worker crashed or lost its link for good): every player the holder serves for it is logged out, so no queue slot or
+/// invitation outlives the worker. The worker's id is the command's sender id. Produced by the hub, never by a worker.
+/// </summary>
+public sealed record BattlegroundWorkerGoneCommand : BattlegroundCommand;
+
 /// <summary>A message for a player served by another worker (holder to worker). Immutable.</summary>
 public abstract record BattlegroundNotice(ObjectGuid Player);
 
@@ -154,6 +160,14 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
                 manager.PlayerLoggedOut(logout.Player);
                 break;
 
+            case BattlegroundWorkerGoneCommand:
+                if (remote)
+                {
+                    DropWorker(workerId, manager);
+                }
+
+                break;
+
             case BattlegroundStatusCommand status:
                 Touch(workerId, status.Player, remote);
                 manager.SendStatusReports(status.Player, status.Level);
@@ -178,6 +192,17 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>Log out every remote player this holder serves for a worker that is gone, so its queue slots and invitations are released.</summary>
+    private void DropWorker(string workerId, BattlegroundManager manager)
+    {
+        List<ObjectGuid> gone = [.. _players.Where(p => p.Value.WorkerId == workerId).Select(p => p.Key)];
+        foreach (ObjectGuid player in gone)
+        {
+            _players.Remove(player);
+            manager.PlayerLoggedOut(player);
         }
     }
 

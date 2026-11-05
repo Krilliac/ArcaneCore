@@ -1,7 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -325,6 +324,36 @@ public sealed class BattlegroundClusterQueueTests
 
         // The return point each worker sent with the join was stored for its players.
         Assert.Equal(4, rig.Local.EntryPoints.Count);
+    }
+
+    [Fact]
+    public void AWorkerThatIsGone_LosesItsPlayersQueueSlots_AndNobodyElse()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+
+        rig.Holder.Submit(WorkerA, new BattlegroundWorkerGoneCommand());
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Equal(2, rig.Holder.RemotePlayerCount);
+        Assert.False(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+        Assert.False(rig.Manager.StateOf(Alliance[1]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[0]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[1]).InAnyQueue);
+    }
+
+    [Fact]
+    public void AWorkerGoneCommandNamingTheHoldersOwnNode_ChangesNothing()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+
+        rig.Holder.Submit(HolderId, new BattlegroundWorkerGoneCommand());
+        rig.Holder.Pump();
+
+        Assert.Equal(4, rig.Holder.RemotePlayerCount);
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
     }
 
     [Fact]

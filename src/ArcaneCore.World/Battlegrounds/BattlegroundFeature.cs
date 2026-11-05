@@ -1105,19 +1105,29 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             ConfigureHolder(link.NodeId, link);
         }
 
-        link.Bind(SubmitClusterCommand, ReceiveNotice, canHold);
+        // A node whose list names the battleground maps is where the gateway sends the transfers, so it wins the election over a node that only owns everything.
+        link.Bind(SubmitClusterCommand, ReceiveNotice, canHold, preferred: canHold && ListsBattlegroundMaps(World.Ownership));
         link.Start(ArcaneCore.World.Cluster.Social.ClusterPresenceHosting.ChatPumpInterval);
         _logger.LogInformation("battlegrounds: cluster queue link started as {Node} ({Role})", link.NodeId, canHold ? "eligible to be the holder" : "worker only");
     }
 
-    /// <summary>Whether a node with this ownership is where the gateway sends players for all three battleground maps: it owns everything or its list names each map.</summary>
+    /// <summary>
+    /// Whether a node with this ownership can be the holder: it owns everything or its list names each battleground map. A node that merely owns everything is only the fallback:
+    /// the gateway prefers a worker that lists the map (<see cref="ListsBattlegroundMaps"/>), and the hub election gives that worker the role.
+    /// </summary>
     internal static bool CanHoldQueues(MapOwnership ownership)
     {
         ArgumentNullException.ThrowIfNull(ownership);
-        return ownership.OwnsEverything
-            || (ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.AlteracValley))
-                && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch))
-                && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.ArathiBasin)));
+        return ownership.OwnsEverything || ListsBattlegroundMaps(ownership);
+    }
+
+    /// <summary>Whether the list of this ownership names all three battleground maps (the gateway's first choice for a transfer to one of them).</summary>
+    internal static bool ListsBattlegroundMaps(MapOwnership ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.AlteracValley))
+            && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch))
+            && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.ArathiBasin));
     }
 
     /// <summary>
