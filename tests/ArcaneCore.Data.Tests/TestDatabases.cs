@@ -65,7 +65,7 @@ internal sealed class TestDatabases : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (!_created.Remove(options))
+            if (!_created.Contains(options))
             {
                 return;
             }
@@ -74,10 +74,20 @@ internal sealed class TestDatabases : IAsyncDisposable
         ClearPool(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
+            // Forgotten only once the drop worked: one that fails every retry stays listed, so DisposeAsync tries it again and reports it.
             await DropAsync(options);
+            lock (_gate)
+            {
+                _created.Remove(options);
+            }
         }
         else
         {
+            lock (_gate)
+            {
+                _created.Remove(options);
+            }
+
             string path = new SqliteConnectionStringBuilder(options.ConnectionString).DataSource;
             try
             {
@@ -102,9 +112,19 @@ internal sealed class TestDatabases : IAsyncDisposable
             ClearPool(options);
         }
 
+        // Every database is tried even when one drop fails (a throw out of the first would leave all the later ones on the server for good:
+        // the leftover arcane_t_* databases), the directory is removed regardless, and the failures are reported together at the end.
+        var failures = new List<Exception>();
         foreach (DatabaseConnectionOptions options in _created.Where(o => o.Provider != DatabaseProvider.Sqlite))
         {
-            await DropAsync(options);
+            try
+            {
+                await DropAsync(options);
+            }
+            catch (Exception ex) when (ex is DbException or TimeoutException)
+            {
+                failures.Add(ex);
+            }
         }
 
         try
@@ -117,6 +137,11 @@ internal sealed class TestDatabases : IAsyncDisposable
         catch (IOException)
         {
             // best effort
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException($"{failures.Count} test database(s) could not be dropped and are left on the server", failures);
         }
     }
 

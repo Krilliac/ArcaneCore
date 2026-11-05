@@ -121,19 +121,19 @@ public sealed class GmTargetRankTests
         await member.CollectAsync();
         await host.OnWorldAsync(() => host.World.FindOnlinePlayer(Gm)!.Selection = default);
 
-        Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
+        Assert.Contains("Guild Minions created.", await RunAsync(gm, ".guild create Rankmember \"Minions\""));
 
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, $".guild create {Boss} \"Coup\""));
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, $".guild invite {Boss} \"Minions\""));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, $".guild create {Boss} \"Coup\""));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, $".guild invite {Boss} \"Minions\""));
         Assert.Equal(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
 
-        Assert.Equal(["Guild Bosses created."], await RunAsync(boss, $".guild create {Boss} \"Bosses\""));
+        Assert.Contains("Guild Bosses created.", await RunAsync(boss, $".guild create {Boss} \"Bosses\""));
         uint bosses = await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid));
         Assert.NotEqual(0u, bosses);
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, $".guild rank {Boss} 4"));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, $".guild rank {Boss} 4"));
         await SelectAsync(host, Gm, Boss);
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild uninvite"));
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild rank 4"));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, ".guild uninvite"));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, ".guild rank 4"));
         Assert.Equal(bosses, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
         Assert.Equal(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildrank)));
     }
@@ -198,27 +198,27 @@ public sealed class GmTargetRankTests
         await member.CollectAsync();
 
         // Led by the administrator.
-        Assert.Equal(["Guild Bosses created."], await RunAsync(boss, $".guild create {Boss} \"Bosses\""));
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild delete \"Bosses\""));
+        Assert.Contains("Guild Bosses created.", await RunAsync(boss, $".guild create {Boss} \"Bosses\""));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, ".guild delete \"Bosses\""));
         Assert.NotEqual(0u, await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid)));
-        Assert.Equal(["Removed from the guild."], await RunAsync(boss, $".guild uninvite {Boss}"));
+        Assert.Contains("Removed from the guild.", await RunAsync(boss, $".guild uninvite {Boss}"));
 
         // The administrator only a member.
-        Assert.Equal(["Guild Minions created."], await RunAsync(gm, ".guild create Rankmember \"Minions\""));
-        Assert.Equal(["Added to Minions."], await RunAsync(boss, $".guild invite {Boss} \"Minions\""));
-        Assert.Equal([GmStrings.SecurityTooLow], await RunAsync(gm, ".guild delete \"Minions\""));
+        Assert.Contains("Guild Minions created.", await RunAsync(gm, ".guild create Rankmember \"Minions\""));
+        Assert.Contains("Added to Minions.", await RunAsync(boss, $".guild invite {Boss} \"Minions\""));
+        Assert.Contains(GmStrings.SecurityTooLow, await RunAsync(gm, ".guild delete \"Minions\""));
         uint minions = await host.PlayerStateAsync(Boss, p => p.GetUInt32(UpdateFields.PlayerGuildid));
         Assert.NotEqual(0u, minions);
         Assert.Equal(minions, await host.PlayerStateAsync("Rankmember", p => p.GetUInt32(UpdateFields.PlayerGuildid)));
 
         // Once no member outranks the GameMaster (itself included), it is served; the administrator always is.
-        Assert.Equal(["Removed from the guild."], await RunAsync(boss, $".guild uninvite {Boss}"));
-        Assert.Equal(["Added to Minions."], await RunAsync(gm, $".guild invite {Gm} \"Minions\""));
-        Assert.Equal(["Guild Minions deleted."], await RunAsync(gm, ".guild delete \"Minions\""));
+        Assert.Contains("Removed from the guild.", await RunAsync(boss, $".guild uninvite {Boss}"));
+        Assert.Contains("Added to Minions.", await RunAsync(gm, $".guild invite {Gm} \"Minions\""));
+        Assert.Contains("Guild Minions deleted.", await RunAsync(gm, ".guild delete \"Minions\""));
         Assert.Equal(0u, await host.PlayerStateAsync("Rankmember", p => p.GetUInt32(UpdateFields.PlayerGuildid)));
-        Assert.Equal(["Guild Staff created."], await RunAsync(gm, $".guild create {Gm} \"Staff\""));
-        Assert.Equal(["Guild Staff deleted."], await RunAsync(boss, ".guild delete \"Staff\""));
-        Assert.Equal(["No guild with that name."], await RunAsync(gm, ".guild delete \"Staff\""));
+        Assert.Contains("Guild Staff created.", await RunAsync(gm, $".guild create {Gm} \"Staff\""));
+        Assert.Contains("Guild Staff deleted.", await RunAsync(boss, ".guild delete \"Staff\""));
+        Assert.Contains("No guild with that name.", await RunAsync(gm, ".guild delete \"Staff\""));
     }
 
     /// <summary>

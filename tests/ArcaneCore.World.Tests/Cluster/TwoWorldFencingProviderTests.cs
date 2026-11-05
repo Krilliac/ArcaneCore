@@ -369,9 +369,28 @@ public sealed class TwoWorldFencingProviderTests
             string server = Environment.GetEnvironmentVariable(provider == DatabaseProvider.PostgreSql ? PostgresVariable : MariaDbVariable)!.TrimEnd(';');
             var cluster = new ScratchCluster(new DatabaseConnectionOptions { Provider = provider, ConnectionString = server + ";Database=" + name }, name);
 
-            // The schema bootstrapper creates the database and every table; the hosts below find it ready.
-            await using ServiceProvider bootstrap = BuildServices(cluster._database, fenced: false);
-            await bootstrap.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+            // The schema bootstrapper creates the database and every table; the hosts below find it ready. A failure part-way has already
+            // created the database, and the caller never gets the cluster to dispose, so it is dropped here before the failure goes on.
+            try
+            {
+                await using ServiceProvider bootstrap = BuildServices(cluster._database, fenced: false);
+                await bootstrap.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+            }
+            catch
+            {
+                try
+                {
+                    await cluster.DisposeAsync();
+                }
+                catch (Exception cleanup)
+                {
+                    // The bootstrap failure is the one to report; a failed cleanup must not replace it.
+                    Console.Error.WriteLine("ScratchCluster cleanup after a failed bootstrap also failed: " + cleanup.Message);
+                }
+
+                throw;
+            }
+
             return cluster;
         }
 

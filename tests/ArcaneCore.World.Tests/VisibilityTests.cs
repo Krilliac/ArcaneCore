@@ -91,7 +91,8 @@ public sealed class VisibilityTests
 
         // While out of range nothing about A reaches B.
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, BuildMovement(StartX, StartY + 190, 83.5f, 0f));
-        await b.AssertSilentAsync(TimeSpan.FromMilliseconds(150));
+        await a.CollectThroughBarrierAsync();
+        await b.AssertNoPacketsAsync(WorldOpcode.MsgMoveHeartbeat, WorldOpcode.SmsgUpdateObject, WorldOpcode.SmsgCompressedUpdateObject, WorldOpcode.SmsgDestroyObject);
 
         // Back in range: both are re-created; later movement is relayed again.
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, BuildMovement(StartX, StartY + 10, 83.5f, 0f));

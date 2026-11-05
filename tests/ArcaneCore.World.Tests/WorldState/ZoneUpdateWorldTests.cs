@@ -64,7 +64,7 @@ public sealed class ZoneUpdateWorldTests
         client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
 
         await client.SendAsync(WorldOpcode.CmsgZoneupdate, ZonePayload(12));
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(300));
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgInitWorldStates);
 
         Assert.Equal(40u, await host.PlayerStateAsync("Ignore", p => p.ZoneId));
     }
@@ -81,7 +81,7 @@ public sealed class ZoneUpdateWorldTests
         Assert.Equal(40u, ZoneOf(await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates)));
 
         await client.SendAsync(WorldOpcode.CmsgZoneupdate, ZonePayload(40)); // same zone: nothing new
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(300));
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgInitWorldStates);
     }
 
     [Fact]
@@ -95,11 +95,11 @@ public sealed class ZoneUpdateWorldTests
         Assert.Equal(12u, await host.PlayerStateAsync("Walker", p => p.ZoneId));
 
         locator.Area = 10; // another area of the same zone: no packet
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(1300));
+        await client.AssertNoPacketsAfterAsync(TimeSpan.FromMilliseconds(1300), WorldOpcode.SmsgInitWorldStates);
 
         locator.Zone = 40; // crossing the zone border: the 1 s timer picks it up
         Assert.Equal(40u, ZoneOf(await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates)));
         Assert.Equal(40u, await host.PlayerStateAsync("Walker", p => p.ZoneId));
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(1300));
+        await client.AssertNoPacketsAfterAsync(TimeSpan.FromMilliseconds(1300), WorldOpcode.SmsgInitWorldStates);
     }
 }

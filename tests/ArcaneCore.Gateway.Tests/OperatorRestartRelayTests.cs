@@ -211,11 +211,16 @@ public sealed class OperatorRestartRelayTests
 
         public IClusterRestartRelay Relay { get; }
 
-        /// <summary>Reads frames until a system chat message containing <paramref name="fragment"/> arrives.</summary>
+        /// <summary>
+        /// Reads frames until a system chat message containing <paramref name="fragment"/> arrives. A handoff is silent for as long as it runs,
+        /// and the client's 5 s deadline bounds each read, so the silence is waited out first (<see cref="WorldClient.WaitForTrafficAsync"/>,
+        /// bounded by <paramref name="token"/>) and only an arriving frame is held to that deadline; a slow Windows run failed it otherwise.
+        /// </summary>
         public async Task<WorldFrame> ReadSystemTextAsync(string fragment, CancellationToken token)
         {
             while (true)
             {
+                await _client.WaitForTrafficAsync(token);
                 WorldFrame frame = await _client.ReadAsync(token);
                 if (frame.Opcode == (ushort)WorldOpcode.SmsgMessagechat && Encoding.UTF8.GetString(frame.Payload).Contains(fragment, StringComparison.Ordinal))
                 {

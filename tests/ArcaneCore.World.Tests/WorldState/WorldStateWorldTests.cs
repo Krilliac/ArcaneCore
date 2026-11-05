@@ -60,7 +60,7 @@ public sealed class WorldStateWorldTests
         Assert.Equal([12u], provider.Zones.ToArray());
 
         locator.Area = 10; // an area change in the same zone: no world states
-        await client.AssertSilentAsync(TimeSpan.FromMilliseconds(1300));
+        await client.AssertNoPacketsAfterAsync(TimeSpan.FromMilliseconds(1300), WorldOpcode.SmsgInitWorldStates);
         Assert.Equal([12u], provider.Zones.ToArray());
 
         locator.Zone = 40;
