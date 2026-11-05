@@ -22,6 +22,16 @@ public sealed class ClusterSupervisorHostedService : IHostedService
     private readonly ILogger<ClusterSupervisorHostedService> _logger;
     private readonly IHostApplicationLifetime? _lifetime;
     private int _requestedExitCode;
+    private string? _selfStopReason;
+
+    /// <summary>How long a start that was refused only for free memory (<see cref="ClusterSupervisorOptions.MinFreeMemoryReserveMb"/>) waits before it plans again.</summary>
+    internal static readonly TimeSpan MemoryRetryInterval = TimeSpan.FromSeconds(30);
+
+    /// <summary>The delay seam of the memory wait; tests replace it. Called from the host's start thread only.</summary>
+    internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } = static (delay, ct) => Task.Delay(delay, ct);
+
+    /// <summary>Why the supervisor stopped itself (below its minimum), or null when the stop came from outside (a stop signal). Read after the host has stopped.</summary>
+    internal string? SelfStopReason => Volatile.Read(ref _selfStopReason);
 
     public ClusterSupervisorHostedService(
         ClusterHostSupervisor supervisor,
@@ -54,22 +64,59 @@ public sealed class ClusterSupervisorHostedService : IHostedService
         }
 
         SupervisorStartPlan plan = _supervisor.PlanStartAll();
-        foreach ((string name, string reason) in plan.Denied)
+        while (true)
         {
-            _logger.LogWarning("Supervisor will not start process {Process}: {Reason}", name, reason);
-        }
+            foreach ((string name, string reason) in plan.Denied)
+            {
+                _logger.LogWarning("Supervisor will not start process {Process}: {Reason}", name, reason);
+            }
 
-        if (plan.Admitted.Count < _options.MinClusterProcesses)
-        {
-            throw new InvalidOperationException(
-                $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}); nothing was launched.");
+            if (plan.Admitted.Count >= _options.MinClusterProcesses)
+            {
+                break;
+            }
+
+            // Free memory comes back (another process exits, a build finishes): a start refused for the reserve waits and plans again, instead of the supervisor
+            // exiting and leaving the operator an empty exit code. Any other refusal (process count, map ownership, total allocation) is a configuration
+            // error that waiting cannot cure. A stop signal ends the wait (the host cancels the start token).
+            if (!plan.Denied.Any(d => ClusterHostSupervisor.IsMemoryReserveRefusal(d.Reason)))
+            {
+                throw new InvalidOperationException(
+                    $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}); nothing was launched.");
+            }
+
+            _logger.LogWarning(
+                "Supervisor waits for free memory: it can admit {Admitted} of its {Configured} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({Minimum}); nothing is launched yet, planning again in {Seconds} s",
+                plan.Admitted.Count, _options.Processes.Count, _options.MinClusterProcesses, (int)MemoryRetryInterval.TotalSeconds);
+            await DelayAsync(MemoryRetryInterval, cancellationToken).ConfigureAwait(false);
+            plan = _supervisor.PlanStartAll();
         }
 
         _supervisor.BelowMinimum += OnBelowMinimum;
-        await _supervisor.StartInGroupsAsync(
-            plan.Admitted,
-            snapshot => _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId),
-            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string> pending = plan.Admitted;
+        var launched = new HashSet<string>(StringComparer.Ordinal);
+        while (true)
+        {
+            try
+            {
+                await _supervisor.StartInGroupsAsync(
+                    pending,
+                    snapshot =>
+                    {
+                        launched.Add(snapshot.Name);
+                        _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            catch (InvalidOperationException ex) when (ClusterHostSupervisor.IsMemoryReserveRefusal(ex.Message))
+            {
+                // A child already launched took the memory the plan counted on: launch the rest once it is free (the group-ready wait of the group in progress is not repeated).
+                pending = [.. pending.Where(n => !launched.Contains(n))];
+                _logger.LogWarning("Supervisor waits for free memory before launching {Remaining} more process(es): {Reason} Planning again in {Seconds} s", pending.Count, ex.Message, (int)MemoryRetryInterval.TotalSeconds);
+                await DelayAsync(MemoryRetryInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started
     }
@@ -77,6 +124,7 @@ public sealed class ClusterSupervisorHostedService : IHostedService
     private void OnBelowMinimum(SupervisorBelowMinimum report)
     {
         Volatile.Write(ref _requestedExitCode, report.AnyGaveUp ? ExitCodes.Failure : ExitCodes.Success);
+        Volatile.Write(ref _selfStopReason, $"only {report.Running} supervised process(es) remain, below MinClusterProcesses ({report.Minimum}); {(report.AnyGaveUp ? "a process was given up on" : "all stops were deliberate")}");
         _logger.LogError(
             "Only {Running} supervised process(es) remain, below Cluster:Supervisor:MinClusterProcesses ({Minimum}); stopping the supervisor and the rest ({Outcome}).",
             report.Running, report.Minimum, report.AnyGaveUp ? "a process was given up on" : "all stops were deliberate");
@@ -205,6 +253,79 @@ public static class ClusterSupervisorHosting
 
         builder.Services.AddClusterSupervisor(builder.Configuration);
         using IHost host = builder.Build();
+        ILogger log = host.Services.GetService<ILoggerFactory>()?.CreateLogger(ExitLoggerName) ?? NullLogger.Instance;
+
+        // The supervisor mode never calls UseArcaneDiagnostics, so nothing else records why this process ended. Every way out writes the reason and the exit
+        // code to the log and to stderr; a crash is written by the unhandled-exception hook and an outside end (console closed, SIGTERM that skips the host's
+        // own handler) by the process-exit hook. A hard kill (TerminateProcess, the OOM killer) can be seen by no hook.
+        int exitLogged = 0;
+        UnhandledExceptionEventHandler onUnhandled = (_, e) =>
+        {
+            Exception? crash = e.ExceptionObject as Exception;
+            WriteExit(log, error, ExitCodes.Failure, $"unhandled exception{(e.IsTerminating ? " (the runtime is terminating the process)" : string.Empty)}: {crash?.GetType().Name}: {crash?.Message}", crash);
+        };
+        EventHandler onProcessExit = (_, _) =>
+        {
+            if (Interlocked.Exchange(ref exitLogged, 1) == 0)
+            {
+                WriteExit(log, error, Environment.ExitCode, "the process was ended from outside before the supervisor reached its own shutdown path (console closed or a termination signal); the code is Environment.ExitCode at that moment", null);
+            }
+        };
+        AppDomain.CurrentDomain.UnhandledException += onUnhandled;
+        AppDomain.CurrentDomain.ProcessExit += onProcessExit;
+        try
+        {
+            (int code, string reason) = await RunHostAsync(host, error).ConfigureAwait(false);
+            if (Interlocked.Exchange(ref exitLogged, 1) == 0)
+            {
+                WriteExit(log, error, code, reason, null);
+            }
+
+            return code;
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.UnhandledException -= onUnhandled;
+            AppDomain.CurrentDomain.ProcessExit -= onProcessExit;
+        }
+    }
+
+    /// <summary>The logger category of the supervisor's exit line.</summary>
+    internal const string ExitLoggerName = "ArcaneCore.Cluster.Supervisor";
+
+    /// <summary>Writes the supervisor's exit line (the exit code and why) to <paramref name="log"/> and <paramref name="error"/>; never throws.</summary>
+    internal static void WriteExit(ILogger log, TextWriter error, int code, string reason, Exception? exception)
+    {
+        string text = $"ArcaneCore.World supervisor exiting with code {code}: {reason}";
+        try
+        {
+            if (code == ExitCodes.Success)
+            {
+                log.LogInformation("Supervisor exiting with code {ExitCode}: {Reason}", code, reason);
+            }
+            else
+            {
+                log.LogError(exception, "Supervisor exiting with code {ExitCode}: {Reason}", code, reason);
+            }
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or IOException)
+        {
+            // The logging providers are already down: stderr below still says it.
+        }
+
+        try
+        {
+            error.WriteLine(text);
+            error.Flush();
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or IOException)
+        {
+            // stderr is gone: nothing left to tell.
+        }
+    }
+
+    private static async Task<(int Code, string Reason)> RunHostAsync(IHost host, TextWriter error)
+    {
         try
         {
             await host.StartAsync().ConfigureAwait(false);
@@ -220,10 +341,10 @@ public static class ClusterSupervisorHosting
             catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
             {
                 await error.WriteLineAsync($"ArcaneCore.World supervisor stop after the cancelled start failed: {stopEx.Message}").ConfigureAwait(false);
-                return ExitCodes.Failure;
+                return (ExitCodes.Failure, $"the start was cancelled by a stop signal and the stop that followed failed: {stopEx.Message}");
             }
 
-            return ExitCodes.Success;
+            return (ExitCodes.Success, "the start was cancelled by a stop signal; the processes already launched were drained");
         }
         catch (Exception ex)
         {
@@ -237,19 +358,22 @@ public static class ClusterSupervisorHosting
                 await error.WriteLineAsync($"ArcaneCore.World supervisor stop after the refused start failed: {stopEx.Message}").ConfigureAwait(false);
             }
 
-            return ExitCodes.Failure;
+            return (ExitCodes.Failure, $"the start was refused: {ex.Message}");
         }
 
         try
         {
             await host.WaitForShutdownAsync().ConfigureAwait(false);
-            return host.Services.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().FirstOrDefault()?.RequestedExitCode ?? ExitCodes.Success;
+            ClusterSupervisorHostedService? service = host.Services.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().FirstOrDefault();
+            return (service?.RequestedExitCode ?? ExitCodes.Success, service?.SelfStopReason is { } selfStop
+                ? "the supervisor stopped itself: " + selfStop
+                : "the host was stopped from outside (a stop signal)");
         }
         catch (Exception ex)
         {
             // Host.StopAsync rethrows a single hosted-service stop failure unchanged, a cancellation included: none may escape Program.cs.
             await error.WriteLineAsync($"ArcaneCore.World supervisor failed while stopping: {ex.Message}").ConfigureAwait(false);
-            return ExitCodes.Failure;
+            return (ExitCodes.Failure, $"the stop failed: {ex.Message}");
         }
     }
 }

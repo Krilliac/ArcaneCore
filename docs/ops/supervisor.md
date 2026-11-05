@@ -13,19 +13,19 @@ shutdown token is cancelled.
 
 ## The per-run token
 
-`ARCANECORE_SUPERVISOR_TOKEN` is the supervisor's per-run secret. `ConsoleInputSource.Default()` reads it and keeps it on the source. The
-variable stays in the process environment on purpose: the World's `SupervisorProtocolChannel.Process` reads it from the live environment the
-first time a GM runs a cross-realm `.server restart|shutdown`, and clearing it earlier would make that command report that the process is not
-supervised. As a consequence, processes the child starts inherit the token, and the host's environment configuration provider also holds a copy
-under the raw variable name (nothing binds that key). Removing the variable is possible only after every consumer takes the token from one
-captured place; that change spans the World supervisor files and is a follow-up.
+`ARCANECORE_SUPERVISOR_TOKEN` is the supervisor's per-run secret. A supervised daemon takes it out of the environment once, at the very start of
+`Main` (`SupervisorProtocol.CaptureProcessToken()`, before the host's configuration builder copies the environment), and the variable is removed
+from the process environment, so processes the child starts (a `gh` or crash-dump tool) and the host's `IConfiguration` do not inherit it. Every
+reader in the process takes the token from that captured copy: `ConsoleInputSource.Default()`, the heartbeat writer and the World's
+`SupervisorProtocolChannel.Process` all go through `SupervisorProtocol.ProcessEnvironment`, so removing the variable disables nothing (cross-realm
+`.server restart|shutdown` still works under supervision). The Gateway captures it in the same way. A process that is not supervised has no token and
+nothing happens.
 
-## Authentication limits
+## Authentication
 
-`lifecycle` lines (requests, results and the `stopping` announcement) carry the token. A `heartbeat` line does not: it is
-`heartbeat <UTC> pid=<pid> ready|alive|stopping` and nothing else. The one exception is the `dumping` line a child writes before its in-process crash dump, `heartbeat <UTC> pid=<pid> dumping max=<seconds> token=<token>`, which carries the token like a `lifecycle` line (a forged one would otherwise delay the hang watch by the whole dump grace).
-
-Child output also carries logged text that a player or GM can influence. If such text contains a bare LF, the part after it becomes a line
-of its own and could match the heartbeat shape. The parser rejects any line with a control character, so a forged line cannot smuggle a
-second line inside it, but a clean forged line is accepted. The effect is bounded to liveness: a forged heartbeat can make a hung child
-look alive and so delay hang detection. It cannot drain, stop or restart a child, because those paths need the token.
+Every line the supervisor acts on carries the token: the `lifecycle` lines (requests, results and the `stopping` announcement), the `dumping`
+heartbeat a child writes before its in-process crash dump, and every plain heartbeat, `heartbeat <UTC> pid=<pid> ready|alive|stopping token=<token>`.
+Child output also carries logged text that a player or GM can influence. If such text contains a bare LF, the part after it becomes a line of its
+own and could match a line shape. The parser rejects any line with a control character, and the supervisor treats a line without the right
+token as ordinary output: a forged heartbeat cannot make a hung child look alive, arm the hang watch or delay hang detection, and a forged
+`lifecycle` line cannot drain, stop or restart a child.

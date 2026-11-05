@@ -740,6 +740,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
+    /// Whether a refusal text (<see cref="CapacityAdmissionResult.Reason"/>, a <see cref="SupervisorStartPlan.Denied"/> reason, or the message of the exception
+    /// <see cref="StartProcessAsync"/> throws) is the free-memory reserve: the one refusal that waiting can cure.
+    /// </summary>
+    internal static bool IsMemoryReserveRefusal(string? reason)
+        => reason is not null && reason.Contains(nameof(ClusterSupervisorOptions.MinFreeMemoryReserveMb), StringComparison.Ordinal);
+
+    /// <summary>
     /// Evaluates whether <paramref name="candidate"/> can be admitted under the host's process ceiling,
     /// memory budget, free RAM reserve, and single-writer map ownership constraints.
     /// </summary>
@@ -1412,7 +1419,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     {
         if (!isStdErr)
         {
-            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat))
+            // A heartbeat is authenticated like the stop announcement: logged text a player or GM influences can land on a line of its own and match the
+            // shape, so a token-less (or wrong-token) heartbeat is ordinary output and never counts as liveness or arms the hang watch.
+            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken) && TokenMatches(beatToken))
             {
                 RecordBeat(entry, process, beat);
                 return;
@@ -1616,7 +1625,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// for the realm (<see cref="HandleLifecycleRequest"/> forwards by <c>Config.RealmId</c>) reaches the world that is serving. The slot's two children are the workers that
     /// name the same shard (<c>Cluster:Fencing:Shard</c>, which <c>tools/ops/live/start-cluster.ps1 -Standby</c> gives both): the shard is the supervisor's only knowledge of
     /// which standby stands behind which world. The moved-to child keeps the environment it was launched with (its own realm id stays 0 until its next launch); only the
-    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, or no peer without a realm id, leaves the id where it is. Call under <c>_gate</c>.
+    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, or no peer without a realm id, leaves the id where it is.
+    /// The promoted peer is the active world now, so its <see cref="ManagedEntry.Standby"/> flag (and the standby argument of its next launch) is cleared with the move: left set,
+    /// two swaps of one slot persist both children as standbys and a supervisor restart then brings the slot back with no active world. Call under <c>_gate</c>.
     /// </summary>
     private void MoveRealmRoleUnderLock(ManagedEntry demoted)
     {
@@ -1640,6 +1651,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         peer.Config.RealmId = realmId;
         demoted.Config.RealmId = 0;
+        SetStandbyUnderLock(peer, false);
         _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
     }
 

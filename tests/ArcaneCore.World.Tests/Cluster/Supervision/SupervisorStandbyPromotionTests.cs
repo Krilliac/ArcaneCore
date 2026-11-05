@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
@@ -119,5 +120,93 @@ public sealed class SupervisorStandbyPromotionTests
 
         Assert.Equal(1, rig.Options.Processes[Active].RealmId);
         Assert.Equal(0, rig.Options.Processes[StandbyName].RealmId);
+    }
+
+    private sealed class NothingRunningInspector : ISupervisorProcessInspector
+    {
+        public bool TryGetStartTimeUtc(int processId, out DateTimeOffset startTimeUtc)
+        {
+            startTimeUtc = default;
+            return false;
+        }
+
+        public bool TryKill(int processId) => throw new InvalidOperationException("no process may be killed by this test");
+    }
+
+    private static ClusterHostSupervisor NewPersistingSupervisor(ClusterSupervisorOptions options, ScriptedLauncher launcher, string statePath)
+    {
+        var delays = new ManualDelays { AutoComplete = ManualDelays.IsBackoff };
+        return new ClusterHostSupervisor(
+            options, launcher, new SupervisedOutputMultiplexer(new StringWriter()), new FixedMemoryProbe(), delays.Delay, new ManualClock(),
+            childStateFile: new SupervisorChildStateFile(statePath), processInspector: new NothingRunningInspector());
+    }
+
+    // Regression: the promoted world kept its standby flag, so two swaps of one slot persisted both children as standbys and a supervisor restart
+    // brought the slot back with no active world.
+    [Fact]
+    public async Task TwoSwapsOfOneSlot_LeaveExactlyOneStandby_InMemoryAndInTheStateFile_AndASupervisorRestartKeepsOneActiveWorld()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-standby-promotion-" + Guid.NewGuid().ToString("N"));
+        string statePath = Path.Combine(dir, "children.json");
+        try
+        {
+            ClusterSupervisorOptions options = SlotOptions();
+            var launcher = new ScriptedLauncher();
+            await using (ClusterHostSupervisor supervisor = NewPersistingSupervisor(options, launcher, statePath))
+            {
+                await supervisor.StartProcessAsync("gateway");
+                await supervisor.StartProcessAsync(Active);
+                await supervisor.StartProcessAsync(StandbyName);
+
+                await supervisor.RestartProcessAsync(Active, standby: true); // swap 1: the standby process is promoted
+                Assert.True(supervisor.GetSnapshot(Active).Standby);
+                Assert.False(supervisor.GetSnapshot(StandbyName).Standby);
+                Assert.Equal([Active], StandbyNamesInFile(statePath));
+                Assert.DoesNotContain(ClusterHostSupervisor.StandbyArgument, options.Processes[StandbyName].Arguments, StringComparison.Ordinal);
+
+                await supervisor.RestartProcessAsync(StandbyName, standby: true); // swap 2: the first world is promoted back
+                Assert.False(supervisor.GetSnapshot(Active).Standby);
+                Assert.True(supervisor.GetSnapshot(StandbyName).Standby);
+                Assert.Equal([StandbyName], StandbyNamesInFile(statePath));
+                Assert.Equal(1, options.Processes[Active].RealmId);
+            }
+
+            // A restarted supervisor reads the file: the slot comes back with the realm-holding world active and the other one standing by.
+            ClusterSupervisorOptions fresh = SlotOptions();
+            await using ClusterHostSupervisor restarted = NewPersistingSupervisor(fresh, new ScriptedLauncher(), statePath);
+            restarted.ReconcileOrphans();
+            Assert.False(restarted.GetSnapshot(Active).Standby);
+            Assert.True(restarted.GetSnapshot(StandbyName).Standby);
+            Assert.Equal(1, fresh.Processes[Active].RealmId);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    private static string[] StandbyNamesInFile(string statePath)
+        => [.. new SupervisorChildStateFile(statePath).Load().Where(r => r.Standby).Select(r => r.Name)];
+
+    // The requester resolves the realm id from the worker's own, fixed copy of the configuration (ClusterHostingRestart passes IOptions.Value): after a swap it still
+    // names the realm id the typed child was configured with, and the supervisor's current table sends the request to the world that holds the realm now.
+    [Fact]
+    public async Task ARestartRequestedForTheConfiguredChildAfterASwap_ReachesTheWorldThatHoldsTheRealmNow()
+    {
+        await using SupervisorRig rig = await StartedSlotAsync(SlotOptions());
+        ScriptedProcess gateway = rig.Launcher.Processes.Single(p => p.Name == "gateway");
+        ScriptedProcess promoted = rig.Launcher.Processes.Single(p => p.Name == StandbyName);
+        await rig.Supervisor.RestartProcessAsync(Active, standby: true);
+        ScriptedProcess relaunched = rig.Launcher.Processes.Last(p => p.Name == Active);
+
+        int realm = SupervisorWorkerRestartRequester.RealmIdOf(SlotOptions(), new WorkerNodeId(Active));
+        gateway.Emit(RestartRequest(gateway, realm));
+
+        Assert.Equal(1, realm);
+        await TestWait.UntilAsync(() => promoted.Sent.Any(line => line.StartsWith("lifecycle restart", StringComparison.Ordinal)), "the request to reach the world that holds the realm now");
+        Assert.Empty(relaunched.Sent);
     }
 }
