@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Economy;
 /// </summary>
 public sealed class EconomyConfigChecks : IConfigCheck
 {
-    /// <summary>A percentage above this is a typo: a cut over 100 would pay the seller a negative amount.</summary>
+    /// <summary>A percentage above this is a typo: a cut over 100 leaves the seller paid nothing (the sale logs it).</summary>
     private const uint MaxPercent = 100;
 
     private const string Key = EconomyFeature.SectionName + ":AuctionHouses";
@@ -66,7 +66,7 @@ public sealed class EconomyConfigChecks : IConfigCheck
                 if (values[field] > MaxPercent)
                 {
                     issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{Key}:{entry.Key}:{field}",
-                        $"entry {entry.Key} sets {field} to {values[field]}, which is over {MaxPercent}: a percentage of the price.",
+                        $"entry {entry.Key} sets {field} to {values[field]}, which is over {MaxPercent}, and a percentage of the price cannot exceed {MaxPercent}.",
                         $"set {Key}:{entry.Key}:{field} to a percentage from 0 to {MaxPercent}"));
                 }
             }
