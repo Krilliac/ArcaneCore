@@ -1,7 +1,6 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 
@@ -171,8 +170,10 @@ internal static class ConfigCatalog
     /// <summary>
     /// The keys of one entry of a list or map option: the public properties the binder can set (collections too), nested groups joined with ':'.
     /// Defaults come from a freshly constructed entry. A type without a parameterless constructor (a positional record) is built by the binder
-    /// through its constructor, which fails for a parameter that has no default value and no key, so such a field shows as "required"; a
-    /// parameter with a default value shows that value. Every field needs a summary or an override, like any other key.
+    /// through its constructor, and an entry with no key for a parameter that has no default value cannot be built, so such a field shows as "required";
+    /// a parameter with a default value shows that value, and a property outside the constructor shows what the constructor leaves in it. The binder
+    /// drops such an entry silently rather than failing (AuctionHouseConfigTests), so a list with a required field needs a config check that refuses
+    /// the entry (Production_EveryListWithARequiredEntryField_HasACheckThatRefusesTheEntry). Every field needs a summary or an override, like any other key.
     /// </summary>
     private static IReadOnlyList<ConfigElementField> ElementFieldsOf(
         Type? element,
@@ -188,7 +189,8 @@ internal static class ConfigCatalog
             return fields;
         }
 
-        WalkElement(Nullable.GetUnderlyingType(element) ?? element, TryInstance(Nullable.GetUnderlyingType(element) ?? element), string.Empty, 0, path, sourceSummary, overrides, fields, problems);
+        Type entry = Nullable.GetUnderlyingType(element) ?? element;
+        WalkElement(entry, TryInstance(entry, path, problems), string.Empty, 0, path, sourceSummary, overrides, fields, problems);
         if (fields.Count == 0)
         {
             problems.Add($"{path}: the entry type {element.Name} has no settable public property, so there are no entry fields to document");
@@ -199,7 +201,8 @@ internal static class ConfigCatalog
 
     /// <summary>
     /// The constructor parameters the configuration binder fills for a class that has no parameterless constructor (by name, ignoring case), or null
-    /// when the binder uses the properties. Microsoft.Extensions.Configuration.Binder throws for a parameter that has no default value and no key.
+    /// when the binder uses the properties, or when the class has no single public constructor (<see cref="TryInstance"/> reports that as a problem).
+    /// A parameter with no default value and no key stops the entry being built; the binder then drops the entry without an error.
     /// </summary>
     private static Dictionary<string, ParameterInfo>? ConstructorParametersOf(Type type)
     {
@@ -208,11 +211,16 @@ internal static class ConfigCatalog
             return null;
         }
 
-        ConstructorInfo? constructor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance).OrderByDescending(c => c.GetParameters().Length).FirstOrDefault();
-        return constructor?.GetParameters().Where(p => p.Name is not null).ToDictionary(p => p.Name!, StringComparer.OrdinalIgnoreCase);
+        ConstructorInfo[] constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        return constructors.Length != 1 ? null : constructors[0].GetParameters().Where(p => p.Name is not null).ToDictionary(p => p.Name!, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static object? TryInstance(Type type)
+    /// <summary>
+    /// A real entry to read defaults from. A type without a parameterless constructor is built through its one public constructor, parameters at their
+    /// default values or at zero, empty or null, so the initializer of a property outside the constructor has run and its value is true. A type that
+    /// cannot be built this way is a problem, not a row of zeros. Limit: an initializer that derives a value from a required parameter shows it derived from that zero.
+    /// </summary>
+    private static object? TryInstance(Type type, string path, List<string> problems)
     {
         if (type.IsAbstract || type.IsInterface)
         {
@@ -231,7 +239,33 @@ internal static class ConfigCatalog
             }
         }
 
-        return RuntimeHelpers.GetUninitializedObject(type);
+        ConstructorInfo[] constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        if (constructors.Length != 1)
+        {
+            problems.Add($"{path}: the entry type {type.Name} has {constructors.Length} public constructors and none without parameters, so its defaults cannot be read");
+            return null;
+        }
+
+        try
+        {
+            object?[] arguments = [.. constructors[0].GetParameters().Select(PlaceholderFor)];
+            return constructors[0].Invoke(arguments);
+        }
+        catch (TargetInvocationException ex)
+        {
+            problems.Add($"{path}: constructing the entry type {type.Name} with empty values threw {ex.InnerException?.GetType().Name}, so its defaults cannot be read");
+            return null;
+        }
+    }
+
+    private static object? PlaceholderFor(ParameterInfo parameter)
+    {
+        if (parameter.HasDefaultValue)
+        {
+            return parameter.DefaultValue;
+        }
+
+        return parameter.ParameterType == typeof(string) ? string.Empty : parameter.ParameterType.IsValueType ? Activator.CreateInstance(parameter.ParameterType) : null;
     }
 
     private static void WalkElement(
@@ -287,7 +321,7 @@ internal static class ConfigCatalog
             }
 
             object? child = instance is null ? null : property.GetValue(instance);
-            WalkElement(propertyType, child ?? TryInstance(propertyType), name, depth + 1, path, sourceSummary, overrides, fields, problems);
+            WalkElement(propertyType, child ?? TryInstance(propertyType, path + ":" + name, problems), name, depth + 1, path, sourceSummary, overrides, fields, problems);
         }
     }
 

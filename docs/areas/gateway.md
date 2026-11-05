@@ -231,11 +231,11 @@ The gateway, the worker and a standby worker can be launched and watched by the 
 
 | Concern | Runs on | Note |
 |---|---|---|
-| Header cipher, `SMSG_AUTH_CHALLENGE`, auth digest | Gateway | The worker holds no cipher state; it reads the session key from the auth database only to start Warden |
+| Header cipher, `SMSG_AUTH_CHALLENGE`, auth digest | Gateway | The worker holds no cipher state; it only checks that the account has a session key in the auth database |
 | `PING` / `PONG` | Gateway answers; the ping is also forwarded | The worker records the latency sample (`WorldSession.LatencyMs`) and sends no pong |
 | Per-IP guards, IP bans | Both | Gateway: `NetGuard` admission and the ban check at auth. Worker: `WorldSession.RemoteEndpoint` is the client's `ip:port`, so IP bans and logs see the client address, not the gateway's |
 | Opcode rate limits, all game handlers | Worker | Unchanged `DispatchAsync` path |
-| Warden | Worker | Its opcodes are forwarded unchanged; the worker starts Warden with the session key from the auth database. The design (section 5.2) puts Warden on the gateway; moving it is needed before 3b |
+| Warden | Gateway | The gateway binds `Warden`, starts each session's Warden with the session key it holds and answers `CMSG_WARDEN_DATA` itself; it runs `Warden:Checks` and the timing scan, not the `warden_checks` table (it has no world database). A failing verdict goes to the worker over the link, with the gateway's Warden manifest; the worker refuses a manifest that differs from the one it derives from its own `Warden` section, applies the ban, and starts no Warden of its own |
 | Account claim | Both | Gateway: one connection per account. Worker: the normal `SessionRegistry` claim |
 
 ## Node role and realm authority leases
@@ -248,7 +248,7 @@ that role would have nothing to serve.
 
 Two features are realm-wide singletons: the auction house bot (the `economy` scope) and AutoBroadcast (the `social` scope). On a `MapWorker` each one
 attaches only while this node holds the matching lease, and a node attaches nothing it cannot lease; the other node (or this one, after the holder's lease
-lapses and it restarts) runs it. Warden stays attached on a map worker, because the gateway passes the client stream through to it.
+lapses and it restarts) runs it. Warden stays attached on a map worker, but it starts no session of its own there: the gateway runs Warden and reports its verdicts to the worker.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -359,7 +359,6 @@ stage 4 (the target session opens at stage 4, after the passive shadow install).
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
-- Warden runs on the worker, not the gateway.
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
