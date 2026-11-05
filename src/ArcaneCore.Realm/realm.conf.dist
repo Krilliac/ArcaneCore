@@ -709,11 +709,13 @@ Diagnostics.CrashDump.Mode = Full
 #                     a minute). A timeout, or an unreachable diagnostics endpoint
 #                     (DOTNET_EnableDiagnostics=0), is not retried with a smaller type; a type the
 #                     runtime refuses is. While it dumps the daemon publishes the heartbeat state
-#                     dumping, which supervisors honour for a grace of this long plus a margin.
-#                     Default 120.
+#                     dumping, which supervisors honour for the announced maximum (three times this)
+#                     plus a minute, bounded by their own cap (Cluster:Supervisor:DumpGraceSeconds,
+#                     default 420; raise it with this value). Default 120. Checked at start (1 to
+#                     3600) so the product cannot overflow.
 #        Type: int
 #        Default: 120
-#        Allowed: a whole number of seconds, 1 or more (a lower value is raised to 1)
+#        Allowed: a whole number of seconds, 1 to 3600
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #

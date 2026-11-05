@@ -1988,12 +1988,12 @@ Cluster.NodeBridge.Enabled = false
 #                     does not turn the bridge on (a warning is logged when Enabled is false). Only
 #                     read when Enabled is true.
 #        Type: string
-#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusternodebridge
 #
-Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
 # Cluster:Peer
@@ -2184,7 +2184,7 @@ Cluster.Supervisor.CrashLoopWindowSeconds = 300
 #                     dump short.
 #        Type: int
 #        Default: 420
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number of seconds, 1 to 3600
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clustersupervisor
 #
@@ -4376,11 +4376,13 @@ Diagnostics.CrashDump.Mode = Full
 #                     a minute). A timeout, or an unreachable diagnostics endpoint
 #                     (DOTNET_EnableDiagnostics=0), is not retried with a smaller type; a type the
 #                     runtime refuses is. While it dumps the daemon publishes the heartbeat state
-#                     dumping, which supervisors honour for a grace of this long plus a margin.
-#                     Default 120.
+#                     dumping, which supervisors honour for the announced maximum (three times this)
+#                     plus a minute, bounded by their own cap (Cluster:Supervisor:DumpGraceSeconds,
+#                     default 420; raise it with this value). Default 120. Checked at start (1 to
+#                     3600) so the product cannot overflow.
 #        Type: int
 #        Default: 120
-#        Allowed: a whole number of seconds, 1 or more (a lower value is raised to 1)
+#        Allowed: a whole number of seconds, 1 to 3600
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #
@@ -5150,6 +5152,20 @@ GameObjects.MiningAmountRate = 1
 #        Docs: docs/reference/configuration.md#gameobjects
 #
 GameObjects.MiningNextRate = 1
+
+#
+#    GameObjects.PersistRespawn
+#        Description: GameObjects:PersistRespawn: despawned database spawns keep their respawn time
+#                     across restarts (vmangos gameobject_respawn, characters database; the
+#                     counterpart of Creatures:Respawn:Persist). False keeps the timers in memory
+#                     only, as before the table existed.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gameobjects
+#
+GameObjects.PersistRespawn = true
 
 #
 #    GameObjects.RandomRespawn
