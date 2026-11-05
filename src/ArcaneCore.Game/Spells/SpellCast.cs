@@ -81,7 +81,7 @@ public sealed class SpellCast
     internal Dictionary<int, Unit>? ObjectCarriersOrNull => _objectCarriers;
 
     /// <summary>
-    /// A script-target selection (the destination of target 46, the unit target an item cast gets from target 38) changed <see cref="Targets"/>
+    /// A script-target selection (the destination of target 46) changed <see cref="Targets"/>
     /// while the cast was aimed at nobody (a self cast): the effects selected afterwards still treat the cast as a self cast
     /// (the explicit-or-self fallback of <c>SelectEffectTargets</c>). Cast thread only.
     /// </summary>

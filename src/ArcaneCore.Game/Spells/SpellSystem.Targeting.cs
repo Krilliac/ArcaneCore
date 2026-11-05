@@ -157,7 +157,7 @@ public sealed partial class SpellSystem
     {
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
-        // A script-target selection of an earlier effect may have added the destination or unit flag to a self cast (ScriptTargetKeptSelfAim): still self-aimed.
+        // A script-target selection of an earlier effect may have added the destination flag to a self cast (ScriptTargetKeptSelfAim): still self-aimed.
         bool selfAimed = cast.Targets.Mask == SpellCastTargetFlags.Self
             || cast.ScriptTargetKeptSelfAim && (cast.Targets.Mask & ~(SpellCastTargetFlags.DestLocation | SpellCastTargetFlags.Unit)) == 0;
         Unit? explicitOrSelf = unitTarget ?? (selfAimed ? caster : null);

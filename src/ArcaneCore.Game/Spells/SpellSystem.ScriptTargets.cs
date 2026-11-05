@@ -258,8 +258,9 @@ public sealed partial class SpellSystem
         });
 
         // Limits (docs/areas/spells.md): vmangos walks the rows one by one and shrinks the radius to the last distance found, so a later row wins only
-        // when nearer (Spell.cpp:466-556); this search takes the nearest unit and the nearest object over all rows at once, which picks the same
-        // winner except in ties. The game object distance here adds the object's bounding radius, which the vmangos object check was not verified to do.
+        // when nearer (Spell.cpp:466-556); this search takes the nearest unit and the nearest object over all rows at once, so the choice can differ
+        // when rows overlap in range. The game object distance here adds only the object's bounding radius; vmangos IsWithinDistInMap adds the caster's too
+        // (Object.cpp:1626-1630), a documented limit. The search can run up to three times per cast (each landing check and the selection).
         // A type 0 row with no entry (the spell focus object of the cast) is not selected here.
         // The unit search measures combat distance, as vmangos NearestUnitFitConditionInCombatRangeCheck does (Spell.cpp:539, Object.h:603-606,
         // GetDistance with SizeFactor::CombatReach): centre distance minus both combat reaches, so a radius of 0 (28364 Damage vs. Guards: range
