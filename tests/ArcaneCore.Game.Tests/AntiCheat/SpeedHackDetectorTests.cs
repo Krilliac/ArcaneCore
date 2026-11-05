@@ -223,12 +223,27 @@ public sealed class SpeedHackDetectorTests
     }
 
     [Fact]
-    public void Credit_IsForgottenByReset_AndSaturatesInsteadOfWrapping()
+    public void Credit_AddedPastUintMax_SaturatesInsteadOfWrapping()
+    {
+        SpeedClockOptions options = Defaults();
+        var detector = new SpeedHackDetector(options);
+        uint client = 0, real = 0;
+        for (int i = 0; i < options.MinSamples; i++)
+        {
+            detector.Feed(client += 500, real += 500);
+        }
+
+        detector.Credit(1);
+        detector.Credit(uint.MaxValue); // a wrapping sum would be 0 and leave the pair below hot
+        Assert.Equal(1.0, detector.Feed(client += 1500, real += 500).Ratio, 9);
+    }
+
+    [Fact]
+    public void Credit_IsForgottenByReset()
     {
         SpeedClockOptions options = Defaults();
         var detector = new SpeedHackDetector(options);
         detector.Credit(uint.MaxValue);
-        detector.Credit(uint.MaxValue); // saturates; no wrap to a small credit
         detector.Reset();
         uint client = 0, real = 0;
         for (int i = 0; i < options.MinSamples; i++)

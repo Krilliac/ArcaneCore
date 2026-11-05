@@ -33,6 +33,9 @@ public sealed class MovementAntiCheat
     private const uint KnockbackMaxMs = 6000;
     private const uint TimeSkipWindowMs = 10000;
 
+    /// <summary>The most client-clock credit all the skips of one ten-second window earn together: jitter, not a licence.</summary>
+    private const long TimeSkipClockCreditPerWindowMs = 250;
+
     private const MovementFlags Airborne = MovementFlags.Jumping | MovementFlags.FallingFar;
     private const MovementFlags Translating = MovementFlags.Forward | MovementFlags.Backward | MovementFlags.StrafeLeft | MovementFlags.StrafeRight;
 
@@ -75,7 +78,9 @@ public sealed class MovementAntiCheat
     private uint _skipWindowStart;
     private int _skipCount;
     private bool _skipWindowOpen;
-    private bool _skipSpanPending;
+    private long _skipSpanBudgetMs;
+    private long _skipWindowSupportedMs;
+    private long _skipWindowClockCreditMs;
     private bool _hasAckTime;
     private uint _lastAckTime;
 
@@ -175,8 +180,8 @@ public sealed class MovementAntiCheat
             findings.Add(new AntiCheatFinding(AntiCheatViolation.TimeSync, Math.Clamp(clock.Severity * 0.5f, 5f, 25f), "client clock runs fast (independent clock)"));
         }
 
-        bool spansSkip = _skipSpanPending;
-        _skipSpanPending = false;
+        long skipBudgetMs = _skipSpanBudgetMs;
+        _skipSpanBudgetMs = 0;
         bool gap = _hasLast && unchecked(now - _lastReceived) > (uint)Options.BaselineGapMs;
         if (!_hasLast || _trustNext || gap)
         {
@@ -203,7 +208,7 @@ public sealed class MovementAntiCheat
         bool legitTransport = onTransport && sample.Transport != TransportClaim.Fake;
         if (!legitTransport && !_lastLegitTransport && !_knockback)
         {
-            CheckDistance(sample, allowed, horizontal, airborne || _lastAirborne, spansSkip, findings);
+            CheckDistance(sample, allowed, horizontal, airborne || _lastAirborne, skipBudgetMs, findings);
         }
 
         if (!legitTransport && !_lastLegitTransport && Options.TerrainChecks && sample.Terrain is { } terrain)
@@ -247,11 +252,16 @@ public sealed class MovementAntiCheat
     /// claiming skipped time buys movement budget), and so is a skip above <see cref="int.MaxValue"/> (no stall lasts 24.8
     /// days: a sign-confused forge).
     /// <para>
-    /// A skip buys no baseline and resets no clock. The step that spans it is judged against real elapsed time plus the
-    /// latency slack. The independent clock is credited only the skip the evidence supports: the lag, capped by
-    /// <see cref="AntiCheatOptions.MaxTimeSkipMs"/> and by the arrival silence before the skip plus the latency slack (a stalled
-    /// main loop sends nothing). The silence runs from the later of <paramref name="previousPacketReceivedMs"/> (the session's
-    /// previous inbound packet, when known) and the last packet these checks saw. A zero or impossible skip changes nothing.
+    /// A skip buys no baseline and resets no clock. The skip the evidence supports is the lag, capped by
+    /// <see cref="AntiCheatOptions.MaxTimeSkipMs"/> and by the arrival silence before the skip (a stalled main loop sends
+    /// nothing; no latency slack is added), and all the supported skips of one ten-second window together by
+    /// <see cref="AntiCheatOptions.BaselineGapMs"/>. The step that spans a skip is judged against the client's own elapsed
+    /// time plus the supported skip, capped by real elapsed time plus the latency slack: a 1 ms skip buys about 1 ms. The
+    /// independent clock is credited at most 250 ms of that per window (jitter; an honest stall already shows in the receive
+    /// side of the pair it spans), so a repeating cadence cannot sustain a fast clock. The silence runs from the later of
+    /// <paramref name="previousPacketReceivedMs"/> (the previous inbound packet the world handler saw, when known; a CMSG_PING
+    /// or a dropped packet is not stamped, so the silence can read longer than it was) and the last packet these checks saw.
+    /// A zero or impossible skip changes nothing.
     /// The timestamp-regression checks keep running: a stalled client's clock only moves forward.
     /// </para>
     /// </summary>
@@ -262,6 +272,8 @@ public sealed class MovementAntiCheat
         {
             _skipWindowStart = receivedMs;
             _skipCount = 0;
+            _skipWindowSupportedMs = 0;
+            _skipWindowClockCreditMs = 0;
             _skipWindowOpen = true;
         }
 
@@ -285,8 +297,12 @@ public sealed class MovementAntiCheat
 
         if (skippedMs != 0 && !impossible)
         {
-            _clock.Credit(SkipCredit(skippedMs, receivedMs, previousPacketReceivedMs));
-            _skipSpanPending = true;
+            long supported = Math.Min(SupportedSkip(skippedMs, receivedMs, previousPacketReceivedMs), Math.Max(0, Options.BaselineGapMs - _skipWindowSupportedMs));
+            long clockCredit = Math.Min(supported, TimeSkipClockCreditPerWindowMs - _skipWindowClockCreditMs);
+            _skipWindowSupportedMs += supported;
+            _skipWindowClockCreditMs += clockCredit;
+            _skipSpanBudgetMs += supported;
+            _clock.Credit((uint)clockCredit);
         }
 
         _hasLastSeen = true;
@@ -313,11 +329,11 @@ public sealed class MovementAntiCheat
     }
 
     /// <summary>
-    /// The skipped client time the evidence supports: min(lag, <see cref="AntiCheatOptions.MaxTimeSkipMs"/>, arrival silence +
-    /// latency slack). With no earlier packet to measure the silence from, nothing is credited. Wrap-safe on the 32-bit
-    /// receive clock; a "previous" stamp later than the skip itself measures a silence of zero.
+    /// The skipped client time the evidence supports: min(lag, <see cref="AntiCheatOptions.MaxTimeSkipMs"/>, arrival silence).
+    /// With no earlier packet to measure the silence from, nothing is supported. Wrap-safe on the 32-bit receive clock; a
+    /// "previous" stamp later than the skip itself measures a silence of zero.
     /// </summary>
-    private uint SkipCredit(uint skippedMs, uint receivedMs, uint? previousPacketReceivedMs)
+    private long SupportedSkip(uint skippedMs, uint receivedMs, uint? previousPacketReceivedMs)
     {
         bool hasPrevious = _hasLastSeen;
         uint previous = _lastSeenMs;
@@ -332,9 +348,8 @@ public sealed class MovementAntiCheat
             return 0;
         }
 
-        int silence = Math.Max(0, unchecked((int)(receivedMs - previous)));
-        long supported = (long)silence + Slack(_lastLatencyMs);
-        return (uint)Math.Min(Math.Min((long)skippedMs, (long)Options.MaxTimeSkipMs), supported);
+        long silence = Math.Max(0, unchecked((int)(receivedMs - previous)));
+        return Math.Min(Math.Min((long)skippedMs, (long)Options.MaxTimeSkipMs), silence);
     }
 
     private void Baseline(in MovementInfo m, uint now, bool airborne, bool onTransport, bool transportClaimHolds)
@@ -515,10 +530,10 @@ public sealed class MovementAntiCheat
 
     /// <summary>
     /// Speed and teleport over one step. The budget is the client's elapsed time capped by the receive interval plus the
-    /// latency slack; for the step that spans a reported time skip the client side is dropped (real elapsed time plus the
-    /// slack bounds any legitimate travel, whether or not the client's clock or its simulation ran through the stall).
+    /// latency slack; the step that spans a reported time skip adds the supported skip to the client side (still capped by the
+    /// receive interval plus the slack, so a client whose clock left out a real stall is not starved).
     /// </summary>
-    private void CheckDistance(in MovementSample sample, float allowed, float horizontal, bool airborne, bool spansSkip, List<AntiCheatFinding> findings)
+    private void CheckDistance(in MovementSample sample, float allowed, float horizontal, bool airborne, long skipBudgetMs, List<AntiCheatFinding> findings)
     {
         uint now = sample.ReceivedMs;
         int clientDelta = unchecked((int)(sample.Movement.Time - _lastMoveClientTime));
@@ -529,7 +544,7 @@ public sealed class MovementAntiCheat
 
         uint receivedDelta = unchecked(now - _lastReceived);
         long wallMs = (long)receivedDelta + Slack(sample.LatencyMs);
-        long budgetMs = spansSkip ? wallMs : Math.Min((long)clientDelta, wallMs);
+        long budgetMs = Math.Min((long)clientDelta + skipBudgetMs, wallMs);
         float speed = airborne ? allowed * AirborneSpeedFactor : allowed;
         float seconds = budgetMs / 1000f;
         float teleport = Options.TeleportDistance + (speed * seconds);

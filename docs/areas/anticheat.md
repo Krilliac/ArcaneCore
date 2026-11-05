@@ -50,9 +50,9 @@ Weights follow the fork. A finding adds its weight (clamped 0..100) to the chara
 
 | Finding | Type | Weight | Rule | Never scored when |
 |---|---|---|---|---|
-| Speed | Speed | 5..25 by overshoot | the horizontal step exceeds the allowed speed × (1 + `SpeedTolerancePercent`) × budget + `SpeedSlackYards`. Budget = the client's own elapsed time, capped by the server's receive interval plus the latency slack (`LatencySlackMs` + 2 × ping average, at most `MaxLatencySlackMs`); for the step that spans a reported time skip, the receive interval plus the slack alone. Airborne steps get 25 % more | on a known transport (either packet), during a knockback, the step after a re-baseline, a step whose client time went back |
+| Speed | Speed | 5..25 by overshoot | the horizontal step exceeds the allowed speed × (1 + `SpeedTolerancePercent`) × budget + `SpeedSlackYards`. Budget = the client's own elapsed time, capped by the server's receive interval plus the latency slack (`LatencySlackMs` + 2 × ping average, at most `MaxLatencySlackMs`); for the step that spans a reported time skip, the client's elapsed time plus the skip the evidence supports (below), still capped by the receive interval plus the slack. Airborne steps get 25 % more | on a known transport (either packet), during a knockback, the step after a re-baseline, a step whose client time went back |
 | Teleport | Teleport | 25 | one step longer than `TeleportDistance` + speed × budget | same |
-| Fast clock | TimeSync | 5..25 (half the severity) | `SpeedHackDetector` fires | lag (the real side only gets longer), idle gaps |
+| Fast clock | TimeSync | 5..25 (half the severity) | `SpeedHackDetector` fires | lag (the real side only gets longer), idle gaps; a reported time skip credits at most 250 ms of jitter per ten seconds |
 | Water walk / hover / slow fall | Flag | 25 / 25 / 15 | the flag without a grant, living players only | an aura that grants it is on the player, an order of that kind is pending (the client may assert the flag until it has the order), `AntiCheatFeature.Grant` |
 | Levitating | Flag | 40 | a creature flag (vmangos `HandleFlagTests`) | granted |
 | Flying while swimming | Flag | 40 | vmangos' swim-fly hack; flying alone is not judged (vmangos neither) | granted |
@@ -96,16 +96,18 @@ graveyard, the end of a taxi flight); a knockback acknowledgement (no speed chec
 longer than `BaselineGapMs`. A time skip is **not** a re-baseline (below). Movement of a unit the player controls (a possessed creature or player) is not
 checked.
 
-**Time skips** (`CMSG_MOVE_TIME_SKIPPED`) buy no baseline and blind no clock check. The step that spans a skip is judged
-against real elapsed time: the receive interval plus the latency slack, without the client's own clock, so a client whose clock
-did not include the stall is not starved and a blink right after a skip is still a teleport (and never the rubberband target).
-The independent clock keeps its window. It is credited only the skip the evidence supports: the lag, capped by
-`MaxTimeSkipMs` and by the arrival silence before the skip (since the session's previous in-world packet or the last packet
-the checks saw, whichever is later) plus the latency slack; the credit only cancels client time that ran ahead of the receive
-clock on the next pair. The movement and acknowledgement timestamp checks keep running with no grace: a stalled client's clock
-only moves forward. A zero skip and an impossible one change nothing. Not yet scored, pending a real-client capture of a stall
-(see [Open questions](#open-questions)): a skip without a matching silence, a client clock that does not
-reflect the skip, and a tighter budget for the spanning step.
+**Time skips** (`CMSG_MOVE_TIME_SKIPPED`) buy no baseline and blind no clock check. The skip the evidence supports is the lag,
+capped by `MaxTimeSkipMs` and by the arrival silence before the skip (since the previous in-world packet the world handler
+saw, or the last packet the checks saw, whichever is later; no latency slack is added), and all the supported skips of one
+ten seconds together by `BaselineGapMs`. The step that spans a skip is judged against the client's own elapsed time plus that
+supported skip, capped by the receive interval plus the latency slack, so a 1 ms skip buys about 1 ms, and a blink right after
+a skip is still a teleport (and never the rubberband target). The independent clock keeps its window and is credited at most
+250 ms per ten seconds across all skips (jitter: an honest stall already shows in the receive side of the pair it spans), so a
+skip cadence under the spam threshold cannot neutralise a fast clock. The silence can read longer than it was: `CMSG_PING`, a
+cancelled trade and dropped packets are not stamped. The movement and acknowledgement timestamp checks keep running with no
+grace: a stalled client's clock only moves forward. A zero skip and an impossible one change nothing. Not yet scored, pending a
+real-client capture of a stall (see [Open questions](#open-questions)): a client clock that does not reflect the skip, and a skip
+backed by up to 3 s of real silence per window (it buys that much extra step budget, no more).
 
 **Terrain-dependent checks** run only where the data is in memory: the terrain tile with data for liquid and floor, the
 map's vmap tile (`VMapManager`, line of sight enabled) for all three. The probe never loads a tile; no data is never a finding.
@@ -175,7 +177,7 @@ reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds
   switch), `MovementAntiCheatTests` (every check positive and its look-alikes negative: lag bunching, knockback, speed
   decrease and pending increase, server relocation, known/unknown/fake transports, dead players, grants, terrain with and
   without data; time skips: a blink after a 0 or 1 ms skip, ten cheap skips each followed by a blink, an honest freeze with and
-  without the clock jump, a fast clock with a cheap skip every 4 s, a forged skip with no silence, `uint.MaxValue`, the
+  without the clock jump, a fast clock with a cheap skip every 4 s, a 1.5x clock with 250 ms skips at the spam cadence, a 1 ms skip at 3x run speed, a forged skip with no silence, `uint.MaxValue`, the
   receive-clock wrap, an acknowledgement going back after a skip), `AntiCheatScoresTests` (decay, ceiling, autoban points and ladder, validation).
 * `Game.Tests/AntiCheat/CastSpellHoneypotTests` (flag off: no signal; flag on: a non-GM gets the signal, a GM does not; the trap
   categories and the tool id list; validation).
@@ -194,7 +196,7 @@ reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds
 * Elevator and tram transports are judged by their game object and its animated position only; ArcaneCore does not move players with them (the client's world position aboard is kept).
 * What a 1.12.1 client does during a stall has no capture yet: whether `CMSG_MOVE_TIME_SKIPPED` carries the wall-clock length
   of the stall, whether the client clock jumps by it, and whether the client advances movement meanwhile. Until one exists,
-  the step after a skip is bounded by real time only, and the skip-specific evidence (no matching silence, a clock that did
-  not jump) is not scored.
+  the step after a skip is bounded by the client's elapsed time plus the silence-supported skip, and the skip-specific evidence
+  (no matching silence, a clock that did not jump) is not scored.
 * `MOVEFLAG_LEVITATING` on a player is treated as a hack as vmangos does; a real client capture of priest Levitate (1.12)
   should confirm the client never sets it.
