@@ -110,16 +110,16 @@ public sealed class NavMeshParamsPrefetchTests : IDisposable
         using WorldRuntime world = TestWorld.CreateRuntime();
         WorldCollision collision = WorldCollision.Of(world);
         collision.Install(null, nav);
-        Map map = world.GetMap(0);
-
-        // The followed view (what the map holds) starts the read at its creation.
         Assert.Null(nav.MapPrefetch(0));
-        _ = new MapCollision(map, collision);
-        Task prefetch = nav.MapPrefetch(0) ?? throw new InvalidOperationException("the view did not prefetch its map");
+
+        // Creating the map attaches its default MapCollision view (a followed view over the world's services), which starts the read:
+        // removing the PrefetchNavigationParameters call from the constructor leaves MapPrefetch(0) null and fails here.
+        Map map = world.GetMap(0);
+        Task prefetch = nav.MapPrefetch(0) ?? throw new InvalidOperationException("creating the map did not prefetch its parameters");
         await prefetch.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Equal(1, Volatile.Read(ref reads));
 
-        // Another view of the same map, then the first query: both take the bytes already read.
+        // Another followed view of the same map, then the first query: both take the bytes already read (the read had ended before them).
         _ = new MapCollision(map, collision);
         Assert.True(nav.HasNavigationData(0));
         Assert.Equal(1, Volatile.Read(ref reads));

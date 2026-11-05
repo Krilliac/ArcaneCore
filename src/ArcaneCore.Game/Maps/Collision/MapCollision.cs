@@ -74,9 +74,9 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
     }
 
     /// <summary>
-    /// Map creation: start reading the pathfinder's per-map parameter file in the background, so the first path query does not. Not a second
-    /// read: a pathfinder keeps the read per map id (<see cref="ICollisionMapPrefetch.PrefetchMap"/> has no effect when the file is read or on
-    /// its way), so another instance of the map, or the first query, takes the same bytes. A detached view (<c>followGrids</c> false) prefetches nothing.
+    /// Map creation: start reading the pathfinder's per-map parameter file in the background, so the first path query does not. A pathfinder
+    /// keeps the bytes per map id, so once they are in, another instance of the map and every query take them (one read per map). A query
+    /// that arrives while the read is still running does not wait for it: it reads the file itself, so that one map can be read twice. A detached view (<c>followGrids</c> false) prefetches nothing.
     /// </summary>
     private void PrefetchNavigationParameters()
     {
