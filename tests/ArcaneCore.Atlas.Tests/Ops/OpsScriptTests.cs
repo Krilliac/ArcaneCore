@@ -370,6 +370,30 @@ public sealed class OpsScriptTests : IDisposable
     private static string[] SlotArgs(string root, string command, params string[] extra)
         => ["-Lane", "t", "-WorkDir", AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar), "-Command", command, "-Slots", "1", "-MinAvailableMB", "1", "-LanesRoot", root, .. extra];
 
+    /// <summary>
+    /// The redirected stderr sidecar (slot-logs/t-1.log.err) is merged into the log after the command ends. When it cannot be read or removed (here
+    /// a detached process holds it open with sharing that forbids reading), the failed cleanup must not replace the command's own exit code: the
+    /// command exits 7 and run-in-slot reports 7 and says the sidecar was left in place.
+    /// </summary>
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
+    public void RunInSlot_ALockedStderrSidecar_DoesNotReplaceTheCommandsExitCode()
+    {
+        string root = SlotRoot();
+        string sidecar = Path.Combine(root, "slot-logs", "t-1.log.err");
+        string marker = Path.Combine(_temp, "holder-ready");
+        string holder = Path.Combine(_temp, "holder.ps1");
+        File.WriteAllText(holder, $"$s = [IO.File]::Open('{sidecar.Replace("'", "''", StringComparison.Ordinal)}', 'Open', 'Write', 'Write')\nSet-Content -LiteralPath '{marker.Replace("'", "''", StringComparison.Ordinal)}' -Value ready\nStart-Sleep -Seconds 40\n");
+        string command = $"Start-Process pwsh -ArgumentList '-NoProfile','-NonInteractive','-File','{holder.Replace("'", "''", StringComparison.Ordinal)}' -WindowStyle Hidden | Out-Null; "
+            + $"$deadline = [DateTime]::UtcNow.AddSeconds(30); while (-not (Test-Path -LiteralPath '{marker.Replace("'", "''", StringComparison.Ordinal)}') -and [DateTime]::UtcNow -lt $deadline) {{ Start-Sleep -Milliseconds 200 }}; "
+            + "exit 7";
+
+        (int exit, string output) = Pwsh(Script("tools/ops/ci/run-in-slot.ps1"), SlotArgs(root, command));
+
+        Assert.True(File.Exists(marker), "the holder never opened the sidecar: " + output);
+        Assert.True(exit == 7, $"exit {exit}: {output}");
+        Assert.Contains("could not merge or remove", output, StringComparison.Ordinal);
+    }
+
     [OpsFact(Needs.Windows | Needs.Pwsh)]
     public void RunInSlot_AHolderThatIsGone_IsReaped_AndTheSlotIsTaken()
     {
