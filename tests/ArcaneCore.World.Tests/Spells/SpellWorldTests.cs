@@ -189,9 +189,9 @@ public sealed class SpellWorldTests
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Selfcast")!.GetUInt32(UpdateFields.UnitFieldAura) == Renew, "aura from .cast self");
     }
 
-    private static async Task<string> RunCommandAsync(WorldTestClient client, string command)
+    private static async Task<string> RunCommandAsync(WorldTestClient client, string command, Language language = Language.Common)
     {
-        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        await client.SendChatAsync(ChatType.Say, language, command);
         return (await client.ReadChatAsync()).Text;
     }
 
@@ -229,7 +229,7 @@ public sealed class SpellWorldTests
         await SelectAsync(host, "Cbgm", "Cbcast");
         uint health = await host.PlayerStateAsync("Cbgm", p => p.Health);
 
-        Assert.Equal($"Cast spell {Bolt}.", await RunCommandAsync(gm, $".cast back {Bolt} triggered"));
+        Assert.Equal($"Cast spell {Bolt}.", await RunCommandAsync(gm, $".cast back {Bolt} triggered", Language.Orcish));
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Cbgm")!.Health == health - 7, "the selected unit's bolt lands on the invoker");
     }
 
