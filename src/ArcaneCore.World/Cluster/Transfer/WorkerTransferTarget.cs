@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
@@ -933,7 +934,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         try
         {
             _world.RegisterPlayerForTransferArrival(shadow);
-            if (!teleports.BeginClusterArrival(shadow, map, new TeleportDestination(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation), new Arrival(_entry, _world)))
+            if (!teleports.BeginClusterArrival(shadow, map, new TeleportDestination(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation), new Arrival(_entry, _world, bundle.SourceMapId)))
             {
                 throw new InvalidOperationException($"the arrival of character {bundle.CharacterGuid} could not be started");
             }
@@ -1034,11 +1035,24 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     }
 
     /// <summary>The arrival callbacks of the teleport service: the held saves resume once the player is in its map (and when the arrival is abandoned), then the login notification.</summary>
-    private sealed class Arrival(ITransferSessionEntry entry, WorldRuntime world) : ITransferArrivalObserver
+    private sealed class Arrival(ITransferSessionEntry entry, WorldRuntime world, uint sourceMapId) : ITransferArrivalObserver
     {
         public void MapAdded(Player player) => entry.ResumeSaves(player);
 
-        public void Entered(Player player) => world.NotifyLoggedIn(player);
+        public void Entered(Player player)
+        {
+            world.NotifyLoggedIn(player);
+
+            // A ghost that entered the map of its body comes back to life here, not on the source (MapCombat.ReviveAfterTransferArrival). Posted: the notification puts the body back,
+            // and CharacterLifeFeature posts the last of the stored vitals from it, so this runs after both.
+            world.Post(() =>
+            {
+                if (ReferenceEquals(world.FindOnlinePlayer(player.Guid), player))
+                {
+                    player.Map?.Combat.ReviveAfterTransferArrival(player, sourceMapId);
+                }
+            });
+        }
 
         public void Abandoned(Player player) => entry.ResumeSaves(player);
     }

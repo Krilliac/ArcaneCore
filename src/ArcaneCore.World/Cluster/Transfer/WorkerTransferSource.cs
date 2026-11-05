@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
@@ -490,6 +491,8 @@ public sealed class WorkerTransferSource(
             StandState = (byte)player.StandState,
             IsGhost = (player.Flags & PlayerFlags.Ghost) != 0,
             HomeBind = player.Home,
+            // The body as the settlement save stores it. The target restores the ghost from that stored life; this copy is the journal's record of what was captured.
+            Corpse = PlayerLife.Capture(player).Corpse,
             Blockers = blockers,
         };
     }
