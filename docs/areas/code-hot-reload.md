@@ -91,7 +91,9 @@ source is another forward edit, or restart. Edits are not tick-atomic.
   requested outside Development / Staging (Staging is treated like Development on purpose, so the allowlist is not mandatory there), or the runtime is set up for hot reload without
   `World:HotCode:Enabled` (a debugger session sets `DOTNET_MODIFIABLE_ASSEMBLIES` too).
 * **`.hotmodule load X` answers `refused by the module allowlist`.** The dll's SHA-256 is not in
-  `modules-allowlist.txt`: run `scripts\dev-module.ps1` (it builds and approves), or add the hash yourself.
+  `modules-allowlist.txt`: run `scripts\dev-module.ps1` (it builds and approves `<name>.dll`), or add the hash yourself. If the
+  message starts with `dependency '<x>.dll' refused`, a private dependency dll is the one that is unlisted: `dev-module.ps1`
+  does not approve dependencies, so run `scripts\hotmodule-hash.ps1 -Name <name> -Dll <path of x.dll> -Allowlist <modules-allowlist.txt>` for it.
 * **`Unloaded modules not yet freed by the runtime: 1`.** The runtime has not collected the unloaded module yet; the
   host never forces a GC. It reached 0 here only after a collection (a hot-edited command that called `GC.Collect()`
   took it from 1 to 0); a count that stays above 0 after collections means module code is holding a reference.
@@ -546,7 +548,7 @@ project changed and nothing else needs a restart, through the World's control pi
 ([Redeploy prefers hot reload](../ops/redeploy.md)).
 
 With an allowlist configured, the allowlist covers `<name>.dll` **and every private dependency dll** the module loads from its
-folder: each is hashed from the bytes that are loaded and must be listed too (`scripts\hotmodule-hash.ps1` per file, or
+folder: each is hashed from the bytes that are loaded and must be listed too (`scripts\hotmodule-hash.ps1` defaults to `<ModuleDirectory>\<Name>\<Name>.dll`, so a dependency needs `-Dll <path>`; or
 `sha256sum`). An unlisted dependency is never loaded, the load or reload is rejected (`dependency '<x>.dll' refused by the module
 allowlist: ...`) and the running version stays in force; a dependency that would only load later, at run time, is refused the
 same way (the load throws inside the module). Assemblies the server already has (ArcaneCore.*, the framework) resolve to the

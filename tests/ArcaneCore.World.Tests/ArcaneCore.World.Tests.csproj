@@ -48,6 +48,8 @@
     <ProjectReference Include="..\hotmodule-fixtures\SampleGm\SampleGm.csproj" ReferenceOutputAssembly="false" OutputItemType="SampleGmOutput" />
     <ProjectReference Include="..\hotmodule-fixtures\HotScriptsV1\HotScriptsV1.csproj" ReferenceOutputAssembly="false" OutputItemType="HotScriptsV1Output" />
     <ProjectReference Include="..\hotmodule-fixtures\HotScriptsV2\HotScriptsV2.csproj" ReferenceOutputAssembly="false" OutputItemType="HotScriptsV2Output" />
+    <ProjectReference Include="..\hotmodule-fixtures\HotDepUse\HotDepUse.csproj" ReferenceOutputAssembly="false" OutputItemType="HotDepUseOutput" />
+    <ProjectReference Include="..\hotmodule-fixtures\HotDepSwallow\HotDepSwallow.csproj" ReferenceOutputAssembly="false" OutputItemType="HotDepSwallowOutput" />
   </ItemGroup>
 
   <Target Name="CopyHotFixtures" AfterTargets="Build">
@@ -59,6 +61,8 @@
     <Copy SourceFiles="@(SampleGmOutput)" DestinationFolder="$(OutDir)hotfixtures\sample" />
     <Copy SourceFiles="@(HotScriptsV1Output)" DestinationFolder="$(OutDir)hotfixtures\scripts1" />
     <Copy SourceFiles="@(HotScriptsV2Output)" DestinationFolder="$(OutDir)hotfixtures\scripts2" />
+    <Copy SourceFiles="@(HotDepUseOutput)" DestinationFolder="$(OutDir)hotfixtures\depuse" />
+    <Copy SourceFiles="@(HotDepSwallowOutput)" DestinationFolder="$(OutDir)hotfixtures\depswallow" />
   </Target>
 
 </Project>

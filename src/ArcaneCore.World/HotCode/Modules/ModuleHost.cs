@@ -729,6 +729,11 @@ public sealed class ModuleHost
             }
             catch (ReflectionTypeLoadException ex)
             {
+                if (context.Refusal is { } refusedDuringTypeLoad)
+                {
+                    throw new ModuleRejectedException(refusedDuringTypeLoad); // an allowlist refusal is a rejection, not a module fault
+                }
+
                 FaultLedger.Shared.Record("hotcode.modules", ex);
                 AnomalyLedger.Shared.Report("hotcode", "module-fault", name, $"type_load_error={ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message}", AnomalySeverity.Warning);
                 throw new ModuleRejectedException("the module's types could not be loaded: " + (ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message));
