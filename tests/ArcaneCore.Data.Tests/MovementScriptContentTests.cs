@@ -94,6 +94,25 @@ public sealed class MovementScriptContentTests
         }
     }
     [Fact]
+    public void SpellScriptTargetConditionId_IsCaptured_AndZeroWhenTheColumnIsAbsent()
+    {
+        // vmangos column order: entry, type, targetEntry, conditionId, inverseEffectMask, build_min, build_max (SpellMgr.cpp:2068).
+        const string dump = """
+            INSERT INTO `spell_script_target` (`entry`,`type`,`targetEntry`,`conditionId`,`inverseEffectMask`,`build_min`,`build_max`) VALUES
+            (9082,1,6492,6492,0,0,5875),(11757,0,144050,122,0,0,5875),(8283,1,4781,0,0,0,5875);
+            INSERT INTO `spell_script_target` (`entry`,`type`,`targetEntry`,`inverseEffectMask`) VALUES (10252,1,7076,0);
+            """;
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader(dump));
+
+        Dictionary<uint, uint> byRow = importer.SpellScriptTargets.ToDictionary(r => r.SpellId, r => r.ConditionId);
+        Assert.Equal(6492u, byRow[9082]);
+        Assert.Equal(122u, byRow[11757]);
+        Assert.Equal(0u, byRow[8283]);
+        Assert.Equal(0u, byRow[10252]);
+    }
+
+    [Fact]
     public void ClassicDbMovementSpellAndLinkRows_AreCaptured()
     {
         const string dump = """

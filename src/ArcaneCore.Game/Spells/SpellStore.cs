@@ -8,7 +8,8 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed class SpellStore
 {
-    public sealed record ScriptTarget(uint SpellId, uint Type, uint TargetEntry, uint InverseEffectMask);
+    /// <summary>One spell_script_target row. <paramref name="ConditionId"/> is the <c>conditions</c> row the target must satisfy (vmangos conditionId); 0 is none.</summary>
+    public sealed record ScriptTarget(uint SpellId, uint Type, uint TargetEntry, uint InverseEffectMask, uint ConditionId = 0);
     public static readonly SpellStore Empty = new([], [], []);
 
     private readonly FrozenDictionary<uint, SpellInfo> _spells;

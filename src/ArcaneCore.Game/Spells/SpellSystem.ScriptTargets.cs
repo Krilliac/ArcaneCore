@@ -73,7 +73,8 @@ public sealed partial class SpellSystem
                     ScriptTargetDead => unit is Creature && !unit.IsAlive,
                     ScriptTargetPlayer => unit is Player && unit.IsAlive,
                     _ => false,
-                }));
+                })
+                && ScriptTargetConditionHolds(row, cast.Caster, unit));
         }
 
         List<Unit> units = [.. UnitsInRadius(map, x, y, z, radius).Where(Matches)
@@ -81,6 +82,17 @@ public sealed partial class SpellSystem
         CapTargets(units, MaxTargetsOf(cast.Spell));
         return [.. units.Select(unit => (unit, 1f))];
     }
+
+    /// <summary>
+    /// The row's <c>conditionId</c> (vmangos NearestUnitFitConditionInCombatRangeCheck and NearestGameObjectEntryFitConditionInObjectRangeCheck,
+    /// GridNotifiers.h:672 and :1210: <c>IsConditionSatisfied(conditionId, candidate, map, caster)</c>, checked once entry, state and range fit): the
+    /// candidate is the condition's target and the caster its source, through the creature system's relay-condition path. A row with no condition
+    /// holds; a condition that is missing or cannot be decided here (no creature system on the map, an undecidable type) does not, so the
+    /// candidate is not selected. World thread only.
+    /// </summary>
+    private static bool ScriptTargetConditionHolds(SpellStore.ScriptTarget row, Unit caster, WorldObject candidate)
+        => row.ConditionId == 0
+            || caster.Map?.FindUpdater<CreatureMapSystem>()?.ScriptTargetConditionHolds(row.ConditionId, candidate, caster) == true;
 
     /// <summary>
     /// Whether an effect of <paramref name="spell"/> has target 46 (as target A or B, as vmangos SetTargetMap runs both) or target 38 (as target A, or as
@@ -255,7 +267,7 @@ public sealed partial class SpellSystem
             ScriptTargetDead => unit is Creature dead && !unit.IsAlive && dead.Entry == row.TargetEntry,
             ScriptTargetPlayer => unit is Player && unit.IsAlive && row.TargetEntry == 0,
             _ => false,
-        });
+        } && ScriptTargetConditionHolds(row, caster, unit));
 
         // Limits (docs/areas/spells.md): vmangos walks the rows one by one and shrinks the radius to the last distance found, so a later row wins only
         // when nearer (Spell.cpp:466-556); this search takes the nearest unit and the nearest object over all rows at once, so the choice can differ
@@ -281,11 +293,12 @@ public sealed partial class SpellSystem
         GameObject? chosenObject = null;
         if (explicitTarget is null || chosenUnit is null || !ReferenceEquals(chosenUnit, explicitTarget))
         {
-            HashSet<uint> objectEntries = [.. rows.Where(row => row.Type == 0 && row.TargetEntry != 0).Select(row => row.TargetEntry)];
-            if (objectEntries.Count > 0 && map.FindUpdater<GameObjectMapSystem>() is { } objects)
+            SpellStore.ScriptTarget[] objectRows = [.. rows.Where(row => row.Type == 0 && row.TargetEntry != 0)];
+            if (objectRows.Length > 0 && map.FindUpdater<GameObjectMapSystem>() is { } objects)
             {
-                chosenObject = objects.GameObjects.Where(go => go.IsSpawned && objectEntries.Contains(go.Entry)
-                        && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius))
+                chosenObject = objects.GameObjects.Where(go => go.IsSpawned
+                        && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius)
+                        && objectRows.Any(row => row.TargetEntry == go.Entry && ScriptTargetConditionHolds(row, caster, go)))
                     .OrderBy(DistanceSquared).ThenBy(go => go.Guid.Value).FirstOrDefault();
             }
         }

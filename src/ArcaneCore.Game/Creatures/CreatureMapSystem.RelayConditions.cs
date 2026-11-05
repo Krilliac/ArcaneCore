@@ -25,6 +25,13 @@ public sealed partial class CreatureMapSystem
     internal bool SmartConditionHolds(uint conditionId, WorldObject? invoker, WorldObject? source) => RelayConditionHolds(conditionId, invoker, source);
 
     /// <summary>
+    /// A spell_script_target row's conditionId (vmangos GridNotifiers.h:672, :1210: <c>IsConditionSatisfied(conditionId, candidate, map, caster)</c>):
+    /// the candidate unit or game object is the target and the caster the source. 0 holds; a missing or undecidable condition does not.
+    /// </summary>
+    internal bool ScriptTargetConditionHolds(uint conditionId, WorldObject candidate, WorldObject caster)
+        => conditionId == 0 || RelayConditionHolds(conditionId, candidate, caster);
+
+    /// <summary>
     /// The three-valued answer (null: cannot be decided here). The condition types about the map rather than a player - 36 DEAD_OR_AWAY,
     /// 37 CREATURE_IN_RANGE and 39 SPAWN_COUNT, and the AND/OR/NOT rows over them - are decided here with the script's objects
     /// (Conditions.cpp:299-308, 424-466, 484-489); a subtree without them goes to the player condition evaluator as before. The table is

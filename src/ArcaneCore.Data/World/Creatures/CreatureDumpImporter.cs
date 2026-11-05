@@ -454,6 +454,7 @@ public sealed class CreatureDumpImporter
                     {
                         SpellId = U32(row, "entry"), Type = U32(row, "type"),
                         TargetEntry = U32(row, "targetEntry"), InverseEffectMask = U32(row, "inverseEffectMask"),
+                        ConditionId = U32(row, "conditionId"),
                     };
                     _spellScriptTargets[(target.SpellId, target.Type, target.TargetEntry, target.InverseEffectMask)] = target;
                     break;

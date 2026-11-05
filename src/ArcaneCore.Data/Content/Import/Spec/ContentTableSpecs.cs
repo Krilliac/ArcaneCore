@@ -285,7 +285,7 @@ public static class ContentTableSpecs
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
         new("playercreateinfo_skills", [new KeyColumn("raceMask"), new KeyColumn("classMask"), new KeyColumn("skill")], ["step", "note"], []),
         new("spell_target_position", [new KeyColumn("id")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsTargetColumn),
-        new("spell_script_target", [new KeyColumn("entry"), new KeyColumn("type"), new KeyColumn("targetEntry")], ["inverseEffectMask"], []),
+        new("spell_script_target", [new KeyColumn("entry"), new KeyColumn("type"), new KeyColumn("targetEntry")], ["inverseEffectMask", "conditionId"], []),
         new("creature_linking", [new KeyColumn("guid")], ["master_guid", "flag"], []),
         new("creature_linking_template", [new KeyColumn("entry"), new KeyColumn("map")], ["master_entry", "flag", "search_range"], []),
         new("player_levelstats", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("level")], [], [], PlayerCreateDumpImporter.ReadsLevelColumn),
