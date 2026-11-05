@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
+using ArcaneCore.Data.Characters.Rename;
 using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Game;
@@ -10,6 +11,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Honor;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Transfer;
@@ -635,6 +637,117 @@ public sealed class CharacterClaimWiringTests
         Assert.Equal(1u, map);
         Assert.Equal(new HomeBind(1u, 14u, 1500.5f, -4400.25f, 40.75f), home); // the bind point the previous owner saved, not the one read before the claim
         Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
+    }
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheRenameGateRefusesAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE10", "Renamer",
+            (services, trip) => services.AddSingleton<ICharacterRenameStore>(new PostClaimRenameStore(trip, throws: false)));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheWorldDataIsMissingAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE11", "Nodata",
+            (services, trip) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheWorldDataReadThrowsAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE12", "Databoom",
+            (services, trip) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)));
+
+    /// <summary>
+    /// A login whose claim is admitted after the previous owner released it (the same sequence as the post-claim record test) and whose re-checks then fail, by a refusal or a
+    /// throw that happens only once <c>trip</c> is set (right when the previous owner releases, so after the pre-claim checks). The login is answered as failed, no player exists,
+    /// and the claim is given back: a login on another worker can then claim the character.
+    /// </summary>
+    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip> faultAfterClaim)
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        var trip = new PostClaimTrip();
+        StaleReadStore? reads = null;
+        await using WorldTestHost host = rig.StartWorld(a, configure: services =>
+        {
+            ICharacterStore inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
+            reads = StaleReadStore.Wrap(inner);
+            services.AddSingleton((ICharacterStore)(object)reads);
+            faultAfterClaim(services, trip);
+        });
+        (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, account, name);
+        trip.CharacterId = id;
+
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome);
+        reads!.Arm(id, readNumber: 2, async () =>
+        {
+            trip.On = true;
+            Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
+        });
+
+        var login = new PacketWriter(8);
+        login.WriteUInt64((ulong)id);
+        await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+        byte[] failed = await client.ReadUntilAsync(WorldOpcode.SmsgCharacterLoginFailed);
+
+        Assert.Equal((byte)CharResult.CharLoginFailed, failed[0]);
+        Assert.True(reads.Fired);
+        Assert.True(trip.Reached, "the post-claim check that was meant to fail never ran");
+        Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the claim is given back by the failed login");
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome); // another worker can claim now
+    }
+
+    /// <summary>Set once the previous owner has released (the login's claim is admitted after this); <see cref="Reached"/> records that a fault hook actually ran after it.</summary>
+    private sealed class PostClaimTrip
+    {
+        public volatile bool On;
+        public volatile bool Reached;
+        public volatile int CharacterId;
+    }
+
+    private sealed class PostClaimRenameStore(PostClaimTrip trip, bool throws) : ICharacterRenameStore
+    {
+        public Task<bool> SetFlagAsync(int characterId, uint flag, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<CharacterRenameResult> RenameAsync(int characterId, int accountId, string newName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<int, uint>> GetFlagsAsync(int accountId, CancellationToken cancellationToken = default)
+        {
+            if (!trip.On)
+            {
+                return Task.FromResult<IReadOnlyDictionary<int, uint>>(new Dictionary<int, uint>());
+            }
+
+            trip.Reached = true;
+            if (throws)
+            {
+                throw new InvalidOperationException("rename flags failed after the claim");
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<int, uint>>(new Dictionary<int, uint> { [trip.CharacterId] = CharacterAtLoginFlags.Rename });
+        }
+    }
+
+    private sealed class PostClaimWorldData(IWorldDataStore inner, PostClaimTrip trip, bool throws) : IWorldDataStore
+    {
+        public Task<StartPosition?> GetStartPositionAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.GetStartPositionAsync(race, cls, cancellationToken);
+
+        public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default) => inner.GetClassInfoAsync(cls, cancellationToken);
+
+        public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.IsValidRaceClassAsync(race, cls, cancellationToken);
+
+        public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
+        {
+            if (!trip.On)
+            {
+                return inner.GetRaceInfoAsync(race, gender, cancellationToken);
+            }
+
+            trip.Reached = true;
+            return throws ? throw new InvalidOperationException("world data failed after the claim") : Task.FromResult<RaceInfo?>(null);
+        }
     }
 
     /// <summary>
