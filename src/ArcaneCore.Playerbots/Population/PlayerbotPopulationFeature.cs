@@ -1318,7 +1318,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         while (_createTimes.Count > 0 && now - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
         if (!pop.FreshLaunch && !input.ShedOnly && input.RushCount == 0 && pop.TargetOnline > 0)
         {
-            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: heldBack is null ? decision.Reason : decision.Reason + "; held back: " + heldBack);
+            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: BandDeficitNote(decision.Reason, heldBack));
         }
 
         PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i],
@@ -1335,6 +1335,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             input.Atlas.CountFor(Team.Alliance), input.Atlas.CountFor(Team.Horde), bands,
             _lastError, Interlocked.Increment(ref _passes), operatorRunning, ownedTarget, pop.FreshLaunch));
     }
+
+    /// <summary>The note a band-deficit anomaly carries: the decision's reason, then <c>; held back: ...</c> when the pass held something back.</summary>
+    internal static string BandDeficitNote(string reason, string? heldBack) => heldBack is null ? reason : reason + "; held back: " + heldBack;
 
     private void ObserveBandDeficits(PopulationBand[] bands, int[] desired, int[] have, long nowMs, PlayerbotPopulationOptions pop, string? ctxNote)
     {

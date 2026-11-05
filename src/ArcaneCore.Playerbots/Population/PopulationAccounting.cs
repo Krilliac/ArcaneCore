@@ -48,7 +48,7 @@ internal sealed record PopulationCounts(int[] Desired, int[] Have, int OperatorR
     }
 }
 
-/// <summary>What one pass changed: the reason of every bot parked, and the bots started, created and moved.</summary>
+/// <summary>What one pass changed: the reason of every bot parked, and the bots started, created and moved, and why it held something back (<see cref="Note"/>).</summary>
 internal sealed class PopulationPassActions
 {
     public List<string> Parked { get; } = [];
@@ -76,8 +76,10 @@ internal sealed class PopulationPassActions
 
 /// <summary>
 /// Rate-limits the population's information line: the changes of every pass are added up, and <see cref="Due"/> hands them out at
-/// most once per <c>ActionLogSeconds</c> of world time (the first change at once). A pass that changes nothing adds nothing, but may
-/// hand out what earlier passes added. Thread affinity: the population pass (one at a time).
+/// most once per <c>ActionLogSeconds</c> of world time (the first change at once). A pass that changes nothing and holds nothing back adds
+/// nothing, but may hand out what earlier passes added. A pass that only held something back (a note, no change) is added: it counts in
+/// "in N passes", uses up the interval like a change, and the last note of the window is the one handed out. Thread affinity: the population
+/// pass (one at a time).
 /// </summary>
 internal sealed class PopulationActionLog
 {
@@ -101,7 +103,7 @@ internal sealed class PopulationActionLog
         _passes++;
     }
 
-    /// <summary>The line's action part (<c>parked 3 (dead 1, sick 2), started 0, created 1, moved 0 in 2 passes</c>) when one is due, else null.</summary>
+    /// <summary>The line's action part (<c>parked 3 (dead 1, sick 2), started 0, created 1, moved 0 in 2 passes</c>, plus <c>; held back: ...</c> when a pass in the window held something back) when one is due, else null. The note is cleared once handed out.</summary>
     public string? Due(long nowMs, int intervalSeconds)
     {
         if (_passes == 0) return null;
