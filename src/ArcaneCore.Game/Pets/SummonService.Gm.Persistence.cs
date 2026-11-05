@@ -20,6 +20,24 @@ public sealed partial class SummonService
         }
     }
 
+    /// <summary>Ids of the characters with a pet save in flight, or a failed pet snapshot or delete kept for the next flush, ascending.</summary>
+    public IReadOnlyList<int> OpenPersistenceCharacters
+    {
+        get
+        {
+            lock (_cacheGate)
+            {
+                var open = new SortedSet<int>(_retained.Keys.Concat(_failedDeletes));
+                foreach ((int characterId, Task tail) in _saveTails)
+                {
+                    if (!tail.IsCompleted) open.Add(characterId);
+                }
+
+                return [.. open];
+            }
+        }
+    }
+
     /// <summary>Ids of the characters whose failed pet snapshot is kept and retried by the next flush, ascending.</summary>
     public IReadOnlyList<int> RetainedPersistenceCharacters
     {

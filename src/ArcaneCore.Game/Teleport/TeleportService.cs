@@ -550,7 +550,8 @@ public sealed partial class TeleportService
         // the transport removal below. The revive reads no map state of the destination.
         player.Map?.Combat.ReviveForDungeonEntry(player, destination.MapId);
 
-        // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872).
+        // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872). Until the gateway answers the client still sends
+        // moves aboard: the transport observer boards it again from the first of them (TransportMovementObserver.AfterApply), so a refused teleport leaves it on the ship.
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
         if (!staysAboard)
         {

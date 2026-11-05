@@ -334,6 +334,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                     return false;
             }
 
+            _server.AfterInterceptClientPacket?.Invoke(this, opcode);
             GatewaySessionLinkClient? link;
             lock (_redirectGate)
             {
@@ -365,6 +366,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 link = _link;
             }
 
+            // Known limit: the send is outside the gate, so a whole stage, commit and route switch could finish here. The packet then reaches the old worker under a generation it has closed,
+            // and that worker's envelope rules drop it (GatewaySessionLinkHost.OnClientPacket: unknown session): one packet lost, never applied to a character it no longer runs.
             if (link is not null && link.SendClientPacket(generation, opcode, payload, _packetReceivedMs))
             {
                 GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);

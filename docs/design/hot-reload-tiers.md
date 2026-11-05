@@ -697,14 +697,22 @@ workers. It is a separate process from every world, so the coordinators it hosts
 
 - **Control channel.** Frames 28 to 32 of the gateway link (`ControlRequest`, `ControlReply`, `ControlSubmit`, `ControlSubmitReply`,
   `ControlNotice`; frames 24 to 27 are unchanged) carry one request per verb. Handoff verbs: `Describe`, `Warm`, `StopAdmissions`, `Freeze`,
-  `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
+  `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
   `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
   once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
-  120 s `Promote`). The link contract version is 5, so a gateway and its workers upgrade together.
+  120 s `Promote`). The link contract version is 6, so a gateway and its workers upgrade together.
 - **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
-  `ResumeSource` is refused once the row is Committed; `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
+  `ResumeSource` is refused once the row is Committed; `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
   its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
   only the abort and roll-forward verbs are repeated, by recovery.
+- **The source's writes around the commit.** `Flush` writes every write the source has open in a character, instance or social queue, offline characters and writes of no one character (instance rows, guilds, petitions, purges) included, and fails the handoff before the commit when one cannot be written.
+  A flush that succeeds seals the source: until `Resume` or `RetireWrites` decides, a fence refusal is dropped and counted, not terminal, because the takeover can land at any moment and that span lasts until recovery or
+  self-heal if the gateway dies after the commit. An ownership loss the worker heartbeat reports is ignored the same way. `RetireWrites` then closes every write of those queues, named or not: the takeover moved the one scope they all run under.
+  The seal belongs to one freeze: `Flush` keeps running after the gateway's timeout and `Resume` does not wait for it, so a flush that finishes after the resume fails and seals nothing.
+  **Known limit:** a write made after the flush has no durability promise; it lands only if the takeover has not. Pet saves have no fence handling of their own: one refused in that span stays retained and is reported at stop.
+  **Known limit:** group, GM audit, account data, account address and creature and game object respawn writes also live in the characters database, and `Flush` does not cover them. They have no terminal path, so a refusal cannot stop the source, but one still retained at the commit is not written (B reads without it) and is reported at stop.
+- **Known limit: a client packet can be lost at a route switch.** The gateway chooses the link and the generation under its redirect gate but sends outside it. If a whole stage, commit and
+  route switch finish in that gap, the packet reaches the old worker under a generation that worker has closed, and its envelope rules drop it. One packet is lost; it is never applied to a character the worker no longer runs.
 - **Opt-in keys, all `false` by default:** `Cluster:Worker:Handoff:Enabled` and `Cluster:Worker:Transfers:Enabled` on a worker (it answers
   `Disabled` for a kind that is off), `Gateway:Handoff:Enabled` and `Gateway:Transfers:Enabled` on the gateway. With them off nothing is
   registered, the in-process coordinators and frames 24 to 27 behave as before, and a Combined or single-process world is unchanged

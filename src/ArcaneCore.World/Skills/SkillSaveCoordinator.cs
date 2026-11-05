@@ -56,6 +56,9 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
     /// <summary>Characters with a snapshot waiting or being retried.</summary>
     public int Pending => _pending.Count;
 
+    /// <summary>Ids of the characters with a snapshot waiting or being retried.</summary>
+    public IReadOnlyList<int> PendingCharacters => [.. _pending.Keys];
+
     /// <summary>Terminal failure that halted the skill save coordinator (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
     public Exception? TerminalFailure
     {
@@ -334,7 +337,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
                 return true;
             }
-            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
             {
                 DropRetired(characterId, entry); // refused because the character moved to another world: counted, neither logged nor terminal
                 return true;

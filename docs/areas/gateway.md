@@ -69,7 +69,7 @@ After the two proofs, both directions switch to MAC-protected frames. Each end d
 with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
 direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
 reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
-The gateway contract version is 5 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32) and the peer link protocol version is 2, so a gateway or peer from before this change is
+The gateway contract version is 6 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`) and the peer link protocol version is 2, so a gateway or peer from before this change is
 refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
 (`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
 
@@ -315,7 +315,7 @@ processes with the gateway as the one coordinator (design `_wf/handoff-control-D
 
 | Key | Where | Effect when `true` |
 |---|---|---|
-| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
+| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
 | `Cluster:Worker:Transfers:Enabled` | worker (and standby) | The worker builds its production transfer source and target and answers the transfer verbs; a teleport to a map another worker owns becomes a transfer request. Off, it answers `Disabled` and the refusal of that teleport is unchanged |
 | `Gateway:Handoff:Enabled` | gateway | The gateway connects to the characters database (validate-only, nothing is created or upgraded), keeps a control link to each slot's standby, coordinates handoffs and operator restarts and recovers interrupted ones from the journal |
 | `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |

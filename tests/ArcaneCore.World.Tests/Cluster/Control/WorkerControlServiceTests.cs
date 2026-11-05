@@ -176,9 +176,10 @@ public sealed class WorkerControlServiceTests
         Assert.Equal(ControlStatus.Refused, resume.Status);
         Assert.Equal(0, source.Resumes);
 
+        Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.RetireWrites)).Status);
         Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.ReleaseWriterLock)).Status);
         Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Retire)).Status);
-        Assert.Equal((1, 1), (source.Releases, source.Retires));
+        Assert.Equal((1, 1, 1), (source.WriteRetires, source.Releases, source.Retires));
 
         // Promote needs the token the journal committed.
         ControlReply stale = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlTokenArguments(SourceToken));
@@ -199,7 +200,8 @@ public sealed class WorkerControlServiceTests
 
         Assert.Equal(ControlStatus.Refused, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Retire)).Status);
         Assert.Equal(ControlStatus.Refused, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.ReleaseWriterLock)).Status);
-        Assert.Equal((0, 0), (source.Retires, source.Releases));
+        Assert.Equal(ControlStatus.Refused, (await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.RetireWrites)).Status); // before the commit these are A's own writes
+        Assert.Equal((0, 0, 0), (source.Retires, source.Releases, source.WriteRetires));
     }
 
     [Fact]
@@ -669,6 +671,9 @@ public sealed class WorkerControlServiceTests
         private int _resumes;
         private int _retires;
         private int _releases;
+        private int _writeRetires;
+
+        public int WriteRetires => Volatile.Read(ref _writeRetires);
 
         public int Stops => Volatile.Read(ref _stops);
 
@@ -728,6 +733,12 @@ public sealed class WorkerControlServiceTests
         public Task RetireAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _retires);
+            return Task.CompletedTask;
+        }
+
+        public Task RetireWritesAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _writeRetires);
             return Task.CompletedTask;
         }
 

@@ -562,7 +562,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 bool rejected = IsOwnershipRejection(ex);
-                if (rejected && CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                if (rejected && CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
                 {
                     lock (_gate)
                     {

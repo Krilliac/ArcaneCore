@@ -854,9 +854,11 @@ public sealed class WorldHost(
                     ICharacterOwnershipStore store = scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>();
                     if (!await store.HeartbeatAsync(token, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), stop).ConfigureAwait(false))
                     {
-                        saveQueue.FailTerminal(new InvalidOperationException(
-                            $"the worker scope '{token.Scope}' at epoch {token.Epoch} no longer belongs to this world (it was reclaimed or reaped)"));
-                        return;
+                        if (saveQueue.FailTerminal(new InvalidOperationException(
+                            $"the worker scope '{token.Scope}' at epoch {token.Epoch} no longer belongs to this world (it was reclaimed or reaped)")))
+                        {
+                            return;
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested)
@@ -913,9 +915,11 @@ public sealed class WorldHost(
                     ICharacterOwnershipStore? store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>();
                     if (store is not null && await store.IsAnyOwnedAsync(stop).ConfigureAwait(false))
                     {
-                        saveQueue.FailTerminal(new InvalidOperationException(
-                            "the characters database was claimed by a fenced world while this world runs with fencing disabled"));
-                        return;
+                        if (saveQueue.FailTerminal(new InvalidOperationException(
+                            "the characters database was claimed by a fenced world while this world runs with fencing disabled")))
+                        {
+                            return;
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested)

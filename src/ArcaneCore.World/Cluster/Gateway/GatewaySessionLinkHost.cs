@@ -69,6 +69,11 @@ public interface IGatewayControlSubmitSink
 
     /// <summary>The gateway tells the worker the outcome of an operation it submitted, or text for an operator.</summary>
     void OnNotice(ControlNotice notice);
+
+    /// <summary>The link that carried this session went down: an answer to a submit of that session has nowhere to arrive, so nothing should wait for one. Called on the link's receive loop, before the session closes.</summary>
+    void OnSessionLinkLost(long sessionGeneration)
+    {
+    }
 }
 
 /// <summary>The acceptor's answer: <see cref="AuthResponseCode.Ok"/> with a session, or a refusal code for the client.</summary>
@@ -498,6 +503,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             ReleaseSource(link);
             foreach (LinkSession session in link.Sessions.Values)
             {
+                OnSessionLinkLost(session.Generation);
                 session.CloseFromLink(ClusterSessionDetachReason.LinkLost);
             }
 
@@ -552,6 +558,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("cluster.control", ex, "The control submit reply handler failed");
+        }
+    }
+
+    private void OnSessionLinkLost(long generation)
+    {
+        try
+        {
+            SubmitSink?.OnSessionLinkLost(generation);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.submit-sink", ex, "The submit sink failed on the link loss of session {Generation}", generation);
         }
     }
 
