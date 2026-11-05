@@ -221,10 +221,10 @@ public sealed class InboundQueueCapTests
         Assert.Equal(4567, bound.MaxQueuedWorldBytes);
     }
 
-    /// <summary>Parks the world thread so queued packets cannot drain until released.</summary>
     /// <summary>These floods hold the world thread, so the closing session waits out its whole world-close bound before the socket closes. The default bound (10 s) equals the client's close timeout.</summary>
     private static readonly TimeSpan StalledWorldCloseGrace = TimeSpan.FromSeconds(1);
 
+    /// <summary>Parks the world thread so queued packets cannot drain until released.</summary>
     private sealed class WorldThreadGate(WorldTestHost host) : IDisposable
     {
         private readonly ManualResetEventSlim _open = new(false);
