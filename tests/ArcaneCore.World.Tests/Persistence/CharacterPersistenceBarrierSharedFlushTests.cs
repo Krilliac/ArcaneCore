@@ -309,7 +309,7 @@ public sealed class CharacterPersistenceBarrierSharedFlushTests
         Assert.Equal(["ticket:7"], rig.Audit.Writes.RetainedKeys);
 
         CharacterPersistenceBarrier barrier = rig.Barrier();
-        await barrier.FlushSharedWritesAsync().WaitAsync(HangGuard); // nothing is owed: the holder writes the stored value
+        await barrier.FlushSharedWritesAsync().WaitAsync(HangGuard); // a lease refusal is not checked by the flush: the group's holder owns that data, but a ticket taken on a non-holder is not durable and is not on B
 
         Assert.Equal(["ticket:7"], rig.Audit.Writes.RetainedKeys); // still retained: stop names it, a regained lease lands it
         Assert.Equal(["group:3"], rig.Group.Writes.RetainedKeys);
