@@ -91,7 +91,7 @@ public sealed class RealmAuthorityLeaseDataModule : IDataModule, ICharacterDataC
 /// <para>Row locks on PostgreSQL (the fence in <see cref="LeaseFencedWrite"/> takes <c>FOR KEY SHARE</c> on the lease row and holds it to the end of the writer's transaction): a renewal changes only
 /// <c>expires_at_unix_ms</c> (the primary key is <c>scope</c> alone, there is no other unique index), so its UPDATE takes <c>FOR NO KEY UPDATE</c>, which does not conflict with <c>FOR KEY SHARE</c>: a renewal never waits for a
 /// writer's commit. Every change of authority (owner, incarnation, fencing token, active: <see cref="TryAcquire"/>, which is also the takeover, and <see cref="TryRelease"/>) first takes <c>SELECT ... FOR UPDATE</c> on the row in the
-/// same transaction, which does conflict with <c>FOR KEY SHARE</c>, so it waits for in-flight fenced commits and a fenced write is always ordered wholly before or wholly after it. A plain UPDATE there would take only
+/// same transaction (only when the call could change the row: a refused acquire or a release by a non-holder locks nothing), which does conflict with <c>FOR KEY SHARE</c>, so it waits for in-flight fenced commits and a fenced write is always ordered wholly before or wholly after it. A plain UPDATE there would take only
 /// <c>FOR NO KEY UPDATE</c> and silently break the fence. On MariaDB the fence's shared lock still conflicts with every UPDATE of the row, so a renewal there still waits for in-flight fenced commits.</para>
 /// <para>A renewal on PostgreSQL commits with <c>synchronous_commit = off</c> (see <see cref="TryRenew"/>).</para>
 /// </summary>
@@ -162,24 +162,34 @@ public sealed class EfRealmAuthorityLeaseStore(
     }
 
     /// <summary>
-    /// PostgreSQL only: <c>SELECT ... FOR UPDATE</c> on the scope's row in the current transaction. Every change of authority calls it first: <c>FOR UPDATE</c> conflicts with the fence's <c>FOR KEY SHARE</c>,
-    /// so the change waits for in-flight fenced commits (bounded by the command timeout). Nothing is selected when the row does not exist (the caller then reports the unknown scope).
+    /// PostgreSQL only: <c>SELECT 1 FROM realm_authority_lease WHERE scope = @scope AND (<paramref name="condition"/>) FOR UPDATE</c> in the current transaction, true when it locked the row. The condition is the
+    /// store's own condition for the change the call is about to make, so only a row this call could change is locked: <c>FOR UPDATE</c> conflicts with the fence's <c>FOR KEY SHARE</c>, so a change of authority waits for
+    /// in-flight fenced commits (bounded by the command timeout), and a call that will be refused takes no row lock at all (it neither waits behind the holder's writers, nor blocks the holder's renewal and writers, nor
+    /// gets a transaction id that would make its commit wait for the WAL). Read Committed re-evaluates the condition after any wait. The caller must skip its UPDATEs when this returns false: a concurrent change
+    /// (a release committing in between) could make the UPDATE match without the lock. Other providers take no lock here and return true: the UPDATEs then run exactly as before.
     /// </summary>
-    private static void LockRowForUpdate(CharacterDbContext db, string scope)
+    private static bool TryLockRow(CharacterDbContext db, string scope, string condition, params (string Name, object Value)[] parameters)
     {
         if (db.Database.ProviderName != "Npgsql.EntityFrameworkCore.PostgreSQL")
-            return;
+            return true;
 
         using DbCommand command = db.Database.GetDbConnection().CreateCommand();
         command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
         if (db.Database.GetCommandTimeout() is { } seconds)
             command.CommandTimeout = seconds;
-        command.CommandText = $"SELECT 1 FROM {RealmAuthorityLeaseDataModule.Table} WHERE scope = @scope FOR UPDATE";
+        command.CommandText = $"SELECT 1 FROM {RealmAuthorityLeaseDataModule.Table} WHERE scope = @scope AND ({condition}) FOR UPDATE";
+        AddParameter(command, "@scope", scope);
+        foreach ((string name, object value) in parameters)
+            AddParameter(command, name, value);
+        return command.ExecuteScalar() is not null;
+    }
+
+    private static void AddParameter(DbCommand command, string name, object value)
+    {
         DbParameter parameter = command.CreateParameter();
-        parameter.ParameterName = "@scope";
-        parameter.Value = scope;
+        parameter.ParameterName = name;
+        parameter.Value = value;
         command.Parameters.Add(parameter);
-        command.ExecuteScalar();
     }
 
     public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
@@ -192,9 +202,13 @@ public sealed class EfRealmAuthorityLeaseStore(
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
-        LockRowForUpdate(db, scope); // acquire and takeover change authority: wait for in-flight fenced commits (PostgreSQL)
+        // Acquire and takeover change authority: on PostgreSQL lock the row (FOR UPDATE, waits for in-flight fenced commits) only when one of the two UPDATEs below could change it: the lease is free or lapsed (and the
+        // token can grow), or it is this owner's own (the renewal branch). A call that will be refused locks nothing and skips both UPDATEs.
+        bool locked = TryLockRow(db, scope,
+            "(owner_node = @node AND owner_incarnation = @incarnation) OR ((NOT active OR expires_at_unix_ms <= @now) AND fencing_token < @maxToken)",
+            ("@node", ownerNodeId), ("@incarnation", incarnation), ("@now", now), ("@maxToken", long.MaxValue));
 
-        int renewed = db.Set<RealmAuthorityLeaseRow>()
+        int renewed = !locked ? 0 : db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && r.Active && r.ExpiresAtUnixMs > now && r.OwnerNode == ownerNodeId && r.OwnerIncarnation == incarnation)
             .ExecuteUpdate(s => s.SetProperty(r => r.ExpiresAtUnixMs, expires));
         if (renewed > 0)
@@ -204,7 +218,7 @@ public sealed class EfRealmAuthorityLeaseStore(
             return new AuthorityLeaseResult(AuthorityLeaseOutcome.Renewed, ToLease(row));
         }
 
-        int granted = db.Set<RealmAuthorityLeaseRow>()
+        int granted = !locked ? 0 : db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && (!r.Active || r.ExpiresAtUnixMs <= now) && r.FencingToken < long.MaxValue)
             .ExecuteUpdate(s => s
                 .SetProperty(r => r.OwnerNode, ownerNodeId)
@@ -273,9 +287,12 @@ public sealed class EfRealmAuthorityLeaseStore(
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
-        LockRowForUpdate(db, scope); // a release changes authority: wait for in-flight fenced commits (PostgreSQL)
+        // A release changes authority: on PostgreSQL lock the row (waits for in-flight fenced commits) only when the UPDATE below would match it; a release by a non-holder locks nothing and skips the UPDATE.
+        bool locked = TryLockRow(db, scope,
+            "fencing_token = @token AND active AND owner_node = @node AND owner_incarnation = @incarnation",
+            ("@token", fencingToken), ("@node", ownerNodeId), ("@incarnation", incarnation));
 
-        int released = db.Set<RealmAuthorityLeaseRow>()
+        int released = !locked ? 0 : db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.OwnerNode == ownerNodeId && r.OwnerIncarnation == incarnation)
             .ExecuteUpdate(s => s
                 .SetProperty(r => r.OwnerNode, (string?)null)

@@ -45,7 +45,7 @@ public static class ClusterNodeHosting
             // On PostgreSQL the leases connect through two small Npgsql pools of their own (own connection strings: application name, max pool size, connect timeout and Command Timeout = the command timeout above), so a
             // saturated or stalled general pool cannot starve a renewal. The writer pool (acquire, renew, release) is only the keeper's, one call at a time, so 2 connections; the reader pool (PeerHolderLocator polls
             // GetCurrent every 1000 ms, ClusterRoleFeatureFilter validates fencing tokens, both from any thread) is separate so that a burst of readers can never queue a renewal, and has 3. At most 5 connections per
-            // process, 25 for a split cluster of 5 workers, against the server's max_connections of 100. MariaDB and SQLite keep the general pool (null factories), and MariaDB keeps the coupling of the fence's shared lock
+            // process, 25 for a split cluster of 5 workers; that is well under PostgreSQL's default max_connections of 100, which is an assumption (the setting is not read from the server). MariaDB and SQLite keep the general pool (null factories), and MariaDB keeps the coupling of the fence's shared lock
             // with the renewal's UPDATE (see EfRealmAuthorityLeaseStore).
             services.TryAddSingleton(sp =>
             {

@@ -182,7 +182,7 @@ internal static class WorldStartup
     }
 
     /// <summary>
-    /// Disposes the host, which disposes the container and with it every service (the writer lock last). A service whose disposal throws escapes from here (the 2026-11-04 incident went through <c>Host.DisposeAsync</c>);
+    /// Disposes the host, which disposes the container and with it every service (the writer lock last). A service whose disposal throws escapes from here;
     /// anything but OutOfMemoryException is handled by <see cref="RecordFailure"/> (site <c>world.host-dispose</c>) and not rethrown.
     /// </summary>
     /// <returns>True when the disposal threw.</returns>
@@ -201,7 +201,10 @@ internal static class WorldStartup
         }
     }
 
-    /// <summary>The code to return: the supervisor-visible one, but never 0 after a failed stop or disposal.</summary>
+    /// <summary>
+    /// The code to return: the supervisor-visible one, but never 0 after a failed stop or disposal. A code that is already set stays as it is, including 2 (a restart request): a restart that was asked for is
+    /// still a restart when its stop fails (the failure is logged and in the fault ledger either way).
+    /// </summary>
     private static int Finish(int code, bool failed) => failed && code == ExitCodes.Success ? ExitCodes.Failure : code;
 
     private sealed class SignalRegistrations(PosixSignalRegistration[] registrations) : IDisposable

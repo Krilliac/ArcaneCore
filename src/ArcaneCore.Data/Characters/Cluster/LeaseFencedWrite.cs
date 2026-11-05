@@ -268,6 +268,8 @@ public static class LeaseFencedWrite
             "Pomelo.EntityFrameworkCore.MySql" => " LOCK IN SHARE MODE",
             // FOR KEY SHARE, not FOR SHARE: it conflicts with FOR UPDATE (every change of authority, see EfRealmAuthorityLeaseStore: acquire, takeover, release) but NOT with the FOR NO KEY UPDATE of a
             // renewal (which changes only expires_at_unix_ms), so a renewal never waits for an in-flight fenced writer's commit, and a takeover still waits for it.
+            // Why the changes of authority must lock FOR UPDATE first and not just UPDATE: their UPDATE changes no key column, so it takes only FOR NO KEY UPDATE, which does not conflict with FOR KEY SHARE; a
+            // FOR KEY SHARE locker skips waiting for an updater unless the tuple's HEAP_KEYS_UPDATED bit is set, and only a FOR UPDATE lock (or an update of a key column) sets it.
             "Npgsql.EntityFrameworkCore.PostgreSQL" => " FOR KEY SHARE",
             _ => throw new NotSupportedException($"no lease fence lock for provider {db.Database.ProviderName}"),
         };

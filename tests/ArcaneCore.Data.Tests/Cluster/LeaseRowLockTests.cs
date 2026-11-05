@@ -94,14 +94,15 @@ public sealed class LeaseRowLockTests : IAsyncLifetime
         return (string)(await command.ExecuteScalarAsync())!;
     }
 
-    /// <summary>Waits (bounded) until a lease backend is blocked on a row lock of a statement containing <paramref name="statementFragment"/>.</summary>
-    private static async Task<bool> WaitForBlockedBackendAsync(DatabaseConnectionOptions connection, string statementFragment)
+    /// <summary>Waits (bounded) until a backend is blocked on a row lock of a statement containing <paramref name="statementFragment"/> (a lease backend by default, any application with <paramref name="application"/> null).</summary>
+    private static async Task<bool> WaitForBlockedBackendAsync(DatabaseConnectionOptions connection, string statementFragment, string? application = Application)
     {
+        string applicationFilter = application is null ? string.Empty : $"AND application_name = '{application}' ";
         Stopwatch watch = Stopwatch.StartNew();
         while (watch.Elapsed < Bound)
         {
             long blocked = await ScalarAsync(connection,
-                $"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = '{Application}' AND wait_event_type = 'Lock' AND query LIKE '%{statementFragment}%'");
+                $"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() {applicationFilter}AND wait_event_type = 'Lock' AND query LIKE '%{statementFragment}%'");
             if (blocked > 0)
                 return true;
             await Task.Delay(50);
@@ -187,6 +188,123 @@ public sealed class LeaseRowLockTests : IAsyncLifetime
         await writer.CommitAsync();
         Assert.True(await CompletesWithinAsync(release, Bound));
         Assert.Equal(AuthorityLeaseOutcome.Released, (await release).Outcome);
+    }
+
+    /// <summary>
+    /// A call that will be refused locks nothing: with a fenced writer's transaction open (it holds FOR KEY SHARE until it ends), another node's acquire on the live lease and a release by a non-holder both return at once with the
+    /// unchanged answers. An unconditional FOR UPDATE would queue behind the writer until the 5 s command timeout.
+    /// </summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task ARefusedAcquire_AndANonHoldersRelease_TakeNoLock_AndReturnPromptly()
+    {
+        Env env = await CreateAsync();
+        Guid a = Guid.NewGuid();
+        Guid b = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        await using OpenFencedWriter writer = await HoldFenceAsync(env.Connection, FenceOf(granted, "node-a", a));
+
+        Task<AuthorityLeaseResult> refused = Task.Run(() => env.Store.TryAcquire(Scope, "node-b", b, Ttl, T0 + TimeSpan.FromSeconds(1)));
+        Assert.True(await CompletesWithinAsync(refused, TimeSpan.FromSeconds(3)), "a refused acquire must not wait for the holder's writers (the command timeout is 5 s)");
+        AuthorityLeaseResult refusal = await refused;
+        Assert.Equal(AuthorityLeaseOutcome.RejectedHeldByOther, refusal.Outcome);
+        Assert.Equal("node-a", refusal.Lease!.OwnerNodeId);
+        Assert.Equal(granted.Lease!.FencingToken, refusal.Lease.FencingToken);
+
+        Task<AuthorityLeaseResult> foreignRelease = Task.Run(() => env.Store.TryRelease(Scope, "node-b", b, granted.Lease.FencingToken));
+        Assert.True(await CompletesWithinAsync(foreignRelease, TimeSpan.FromSeconds(3)), "a release by a non-holder must not wait for the holder's writers");
+        Assert.Equal(AuthorityLeaseOutcome.RejectedStaleToken, (await foreignRelease).Outcome);
+
+        // The holder is untouched: its renewal still goes through, and the lease is still its own.
+        Assert.Equal(AuthorityLeaseOutcome.Renewed, env.Store.TryRenew(Scope, "node-a", a, granted.Lease.FencingToken, Ttl, T0 + TimeSpan.FromSeconds(2)).Outcome);
+        Assert.Equal("node-a", env.Store.GetCurrent(Scope, T0 + TimeSpan.FromSeconds(3))!.OwnerNodeId);
+    }
+
+    /// <summary>The writer holds its lock and a renewal commits (a new row version): a takeover must still wait for the writer, the lock follows the row.</summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task ATakeover_StillWaitsForTheWriter_AfterARenewalCommitted()
+    {
+        Env env = await CreateAsync();
+        Guid a = Guid.NewGuid();
+        Guid b = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        await using OpenFencedWriter writer = await HoldFenceAsync(env.Connection, FenceOf(granted, "node-a", a));
+        Assert.Equal(AuthorityLeaseOutcome.Renewed, env.Store.TryRenew(Scope, "node-a", a, granted.Lease!.FencingToken, Ttl, T0 + TimeSpan.FromSeconds(10)).Outcome);
+
+        Task<AuthorityLeaseResult> takeover = Task.Run(() => env.Store.TryAcquire(Scope, "node-b", b, Ttl, T0 + TimeSpan.FromSeconds(10) + Ttl + TimeSpan.FromSeconds(1)));
+
+        Assert.True(await WaitForBlockedBackendAsync(env.Connection, "FOR UPDATE"), "the takeover must be blocked on the writer's lock although a renewal replaced the row version");
+        Assert.False(takeover.IsCompleted);
+        await writer.CommitAsync();
+        Assert.True(await CompletesWithinAsync(takeover, Bound));
+        Assert.Equal(AuthorityLeaseOutcome.Granted, (await takeover).Outcome);
+    }
+
+    /// <summary>
+    /// A takeover that has changed the row but not committed: a fenced writer that arrives now (with the old token) must wait for it and be refused after the commit, not pass on the old row version. The takeover is
+    /// the store's own statements (FOR UPDATE, then the grant UPDATE) run by hand so that the transaction can stay open.
+    /// </summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task AWriter_ArrivingDuringAnUncommittedTakeover_Waits_AndIsRefusedAfterTheCommit()
+    {
+        Env env = await CreateAsync();
+        Guid a = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        RealmLeaseFence stale = FenceOf(granted, "node-a", a);
+
+        await using var conn = new NpgsqlConnection(env.Connection.ConnectionString);
+        await conn.OpenAsync();
+        await using NpgsqlTransaction takeover = await conn.BeginTransactionAsync();
+        await using (var lockRow = new NpgsqlCommand($"SELECT 1 FROM realm_authority_lease WHERE scope = '{Scope}' FOR UPDATE", conn, takeover))
+            await lockRow.ExecuteScalarAsync();
+        await using (var grant = new NpgsqlCommand(
+            $"UPDATE realm_authority_lease SET owner_node = 'node-b', owner_incarnation = '{Guid.NewGuid():D}', fencing_token = fencing_token + 1, active = TRUE WHERE scope = '{Scope}'", conn, takeover))
+            await grant.ExecuteNonQueryAsync();
+
+        Task<OpenFencedWriter> writer = Task.Run(() => HoldFenceAsync(env.Connection, stale));
+        Assert.True(await WaitForBlockedBackendAsync(env.Connection, "FOR KEY SHARE", application: null), "the writer must wait for the uncommitted takeover");
+        Assert.False(writer.IsCompleted);
+
+        await takeover.CommitAsync();
+
+        Assert.True(await CompletesWithinAsync(writer, Bound));
+        await Assert.ThrowsAsync<RealmLeaseFenceLostException>(() => writer);
+    }
+
+    /// <summary>The economy commit is Serializable: a renewal and then a takeover both commit after the writer's snapshot, and the writer's fence lock must not pass.</summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task ARenewalThenATakeover_AfterTheWritersSnapshot_LeaveTheWriterRefused()
+    {
+        Env env = await CreateAsync();
+        Guid a = Guid.NewGuid();
+        Guid b = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        RealmLeaseFence stale = FenceOf(granted, "node-a", a);
+
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(env.Connection);
+        await using IDbContextTransaction tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        await db.Database.ExecuteSqlRawAsync("SELECT count(*) FROM realm_authority_lease"); // the transaction's snapshot
+        Assert.Equal(AuthorityLeaseOutcome.Renewed, env.Store.TryRenew(Scope, "node-a", a, granted.Lease!.FencingToken, Ttl, T0 + TimeSpan.FromSeconds(10)).Outcome);
+        Assert.Equal(AuthorityLeaseOutcome.Granted, env.Store.TryAcquire(Scope, "node-b", b, Ttl, T0 + TimeSpan.FromSeconds(10) + Ttl + TimeSpan.FromSeconds(1)).Outcome);
+
+        Exception refused = await Assert.ThrowsAnyAsync<Exception>(() => LeaseFencedWrite.EnsureHeldAsync(db, stale, CancellationToken.None));
+        Assert.True(refused is RealmLeaseFenceLostException || refused is PostgresException { SqlState: "40001" }, $"unexpected {refused.GetType().Name}: {refused.Message}");
+    }
+
+    /// <summary>The reader pool is a pool of its own: reads through it appear under its own application name, and the answers are the store's.</summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task TheReaderPool_IsItsOwnPool_AndServesGetCurrentAndValidation()
+    {
+        Env env = await CreateAsync();
+        Func<CharacterDbContext> readFactory = EfRealmAuthorityLeaseStore.DedicatedContextFactory(env.Connection, Application + "-read", 3, TimeSpan.FromSeconds(5))!;
+        var store = new EfRealmAuthorityLeaseStore(new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(), TimeSpan.FromSeconds(5), env.Factory, readFactory);
+        Guid a = Guid.NewGuid();
+        AuthorityLeaseResult granted = store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+
+        Assert.Equal("node-a", store.GetCurrent(Scope, T0 + TimeSpan.FromSeconds(1))!.OwnerNodeId);
+        Assert.True(store.ValidateFencingToken(Scope, "node-a", granted.Lease!.FencingToken, T0 + TimeSpan.FromSeconds(1)));
+        Assert.False(store.ValidateFencingToken(Scope, "node-b", granted.Lease.FencingToken, T0 + TimeSpan.FromSeconds(1)));
+
+        Assert.InRange(await ScalarAsync(env.Connection, $"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = '{Application}-read'"), 1, 3);
     }
 
     [LeaseRenewalPoolTests.PostgresFact]
