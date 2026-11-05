@@ -780,6 +780,63 @@ public sealed class GmTicketAssistantTests
         Assert.Equal(UnstuckCommands.Unavailable, reply);
     }
 
+    // The assistant's own Permitted gate (UnstuckGhost): TicketPolicy checks neither level nor cooldown, so this refusal is the only gate on the ticket path.
+    [Fact]
+    public async Task Stuck_AGhostWhoseCooldownRuns_IsRefusedASecondTicket_AndNotTeleportedAgain()
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel },
+            items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await player.CollectAsync();
+        GmTicketRecord first = File(host, "Plainone", Stuck);
+        TicketOutcome? firstOutcome = await AssistantOf(host).ProcessTicketAsync(first.Id);
+        Assert.NotNull(firstOutcome);
+        Assert.True(firstOutcome.Performed);
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
+        Assert.False(await UnstuckReadyAsync(host));
+        Assert.Equal(1, AssistantOf(host).Status().Fixed);
+        // Moved away from the graveyard again, so a second teleport would be visible.
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        uint before = await SwordDurabilityAsync(host, "Plainone");
+        GmTicketRecord second = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(second.Id);
+
+        await AssertLeftAGhostAsync(host, second, outcome, -8900f, before);
+        Assert.False(await BeingTeleportedAsync(host, "Plainone"));
+        Assert.False(await UnstuckReadyAsync(host));
+        Assert.Equal(1, AssistantOf(host).Status().Fixed);
+        Assert.True(AssistantOf(host).NeedsHuman(second.Id));
+        Assert.Contains(AssistantOf(host).NotesOf(second.Id), n => n.Contains("unstuck refused", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Stuck_AGhostBelowLevelTen_IsRefused_PaysNothing_AndTheTicketStaysOpen()
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel },
+            items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Plainone")!.SetUInt32(UpdateFields.UnitFieldLevel, 9));
+        uint before = await SwordDurabilityAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        await AssertLeftAGhostAsync(host, ticket, outcome, -8900f, before);
+        Assert.False(await BeingTeleportedAsync(host, "Plainone"));
+        Assert.False(await SickAsync(host));
+        Assert.True(await UnstuckReadyAsync(host));
+        Assert.Equal(0, AssistantOf(host).Status().Fixed);
+        Assert.True(AssistantOf(host).NeedsHuman(ticket.Id));
+        Assert.Contains(AssistantOf(host).NotesOf(ticket.Id), n => n.Contains("unstuck refused", StringComparison.Ordinal));
+    }
+
     // ---- missing services, a teleport under way, a cast that fails ----
 
     // The real services with some hidden (null), and optionally another logger factory: the seam GmTicketAssistant and UnstuckCommands.TryApply take.
