@@ -663,7 +663,7 @@ public sealed class CharacterClaimWiringTests
         // a's scope under an incarnation that is not the live one (a restarted target's dead token, say).
         var stale = new CharacterOwnershipToken(a.Scope, a.Epoch, Guid.NewGuid());
         rig.Holder.Current = stale;
-        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => arrival.CompleteAsync(bundle, stale, 0, CancellationToken.None));
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => arrival.CompleteAsync(bundle, stale, 0, CancellationToken.None));
         Assert.Equal(0u, (await rig.CharacterAsync(character))!.MapId);
 
         rig.Holder.Current = a;

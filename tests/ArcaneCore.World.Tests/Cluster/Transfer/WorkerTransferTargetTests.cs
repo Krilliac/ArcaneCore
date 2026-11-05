@@ -375,6 +375,31 @@ public sealed class WorkerTransferTargetTests : IDisposable
         Assert.False(target.WasActivated(id));
     }
 
+    /// <summary>
+    /// The reconnect race: the client logs in again (a newer claim ticket for the character) while the arrival is still being started, and then the arrival fails. The failed arrival abandons
+    /// only its own ticket, so the reconnect's ticket stays live and its logout release stays valid; dropping every ticket of the character would let the reconnect's claim be released under it.
+    /// </summary>
+    [Fact]
+    public async Task AFailedArrival_AbandonsOnlyItsOwnClaimTicket_WhenTheClientReconnectedMeanwhile()
+    {
+        var worker = new CharacterOwnershipToken("worker:b", 4, Guid.NewGuid());
+        _world.CharacterOwnership = worker;
+        await using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        using var claims = new CharacterClaimService(services);
+        var target = new WorkerTransferTarget(Target, _world, _loader, _entry, claims: claims);
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+        long reconnectTicket = 0;
+        _session.OnSend = () => reconnectTicket = claims.IssueTicketForReceivedClaim(7, worker); // the first packet of the arrival: the reconnect lands now
+        _session.ThrowOnSend = true;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), worker));
+
+        Assert.True(reconnectTicket > 0, "the reconnect never ran inside the arrival");
+        Assert.Equal(1, LiveTicketCount(claims)); // the failed arrival's own ticket is gone, the reconnect's remains
+        Assert.False(target.WasActivated(id));
+    }
+
     private static int LiveTicketCount(CharacterClaimService claims)
     {
         var live = (Dictionary<int, List<long>>)typeof(CharacterClaimService).GetField("_liveTickets", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!;
@@ -538,10 +563,14 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         public volatile bool ThrowOnKick;
 
+        /// <summary>Runs on the sending thread at the start of every <see cref="Send"/>, before <see cref="ThrowOnSend"/> is honoured: a client action that lands in the middle of an arrival.</summary>
+        public volatile Action? OnSend;
+
         public int Kicks => Volatile.Read(ref _kicks);
 
         public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
         {
+            OnSend?.Invoke();
             if (ThrowOnSend)
             {
                 throw new InvalidOperationException("send failed");
