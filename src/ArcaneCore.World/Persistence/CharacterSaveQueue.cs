@@ -946,7 +946,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 lock (_gate)
                 {
-                    _failed[state.Id] = new FailedSave(state, refused);
+                    // A snapshot retained because the fence refused it while the handoff was sealed keeps that refusal as its Failure: StopAsync only forgives that kind while sealed,
+                    // and the stalled drain must not turn it into a failure that fails the stop.
+                    Exception retainedFailure = _failed.TryGetValue(state.Id, out FailedSave? sealedRefusal) && sealedRefusal.Failure is CharacterOwnershipRejectedException
+                        ? sealedRefusal.Failure
+                        : refused;
+                    _failed[state.Id] = new FailedSave(state, retainedFailure);
                     DropRetainedIfRetiredLocked(state.Id);
                 }
 

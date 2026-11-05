@@ -1892,6 +1892,25 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
+    public async Task ARefusalWhileSealed_StaysTheFailure_WhenTheStopDrainRefusesTheRecoveryAttempt()
+    {
+        // The stalled (here: suppressed) stop drain refuses the recovery attempt before it starts; that must not replace the retained refusal
+        // with a StopDrainExhaustedException, which the stop's sealed tolerance would not forgive.
+        var drain = new ShutdownDrain();
+        await using var kit = new Kit(drain: drain);
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+        kit.Queue.SealWrites();
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await WaitForRetainedAsync(kit.Queue, 1, retained: true);
+
+        drain.Saves.Suppress("test: the stop drain refuses every attempt");
+        await kit.Queue.StopAsync(); // throws "character saves did not drain" when the refusal was replaced
+
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
     public async Task ARefusalOfAnUnsealedQueue_IsStillTerminal_AndNotRetainedAsASealedOne()
     {
         await using var kit = new Kit();
