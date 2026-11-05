@@ -74,4 +74,5 @@ public sealed class InMemoryTransferDecisionStoreCountTests
         Assert.True(seed.IsCanceled);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => seed);
         Assert.Null(await store.GetActiveOwnershipAsync(31)); // nothing was seeded
-    }}
+    }
+}

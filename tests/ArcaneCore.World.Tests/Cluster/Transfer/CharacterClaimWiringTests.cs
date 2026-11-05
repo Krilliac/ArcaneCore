@@ -440,7 +440,7 @@ public sealed class CharacterClaimWiringTests
 
         Assert.Single(results, r => r.IsClaimed);
         Assert.Single(results, r => r.Outcome == CharacterClaimOutcome.RefusedLiveOwner);
-        CharacterOwnershipToken holder = await rig.Store.GetActiveOwnershipAsync(33)!;
+        CharacterOwnershipToken holder = (await rig.Store.GetActiveOwnershipAsync(33))!;
         Assert.Equal(results.Single(r => r.IsClaimed).Claim, holder);
     }
 
@@ -641,7 +641,7 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
         await Task.Delay(400);
-        Assert.Equal(b.Scope, await rig.Store.GetActiveOwnershipAsync((ulong)character)?.Scope); // still in flight: nothing deleted
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope); // still in flight: nothing deleted
         Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
 
         await rig.Store.MarkCompletedAsync(transfer);
@@ -664,7 +664,7 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleReleaseOfReceivedClaim(character, b, () => true);
         await claims.DrainAsync();
-        Assert.Equal(b.Scope, await rig.Store.GetActiveOwnershipAsync((ulong)character)?.Scope);
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
     }
 
     /// <summary>An <see cref="ICharacterStore"/> whose reads of one character return copies, and which runs a callback right after the Nth read of it (before returning it).</summary>

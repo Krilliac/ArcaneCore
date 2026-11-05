@@ -101,6 +101,12 @@ public sealed class CharacterWriteSweepTests
     /// <summary>A synchronous <c>SaveChanges(</c> or <c>Database.BeginTransaction(</c> (the async forms end in <c>Async(</c> and do not match).</summary>
     private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\.BeginTransaction)\s*\(", RegexOptions.Compiled);
 
+    /// <summary>"relative/path.cs::Member" -> why a synchronous transaction there is correct.</summary>
+    private static readonly Dictionary<string, string> SyncExemptions = new(StringComparer.Ordinal)
+    {
+        ["ArcaneCore.Data/Characters/Cluster/RealmAuthorityLeaseDataModule.cs::BeginLeaseTransaction"] = "helper whose three callers (TryAcquire and the renew and release paths) each open it under CharacterWriteFence.Exempt()",
+    };
+
     [Fact]
     public void NoSourceFile_UsesASynchronousSaveChangesOrBeginTransaction_OnACharactersContext_OutsideAnExemptMember()
     {
@@ -125,6 +131,8 @@ public sealed class CharacterWriteSweepTests
                     continue;
                 (string member, int start, int end) = EnclosingMember(lines, i);
                 string body = string.Join('\n', lines[start..end]);
+                if (SyncExemptions.ContainsKey($"{relative}::{member}"))
+                    continue; // named member with a recorded reason
                 if (body.Contains("CharacterWriteFence.Exempt()", StringComparison.Ordinal))
                     continue; // the fence skips exempt work, so a synchronous transaction there is allowed
                 offenders.Add($"{relative}:{i + 1} in {member}");
