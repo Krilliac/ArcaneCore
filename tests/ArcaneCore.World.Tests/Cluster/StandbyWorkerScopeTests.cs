@@ -77,14 +77,14 @@ public sealed class StandbyWorkerScopeTests
         Assert.Equal("0,1,2", row.OwnedMaps);
         Assert.Equal(standby.Host.OwnerNode, row.OwnerNode);
 
-        long first = row.HeartbeatAtMs ?? 0;
+        long first = await db.HeartbeatAsync(takenOver.Scope);
         Assert.True(first > 0);
         long latest = first;
         DateTime deadline = DateTime.UtcNow.AddSeconds(15);
         while (latest <= first && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
-            latest = (await db.RowAsync(takenOver.Scope)).HeartbeatAtMs ?? 0;
+            latest = await db.HeartbeatAsync(takenOver.Scope);
         }
 
         Assert.True(latest > first, "the promoted worker's heartbeat never advanced");
@@ -289,6 +289,13 @@ public sealed class StandbyWorkerScopeTests
         {
             await using CharacterDbContext db = PlainContext();
             return await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == scope);
+        }
+
+        /// <summary>The shard's last heartbeat (characters schema 75 keeps it in its own table); 0 before the first beat.</summary>
+        public async Task<long> HeartbeatAsync(string scope)
+        {
+            await using CharacterDbContext db = PlainContext();
+            return await db.Set<CharacterOwnershipHeartbeatRow>().AsNoTracking().Where(r => r.Scope == scope).Select(r => r.HeartbeatAtMs).SingleOrDefaultAsync();
         }
 
         public async Task<CharacterOwnershipToken?> CurrentAsync(HostKit host, string scope)

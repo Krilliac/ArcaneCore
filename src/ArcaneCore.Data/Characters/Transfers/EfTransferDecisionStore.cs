@@ -151,9 +151,15 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             .SingleOrDefaultAsync(o => o.Scope == heldScope && o.Active && o.OwnerIncarnation == heldIncarnation, cancellationToken).ConfigureAwait(false);
         if (holder is null)
             return null;
-        if (reapPolicy is not null && holder.HeartbeatAtMs is { } beat && beat <= reapPolicy.NewestReapableHeartbeat(_clock())
-            && await reapPolicy.IsShardLockFree(heldScope, cancellationToken).ConfigureAwait(false))
-            return null;
+        if (reapPolicy is not null)
+        {
+            long? beat = await db.Set<CharacterOwnershipHeartbeatRow>().AsNoTracking()
+                .Where(h => h.Scope == heldScope).Select(h => (long?)h.HeartbeatAtMs).SingleOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+            if (beat is { } last && last <= reapPolicy.NewestReapableHeartbeat(_clock())
+                && await reapPolicy.IsShardLockFree(heldScope, cancellationToken).ConfigureAwait(false))
+                return null;
+        }
+
         return row.Scope;
     }
 
@@ -217,7 +223,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     int reaped = await db.Set<CharacterOwnershipRow>()
                         .Where(o => o.Scope == heldScope && o.Active && o.Epoch == holderEpoch && o.Epoch < long.MaxValue
                             && o.WriteSequence < long.MaxValue && o.OwnerIncarnation == heldIncarnation
-                            && o.HeartbeatAtMs != null && o.HeartbeatAtMs <= newestReapable)
+                            && db.Set<CharacterOwnershipHeartbeatRow>().Any(h => h.Scope == o.Scope && h.HeartbeatAtMs <= newestReapable))
                         .ExecuteUpdateAsync(s => s
                             .SetProperty(o => o.OwnerNode, (string?)null)
                             .SetProperty(o => o.OwnerIncarnation, (string?)null)
@@ -833,15 +839,10 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     if (writeMaps)
                     {
                         await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
-                            .ExecuteUpdateAsync(s => s
-                                .SetProperty(o => o.OwnedMaps, storedMaps)
-                                .SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                            .ExecuteUpdateAsync(s => s.SetProperty(o => o.OwnedMaps, storedMaps), ct).ConfigureAwait(false);
                     }
-                    else
-                    {
-                        await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
-                            .ExecuteUpdateAsync(s => s.SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
-                    }
+
+                    await EfCharacterOwnershipStore.RecordHeartbeatAsync(db, sourceScope, heartbeat, ct).ConfigureAwait(false);
                 }
             }
 

@@ -196,7 +196,7 @@ public sealed class WorldHostWorkerScopeTests
 
         await using HostKit worker = db.NewWorker(ShardA, "0,1", heartbeat: TimeSpan.FromMilliseconds(40));
         await worker.Host.StartAsync(CancellationToken.None);
-        long first = (await db.RowAsync(worker.Host.OwnershipScope)).HeartbeatAtMs ?? 0;
+        long first = await db.HeartbeatAsync(worker.Host.OwnershipScope);
         Assert.True(first > 0);
 
         long latest = first;
@@ -204,7 +204,7 @@ public sealed class WorldHostWorkerScopeTests
         while (latest <= first && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
-            latest = (await db.RowAsync(worker.Host.OwnershipScope)).HeartbeatAtMs ?? 0;
+            latest = await db.HeartbeatAsync(worker.Host.OwnershipScope);
         }
 
         Assert.True(latest > first, "the heartbeat never advanced");
@@ -432,6 +432,13 @@ public sealed class WorldHostWorkerScopeTests
         {
             await using CharacterDbContext db = PlainContext();
             return await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == scope);
+        }
+
+        /// <summary>The shard's last heartbeat (characters schema 75 keeps it in its own table); 0 before the first beat.</summary>
+        public async Task<long> HeartbeatAsync(string scope)
+        {
+            await using CharacterDbContext db = PlainContext();
+            return await db.Set<CharacterOwnershipHeartbeatRow>().AsNoTracking().Where(r => r.Scope == scope).Select(r => r.HeartbeatAtMs).SingleOrDefaultAsync();
         }
 
         public async Task<bool> AnyActiveAsync()
