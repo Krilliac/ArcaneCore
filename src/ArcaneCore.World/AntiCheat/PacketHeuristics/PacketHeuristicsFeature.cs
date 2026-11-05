@@ -134,7 +134,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} ({(settings.FeedScore ? $"reports; AntiCheat score feed ON, weight {settings.ScoreWeight}" : "report only; AntiCheat score feed off")}). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
+                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} ({(settings.FeedScore ? $"reports; AntiCheat score feed ON, weight {settings.ScoreWeight}" : "report only")}). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
             "check                   enabled     player        bot      staff       tool",
         };
         for (int i = 0; i < PacketChecks.Count; i++)
