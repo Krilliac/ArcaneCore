@@ -52,9 +52,11 @@ public sealed class ScourgeInvasionTickBoundTests(ITestOutputHelper output)
 
         public Task<ScourgeInvasionSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Call(() => State);
         public bool FailStart { get; set; }
+        /// <summary>The next this many StartAsync calls fail, then it succeeds.</summary>
+        public int FailStartTimes;
         public Task<bool> StartAsync(CancellationToken cancellationToken = default) => Call(() =>
         {
-            if (FailStart) throw new InvalidOperationException("injected start failure");
+            if (FailStart || Interlocked.Decrement(ref FailStartTimes) >= 0) throw new InvalidOperationException("injected start failure");
             State = new ScourgeInvasionSnapshot(ScourgeInvasionState.Enabled, 0, 0,
                 ScourgeInvasionCatalog.Zones.Select(z => new ScourgeInvasionZoneProgress(z.ZoneId, z.Necropolises, 0)).ToArray());
             return true;
@@ -216,6 +218,41 @@ public sealed class ScourgeInvasionTickBoundTests(ITestOutputHelper output)
         Assert.True(rig.Events.Service!.StartEvent(17));
         rig.Invasion.CaptureForHandoff();
         store.FailStart = true;
+
+        Task flush = rig.Invasion.FlushStateWritesAsync();
+        store.Gate.Set();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => flush.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(ScourgeInvasionState.Disabled, store.State.State);
+    }
+
+    [Fact]
+    public async Task HandoffFlushWritesAgainAStartTheJobInFlightRefused()
+    {
+        var store = new SlowStore();
+        using var rig = new Rig(store, inline: false);
+        store.Gate.Reset();
+        Assert.True(rig.Events.Service!.StartEvent(17)); // launches a job that carries the Start, stuck in the store; _ops is empty now
+        Assert.True(rig.Invasion.StoreWork!.Busy);
+        store.FailStartTimes = 1; // the job in flight is refused once
+        rig.Invasion.CaptureForHandoff();
+
+        Task flush = rig.Invasion.FlushStateWritesAsync();
+        store.Gate.Set();
+        await flush.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(ScourgeInvasionState.Enabled, store.State.State); // the job swallowed the refusal; the flush wrote the Start again
+    }
+
+    [Fact]
+    public async Task HandoffFlushFailsWhenAStartTheJobInFlightRefusedIsRefusedAgain()
+    {
+        var store = new SlowStore();
+        using var rig = new Rig(store, inline: false);
+        store.Gate.Reset();
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        store.FailStart = true;
+        rig.Invasion.CaptureForHandoff();
 
         Task flush = rig.Invasion.FlushStateWritesAsync();
         store.Gate.Set();
