@@ -322,7 +322,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         mapTable.AssignStaticMap(1, targetWorker.WorkerId);
 
         var sourceToken = new CharacterOwnershipToken("char:4242", 7, sourceWorker.Incarnation);
-        decisionStore.SeedCharacterOwnership(4242UL, sourceToken);
+        await decisionStore.SeedCharacterOwnershipAsync(4242UL, sourceToken);
         gateway.ActiveRoutes[4242UL] = sourceWorker.WorkerId;
         gateway.RoutedOwnershipTokens[4242UL] = sourceToken;
 
@@ -462,7 +462,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.True(targetWorker.IsPlayerActive(request.CharacterGuid));
         Assert.False(targetWorker.HasPassiveShadow(request.TransferId));
 
-        CharacterOwnershipToken? activeOwner = decisionStore.GetActiveOwnership(request.CharacterGuid);
+        CharacterOwnershipToken? activeOwner = (await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid));
         Assert.NotNull(activeOwner);
         Assert.Equal(request.SourceOwnershipToken.Epoch + 1, activeOwner!.Epoch);
         Assert.Equal(targetWorker.Incarnation, activeOwner.Incarnation);
@@ -470,7 +470,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.Equal(activeOwner, gateway.RoutedOwnershipTokens[request.CharacterGuid]);
 
         // Stale source token is fenced out by the decision store
-        Assert.NotEqual(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.NotEqual(request.SourceOwnershipToken, (await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid)));
         if (decisionStore is InMemoryTransferDecisionStore memory)
         {
             Assert.Throws<CharacterOwnershipRejectedException>(() =>
@@ -540,7 +540,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.True(sourceWorker.IsPlayerActive(request.CharacterGuid));
         Assert.False(sourceWorker.IsPlayerSuspended(request.CharacterGuid));
         Assert.Equal(request.SourceOwnershipToken, sourceWorker.GetHeldToken(request.CharacterGuid));
-        Assert.Equal(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.Equal(request.SourceOwnershipToken, (await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid)));
 
         // Target worker has no passive shadow, no reservation, and is not active
         Assert.False(targetWorker.IsPlayerActive(request.CharacterGuid));
@@ -695,7 +695,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.False(targetWorker.IsPlayerActive(request.CharacterGuid));
         Assert.False(targetWorker.HasPassiveShadow(request.TransferId));
         Assert.Equal(sourceWorker.WorkerId, gateway.ActiveRoutes[request.CharacterGuid]);
-        Assert.Equal(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.Equal(request.SourceOwnershipToken, (await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid)));
     }
 
     [Theory]
@@ -713,6 +713,6 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.Equal(PlayerTransferDecisionState.Aborted, outcome.DecisionState);
         Assert.True(sourceWorker.IsPlayerActive(request.CharacterGuid));
         Assert.False(targetWorker.IsPlayerActive(request.CharacterGuid));
-        Assert.Equal(request.SourceOwnershipToken, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.Equal(request.SourceOwnershipToken, (await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid)));
     }
 }

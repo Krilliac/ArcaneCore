@@ -121,7 +121,7 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         Assert.Equal(PlayerTransferStage.SuspendAndCapture, afterCapture.CurrentStage);
         Assert.Equal(PlayerTransferDecisionState.PreCommit, afterCapture.DecisionState);
         Assert.Equal(source, afterCapture.SourceOwnershipToken);
-        Assert.Equal(source, restarted.GetActiveOwnership(7));
+        Assert.Equal(source, await restarted.GetActiveOwnershipAsync(7));
         Assert.Equal(System.Text.Json.JsonSerializer.Serialize(bundle), System.Text.Json.JsonSerializer.Serialize(afterCapture.CapturedBundle));
 
         await restarted.AdvancePreCommitStageAsync(transferId, PlayerTransferStage.InstallPassive);
@@ -132,7 +132,7 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         Assert.Equal(committed.TargetOwnershipToken, (await restarted.CommitDecisionAsync(transferId, target)).TargetOwnershipToken); // idempotent
 
         (_, EfTransferDecisionStore again) = await OpenAsync(connection);
-        Assert.Equal(committed.TargetOwnershipToken, again.GetActiveOwnership(7));
+        Assert.Equal(committed.TargetOwnershipToken, await again.GetActiveOwnershipAsync(7));
         Assert.Single(await again.GetUnresolvedForCharacterAsync(7));
         await Assert.ThrowsAsync<InvalidOperationException>(() => again.AbortPreCommitAsync(transferId, "too-late"));
         TransferDecisionRecord completed = await again.MarkCompletedAsync(transferId);
@@ -155,7 +155,7 @@ public sealed class TransferDecisionStoreTests : IAsyncLifetime
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitDecisionAsync(first, Guid.NewGuid()));
 
         await store.AbortPreCommitAsync(first, "operator");
-        Assert.Equal(source, store.GetActiveOwnership(9));
+        Assert.Equal(source, await store.GetActiveOwnershipAsync(9));
 
         // The claim was given back: a new transfer may start, but only with the token the store holds.
         var stale = new CharacterOwnershipToken("char:9", 0, source.Incarnation);

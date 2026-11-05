@@ -98,6 +98,55 @@ public sealed class CharacterWriteSweepTests
             + string.Join('\n', offenders));
     }
 
+    /// <summary>A synchronous <c>SaveChanges(</c> or <c>Database.BeginTransaction(</c> (the async forms end in <c>Async(</c> and do not match).</summary>
+    private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\.BeginTransaction)\s*\(", RegexOptions.Compiled);
+
+    [Fact]
+    public void NoSourceFile_UsesASynchronousSaveChangesOrBeginTransaction_OnACharactersContext_OutsideAnExemptMember()
+    {
+        string root = RepositorySource.FindRoot() ?? throw new InvalidOperationException("repository root not found");
+        string src = Path.Combine(root, "src");
+        var offenders = new List<string>();
+        int files = 0;
+        foreach (string file in Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                continue;
+            string text = File.ReadAllText(file);
+            if (!text.Contains("CharacterDbContext", StringComparison.Ordinal))
+                continue;
+            files++;
+            string relative = Path.GetRelativePath(src, file).Replace('\\', '/');
+            string[] lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string trimmed = lines[i].TrimStart();
+                if (!SyncWrite.IsMatch(lines[i]) || trimmed.StartsWith("//", StringComparison.Ordinal))
+                    continue;
+                (string member, int start, int end) = EnclosingMember(lines, i);
+                string body = string.Join('\n', lines[start..end]);
+                if (body.Contains("CharacterWriteFence.Exempt()", StringComparison.Ordinal))
+                    continue; // the fence skips exempt work, so a synchronous transaction there is allowed
+                offenders.Add($"{relative}:{i + 1} in {member}");
+            }
+        }
+
+        Assert.True(files > 50, $"the sweep saw only {files} characters-context files; the scan has stopped scanning");
+        Assert.True(offenders.Count == 0,
+            "synchronous SaveChanges/BeginTransaction on a characters context (the write fence refuses it; use the async API, or mark the member CharacterWriteFence.Exempt):\n"
+            + string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void TheSynchronousWritePattern_MatchesTheSyncFormsAndNotTheAsyncOnes()
+    {
+        Assert.Matches(SyncWrite, "        db.SaveChanges();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database.BeginTransaction();");
+        Assert.DoesNotMatch(SyncWrite, "        await db.SaveChangesAsync(ct);");
+        Assert.DoesNotMatch(SyncWrite, "        await db.Database.BeginTransactionAsync(ct);");
+        Assert.DoesNotMatch(SyncWrite, "        await CharacterWriteFence.BeginTransactionAsync(db, token, ct);");
+    }
+
     [Fact]
     public void EveryExemption_NamesAFileThatStillExists()
     {

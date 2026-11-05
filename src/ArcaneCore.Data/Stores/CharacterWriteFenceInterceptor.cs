@@ -56,20 +56,25 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
         if (CharacterWriteFence.IsExempt)
             return result;
 
+        // A synchronous transaction cannot be verified: the guard and the claim check have no synchronous form, and blocking a pool thread on them risks a deadlock. Fail closed.
+        var refusal = new NotSupportedException("characters writes must use the async API (SaveChangesAsync / BeginTransactionAsync); the write fence cannot verify a synchronous transaction.");
         try
         {
-            // A synchronous SaveChanges: the guard has no synchronous form, and the connection is not shared with a synchronization context.
-            CharacterOwnershipGuard.VerifyOnTransactionAsync(Require(eventData), connection, result, Token(), CancellationToken.None).GetAwaiter().GetResult();
-            VerifyClaimAsync(eventData, connection, result, CancellationToken.None).GetAwaiter().GetResult();
+            result.Rollback();
         }
         catch (Exception ex)
         {
-            Report(ex);
-            AbandonAsync(result).AsTask().GetAwaiter().GetResult();
-            throw;
+            // The refusal is the error to report; a failed rollback of a transaction that is being discarded must not replace it.
+            FaultLedger.Shared.Record("data.character-write-fence-rollback", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", "character-write-fence-rollback", ex.Message, AnomalySeverity.Warning);
+        }
+        finally
+        {
+            result.Dispose();
         }
 
-        return result;
+        Report(refusal);
+        throw refusal;
     }
 
     InterceptionResult<int> ISaveChangesInterceptor.SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)

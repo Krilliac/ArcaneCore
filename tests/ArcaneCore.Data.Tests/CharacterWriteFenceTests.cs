@@ -250,6 +250,34 @@ public sealed class CharacterWriteFenceTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task ASynchronousTransaction_UnderTheFence_FailsClosed_UnlessExempt_AndTheAsyncPathStillWorks(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using ServiceProvider services = await BuildAsync(connection, fence: true);
+        int id = await CreateCharacterAsync(connection, "SyncRefused");
+        CharacterOwnershipToken token = await AcquireAsync(services);
+        services.GetRequiredService<CharacterOwnershipContext>().Current = token;
+
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+
+        NotSupportedException begin = Assert.Throws<NotSupportedException>(() => db.Database.BeginTransaction());
+        Assert.Contains("characters writes must use the async API", begin.Message, StringComparison.Ordinal);
+
+        (await db.Characters.SingleAsync(c => c.Id == id)).Level = 7;
+        NotSupportedException save = Assert.Throws<NotSupportedException>(() => db.SaveChanges());
+        Assert.Contains("characters writes must use the async API", save.Message, StringComparison.Ordinal);
+
+        // The refused transaction was rolled back and released: the same context can still write through the async path.
+        await db.SaveChangesAsync();
+
+        // Exempt work may still begin a transaction synchronously.
+        using (CharacterWriteFence.Exempt())
+            db.Database.BeginTransaction().Dispose();
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task AnUntransactedExecuteUpdate_UnderTheFence_Throws_ButTheExemptStoresStillWork(DatabaseProvider provider)
     {
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);

@@ -90,6 +90,7 @@ public sealed class LogonServer(
             var guard = new NetGuard(protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp, logger, bindAddress: bind);
             Guard = guard;
             IpBans = new RealmIpBanCache(TimeSpan.FromSeconds(Math.Max(0, config.IpBanCacheSeconds)), scopes: scopeFactory);
+            _ = Task.Run(WarmPatches, CancellationToken.None); // hash the configured patches now, not inside the first logon proof
             await AcceptLoop.RunAsync(
                 ct => listener.AcceptTcpClientAsync(ct),
                 client => Admit(client, guard, config, stoppingToken),
@@ -118,6 +119,22 @@ public sealed class LogonServer(
         {
             listener.Stop();
             logger.LogInformation("Logon daemon stopped");
+        }
+    }
+
+    /// <summary>Thread pool: <see cref="PatchCatalog.Warm"/> at startup. A failure is logged; the first challenge then hashes the file itself.</summary>
+    private void WarmPatches()
+    {
+        try
+        {
+            int hashed = patches.Warm();
+            if (hashed > 0)
+                logger.LogInformation("Logon daemon hashed {Count} client patch file(s)", hashed);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("logon/patch-warm", ex);
+            logger.LogWarning(ex, "Logon daemon could not pre-hash the client patches ({Type}); the first challenge for each will", ex.GetType().Name);
         }
     }
 
@@ -167,6 +184,8 @@ public sealed class LogonServer(
 
     private async Task HandleClientAsync(TcpClient client, AuthOptions config, NetGuard guard, IDisposable? lease, CancellationToken stoppingToken)
     {
+        // Hop off the accept loop: a session whose first bytes are already buffered must not run inline on it.
+        await Task.Yield();
         string endpoint = "unknown";
         Interlocked.Increment(ref _activeSessions);
 
