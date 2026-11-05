@@ -109,7 +109,7 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
     public async Task SavePetitionAsync(PetitionData petition, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(petition);
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // petitions are realm state the Social holder owns (ids and saves would collide across workers)
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // petitions are realm state the Social holder owns (ids and saves would collide across workers)
         PetitionRow? row = await db.Set<PetitionRow>().FirstOrDefaultAsync(p => p.Id == petition.Id, cancellationToken).ConfigureAwait(false);
         if (row is null)
         {
@@ -137,22 +137,22 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
         }
 
         db.Set<PetitionSignRow>().RemoveRange(stored.Values);
-        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, fence, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 
     public async Task DeletePetitionAsync(int petitionId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         StageDelete(await FindForDeleteAsync(petitionId, cancellationToken).ConfigureAwait(false));
-        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, fence, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 
     public async Task CompletePetitionAsync(GuildData guild, int petitionId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(guild);
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         try
         {
             await EfSocialStore.StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);
@@ -160,7 +160,7 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
 
             // One SaveChanges is one transaction on every engine: a member who joined another guild
             // meanwhile violates the guild_member unique character index and nothing is stored.
-            await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
+            await LeaseFencedWrite.SaveChangesAsync(db, fence, cancellationToken).ConfigureAwait(false);
         }
         finally
         {

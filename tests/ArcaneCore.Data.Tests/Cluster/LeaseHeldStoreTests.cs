@@ -402,6 +402,41 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// The keeper forgets its fences in ReleaseAllAsync, so a write that asked for the fence a second time after its RequireFence check could read null and go unchecked. The source here answers each scope once
+    /// and then null (as after a release between the two reads): every commit-verified write must still be refused when another node took the scope over, because it uses the fence its RequireFence read.
+    /// Unproven until the integration gate runs it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task FenceReleasedAfterTheRequireFenceRead_IsStillCheckedAtCommit(DatabaseProvider provider)
+    {
+        Rig rig = await CreateAsync(provider, takeOver: true);
+        foreach (Site site in Sites(rig).Where(s => s.Fenced && !s.Sweep))
+        {
+            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Seed(seed);
+
+            var asked = new HashSet<string>(StringComparer.Ordinal);
+            var once = new Source(
+                scope => asked.Add(scope) ? rig.Lost.FenceFor(scope) : null,
+                _ => true);
+            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await ExpectAsync<RealmLeaseFenceLostException>(site.Name, () => site.Act(db, once));
+
+            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
+            Assert.False(await site.Done(check), $"{site.Name}: a write whose fence was released after the check must still be refused at commit");
+        }
+    }
+
+    [Fact]
+    public void RequireFence_ReturnsTheFenceItRead_AndNullWithoutASource()
+    {
+        var fence = new RealmLeaseFence(RealmAuthorityScopes.Social, "node-a", Guid.NewGuid(), 7);
+        Assert.Null(LeaseFencedWrite.RequireFence(null, RealmAuthorityScopes.Social));
+        Assert.Equal(fence, LeaseFencedWrite.RequireFence(new Source(_ => fence, _ => false), RealmAuthorityScopes.Social));
+    }
+
     [Fact]
     public void RequireHeld_RefusesAfterLocalLoss_AndRequireFence_LeavesThatToTheCommitFence()
     {

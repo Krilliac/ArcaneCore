@@ -26,6 +26,10 @@ public interface IRealmSingletonHalt
 /// <para>Renewal starts as soon as the first lease is granted (inside <see cref="AcquireAtStartAsync"/>), so a slow start cannot outlast a lease.
 /// Every timer tick also judges the deadline on its own, so a renewal call that hangs in the store cannot hide an expiring lease: the node stops
 /// when the next tick would fall in the last half renewal interval before the lease lapses.</para>
+/// <para>Takeover: a scope another node held at start is not given up on. Every renewal tick also tries to acquire each scope this node does not hold (the store refuses while the other node's lease is live), so when that node
+/// stops or dies and its lease lapses, a surviving worker takes the scope over with a new fencing token instead of leaving it ownerless until a restart. Everything that checks the lease at run time
+/// (<see cref="Holds"/>: the sweeps and the durable singleton writes) then works on the new holder; a singleton feature that is only attached at start (AutoBroadcast, the auction house bot) is not attached by a takeover, so
+/// it runs again after the next restart of the node.</para>
 /// <para>Thread affinity: <see cref="AcquireAtStartAsync"/> and <see cref="ReleaseAllAsync"/> run on the host's start and stop; the renewal timer
 /// runs on the thread pool, and its ticks may overlap a still-running store call. The lease store is called synchronously off the world thread.
 /// All state is guarded by one lock.</para>
@@ -61,11 +65,13 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     private readonly IRealmSingletonHalt[] _halts;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _noRow = new(StringComparer.Ordinal); // optional scopes the database has no lease row for: never retried
     private Guid _incarnation;
     private ITimer? _timer;
     private bool _renewing;
     private bool _lost;
     private bool _released;
+    private bool _started; // AcquireAtStartAsync finished: from then on the renewal tick may take over scopes (never while the start is still acquiring them in order)
 
     public RealmAuthorityLeaseKeeper(
         IRealmAuthorityLeaseStore store,
@@ -190,10 +196,17 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
             else
             {
                 _logger.LogInformation(
-                    "Not holding the {Scope} lease: held by {Holder} (fencing token {Token}); the matching realm singleton does not run on this node",
+                    "Not holding the {Scope} lease: held by {Holder} (fencing token {Token}); the matching realm singleton does not run on this node unless it takes the lease over later",
                     scope, result.Lease?.OwnerNodeId ?? "another node", result.Lease?.FencingToken ?? 0);
             }
         }
+
+        lock (_gate)
+        {
+            _started = true;
+        }
+
+        StartRenewing(); // also with no lease held: the same timer retries the scopes another node held (takeover)
     }
 
     // Null when an optional scope has no lease row (ArgumentException from the durable store, see OptionalScopes); every other failure propagates.
@@ -206,6 +219,11 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         catch (ArgumentException ex) when (ex.ParamName == "scope" && Array.IndexOf(OptionalScopes, scope) >= 0) // the store's UnknownScope: the scope parameter names the missing row
         {
             _logger.LogWarning(ex, "The {Scope} lease row does not exist in the characters database (schema 72 not applied); this node does not hold it, so the matching realm sweeps do not run here", scope);
+            lock (_gate)
+            {
+                _noRow.Add(scope);
+            }
+
             return null;
         }
     }
@@ -217,7 +235,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     {
         lock (_gate)
         {
-            if (_timer is not null || _held.Count == 0)
+            if (_timer is not null || _lost || _released)
             {
                 return;
             }
@@ -316,6 +334,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
                     _logger.LogWarning(ex, "Renewing the {Scope} lease failed; retrying in {Seconds} s (lease valid until {Expires:O})", scope, _node.AuthorityLeaseRenewSeconds, current.ExpiresAtUtc);
                 }
             }
+
+            TakeOverFreeScopes(); // every held lease was renewed (a failed one stopped the node above): now look for scopes whose holder is gone
         }
         finally
         {
@@ -323,6 +343,84 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
             {
                 _renewing = false;
             }
+        }
+    }
+
+    /// <summary>
+    /// Tries to acquire each scope this node does not hold. The store refuses while another node's lease is live (<see cref="AuthorityLeaseOutcome.RejectedHeldByOther"/>, nothing changes), and grants it with a higher
+    /// fencing token once that lease has lapsed. A store failure is logged and retried on the next tick. Runs on the renewal tick (so never concurrently with a renewal round), after the held leases were renewed.
+    /// </summary>
+    private void TakeOverFreeScopes()
+    {
+        foreach (string scope in ScopesToTake)
+        {
+            lock (_gate)
+            {
+                if (_lost || _released || !_started)
+                {
+                    return;
+                }
+
+                if (_held.ContainsKey(scope) || _noRow.Contains(scope))
+                {
+                    continue;
+                }
+            }
+
+            AuthorityLeaseResult result;
+            try
+            {
+                result = _store.TryAcquire(scope, _nodeId, _incarnation, _node.LeaseTtl, _time.GetUtcNow());
+            }
+            catch (ArgumentException ex) when (ex.ParamName == "scope" && Array.IndexOf(OptionalScopes, scope) >= 0)
+            {
+                lock (_gate)
+                {
+                    _noRow.Add(scope);
+                }
+
+                _logger.LogWarning(ex, "The {Scope} lease row does not exist in the characters database; this node will not try to take it over", scope);
+                continue;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "Trying to take over the {Scope} lease failed; retrying in {Seconds} s", scope, _node.AuthorityLeaseRenewSeconds);
+                continue;
+            }
+
+            if (result.Outcome is not (AuthorityLeaseOutcome.Granted or AuthorityLeaseOutcome.Renewed) || result.Lease is not { } lease)
+            {
+                continue; // another node still holds it
+            }
+
+            bool keep;
+            lock (_gate)
+            {
+                keep = !_lost && !_released;
+                if (keep)
+                {
+                    _held[scope] = new Held(lease.FencingToken, lease.ExpiresAtUtc);
+                }
+            }
+
+            if (!keep)
+            {
+                // An orderly stop (or a loss) began while the store call ran: give the lease straight back instead of holding it until it expires.
+                try
+                {
+                    _store.TryRelease(scope, _nodeId, _incarnation, lease.FencingToken);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogWarning(ex, "Giving back the {Scope} lease taken during the stop failed; it expires on its own within {Seconds} s", scope, _node.AuthorityLeaseTtlSeconds);
+                }
+
+                return;
+            }
+
+            _logger.LogWarning(
+                "Took over the {Scope} lease (fencing token {Token}) as {Node}: its previous holder is gone. Sweeps and durable writes of the scope run here now; a singleton feature attached only at start runs again after this node restarts",
+                scope, lease.FencingToken, _nodeId);
         }
     }
 

@@ -102,6 +102,87 @@ public sealed class RealmAuthorityLeaseKeeperTests
     }
 
     [Fact]
+    public async Task ScopeHeldByAnotherNodeAtStart_IsTakenOverOnceItsLeaseLapses()
+    {
+        // worker-b took the economy lease at start and then died: it never renews. Unproven until the integration gate runs it.
+        _inner.TryAcquire(RealmAuthorityScopes.Economy, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Economy));
+
+        _time.Advance(TimeSpan.FromSeconds(10)); // worker-b's lease is still live: the takeover attempt is refused
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Economy));
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+        _time.Advance(TimeSpan.FromSeconds(10));
+        _time.Advance(TimeSpan.FromSeconds(10)); // 40 s: worker-b's lease lapsed at 30 s
+
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Economy)); // strictly above worker-b's token
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Economy));
+        Assert.True(keeper.FenceFor(RealmAuthorityScopes.Economy) is { FencingToken: 2 });
+        Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Economy, Node, 2, _time.GetUtcNow()));
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social)); // the leases it already held were renewed, not retaken
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task ScopeHeldByALiveOtherNode_IsNeverTakenOver()
+    {
+        var other = new ManualRenewer(_inner, RealmAuthorityScopes.Economy, "worker-b", _time);
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+
+        for (int i = 0; i < 6; i++)
+        {
+            other.Renew();
+            _time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Economy));
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task ReleaseAll_StopsTheTakeover()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Economy, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await keeper.ReleaseAllAsync();
+
+        for (int i = 0; i < 5; i++)
+            _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Economy));
+    }
+
+    /// <summary>Another node that keeps its lease alive by renewing it by hand.</summary>
+    private sealed class ManualRenewer
+    {
+        private readonly InMemoryRealmAuthorityLeaseStore _store;
+        private readonly string _scope;
+        private readonly string _node;
+        private readonly ManualTimeProvider _time;
+        private readonly Guid _incarnation = Guid.NewGuid();
+        private long _token;
+
+        public ManualRenewer(InMemoryRealmAuthorityLeaseStore store, string scope, string node, ManualTimeProvider time)
+        {
+            _store = store;
+            _scope = scope;
+            _node = node;
+            _time = time;
+            _token = store.TryAcquire(scope, node, _incarnation, TimeSpan.FromSeconds(30), time.GetUtcNow()).Lease!.FencingToken;
+        }
+
+        public void Renew() => _store.TryRenew(_scope, _node, _incarnation, _token, TimeSpan.FromSeconds(30), _time.GetUtcNow());
+    }
+
+    [Fact]
     public async Task AcquireAtStart_SameNodePreviousIncarnation_WaitsForExpiryThenGrants()
     {
         // A previous incarnation of this node crashed without releasing.

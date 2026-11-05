@@ -182,12 +182,17 @@ public static class LeaseFencedWrite
     /// refuses only a node that has no fence for <paramref name="scope"/> (never taken, held by another node, given back). A keeper that marked the lease lost locally (a slow renewal round, a transient store failure)
     /// keeps the old token in <see cref="IRealmLeaseFenceSource.FenceFor"/>, so the commit fence decides: it refuses the write exactly when another node really took the lease over and accepts it while the token is still the
     /// row's. Never call it from a write that has no commit-time check: there nothing would stop a deposed node.
+    /// <para>Returns the fence it read (null only when there is no <paramref name="source"/>). A write passes that same fence to the commit check (<see cref="EnsureHeldAsync"/>, or the overloads of
+    /// <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/> and
+    /// <see cref="SaveChangesAsync(CharacterDbContext, RealmLeaseFence?, CancellationToken)"/>) instead of asking the source a second time: the keeper forgets its fences in
+    /// <c>ReleaseAllAsync</c>, so a second read after a release would be null and the write would go unchecked.</para>
     /// </summary>
-    public static void RequireFence(IRealmLeaseFenceSource? source, string scope)
+    public static RealmLeaseFence? RequireFence(IRealmLeaseFenceSource? source, string scope)
     {
         ArgumentException.ThrowIfNullOrEmpty(scope);
-        if (source is not null && source.FenceFor(scope) is null)
-            throw new RealmLeaseNotHeldException(scope);
+        if (source is null)
+            return null;
+        return source.FenceFor(scope) ?? throw new RealmLeaseNotHeldException(scope);
     }
 
     /// <summary>
@@ -207,38 +212,52 @@ public static class LeaseFencedWrite
     public static Task<T> HeldWriteAsync<T>(
         CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
     {
+        RealmLeaseFence? fence = source?.FenceFor(scope); // read before the holder check, so a release between the two cannot leave the write unchecked
         RequireHeld(source, scope);
-        return InTransactionAsync(db, source, scope, write, cancellationToken);
+        return InTransactionAsync(db, fence, write, cancellationToken);
     }
 
     /// <summary>The same as the generic overload, for a write with no result.</summary>
     public static Task HeldWriteAsync(
         CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task> write, CancellationToken cancellationToken)
     {
+        RealmLeaseFence? fence = source?.FenceFor(scope);
         RequireHeld(source, scope);
-        return InTransactionAsync(db, source, scope, write, cancellationToken);
+        return InTransactionAsync<bool>(db, fence, async () =>
+        {
+            await write().ConfigureAwait(false);
+            return true;
+        }, cancellationToken);
     }
 
     /// <summary>
     /// Runs <paramref name="write"/> after verifying the lease <paramref name="source"/> reports for <paramref name="scope"/>, in one transaction (joining the caller's when there is one,
     /// whose owner then commits). With no source, or a source that holds no lease for the scope, the delegate is simply awaited.
     /// </summary>
-    public static async Task<T> InTransactionAsync<T>(
+    public static Task<T> InTransactionAsync<T>(
         CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
+        => InTransactionAsync(db, source?.FenceFor(scope), write, cancellationToken);
+
+    /// <summary>
+    /// <see cref="InTransactionAsync{T}(CharacterDbContext, IRealmLeaseFenceSource?, string, Func{Task{T}}, CancellationToken)"/> under a fence the caller already read (<see cref="RequireFence"/> returns it), so the
+    /// lease is not looked up a second time. A null <paramref name="fence"/> means no check (no source, or a scope this node never held), as the overload without a fence does.
+    /// </summary>
+    public static async Task<T> InTransactionAsync<T>(
+        CharacterDbContext db, RealmLeaseFence? fence, Func<Task<T>> write, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(write);
-        if (source?.FenceFor(scope) is not { } fence)
+        if (fence is not { } held)
             return await write().ConfigureAwait(false);
 
         if (db.Database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
         {
-            await EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            await EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
             return await write().ConfigureAwait(false);
         }
 
         await using IDbContextTransaction transaction = await CharacterWriteFence.BeginTransactionAsync(db, null, cancellationToken).ConfigureAwait(false);
-        await EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+        await EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
         T result = await write().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
@@ -259,6 +278,10 @@ public static class LeaseFencedWrite
     /// <summary><c>SaveChangesAsync</c> under the verified transaction of <see cref="InTransactionAsync{T}"/>.</summary>
     public static Task SaveChangesAsync(CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, CancellationToken cancellationToken)
         => InTransactionAsync<int>(db, source, scope, () => db.SaveChangesAsync(cancellationToken), cancellationToken);
+
+    /// <summary><see cref="SaveChangesAsync(CharacterDbContext, IRealmLeaseFenceSource?, string, CancellationToken)"/> under a fence the caller already read (<see cref="RequireFence"/> returns it).</summary>
+    public static Task SaveChangesAsync(CharacterDbContext db, RealmLeaseFence? fence, CancellationToken cancellationToken)
+        => InTransactionAsync<int>(db, fence, () => db.SaveChangesAsync(cancellationToken), cancellationToken);
 
     private static async Task<bool> LockSharedAsync(CharacterDbContext db, RealmLeaseFence fence, string incarnation, CancellationToken cancellationToken)
     {
