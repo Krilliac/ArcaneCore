@@ -487,7 +487,9 @@ public sealed class GameObjectTests
         Assert.Empty(Packets(watcher, WorldOpcode.SmsgGameobjectCustomAnim));
         Assert.Equal(GameObjectState.Active, goober.State);
 
-        Assert.Equal(GameObjectUseResult.OnCooldown, rig.System.Use(player, goober.Guid));
+        // A click on the goober in use stops at the opcode (SpellHandler.cpp:295-296); the script path has no such stop and meets the cooldown.
+        Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(player, goober.Guid));
+        Assert.Equal(GameObjectUseResult.OnCooldown, rig.System.UseByUnit(player, goober));
         rig.World.RunTick(10_000);
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, goober.Guid));
     }

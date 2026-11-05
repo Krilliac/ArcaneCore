@@ -98,7 +98,8 @@ public sealed partial class CreatureMapSystem
         // SCRIPT_EXEC_PARAM_NONE, Spells/SpellEffects.cpp:1529-1531 and :4188-4190).
         // A game object use script starts on every use: GameObject::Use calls ScriptsStart with no execution parameter (GameObject.cpp:1490,
         // :1506, :1529, :1703), the default SCRIPT_EXEC_PARAM_NONE, and Map::ScriptsStart checks uniqueness only for a non-zero parameter
-        // (Maps/Map.h:233-240, Maps/Map.cpp:2181).
+        // (Maps/Map.h:233-240, Maps/Map.cpp:2181). A repeat click is stopped before GameObject::Use instead, by GO_FLAG_IN_USE in
+        // HandleGameObjectUseOpcode (Spells/SpellHandler.cpp:295-296, GameObjectMapSystem.UseCore).
         DbScriptUniqueness unique = kind is DbScriptKind.Spell or DbScriptKind.GameObject or DbScriptKind.GameObjectTemplate ? DbScriptUniqueness.None
             : kind != DbScriptKind.Event ? DbScriptUniqueness.SourceAndTarget
             : source is Unit or GameObjects.GameObject ? DbScriptUniqueness.Source

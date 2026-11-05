@@ -58,11 +58,17 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   `GameObject::Use` does (GameObject.cpp:1490 template script for every type; :1506, :1529, :1703 the guid script of a door, button and
   goober), with the user as source and the object as target, on the map's DB script executor. The coffer therefore toggles, fires its trap
   and then runs command 40 on use by a creature, as for a player.
-  Both scripts start on every use, with no uniqueness check: GameObject::Use passes no execution parameter, so ScriptsStart defaults to
-  SCRIPT_EXEC_PARAM_NONE (Map.h:233-240, Map.cpp:2181), and a second use while a delayed step (Keystone 28 s, Shadowforge Lock 20 s,
-  Sacred Fire 5 s) is pending queues a second run.
-  A goober or trap on cooldown, and a goober still in use, refuses the click before the template script starts (GameObject.cpp:1482;
-  GetCooldown covers TRAP and GOOBER, GameObject.h:458-466), and a door or button
+  Both scripts start on every use that reaches GameObject::Use, with no uniqueness check: GameObject::Use passes no execution parameter, so
+  ScriptsStart defaults to SCRIPT_EXEC_PARAM_NONE (Map.h:233-240, Map.cpp:2181).
+  A click does not reach it on an object in use: HandleGameObjectUseOpcode returns for GO_FLAG_IN_USE (SpellHandler.cpp:295-296), which a door
+  or button holds until it resets (for good if it has no auto-close time) and a goober until GameObject::Update clears it after its auto-close
+  time (GameObject.cpp:549-552, 1385-1388, 1650). `UseCore` refuses the same way, before any script, hook or aura break. So a second run while
+  a delayed step (Keystone 28 s, Shadowforge Lock 20 s, Sacred Fire 5 s) is pending needs the object to be usable again first, or a use through
+  the open-lock spell or `UseByUnit`, which skip the opcode and have no such refusal. A click on a generic object starts nothing either
+  (SpellHandler.cpp:289-293).
+  A goober or trap on cooldown refuses the use before the template script starts (GameObject.cpp:1482; GetCooldown covers TRAP and GOOBER,
+  GameObject.h:458-466). ArcaneCore also holds back the template script for a goober that `UseGoober` or `UseGooberByUnit` would refuse as not
+  ready on the spell and script paths, which GameObject::Use does not do. A door or button
   whose instance script took the use skips the guid script (GameObject.cpp:1505, :1528; asked for a player user on the script-use path too). Known gap: a linked or scripted trap trigger
   calls `UseTrap` directly, where the reference goes through `GameObject::Use` and so starts the template script too; the only type 6
   row is 179804 (Drakonid Bones), whose event BlackwingLairInstance already raises in C#, so it is left alone to avoid a double summon.

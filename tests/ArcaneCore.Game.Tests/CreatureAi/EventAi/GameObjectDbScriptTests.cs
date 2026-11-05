@@ -138,10 +138,29 @@ public sealed class GameObjectDbScriptTests
         }
     }
 
+    /// <summary>The template script and the guid script of the test object, each one step <paramref name="delayMs"/> away, so a started run shows as a pending step.</summary>
+    private static DbScriptCatalog DelayedUseScripts(uint delayMs) => new(
+    [
+        (DbScriptKind.GameObjectTemplate, new RelayScriptStep(ObjectEntry, delayMs, 0, 53, 0, 0, 0, 0, 0, 0, (int)TemplateVariable, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+        (DbScriptKind.GameObject, new RelayScriptStep(ObjectGuid, delayMs, 0, 53, 0, 0, 0, 0, 0, 0, (int)GuidVariable, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+    ]);
+
+    /// <summary>The auto-close column of <paramref name="type"/>, in template units (seconds * 0x10000, GameObjectInfoView.AutoCloseSeconds).</summary>
+    private static (int Index, uint Value)[] AutoClose(GameObjectType type, uint seconds)
+        => seconds == 0 ? [] : [(type == GameObjectType.Goober ? 3 : 2, seconds * 0x10000)];
+
+    private static GameObjectMapSystem AddObject(Map map, GameObjectType type, params (int Index, uint Value)[] data)
+    {
+        var objects = new GameObjectMapSystem(map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(ObjectEntry, type, data)], [GameObjectTestKit.GoSpawn(ObjectGuid, ObjectEntry, 0, 10)], [], [], []));
+        map.AddUpdater(objects);
+        return objects;
+    }
+
     [Theory]
     [InlineData(5u, 0u, GameObjectUseResult.OnCooldown)] // a goober on cooldown (data6 seconds)
-    [InlineData(0u, 10u, GameObjectUseResult.InUse)] // a goober still in use (data3 auto-close seconds)
-    public void AGooberRefusedAsOnCooldownOrInUse_DoesNotRunTheTemplateScriptAgain(uint cooldown, uint autoClose, GameObjectUseResult refusal)
+    [InlineData(0u, 10u, GameObjectUseResult.InUse)] // a goober waiting for its auto-close time (data3)
+    public void AGooberInUse_RefusesTheClick_AndTheScriptPathRefusal_RunsNoTemplateScriptEither(uint cooldown, uint autoClose, GameObjectUseResult scriptPathRefusal)
     {
         var ai = new CreatureAiContent([], [])
         {
@@ -150,52 +169,146 @@ public sealed class GameObjectDbScriptTests
         (WorldRuntime world, Map map, _) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
         using (world)
         {
-            (int Index, uint Value)[] data = autoClose > 0 ? [(3, autoClose)] : [(6, cooldown)];
-            var objects = new GameObjectMapSystem(map, new GameObjectContent(
-                [GameObjectTestKit.GoTemplate(ObjectEntry, GameObjectType.Goober, data)], [GameObjectTestKit.GoSpawn(ObjectGuid, ObjectEntry, 0, 10)], [], [], []));
-            map.AddUpdater(objects);
+            (int Index, uint Value)[] data = autoClose > 0 ? AutoClose(GameObjectType.Goober, autoClose) : [(6, cooldown)];
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Goober, data);
             (Player player, _) = AddPlayer(world, 1, 0, 10);
             GameObject go = Assert.Single(objects.GameObjects);
             Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
             Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
 
             ConditionRuntimeState.For(world).SetMapVariable(map, TemplateVariable, 0);
-            Assert.Equal(refusal, objects.Use(player, go.Guid));
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
             Assert.Equal(0, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
+
+            Assert.Equal(scriptPathRefusal, objects.UseByUnit(player, go));
+            Assert.Equal(0, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
+        }
+    }
+
+    [Theory]
+    [InlineData(GameObjectType.Door, 0u)]
+    [InlineData(GameObjectType.Door, 60u)]
+    [InlineData(GameObjectType.Button, 0u)]
+    [InlineData(GameObjectType.Button, 60u)]
+    [InlineData(GameObjectType.Goober, 0u)]
+    [InlineData(GameObjectType.Goober, 60u)]
+    public void ASecondClickOnAnObjectInUse_IsRefused_AndStartsNeitherScript(GameObjectType type, uint autoCloseSeconds)
+    {
+        // HandleGameObjectUseOpcode returns for GO_FLAG_IN_USE before GameObject::Use (SpellHandler.cpp:295-296). Set for a door or button by
+        // SwitchDoorOrButton (GameObject.cpp:1385-1388) and for a goober at :1650.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, type, AutoClose(type, autoCloseSeconds));
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
+            Assert.True(go.Flags.HasFlag(GameObjectFlags.InUse));
+            Assert.Equal(2, system.PendingDbScriptSteps);
+
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(2, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Fact]
+    public void ADoorWithoutAnAutoCloseTime_StaysInUse_SoLaterClicksStartNothing()
+    {
+        // GameObject::Update resets a door only with an auto-close time (GameObject.cpp:521-525).
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Door);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
+            Run(world, 3000);
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(2, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Theory]
+    [InlineData(GameObjectType.Door)]
+    [InlineData(GameObjectType.Button)]
+    public void TheSpellAndScriptPaths_HaveNoInUseGuard_SoTheyStartTheScriptsOnAnObjectInUse(GameObjectType type)
+    {
+        // The in-use return is in the opcode handler, not in GameObject::Use, which Spell::SendLoot and the script use call directly.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, type);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
+            Assert.Equal(2, system.PendingDbScriptSteps);
+
+            Assert.Equal(GameObjectUseResult.InUse, objects.UseByUnit(player, go));
+            Assert.Equal(4, system.PendingDbScriptSteps);
+
+            Assert.Equal(GameObjectUseResult.InUse, objects.OpenLock(player, go.Guid, LockType.Open));
+            Assert.Equal(6, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Fact]
+    public void AClickOnAGenericObject_StartsNoTemplateScript()
+    {
+        // HandleGameObjectUseOpcode never hands GAMEOBJECT_TYPE_GENERIC to GameObject::Use (SpellHandler.cpp:289-293).
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Generic);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.NotUsable, objects.Use(player, go.Guid));
+            Assert.Equal(0, system.PendingDbScriptSteps);
         }
     }
 
     [Theory]
     [InlineData(DbScriptKind.GameObjectTemplate)]
     [InlineData(DbScriptKind.GameObject)]
-    public void ARepeatUseWhileADelayedStepIsPending_QueuesASecondRun(DbScriptKind kind)
+    public void ARepeatUseOnceTheObjectIsUsableAgain_WhileADelayedStepIsPending_QueuesASecondRun(DbScriptKind kind)
     {
-        // GameObject::Use starts the script with the default SCRIPT_EXEC_PARAM_NONE (GameObject.cpp:1490, :1506, :1703; Map.h:233-240), so a
-        // second use by the same player while the 500 ms step of the first is pending is not dropped.
+        // GameObject::Use starts the script with the default SCRIPT_EXEC_PARAM_NONE (GameObject.cpp:1490, :1529; Map.h:233-240), so nothing drops
+        // a run for the pending step of an earlier one. The button here resets long before its 5000 ms step is due; only then does a click
+        // get through the opcode's in-use return (SpellHandler.cpp:295-296).
         var ai = new CreatureAiContent([], [])
         {
             DbScripts = new DbScriptCatalog(
             [
-                (kind, new RelayScriptStep(kind == DbScriptKind.GameObject ? ObjectGuid : ObjectEntry, 500, 0, 53, 0, 0, 0, 0, 0, 0,
+                (kind, new RelayScriptStep(kind == DbScriptKind.GameObject ? ObjectGuid : ObjectEntry, 5000, 0, 53, 0, 0, 0, 0, 0, 0,
                     (int)TemplateVariable, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
             ]),
         };
-        (WorldRuntime world, Map map, _) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
         using (world)
         {
-            var objects = new GameObjectMapSystem(map, new GameObjectContent(
-                [GameObjectTestKit.GoTemplate(ObjectEntry, GameObjectType.Goober)], [GameObjectTestKit.GoSpawn(ObjectGuid, ObjectEntry, 0, 10)], [], [], []));
-            map.AddUpdater(objects);
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Button, AutoClose(GameObjectType.Button, 1));
             (Player player, _) = AddPlayer(world, 1, 0, 10);
             GameObject go = Assert.Single(objects.GameObjects);
             Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
-            Run(world, 300);
-            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid)); // the second run is due 500 ms after this use
-            Run(world, 300); // the first run's step fires at 500 ms
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+
+            Run(world, 2500); // whole-second clock: the button resets 1 to 2 seconds after the use
+            Assert.False(go.Flags.HasFlag(GameObjectFlags.InUse));
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid)); // the second run is due 5000 ms after this use
+            Assert.Equal(2, system.PendingDbScriptSteps);
+
+            Run(world, 3000); // the first run's step fires at 5000 ms
+            Assert.Equal(1, system.PendingDbScriptSteps);
             Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
 
             ConditionRuntimeState.For(world).SetMapVariable(map, TemplateVariable, 0);
-            Run(world, 400); // the second run's step fires at 800 ms
+            Run(world, 2500); // the second run's step fires at 7500 ms
+            Assert.Equal(0, system.PendingDbScriptSteps);
             Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
         }
     }

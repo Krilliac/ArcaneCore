@@ -657,7 +657,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// alive. Then by type: doors and buttons toggle (auto-closing after data2 ms); chests check
     /// their lock and quest gate and open their loot; goobers check their quest, give quest
     /// credit, show page text / custom animation; text objects show their page; quest givers go to
-    /// <see cref="QuestGiver"/>; mailboxes answer Ok (the mail area opens the UI).
+    /// <see cref="QuestGiver"/>; mailboxes answer Ok (the mail area opens the UI). An object already in use is refused before any of
+    /// that (mangos-classic SpellHandler.cpp:295-296). <see cref="OpenLock"/> and <see cref="UseByUnit"/> reach GameObject::Use without
+    /// going through this opcode, so they do not have that refusal.
     /// </summary>
     public GameObjectUseResult Use(Player player, ObjectGuid guid)
     {
@@ -679,6 +681,14 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (DirectUseRefused?.Invoke(player, go) == true)
         {
             return GameObjectUseResult.Locked;
+        }
+
+        // HandleGameObjectUseOpcode (mangos-classic SpellHandler.cpp:295-296) returns for a GO_FLAG_IN_USE object before GameObject::Use, so a
+        // repeated or crafted click on a door, button or goober still in use reaches no script, hook, aura break or dismount. That flag, not
+        // script uniqueness (the use scripts have none), is what stops a repeat click from starting another run.
+        if ((go.Flags & GameObjectFlags.InUse) != 0)
+        {
+            return GameObjectUseResult.InUse;
         }
 
         // HandleGameObjectUseOpcode (SpellHandler.cpp:241-258) strips AURA_INTERRUPT_LOOTING_CANCELS before GameObject::Use, once the
@@ -713,9 +723,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // is open (the direct-use lock here, the open-lock spell in OpenLock).
         bool lockOpen = CheckDirectLock(player, go) == GameObjectUseResult.Ok;
         bool scriptTookUse = lockOpen && InstanceScriptTookUse(player, go);
-        if (lockOpen && !scriptTookUse)
+        if (lockOpen && !scriptTookUse && go.Type != GameObjectType.Generic)
         {
-            // dbscripts_on_go_template_use (GameObject.cpp:1489-1490): skipped when the ScriptDev2 hook took the use.
+            // dbscripts_on_go_template_use (GameObject.cpp:1489-1490): skipped when the ScriptDev2 hook took the use. The opcode never hands a
+            // generic object to GameObject::Use (SpellHandler.cpp:289-293), so a click on one starts nothing.
             StartTemplateUseScript(player, go);
         }
 
@@ -1111,7 +1122,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         // dbscripts_on_go_use of a door or button (GameObject.cpp:1506, :1529): started whatever the toggle answered, unless the ScriptDev2
-        // hook took the use (scriptReturnValue, asked in UseCore).
+        // hook took the use (scriptReturnValue, asked in UseCore). UseCore has already refused an object in use, so here the toggle only
+        // refuses one that is not ready without carrying GO_FLAG_IN_USE.
         if (!scriptTookUse)
         {
             StartGuidUseScript(player, go);
@@ -1448,9 +1460,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.OnCooldown;
         }
 
-        // An object still in use (activated until its auto-close time) refuses the use before anything else, so a repeated or crafted
-        // CMSG_GAMEOBJ_USE in that window neither shows the page again nor re-fires the goober event. The client offers no use of a
-        // GO_FLAG_IN_USE object and cmangos has no server-side refusal; ArcaneCore's InUse check stands for it, as the chest path does.
+        // A click never gets here on an object in use: UseCore refuses it as the opcode does (SpellHandler.cpp:295-296). This gate is for the
+        // paths that skip the opcode, the open-lock spell and UseByUnit. It is ArcaneCore's own: GameObject::Use has no in-use check (the spell
+        // path has the cast check at Spell.cpp:5563 instead, GatheringSpells here), so a use there neither shows the page again nor re-fires
+        // the goober event while the object waits for its auto-close time.
         uint autoCloseSeconds = go.Template.AutoCloseSeconds();
         if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
         {
