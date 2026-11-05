@@ -73,7 +73,7 @@ internal static class WardenEvidence
     public static bool IsActionable(WardenEvidenceClass evidenceClass)
         => evidenceClass is WardenEvidenceClass.IntegrityInvariant or WardenEvidenceClass.ThreatSignature;
 
-    /// <summary>MaNGOS Zero NeedsConfirmation: an eligible (non-timing) check that came back Mismatch or Unavailable is rescanned alone first.</summary>
+    /// <summary>MaNGOS Zero NeedsConfirmation: an eligible (non-timing, non-zero id) check that came back Mismatch or Unavailable is rescanned alone first.</summary>
     public static bool NeedsConfirmation(WardenCheck check, WardenCheckOutcome outcome)
         => check.ConfirmationEligible && (outcome is WardenCheckOutcome.Mismatch or WardenCheckOutcome.Unavailable);
 

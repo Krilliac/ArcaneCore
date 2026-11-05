@@ -180,7 +180,7 @@ public sealed class WardenOptions
     /// Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua,
     /// page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of
     /// an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration
-    /// (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. Default false: a failed scan acts at once.
+    /// (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. A check with id 0 is never confirmed and never acts: its failure is logged. Default false: a failed scan acts at once.
     /// </summary>
     public bool ConfirmFailedScans { get; set; }
 
