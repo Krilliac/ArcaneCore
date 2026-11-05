@@ -174,11 +174,11 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         var botA = new PlayerbotStallWatch { SharedPins = pins };
         var botB = new PlayerbotStallWatch { SharedPins = pins };
         // The overload the brain reports through (PlayerbotBrain.ReportWorldPin): the region of the stalled bot in the graph decides.
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
-        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
-        Assert.Equal(1, pins.Count); // the ledger remembers the cell towards a crowd, and it is no pin
-        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
-        Assert.False(botA.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2091f, 1_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2092f, 2_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Equal(1, pins.Count); // one cell: both reports wait in its record, and two bots stay below the crowd
+        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2091f, 2_000));
+        Assert.False(botA.IsWorldPin(1, 0, 7020f, -2091f, 2_000));
 
         // The same two reports from a region of one of the parts, or with no graph built, or from no region: the second bot makes the cell a world pin.
         Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons));
@@ -192,16 +192,17 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
 
     /// <summary>
     /// Audit cid 44: 53 different bots dead-end-pinned one cell of Deadwind Pass in under three hours (at the peak 21 in 30 minutes, the live logs of
-    /// 2026-10) and no world pin formed, because the cell lies in a cut region (the split stage's <c>world-dead-end-pin-unshared</c> line of 2026-11-05 names
-    /// region 126021 of 4323 polygons in zone 41) and every stall in a cut region was dropped. Size cannot tell such a region from the tunnel: Timbermaw's
-    /// largest region holds 4882 polygons. The number of bots can: no Timbermaw cell had more than 2 different bots in 30 minutes.
+    /// 2026-10) and no world pin formed. By elimination the cell lies in some cut region of at most 5000 polygons, where every stall was dropped; which region is
+    /// unknown, since no log or lookup names the cell's own. The middle region's 4323 polygons here is a stand-in: the size of region 126021, the region of a
+    /// neighbouring point 71 yards away (the split stage's <c>world-dead-end-pin-unshared</c> line of 2026-11-05). Size cannot tell a cut region from the tunnel:
+    /// Timbermaw's largest region holds 4882 polygons. Whether a crowd of <see cref="PlayerbotSharedPins.CutRegionBotsToShare"/> can is unproven (see that constant).
     /// </summary>
     [Fact]
     public void ACrowdOfBotsPinningOneCellOfACutRegion_MakesAWorldPin()
     {
-        NavRegionGraph deadwind = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 4323, PlayerbotNavigation.CutRegionPartPolygons + 200],
+        NavRegionGraph standIn = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 4323, PlayerbotNavigation.CutRegionPartPolygons + 200],
             [(0, 1), (1, 2)]);
-        Assert.True(PlayerbotNavigation.IsCutRegion(deadwind, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.True(PlayerbotNavigation.IsCutRegion(standIn, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
 
         var pins = new PlayerbotSharedPins();
         string? created = null;
@@ -209,7 +210,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         {
             Assert.False(pins.IsWorldPin(0, 0, -11153.8f, -1878.6f, 1_000), $"no world pin before bot {bot}");
             var watch = new PlayerbotStallWatch { SharedPins = pins };
-            created = watch.ReportDeadEndPin(bot, 0, 0, -11153.8f, -1878.6f, 1_000, deadwind, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons);
+            created = watch.ReportDeadEndPin(bot, 0, 0, -11153.8f, -1878.6f, 1_000, standIn, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons);
             if (bot < 4) Assert.Null(created);
         }
 

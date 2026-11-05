@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Playerbots;
 /// World pins never refuse a plan (<see cref="PlayerbotNavigation.IsDeadEndPin"/> is per bot): an NPC or a flag in the cell stays reachable.
 /// The caller reports only from open-world maps outside cities (PlayerbotBrain.DeadEndPinShareBlock, the area rule); cells are kept per map instance anyway.
 /// A report from a cut region (<see cref="PlayerbotNavigation.IsCutRegion"/>) is weak evidence: bots in a tunnel stall in each other's way, so such reports
-/// make a world pin only as a crowd of <see cref="CutRegionBotsToShare"/> different bots. A world pin cannot shut a tunnel, since it refuses no plan.
+/// make a world pin only as a crowd of <see cref="CutRegionBotsToShare"/> different bots. A world pin cannot shut a tunnel, since it refuses no plan, though a first stall in it teleports the bot out.
 /// Live 2026-10-25: 60 bots were pinned at two Deadwind Pass spawn points; the pin ledger is per bot, so each of them needed two stalls of
 /// two minutes or more to learn what the first had already found. A repeat after a pin ended lasts twice as long (at most
 /// <see cref="MaxPinMs"/>); bounded by <see cref="MaxKeys"/> (the one reported longest ago goes first). Kept in memory only: a restart relearns it.
@@ -25,10 +25,13 @@ internal sealed class PlayerbotSharedPins
     internal const int BotsToShare = 2;
 
     /// <summary>
-    /// Different bots that must dead-end-pin one cell for it to be a world pin when their stalls lie in a cut region. Size cannot tell a tunnel
-    /// from open ground (Timbermaw Hold's largest region holds 4882 polygons, the Deadwind Pass region of audit cid 44 holds 4323, and cut regions hold about
-    /// 11% of each continent), the number of bots in one 10-yard cell can: in the live logs of 2026-10 no Timbermaw cell had more than 2 different bots within
-    /// <see cref="WindowMs"/>, and the Deadwind cell had 21. Those logs are throttled, so both counts are floors.
+    /// Different bots that must dead-end-pin one cell for it to be a world pin when their stalls lie in a cut region. Polygon size cannot tell a tunnel from open
+    /// ground: Timbermaw Hold's largest region holds 4882 polygons and cut regions hold about 11% of each continent. The region of the Deadwind Pass cell of audit
+    /// cid 44 is unknown: elimination says only some cut region of at most 5000 polygons, and a neighbouring point 71 yards away lies in one of 4323.
+    /// The value is a judgement, not a measurement. The logs sampled start after the Timbermaw fix of 2026-10-25 (the first Timbermaw line is 2026-10-26 19:47, so the
+    /// incident day is not in them) and are heavily throttled: they show at most 2 different bots in a Timbermaw cell within <see cref="WindowMs"/> and 21 in the Deadwind
+    /// cell. Both are floors, and a floor bounds no maximum, so whether 4 keeps tunnel cells unpinned is unproven. The downside is bounded: a false tunnel pin refuses
+    /// no plan, so walks through keep their route, but explore candidates keep out of the cell and a bot's first stall in it teleports the bot home or to its bind point.
     /// </summary>
     internal const int CutRegionBotsToShare = 4;
 
