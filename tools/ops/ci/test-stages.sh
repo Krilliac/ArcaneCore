@@ -42,8 +42,9 @@
 # GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
 # The summary lists the slowest classes and tests of a target that hit a budget.
 # Executed-test guard: a skipped test is not a passed one. With GATE_REQUIRE_EXECUTED (space separated test class names) a run without
-# --filter FAILS when no test of such a class has a Passed or Failed result in the main-stage .trx files. Unset, it defaults to
-# SpellContractSweepTests when a target is named World and ARCANECORE_TEST_DBC_DIR holds Spell.dbc (the sweep skips without the client
+# --filter FAILS when no test of such a class has a Passed or Failed result in the main-stage .trx files. An entry Class.Method names one
+# test instead (needed for SpellContractSweepTests, whose plain harness tests run without DBCs and would satisfy a class-wide check).
+# Unset, it defaults to SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline when a target is named World and ARCANECORE_TEST_DBC_DIR holds Spell.dbc (the sweep skips without the client
 # DBCs, e.g. on Node1, and then nothing enforces its ratchet); GATE_REQUIRE_EXECUTED="" turns the guard off.
 set -u
 
@@ -155,15 +156,20 @@ class_times() {
     END { for (c in t) printf "%d %s\n", t[c], c }' | sort -rn
 }
 
-# executed_count <trx dir> <test class name> -> how many results of tests in that class (".Class." in the test name) are Passed or Failed.
-# A skipped test is NotExecuted and does not count.
+# executed_count <trx dir> <required> -> how many results matching <required> are Passed or Failed. <required> is a test class name
+# (matches ".Class." in the test name) or Class.Method (matches ".Class.Method" followed by the end of the name or a theory "(").
+# A skipped test is NotExecuted and does not count. Name the method when the class also holds plain tests that run without the data.
 executed_count() {
-  find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk -v cls=".$2." '
+  find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk -v req="$2" '
+    BEGIN { m = index(req, ".") > 0; pat = m ? "." req : "." req "." }
     { while (match($0, /<UnitTestResult [^>]*>/)) {
         tag = substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH)
         if (!match(tag, /testName="[^"]*"/)) continue; n = substr(tag, RSTART + 10, RLENGTH - 11)
         if (!match(tag, /outcome="[^"]*"/)) continue; o = substr(tag, RSTART + 9, RLENGTH - 10)
-        if (index(n, cls) > 0 && (o == "Passed" || o == "Failed")) c++ } }
+        if (o != "Passed" && o != "Failed") continue
+        i = index(n, pat); if (i == 0) continue
+        if (m) { r = substr(n, i + length(pat), 1); if (r != "" && r != "(") continue }
+        c++ } }
     END { print c + 0 }'
 }
 
@@ -205,12 +211,13 @@ label() { basename "$1" | sed -E 's/\.(slnf|slnx|sln|csproj)$//'; }
 dups=$(for t in "${targets[@]}"; do label "$t"; done | sort | uniq -d)
 for t in "${targets[@]}"; do [ -n "$(label "$t")" ] || { echo "test-stages: target '$t' has an empty name" >&2; exit 2; }; done
 [ -z "$dups" ] || { echo "test-stages: targets share the name(s): $(echo $dups) (their logs and results would collide)" >&2; exit 2; }
+sweep_method=Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline   # the [RealClientDbcFact]; the class's other tests need no DBCs
 # The executed-test guard (see the header): explicit list, else the sweep when the host has the client DBCs and a World target is run.
 if [ -n "${GATE_REQUIRE_EXECUTED+x}" ]; then require_executed=$GATE_REQUIRE_EXECUTED
 else
   require_executed=
   for t in "${targets[@]}"; do
-    [ "$(label "$t")" = World ] && [ -f "${ARCANECORE_TEST_DBC_DIR:-/nonexistent}/Spell.dbc" ] && require_executed=SpellContractSweepTests
+    [ "$(label "$t")" = World ] && [ -f "${ARCANECORE_TEST_DBC_DIR:-/nonexistent}/Spell.dbc" ] && require_executed=SpellContractSweepTests.$sweep_method
   done
 fi
 
@@ -319,7 +326,7 @@ if [ "$stage" = main ] || [ "$stage" = all ]; then
     for c in $require_executed; do
       n=$(executed_count "$results" "$c")
       summary+=("executed-test guard: $c ran $n test(s) in the main stage")
-      [ "$n" -ge 1 ] || fail "main stage: no $c test executed (all skipped or absent); set the data it needs, or GATE_REQUIRE_EXECUTED= to turn the guard off"
+      [ "$n" -ge 1 ] || fail "main stage: no $c test executed (skipped or absent); set the data it needs, or GATE_REQUIRE_EXECUTED= to turn the guard off"
     done
   fi
   summary[0]="stage main (parallel, $flt): executed $a_exec (passed $a_pass, failed $a_fail), skipped $a_skip"

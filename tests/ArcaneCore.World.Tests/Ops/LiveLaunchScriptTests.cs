@@ -1074,6 +1074,56 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.DoesNotContain("Last relevant log lines", missingLine, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// start-cluster waits for the supervisor with -Port 0 and no -WatchPid, so the realistic ways a refusing supervisor goes away are not the
+    /// WatchPid throw: it lives past one poll and exits inside the settle sleep, or it is seen and then gone on the next poll, or its console
+    /// window ends before the process is ever found. Each of those errors must quote the refusal from -LogPath too.
+    /// </summary>
+    [PwshFact]
+    public void WaitLiveDaemonUp_SupervisorExitsDuringSettleOrIsGone_QuotesTheRefusalFromTheSupervisorLog()
+    {
+        string log = Path.Combine(_root, "settle.debug.jsonl");
+        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}
+{\"level\":\"Error\",\"msg\":\"admission refused world: 311 MiB free is under the 1024 MiB reserve\"}
+");
+        string output = RunPwsh($$"""
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+            $log = '{{Q(log)}}'
+            function Get-LivePortOwner { param($Port) return $null }
+
+            # 1. Found at the first poll, port 0 enters the settle sleep, and the process exits inside it.
+            $script:child = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 800; exit 3' -PassThru @hide
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $script:child }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $PID -ImageName 'x.exe' -TimeoutSec 30 -SettleSeconds 4 -LogPath $log; 'returned' }
+            catch { "threw[settle]: $($_.Exception.Message)" }
+
+            # 2. Seen with a port that never listens, then gone at the next poll (no relaunch to follow).
+            $script:child = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 500; exit 4' -PassThru @hide
+            $script:polls = 0
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) $script:polls++; if ($script:polls -eq 1) { return $script:child }; $script:child.WaitForExit(); return $null }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -LogPath $log; 'returned' }
+            catch { "threw[seen]: $($_.Exception.Message)" }
+
+            # 3. The console window (parent) ends before any child is found.
+            $script:parentProc = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep -Milliseconds 1500; exit 5' -PassThru @hide
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
+            try { Wait-LiveDaemonUp -Label 'sup' -ParentPid $script:parentProc.Id -ImageName 'x.exe' -TimeoutSec 30 -LogPath $log; 'returned' }
+            catch { "threw[console]: $($_.Exception.Message)" }
+            """);
+        foreach (string path in new[] { "settle", "seen", "console" })
+        {
+            string line = output.Split('
+').Single(l => l.StartsWith($"threw[{path}]", StringComparison.Ordinal));
+            Assert.Contains("admission refused world: 311 MiB free is under the 1024 MiB reserve", line, StringComparison.Ordinal);
+            Assert.DoesNotContain("supervisor started", line, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("threw[settle]: sup (pid ", output, StringComparison.Ordinal);
+        Assert.Contains("exited within 4 s of coming up (exit code 3)", output, StringComparison.Ordinal);
+        Assert.Contains("exited before it was up (exit code 4)", output, StringComparison.Ordinal);
+        Assert.Contains("never started: its console window", output, StringComparison.Ordinal);
+    }
+
     // ---- the debugger script ------------------------------------------------------------------------------------------------------------
 
     [PwshFact]

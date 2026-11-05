@@ -340,7 +340,7 @@ function Wait-LiveDaemonUp {
       supervisor) going away still stops it. Without the switch (a daemon this script started itself) an early exit throws.
       -ArgumentToken names the child among several of the same image (see Find-LiveChildProcess); it is passed on only when given.
       -LogPath is the log of the process that launches it (the supervisor's): when the launcher exits or is gone before the daemon is up, the
-      error carries the last refusal/error lines of that log (Get-LiveLogFailureDetail), since the exit code alone does not say why.
+      error carries the last refusal/error lines of that log (Get-LiveLogFailureDetail; every throw about the launcher or the child going away does), since the exit code alone does not say why.
     #>
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -367,7 +367,7 @@ function Wait-LiveDaemonUp {
                 Start-Sleep -Seconds $SettleSeconds
                 $child.Refresh()
                 if (-not $child.HasExited) { return $child }
-                if (-not $FollowRelaunch) { throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log." }
+                if (-not $FollowRelaunch) { throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log.$(Get-LiveLogFailureDetail -LogPath $LogPath)" }
                 Write-Host "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); its supervisor relaunches it, waiting for the new process."
                 $seen = $null
             }
@@ -375,7 +375,7 @@ function Wait-LiveDaemonUp {
             Write-Host "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); its supervisor relaunches it, waiting for the new process."
             $seen = $null
         } elseif ($null -ne $seen) {
-            throw "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); see its console window and log."
+            throw "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); see its console window and log.$(Get-LiveLogFailureDetail -LogPath $LogPath)"
         } elseif ($parent -and $parent.HasExited) {
             throw "$Label never started: its console window (pid $ParentPid) exited with code $(if ($null -ne $parent.ExitCode) { $parent.ExitCode } else { 'unknown' }).$(Get-LiveLogFailureDetail -LogPath $LogPath)"
         }

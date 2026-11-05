@@ -37,7 +37,7 @@ public sealed class TestStagesScriptTests
             Assert.Contains("ok   " + budgetCase + ":", stdout, StringComparison.Ordinal);
         }
 
-        Assert.Equal(76, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
+        Assert.Equal(79, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
     }
 }
 
