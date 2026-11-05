@@ -316,7 +316,9 @@ internal static class GmTraceTap
 
                     break;
                 default:
-                    return; // an entry of a type this packet does not carry: the rest cannot be located
+                    // An entry of a type this tap does not decode ends the read: its length is unknown, so the rest cannot be located.
+                    // That includes the mana-leech entry (DrainAuras.cs, BuildManaLeechLog), which is therefore not traced.
+                    return;
             }
         }
     }
