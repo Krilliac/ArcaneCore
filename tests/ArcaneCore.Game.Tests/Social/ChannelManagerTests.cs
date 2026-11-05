@@ -513,12 +513,7 @@ public sealed class ChannelManagerTests
         f.ClearAll();
         f.Context.Channels.ToggleAnnounce(b, "Club");
         Assert.Equal([ChatNotify.NotModerator], Notifies(f, b));
-        Assert.False(channel.Announce);
-
-        f.ClearAll();
-        f.Context.Channels.ToggleAnnounce(a, "Club");
-        Assert.True(channel.Announce);
-        Assert.Equal([ChatNotify.AnnouncementsOn], Notifies(f, a));
+        Assert.True(channel.Announce); // a custom channel starts with announcements on
 
         f.ClearAll();
         f.Context.Channels.Join(c, "Club", string.Empty);
@@ -527,11 +522,22 @@ public sealed class ChannelManagerTests
         f.Context.Channels.Leave(c, "Club");
         Assert.Equal([ChatNotify.Left], Notifies(f, a));
 
+        f.ClearAll();
         f.Context.Channels.ToggleAnnounce(a, "Club");
         Assert.False(channel.Announce);
+        Assert.Equal([ChatNotify.AnnouncementsOff], Notifies(f, a));
+
         f.ClearAll();
         f.Context.Channels.Join(c, "Club", string.Empty);
         Assert.Empty(Notifies(f, a));
+        f.ClearAll();
+        f.Context.Channels.Leave(c, "Club");
+        Assert.Empty(Notifies(f, a));
+
+        f.ClearAll();
+        f.Context.Channels.ToggleAnnounce(a, "Club");
+        Assert.True(channel.Announce);
+        Assert.Equal([ChatNotify.AnnouncementsOn], Notifies(f, a));
     }
 
     [Fact]
