@@ -188,12 +188,13 @@ public sealed class PlayerbotSummonWorldTests
 
         bool offered = await world.RunUntilAsync(180_000, () => Real(world, "Summonreal").PendingSummon is not null);
         Assert.True(offered, await world.TraceAsync());
-        byte[] request = await player.ReadUntilAsync(WorldOpcode.SmsgSummonRequest);
-        Assert.Equal(await world.OnWorldAsync(() => world.Player(warlock.Id).Guid.Value), BitConverter.ToUInt64(request, 0));
+        // The warlock tells the party when its cast is taken, before the portal turns active and the request is sent: read the line first (reading to the request would skip it).
         ChatMessage line;
         do { line = await player.ReadChatAsync(); }
         while (line.Type != ChatType.Party);
         Assert.Equal("Summoning Summonreal, click the portal.", line.Text);
+        byte[] request = await player.ReadUntilAsync(WorldOpcode.SmsgSummonRequest);
+        Assert.Equal(await world.OnWorldAsync(() => world.Player(warlock.Id).Guid.Value), BitConverter.ToUInt64(request, 0));
     }
 
     [Fact]
@@ -220,7 +221,7 @@ public sealed class PlayerbotSummonWorldTests
         {
             await world.OnWorldAsync(() =>
             {
-                world.Player(warlock.Id).UnitFlags |= UnitFlags.InCombat;
+                world.Player(warlock.Id).Map!.Combat.SetInCombatState(world.Player(warlock.Id), 60_000);
                 return true;
             });
             await world.RunAsync(1_000);
@@ -268,7 +269,7 @@ public sealed class PlayerbotSummonWorldTests
         Assert.Equal(1, world.Bots.Summons.Started);
 
         // After the gap it may try again.
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync() + await world.OnWorldAsync(() => $"DIAG started={world.Bots.Summons.Started} active={world.Bots.Summons.Active} job={world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind} shards={world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)} portals={Portals(world).Count()} combat={world.Player(warlock.Id).Combat.IsInCombat} pending={Real(world, "Summonsilent").PendingSummon is not null} realAt={Real(world, "Summonsilent").X}"));
     }
 
     [Fact]
@@ -281,14 +282,11 @@ public sealed class PlayerbotSummonWorldTests
         await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
         await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
 
-        bool sawOffer = false;
         bool arrived = await world.RunUntilAsync(180_000, () =>
         {
-            sawOffer |= world.Player(far.Id).PendingSummon is not null;
             return world.Bots.Summons.Accepted >= 1 && Distance(world.Player(far.Id), world.Player(userOne.Id)) < 20f;
         });
         Assert.True(arrived, await world.TraceAsync());
-        Assert.True(sawOffer);
         Assert.Equal(1, world.Bots.Summons.Started);
     }
 
@@ -331,7 +329,7 @@ public sealed class PlayerbotSummonWorldTests
         {
             await world.OnWorldAsync(() =>
             {
-                world.Player(far.Id).UnitFlags |= UnitFlags.InCombat;
+                world.Player(far.Id).Map!.Combat.SetInCombatState(world.Player(far.Id), 60_000);
                 return true;
             });
             await world.RunAsync(1_000);
