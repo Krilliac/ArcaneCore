@@ -1608,9 +1608,12 @@ public sealed partial class SpellSystem
         {
             // A destination selector that reads the explicit unit (TARGET_LOCATION_CASTER_TARGET_POSITION, 53) needs no unit target of its
             // own but is still an explicit negative selector (vmangos IsExplicitNegativeTarget, SpellEntry.h:258-270): same gate.
-            // The alive state is checked here too (vmangos Spell.cpp:5572 CanTargetAliveState, BAD_TARGETS), because the CanTargetDead
-            // check above only runs for a spell with an explicit unit selector and the combat hook behind IsHostile has no alive test.
-            if (!unitTarget.IsAlive && !spell.CanTargetDead)
+            // The alive state is checked here too, but only for a spell that has that destination selector (vmangos Spell.cpp:5572, an
+            // explicit selector inside the per-effect loop, CanTargetAliveState, BAD_TARGETS; SpellEntry.h:273-287 lists explicit selectors
+            // only). A spell with TARGET_UNIT_CASTER, an area or cone selector, or none is not covered: a creature cast aimed with ForUnit
+            // at a victim who dies during the cast bar must still land.
+            if (!unitTarget.IsAlive && !spell.CanTargetDead
+                && spell.Effects.Any(effect => !effect.IsEmpty && effect.TargetA == SpellImplicitTarget.LocationCasterTargetPosition))
             {
                 return SpellCastResult.BadTargets;
             }

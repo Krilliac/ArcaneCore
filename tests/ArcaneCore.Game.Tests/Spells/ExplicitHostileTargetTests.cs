@@ -303,6 +303,45 @@ public sealed class ExplicitHostileTargetTests
         Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, DeadRelay, SpellCastTargets.ForUnit(foe.Guid)));
     }
 
+    [Theory]
+    [InlineData(SpellImplicitTarget.UnitCaster)]
+    [InlineData(SpellImplicitTarget.EnumUnitsEnemyAoeAtSrcLoc)]
+    public void CastTimeSpellWithoutAnExplicitSelector_AimedAtATargetThatDiesBeforeLanding_StillLands(SpellImplicitTarget selector)
+    {
+        // A creature cast at another unit is built with ForUnit(target) whatever the selector is, and the victim may die during the
+        // cast bar (a boss volley at a tank). Only the destination selector (53) refuses a dead target (vmangos Spell.cpp:5572).
+        const uint Volley = 900425;
+        using var kit = new SpellTestKit(
+            Spell(Volley, Effect(SpellEffectName.Dummy, 0, selector)) with
+            {
+                RangeIndex = 4,
+                Range = new SpellRange(0, 30),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+                CastTime = new SpellCastTime(2000, 0, 0),
+            });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, Volley);
+        kit.System.Relations = CombatHookRelations.Instance;
+        var finished = new FinishRecorder();
+        kit.System.RegisterObserver(finished);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Volley, SpellCastTargets.ForUnit(foe.Guid)));
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+        kit.Advance(2500);
+
+        Assert.Equal(new[] { true }, finished.Completed);
+    }
+
+    private sealed class FinishRecorder : ISpellCastObserver
+    {
+        public List<bool> Completed { get; } = [];
+
+        public void OnFinished(SpellCast cast, bool completed) => Completed.Add(completed);
+    }
+
     [Fact]
     public void ADestinationSpellAimedAtTheCaster_IsNotRefusedByTheGate()
     {

@@ -30,7 +30,7 @@ public sealed partial class SpellSystem
     /// caster may attack (<see cref="ISpellTargetRelations.IsHostile"/>, the relation IsValidAttackTarget maps to); a crafted cast
     /// request cannot aim a hostile spell at a friendly or unflagged target. A self-aimed cast is left to the existing self-target rules.
     /// vmangos passes checkAlive=false and so does the combat hook behind <c>IsHostile</c> (it has no alive test); a dead explicit target is
-    /// refused by CheckCast before this call (the CanTargetDead check, or the same alive test beside the destination selector), not here. Only the game object stand-in relation also needs a live target.
+    /// refused by CheckCast before this call (the CanTargetDead check, or the same alive test in the else-if branch of CheckCast that runs only for a spell with the destination selector), not here. Only the game object stand-in relation also needs a live target.
     /// </summary>
     private SpellCastResult CheckExplicitHostileTargetRules(Unit caster, SpellInfo spell, Unit target)
     {
