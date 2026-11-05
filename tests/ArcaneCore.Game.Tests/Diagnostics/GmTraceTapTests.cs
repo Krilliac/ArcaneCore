@@ -75,7 +75,7 @@ public sealed class GmTraceTapTests
     {
         var kit = new SpellTestKit(extra);
         (Player a, FakeSession sa) = kit.AddPlayer(1);
-        (Player b, FakeSession sb) = kit.AddPlayer(2, 5, 0);
+        (Player b, FakeSession sb) = kit.AddHostilePlayer(2, 5, 0); // hostile: the real cast path refuses a harmful spell at an unattackable target
         kit.World.RunTick(0);
         sa.Clear();
         sb.Clear();
