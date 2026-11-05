@@ -919,7 +919,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             // The walk to a lift's landing may lead away from the NPC: the stuck clock measures to the landing then. A change of aim (the
             // NPC to the landing, the NPC again after a fallback or the ride, another car's landing) starts the best over where the bot
             // stands and is no progress: the clock runs on (PlayerbotProgressAim).
-            bool retargeted = _repairAim.Retarget(_repairRoute);
+            // A route that is null for a think (between legs) is no change of aim: Retarget(null) would clear a held landing and count a change.
+            bool retargeted = _repairRoute is not null && _repairAim.Retarget(_repairRoute);
             float walked = _repairAim.Landing is { } landing ? Vector3.Distance(here, landing) : left;
             if (retargeted) _repairBest = walked;
             // Arrived at the repair NPC's own spawn point with no live creature of that entry there: the NPC is not there.

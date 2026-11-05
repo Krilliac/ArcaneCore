@@ -1177,6 +1177,14 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   for explore and waits the transit backoff (`TransitBackoffSeconds`, doubling per failure up to `TransitBackoffMaxSeconds`) before the next try. Neither runs in combat, a duel, a group or on a battleground, with travel
   off, or for a bot that has a home (which keeps `InwardLeg` and the home return rules); the journey is as good as the planner's route, and a bot the planner has no route for stays
   where it is and explores.
+  The journey's site is judged like an explore target: only cells with a creature the bot can attack (the faction rule of the explore search), whose spawn gate is open, inside no
+  active hazard and beside no strong hazard (`PlayerbotBrain.PrepareExploreFilters`, then `ExploreEligible` and `ExploreAttackableFaction`), and not a cell set aside.
+* **Explore stand-still refusal (bot QA #1488, Winterspring slope).** An explore walk the motion accepts but never carries out (the bot's stored position stays within
+  `ExploreInPlaceYards` (2) of one point) is refused after `ExploreInPlaceMs` (8 s) of explore thinks, as a rejected walk is: the route is abandoned, the refusal count rises, the
+  motion is stopped, the trace records `explore-in-place`, and the next think plans another leg. The check reads the stored position (what every observer sees), not the motion's
+  projected position. A wander leg has no atlas candidate, so a wander leg given up for a stall (this refusal, or the stall watch's give-up) blocks the explore cell the bot stands
+  in (`BlockExploreCellAt`, the cooldown of a refused candidate's cell), and the next search skips it. A Vendor, Train or Mount label left over from an errand that did not
+  claim the think is cleared to Explore before the think's explore work (`ClearStaleErrandLabel`), so the stall watch does not report an errand that is not under way.
 * **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
   `PlayerbotTrainerDestinations.HasCandidate`), a quest exchange already under way, and the turn-in of a completed quest (the way to its ender is never
   restricted) may take the bot anywhere, in any zone; the bot walks home afterwards. The zone clip does not change this: a capital trip for a trainer or a

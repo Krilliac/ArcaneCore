@@ -75,9 +75,41 @@ public sealed class PlayerbotStallVendorGoalTests
                     brain.HoldGoalForTests(PlayerbotGoalKind.Vendor, 0, 0);
                     brain.GiveUpStalledGoal(player);
                     Assert.NotEqual(PlayerbotGoalKind.Vendor, brain.Goal);
-                    Assert.Equal(0u, brain.TargetEntry);
                     Assert.True(PlayerbotHearthstone.IsActive(player), "the over-levelled bot with no home did not begin its hearthstone leg out of the zone");
                     Assert.True(brain.BindTeleported);
+                    return 0;
+                });
+            }
+            finally { brain.Stop(); }
+        }
+    }
+
+    /// <summary>
+    /// Every errand kind a stall gives up ends as an errand, whether it names an entry or not: the goal is Explore afterwards, and an entry
+    /// the errand named is set aside (so it is not planned again at once).
+    /// </summary>
+    [Theory]
+    [InlineData(PlayerbotGoalKind.Vendor, 3098u)]
+    [InlineData(PlayerbotGoalKind.Train, 3099u)]
+    [InlineData(PlayerbotGoalKind.Mount, 3100u)]
+    [InlineData(PlayerbotGoalKind.Gather, 3101u)]
+    [InlineData(PlayerbotGoalKind.Train, 0u)]
+    [InlineData(PlayerbotGoalKind.Mount, 0u)]
+    [InlineData(PlayerbotGoalKind.Gather, 0u)]
+    public async Task GivenUpErrand_OfAnyKind_EndsAsAnErrand_AndSetsItsEntryAside(PlayerbotGoalKind kind, uint entry)
+    {
+        (MageTravelRig rig, Player player, PlayerbotBrain brain) = await StartAsync("Stallerrand", highLevelCreaturesHere: true, withHome: false);
+        await using (rig)
+        {
+            try
+            {
+                await rig.OnWorld(() =>
+                {
+                    brain.HoldGoalForTests(kind, entry, 0);
+                    brain.GiveUpStalledGoal(player);
+                    Assert.NotEqual(kind, brain.Goal);
+                    Assert.Equal(PlayerbotGoalKind.Explore, brain.Goal);
+                    if (entry != 0) Assert.True(brain.IsEntrySetAside(entry), $"entry {entry} of the given-up {kind} errand was not set aside");
                     return 0;
                 });
             }

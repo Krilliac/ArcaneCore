@@ -70,7 +70,10 @@ public sealed class PlayerbotStallExploreInPlaceTests
         {
             await InstallOpenFloorAsync(rig);
             Vector3 start = await rig.OnWorld(() => new Vector3(player.X, player.Y, player.Z));
-            // The bot is held at its start after every think (nothing carries the walk out, whatever else the world does).
+            // The bot is held at its start after every think (nothing carries the walk out, whatever else the world does). The world clock
+            // runs in real time here, so each think ends with the motion's own heartbeat (aged past the interval, then pumped and put back):
+            // that re-anchors the motion every think, so no heartbeat falls inside a think and moves the stored position the check reads,
+            // however slowly the box runs.
             int thinks = (int)(PlayerbotBrain.ExploreInPlaceMs / 500) + 6;
             int plansAtGiveUp = -1;
             for (int think = 0; think < thinks + 8; think++)
@@ -79,6 +82,8 @@ public sealed class PlayerbotStallExploreInPlaceTests
                 {
                     session.ManagedBudget = new ManagedActionBudget(8);
                     brain.Update(500);
+                    PlayerbotMotion.ElapseForTests(player, 500);
+                    PlayerbotMotion.Pump(session, player, rig.Host.World.NowMs);
                     player.SetPosition(start.X, start.Y, start.Z, player.Orientation);
                     if (plansAtGiveUp < 0 && brain.ExploreInPlaceGiveUps >= 1) plansAtGiveUp = brain.ExploreWanderPlans;
                     return 0;
@@ -140,8 +145,11 @@ public sealed class PlayerbotStallExploreInPlaceTests
 
     /// <summary>
     /// The motion's projected position (route position at the current time, <see cref="PlayerbotMotion.CurrentPosition"/>) runs ahead of the
-    /// frozen stored position by the speed times the age of the last heartbeat; the check must not read it. Here no heartbeat is pumped, so the
-    /// projection grows by half a second of walking per think while the bot stands where it was.
+    /// frozen stored position by the speed times the age of the last heartbeat; the check must not read it. The think's own motion step may
+    /// send a heartbeat (the age passes the heartbeat interval), which moves the stored position, so it is put back to the start after every
+    /// think: the stored position is frozen at each check while the projection and the route's anchor run ahead. The motion is aged 300 ms
+    /// before each think (no heartbeat is due inside it, so the projection at the check is 300 ms of walking ahead) and 200 ms more after it,
+    /// where the pump sends the heartbeat that is put back.
     /// </summary>
     [Fact]
     public async Task AWalkWhoseProjectedPositionRunsAhead_ButWhoseStoredPositionIsFrozen_IsRefused()
@@ -153,14 +161,18 @@ public sealed class PlayerbotStallExploreInPlaceTests
         try
         {
             await InstallOpenFloorAsync(rig);
+            Vector3 start = await rig.OnWorld(() => new Vector3(player.X, player.Y, player.Z));
             int thinks = (int)(PlayerbotBrain.ExploreInPlaceMs / 500) + 8;
             for (int think = 0; think < thinks; think++)
             {
                 await rig.OnWorld(() =>
                 {
                     session.ManagedBudget = new ManagedActionBudget(8);
+                    PlayerbotMotion.ElapseForTests(player, 300);
                     brain.Update(500);
-                    PlayerbotMotion.ElapseForTests(player, 500);
+                    PlayerbotMotion.ElapseForTests(player, 200);
+                    PlayerbotMotion.Pump(session, player, rig.Host.World.NowMs);
+                    player.SetPosition(start.X, start.Y, start.Z, player.Orientation);
                     return 0;
                 });
             }

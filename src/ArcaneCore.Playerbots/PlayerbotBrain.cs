@@ -1385,8 +1385,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _lootOpened = false;
             if (_target is null)
             {
-                // No errand claimed this think (an errand that does returns; the ladder is skipped in combat and left by goto afterGoalLadder
-                // with a target of its own), so a Vendor, Train or Mount label still held is last think's: it would stay through a wait for
+                // No errand claimed this think (an errand that does returns; the ladder is skipped in combat and a step that pulls a target
+                // leaves it with one of its own), so a Vendor, Train or Mount label still held is last think's: it would stay through a wait for
                 // tiles below and the stall watch would report an errand that is not under way (bot QA #1487: Vendor/0 stalls with phase
                 // grind-destinations and no destination).
                 ClearStaleErrandLabel();
@@ -2157,12 +2157,19 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (travel.IsTraveling(player)) return true;
         if (_fitJourneyFailures > 0 && unchecked((int)(_fitJourneyRetryAt - now)) > 0) return false;
         uint mapId = player.MapId;
-        PlayerbotExploreAtlas.Candidate? site = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), static _ => true,
-            (x, y) => _exploreBlockedCells.ContainsKey((mapId, x, y)), out _);
+        // The same eligibility the explore search applies (attackable faction, spawn gate present, home, hazards, strong hazard beside it):
+        // a cell whose creatures the bot cannot attack or that is gated out is not worth a journey, and once there nothing would send it on.
+        if (_session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content is not { } content
+            || !PrepareExploreFilters(player, content, atlas, mapId, now)) return false;
+        _exploreEligibleFilter ??= ExploreEligible;
+        _exploreFactionFilter ??= ExploreAttackableFaction;
+        _exploreThreatFilter ??= ExploreHostileFaction;
+        PlayerbotExploreAtlas.Candidate? site = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
+            (x, y) => _exploreBlockedCells.ContainsKey((mapId, x, y)), out _, _exploreFactionFilter);
         if (site is not { } chosen) return false;
         var to = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
         ILogger? logger = _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>();
-        if (travel.TryBegin(_session, player, mapId, to, out string? why))
+        if (travel.TryBegin(_session, player, mapId, to, out string? why) && travel.IsTraveling(player))
         {
             _fitJourneyFailures = 0;
             _goal = PlayerbotGoalKind.Explore;
@@ -3967,6 +3974,37 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0
             || PlayerbotMotion.ControlLost(player); // a pause: no refusal, no abandoned route, no blocked cell
 
+    /// <summary>
+    /// Fills the state the explore filters (<see cref="ExploreEligible"/>, <see cref="ExploreAttackableFaction"/>, <see cref="ExploreHostileFaction"/>)
+    /// read: the bot, its faction rows and reputation source, home, active hazards and the map. False when no faction row for the bot is known
+    /// (nothing can be judged). World thread.
+    /// </summary>
+    private bool PrepareExploreFilters(Player player, CreatureContent content, PlayerbotExploreAtlas atlas, uint mapId, uint now)
+    {
+        FactionTemplateCatalog? factions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.FactionTemplates;
+        if (factions is not { Count: > 0 }) factions = _session.Services.GetService<FactionTemplateCatalog>();
+        if (factions is not { Count: > 0 })
+        {
+            CombatHooks hooks = CombatHooks.For(_session.World);
+            while (hooks is ArcaneCore.Game.Reputation.ReputationCombatHooks reputation) hooks = reputation.Fallback;
+            factions = (hooks as FactionCombatHooks)?.Factions;
+        }
+        FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
+        if (self is null) return false;
+        _exploreSearchPlayer = player;
+        _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
+        _exploreSearchContent = content;
+        _exploreSearchAtlas = atlas;
+        _exploreSearchFactions = factions;
+        _exploreSearchSelf = self;
+        _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
+            as ArcaneCore.Game.Reputation.INpcReactionSource;
+        _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
+        _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
+        _exploreSearchMap = mapId;
+        return true;
+    }
+
     private bool TryExploreSpawns(Player player, uint elapsedMs)
     {
         // Explore is only entered after _destinations.Update had no unvisited/reachable spawn for PreferredCreatureEntry;
@@ -4034,27 +4072,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_exploreCandidate is null)
         {
             if (unchecked((int)(_exploreSearchAfter - now)) > 0) return false;
-            FactionTemplateCatalog? factions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.FactionTemplates;
-            if (factions is not { Count: > 0 }) factions = _session.Services.GetService<FactionTemplateCatalog>();
-            if (factions is not { Count: > 0 })
-            {
-                CombatHooks hooks = CombatHooks.For(_session.World);
-                while (hooks is ArcaneCore.Game.Reputation.ReputationCombatHooks reputation) hooks = reputation.Fallback;
-                factions = (hooks as FactionCombatHooks)?.Factions;
-            }
-            FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
-            if (self is null) return false;
-            _exploreSearchPlayer = player;
-            _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
-            _exploreSearchContent = content;
-            _exploreSearchAtlas = atlas;
-            _exploreSearchFactions = factions;
-            _exploreSearchSelf = self;
-            _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
-                as ArcaneCore.Game.Reputation.INpcReactionSource;
-            _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
-            _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
-            _exploreSearchMap = mapId;
+            if (!PrepareExploreFilters(player, content, atlas, mapId, now)) return false;
             _exploreEligibleFilter ??= ExploreEligible;
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;

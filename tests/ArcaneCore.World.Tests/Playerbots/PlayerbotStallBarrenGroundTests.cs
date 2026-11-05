@@ -19,10 +19,11 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// </summary>
 public sealed class PlayerbotStallBarrenGroundTests
 {
-    private const uint LowMob = 960301, HighMob = 960302;
+    private const uint LowMob = 960301, HighMob = 960302, FriendlyMob = 960303;
     private const float X = -8949.95f, Y = -132.49f, Z = 83.53f;
 
     private static readonly Vector3 NearestFit = new(X + 2000f, Y, Z);
+    private static readonly Vector3 FriendlyFit = new(X + 1000f, Y, Z);
     private static readonly Vector3 FartherFit = new(X - 3500f, Y, Z);
 
     /// <summary>A travel seam that records every journey asked of it and begins one or refuses, as told (world thread only).</summary>
@@ -39,7 +40,7 @@ public sealed class PlayerbotStallBarrenGroundTests
             return begins;
         }
 
-        public bool IsTraveling(Player player) => false;
+        public bool IsTraveling(Player player) => begins && Asked.Count > 0;
     }
 
     private sealed class TestContent(CreatureContent content) : ICreatureDataStore
@@ -47,7 +48,7 @@ public sealed class PlayerbotStallBarrenGroundTests
         public Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
     }
 
-    private static CreatureContent Content(bool fitBesideTheBot)
+    private static CreatureContent Content(bool fitBesideTheBot, bool friendlyNearer)
     {
         var templates = new List<CreatureTemplate>
         {
@@ -60,20 +61,26 @@ public sealed class PlayerbotStallBarrenGroundTests
             new() { Guid = 960312, Entry = HighMob, MapId = 0, X = NearestFit.X, Y = NearestFit.Y, Z = NearestFit.Z },
             new() { Guid = 960313, Entry = HighMob, MapId = 0, X = FartherFit.X, Y = FartherFit.Y, Z = FartherFit.Z },
         };
+        if (friendlyNearer)
+        {
+            templates.Add(new() { Entry = FriendlyMob, Name = "friendly mob", MinLevel = 60, MaxLevel = 60, Faction = 15 });
+            spawns.Add(new() { Guid = 960315, Entry = FriendlyMob, MapId = 0, X = FriendlyFit.X, Y = FriendlyFit.Y, Z = FriendlyFit.Z });
+        }
         if (fitBesideTheBot) spawns.Add(new() { Guid = 960314, Entry = HighMob, MapId = 0, X = X - 300f, Y = Y, Z = Z });
         return new CreatureContent(templates, spawns, [], [], []);
     }
 
     private static async Task<(WorldTestHost Host, WorldSession Session, PlayerbotBrain Brain, ScriptedTravel Travel)> StartAsync(
-        bool travelBegins, bool fitBesideTheBot = false, bool homed = false)
+        bool travelBegins, bool fitBesideTheBot = false, bool homed = false, bool friendlyNearer = false)
     {
         var travel = new ScriptedTravel(travelBegins);
         WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
-            services.AddSingleton<ICreatureDataStore>(new TestContent(Content(fitBesideTheBot)));
+            services.AddSingleton<ICreatureDataStore>(new TestContent(Content(fitBesideTheBot, friendlyNearer)));
             services.AddSingleton(new FactionTemplateCatalog([
                 new FactionTemplateRecord(1, 1, 0, 1, 0, 0),
-                new FactionTemplateRecord(14, 0, 0, 8, 0, 1)]));
+                new FactionTemplateRecord(14, 0, 0, 8, 0, 1),
+                new FactionTemplateRecord(15, 0, 0, 2, 1, 0)]));
             services.AddSingleton<IPlayerbotTravel>(travel);
         });
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -117,6 +124,29 @@ public sealed class PlayerbotStallBarrenGroundTests
                 Assert.Equal(0u, map);
                 Assert.True(Vector3.Distance(NearestFit, to) < 1f, $"travelled to {to}, not to the nearest ground for its level {NearestFit}");
                 Assert.False(brain.BindTeleported);
+                return 0;
+            });
+        }
+        finally { await StopAsync(host, session, brain); }
+    }
+
+    /// <summary>
+    /// The journey applies the explore search's eligibility: a level 60 cell 1000 yards away whose creatures are friendly to the bot (faction
+    /// it cannot attack) is nearer than the 2000-yard hostile one, and is passed over for it.
+    /// </summary>
+    [Fact]
+    public async Task GivenUpExplore_WhereTheNearestCellHoldsOnlyCreaturesTheBotCannotAttack_TravelsToTheNextCell()
+    {
+        (WorldTestHost host, WorldSession session, PlayerbotBrain brain, ScriptedTravel travel) = await StartAsync(travelBegins: true, friendlyNearer: true);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, 0);
+                brain.GiveUpStalledGoal(session.Player!, shareable: false);
+                (uint map, Vector3 to) = Assert.Single(travel.Asked);
+                Assert.Equal(0u, map);
+                Assert.True(Vector3.Distance(NearestFit, to) < 1f, $"travelled to {to}, not to the nearest attackable ground {NearestFit} (friendly cell at {FriendlyFit})");
                 return 0;
             });
         }
