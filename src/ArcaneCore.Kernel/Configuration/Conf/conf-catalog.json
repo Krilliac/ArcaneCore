@@ -556,6 +556,22 @@
       "isCollection": false
     },
     {
+      "path": "AntiCheat:SpeedClock:LongTermDriftMs",
+      "section": "AntiCheat",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "0",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock (the client time elapsed since the last restart of the count, a teleport or a previous fire, minus the real time elapsed, over every packet pair), a clock that runs fast by less than `TolerancePercent` is reported too. 0 switches it off, which is the default (the sliding window alone, as before); otherwise 1000 to 3600000. Honest play stays near zero: lag and the catch-up burst cancel. The excess is floored at minus twice the limit, so a stall (or two close together) longer than about three times the limit leaves an honest running player at or above the limit: choose the limit at no less than a third of the longest stall you expect (3000 survives a 9 second spike).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#anticheat",
+      "isCollection": false
+    },
+    {
       "path": "AntiCheat:SpeedClock:MaxGapMs",
       "section": "AntiCheat",
       "type": "int",
@@ -11629,7 +11645,7 @@
       "defaultEntries": [],
       "daemons": "World, Gateway",
       "reload": "start",
-      "meaning": "Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua, page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. Default false: a failed scan acts at once.",
+      "meaning": "Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua, page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. A check with id 0 is never confirmed and never acts: its failure is logged. Default false: a failed scan acts at once.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#warden",
       "isCollection": false
@@ -16648,6 +16664,22 @@
       "isCollection": false
     },
     {
+      "path": "World:PacketHeuristics:FeedAntiCheatScore",
+      "section": "World:PacketHeuristics",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Feed the reports of real players' traffic into the AntiCheat score (so they count towards the escalation ladder of `AntiCheat:Action`). Default false: findings stay report-only, as before. Only `shape`, `dev-opcode` and `malformed` are fed, the checks whose only honest cause is a modified client. Every other check has an honest false-positive risk in the check table of docs/areas/packet-heuristics.md (latency, a crowded city's query burst, a late acknowledgement, a legitimately repeated payload) and never scores. Bot, staff and tool-injected traffic never scores; one score per reported finding, so the report throttle (one per session, check and opcode per `ReportIntervalSeconds`) also limits the score. With the default weight and decay a single finding peaks at 3 and is gone in 1.5 s: raise `ScoreWeight` (30 reaches the default GM alert in one finding) for it to escalate.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldpacketheuristics",
+      "isCollection": false
+    },
+    {
       "path": "World:PacketHeuristics:IncapacitatedAction",
       "section": "World:PacketHeuristics",
       "type": "bool",
@@ -16787,6 +16819,22 @@
       "daemons": "World",
       "reload": "start",
       "meaning": "At most one ledger report per session, check and opcode per this many seconds; every occurrence is still counted. 1-3600, default 10.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldpacketheuristics",
+      "isCollection": false
+    },
+    {
+      "path": "World:PacketHeuristics:ScoreWeight",
+      "section": "World:PacketHeuristics",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "3",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The weight each fed finding adds to the AntiCheat score. The score decays by `AntiCheat:DecayPerSecond` (2) and escalates at 30, 60 and 120 by default, so the default weight 3 only escalates when about ten distinct check and opcode pairs report within a second or two; use 30 or more for a single finding to alert. 1-100, default 3.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldpacketheuristics",
       "isCollection": false

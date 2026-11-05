@@ -495,6 +495,27 @@ AntiCheat.SpeedClock.CooldownMs = 10000
 AntiCheat.SpeedClock.Enabled = true
 
 #
+#    AntiCheat.SpeedClock.LongTermDriftMs
+#        Description: Long-term drift: when the client clock has gained this many milliseconds on
+#                     the server's receive clock (the client time elapsed since the last restart of
+#                     the count, a teleport or a previous fire, minus the real time elapsed, over
+#                     every packet pair), a clock that runs fast by less than TolerancePercent is
+#                     reported too. 0 switches it off, which is the default (the sliding window
+#                     alone, as before); otherwise 1000 to 3600000. Honest play stays near zero: lag
+#                     and the catch-up burst cancel. The excess is floored at minus twice the limit,
+#                     so a stall (or two close together) longer than about three times the limit
+#                     leaves an honest running player at or above the limit: choose the limit at no
+#                     less than a third of the longest stall you expect (3000 survives a 9 second
+#                     spike).
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#anticheat
+#
+AntiCheat.SpeedClock.LongTermDriftMs = 0
+
+#
 #    AntiCheat.SpeedClock.MaxGapMs
 #        Description: A pair further apart than this (milliseconds) is ignored (the player stood
 #                     still or the client froze). Default 3000.
@@ -9328,7 +9349,8 @@ Warden.ChunkSize = 500
 #                     only a confirmed mismatch of an actionable evidence class (integrity, threat
 #                     signature) takes the scan's action. A confirmed unreadable result or a
 #                     corroboration (Lua, scripted) mismatch is logged once, and a failed timing
-#                     scan is logged. Default false: a failed scan acts at once.
+#                     scan is logged. A check with id 0 is never confirmed and never acts: its
+#                     failure is logged. Default false: a failed scan acts at once.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -13413,6 +13435,28 @@ World.PacketHeuristics.ExemptBots = true
 World.PacketHeuristics.ExemptStaff = true
 
 #
+#    World.PacketHeuristics.FeedAntiCheatScore
+#        Description: Feed the reports of real players' traffic into the AntiCheat score (so they
+#                     count towards the escalation ladder of AntiCheat:Action). Default false:
+#                     findings stay report-only, as before. Only shape, dev-opcode and malformed are
+#                     fed, the checks whose only honest cause is a modified client. Every other
+#                     check has an honest false-positive risk in the check table of
+#                     docs/areas/packet-heuristics.md (latency, a crowded city's query burst, a late
+#                     acknowledgement, a legitimately repeated payload) and never scores. Bot, staff
+#                     and tool-injected traffic never scores; one score per reported finding, so the
+#                     report throttle (one per session, check and opcode per ReportIntervalSeconds)
+#                     also limits the score. With the default weight and decay a single finding
+#                     peaks at 3 and is gone in 1.5 s: raise ScoreWeight (30 reaches the default GM
+#                     alert in one finding) for it to escalate.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.FeedAntiCheatScore = false
+
+#
 #    World.PacketHeuristics.IncapacitatedAction
 #        Description: Report an action opcode received while the player is dead or a ghost, on a
 #                     taxi flight or in a far transfer (incapacitated-action; a near teleport such
@@ -13526,6 +13570,21 @@ World.PacketHeuristics.ReplayWindowMs = 1000
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
 World.PacketHeuristics.ReportIntervalSeconds = 10
+
+#
+#    World.PacketHeuristics.ScoreWeight
+#        Description: The weight each fed finding adds to the AntiCheat score. The score decays by
+#                     AntiCheat:DecayPerSecond (2) and escalates at 30, 60 and 120 by default, so
+#                     the default weight 3 only escalates when about ten distinct check and opcode
+#                     pairs report within a second or two; use 30 or more for a single finding to
+#                     alert. 1-100, default 3.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ScoreWeight = 3
 
 #
 #    World.PacketHeuristics.Shape
