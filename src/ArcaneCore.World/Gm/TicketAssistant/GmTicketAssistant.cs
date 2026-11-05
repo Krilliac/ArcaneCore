@@ -256,7 +256,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         return watch;
     }
 
-    /// <summary>World thread: whether another caster's hostile periodic damage aura sits on the player (SpellSystem.GetAuras; evaluated only for a player that otherwise reads as stale).</summary>
+    /// <summary>World thread: whether another caster's periodic damage aura sits (polarity is not consulted: a periodic damage aura that reads positive by its target shape still counts, which fails closed) on the player (SpellSystem.GetAuras; evaluated only for a player that otherwise reads as stale).</summary>
     private bool HasHostileDot(Player player)
     {
         if (services.GetService<SpellFeature>()?.System is not { } spells)
@@ -266,7 +266,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
         foreach (ArcaneCore.Game.Spells.SpellAuraHolder holder in spells.GetAuras(player))
         {
-            if (!holder.IsRemoved && holder.CasterGuid != player.Guid && !holder.IsPositive && holder.HasAura(ArcaneCore.Game.Spells.AuraType.PeriodicDamage))
+            if (!holder.IsRemoved && holder.CasterGuid != player.Guid && holder.HasAura(ArcaneCore.Game.Spells.AuraType.PeriodicDamage))
             {
                 return true;
             }
@@ -353,7 +353,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             TicketClassification classification = await ClassifyAsync(ticket.Text, cancellationToken).ConfigureAwait(false);
             // The ticket is read again on the world thread before anything is done to its author: a human may have answered it, or the
             // player withdrawn it, while the model was thinking.
-            Step? step = await world.InvokeAsync(() => Decide(ticket, classification, force), cancellationToken).ConfigureAwait(false);
+            Step? step = await world.InvokeAsync(() => Decide(ticket, classification), cancellationToken).ConfigureAwait(false);
             if (step is null)
             {
                 return null;
@@ -365,7 +365,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                 answer = await DraftAsync(ticket.Text, cancellationToken).ConfigureAwait(false);
             }
 
-            return await world.InvokeAsync(() => Finish(ticket, classification, step, answer, force), cancellationToken).ConfigureAwait(false);
+            return await world.InvokeAsync(() => Finish(ticket, classification, step, answer), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -609,8 +609,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         return label + " is " + state.Quests.GetStatus(found.Id) + " in the author's log";
     }
 
-    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself. Null, changing nothing, when the ticket is no longer open or a human has answered it since it was picked (force only overrides what was seen at pick time).</summary>
-    private Step? Decide(GmTicketRecord ticket, TicketClassification classification, bool force)
+    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself. Null, changing nothing, when the ticket is no longer open or a human has answered it since it was picked (compared with the snapshot taken at pick time).</summary>
+    private Step? Decide(GmTicketRecord ticket, TicketClassification classification)
     {
         if (services.GetRequiredService<GmAuditFeature>().OpenTicket(ticket.Id) is not { } current || !string.Equals(current.Response, ticket.Response, StringComparison.Ordinal))
         {
@@ -897,7 +897,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
     // ---- world thread: answer, close, note, audit ---------------------------------------------------
 
-    private TicketOutcome Finish(GmTicketRecord ticket, TicketClassification classification, Step step, string? answer, bool force)
+    private TicketOutcome Finish(GmTicketRecord ticket, TicketClassification classification, Step step, string? answer)
     {
         GmAuditFeature audit = services.GetRequiredService<GmAuditFeature>();
         TicketAction action = step.Decision.Action;

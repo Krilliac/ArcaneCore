@@ -1568,7 +1568,7 @@ public sealed class GmTicketAssistantTests
                     Effects = [new SpellEffectInfo
                     {
                         Effect = SpellEffectName.ApplyAura, BasePoints = 6, BaseDice = 1, DieSides = 1,
-                        TargetA = SpellImplicitTarget.Unit, AuraType = AuraType.PeriodicDamage, Amplitude = 600_000,
+                        TargetA = SpellImplicitTarget.UnitEnemy, AuraType = AuraType.PeriodicDamage, Amplitude = 600_000,
                     }, new(), new()],
                 },
             ], [], []);
@@ -1579,7 +1579,7 @@ public sealed class GmTicketAssistantTests
             Assert.True(assistant.Gather(ticket, out _).StaleCombat);
 
             Assert.True(spells.AddAura(author, HostileDot, caster: other));
-            Assert.Contains(spells.GetAuras(author), h => h.Spell.Id == HostileDot && h.CasterGuid == other.Guid && !h.IsPositive);
+            Assert.Contains(spells.GetAuras(author), h => h.Spell.Id == HostileDot && h.CasterGuid == other.Guid);
             Assert.False(assistant.Gather(ticket, out _).StaleCombat);
         });
     }
