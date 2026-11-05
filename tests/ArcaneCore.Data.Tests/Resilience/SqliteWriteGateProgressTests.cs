@@ -528,7 +528,7 @@ public sealed class SqliteWriteGateProgressTests
     [Trait("Category", "Timing")] // wall-bound: checks the gate against the real clock while holders take real time in turn
     public async Task AWaiterBehindAMovingQueue_DoesNotTimeOut_OnTheRealClock()
     {
-        // Public API, real time: 8 writers hold the gate ~120 ms each in turn (~1 s in all) against a 2 s bound (hard cap 8 s). The bound is wide enough that building the
+        // Public API, real time: 8 writers hold the gate ~120 ms each in turn (~1 s in all) against a 10 s bound (hard cap 30 s), so a pool or process stall of several seconds on a loaded machine (the flake this replaces failed once under load) cannot use it up. The bound is wide enough that building the
         // queue on a loaded pool cannot use it up; what is under test is that nothing gives up while the queue keeps moving.
         SqliteWriteGate gate = NewRealGate();
         SqliteWriteGate.Hold first = gate.Enter(0, "H", 0)!;
@@ -539,7 +539,7 @@ public sealed class SqliteWriteGateProgressTests
             int id = i;
             tasks.Add(Task.Run(async () =>
             {
-                SqliteWriteGate.Hold? hold = await gate.EnterAsync(2000, "w" + id, 0, CancellationToken.None);
+                SqliteWriteGate.Hold? hold = await gate.EnterAsync(10_000, "w" + id, 0, CancellationToken.None);
                 Assert.NotNull(hold);
                 lock (order) order.Add(id);
                 await Task.Delay(120);

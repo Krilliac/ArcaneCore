@@ -159,8 +159,8 @@ public sealed class SpellPersistenceWorldTests
         await using ServiceProvider provider = new ServiceCollection()
             .AddScoped<ICharacterSpellStateStore>(_ => store)
             .BuildServiceProvider();
-        var persistence = new SpellStatePersistence(provider.GetRequiredService<IServiceScopeFactory>(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
-        long faultsBefore = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue.spellstate")?.Count ?? 0;
+        var logger = new LevelCountingLogger();
+        var persistence = new SpellStatePersistence(provider.GetRequiredService<IServiceScopeFactory>(), logger);
 
         for (int id = 1; id <= 8; id++)
         {
@@ -169,13 +169,30 @@ public sealed class SpellPersistenceWorldTests
 
         await persistence.FlushAsync();
 
-        long faultsAfter = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == "writequeue.spellstate")?.Count ?? 0;
-        Assert.Equal(faultsBefore, faultsAfter);
+        // This instance's own logger and retention state, not the process-wide fault ledger: any other test running at the same time can add to that one.
+        Assert.Equal(0, logger.Count(Microsoft.Extensions.Logging.LogLevel.Error));
+        Assert.Equal(2, logger.Count(Microsoft.Extensions.Logging.LogLevel.Warning)); // one retry warning per injected busy failure
+        Assert.Empty(persistence.RetainedCharacters);
+        Assert.Equal(0, persistence.Pending);
         for (int id = 1; id <= 8; id++)
         {
             Assert.False(persistence.HasUnsaved(id));
         }
         Assert.Equal(1, maxConcurrent);
+    }
+
+    private sealed class LevelCountingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Microsoft.Extensions.Logging.LogLevel> _levels = new();
+
+        public int Count(Microsoft.Extensions.Logging.LogLevel level) => _levels.Count(l => l == level);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => _levels.Enqueue(logLevel);
     }
 
     private sealed class TransientBusySpellStateStore(Action onSave) : ICharacterSpellStateStore

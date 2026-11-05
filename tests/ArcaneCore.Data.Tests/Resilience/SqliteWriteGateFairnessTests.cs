@@ -27,6 +27,11 @@ public sealed class SqliteWriteGateFairnessTests
         }
     }
 
+    private static void WaitUntilHeldFor(SqliteWriteGate.Hold hold, int ms)
+    {
+        while (hold.HeldMs < ms) Thread.Sleep(5);
+    }
+
     private static Task StartAsyncWaiter(SqliteWriteGate gate, int id, List<int> order, int timeoutMs = 10_000, int maxHoldMs = 0)
         => Task.Run(async () =>
         {
@@ -122,11 +127,16 @@ public sealed class SqliteWriteGateFairnessTests
         try
         {
             var order = new List<int>();
-            Task a = StartAsyncWaiter(gate, 0, order, 3000, 200);
-            Task b = StartAsyncWaiter(gate, 1, order, 3000, 200);
+            // The first two waiters never force (max hold 0) so only the forcer below can release the leaked hold: a waiter that forced on its own
+            // wake-up could race the queue count (a scheduling delay of 200 ms would let it release the leak before both were queued) or force a
+            // later holder that a loaded machine kept for over 200 ms, which would run the handler twice.
+            Task a = StartAsyncWaiter(gate, 0, order, 3000, 0);
+            Task b = StartAsyncWaiter(gate, 1, order, 3000, 0);
             WaitUntilWaiting(gate, 2);
-            await Task.WhenAll(a, b);
-            Assert.Equal(2, order.Count);
+            WaitUntilHeldFor(leaked, 250);
+            Task c = StartAsyncWaiter(gate, 2, order, 3000, 200);
+            await Task.WhenAll(a, b, c);
+            Assert.Equal(new[] { 0, 1, 2 }, order);
         }
         finally
         {
@@ -160,12 +170,14 @@ public sealed class SqliteWriteGateFairnessTests
         try
         {
             var order = new List<int>();
-            Task a = StartSyncWaiter(gate, 0, order, 3000, 200);
+            Task a = StartSyncWaiter(gate, 0, order, 3000, 0);
             WaitUntilWaiting(gate, 1);
-            Task b = StartSyncWaiter(gate, 1, order, 3000, 200);
+            Task b = StartSyncWaiter(gate, 1, order, 3000, 0);
             WaitUntilWaiting(gate, 2);
-            await Task.WhenAll(a, b);
-            Assert.Equal(2, order.Count);
+            WaitUntilHeldFor(leaked, 250);
+            Task c = StartSyncWaiter(gate, 2, order, 3000, 200);
+            await Task.WhenAll(a, b, c);
+            Assert.Equal(new[] { 0, 1, 2 }, order);
         }
         finally
         {

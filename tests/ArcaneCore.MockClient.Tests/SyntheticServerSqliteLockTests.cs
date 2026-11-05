@@ -37,10 +37,21 @@ public sealed class SyntheticServerSqliteLockTests
         await using AsyncServiceScope scope = server.Services.CreateAsyncScope();
         CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
         // Microsoft.Data.Sqlite runs a command synchronously (its busy wait included), so the write gets a thread of its own: the lock can then be released while it waits.
-        Task<int> write = Task.Run(() => db.Database.ExecuteSqlRawAsync("CREATE TABLE fixture_lock_probe (id INTEGER)", token), token);
+        long writeStarted = 0;
+        Task<int> write = Task.Run(() =>
+        {
+            Volatile.Write(ref writeStarted, System.Diagnostics.Stopwatch.GetTimestamp());
+            return db.Database.ExecuteSqlRawAsync("CREATE TABLE fixture_lock_probe (id INTEGER)", token);
+        }, token);
 
-        // Held for 1.5 s: a one-second bound has already failed the write by now; the shipped 5 s bound is still waiting.
-        await Task.Delay(TimeSpan.FromMilliseconds(1500), token);
+        // Held until the write itself has been running past 1.1 s (measured from its own start, so a slow pool start does not shorten the proof and a slow
+        // test thread does not lengthen the hold): a one-second bound has already failed the write by now; the shipped 5 s bound is still waiting.
+        while (Volatile.Read(ref writeStarted) == 0
+            || System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref writeStarted)).TotalMilliseconds < 1100)
+        {
+            await Task.Delay(25, token);
+        }
+
         Assert.False(write.IsCompleted, write.Exception?.GetBaseException().Message ?? $"the write finished while the lock was held ({write.Status})");
 
         await using (SqliteCommand commit = holder.CreateCommand())
