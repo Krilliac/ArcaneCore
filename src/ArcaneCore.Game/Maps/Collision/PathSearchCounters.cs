@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Maps.Collision;
 
@@ -168,4 +170,226 @@ public readonly record struct PathSearchTotals(long Searches, long Nodes, long E
 
     /// <summary>The time of every installation in milliseconds.</summary>
     public double SyncTileReadMs => (TileLoadTicks + GridTileLoadTicks) * 1000.0 / Stopwatch.Frequency;
+}
+
+/// <summary>Which kind of caller made a synchronous tile file read (<see cref="SyncTileReadCounters"/>).</summary>
+public enum SyncReadCaller
+{
+    /// <summary>Not inside a map's update: the world thread's own services (teleports, logins, bot planning) or any other thread.</summary>
+    OutsideMapUpdate = 0,
+
+    /// <summary>The world thread, inside a map's update (the serial maps loop, or a map it runs itself in the parallel phase) without the serial gate.</summary>
+    WorldThread = 1,
+
+    /// <summary>A map worker thread in the parallel phase, not holding the serial gate.</summary>
+    MapWorker = 2,
+
+    /// <summary>Any thread inside a parallel-phase map update while it holds the world's single serial gate (the world thread included): every other map waits behind its read.</summary>
+    MapWorkerHoldingGate = 3,
+}
+
+/// <summary>Which tile file a synchronous read was for.</summary>
+public enum SyncReadFile
+{
+    /// <summary>A terrain <c>.map</c> file.</summary>
+    Terrain = 0,
+
+    /// <summary>A vmap tile file (<c>.vmtile</c>).</summary>
+    VMap = 1,
+}
+
+/// <summary>Why an untaken prefetch left its tile prefetch cache.</summary>
+public enum PrefetchDrop
+{
+    /// <summary>The approach budget was full and it was the oldest.</summary>
+    Evicted = 0,
+
+    /// <summary>The arrival budget was full and it was the oldest.</summary>
+    ArrivalEvicted = 1,
+
+    /// <summary>Nobody took it before it expired.</summary>
+    Expired = 2,
+}
+
+/// <summary>
+/// Terrain and vmap tile files read synchronously, that is a prefetch miss: the loader read and parsed the file on the thread that needed
+/// the tile, inside a tick (the navigation mesh's own reads are in <see cref="PathSearchCounters"/>). Terrain time includes parsing the tile;
+/// vmap time covers only the <c>.vmtile</c> read (not parsing, not the model reads made while instantiating). Counted per caller kind (<see cref="SyncReadCaller"/>) with the time they took; a read over
+/// <see cref="AnomalyMs"/> is also reported to the anomaly ledger as <c>sync-tile-read</c> (subsystem <c>terrain</c> or <c>collision</c>).
+/// Beside them, the prefetches of those files dropped untaken (<see cref="PrefetchDrops"/>): a dropped prefetch is one way to a later read,
+/// so these tell a prefetch that was thrown away from one that came too late or was never asked for. A drop is not proof of a read: the tile
+/// may never have been needed.
+/// <para>
+/// Thread affinity: any thread. The per-thread totals are thread-static (a caller takes <see cref="Current"/> before and after a piece
+/// of work and subtracts); the process totals are interlocked. Each read adds a few integer increments; nothing allocates unless the
+/// anomaly fires.
+/// </para>
+/// </summary>
+public static class SyncTileReadCounters
+{
+    /// <summary>A synchronous read over this many milliseconds is reported as an anomaly.</summary>
+    public const double AnomalyMs = 100;
+
+    private const int CallerKinds = 4;
+    private const int FileKinds = 2;
+    private const int DropKinds = 3;
+
+    [ThreadStatic] private static long t_reads;
+    [ThreadStatic] private static long t_ticks;
+    [ThreadStatic] private static long t_gateReads;
+    [ThreadStatic] private static int t_serialMapUpdateDepth;
+    private static readonly long[] s_reads = new long[CallerKinds * FileKinds];
+    private static readonly long[] s_ticks = new long[CallerKinds * FileKinds];
+    private static readonly long[] s_drops = new long[FileKinds * DropKinds];
+
+    /// <summary>This thread's totals so far.</summary>
+    public static SyncFileReadTotals Current => new(t_reads, t_ticks, t_gateReads);
+
+    /// <summary>Reads and time (<see cref="Stopwatch"/> ticks) made so far by any thread, of one caller kind and file kind.</summary>
+    public static (long Reads, long Ticks) Process(SyncReadCaller caller, SyncReadFile file)
+    {
+        int slot = SlotOf(caller, file);
+        return (Interlocked.Read(ref s_reads[slot]), Interlocked.Read(ref s_ticks[slot]));
+    }
+
+    /// <summary>Prefetches of one file kind dropped untaken so far, for one reason, by any thread.</summary>
+    public static long PrefetchDrops(SyncReadFile file, PrefetchDrop drop) => Interlocked.Read(ref s_drops[DropSlotOf(file, drop)]);
+
+    /// <summary>
+    /// The kind of the calling thread. Inside a parallel-phase map update (<see cref="TickOwner"/>) a thread holding the serial gate is
+    /// <see cref="SyncReadCaller.MapWorkerHoldingGate"/> whichever thread it is (the world thread runs maps in the parallel phase too, and every
+    /// other map still waits behind its read); otherwise the world thread is <see cref="SyncReadCaller.WorldThread"/> and any other thread
+    /// <see cref="SyncReadCaller.MapWorker"/>. The serial maps loop has no <see cref="TickOwner"/>: it marks itself with <see cref="EnterMapUpdate"/>.
+    /// </summary>
+    public static SyncReadCaller CallerKind()
+    {
+        WorldRuntime? world = TickOwner.CurrentWorld;
+        if (world is null)
+        {
+            return t_serialMapUpdateDepth > 0 ? SyncReadCaller.WorldThread : SyncReadCaller.OutsideMapUpdate;
+        }
+
+        if (world.IsParallelPhase && world.HoldsSerialGate)
+        {
+            return SyncReadCaller.MapWorkerHoldingGate;
+        }
+
+        return world.IsMainWorldThread ? SyncReadCaller.WorldThread : SyncReadCaller.MapWorker;
+    }
+
+    /// <summary>Marks the calling thread as inside a map's update in the serial maps loop (no <see cref="TickOwner"/> there) until disposed; nests.</summary>
+    internal static MapUpdateScope EnterMapUpdate()
+    {
+        t_serialMapUpdateDepth++;
+        return default;
+    }
+
+    /// <summary>A map update in the serial loop; disposing it leaves the update.</summary>
+    internal readonly struct MapUpdateScope : IDisposable
+    {
+        public void Dispose() => t_serialMapUpdateDepth--;
+    }
+
+    /// <summary>
+    /// The process totals for the hang and overrun detail (empty until a read or a drop happened): per caller kind, the reads of both
+    /// file kinds with their time, then per file kind the prefetches dropped untaken, as "; "-separated segments. Reads outside a map update
+    /// are in it, which no map's slow-update line can show.
+    /// </summary>
+    public static string DescribeProcess()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int caller = 0; caller < CallerKinds; caller++)
+        {
+            long reads = 0;
+            long ticks = 0;
+            for (int file = 0; file < FileKinds; file++)
+            {
+                (long r, long t) = Process((SyncReadCaller)caller, (SyncReadFile)file);
+                reads += r;
+                ticks += t;
+            }
+
+            if (reads == 0)
+            {
+                continue;
+            }
+
+            sb.Append(sb.Length == 0 ? "terrain/vmap tile file reads since start (prefetch misses): " : ", ")
+                .Append((SyncReadCaller)caller).Append(' ').Append(reads.ToString(CultureInfo.InvariantCulture)).Append(" (")
+                .Append((ticks * 1000.0 / Stopwatch.Frequency).ToString("F1", CultureInfo.InvariantCulture)).Append(" ms)");
+        }
+
+        AppendDrops(sb);
+        return sb.ToString();
+    }
+
+    private static void AppendDrops(System.Text.StringBuilder sb)
+    {
+        bool any = false;
+        for (int file = 0; file < FileKinds; file++)
+        {
+            long evicted = PrefetchDrops((SyncReadFile)file, PrefetchDrop.Evicted);
+            long arrivalEvicted = PrefetchDrops((SyncReadFile)file, PrefetchDrop.ArrivalEvicted);
+            long expired = PrefetchDrops((SyncReadFile)file, PrefetchDrop.Expired);
+            if (evicted + arrivalEvicted + expired == 0)
+            {
+                continue;
+            }
+
+            if (any)
+            {
+                sb.Append(", ");
+            }
+            else
+            {
+                sb.Append(sb.Length == 0 ? string.Empty : "; ").Append("terrain/vmap tile prefetches dropped untaken since start: ");
+                any = true;
+            }
+
+            sb.Append(CultureInfo.InvariantCulture, $"{(SyncReadFile)file} {evicted} evicted, {arrivalEvicted} arrival evicted, {expired} expired");
+        }
+    }
+
+    /// <summary>A prefetch of <paramref name="file"/> left its cache untaken.</summary>
+    internal static void RecordPrefetchDrop(SyncReadFile file, PrefetchDrop drop) => Interlocked.Increment(ref s_drops[DropSlotOf(file, drop)]);
+
+    /// <summary>A tile file was read on the calling thread (a prefetch miss), taking <paramref name="ticks"/> (<see cref="Stopwatch"/> ticks).</summary>
+    internal static void Record(SyncReadFile file, long ticks, uint mapId, int tileX, int tileY)
+        => Record(CallerKind(), file, ticks, mapId, tileX, tileY);
+
+    /// <summary><see cref="Record(SyncReadFile, long, uint, int, int)"/> for a given caller kind (tests).</summary>
+    internal static void Record(SyncReadCaller caller, SyncReadFile file, long ticks, uint mapId, int tileX, int tileY)
+    {
+        int slot = SlotOf(caller, file);
+        Interlocked.Increment(ref s_reads[slot]);
+        Interlocked.Add(ref s_ticks[slot], ticks);
+        t_reads++;
+        t_ticks += ticks;
+        if (caller == SyncReadCaller.MapWorkerHoldingGate)
+        {
+            t_gateReads++;
+        }
+
+        double ms = ticks * 1000.0 / Stopwatch.Frequency;
+        if (ms > AnomalyMs)
+        {
+            AnomalyLedger.Shared.Report(file == SyncReadFile.Terrain ? "terrain" : "collision", "sync-tile-read",
+                string.Create(CultureInfo.InvariantCulture, $"map {mapId} tile ({tileX}, {tileY}) by {caller}"),
+                string.Create(CultureInfo.InvariantCulture, $"{file} tile read on the {caller} thread took {ms:F0} ms: the prefetch missed"));
+        }
+    }
+
+    private static int SlotOf(SyncReadCaller caller, SyncReadFile file) => ((int)caller * FileKinds) + (int)file;
+
+    private static int DropSlotOf(SyncReadFile file, PrefetchDrop drop) => ((int)file * DropKinds) + (int)drop;
+}
+
+/// <summary>A snapshot of <see cref="SyncTileReadCounters.Current"/>; the difference of two is the work between them.</summary>
+public readonly record struct SyncFileReadTotals(long Reads, long Ticks, long ReadsHoldingGate)
+{
+    public static SyncFileReadTotals operator -(SyncFileReadTotals a, SyncFileReadTotals b)
+        => new(a.Reads - b.Reads, a.Ticks - b.Ticks, a.ReadsHoldingGate - b.ReadsHoldingGate);
+
+    /// <summary>The reads' time in milliseconds.</summary>
+    public double Ms => Ticks * 1000.0 / Stopwatch.Frequency;
 }
