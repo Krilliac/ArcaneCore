@@ -58,6 +58,11 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   `GameObject::Use` does (GameObject.cpp:1490 template script for every type; :1506, :1529, :1703 the guid script of a door, button and
   goober), with the user as source and the object as target, on the map's DB script executor. The coffer therefore toggles, fires its trap
   and then runs command 40 on use by a creature, as for a player.
+  A goober on cooldown or still in use refuses the click before the template script starts (GameObject.cpp:1482), and a door or button
+  whose instance script took the use skips the guid script (GameObject.cpp:1505, :1528). Known gap: a linked or scripted trap trigger
+  calls `UseTrap` directly, where the reference goes through `GameObject::Use` and so starts the template script too; the only type 6
+  row is 179804 (Drakonid Bones), whose event BlackwingLairInstance already raises in C#, so it is left alone to avoid a double summon.
+  The Brazier of the Herald (guid 2890009) is ported in C# by ScholomanceInstance, which takes that use, so its row does not run too.
 
 ## Tests
 

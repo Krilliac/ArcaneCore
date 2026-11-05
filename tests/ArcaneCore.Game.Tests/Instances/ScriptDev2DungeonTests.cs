@@ -44,17 +44,19 @@ public sealed partial class ScriptDev2DungeonTests
     }
 
     private static ScriptRun Enter(Func<Map, InstanceData> script, IEnumerable<(uint Guid, uint Entry, float X, float Z)> spawns,
-        IEnumerable<(uint Entry, float X)> doors, IEnumerable<uint>? extraTemplates = null)
+        IEnumerable<(uint Entry, float X)> doors, IEnumerable<uint>? extraTemplates = null, DbScriptCatalog? dbScripts = null,
+        (uint Entry, uint Guid)? spawnGuid = null)
     {
         var fixture = new InstanceFixture();
         fixture.Manager.Scripts = new InstanceScriptRegistry().Register(InstanceFixture.Dungeon, script);
         CreatureSpawn[] creatureSpawns = [.. spawns.Select(s => Spawn(s.Guid, s.Entry, s.X, -383.07f, s.Z, mapId: InstanceFixture.Dungeon))];
         var content = new CreatureContent(
-            [.. creatureSpawns.Select(s => s.Entry).Concat(extraTemplates ?? []).Distinct().Select(e => Template(e))], creatureSpawns, [], [], []);
+            [.. creatureSpawns.Select(s => s.Entry).Concat(extraTemplates ?? []).Distinct().Select(e => Template(e))], creatureSpawns, [], [], [],
+            dbScripts is null ? null : new CreatureAiContent([], []) { DbScripts = dbScripts });
         (uint Entry, float X)[] doorSpawns = [.. doors];
         var objects = new GameObjectContent(
             [.. doorSpawns.Select(d => GameObjectTestKit.GoTemplate(d.Entry, GameObjectType.Door))],
-            [.. doorSpawns.Select((d, i) => GameObjectTestKit.GoSpawn(500u + (uint)i, d.Entry, d.X, -383.07f)
+            [.. doorSpawns.Select((d, i) => GameObjectTestKit.GoSpawn(spawnGuid is { } g && g.Entry == d.Entry ? g.Guid : 500u + (uint)i, d.Entry, d.X, -383.07f)
                 with { MapId = InstanceFixture.Dungeon, Z = 61.78f })], [], [], []);
         fixture.World.MapCreated += map =>
         {
@@ -295,6 +297,26 @@ public sealed partial class ScriptDev2DungeonTests
         Assert.Equal(309.65f, kirtonos.X);
         run.Map.Combat.Kill(run.Player, kirtonos);
         Assert.Equal(GameObjectState.Active, gate.State);
+    }
+
+    [Fact]
+    public void Scholomance_BrazierWithItsDatabaseScriptLoaded_SummonsExactlyOneKirtonos()
+    {
+        // dbscripts_on_go_use 2890009 (guid of the brazier): close gate 2890010, command 10 npc 10506 after 5000 ms. The C# port stands for
+        // that row, so a content refresh that loads it must not summon a second Kirtonos.
+        var rows = new DbScriptCatalog(
+        [
+            (DbScriptKind.GameObject, new RelayScriptStep(2890009, 5000, 0, 10, ScholomanceInstance.NpcKirtonos, 900_000, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 309.65f, 93.47f, 101.66f, 0.03f, 0, 0)),
+        ]);
+        using ScriptRun run = Enter(map => new ScholomanceInstance(map), [],
+            [(ScholomanceInstance.GoBrazierOfTheHerald, -16f), (ScholomanceInstance.GoKirtonosGate, -10f)],
+            [ScholomanceInstance.NpcKirtonos], rows, (ScholomanceInstance.GoBrazierOfTheHerald, 2890009));
+
+        Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(ScholomanceInstance.GoBrazierOfTheHerald).Guid));
+        run.Data.Update(5_000);
+        run.Fixture.Tick(); // the script runner's own steps run on the map tick
+        Assert.Single(run.Creatures.Creatures, c => c.Template.Entry == ScholomanceInstance.NpcKirtonos);
     }
 
     [Fact]

@@ -18,9 +18,31 @@ public sealed partial class GameObjectMapSystem
     /// it already runs for this user and object.
     /// </summary>
     private bool StartTemplateUseScript(Unit user, GameObject go)
-        => Map.FindUpdater<CreatureMapSystem>() is { } scripts
+        => !GooberRefusesUse(user, go)
+            && Map.FindUpdater<CreatureMapSystem>() is { } scripts
             && scripts.HasDbScript(DbScriptKind.GameObjectTemplate, go.Template.Entry)
             && scripts.StartDbScript(DbScriptKind.GameObjectTemplate, go.Template.Entry, user, go);
+
+    /// <summary>
+    /// A goober on cooldown, or one still in use, refuses the click before anything fires (mangos-classic GameObject.cpp:1482 returns on the
+    /// cooldown above the template script at :1490), so a repeated or crafted use must not start the template script again. The same gate as
+    /// <see cref="UseGoober"/> (a player: the cooldown, and an object with an auto-close time that is not ready) and
+    /// <see cref="UseGooberByUnit"/> (any other unit: the cooldown, or not ready). Other types have no such gate.
+    /// </summary>
+    private bool GooberRefusesUse(Unit user, GameObject go)
+    {
+        if (go.Type != GameObjectType.Goober)
+        {
+            return false;
+        }
+
+        if (go.CooldownUntilMs > _clockMs)
+        {
+            return true;
+        }
+
+        return go.LootState != GameObjectLootState.Ready && (user is not Player || go.Template.AutoCloseSeconds() > 0);
+    }
 
     /// <summary>
     /// <c>dbscripts_on_go_use</c> script <c>go.Spawn.Guid</c>, which only a door, a button and a goober start (GameObject.cpp:1506, :1529,

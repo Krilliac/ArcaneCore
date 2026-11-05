@@ -722,7 +722,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
         result = _useHandlers.TryGetValue(go.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
         {
-            GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go),
+            GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go, scriptTookUse),
             GameObjectType.Chest => UseChest(player, go),
             GameObjectType.Goober => UseGoober(player, go, scriptTookUse: scriptTookUse),
             GameObjectType.Text => UseText(player, go),
@@ -1089,7 +1089,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>The display id of the Scarlet Monastery lever buttons, the only ones that need line of sight (GameObject.cpp:1441-1446).</summary>
     private const uint LeverDisplayId = 295;
 
-    private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
+    /// <param name="scriptTookUse">The ScriptDev2 GOUse hook took the use: <c>dbscripts_on_go_use</c> is skipped (GameObject.cpp:1505, :1528).</param>
+    private GameObjectUseResult UseDoorOrButton(Player player, GameObject go, bool scriptTookUse)
     {
         // GameObject::Use, button (GameObject.cpp:1441-1446): the levers inside the cathedral and armory entrances need line of sight.
         if (go.Type == GameObjectType.Button && go.Template.DisplayId == LeverDisplayId && !player.IsWithinLineOfSight(go))
@@ -1109,9 +1110,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             TriggerLinkedTrap(go, player); // GameObject::Use, button (GameObject.cpp:1441-1455)
         }
 
-        // dbscripts_on_go_use of a door or button (GameObject.cpp:1506, :1529): started whatever the toggle answered. The ScriptDev2
-        // hook's answer (scriptReturnValue) is not known here: the instance script of a click is asked in UseCore.
-        StartGuidUseScript(player, go);
+        // dbscripts_on_go_use of a door or button (GameObject.cpp:1506, :1529): started whatever the toggle answered, unless the ScriptDev2
+        // hook took the use (scriptReturnValue, asked in UseCore).
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(player, go);
+        }
         return result;
     }
 

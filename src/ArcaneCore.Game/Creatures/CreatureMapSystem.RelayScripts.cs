@@ -877,6 +877,43 @@ public sealed partial class CreatureMapSystem
                 _ai.UnitSpells?.InterruptSpell(interrupted, step.DataLong);
                 return false;
 
+            case 54: // SCRIPT_COMMAND_SET_SHEATHE (mangos-classic ScriptMgr.cpp:3292-3299): datalong is the sheath state of the source unit
+                if (source is not Unit sheathed)
+                {
+                    ReportRelay(step, "SET_SHEATHE by a non-unit"); // LogIfNotUnit(pSource)
+                    return false;
+                }
+
+                // The loader refuses a state above SHEATH_STATE_RANGED (2) and skips the row (ScriptMgr.cpp:931-938).
+                if (step.DataLong > 2)
+                {
+                    ReportRelay(step, $"SET_SHEATHE of sheath state {step.DataLong}");
+                    return false;
+                }
+
+                sheathed.SetByte(UpdateFields.UnitFieldBytes2, 0, (byte)step.DataLong); // Unit::SetSheath
+                return false;
+
+            case 200: // SCRIPT_COMMAND_MEETINGSTONE (mangos-classic ScriptMgr.cpp:3322-3345, vanilla only): the player joins the queue of area datalong
+            {
+                // The reference takes the target when it is a player, else the source (ScriptMgr.cpp:3331-3335).
+                Player? queued = target as Player ?? source as Player;
+                if (queued is null)
+                {
+                    ReportRelay(step, "MEETINGSTONE for a non-player");
+                    return false;
+                }
+
+                if (_ai.JoinMeetingStone is not { } join)
+                {
+                    ReportRelay(step, "MEETINGSTONE without a meeting stone queue");
+                    return false;
+                }
+
+                join(queued, step.DataLong); // sLFGMgr.AddToQueue(player, areaId)
+                return false;
+            }
+
             default:
                 ReportRelay(step, $"command {step.Command}");
                 return false;
