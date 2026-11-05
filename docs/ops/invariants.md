@@ -35,15 +35,30 @@ it is called on every failure path and may be called directly.
 ## The `Diagnostics` section
 
 Defaults keep the process behaving as the .NET runtime does without this section, except that every event is now reported
-first. None of the keys is live (`.reload config` does not touch them). The world daemon's `check-config` validates the section
-(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78; the `CrashDump` subsection is checked the same way by every daemon, `CrashDumpConfigChecks`). The realm daemon's `check-config` (`RealmOpsCli.Validate`, run from `src/ArcaneCore.Realm/Program.cs`) covers only the `CrashDump` subsection, not `DiagnosticsConfigChecks`; the other Diagnostics keys are refused only by `UseArcaneDiagnostics`, which writes the binder's message to standard error and exits 78 before anything
-binds or touches a database.
+first. None of the keys is live (`.reload config` does not touch them).
+
+Bad values are refused in layers, and the layers differ by daemon. Each check below runs from `check-config` and again at every
+normal start, before the crash hooks are installed; an error is exit 78.
+
+- `ConfKeyCheck` (all three daemons: the world, the realm through `RealmOpsCli.Validate`, the gateway) reads only what is written in
+  the daemon's `.conf` file. There, an unknown policy name, a flag that is not `true` or `false`, and a limit that is not an integer are errors.
+  `ConfValue` tests the form of the value and nothing else: it takes a negative limit, and it takes any integer in place of a policy name.
+- `CrashDumpConfigChecks` (all three daemons) checks the `CrashDump` subsection, from every configuration source.
+- `DiagnosticsConfigChecks` (the world daemon only) checks the three policies, the boolean flags and `InvariantLogLimit` from every
+  configuration source and adds the two rules `ConfValue` lacks: a policy must be a named member, and the limit must not be negative.
+
+What those checks do not see falls to `UseArcaneDiagnostics`, at start only: a value from another configuration source
+(`appsettings.json`, the environment, the command line) that the binder cannot convert, on the realm and the gateway for any key
+outside `CrashDump`, on the world for a key `DiagnosticsConfigChecks` does not list. `check-config` does not report it; the start
+writes the binder's message to standard error and exits 78 before anything binds or touches a database.
+`UseArcaneDiagnostics` has no rule of its own, so it does not refuse a negative limit: the realm and the gateway accept one from any
+source and `Invariant.Configure` treats it as `0`. No check on those two daemons tests that an integer given as a policy names a member.
 
 | Key | Default | Values | Fail-closed behaviour |
 |---|---|---|---|
 | `Diagnostics:OnInvariant` | `Continue` | `Continue`, `FailFast` | unknown name: exit 78 at start. `Continue`: the caller's own refusal runs (drop the packet, refuse the login, throw `SchemaMismatchException`). `FailFast`: the process aborts with the site and message |
 | `Diagnostics:BreakOnInvariant` | `false` | `true`, `false` | acts only with a debugger attached, so an unattended process never waits on a prompt |
-| `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error (exit 78); a hot-path check that fails per packet cannot flood the log |
+| `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error on the world daemon (exit 78), while the realm and the gateway accept it and treat it as `0`; a hot-path check that fails per packet cannot flood the log |
 | `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match. Either way the daemon writes a dump of itself first (`Diagnostics:CrashDump`, [below](#the-crash-dump)) |
 | `Diagnostics:OnUnobservedTask` | `Log` | `Log`, `Exit`, `FailFast` | `Log` is the runtime's own behaviour (the exception is marked observed) made visible at Error level. `Exit`/`FailFast` as above. Default stays `Log` so a fire-and-forget task that faulted silently before this lane does not start killing production servers |
 | `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Reports throws, caught or not, at Debug level; the hook is re-entrancy guarded. Each exception object is reported once (a rethrow through the next awaiting frame is not reported again), one exception type and origin frame at most once a minute, and at most 20 reports a minute in all; a report says what it suppressed and carries a `[throw site]` section with the throwing thread's stack, so an exception whose own stack is only the rethrow frame (a `Task.WaitAsync` timeout) still names the method that awaited it (`FirstChanceThrottle`, `FirstChanceSite`) |
