@@ -134,14 +134,15 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
 
     /// <summary>
     /// How many test cases one world fresh create is cut into. A fresh create of the world component issues one DDL statement per table and
-    /// the theory replays the whole create once per injected fault, so its cost grows with the square of the table count: as a single case it ran
-    /// 32 minutes on MariaDB. Each shard owns every <c>FaultShards</c>-th fault, so the faults still all run, in cases that the classes spread.
+    /// the theory replays the whole create once per injected fault, so the cost of one case grows with the square of the table count (727 s for
+    /// MariaDB world on gate 57a1c0c21, 32 minutes on gate 1c7134022, where every test of the suite ran 2.45 times slower). Each shard owns every
+    /// <c>WorldFaultShards</c>-th fault, so the faults still all run, in cases that the classes spread.
     /// </summary>
     internal const int WorldFaultShards = 12;
 
     /// <summary>
     /// Every <paramref name="slices"/>-th row of each provider's block of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/> of the block: the slices together
-    /// cover each row exactly once, and every slice carries the same mix of providers (a MariaDB row costs far more than a SQLite one, so slicing the whole list by position left whole shares on one engine).
+    /// cover each row exactly once, and every slice carries the same number of rows of each provider (a MariaDB row costs far more than a SQLite one). All providers of a step are not in one slice: the rows of a provider block are dealt out separately.
     /// </summary>
     public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices)
     {
@@ -190,12 +191,26 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
         return faults.Where((_, index) => index % shards == shard).ToList();
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(DatabaseProvider Provider, string Component), Lazy<Task<int>>> s_freshCreateDdl = new();
+
+    /// <summary>
+    /// How many DDL statements a fresh create of <paramref name="component"/> issues on <paramref name="provider"/>, measured once per process and shared by every shard:
+    /// each shard would otherwise repeat the whole probe create, and a count that differed between shards would skip or repeat a fault silently.
+    /// The probe runs on its own databases, which are dropped when it is done.
+    /// </summary>
+    private static Task<int> FreshCreateDdlCountAsync(DatabaseProvider provider, string component)
+        => s_freshCreateDdl.GetOrAdd((provider, component), key => new Lazy<Task<int>>(async () =>
+        {
+            await using var databases = new TestDatabases();
+            var counter = new CommandTap();
+            await SchemaProbe.EnsureCurrentAsync(key.Component, await databases.CreateAsync(key.Provider), counter);
+            return counter.Ddl;
+        })).Value;
+
     /// <summary>The body of the interrupted-fresh-create theory; the share classes each run a share of <see cref="FreshCreateCases"/> through it, so the rows run in parallel. Runs shard <paramref name="shard"/> of <paramref name="shards"/> of the faults.</summary>
     private protected async Task RunInterruptedFreshCreateAsync(DatabaseProvider provider, string component, int shard, int shards)
     {
-        var counter = new CommandTap();
-        await SchemaProbe.EnsureCurrentAsync(component, await _databases.CreateAsync(provider), counter);
-        int ddl = counter.Ddl;
+        int ddl = await FreshCreateDdlCountAsync(provider, component);
         Assert.True(ddl > 0);
 
         // Die after each DDL statement, and just before the statement that records the version

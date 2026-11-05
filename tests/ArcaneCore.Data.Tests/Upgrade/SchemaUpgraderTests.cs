@@ -219,28 +219,37 @@ public sealed class SchemaUpgraderTests : IAsyncLifetime
         Assert.True(ddl > 20, $"the legacy characters upgrade issues many DDL statements, saw {ddl}");
 
         // Every statement of the upgrade, one crash each; a handful of statements per run keeps the SQLite run short on large counts.
+        // Each crash point owns its database, so they run FaultParallelism at a time (the same shape as the startup-resilience theories); every point still runs.
         int[] points = [.. Enumerable.Range(1, ddl).Where(k => k <= 12 || k >= ddl - 12 || k % 5 == 0)];
-        foreach (int k in points)
+        await SchemaStartupResilienceTestBase.RunFaultsAsync(points, SchemaStartupResilienceTestBase.FaultParallelism, async k =>
         {
             DatabaseConnectionOptions connection = await NewLegacyAsync(provider);
-            await using (CharacterDbContext db = SchemaProbe.CreateWith<CharacterDbContext>(connection, new CommandTap(CommandTap.IsDdl, k)))
+            try
             {
-                Exception ex = await Assert.ThrowsAnyAsync<Exception>(() => SchemaUpgrader.ApplyAsync(db, schema));
-                Assert.True(IsInjected(ex), $"crash after DDL #{k} surfaced as {ex.GetType().Name}: {ex.Message}");
+                await using (CharacterDbContext db = SchemaProbe.CreateWith<CharacterDbContext>(connection, new CommandTap(CommandTap.IsDdl, k)))
+                {
+                    Exception ex = await Assert.ThrowsAnyAsync<Exception>(() => SchemaUpgrader.ApplyAsync(db, schema));
+                    Assert.True(IsInjected(ex), $"crash after DDL #{k} surfaced as {ex.GetType().Name}: {ex.Message}");
+                }
+
+                var after = new CommandTap();
+                await using CharacterDbContext restart = SchemaProbe.CreateWith<CharacterDbContext>(connection, after);
+                await SchemaUpgrader.ApplyAsync(restart, schema);
+                Assert.Equal(schema.CurrentVersion, await UpgradeTestSupport.ReadVersionAsync(restart, "characters"));
+                Assert.True((await SchemaDriftChecker.CheckAsync(restart, schema)).IsClean, $"not converged after a crash at DDL #{k}");
+
+                // Converged: another apply does nothing.
+                var again = new CommandTap();
+                await using CharacterDbContext third = SchemaProbe.CreateWith<CharacterDbContext>(connection, again);
+                await SchemaUpgrader.ApplyAsync(third, schema);
+                Assert.Equal(0, again.Ddl);
             }
-
-            var after = new CommandTap();
-            await using CharacterDbContext restart = SchemaProbe.CreateWith<CharacterDbContext>(connection, after);
-            await SchemaUpgrader.ApplyAsync(restart, schema);
-            Assert.Equal(schema.CurrentVersion, await UpgradeTestSupport.ReadVersionAsync(restart, "characters"));
-            Assert.True((await SchemaDriftChecker.CheckAsync(restart, schema)).IsClean, $"not converged after a crash at DDL #{k}");
-
-            // Converged: another apply does nothing.
-            var again = new CommandTap();
-            await using CharacterDbContext third = SchemaProbe.CreateWith<CharacterDbContext>(connection, again);
-            await SchemaUpgrader.ApplyAsync(third, schema);
-            Assert.Equal(0, again.Ddl);
-        }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
+        await _databases.ReleaseAsync(probe);
     }
 
     [Theory]
