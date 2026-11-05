@@ -451,6 +451,26 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_EntitiesReportDisconnected_WithNoEntities()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            CommandResult listed = await rig.RunAsync("live.entities", Obj("{}"));
+
+            Assert.True(listed.Ok, listed.ErrorMessage);
+            Assert.False(listed.Data!["connected"]!.GetValue<bool>());
+            Assert.Equal(0, listed.Data["matched"]!.GetValue<int>());
+            Assert.Equal(0, listed.Data["returned"]!.GetValue<int>());
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task InTheGapBeforeTheCloseNotice_HotspotsReportDisconnected_WithNoCells()
     {
         (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();

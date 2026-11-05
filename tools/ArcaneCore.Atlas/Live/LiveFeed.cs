@@ -104,8 +104,9 @@ public sealed class LiveFeed : IDisposable
                 session = _session;
             }
 
-            // One read of IsOpen decides both the retire and the answer, so false is only ever returned after the dead connection's entity
-            // list was emptied: a caller that reads IsConnected before the store never sees "disconnected" next to stale entities.
+            // One read of IsOpen decides both the retire and the answer, so when the connection ended through the reader's close path the
+            // dead connection is retired (entities emptied) before false is returned: a caller that reads IsConnected before the store never
+            // sees "disconnected" next to stale entities. A client-side disconnect or dispose detaches the session first, so a narrow window remains there.
             bool open = session is { IsOpen: true };
             if (!open && session is not null)
             {
@@ -574,6 +575,9 @@ public sealed class LiveFeed : IDisposable
     {
         ArgumentNullException.ThrowIfNull(filter);
         string? name = filter.Name;
+
+        // Read before the store: a false here means the dead connection was retired (its entities emptied) before the snapshot below.
+        bool connected = IsConnected;
         IReadOnlyList<StoredEntity> found = Store.Snapshot(
             e =>
             (filter.Kind is null || e.Kind == filter.Kind)
@@ -601,7 +605,7 @@ public sealed class LiveFeed : IDisposable
 
         return new JsonObject
         {
-            ["connected"] = IsConnected,
+            ["connected"] = connected,
             ["matched"] = found.Count,
             ["returned"] = entities.Count,
             ["truncated"] = found.Count > entities.Count,
