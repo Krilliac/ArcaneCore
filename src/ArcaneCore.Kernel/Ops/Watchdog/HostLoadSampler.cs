@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog;
 
@@ -138,6 +139,7 @@ public sealed class SystemHostLoadProbe : IHostLoadProbe
     }
 
 #pragma warning disable SYSLIB1054 // LibraryImport needs AllowUnsafeBlocks; this call runs only on Windows behind OperatingSystem.IsWindows
+    [AuditedUnsafe("kernel32 GetSystemTimes writes three out ulongs; called only on Windows behind OperatingSystem.IsWindows, result checked")]
     [DllImport("kernel32.dll", SetLastError = false)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetSystemTimes(out ulong idle, out ulong kernel, out ulong user);
