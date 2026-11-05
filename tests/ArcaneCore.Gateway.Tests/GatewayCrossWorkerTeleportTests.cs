@@ -104,7 +104,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             Player player = cluster.Eastern.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
             player.Health = 0;
             player.Map!.Combat.KillPlayer(player);
-            Assert.True(player.Map.Combat.RepopPlayer(player));
+            Assert.True(player.Map!.Combat.RepopPlayer(player));
             return PlayerLife.Capture(player).Corpse ?? throw new InvalidOperationException("the release made no body");
         }, cts.Token);
         Assert.Equal(0u, body.MapId);
