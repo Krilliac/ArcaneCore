@@ -834,6 +834,22 @@ public sealed partial class TeleportService
                 "destination-invalid",
                 string.Create(System.Globalization.CultureInfo.InvariantCulture, $"far teleport destination map {dest.MapId} {dest.X} {dest.Y} {dest.Z} is invalid or not in the registry; sent to the bind point on map {player.Home.MapId}"));
             dest = new TeleportDestination(player.Home.MapId, player.Home.X, player.Home.Y, player.Home.Z, player.Orientation);
+            if (dest.MapId != loadedMapId
+                && pending.Fallback != FallbackKind.Home
+                && maps.Registry.Contains(dest.MapId)
+                && GridDefines.IsValidMapCoord(dest.X, dest.Y, dest.Z, dest.Orientation))
+            {
+                // The client loaded another map id than the bind point's: vmangos TeleportToHomebind is a new far teleport, so the client is told
+                // to load the bind point's map (a loading screen and a fresh worldport ack) instead of the server entering it behind its back.
+                if (ReissueFar(player, pending.SourceMap, dest, FallbackKind.Home))
+                {
+                    return;
+                }
+
+                _logger.LogError("{Player} could not be sent to the bind point on map {HomeMapId}; disconnecting", player.Name, dest.MapId);
+                player.Session.Kick();
+                return;
+            }
         }
 
         if (TryEnterMap(player, dest))
@@ -845,18 +861,25 @@ public sealed partial class TeleportService
             // sends SMSG_NEW_WORLD (bailed out in ExecuteTeleportFar, or stalled while scheduled) keeps the cheats, because the client is
             // still flying on the source map and would otherwise be flagged. A map-entry failure (the return-to-origin branch below)
             // also keeps them: SMSG_NEW_WORLD was already sent there, but a stale cheat grants no immunity (MovementCheats.cs), so
-            // clearing it would add a second behaviour for no gain.
+            // clearing it would add a second behaviour for no gain. A fallback far teleport (ReissueFar: the origin, then the bind point)
+            // that arrives goes through this same branch and clears them like any other arrival.
             player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
             VerifyLanding(player, dest, dest.MapId);
             HonorlessTargetDue?.Invoke(player, true);
         }
         else
         {
+            string next = pending.Fallback switch
+            {
+                FallbackKind.None => $"returning to map {pending.Origin.MapId}",
+                FallbackKind.Origin => $"going to the bind point on map {player.Home.MapId}",
+                _ => "no fallback is left",
+            };
             ServerAnomalies.Report(
                 player,
                 ServerAnomalies.Teleport,
                 "map-entry-failed",
-                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} (not loaded, refused by the resolver or the player is already in it); returning to map {pending.Origin.MapId}"));
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} (not loaded, refused by the resolver or the player is already in it); {next}"));
 
             // vmangos HandleReturnOnTeleportFail: back to where the teleport started.
             // vmangos does a real TeleportTo(oldLoc) (Player.cpp:2130): a far teleport, with a loading screen, when the origin is on another
@@ -878,23 +901,30 @@ public sealed partial class TeleportService
                     bool reissue = home.MapId != loadedMapId;
                     if (reissue ? ReissueFar(player, pending.SourceMap, home, FallbackKind.Home) : TryEnterMap(player, home))
                     {
-                        _logger.LogWarning("{Player} could not enter map {MapId} nor return to map {Origin}; sent to the bind point on map {HomeMapId}", player.Name, dest.MapId, origin.MapId, home.MapId);
+                        string tried = pending.Fallback == FallbackKind.None ? $"{dest.MapId} nor return to map {origin.MapId}" : $"{dest.MapId} (the way back)";
+                        _logger.LogWarning("{Player} could not enter map {Tried}; sent to the bind point on map {HomeMapId}", player.Name, tried, home.MapId);
                         ServerAnomalies.Report(
                             player,
                             ServerAnomalies.Teleport,
                             "return-failed",
-                            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId}; sent to the bind point on map {home.MapId}"),
+                            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {tried}; sent to the bind point on map {home.MapId}"),
                             AnomalySeverity.Warning);
                         return;
                     }
                 }
 
-                _logger.LogError("{Player} could not enter map {MapId} nor return to map {Origin} nor reach the bind point; disconnecting", player.Name, dest.MapId, origin.MapId);
+                string gaveUp = pending.Fallback switch
+                {
+                    FallbackKind.None => $"{dest.MapId} nor return to map {origin.MapId} nor reach the bind point",
+                    FallbackKind.Origin => $"{dest.MapId} (the way back) nor reach the bind point",
+                    _ => $"{dest.MapId} (the bind point)",
+                };
+                _logger.LogError("{Player} could not enter map {GaveUp}; disconnecting", player.Name, gaveUp);
                 ServerAnomalies.Report(
                     player,
                     ServerAnomalies.Teleport,
                     "return-failed",
-                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} nor return to map {origin.MapId} nor the bind point; the session is kicked"),
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {gaveUp}; the session is kicked"),
                     AnomalySeverity.Error);
                 player.Session.Kick();
             }
@@ -930,13 +960,20 @@ public sealed partial class TeleportService
     }
 
     /// <summary>
-    /// A new far teleport for a player that is in no map (the failed-teleport fallback to the bind point, vmangos <c>TeleportToHomebind</c>): the
-    /// client gets SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD for the map it must load and the entry waits for its MSG_MOVE_WORLDPORT_ACK, as
-    /// the tail of <see cref="ExecuteTeleportFar"/>. World thread.
+    /// A new far teleport for a player that is in no map (the failed-teleport fallbacks: back to the origin, vmangos <c>TeleportTo(oldLoc)</c>, then
+    /// the bind point, <c>TeleportToHomebind</c>). Like <c>TeleportTo</c> it first asks the instance rules (<see cref="IMapResolver.CanEnter"/>) and
+    /// returns false, sending nothing, when they refuse. Otherwise the client gets SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD for the map it must
+    /// load and the entry waits for its MSG_MOVE_WORLDPORT_ACK, as the tail of <see cref="ExecuteTeleportFar"/>. World thread.
     /// </summary>
     private bool ReissueFar(Player player, Map sourceMap, TeleportDestination target, FallbackKind kind)
     {
         if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null)
+        {
+            return false;
+        }
+
+        // vmangos TeleportTo → MapManager::CanPlayerEnter runs before the loading screen: a refused target must not cost the client a map load.
+        if (_world.MapResolver is { } resolver && !resolver.CanEnter(player, target.MapId))
         {
             return false;
         }

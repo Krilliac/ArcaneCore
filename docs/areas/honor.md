@@ -107,6 +107,7 @@ Every default is the retail 1.12 value; a different value is a deliberate deviat
   Reachable only through GM commands.
 - Standing ties are broken by character id (vmangos `std::sort` is unstable).
 - WorldDefense: vmangos needs internal rank 15, mangos-classic visual rank 11; these are the same rank under two numberings, so there is no difference to choose.
+- A far teleport that cannot enter its map returns to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded; the arrival Honorless Target cast is due on whichever entry succeeds (vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
 
 ## Hosted CI
 

@@ -57,6 +57,22 @@ public sealed class TeleportAnomalyTests
         }
     }
 
+    /// <summary>Refuses the first entry (the destination); <see cref="CanEnter"/> refuses <c>gatedMapId</c> (the instance rules judge the origin before any loading screen).</summary>
+    private sealed class GatedOrigin(WorldRuntime world, uint gatedMapId) : IMapResolver
+    {
+        private int _calls;
+
+        public Map ResolveLoginMap(Player player) => throw new NotSupportedException();
+
+        public bool CanEnter(Player player, uint mapId) => mapId != gatedMapId;
+
+        public Map? ResolveEntry(Player player, uint mapId) => ++_calls <= 1 ? null : world.GetMap(mapId);
+
+        public void OnEntered(Player player, Map map)
+        {
+        }
+    }
+
     private sealed class Fixture : IDisposable
     {
         public Fixture(Action<Player>? beforeAdd = null)
@@ -327,5 +343,71 @@ public sealed class TeleportAnomalyTests
         Assert.True(((FakeSession)a.Session).Kicked);
         Assert.Null(f.Teleports.StageOf(a));
         Assert.Equal(2, cap.Count(ServerAnomalies.Key("teleport", "return-failed"))); // the fallback, then the kick
+    }
+
+    [Fact]
+    public void FarTeleport_WhoseOriginTheInstanceRulesRefuse_SendsNoOriginLoadingScreen_AndGoesStraightToTheBindPoint()
+    {
+        using var f = new Fixture();
+        Player a = f.Add(9114); // map 0 at the origin
+        a.Home = new HomeBind(2, 0, 321f, 654f, 40f);
+        using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
+
+        Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
+        f.World.RunTick(50);
+        f.World.MapResolver = new GatedOrigin(f.World, 0); // the destination refuses entry, and CanEnter refuses the origin map
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        // vmangos TeleportTo(oldLoc) asks CanPlayerEnter before the loading screen: no loading screen for the origin, the bind point's at once.
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a));
+        Assert.Equal(2u, f.Teleports.DestinationOf(a)?.MapId);
+        Assert.Null(a.Map);
+
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        Assert.NotNull(a.Map);
+        Assert.Equal(2u, a.Map!.MapId);
+        Assert.Equal(1, cap.Count(EntryFailed));
+        Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
+    }
+
+    [Fact]
+    public void FarTeleport_ToADestinationThatBecameInvalid_SendsAFarTeleportToTheBindPointOnAnotherMap()
+    {
+        using var f = new Fixture();
+        Player a = f.Add(9115);
+        a.Home = new HomeBind(2, 0, 321f, 654f, 40f); // not the map the client loads (1)
+        using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
+
+        Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
+        f.World.RunTick(50);
+        // The destination map leaves the registry while the client loads it.
+        WorldMaps.Of(f.World).Load(new MapContent(
+            [
+                new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(2, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Test continent", ""),
+            ],
+            [], [], [], []));
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        // vmangos TeleportToHomebind is a new far teleport: the client loaded map 1 and must be told to load map 2, not be entered behind its back.
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a));
+        Assert.Equal(2u, f.Teleports.DestinationOf(a)?.MapId);
+        Assert.Null(a.Map);
+        Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "destination-invalid")));
+
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.NotNull(a.Map);
+        Assert.Equal(2u, a.Map!.MapId);
+        Assert.InRange(a.X, 320f, 322f);
+        Assert.InRange(a.Y, 653f, 655f);
     }
 }
