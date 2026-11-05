@@ -18,10 +18,10 @@ namespace ArcaneCore.Data.Tests;
 /// </summary>
 public sealed class SchemaStartupResilienceTests : SchemaStartupResilienceTestBase
 {
-    public static IEnumerable<object[]> FreshCreateRows() => FreshCreateSlice(0, FreshCreateClassCount);
+    public static IEnumerable<object[]> Rows() => FreshCreateSlice(0, FreshCreateClassCount);
 
     [Theory]
-    [MemberData(nameof(FreshCreateRows))]
+    [MemberData(nameof(Rows))]
     public Task InterruptedFreshCreate_ResumesOnRestart(DatabaseProvider provider, string component, int shard, int shards) => RunInterruptedFreshCreateAsync(provider, component, shard, shards);
 
     [Fact]
