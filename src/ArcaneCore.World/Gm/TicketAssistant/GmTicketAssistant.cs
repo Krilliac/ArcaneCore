@@ -51,6 +51,17 @@ public sealed record TicketAssistantStatus(bool Enabled, int Handled, int Fixed,
 /// </list>
 /// Everything that reads or changes a player runs through <see cref="WorldRuntime.InvokeAsync{T}"/> (the world thread, outside the
 /// maps' parallel phase); model calls run off it with a timeout. Thread-affinity: public members are safe from any thread.
+/// <para>
+/// Limits. (1) <c>-Topology Split</c> (cluster): the assistant reads and acts on the players this world process owns (<c>WorldRuntime.FindOnlinePlayer</c>);
+/// an author on another worker reads as offline, so a ticket from one is escalated, never acted on. A ghost sent to a graveyard on a map another worker owns
+/// (<c>TeleportService.TeleportToRemoteMap</c>, whose <c>TryBeginTransfer</c> returns before the gateway has answered) counts as sent: the unstuck penalty
+/// (<c>UnstuckCommands.PenaliseGhost</c>) is applied on this worker right after, and a revive is left pending (<see cref="SettleRevives"/>) until the player is
+/// seen here again or <see cref="ReviveArrivalSeconds"/> pass, so the transferred ghost is never resurrected by this worker and the ticket was already closed with the
+/// "you were sent" text. A refused transfer therefore leaves a ghost that paid the unstuck cost. Tickets of a split stage are meant to be left to a GM until a
+/// transfer result is awaited; the daily and cooldown limits bound the cost. (2) The evidence log listens to the process-wide <c>AnomalyLedger.Shared</c>, so
+/// hosts that run in one process (parallel tests) hear each other's reports; a signal is keyed by the character's guid and is only ever shown to a GM, never
+/// evidence for an action, so the interference cannot cause a fix.
+/// </para>
 /// </summary>
 public sealed partial class GmTicketAssistant(IServiceProvider services, IConfiguration? configuration = null, TimeProvider? clock = null) : IWorldFeature
 {
@@ -236,7 +247,12 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         }
 
         watch.DeadSince = player.IsAlive ? 0 : watch.DeadSince == 0 ? now : watch.DeadSince;
-        bool stale = player.Combat.IsInCombat && player.Combat.Attackers.Count == 0 && player.Combat.Victim is null && !player.Combat.HasThreatList;
+        // A duel keeps a player in combat with nobody on its attacker list, and a living creature that holds the player on its threat list
+        // keeps it there too (the combat anomaly check calls that engaged): neither is stale. Limit: a periodic hostile aura from a caster that is
+        // neither an attacker nor a threat holder is not looked at, so such a player can read as stale; ClearCombat then only stops the combat
+        // state, which the aura's next tick raises again, and costs the account one action.
+        bool stale = player.Duel is null && player.Combat.IsInCombat && player.Combat.Attackers.Count == 0 && player.Combat.Victim is null
+            && !player.Combat.HasThreatList && player.Combat.ThreatenedBy.Count == 0;
         watch.StaleSince = stale ? (watch.StaleSince == 0 ? now : watch.StaleSince) : 0;
         return watch;
     }
@@ -317,14 +333,21 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             }
 
             TicketClassification classification = await ClassifyAsync(ticket.Text, cancellationToken).ConfigureAwait(false);
-            Step step = await world.InvokeAsync(() => Decide(ticket, classification), cancellationToken).ConfigureAwait(false);
+            // The ticket is read again on the world thread before anything is done to its author: a human may have answered it, or the
+            // player withdrawn it, while the model was thinking.
+            Step? step = await world.InvokeAsync(() => Decide(ticket, classification, force), cancellationToken).ConfigureAwait(false);
+            if (step is null)
+            {
+                return null;
+            }
+
             string? answer = null;
             if (step.Decision.Action == TicketAction.Answer)
             {
                 answer = await DraftAsync(ticket.Text, cancellationToken).ConfigureAwait(false);
             }
 
-            return await world.InvokeAsync(() => Finish(ticket, classification, step, answer), cancellationToken).ConfigureAwait(false);
+            return await world.InvokeAsync(() => Finish(ticket, classification, step, answer, force), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -344,7 +367,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             {
                 if (await model.ClassifyAsync(ticketText, timeout.Token).ConfigureAwait(false) is { } raw)
                 {
-                    return TicketClassifier.Parse(raw);
+                    return ScreenSummary(TicketClassifier.Parse(raw));
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -360,6 +383,16 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
         return TicketClassifier.ByKeywords(ticketText);
     }
+
+    /// <summary>
+    /// The model's summary goes to the GM note and the audit line, so it passes the same code-side screen as a drafted answer (no client escape,
+    /// link, bare domain, slash command or dot command). A summary that fails is dropped; the category, which is all that decides anything, stays.
+    /// Pure.
+    /// </summary>
+    internal static TicketClassification ScreenSummary(TicketClassification classification)
+        => classification.Summary.Length == 0 || ScreenDraft(classification.Summary, string.Empty) is not null
+            ? classification
+            : classification with { Summary = string.Empty };
 
     private async Task<string?> DraftAsync(string ticketText, CancellationToken cancellationToken)
     {
@@ -394,28 +427,38 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     // A command prefix of the command table ('.' or '!') at the start of a word.
     private static readonly Regex DraftCommandPattern = new(@"(?<![\w.!])[.!][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
-    // A bare domain ("name.example"), which the "://" and "www." checks miss.
-    private static readonly Regex DraftDomainPattern = new(@"\b[A-Za-z0-9-]+\.(?:com|net|org|info|biz|io|gg|tv|me|co|cc|ly|to|xyz|top|club|online|site|ru|cn|de|uk|us|eu|fr|nl|pl|tk|ml|ga|cf|gq|app|dev|link|live|shop|store|tech)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
+    // A bare domain, by shape and not by a list of endings: a label, a dot (ASCII or a fullwidth or ideographic one) and at least two letters
+    // ("name.example", "a.b.xyz"). Prose with no space after a full stop ("run.Then") matches too, which only sends the ticket to a GM.
+    private static readonly Regex DraftDomainPattern = new(@"[A-Za-z0-9-]{2,}[.\u3002\uFF0E\uFF61][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+
+    // A domain spelled out ("evil dot com", "evil [dot] gg", "evil (dot) com"): "dot" followed by a short word or bracketed at all. A damage-over-time
+    // sentence ("dot damage") can match, which again only sends the ticket to a GM.
+    private static readonly Regex DraftSpelledDomainPattern = new(@"(?:[\[\(\{]\s*dot\s*[\]\)\}]|\bdot\s+[a-z]{2,3}\b)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
+
+    // A slash command of the client ("/script", "/run", "/say") at the start of a word. "and/or" and "1/2" do not match.
+    private static readonly Regex DraftSlashCommandPattern = new(@"(?<![\w/])/[A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
     /// <summary>
-    /// The code-side check of a model-drafted answer, which is the one model-written text a player sees and which closes the ticket
-    /// (prompt injection through the ticket text can steer it). Null, so the ticket is left to a GM, when the draft is longer than
-    /// <see cref="MaxDraftLength"/>, carries a client escape (<c>|</c>: colour, item or quest link), a link (<c>://</c>, <c>www.</c>), or
-    /// a bare domain, or names a dot or bang command the <paramref name="faq"/> does not contain. Pure.
+    /// The code-side check of a model-written text a player or a GM sees (a drafted answer, which closes the ticket, and the summary that goes
+    /// into the GM note and the audit line; prompt injection through the ticket text can steer both). Null, so the ticket is left to a GM, when the text
+    /// is longer than <see cref="MaxDraftLength"/>, carries a client escape (<c>|</c>: colour, item or quest link), an invisible format character, a
+    /// link (<c>://</c>, <c>www.</c>), a bare or spelled-out domain, a slash command (<c>/script</c>), or names a dot or bang command the
+    /// <paramref name="faq"/> does not contain. Pure.
     /// </summary>
     internal static string? ScreenDraft(string draft, string faq)
     {
         if (draft.Length > MaxDraftLength
             || draft.Contains('|', StringComparison.Ordinal)
             || draft.Contains("://", StringComparison.Ordinal)
-            || draft.Contains("www.", StringComparison.OrdinalIgnoreCase))
+            || draft.Contains("www.", StringComparison.OrdinalIgnoreCase)
+            || draft.Any(c => char.GetUnicodeCategory(c) == UnicodeCategory.Format))
         {
             return null;
         }
 
         try
         {
-            if (DraftDomainPattern.IsMatch(draft))
+            if (DraftDomainPattern.IsMatch(draft) || DraftSpelledDomainPattern.IsMatch(draft) || DraftSlashCommandPattern.IsMatch(draft))
             {
                 return null;
             }
@@ -497,7 +540,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         return new TicketFacts(
             true, player.AccountId, player.Name, player.MapId, player.X, player.Y, player.Z, player.IsAlive, ghost, player.Level,
             watch.DeadSince == 0 ? 0 : now - watch.DeadSince, now - watch.MovedAt, player.Combat.IsInCombat || player.Duel is not null, stale, blocked,
-            signal, quest);
+            signal, quest, player.Duel is not null);
     }
 
     private static readonly Regex QuestIdPattern = new(@"\b\d{1,6}\b", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
@@ -547,9 +590,14 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         return label + " is " + state.Quests.GetStatus(found.Id) + " in the author's log";
     }
 
-    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself.</summary>
-    private Step Decide(GmTicketRecord ticket, TicketClassification classification)
+    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself. Null, changing nothing, when the ticket is no longer open or a human has answered it since it was picked.</summary>
+    private Step? Decide(GmTicketRecord ticket, TicketClassification classification, bool force)
     {
+        if (services.GetRequiredService<GmAuditFeature>().OpenTicket(ticket.Id) is not { } current || (!force && current.Response.Length != 0))
+        {
+            return null;
+        }
+
         TicketFacts facts = Gather(ticket, out Player? player);
         TicketDecision decision = TicketPolicy.Decide(classification.Category, facts, _options);
         string? limit = null;
@@ -830,10 +878,19 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
     // ---- world thread: answer, close, note, audit ---------------------------------------------------
 
-    private TicketOutcome Finish(GmTicketRecord ticket, TicketClassification classification, Step step, string? answer)
+    private TicketOutcome Finish(GmTicketRecord ticket, TicketClassification classification, Step step, string? answer, bool force)
     {
         GmAuditFeature audit = services.GetRequiredService<GmAuditFeature>();
         TicketAction action = step.Decision.Action;
+        // Read again: a human who answered, or a player who withdrew the ticket, since Decide must not be overwritten or answered.
+        GmTicketRecord? current = audit.OpenTicket(ticket.Id);
+        bool writable = current is not null && (force || current.Response.Length == 0);
+        string? meanwhile = writable ? null : current is null ? "the ticket was closed or withdrawn meanwhile" : "a GM answered the ticket meanwhile";
+        if (!writable && action == TicketAction.Answer)
+        {
+            action = TicketAction.Escalate;
+        }
+
         string name = _options.AssistantName;
         string text;
         bool close;
@@ -873,8 +930,19 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         string detail = performed ? step.Detail
             : step.LimitNote ?? (step.Detail.Length > 0 ? step.Detail : step.Decision.Action == TicketAction.Answer ? "no answer drafted" : "no evidence or no action allowed");
 
+        if (meanwhile is not null)
+        {
+            close = false;
+            detail += "; " + meanwhile + ", nothing was written to it";
+        }
+
         // The player's view first, then the record.
-        GmTicketRecord? updated = close ? audit.CloseTicket(ticket.Id, name, text) : audit.RespondToTicket(ticket.Id, text);
+        GmTicketRecord? updated = null;
+        if (writable)
+        {
+            updated = close ? audit.CloseTicket(ticket.Id, name, text) : audit.RespondToTicket(ticket.Id, text);
+        }
+
         if (updated is not null)
         {
             Tell(audit, ticket, name, text, close);
@@ -905,7 +973,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                 _escalated++;
             }
 
-            if (!close)
+            if (!close && writable)
             {
                 _needsHuman.Add(ticket.Id);
                 if (!_notes.TryGetValue(ticket.Id, out List<string>? notes))

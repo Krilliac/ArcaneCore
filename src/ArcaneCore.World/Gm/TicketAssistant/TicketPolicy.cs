@@ -34,7 +34,7 @@ public static class TicketPolicy
                     return none;
                 }
 
-                if (facts.Alive && facts.StaleCombat)
+                if (facts.Alive && facts.StaleCombat && !facts.InDuel)
                 {
                     return new TicketDecision(TicketAction.ClearCombat, EvidenceStaleCombat);
                 }

@@ -91,16 +91,19 @@ public static class TicketClassifier
     private static readonly (TicketCategory Category, string[] Words)[] Keywords =
     [
         (TicketCategory.Harassment, ["harass", "stalk", "threat", "racist", "insult", "abuse", "bullying", "scammed", "scammer", "doxx"]),
-        (TicketCategory.Stuck, ["stuck", "fell through", "under the map", "under the world", "underground", "can't move", "cant move", "cannot move", "trapped", "falling forever"]),
+        (TicketCategory.Stuck, ["fell through", "under the map", "under the world", "underground", "can't move", "cant move", "cannot move", "falling forever"]),
         (TicketCategory.DeadCantRes, ["can't res", "cant res", "cannot res", "can't resurrect", "cant resurrect", "cannot resurrect", "no graveyard", "spirit healer", "corpse"]),
         (TicketCategory.QuestBroken, ["quest"]),
+        // "stuck" and "trapped" alone also describe a quest ("my quest is stuck"), and Stuck can lead to Undying Soul, which kills a living
+        // player, so they only count when nothing about a quest was said and no stronger category matched.
+        (TicketCategory.Stuck, ["stuck", "trapped"]),
         (TicketCategory.ItemLost, ["lost my", "missing item", "item is gone", "item disappeared", "vanished", "my item", "my gold"]),
         (TicketCategory.BugReport, ["bug", "glitch", "broken", "doesn't work", "does not work", "not working", "crash", "exploit"]),
         (TicketCategory.Question, ["how do i", "how to", "how can i", "what is", "where can i", "where do i", "is it possible", "can i ", "what are the rules"]),
     ];
 
     /// <summary>
-    /// The fallback classifier: the first category (in the order harassment, stuck, dead, quest, item, bug, question) whose keyword
+    /// The fallback classifier: the first category (in the order harassment, stuck by movement phrases, dead, quest, stuck or trapped, item, bug, question) whose keyword
     /// appears; a text ending in a question mark with no other match is a question; everything else is <see cref="TicketCategory.Other"/>
     /// (which escalates).
     /// </summary>
