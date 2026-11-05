@@ -316,6 +316,55 @@ public sealed class PlayerbotRoutePlanWatchTests
         Assert.True(PlayerbotRoutePlanWatch.DutySuppressMs < PlayerbotRoutePlanWatch.SuppressMs);
     }
 
+    private static async Task RecordRefusalsAsync(RiskTestWorld world, Vector3 origin, Vector3 goal)
+    {
+        for (int i = 0; i < PlayerbotRoutePlanWatch.MaxConsecutiveRefusals; i++)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                PlayerbotRoutePlanWatch.RecordOutcome(world.Player, origin, goal, planned: false, route: null, world.Host.World.NowMs,
+                    PlayerbotRoutePlanWatch.Policy.Duty);
+                return true;
+            });
+            await world.Host.World.AdvanceClockAsync(1_000);
+        }
+    }
+
+    [Fact]
+    public async Task DutyPolicy_RefusedAgainForTheSamePair_BacksOffTo30Then60Seconds_AndASuccessfulPlanStartsItOver()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        Assert.Equal(new uint[] { 10_000, 30_000, 60_000 }, PlayerbotRoutePlanWatch.DutyBackoffMs);
+        Assert.Equal(60_000u, PlayerbotRoutePlanWatch.DutySpanMs(9));
+
+        (Vector3 origin, Vector3 goal) = await SeedRefusalsAsync(world, PlayerbotRoutePlanWatch.Policy.Duty);
+        await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
+        Assert.False(await Refused(world, origin, goal), "first hold: 10 s");
+
+        await RecordRefusalsAsync(world, origin, goal);
+        await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
+        Assert.True(await Refused(world, origin, goal), "second hold: 30 s, still held 11 s after the suppression");
+        await world.Host.World.AdvanceClockAsync(25_000);
+        Assert.False(await Refused(world, origin, goal), "second hold over after 30 s");
+
+        await RecordRefusalsAsync(world, origin, goal);
+        await world.Host.World.AdvanceClockAsync(40_000);
+        Assert.True(await Refused(world, origin, goal), "third hold: 60 s");
+        await world.Host.World.AdvanceClockAsync(25_000);
+        Assert.False(await Refused(world, origin, goal), "third hold over after 60 s");
+        Assert.False(await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal)), "a duty goal is never blacklisted");
+
+        await world.OnWorldAsync(() =>
+        {
+            PlayerbotRoutePlanWatch.RecordOutcome(world.Player, origin, goal, planned: true, route: null, world.Host.World.NowMs,
+                PlayerbotRoutePlanWatch.Policy.Duty);
+            return true;
+        });
+        await RecordRefusalsAsync(world, origin, goal);
+        await world.Host.World.AdvanceClockAsync(PastDutyWindowMs);
+        Assert.False(await Refused(world, origin, goal), "after a successful plan the hold is 10 s again");
+    }
+
     [Fact]
     public async Task DefaultPolicy_RefusedGoal_StaysShelvedPastTheDutyWindow_AndIsBlacklisted()
     {

@@ -5,7 +5,6 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
-using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
@@ -506,18 +505,6 @@ internal sealed partial class PlayerbotBattlegroundAI
         PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", detail);
     }
 
-    /// <summary>
-    /// The last point of the navigation mesh on the straight line from the bot to <paramref name="goal"/>, or null when the mesh holds the
-    /// whole line (the goal itself is no better), has no answer, or the point is within 2 yards of the goal.
-    /// </summary>
-    private Vector3? SnappedGoal(Player player, Vector3 goal)
-    {
-        if (player.Map is null || !goal.IsFinite()) return null;
-        IPathfinder pathfinder = WorldCollision.Of(_session.World).PathfinderFor(player.MapId);
-        Vector3 snapped = Groups.PlayerbotGroupCoordinator.SnapToMesh(pathfinder, player.MapId, Position(player), goal);
-        return snapped.IsFinite() && Vector3.Distance(snapped, goal) > 2f && Vector3.Distance(snapped, Position(player)) > 1.5f ? snapped : null;
-    }
-
     private void ReportIdleInMatch(Player player, string detail)
     {
         if (_reportedIdleInMatch || _session.IsInChaosProbe) return;
@@ -872,17 +859,6 @@ internal sealed partial class PlayerbotBattlegroundAI
                     watchPolicy: PlayerbotRoutePlanWatch.Policy.Duty)
                 : PlayerbotNavigation.PlanExact(player, goal, _options, ref _tileWait, _session.World.NowMs, out plannedRoute, chase: chase);
             _route = plannedRoute;
-            // A refused goal off the mesh (a flag room's corner, the middle's stump) is tried again at the last point of the mesh on the
-            // straight line to it (Groups.PlayerbotGroupCoordinator.SnapToMesh) before the bot stands still.
-            if (planned == PlanOutcome.Refused && !chase && SnappedGoal(player, goal) is { } snapped)
-            {
-                planned = toward
-                    ? PlayerbotNavigation.PlanToward(player, snapped, _options, ref _tileWait, _session.World.NowMs, out plannedRoute,
-                        watchPolicy: PlayerbotRoutePlanWatch.Policy.Duty)
-                    : PlayerbotNavigation.PlanExact(player, snapped, _options, ref _tileWait, _session.World.NowMs, out plannedRoute, chase: chase);
-                _route = plannedRoute;
-            }
-
             if (planned != PlanOutcome.Route || _route is null)
             {
                 _route = null;
