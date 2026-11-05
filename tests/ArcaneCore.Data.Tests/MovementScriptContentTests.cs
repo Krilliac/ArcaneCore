@@ -94,6 +94,38 @@ public sealed class MovementScriptContentTests
         }
     }
     [Fact]
+    public void SpellScriptTargetConditionId_IsTranslated_NeverCopied()
+    {
+        // vmangos column order: entry, type, targetEntry, conditionId, inverseEffectMask, build_min, build_max (SpellMgr.cpp:2068); the
+        // vmangos conditions have no `comments` column. Rows are the real shapes of the vmangos world database: 6492 health at most 5%,
+        // 122 spawned, 124 AND(122 spawned, 123 loot state 1), 15958 AND(122, 192 go state 2), 1111 source entry 15882 reversed.
+        const string dump = """
+            INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES
+            (122,48,0,0,0,0,0),(123,49,1,0,0,0,0),(124,-1,122,123,0,0,0),(192,55,2,0,0,0,0),(15958,-1,122,192,0,0,0),
+            (1111,16,15882,0,0,0,1),(6492,41,5,2,0,0,0);
+            INSERT INTO `spell_script_target` (`entry`,`type`,`targetEntry`,`conditionId`,`inverseEffectMask`,`build_min`,`build_max`) VALUES
+            (9082,1,6492,6492,0,0,5875),(11757,0,144050,122,0,0,5875),(10731,0,128403,124,0,0,5875),(15958,0,175124,15958,0,0,5875),
+            (26347,0,180771,1111,0,5086,5875),(8283,1,4781,0,0,0,5875),(99001,1,5,7777,0,0,5875);
+            INSERT INTO `spell_script_target` (`entry`,`type`,`targetEntry`,`inverseEffectMask`) VALUES (10252,1,7076,0);
+            """;
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader(dump));
+
+        Dictionary<uint, string> bySpell = importer.SpellScriptTargets.ToDictionary(r => r.SpellId, r => r.TargetCondition);
+        Assert.Equal("health:5:2", bySpell[9082]);
+        Assert.Equal("spawned", bySpell[11757]);
+        Assert.Equal("spawned;loot:1", bySpell[10731]);
+        Assert.Equal("spawned;gostate:2", bySpell[15958]);
+        Assert.Equal("!entry:15882", bySpell[26347]);
+        Assert.Equal(string.Empty, bySpell[8283]);
+        Assert.Equal(string.Empty, bySpell[10252]); // the column is absent
+        Assert.DoesNotContain(99001u, bySpell.Keys); // condition 7777 is not in the input: the row is left out, not stored unconditioned
+        string warning = Assert.Single(importer.SpellScriptTargetWarnings);
+        Assert.Contains("spell 99001", warning, StringComparison.Ordinal);
+        Assert.Contains("7777", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ClassicDbMovementSpellAndLinkRows_AreCaptured()
     {
         const string dump = """

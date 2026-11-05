@@ -20,10 +20,9 @@ public sealed partial class SpellSystem
         if (caster.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects)
             return [];
 
-        HashSet<uint> entries = [.. Store.GetScriptTargets(cast.Spell.Id)
-            .Where(row => row.Type == 0 && (row.InverseEffectMask & (1u << effectIndex)) == 0)
-            .Select(row => row.TargetEntry)];
-        if (entries.Count == 0)
+        SpellStore.ScriptTarget[] rows = [.. Store.GetScriptTargets(cast.Spell.Id)
+            .Where(row => row.Type == 0 && (row.InverseEffectMask & (1u << effectIndex)) == 0)];
+        if (rows.Length == 0)
             return [];
 
         float radius = TargetMapRadius(cast.Spell, effect, effectIndex);
@@ -45,8 +44,14 @@ public sealed partial class SpellSystem
             return dx * dx + dy * dy + dz * dz;
         }
 
-        GameObject[] candidates = [.. objects.GameObjects.Where(go => go.IsSpawned && entries.Contains(go.Entry)
-            && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius))
+        // Only the nearest-object choice (target 40) reads the row's condition (vmangos NearestGameObjectEntryFitConditionInObjectRangeCheck,
+        // Spell.cpp:480); the area targets 51 and 52 use GameObjectEntryInPosRangeCheck, which has none (Spell.cpp:2498-2503). Entry first, then
+        // range, the condition last.
+        bool checkCondition = selector == (SpellImplicitTarget)40;
+        GameObject[] candidates = [.. objects.GameObjects.Where(go => go.IsSpawned
+            && rows.Any(row => row.TargetEntry == go.Entry)
+            && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius)
+            && (!checkCondition || rows.Any(row => row.TargetEntry == go.Entry && ScriptTargetConditionHolds(row, caster, go))))
             .OrderBy(DistanceSquared).ThenBy(go => go.Guid.Value)];
         if (candidates.Length == 0)
             return [];

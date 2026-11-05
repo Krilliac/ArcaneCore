@@ -65,6 +65,9 @@ public sealed class DbScriptDumpImporter
     /// <summary>The vmangos <c>spell_scripts</c> ids refused whole, with the reason of their first refused row.</summary>
     public IReadOnlyDictionary<uint, string> VmangosSpellScriptRejections => _vmangosSpellRejections;
 
+    /// <summary>The vmangos <c>conditions</c> row (a table without the cmangos <c>comments</c> column) read with this id, or null.</summary>
+    internal ConditionRow? VmangosCondition(uint conditionEntry) => _vmangosConditions.GetValueOrDefault(conditionEntry);
+
     /// <summary>What the last write left out: vmangos spell scripts whose condition did not resolve.</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
