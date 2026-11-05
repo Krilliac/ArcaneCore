@@ -98,7 +98,7 @@ public sealed class RealmConsoleCommands(
         say("  account create <name> <password>            create an account (the password is visible while typed; arcane-account prompts without echo)");
         say("  account set-password <name> <password>      change an account's password");
         say("  account set-gmlevel <name> <0-3|name>       set an account's GM level (applies from the next world login)");
-        say("  account delete <name>                       arm the deletion of an account proven to have no characters (then repeat with 'confirm' within 60 s; irreversible)");
+        say("  account delete <name>                       arm the deletion of an account whose recorded character count is 0 (then repeat with 'confirm' within 60 s; irreversible)");
         say("  quit | shutdown                             stop the realm daemon");
     }
 
