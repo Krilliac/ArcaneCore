@@ -16,6 +16,13 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// </summary>
 public sealed class CreatureTypeImmunityTests
 {
+    /// <summary>The production resolver (WorldSpellUnitResolver): any unit of the caster's map by GUID.</summary>
+    private sealed class MapObjectResolver : ISpellUnitResolver
+    {
+        public Unit? Find(Unit reference, ObjectGuid guid)
+            => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
+    }
+
     private const uint Beast = 1;
     private const uint Elemental = 4;
     private const uint Mechanical = 9;
@@ -141,7 +148,7 @@ public sealed class CreatureTypeImmunityTests
         const uint friendlyHeal = 932_110;
         using SpellTestKit kit = new(Hostile(friendlyHeal, Effect(SpellEffectName.Heal, 100, SpellImplicitTarget.UnitFriend)));
         kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
-        kit.System.CombatRules = SpellCombatRules.Neutral;
+        kit.System.Units = new MapObjectResolver(); // the default resolver only finds players; this lets the creature resolve as an explicit target
         (Player healer, _) = kit.AddPlayer(1);
         CreatureTemplate template = Template(entry, t =>
         {
