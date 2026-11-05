@@ -184,6 +184,15 @@ public sealed class EfRealmAuthorityLeaseStore(
         return command.ExecuteScalar() is not null;
     }
 
+    /// <summary>
+    /// The lease transaction. On PostgreSQL the isolation level is stated (Read Committed), because the row-lock logic relies on it: a <c>FOR UPDATE</c> that waited re-evaluates its condition on the latest row version, and
+    /// the UPDATEs after it see that version; the server default (<c>default_transaction_isolation</c>) is not trusted to be that. Other providers keep their default, as before.
+    /// </summary>
+    private static IDbContextTransaction BeginLeaseTransaction(CharacterDbContext db)
+        => db.Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL"
+            ? db.Database.BeginTransaction(System.Data.IsolationLevel.ReadCommitted)
+            : db.Database.BeginTransaction();
+
     private static void AddParameter(DbCommand command, string name, object value)
     {
         DbParameter parameter = command.CreateParameter();
@@ -201,7 +210,7 @@ public sealed class EfRealmAuthorityLeaseStore(
         using LeaseDb lease = Open();
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
-        using var tx = db.Database.BeginTransaction();
+        using IDbContextTransaction tx = BeginLeaseTransaction(db);
         // Acquire and takeover change authority: on PostgreSQL lock the row (FOR UPDATE, waits for in-flight fenced commits) only when one of the two UPDATEs below could change it: the lease is free or lapsed (and the
         // token can grow), or it is this owner's own (the renewal branch). A call that will be refused locks nothing and skips both UPDATEs.
         bool locked = TryLockRow(db, scope,
@@ -228,9 +237,15 @@ public sealed class EfRealmAuthorityLeaseStore(
                 .SetProperty(r => r.ExpiresAtUnixMs, expires)
                 .SetProperty(r => r.Active, true));
         RealmAuthorityLeaseRow current = Read(db, scope) ?? throw UnknownScope(scope);
-        tx.Commit();
         if (granted > 0)
+        {
+            tx.Commit();
             return new AuthorityLeaseResult(AuthorityLeaseOutcome.Granted, ToLease(current));
+        }
+
+        // Nothing changed: roll back, never commit. A commit flushes the WAL synchronously, and the lock above may have followed a concurrent update to the latest row version, locked it, and then
+        // dropped it on the recheck: the lock stays until the transaction ends, so a refused call must end it without a flush or it would hold FOR UPDATE through a WAL stall and block the holder's renewals.
+        tx.Rollback();
         return new AuthorityLeaseResult(AuthorityLeaseOutcome.RejectedHeldByOther, ActiveLease(current, now));
     }
 
@@ -243,7 +258,7 @@ public sealed class EfRealmAuthorityLeaseStore(
         using LeaseDb lease = Open();
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
-        using var tx = db.Database.BeginTransaction();
+        using IDbContextTransaction tx = BeginLeaseTransaction(db);
         RelaxCommitDurability(db);
 
         int renewed = db.Set<RealmAuthorityLeaseRow>()
@@ -286,7 +301,7 @@ public sealed class EfRealmAuthorityLeaseStore(
         using LeaseDb lease = Open();
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
-        using var tx = db.Database.BeginTransaction();
+        using IDbContextTransaction tx = BeginLeaseTransaction(db);
         // A release changes authority: on PostgreSQL lock the row (waits for in-flight fenced commits) only when the UPDATE below would match it; a release by a non-holder locks nothing and skips the UPDATE.
         bool locked = TryLockRow(db, scope,
             "fencing_token = @token AND active AND owner_node = @node AND owner_incarnation = @incarnation",
@@ -299,9 +314,13 @@ public sealed class EfRealmAuthorityLeaseStore(
                 .SetProperty(r => r.OwnerIncarnation, (string?)null)
                 .SetProperty(r => r.Active, false));
         RealmAuthorityLeaseRow row = Read(db, scope) ?? throw UnknownScope(scope);
-        tx.Commit();
         if (released > 0)
+        {
+            tx.Commit();
             return new AuthorityLeaseResult(AuthorityLeaseOutcome.Released, null);
+        }
+
+        tx.Rollback(); // nothing changed: no commit, no WAL flush while a lock from the recheck may still be held (see TryAcquire)
         return new AuthorityLeaseResult(AuthorityLeaseOutcome.RejectedStaleToken, row.Active ? ToLease(row) : null);
     }
 

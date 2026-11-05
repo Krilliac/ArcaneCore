@@ -307,6 +307,107 @@ public sealed class LeaseRowLockTests : IAsyncLifetime
         Assert.InRange(await ScalarAsync(env.Connection, $"SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = '{Application}-read'"), 1, 3);
     }
 
+    private static long UnixMs(DateTimeOffset time) => time.ToUnixTimeMilliseconds();
+
+    private static async Task<(NpgsqlConnection Connection, NpgsqlTransaction Transaction)> BeginRawRenewalAsync(DatabaseConnectionOptions connection, DateTimeOffset newExpiry)
+    {
+        var conn = new NpgsqlConnection(connection.ConnectionString);
+        await conn.OpenAsync();
+        NpgsqlTransaction tx = await conn.BeginTransactionAsync();
+        await using var update = new NpgsqlCommand($"UPDATE realm_authority_lease SET expires_at_unix_ms = {UnixMs(newExpiry)} WHERE scope = '{Scope}'", conn, tx);
+        await update.ExecuteNonQueryAsync(); // an uncommitted renewal
+        return (conn, tx);
+    }
+
+    /// <summary>
+    /// The row changed between the statement's snapshot and the lock: the lock follows to the latest version, the recheck drops the row, and the lock stays until the transaction ends. The refused call must then END its
+    /// transaction by rolling back (a commit flushes the WAL synchronously, and during a stall would hold FOR UPDATE and block the holder's renewals). Observed as xact_rollback rising, and the holder's renewal completing at once.
+    /// </summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task ARefusedTakeover_ThatWaitedForARenewal_RollsBack_AndReleasesItsLock()
+    {
+        Env env = await CreateAsync(poolSize: 1); // one backend: its statistics can be flushed on demand
+        Guid a = Guid.NewGuid();
+        Guid b = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        (NpgsqlConnection raw, NpgsqlTransaction renewal) = await BeginRawRenewalAsync(env.Connection, T0 + TimeSpan.FromDays(1));
+        await using (raw)
+        await using (renewal)
+        {
+            long rollbacksBefore = await ScalarAsync(env.Connection, "SELECT xact_rollback FROM pg_stat_database WHERE datname = current_database()");
+            Task<AuthorityLeaseResult> takeover = Task.Run(() => env.Store.TryAcquire(Scope, "node-b", b, Ttl, T0 + Ttl + TimeSpan.FromSeconds(1))); // past the old expiry: the snapshot says it is free
+
+            Assert.True(await WaitForBlockedBackendAsync(env.Connection, "FOR UPDATE"), "the takeover must be blocked on the uncommitted renewal");
+            await renewal.CommitAsync();
+
+            Assert.True(await CompletesWithinAsync(takeover, Bound));
+            AuthorityLeaseResult refusal = await takeover;
+            Assert.Equal(AuthorityLeaseOutcome.RejectedHeldByOther, refusal.Outcome);
+            Assert.Equal("node-a", refusal.Lease!.OwnerNodeId);
+
+            // The pooled backend is the one that rolled back: have it publish its statistics, then look (PostgreSQL 15 has pg_stat_force_next_flush; older servers flush on their own within a second or two).
+            await using (CharacterDbContext flush = env.Factory())
+            {
+                try
+                {
+                    await flush.Database.ExecuteSqlRawAsync("SELECT pg_stat_force_next_flush()");
+                }
+                catch (PostgresException)
+                {
+                    // before PostgreSQL 15: poll below
+                }
+            }
+
+            long rollbacks = 0;
+            Stopwatch watch = Stopwatch.StartNew();
+            while (watch.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                rollbacks = await ScalarAsync(env.Connection, "SELECT xact_rollback FROM pg_stat_database WHERE datname = current_database()") - rollbacksBefore;
+                if (rollbacks >= 1)
+                    break;
+                await Task.Delay(100);
+            }
+
+            Assert.True(rollbacks >= 1, "a refused takeover that changed nothing must roll back, not commit");
+            Task<AuthorityLeaseResult> holderRenewal = Task.Run(() => env.Store.TryRenew(Scope, "node-a", a, granted.Lease!.FencingToken, Ttl, T0 + TimeSpan.FromSeconds(40)));
+            Assert.True(await CompletesWithinAsync(holderRenewal, TimeSpan.FromSeconds(1)), "the holder's renewal must not wait behind a lock left by the refused call");
+            Assert.Equal(AuthorityLeaseOutcome.Renewed, (await holderRenewal).Outcome);
+        }
+    }
+
+    /// <summary>The other direction: a renewal not yet committed when a fenced writer takes its lock; the lock must carry over to the renewed row version, so a takeover after the renewal still waits for the writer.</summary>
+    [LeaseRenewalPoolTests.PostgresFact]
+    public async Task AFencedLock_TakenDuringAnUncommittedRenewal_CarriesOver_ToTheTakeover()
+    {
+        Env env = await CreateAsync();
+        Guid a = Guid.NewGuid();
+        Guid b = Guid.NewGuid();
+        AuthorityLeaseResult granted = env.Store.TryAcquire(Scope, "node-a", a, Ttl, T0);
+        RealmLeaseFence stale = FenceOf(granted, "node-a", a);
+        DateTimeOffset newExpiry = T0 + TimeSpan.FromSeconds(10) + Ttl;
+        (NpgsqlConnection raw, NpgsqlTransaction renewal) = await BeginRawRenewalAsync(env.Connection, newExpiry);
+        await using (raw)
+        await using (renewal)
+        {
+            Task<OpenFencedWriter> writerStart = Task.Run(() => HoldFenceAsync(env.Connection, stale));
+            Assert.True(await CompletesWithinAsync(writerStart, TimeSpan.FromSeconds(3)), "a fenced writer must pass promptly while a renewal is uncommitted");
+            await using OpenFencedWriter writer = await writerStart;
+            await renewal.CommitAsync();
+
+            Task<AuthorityLeaseResult> takeover = Task.Run(() => env.Store.TryAcquire(Scope, "node-b", b, Ttl, newExpiry + TimeSpan.FromSeconds(1)));
+            Assert.True(await WaitForBlockedBackendAsync(env.Connection, "FOR UPDATE"), "the takeover must wait for the writer's lock, which carried over to the renewed row version");
+            Assert.False(takeover.IsCompleted);
+
+            await writer.CommitAsync();
+            Assert.True(await CompletesWithinAsync(takeover, Bound));
+            Assert.Equal(AuthorityLeaseOutcome.Granted, (await takeover).Outcome);
+
+            await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(env.Connection);
+            await using IDbContextTransaction tx = await db.Database.BeginTransactionAsync();
+            await Assert.ThrowsAsync<RealmLeaseFenceLostException>(() => LeaseFencedWrite.EnsureHeldAsync(db, stale, CancellationToken.None));
+        }
+    }
+
     [LeaseRenewalPoolTests.PostgresFact]
     public async Task TheLeaseTable_HasOnlyItsScopePrimaryKey_SoARenewalNeverTakesAKeyUpdateLock()
     {
