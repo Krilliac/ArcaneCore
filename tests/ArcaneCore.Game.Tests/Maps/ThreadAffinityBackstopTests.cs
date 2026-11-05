@@ -20,6 +20,13 @@ public sealed class ThreadAffinityBackstopTests
     private const string FieldSite = "thread-affinity:WorldObject.MarkChanged";
     private const string MoveSite = "thread-affinity:Map.OnObjectMoved";
 
+    /// <summary>The counter and the ledger are process-wide and the ledger records only the first <see cref="ThreadAffinity.RecordLimit"/> violations, so an earlier class that changed an in-map object off its world thread (for example the parallel map tests) could leave the budget spent or a same-site entry with other frames. Start every test from zero; this collection never overlaps another test.</summary>
+    public ThreadAffinityBackstopTests()
+    {
+        ThreadAffinity.Reset();
+        FaultLedger.Shared.Reset();
+    }
+
     private static FaultSnapshot? Find(string site) => FaultLedger.Shared.Snapshot().FirstOrDefault(f => f.Site == site);
 
     [Fact]

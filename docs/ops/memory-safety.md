@@ -30,6 +30,34 @@ count is silent, one beyond it fails the build, and a count above what the code 
 The diagnostic message prints the exact line. Fix new findings; do not add lines for new code. After fixing old ones, or when adding a rule,
 run `powershell -NoProfile -File scripts/safety-baseline.ps1`.
 
+### ARC0002 baseline assessment (reissued entry by entry)
+
+Every remaining ARC0002 baseline entry (19 entries, 27 occurrences) was checked against the code. None is a race. They fall into two classes: A (the `Player` is still loading) and B (the member is immutable). Real races found by the same check (the `ScenarioParty` position read of a live creature, and `Creature.Template` read off-thread four times) were fixed with `await context.ReadAsync(...)` and their baseline lines removed.
+
+Class A: the `Player` is still loading. `ICharacterHooks.OnPlayerLoadingAsync`/`OnPlayerLoadedAsync` (and `ISpellbookLoadObserver.OnSpellbookLoadedAsync`, called from `SpellFeature.OnPlayerLoadingAsync`) run only from `CharacterHandlers.HandlePlayerLoginAsync` (:579, :586) and `TransferShadowHooks.RunAsync` (`WorkerTransferTarget.cs`:67, :72), before the player is added to a map or visible to the world thread; the player is built a few lines earlier and has not been handed to the session, a map or the world. The only other references are a weak key in the claim service's ticket table (`CharacterClaimService.BindTicket`, which never reads the player's state) and, for the shadow, the honor service's tracking (`HonorFeature.OnPlayerLoadingAsync`). Neither touches the members below. A pool continuation touching the player cannot race. The same holds for the two object initializers on a freshly constructed `Player`.
+
+| Entry | Lines | Reason |
+|---|---|---|
+| `CharacterHandlers.HandlePlayerLoginAsync` `Player.Home`, `Player.CharacterOwnership` | `CharacterHandlers.cs`:550, :551 | Object initializer of the `new Player(...)` at :548, assigned after the awaits of the login; the player is unpublished. |
+| `CharacterHooksShadowLoader.LoadForSessionAsync` `Player.Home`, `Player.CharacterOwnership` | `WorkerTransferTarget.cs`:160, :161 | Same: initializer of the shadow `Player` built at :158, returned to the caller only after the hooks ran. |
+| `BattlegroundFeature.OnPlayerLoadingAsync` `WorldObject.MapId`, `Unit.Relocate` | `BattlegroundFeature.cs`:1205, :1206 | Loading hook; the player has no map yet, so `Relocate` moves an unpublished object (no `Map.OnObjectMoved`). |
+| `CharacterLifeFeature.OnPlayerLoadedAsync` `Player.LoadedLife` | `CharacterLifeFeature.cs`:68 | Loaded hook, unpublished player. `LoadedLife` is consumed later by `OnPlayerLoggedIn` (:76-:87), after the player has entered the world. |
+| `QuestNpcFeature.OnPlayerLoadingAsync` `Player.CharacterOwnership` | `QuestNpcFeature.cs`:215 | Loading hook, unpublished player. `CharacterOwnership` is `{ get; set; }` (`Player.cs`:111); the only later write is `WorkerTransferTarget.cs`:888 at activation, after the load has finished. |
+| `ItemsFeature.OnPlayerLoadingAsync` `Player.Inventory` (6) | `ItemsFeature.cs`:248, :249, :250, :251, :265, :270 | Loading hook; `Inventory` is the player's own container, filled before the player is published. |
+| `HonorFeature.OnPlayerLoadingAsync` `Player.Inventory` | `HonorFeature.cs`:185 | `HonorItemRequirements.Install(player.Inventory, service)` in the loading hook (not `HonorService.Track`, which the analyzer does not flag). |
+| `ReputationFeature.OnPlayerLoadingAsync` `Player.Inventory` (2) | `ReputationFeature.cs`:135 | Read and write of `Inventory.Requirements` on one line, loading hook. |
+| `SkillsFeature.OnSpellbookLoadedAsync` `Player.AttachSkills`, `Player.Inventory` (2), `Unit.Race`, `Unit.Class`, `Player.Name` | `SkillsFeature.cs`:160 (Race, Class), :166 (AttachSkills), :167 (Inventory, read and write), :183 (Name) | Spellbook-loaded observer inside the loading hook, unpublished player. |
+| `StatsFeature.OnPlayerLoadingAsync` `Player.Skills` | `StatsFeature.cs`:180 | Loading hook. The `SkillChanged` subscription it adds only calls `system.UpdateAll(player)` later from the skill owner's thread; the read of `Skills` itself is on the unpublished player. |
+
+Class B: the member is get-only and assigned in the constructor, so the value cannot change. This rests on immutability alone, whatever the owner is doing (a `Player`, a `ShipTransport`).
+
+| Entry | Lines | Reason |
+|---|---|---|
+| `ManagedPlayerbotFeature.StartCoreAsync` `Player.Name` (2) | `ManagedPlayerbotFeature.cs`:2011, :2103 | `session.Player?.Name`. `Player.Name` is `{ get; }` (`Player.cs`:121), assigned in the constructor, so reading it from the pool is safe. :2103 is the abort path, in the `finally` of a failed start after `session.Kick`, so the player may be null, never have entered the world, or already have logged out; immutability makes the read safe in all three. The `session.Player` reference read is a single reference load that is either the player or null (the `??` fallback covers null). |
+| `ShipCrossingScenario.RunAsync` `ShipTransport.Period` | `ScenarioTransports.cs`:134 | `Period` is `{ get; }`, set once in the constructor from `template.PathTime` (`ShipTransport.cs`:51, :79). |
+
+Not accepted as safe: `Creature.Template` (can swap to `EventTemplate` and writes `_template` and `_templateVersion`, `Creature.cs`:96-112) and `WorldObject.X/Y/Z` of a live in-map object. Both were read in `PartyScenario.Run` and are now read inside `ReadAsync`.
+
 ### Suppressing a finding
 
 When a report is a false positive or the object is genuinely not world-owned yet (for example a player being loaded, not in a map), suppress that one statement with a reason; do not add a baseline line for new code:
@@ -65,6 +93,10 @@ an update field of an object in a map) calls `Map.CheckWorldThread`; off the wor
 `FaultLedger.Shared` as an `InvariantViolationException` with site `thread-affinity:WorldObject.MarkChanged`. It never throws. The ledger signature is built from the stack at the detection point (the exception is never thrown, so `FaultLedger.Record(site, exception, StackTrace)` is given the captured stack; methods marked `[StackTraceHidden]` are skipped), so it names the code that made the change. The count is the `arcanecore_thread_affinity_violations_total` metric. The pass
 path is one thread-id compare, or a `[ThreadStatic]` read on parallel map threads (`WorldRuntime.IsWorldThread`; a world that has no running thread, as in most tests, passes). `ThreadAffinity.Enabled = false`
 turns the report off. `Map.OnObjectMoved` (every position change of an in-map object) makes the same check, site `thread-affinity:Map.OnObjectMoved`. Map add/remove and the other map mutators throw through `Map.EnsureWorldThread`.
+
+### StackTraceHidden and the fault ledger
+
+The `WorldObject` field setters (`SetUInt32`, `SetInt32`, `SetUInt64`, `SetFloat`, `SetByte`, `SetUInt16`, `SetFlag`, `RemoveFlag`, `ForceFieldUpdate`, `MarkChanged`) and `Map.CheckWorldThread` are `[StackTraceHidden]` so the backstop's own frames never name the call site. `FaultLedger` honours it everywhere it reads frames (`CollectFrames`, used for the signature of a thrown exception, for a never-thrown invariant report, and by `CurrentStackFrames` for crash hooks): a frame whose method or declaring type carries the attribute is skipped before the first `SignatureFrames` (3) are taken. Effects: (1) a fault thrown from inside one of those methods, for example a handler of an update-field change event, is attributed to the first visible `ArcaneCore.*` caller, so its displayed `Type.Method` frames and its signature id (the first 8 bytes of the SHA-256 of `type|site|frame1|frame2|frame3`) differ from what a build without the attribute produced; a signature id recorded before the attribute landed and the same fault after it are two ledger entries, and any saved id (alerts, dashboards, `show` bookmarks) for such a fault goes stale once. (2) Faults that never pass through those methods keep their ids. (3) Runtime thread-affinity reports (`thread-affinity:WorldObject.MarkChanged`, `thread-affinity:Map.OnObjectMoved`) take their frames from the stack captured at detection with the hidden methods removed, so the signature is the off-thread caller plus its callers, which is the point. (4) The attribute also removes the frames from `Exception.ToString()` and `StackTrace.ToString()` text, so logs show the same caller-first view. The attribute does not change behaviour, inlining or the stack itself.
 
 ## Stale entity references (design, not implemented)
 

@@ -475,7 +475,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     private TicketFacts Gather(GmTicketRecord ticket, out Player? player)
     {
         CharacterIdentity? identity = IdentityOf(ticket);
-        string name = identity?.Name ?? "#" + ticket.CharacterId.ToString(CultureInfo.InvariantCulture);
+        string name = identity?.Name ?? ("#" + ticket.CharacterId.ToString(CultureInfo.InvariantCulture));
         player = identity is null ? null : _world?.FindOnlinePlayer(identity.Name);
         string? quest = QuestNote(ticket.Text, player);
         if (player is null)

@@ -6,6 +6,12 @@ using ArcaneCore.Kernel.Configuration.Conf;
 
 namespace ArcaneCore.World.Tests.Docs;
 
+/// <summary>
+/// One key of an entry of a list or map option (<c>Auth:IntegrityHashes:0:Build</c> is the field <c>Build</c>). <see cref="Name"/> is relative to the entry,
+/// nested groups joined with ':'; <see cref="Default"/> is the display text of the field of a freshly constructed entry.
+/// </summary>
+internal sealed record ConfigElementField(string Name, string TypeText, string Default, string Meaning);
+
 /// <summary>A configuration section and the options class bound from it.</summary>
 internal sealed record ConfigSection(string Path, Type Type);
 
@@ -27,7 +33,8 @@ internal sealed record ConfigEntry(
     IReadOnlyList<string>? EnumValues = null,
     string? RawDefault = null,
     IReadOnlyList<ConfDefaultEntry>? DefaultEntries = null,
-    string? AllowedOverride = null);
+    string? AllowedOverride = null,
+    IReadOnlyList<ConfigElementField>? ElementFields = null);
 
 /// <summary>The catalog and every reason it could not be built cleanly (an empty list means complete).</summary>
 internal sealed record ConfigCatalogResult(IReadOnlyList<ConfigEntry> Entries, IReadOnlyList<string> Problems);
@@ -142,6 +149,12 @@ internal static class ConfigCatalog
                 // An option's real range (ConfigAllowedAttribute) replaces the type's own in the "Allowed" line.
                 if (property.GetCustomAttribute<ArcaneCore.Kernel.Configuration.ConfigAllowedAttribute>(inherit: false) is { } allowed)
                     leaf = leaf with { AllowedOverride = allowed.Allowed };
+                // A list or map of groups: the fields of one entry are keys too, and an operator needs their names, types and meanings.
+                if (leaf.Kind != ConfKey.Scalar && leaf.ElementType == "object")
+                {
+                    leaf = leaf with { ElementFields = ElementFieldsOf(ElementTypeOf(propertyType, leaf.Kind == ConfKey.Map), path, sourceSummary, overrides, problems) };
+                }
+
                 entries.Add(leaf);
                 continue;
             }
@@ -151,6 +164,164 @@ internal static class ConfigCatalog
             {
                 Walk(propertyType, child, path, section, depth + 1, propertyDaemons, sourceSummary, overrides, skipped, reload, entries, problems);
             }
+        }
+    }
+
+    /// <summary>
+    /// The keys of one entry of a list or map option: the public properties the binder can set (collections too), nested groups joined with ':'.
+    /// Defaults come from a freshly constructed entry. A type without a parameterless constructor (a positional record) is built by the binder
+    /// through its constructor, and an entry with no key for a parameter that has no default value cannot be built, so such a field shows as "required";
+    /// a parameter with a default value shows that value, and a property outside the constructor shows what the constructor leaves in it. The binder
+    /// drops such an entry silently rather than failing (AuctionHouseConfigTests), so a list with a required field needs a config check that refuses
+    /// the entry (Production_EveryListWithARequiredEntryField_HasACheckThatRefusesTheEntry). Every field needs a summary or an override, like any other key.
+    /// </summary>
+    private static IReadOnlyList<ConfigElementField> ElementFieldsOf(
+        Type? element,
+        string path,
+        Func<Type, string, string?> sourceSummary,
+        IReadOnlyDictionary<string, string> overrides,
+        List<string> problems)
+    {
+        var fields = new List<ConfigElementField>();
+        if (element is null)
+        {
+            problems.Add($"{path}: the element type of this list or map cannot be determined, so its entry fields cannot be documented");
+            return fields;
+        }
+
+        Type entry = Nullable.GetUnderlyingType(element) ?? element;
+        WalkElement(entry, TryInstance(entry, path, problems), string.Empty, 0, path, sourceSummary, overrides, fields, problems);
+        if (fields.Count == 0)
+        {
+            problems.Add($"{path}: the entry type {element.Name} has no settable public property, so there are no entry fields to document");
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// The constructor parameters the configuration binder fills for a class that has no parameterless constructor (by name, ignoring case), or null
+    /// when the binder uses the properties, or when the class has no single public constructor (<see cref="TryInstance"/> reports that as a problem).
+    /// A parameter with no default value and no key stops the entry being built; the binder then drops the entry without an error.
+    /// </summary>
+    private static Dictionary<string, ParameterInfo>? ConstructorParametersOf(Type type)
+    {
+        if (type.IsValueType || type.IsAbstract || type.IsInterface || type.GetConstructor(Type.EmptyTypes) is not null)
+        {
+            return null;
+        }
+
+        ConstructorInfo[] constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        return constructors.Length != 1 ? null : constructors[0].GetParameters().Where(p => p.Name is not null).ToDictionary(p => p.Name!, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A real entry to read defaults from. A type without a parameterless constructor is built through its one public constructor, parameters at their
+    /// default values or at zero, empty or null, so the initializer of a property outside the constructor has run and its value is true. A type that
+    /// cannot be built this way is a problem, not a row of zeros. Limit: an initializer that derives a value from a required parameter shows it derived from that zero.
+    /// </summary>
+    private static object? TryInstance(Type type, string path, List<string> problems)
+    {
+        if (type.IsAbstract || type.IsInterface)
+        {
+            return null;
+        }
+
+        if (type.GetConstructor(Type.EmptyTypes) is not null || type.IsValueType)
+        {
+            try
+            {
+                return Activator.CreateInstance(type);
+            }
+            catch (Exception ex) when (ex is TargetInvocationException or MissingMethodException)
+            {
+                return null;
+            }
+        }
+
+        ConstructorInfo[] constructors = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        if (constructors.Length != 1)
+        {
+            problems.Add($"{path}: the entry type {type.Name} has {constructors.Length} public constructors and none without parameters, so its defaults cannot be read");
+            return null;
+        }
+
+        try
+        {
+            object?[] arguments = [.. constructors[0].GetParameters().Select(PlaceholderFor)];
+            return constructors[0].Invoke(arguments);
+        }
+        catch (TargetInvocationException ex)
+        {
+            problems.Add($"{path}: constructing the entry type {type.Name} with empty values threw {ex.InnerException?.GetType().Name}, so its defaults cannot be read");
+            return null;
+        }
+    }
+
+    private static object? PlaceholderFor(ParameterInfo parameter)
+    {
+        if (parameter.HasDefaultValue)
+        {
+            return parameter.DefaultValue;
+        }
+
+        return parameter.ParameterType == typeof(string) ? string.Empty : parameter.ParameterType.IsValueType ? Activator.CreateInstance(parameter.ParameterType) : null;
+    }
+
+    private static void WalkElement(
+        Type type,
+        object? instance,
+        string prefix,
+        int depth,
+        string path,
+        Func<Type, string, string?> sourceSummary,
+        IReadOnlyDictionary<string, string> overrides,
+        List<ConfigElementField> fields,
+        List<string> problems)
+    {
+        if (depth > MaxDepth)
+        {
+            problems.Add($"{path}: entry fields nested deeper than {MaxDepth} levels (a cycle?)");
+            return;
+        }
+
+        Dictionary<string, ParameterInfo>? constructorParameters = ConstructorParametersOf(type);
+        foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            if (property.GetIndexParameters().Length > 0 || property.GetMethod?.IsPublic != true)
+            {
+                continue;
+            }
+
+            string name = prefix.Length == 0 ? property.Name : prefix + ":" + property.Name;
+            Type propertyType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            bool settable = property.SetMethod?.IsPublic == true;
+            if (IsLeaf(propertyType))
+            {
+                if (!settable && !IsCollection(propertyType))
+                {
+                    continue;
+                }
+
+                object? value = instance is null ? null : property.GetValue(instance);
+                string meaning = MeaningOf(property, path + ":" + name, sourceSummary, overrides, problems);
+                if (propertyType.IsEnum)
+                {
+                    meaning += (meaning.Length > 0 ? " " : string.Empty) + "Values: " + string.Join(", ", Enum.GetNames(propertyType).Select(n => "`" + n + "`")) + ".";
+                }
+
+                string defaultText = FormatValue(value);
+                if (constructorParameters is not null && constructorParameters.TryGetValue(property.Name, out ParameterInfo? parameter))
+                {
+                    defaultText = parameter.HasDefaultValue ? FormatValue(parameter.DefaultValue) : "required";
+                }
+
+                fields.Add(new ConfigElementField(name, TypeText(property.PropertyType), defaultText, meaning));
+                continue;
+            }
+
+            object? child = instance is null ? null : property.GetValue(instance);
+            WalkElement(propertyType, child ?? TryInstance(propertyType, path + ":" + name, problems), name, depth + 1, path, sourceSummary, overrides, fields, problems);
         }
     }
 
@@ -295,9 +466,9 @@ internal static class ConfigCatalog
         return text.Trim();
     }
 
-    private static bool IsCollection(Type type) => type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type);
+    internal static bool IsCollection(Type type) => type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type);
 
-    private static bool IsLeaf(Type type) =>
+    internal static bool IsLeaf(Type type) =>
         type.IsPrimitive || type.IsEnum || IsCollection(type)
         || type == typeof(string) || type == typeof(decimal) || type == typeof(TimeSpan) || type == typeof(DateTime)
         || type == typeof(DateTimeOffset) || type == typeof(Guid) || type == typeof(Uri);
