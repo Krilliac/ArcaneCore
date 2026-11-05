@@ -239,6 +239,33 @@ public sealed class FleetResetTests
         Assert.Equal(4242UL, Assert.Single(await store.LoadAllAsync(), r => r.BotId == ids[0]).OtherGuid);
     }
 
+    [Fact]
+    public async Task ABotWhoseResetLostALaterCharacter_IsForgottenButNotRetired_SoTheFinishedDeletionStillRemovesItsRows()
+    {
+        var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        Guid[] ids = await CreateBotsAsync(world, 1, started: 0);
+        ManagedPlayerbot bot = Assert.Single(await world.Owners.LoadAllAsync());
+        var memory = world.Bots.Social.Memory;
+        await using AsyncServiceScope scope = world.Host.WorldServices.CreateAsyncScope();
+
+        // The reset deleted the bot's first character, then lost the second: the bot is listed as forgotten but still exists.
+        await world.Bots.ForgetRelationsAsync(scope.ServiceProvider, [(ids[0], new[] { bot.CharacterId })], new HashSet<Guid> { ids[0] });
+
+        // It later gets a new relation and its rows are stored; deleting it for real must still clear them (a retired bot would be skipped).
+        memory.Note(ids[0], bot.CharacterId, 4242, false, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        await store.ReplaceAsync(ids[0], memory.Snapshot(ids[0]));
+        Assert.Contains(await store.LoadAllAsync(), r => r.BotId == ids[0]);
+
+        await world.Bots.ForgetRelationsAsync(scope.ServiceProvider, ids[0], bot.CharacterId);
+
+        Assert.DoesNotContain(await store.LoadAllAsync(), r => r.BotId == ids[0]);
+    }
+
     private sealed class OverlapStore : IPlayerbotRelationStore
     {
         private readonly object _gate = new();

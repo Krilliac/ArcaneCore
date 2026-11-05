@@ -120,6 +120,23 @@ public sealed class ManagedPlayerbotHomeTests
     }
 
     [Fact]
+    public void SameHomeArea_IgnoresTheTimeItWasSet_AndSeesEveryOtherChange()
+    {
+        var id = Guid.NewGuid();
+        var home = new PlayerbotHome(id, 7, 0, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind", 1000);
+
+        Assert.True(ManagedPlayerbotFeature.SameHomeArea(home, home with { SetUnix = 2000 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { MapId = 1 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { X = -8913f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Y = 555f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Z = 94f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Radius = 301f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = "Ironforge" }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = null }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { ZoneClipped = false }));
+    }
+
+    [Fact]
     public async Task SetHome_PrefixSelector_AnchorsEveryMatchingBot_AndReportsTheCount()
     {
         var homes = new MemoryHomeStore();

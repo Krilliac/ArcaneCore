@@ -22,7 +22,8 @@ public abstract class PlayerbotRunClearWorldTestBase
 
     /// <summary>
     /// Puts <paramref name="id"/> on the RFC exit point with its trigger tracker already inside the volume (so standing still fires nothing),
-    /// at full health, and has every live trash creature hit it once for <paramref name="damage"/> so it is engaged.
+    /// at full health, and has every live trash creature hit it once for <paramref name="damage"/> so it is engaged. The engagement is synthetic:
+    /// the damage is dealt directly, not by the trash fighting its way to the bot.
     /// </summary>
     private protected static Task StandEngagedOnTheStuckExit(GroupTestWorld world, Guid id, uint damage = 1)
         => world.OnWorldAsync(() =>

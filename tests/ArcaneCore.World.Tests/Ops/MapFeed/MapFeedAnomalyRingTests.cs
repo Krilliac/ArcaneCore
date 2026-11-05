@@ -249,7 +249,14 @@ public sealed class MapFeedAnomalyRingTests
                 }
             }
         }, TaskCreationOptions.LongRunning);
-        await readerRunning.Task;
+
+        // A reader that faults before its first query would never complete readerRunning: wait for whichever finishes first and surface its exception.
+        Task first = await Task.WhenAny(readerRunning.Task, reader);
+        if (ReferenceEquals(first, reader))
+        {
+            await reader;
+            Assert.Fail("the reader stopped before its first query");
+        }
 
         Task[] writers = [.. Enumerable.Range(0, Threads).Select(t => Task.Run(() =>
         {
@@ -259,8 +266,15 @@ public sealed class MapFeedAnomalyRingTests
                 ring.Offer(Notice(text, text, origin: world));
             }
         }))];
-        await Task.WhenAll(writers);
-        await stop.CancelAsync();
+        try
+        {
+            await Task.WhenAll(writers);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+        }
+
         await reader;
 
         Assert.Equal(Threads * PerThread, ring.Accepted);

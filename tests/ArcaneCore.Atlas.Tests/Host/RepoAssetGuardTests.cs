@@ -254,7 +254,8 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     {
         try
         {
-            var info = new ProcessStartInfo("git", ["--version"]) { RedirectStandardOutput = true, UseShellExecute = false };
+            // Routed through GitStartInfo so the probe runs with the same scrubbed environment as every other git call here.
+            ProcessStartInfo info = GitStartInfo(System.IO.Path.GetTempPath(), null, "--version");
             using Process process = Process.Start(info)!;
             process.StandardOutput.ReadToEnd();
             process.WaitForExit();
@@ -270,7 +271,10 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     private static readonly string[] GitRedirectingVariables =
     [
         "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES",
+        "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
     ];
+
+    private static readonly string[] FsMonitorOff = ["-c", "core.fsmonitor=false"];
 
     /// <summary>
     /// A git process rooted at <paramref name="workDir"/> with every redirecting variable removed. <paramref name="pollution"/> simulates a
@@ -278,7 +282,8 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
     /// </summary>
     private static ProcessStartInfo GitStartInfo(string workDir, IReadOnlyDictionary<string, string>? pollution, params string[] arguments)
     {
-        var info = new ProcessStartInfo("git", ["-C", workDir, .. arguments])
+        // core.fsmonitor from an inherited config would run a program during update-index, so every call pins it off on the command line.
+        var info = new ProcessStartInfo("git", [.. FsMonitorOff, "-C", workDir, .. arguments])
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
@@ -341,6 +346,11 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
             ["GIT_INDEX_FILE"] = System.IO.Path.Combine(decoyGit, "index"),
             ["GIT_OBJECT_DIRECTORY"] = System.IO.Path.Combine(decoyGit, "objects"),
             ["GIT_COMMON_DIR"] = decoyGit,
+            ["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = System.IO.Path.Combine(decoyGit, "objects"),
+            ["GIT_CEILING_DIRECTORIES"] = decoyDirectory.Path,
+            ["GIT_CONFIG_COUNT"] = "1",
+            ["GIT_CONFIG_KEY_0"] = "core.fsmonitor",
+            ["GIT_CONFIG_VALUE_0"] = "git-guard-test-no-such-hook",
         };
 
         List<string>? listed = ListInvalidUtf8Repository(directory.Path, pollution);
@@ -351,6 +361,20 @@ public sealed class RepoAssetGuardTests(ITestOutputHelper output)
         string objects = System.IO.Path.Combine(decoyGit, "objects");
         Assert.Empty(Directory.EnumerateFiles(objects, "*", SearchOption.AllDirectories));
         Assert.Empty(RunGit(decoyDirectory.Path, null, null, "ls-files", "-z"));
+    }
+
+    [Fact]
+    public void EveryGitCall_PinsFsMonitorOff_AndScrubsTheRedirectingVariables()
+    {
+        var pollution = new Dictionary<string, string> { ["GIT_CEILING_DIRECTORIES"] = "x", ["GIT_ALTERNATE_OBJECT_DIRECTORIES"] = "y", ["GIT_CONFIG_COUNT"] = "1", ["KEEP_ME"] = "z" };
+
+        ProcessStartInfo info = GitStartInfo(System.IO.Path.GetTempPath(), pollution, "status");
+
+        Assert.Equal(["-c", "core.fsmonitor=false", "-C", System.IO.Path.GetTempPath(), "status"], info.ArgumentList.ToArray());
+        Assert.False(info.Environment.ContainsKey("GIT_CEILING_DIRECTORIES"));
+        Assert.False(info.Environment.ContainsKey("GIT_CONFIG_COUNT"));
+        Assert.False(info.Environment.ContainsKey("GIT_ALTERNATE_OBJECT_DIRECTORIES"));
+        Assert.Equal("z", info.Environment["KEEP_ME"]);
     }
 
     [Fact]

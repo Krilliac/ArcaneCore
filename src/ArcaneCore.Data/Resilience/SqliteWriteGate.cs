@@ -412,7 +412,7 @@ public sealed class SqliteWriteGate
 
         hold.WaitedMs = waited;
         Volatile.Write(ref _current, hold); // last of the hold's own state: nothing after this can throw and leave an orphan hold published
-        if (contended) Volatile.Write(ref _pendingGrantSinceMs, double.NaN); // published: the grant is taken up (a next hand-off racing this may be cleared early; cosmetic)
+        if (contended) Volatile.Write(ref _pendingGrantSinceMs, double.NaN); // the waiter resumed and now holds the gate, so the pending-grant age is cleared. A later hand-off to another waiter can publish its own age just before this write and lose it, which only hides the age on the status line
         return hold;
     }
 

@@ -57,6 +57,20 @@ public sealed class DebugToolsCommandTests
     }
 
     [Fact]
+    public void TruncateFault_KeepsAShortFault_ShowsADashForNone_AndCutsALongOneTo120Characters()
+    {
+        Assert.Equal("-", DebugToolsCommands.TruncateFault(null));
+        Assert.Equal("short", DebugToolsCommands.TruncateFault("short"));
+        string exact = new('a', 120);
+        Assert.Equal(exact, DebugToolsCommands.TruncateFault(exact));
+
+        string cut = DebugToolsCommands.TruncateFault(new string('b', 121));
+
+        Assert.Equal(120, cut.Length);
+        Assert.Equal(new string('b', 117) + "...", cut);
+    }
+
+    [Fact]
     public async Task BadArgumentsShowTheSyntax()
     {
         await using WorldTestHost host = WorldTestHost.Start();
