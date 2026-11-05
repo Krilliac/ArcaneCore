@@ -118,6 +118,15 @@ public sealed partial class PlayerbotGroupCoordinator
         int size = sameGoal.Max(w => w.Waiting.Goal.Size);
         List<PlayerbotGroupCandidate> candidates = BuildCandidates(sameGoal, goal);
         if (!CanReach(player, goal) || !candidates.Exists(c => c.BotId == botId)) return new(PlayerbotVolunteerOutcome.CannotPlace);
+        if (PlanForVolunteer(player, candidates, size, goal, botId, role) is { } plan && (!goal.InInstance || PlanAnchored(plan)))
+        {
+            // A group with a real player takes no slot from the bots' cap: it forms now and the leader invites on the forming ticks.
+            _volunteers.Remove(player.Guid);
+            Form(goal with { Size = size }, plan);
+            return new(PlayerbotVolunteerOutcome.Ready);
+        }
+
+        // The dry run came first: the role answer is for a player the coordinator could not place (a dual-role bot may tank or heal, so the roles are only counted once placing failed).
         if (size - candidates.Count <= 1)
         {
             (int tanks, int healers) = PlayerbotRecruitment.MissingRoles(candidates, size, _options.Groups);
@@ -132,14 +141,6 @@ public sealed partial class PlayerbotGroupCoordinator
                 };
                 if (!fills) return new(PlayerbotVolunteerOutcome.Role, Needed: tanks > 0 ? PlayerbotGroupRole.Tank : PlayerbotGroupRole.Healer);
             }
-        }
-
-        if (PlanForVolunteer(player, candidates, size, goal, botId, role) is { } plan && (!goal.InInstance || PlanAnchored(plan)))
-        {
-            // A group with a real player takes no slot from the bots' cap: it forms now and the leader invites on the forming ticks.
-            _volunteers.Remove(player.Guid);
-            Form(goal with { Size = size }, plan);
-            return new(PlayerbotVolunteerOutcome.Ready);
         }
 
         // Too few bots is the one reason that time can mend; any other (the level range, the roles) is not promised away.

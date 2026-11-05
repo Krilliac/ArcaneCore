@@ -154,6 +154,36 @@ public sealed class PlayerbotVolunteerWorldTests
     }
 
     [Fact]
+    public async Task ADualRoleBot_CountedAsTheTank_DoesNotRefuseAWarrior_WhoTanksWhileTheBotHeals()
+    {
+        // An unspecced paladin has the healer talent role but can tank: the role count calls it the tank, so only the dry run knows the warrior tanks and the paladin heals.
+        GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Still(options);
+            options.Groups.MinTank = 1;
+            options.Groups.MinHealer = 1;
+        });
+        await using (world)
+        {
+            var paladin = await world.AddBotAsync("Volpally", Human, 2, 10, [LesserHeal]);
+            await world.AddBotAsync("Volmage", Human, Mage, 10, [Fireball]);
+            Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.WaitingBots.Count() == 2), await world.TraceAsync());
+            await world.World.PrepareCharacterAsync("VOLUNTEERONE", PlayerName, AccountSecurity.Player);
+            await using WorldTestClient player = await world.World.EnterWorldAsync("VOLUNTEERONE", PlayerName, AccountSecurity.Player);
+            await SetLevelAsync(world, 9);
+
+            PlayerbotVolunteerResult result = await world.OnWorldAsync(() =>
+                world.Coordinator.Volunteer(paladin.Id, world.World.Host.World.FindOnlinePlayer(PlayerName)!, PlayerbotGroupRole.Tank));
+            Assert.Equal(PlayerbotVolunteerOutcome.Ready, result.Outcome);
+            Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+            var real = world.Coordinator.Groups.SelectMany(g => g.Members).Single(m => m.Real);
+            var bot = world.Coordinator.Groups.SelectMany(g => g.Members).Single(m => m.Name == "Volpally");
+            Assert.Equal(PlayerbotGroupRole.Tank, real.Role);
+            Assert.Equal(PlayerbotGroupRole.Healer, bot.Role);
+        }
+    }
+
+    [Fact]
     public async Task AStatedRole_DecidesWhetherThePlayerFillsATankOnlyPlace()
     {
         // MinTank 2: the warrior bot is one tank and the priest cannot tank, so the group's last place is a tank's.
