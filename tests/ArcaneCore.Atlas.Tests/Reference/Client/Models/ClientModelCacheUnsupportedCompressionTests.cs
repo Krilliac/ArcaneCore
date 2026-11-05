@@ -43,5 +43,6 @@ public sealed class ClientModelCacheUnsupportedCompressionTests
         Assert.False(load.IsOk);
         Assert.NotNull(load.Problem);
         Assert.Equal(ModelProblemKind.Rejected, load.Problem.Kind);
+        Assert.Contains("not supported", load.Problem.Message, StringComparison.Ordinal);
     }
 }

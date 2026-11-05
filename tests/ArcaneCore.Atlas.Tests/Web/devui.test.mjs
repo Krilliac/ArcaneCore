@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { Emitter } from '../../../tools/ArcaneCore.Atlas/Web/js/util.js';
 import { SHORTCUTS } from '../../../tools/ArcaneCore.Atlas/Web/js/hotkeys.js';
 import { ActionLogModel } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-log.js';
 import { confirmDialog, targetLines } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-confirm.js';
@@ -357,6 +358,9 @@ function fakeLive(connected = false) {
                 handler(status);
             }
         },
+        applyStatus(status) {
+            this.set(status);
+        },
         get listeners() {
             return handlers.size;
         },
@@ -397,6 +401,75 @@ test('a feed the daemon closed is reconnected with growing waits; a disconnect t
 
     reconnect.stop();
     assert.equal(live.listeners, 0);
+});
+
+test('a page that starts unseeded while the host feed is up learns it from live.status, and reconnects to the same pid when it is lost', async () => {
+    const timers = [];
+    const calls = [];
+    const live = fakeLive(false);
+    const hello = new Emitter();
+    let hostStatus = { connected: true, pid: 4242, detail: 'connected to process 4242' };
+    const app = {
+        live,
+        events: hello,
+        hasCommand: () => true,
+        runCommand: async (name, args) => {
+            calls.push({ name, args });
+            if (name === 'live.status') {
+                return { ok: true, data: hostStatus };
+            }
+            return { ok: false, error: { message: 'no feed' } };
+        },
+    };
+    const reconnect = new FeedReconnect({ app, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {} });
+    reconnect.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(live.status.connected, true, 'the host state was applied without a live.status event');
+
+    live.set({ connected: false, detail: 'the server closed the connection (idle)' });
+    assert.equal(timers.length, 1, 'the loss of a feed this page only learned about from the host is answered');
+    timers[0].fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls.find((c) => c.name === 'live.connect').args, { pid: 4242 }, 'the process that was lost, not whichever is left');
+
+    // A WebSocket drop across the loss: the new hello re-reads the host, which now reports the feed gone.
+    reconnect.stop();
+    const second = fakeLive(false);
+    const app2 = { ...app, live: second, events: hello };
+    hostStatus = { connected: true, pid: 4242, detail: 'connected' };
+    const r2 = new FeedReconnect({ app: app2, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {} });
+    r2.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    const before = timers.length;
+    hostStatus = { connected: false, pid: null, detail: 'the connection has ended' };
+    hello.emit('connection', { state: 'open' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(timers.length, before + 1, 'a hello after the feed ended while the socket was down starts the reconnect');
+    r2.stop();
+});
+
+
+test('giving up on the feed tells the operator once', async () => {
+    const timers = [];
+    const toasts = [];
+    const live = fakeLive(true);
+    const app = {
+        live,
+        hasCommand: (name) => name === 'live.connect',
+        toast: (message, kind) => toasts.push({ message, kind }),
+        runCommand: async () => ({ ok: false, error: { message: 'no feed' } }),
+    };
+    const reconnect = new FeedReconnect({ app, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {} });
+    reconnect.start();
+    live.set({ connected: false, detail: 'ended' });
+    for (let i = 0; i < RETRY_DELAYS_MS.length; i++) {
+        assert.equal(toasts.length, 0, 'still retrying');
+        timers[i].fn();
+        await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(toasts.length, 1);
+    assert.equal(toasts[0].kind, 'warn');
+    reconnect.stop();
 });
 
 test('a reconnect that works resets the attempts, and the pure rule never reconnects a feed that was not connected before', () => {

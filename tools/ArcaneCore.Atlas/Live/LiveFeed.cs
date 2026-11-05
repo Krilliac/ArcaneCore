@@ -106,7 +106,8 @@ public sealed class LiveFeed : IDisposable
 
             // One read of IsOpen decides both the retire and the answer, so when the connection ended through the reader's close path the
             // dead connection is retired (entities emptied) before false is returned: a caller that reads IsConnected before the store never
-            // sees "disconnected" next to stale entities. A client-side disconnect or dispose detaches the session first, so a narrow window remains there.
+            // sees "disconnected" next to stale entities. A client-side disconnect, a dispose and a replacement that closed meanwhile all retire
+            // the installed connection before they detach it, so no window remains there.
             bool open = session is { IsOpen: true };
             if (!open && session is not null)
             {
@@ -119,6 +120,12 @@ public sealed class LiveFeed : IDisposable
 
     /// <summary>Test hook invoked after hello succeeds and before the session swap lock is taken.</summary>
     internal Action<FeedSession>? BeforeSwap { get; set; }
+
+    /// <summary>
+    /// Test hook invoked right after the installed connection was retired and before it is detached or replaced, on the connect, disconnect
+    /// and dispose paths alike: the connection is still installed and its entities are already gone.
+    /// </summary>
+    internal Action? AfterRetire { get; set; }
 
     /// <summary>Test hook invoked at the start of the close notice, after the session ended and before its entities are retired.</summary>
     internal Action<FeedSession>? BeforeClose { get; set; }
@@ -172,11 +179,12 @@ public sealed class LiveFeed : IDisposable
 
             BeforeSwap?.Invoke(session);
 
-            if (!session.IsOpen)
-            {
-                // Closed before the swap: the previous connection's entities are retired while it is still installed, not after it is detached.
-                RetireCurrent();
-            }
+            // The previous connection's entities are retired while it is still installed, never after it is detached: a close of the new
+            // connection can land at any point before the swap lock below, and the closed path then detaches with nothing left to retire.
+            // Frames of the previous connection that arrive in this short gap are dropped, which the swap's own store clear would do anyway.
+            // The lock order stays _state and _apply never nested: OnFrame publishes under _apply.
+            RetireCurrent();
+            AfterRetire?.Invoke();
 
             FeedSession? previous = null;
             bool disposedMeanwhile;
@@ -263,6 +271,7 @@ public sealed class LiveFeed : IDisposable
         {
             // Retired before it is detached: once _session is null nobody could tell which entities belong to the closing connection.
             RetireCurrent();
+            AfterRetire?.Invoke();
             FeedSession? session = Detach();
             lock (_state)
             {
@@ -777,6 +786,7 @@ public sealed class LiveFeed : IDisposable
 
         _lifetime.Cancel();
         RetireCurrent();
+        AfterRetire?.Invoke();
         FeedSession? session = Detach();
         lock (_apply)
         {

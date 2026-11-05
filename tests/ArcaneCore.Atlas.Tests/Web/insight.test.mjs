@@ -400,7 +400,6 @@ test('the Insight tab and the perf HUD in a real browser', { skip }, async (t) =
         assert.ok(report, 'no perf.report arrived');
         assert.ok(Object.keys(report.args.stats).length > 0);
         assert.ok(Object.keys(report.args.stats).every((k) => REPORT_KEYS.includes(k)), JSON.stringify(report.args));
-        assert.ok(!('modelGroups' in report.args.stats) && !('instances' in report.args.stats), 'only the pinned report keys are sent');
         await page.press('p');
         await page.waitFor('document.querySelector(".perfhud").hidden', 'the HUD to close');
     });

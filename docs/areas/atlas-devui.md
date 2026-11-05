@@ -71,7 +71,11 @@ overlay layer. It refreshes on its own timer at no more than 2 Hz and stops when
 
 `devui-reconnect.js` brings the map feed back when the daemon closed it (an idle timeout, an error, a restart): it retries `live.connect`
 after 1, 2, 4, 8, 15 and 30 s and then stops. A `live.disconnect` the operator asked for and the swap of one connection for another are
-not retried. `api.js` reconnects only the WebSocket to the Atlas host. A failed `action.catalog` lookup is kept for the two seconds a good
+not retried. The feed state is read from the host (`live.status`) when the dev UI starts and on every WebSocket hello, because the host
+pushes `live.status` only on a change; a page opened, reloaded or reconnected while the feed is up would otherwise never arm the retry.
+The retry connects to the process it lost (`live.connect` with its pid), never to whichever other daemon is left, so a restarted daemon
+with a new pid is not followed; when the retries run out a toast says so. A feed that nobody subscribed to is closed by the daemon after
+about 120 s idle and reconnected again, so subscribe (or `live.disconnect`) if that cycle is not wanted. `api.js` reconnects only the WebSocket to the Atlas host. A failed `action.catalog` lookup is kept for the two seconds a good
 one is kept, and the host side keeps a refused `caps` answer for `LiveActions.CapsRefusalSeconds` (a missing connection is never kept). A
 debug overlay answer that arrives after the watch was stopped is removed again. The palette's target chip is read again on every
 keystroke and at submit, so it shows the target the typed line is sent with.
