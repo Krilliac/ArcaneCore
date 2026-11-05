@@ -182,6 +182,78 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
+    /// <summary>
+    /// A client movement block of a unit the controller possesses (a possessed creature or player), before it is stored. Judged by a
+    /// second set of checks kept on the controller's state, with a fresh baseline for each new unit, against the unit's own position,
+    /// speeds and flags (the server holds the capability flags of a possessed unit itself, so none is scored). A finding scores the
+    /// controller, whose client sent the block, and never rubberbands (the rubberband target is the controller's own position).
+    /// </summary>
+    public void BeforeControlledMovement(WorldSession session, Player controller, Unit unit, WorldOpcode opcode, in MovementInfo movement)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (IsExempt(session, controller))
+        {
+            return;
+        }
+
+        PlayerState state = StateOf(controller);
+        MovementAntiCheat checks = state.ControlledChecksFor(unit.Guid, _options);
+        // Judged against the position the server holds for the unit: the first block of a possession, and any block after the server moved
+        // the unit, is never a baseline of the client's own coordinates (that would let a client relocate the unit anywhere unscored).
+        checks.SeedFromServerPosition(unit.X, unit.Y, unit.Z, session.CurrentPacketReceivedMs, movement.Time);
+        float allowed;
+        bool alive;
+        bool rooted;
+        MovementFlags granted;
+        bool serverControlled;
+        if (unit is Player unitPlayer)
+        {
+            allowed = AllowedSpeed(unitPlayer);
+            alive = unitPlayer.IsAlive;
+            rooted = unitPlayer.IsRooted && unitPlayer.Movement.HasFlag(MovementFlags.Root) && !unitPlayer.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
+            granted = GrantedFlags(unitPlayer, state);
+            serverControlled = (unitPlayer.UnitFlags & UnitFlags.ServerControlled) != 0;
+        }
+        else
+        {
+            allowed = Math.Max(Math.Max(unit.RunSpeed, unit.WalkSpeed), Math.Max(Math.Max(unit.RunBackSpeed, unit.SwimSpeed), unit.SwimBackSpeed));
+            alive = false;
+            rooted = false;
+            granted = MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating | MovementFlags.Flying;
+            serverControlled = true;
+        }
+
+        TransportClaim claim = ClaimOf(unit, movement);
+
+        var sample = new MovementSample
+        {
+            Opcode = opcode,
+            Movement = movement,
+            ReceivedMs = session.CurrentPacketReceivedMs,
+            LatencyMs = session.LatencyMs,
+            AllowedSpeed = allowed,
+            Alive = alive,
+            Rooted = rooted,
+            GrantedFlags = granted,
+            ServerControlled = serverControlled,
+            Transport = claim,
+            Terrain = null,
+        };
+
+        _scratch.Clear();
+        checks.Observe(sample, _scratch);
+        RecordAll(session, controller, state, controlledUnit: unit.Guid.Low);
+    }
+
+    /// <summary>After a controlled unit's block was stored: the position the server now holds for it.</summary>
+    public void AfterControlledMovement(Player controller, Unit unit)
+    {
+        if (_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            state.ControlledChecksIfFor(unit.Guid)?.NotifyStored(unit.X, unit.Y, unit.Z);
+        }
+    }
+
     /// <summary>An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline.</summary>
     public void OnAcknowledgement(WorldSession session, Player player, uint clientTime, bool knockback)
     {
@@ -271,17 +343,25 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     // --- scoring and escalation ---------------------------------------------------------------------------------------
 
-    private void RecordAll(WorldSession session, Player player, PlayerState state)
+    private void RecordAll(WorldSession session, Player player, PlayerState state, uint controlledUnit = 0)
     {
         foreach (AntiCheatFinding finding in _scratch)
         {
-            Record(session, player, state, finding);
+            if (controlledUnit != 0)
+            {
+                string detail = string.Create(CultureInfo.InvariantCulture, $"controlled unit {controlledUnit}: {finding.Detail}");
+                Record(session, player, state, finding with { Detail = detail }, controlled: true);
+            }
+            else
+            {
+                Record(session, player, state, finding);
+            }
         }
 
         _scratch.Clear();
     }
 
-    private void Record(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding)
+    private void Record(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, bool controlled = false)
     {
         AntiCheatOptions options = _options;
         uint now = _world?.NowMs ?? 0;
@@ -320,11 +400,11 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
                 player.Name, session.AccountId, finding.Type, finding.Detail, finding.Weight, score, action, suppressed);
         }
 
-        Escalate(session, player, state, finding, score, action);
+        Escalate(session, player, state, finding, score, action, controlled);
     }
 
     /// <summary>The escalation itself (the fork's Apply, the only place a countermeasure happens), already capped by the ceiling.</summary>
-    private void Escalate(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, float score, AntiCheatAction action)
+    private void Escalate(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, float score, AntiCheatAction action, bool controlled = false)
     {
         AntiCheatOptions options = _options;
         uint now = _world?.NowMs ?? 0;
@@ -334,7 +414,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             AlertStaff(player, finding, score, action);
         }
 
-        if (action == AntiCheatAction.Rubberband && Elapsed(ref state.LastRubberbandMs, now, (uint)options.RubberbandIntervalMs))
+        if (action == AntiCheatAction.Rubberband && !controlled && Elapsed(ref state.LastRubberbandMs, now, (uint)options.RubberbandIntervalMs))
         {
             Rubberband(player, state);
         }
@@ -677,7 +757,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// map near the player; an elevator or tram (a TRANSPORT game object) must exist on the map near the player, measured from
     /// where its animation puts it now (its spawn without one); any other GUID is fake. Without a transport system or game object system the claim cannot be judged and is never scored.
     /// </summary>
-    private TransportClaim ClaimOf(Player player, in MovementInfo movement)
+    private TransportClaim ClaimOf(Unit player, in MovementInfo movement)
     {
         if (!movement.HasFlag(MovementFlags.OnTransport))
         {
@@ -741,6 +821,24 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         public uint? LastAlertMs;
 
         public uint? LastRubberbandMs;
+
+        private MovementAntiCheat? _controlled;
+        private ObjectGuid _controlledGuid;
+
+        /// <summary>The checks of the unit the player controls: new for each unit and each options object (a fresh baseline).</summary>
+        public MovementAntiCheat ControlledChecksFor(ObjectGuid unit, AntiCheatOptions options)
+        {
+            if (_controlled is null || _controlledGuid != unit || !ReferenceEquals(_controlled.Options, options))
+            {
+                _controlled = new MovementAntiCheat(options);
+                _controlledGuid = unit;
+            }
+
+            return _controlled;
+        }
+
+        /// <summary>The checks of that unit when they exist, else null.</summary>
+        public MovementAntiCheat? ControlledChecksIfFor(ObjectGuid unit) => _controlled is not null && _controlledGuid == unit ? _controlled : null;
 
         private MapAntiCheatTerrain? _terrain;
         private Map? _terrainMap;

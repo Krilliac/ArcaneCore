@@ -19,8 +19,9 @@ namespace ArcaneCore.Game.AntiCheat;
 /// <item>Geometry (only where the data is loaded): swimming with no water, climbing into the air, walking through walls.</item>
 /// </list>
 /// A new baseline is taken (the next packet is trusted) on the first packet, after <see cref="NotifyServerRelocation"/>
-/// (teleports, the server moving the player), after a knockback and after a gap longer than
-/// <see cref="AntiCheatOptions.BaselineGapMs"/>. A time skip is not a baseline: the step that spans it is judged against
+/// (teleports, the server moving the player) and after a knockback. A silence, however long, is not a baseline: the step after it is
+/// judged against the time that passed (the client's own elapsed time, capped by the receive interval plus the latency slack), so holding
+/// packets and then jumping buys only what the silence covers. A time skip is not a baseline either: the step that spans it is judged against
 /// real elapsed time (<see cref="NotifyTimeSkip(uint, uint, List{AntiCheatFinding})"/>). Pure and world-thread only.
 /// </summary>
 public sealed class MovementAntiCheat
@@ -136,6 +137,36 @@ public sealed class MovementAntiCheat
         }
     }
 
+    /// <summary>
+    /// For a unit the player controls instead of its own: make the position the server holds for the unit the baseline when there is
+    /// none yet, or when the server moved the unit since the last judged block. The client's block is then judged against that
+    /// position (with no client time elapsed, so only <see cref="AntiCheatOptions.TeleportDistance"/> of slack), never trusted.
+    /// </summary>
+    public void SeedFromServerPosition(float x, float y, float z, uint receivedMs, uint clientTime)
+    {
+        if (_hasLast && !_trustNext && _hasStored && MathF.Abs(x - _storedX) <= StoredPositionTolerance && MathF.Abs(y - _storedY) <= StoredPositionTolerance
+            && MathF.Abs(z - _storedZ) <= StoredPositionTolerance)
+        {
+            return;
+        }
+
+        NotifyServerRelocation();
+        _trustNext = false;
+        _hasLast = true;
+        _lastX = x;
+        _lastY = y;
+        _lastZ = z;
+        _lastReceived = receivedMs;
+        _lastOnTransport = false;
+        _lastLegitTransport = false;
+        _lastAirborne = false;
+        _lastMoveClientTime = clientTime;
+        _airborne = false;
+        _apexZ = z;
+        _knockback = false;
+        NotifyStored(x, y, z);
+    }
+
     /// <summary>After a block was stored: the position the server now holds (observers may have corrected the client's).</summary>
     public void NotifyStored(float x, float y, float z)
     {
@@ -180,8 +211,7 @@ public sealed class MovementAntiCheat
 
         long skipBudgetMs = _skipSpanBudgetMs;
         _skipSpanBudgetMs = 0;
-        bool gap = _hasLast && unchecked(now - _lastReceived) > (uint)Options.BaselineGapMs;
-        if (!_hasLast || _trustNext || gap)
+        if (!_hasLast || _trustNext)
         {
             Baseline(m, now, airborne, onTransport, sample.Transport != TransportClaim.Fake);
             if (!HasPositionFinding(findings, before))

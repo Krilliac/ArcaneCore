@@ -50,7 +50,7 @@ Weights follow the fork. A finding adds its weight (clamped 0..100) to the chara
 
 | Finding | Type | Weight | Rule | Never scored when |
 |---|---|---|---|---|
-| Speed | Speed | 5..25 by overshoot | the horizontal step exceeds the allowed speed × (1 + `SpeedTolerancePercent`) × budget + `SpeedSlackYards`. Budget = the client's own elapsed time, capped by the server's receive interval plus the latency slack (`LatencySlackMs` + 2 × ping average, at most `MaxLatencySlackMs`); for the step that spans a reported time skip, the client's elapsed time plus the skip the evidence supports (below), still capped by the receive interval plus the slack. Airborne steps get 25 % more | on a known transport (either packet), during a knockback, the step after a re-baseline, a step whose client time went back |
+| Speed | Speed | 5..25 by overshoot | the horizontal step exceeds the allowed speed × (1 + `SpeedTolerancePercent`) × budget + `SpeedSlackYards`. Budget = the client's own elapsed time, capped by the server's receive interval plus the latency slack (`LatencySlackMs` + 2 × ping average, at most `MaxLatencySlackMs`); for the step that spans a reported time skip, the client's elapsed time plus the skip the evidence supports (below), capped by the receive interval alone (no latency slack). Airborne steps get 25 % more | on a known transport (either packet), during a knockback, the step after a re-baseline, a step whose client time went back |
 | Teleport | Teleport | 25 | one step longer than `TeleportDistance` + speed × budget | same |
 | Fast clock | TimeSync | 5..25 (half the severity) | `SpeedHackDetector` fires | lag (the real side only gets longer), idle gaps; a reported time skip credits at most 250 ms of jitter per ten seconds |
 | Water walk / hover / slow fall | Flag | 25 / 25 / 15 | the flag without a grant, living players only | an aura that grants it is on the player, an order of that kind is pending (the client may assert the flag until it has the order), `AntiCheatFeature.Grant` |
@@ -92,9 +92,29 @@ slack, so packets sent before the ack are never judged by the new speed.
 
 **Re-baselines** (the next packet is trusted, the clock window forgotten): the first packet; a server relocation (the
 `TeleportService` events, and any time the stored position is not where the last judged packet left it: a charge, a
-graveyard, the end of a taxi flight); a knockback acknowledgement (no speed check until the landing or six seconds); a gap
-longer than `BaselineGapMs`. A time skip is **not** a re-baseline (below). Movement of a unit the player controls (a possessed creature or player) is not
-checked.
+graveyard, the end of a taxi flight); a knockback acknowledgement (no speed check until the landing or six seconds). A silence, however long (holding packets, AFK), and a time skip are **not**
+re-baselines: the step after them is judged against the time that passed, so holding packets and then jumping buys only what the
+silence covers (the client's own elapsed time, capped by the receive interval plus the latency slack).
+
+**Other paths that store a client block**: `CMSG_MOVE_NOT_ACTIVE_MOVER` is judged, because a block stored unjudged would be
+laundered by the next packet's re-baseline (the stored position no longer where the last judged packet left it). The
+sender's reject window and the moved player's taxi flight refuse the block for every unit, then the checks run (vmangos
+`HandleMoveNotActiveMoverOpcode`, MovementHandler.cpp:922-924, :937, :948). The solicited acknowledgements (speed, flag, root,
+knockback, turn rate) are stored after a clock check only, so the position they carry is not judged (vmangos runs the cheat
+tests on them, MovementHandler.cpp:492); a pending-order ack can move the server position and a later zero-distance
+heartbeat then goes unscored. Open follow-up.
+
+**A unit the player controls** (a possessed creature or player, moved by `MSG_MOVE_*` or given up by
+`CMSG_MOVE_NOT_ACTIVE_MOVER`) has its own checks on the controller's state: the unit's position, speeds and auras (a creature
+may also keep the hover, water walk, slow fall, levitate and fly flags the server already holds for it; a possessed player is
+judged on its own flags, root, death state and granted flags like any player), a fresh baseline for
+each new unit. The baseline is the position the server holds for the unit, never the client's first block: a first block any
+distance beyond `TeleportDistance` from the unit, and a block after the server moved the unit, is a teleport finding.
+There are no terrain checks and no knockback exemption for a controlled unit, and a time skip is not fed to its checks. Findings score the controller, whose client sent the block, with the detail "controlled unit N: ..."; the
+controller's exemption applies, and a controlled finding never rubberbands (the rubberband target is the controller's own).
+vmangos runs the controller's cheat tests on a possessed player and none on a creature (MovementHandler.cpp:318-325); here
+both are scored and neither is refused, so a creature's block is still stored as in vmangos. A creature's root is not judged
+(only a player acknowledges a root order). A creature aboard a ship is judged against the same transport claim as a player.
 
 **Time skips** (`CMSG_MOVE_TIME_SKIPPED`) buy no baseline and blind no clock check. The skip the evidence supports is the lag,
 capped by `MaxTimeSkipMs` and by the arrival silence before the skip (since the previous in-world packet the world handler
@@ -107,7 +127,7 @@ skip cadence under the spam threshold cannot neutralise a fast clock. The silenc
 cancelled trade and dropped packets are not stamped. The movement and acknowledgement timestamp checks keep running with no
 grace: a stalled client's clock only moves forward. A zero or impossible skip adds no budget or credit, but still counts toward spam. Not yet scored, pending a
 real-client capture of a stall (see [Open questions](#open-questions)): a client clock that does not reflect the skip, and a skip
-whose clock already includes the silence is not helped by a skip. A packet hold longer than `BaselineGapMs` is a free re-baseline with or without a skip (pre-existing, tracked separately).
+whose clock already includes the silence is not helped by a skip.
 
 **Terrain-dependent checks** run only where the data is in memory: the terrain tile with data for liquid and floor, the
 map's vmap tile (`VMapManager`, line of sight enabled) for all three. The probe never loads a tile; no data is never a finding.
@@ -187,7 +207,9 @@ reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds
   staff and GM mode are exempt, the GM alert reaches the staff online, the rubberband teleports back, the kick disconnects and
   the autoban writes a 7-day ban after an earlier one, the log coalesces into one row written in one batch, the ping feeds
   the latency average, and the commands. `AntiCheatConfigurationTests` (startup check, `.reload config`),
-  `Net/PacketBudgetTests` (drop and flood through a real session).
+  `Net/PacketBudgetTests` (drop and flood through a real session). `MovementBypassTests`: a `CMSG_MOVE_NOT_ACTIVE_MOVER`
+  naming the player itself is scored every time `CMSG_SET_ACTIVE_MOVER` re-arms it and is ignored on a taxi and inside the
+  reject window; a possessed creature's and a possessed player's blink is scored against the controller, not the victim.
 
 ## Open questions
 

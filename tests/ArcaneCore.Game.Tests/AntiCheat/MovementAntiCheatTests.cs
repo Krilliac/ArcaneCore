@@ -194,19 +194,36 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
-    public void APacketAfterTheBaselineGap_IsANewBaseline_SoTheSameBlinkIsNotScored()
+    public void ASilenceOverTheBaselineGap_IsNotAFreeBaseline_TheBlinkAfterItIsScored()
     {
-        // The default 3 s gap (AFK, a loading screen): the packet after it is trusted.
+        // 3.001 s of silence on the receive clock with only 500 ms on the client's clock: the step is judged, not trusted.
         var client = new Client();
         client.Send(WorldOpcode.MsgMoveStartForward);
         client.RunFor(4, Run);
-        Assert.Empty(client.Step(500, 80, receivedMs: 3001));
+        Assert.True(Has(client.Step(500, 80, receivedMs: 3001), AntiCheatViolation.Teleport));
 
-        // The same pause under a larger gap is an ordinary step, and the blink is scored.
-        var patient = new Client(new AntiCheatOptions { BaselineGapMs = 600_000 });
-        patient.Send(WorldOpcode.MsgMoveStartForward);
-        patient.RunFor(4, Run);
-        Assert.True(Has(patient.Step(500, 80, receivedMs: 3001), AntiCheatViolation.Teleport));
+        // Packets held 3.1 s with the client's clock running through the silence: the budget is those 3.1 s (about 22 yards at run speed
+        // plus the teleport distance), so a blink of 80 yards after the hold is still scored.
+        var holder = new Client();
+        holder.Send(WorldOpcode.MsgMoveStartForward);
+        holder.RunFor(4, Run);
+        Assert.True(Has(holder.Step(3100, 80), AntiCheatViolation.Teleport));
+    }
+
+    [Fact]
+    public void ASilenceOverTheBaselineGap_OfAnHonestClient_ScoresNothing()
+    {
+        // AFK for a minute, then walking on from where it stood: the clock covers the silence, the step is short.
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        client.Flags = MovementFlags.None;
+        client.Step(100, 0.2f, WorldOpcode.MsgMoveStop);
+        client.Step(60_000, 0, WorldOpcode.MsgMoveHeartbeat);
+        client.Flags = MovementFlags.Forward;
+        client.Step(100, 0.5f, WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        Assert.Empty(client.All);
     }
 
     [Fact]
