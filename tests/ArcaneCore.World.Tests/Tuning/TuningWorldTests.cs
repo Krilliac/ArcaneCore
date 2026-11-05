@@ -1,9 +1,12 @@
+using ArcaneCore.Data;
+using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.Kernel.Tuning;
 using ArcaneCore.World.Reload;
 using ArcaneCore.World.Tuning;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Tuning;
@@ -49,11 +52,16 @@ public sealed class TuningWorldTests
         Values = [.. TuningDefaults.Content.Values.Select(v => v.Quality == 0 && v.ItemClass == 0 ? v with { Percent = percent } : v)],
     };
 
-    private static (TuningFeature Feature, ReloadCoordinator Coordinator, MutableStore Store) Start(WorldTestHost host, TuningContent content)
+    private static (TuningFeature Feature, ReloadCoordinator Coordinator, MutableStore Store) Start(WorldTestHost host, TuningContent content, DatabaseUpgradeOptions? upgrade = null)
     {
         var store = new MutableStore(content);
         ServiceCollection services = new();
         services.AddSingleton<ITuningContentStore>(store);
+        if (upgrade is not null)
+        {
+            services.AddSingleton<IOptions<DatabaseOptions>>(Options.Create(new DatabaseOptions { Upgrade = upgrade }));
+        }
+
         ServiceProvider provider = services.BuildServiceProvider();
         var feature = new TuningFeature(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<TuningFeature>.Instance);
         feature.Attach(host.World);
@@ -80,6 +88,58 @@ public sealed class TuningWorldTests
             Assert.Equal(TuningDefaults.Content.RowCount, feature.Catalog.RowCount);
             Assert.Empty(feature.Catalog.Rejected);
             Assert.Equal(TuningCatalog.Shipped.ValueMatrix(), feature.Catalog.ValueMatrix());
+        }
+        finally
+        {
+            TuningCatalog.Replace(before);
+        }
+    }
+
+    [Theory]
+    [InlineData(SchemaPolicy.Never, false)]
+    [InlineData(SchemaPolicy.Always, true)]
+    [InlineData(SchemaPolicy.CreateOnly, true)]
+    public async Task Attach_DoesNotSeed_UnderPolicyNeverOrValidateOnly(SchemaPolicy policy, bool validateOnly)
+    {
+        // Never forbids the seed, and so does ValidateOnly under any other policy (a standby forced to validate-only).
+        TuningCatalog before = TuningCatalog.Active;
+        try
+        {
+            await using var host = WorldTestHost.Start();
+            var upgrade = new DatabaseUpgradeOptions { Policy = policy, ValidateOnly = validateOnly };
+            (TuningFeature feature, _, MutableStore store) = Start(host, TuningContent.Empty, upgrade);
+
+            Assert.Equal(0, store.SeedCalls);
+            Assert.Equal(0, store.Content.RowCount);
+            Assert.Equal(0, feature.Catalog.RowCount);
+        }
+        finally
+        {
+            TuningCatalog.Replace(before);
+        }
+    }
+
+    [Fact]
+    public void SeedsOnStart_FollowsThePolicyAndValidateOnly()
+    {
+        Assert.True(TuningFeature.SeedsOnStart(new SchemaUpgradeOptions { Policy = SchemaPolicy.Always }));
+        Assert.True(TuningFeature.SeedsOnStart(new SchemaUpgradeOptions { Policy = SchemaPolicy.CreateOnly }));
+        Assert.False(TuningFeature.SeedsOnStart(new SchemaUpgradeOptions { Policy = SchemaPolicy.Never }));
+        Assert.False(TuningFeature.SeedsOnStart(new SchemaUpgradeOptions { Policy = SchemaPolicy.Always, ValidateOnly = true }));
+        Assert.False(TuningFeature.SeedsOnStart(new SchemaUpgradeOptions { Policy = SchemaPolicy.CreateOnly, ValidateOnly = true }));
+    }
+
+    [Fact]
+    public async Task Attach_Seeds_UnderCreateOnly()
+    {
+        TuningCatalog before = TuningCatalog.Active;
+        try
+        {
+            await using var host = WorldTestHost.Start();
+            (_, _, MutableStore store) = Start(host, TuningContent.Empty, new DatabaseUpgradeOptions { Policy = SchemaPolicy.CreateOnly });
+
+            Assert.Equal(1, store.SeedCalls);
+            Assert.Equal(TuningDefaults.Content.RowCount, store.Content.RowCount);
         }
         finally
         {

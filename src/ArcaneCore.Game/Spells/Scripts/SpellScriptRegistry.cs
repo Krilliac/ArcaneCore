@@ -5,7 +5,7 @@ using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.Game.Spells.Scripts;
 
 /// <summary>
-/// The spell scripts by spell id. Two scripts claiming one spell id fail at construction (charter: fail closed), as does a script
+/// The spell scripts by spell id. Two scripts claiming one spell id fail at construction (fail closed), as does a script
 /// without a <see cref="SpellScriptAttribute"/> or with an empty id list.
 /// <para>
 /// The scripts given to the constructor are the built-in ones. A hot module adds, replaces and removes its own scripts at a tick boundary with

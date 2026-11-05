@@ -21,7 +21,7 @@ network is built.
 
 ## Where the rows come from
 
-- At world start an **empty** table is seeded with the shipped rows (the same rows as `sql/content/world/<provider>/0003_tuning_tables.sql`,
+- At world start an **empty** table is seeded with the shipped rows (only when `Database:Upgrade:Policy` is not `Never` and `Database:Upgrade:ValidateOnly` is off; otherwise apply the SQL file by hand) (the same rows as `sql/content/world/<provider>/0003_tuning_tables.sql`,
   which can also be applied by hand; see [shipped content SQL](../../sql/content/README.md)). A table that holds any row is left as the
   operator has it, so edit the rows to tune; they survive upgrades.
 - Every row is validated when it is loaded (quality and class in range, known loot source, min at most max, known ship means and access,
@@ -32,7 +32,7 @@ network is built.
 
 `.reload tuning` (also part of `.reload all`) reads and validates the tables off the world thread and swaps the catalog in between ticks.
 The auction bot rebuilds its pool and loot sources on its next action; ship routes, lift regions and the tram network are read from the new
-catalog on the next bot plan. `HotReload:EmptyTables = KeepLoaded` keeps the loaded rows only when every tuning table reads back empty; a single emptied table still applies. Otherwise a reload that reads a table back empty applies and switches that behaviour off (the success message names the empty tables); this lasts only until the next restart, which seeds an empty table again.
+catalog on the next bot plan. `HotReload:EmptyTables = KeepLoaded` keeps the loaded rows only when every tuning table reads back empty; a single emptied table still applies. Otherwise a reload that reads a table back empty applies and switches that behaviour off (the success message names the empty tables); this lasts until the table is filled again; a restart seeds an empty table only when `Database:Upgrade:Policy` is not `Never` and `ValidateOnly` is off.
 
 ## Config keys during the move
 

@@ -82,7 +82,7 @@ public sealed class GmSpawnGroupCommandTests
 
     /// <summary>
     /// The command's system chat lines. Waits for the first line, then reads through the session barrier: a command writes all of its reply lines synchronously in its handler, so
-    /// every line comes before the barrier's answer. A fixed quiet window split the eight-line <c>info</c> reply when the session writer was descheduled for over 250 ms under load.
+    /// every line comes before the barrier's answer. A fixed quiet window split the eight-line <c>info</c> reply under load; the cause (the session writer descheduled for over 250 ms) is inferred from the gap, not measured.
     /// </summary>
     private static async Task<List<string>> SendAsync(WorldTestClient client, string command)
     {

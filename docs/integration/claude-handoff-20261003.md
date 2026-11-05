@@ -33,7 +33,7 @@ The linked original Claude session was inaccessible read-only:
 `https://claude.ai/code/session_016eMgZECkSiMH9b9kBQRBtA`. Its private conversation
 was not recovered or operated. Do not assume additional context from that URL.
 
-Read the charter, current README, `docs/integration/seams.md`, global
+Read the charter (since retired; its rules are in `docs/guide/contributing.md`), current README, `docs/integration/seams.md`, global
 the Codex AGENTS.md in the user profile, and any current Claude/local instructions.
 The machine is shared with Sonder/Spark. .NET SDK 10.0.401 and existing EF/Pomelo
 9 dependencies are installed; no paid infrastructure/new security access was

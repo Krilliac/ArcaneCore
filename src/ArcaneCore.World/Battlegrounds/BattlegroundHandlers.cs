@@ -311,7 +311,7 @@ public sealed partial class BattlegroundFeature
         => Services.GetService<SpellFeature>()?.System.HasAura(player, BattlegroundConstants.SpellDeserter) == true;
 
     /// <summary>
-    /// SMSG_BATTLEFIELD_LIST (vmangos <c>BuildBattleGroundListPacket</c>, BattleGroundMgr.cpp:1166-1213): the map, the player's bracket and
+    /// SMSG_BATTLEFIELD_LIST (vmangos <c>BuildBattleGroundListPacket</c>, BattleGroundMgr.cpp:1432-1450): the map, the player's bracket and
     /// the client instance ids of that bracket.
     /// </summary>
     internal void SendBattlefieldList(Player player, ObjectGuid source, BattlegroundType type)
