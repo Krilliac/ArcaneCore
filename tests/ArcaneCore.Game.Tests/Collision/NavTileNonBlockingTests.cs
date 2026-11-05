@@ -142,7 +142,8 @@ public sealed class NavTileNonBlockingTests : IDisposable
     {
         _gated = _ => false;
         NavMeshPathfinder nav = Gated();
-        using var release = new ManualResetEventSlim();
+        // Not disposed: blockers still queued when the test ends must find it set, not disposed.
+        var release = new ManualResetEventSlim();
         int blockers = Environment.ProcessorCount * 4 + 8;
         try
         {
