@@ -222,7 +222,7 @@ public sealed partial class CreatureMapSystem
             return 0;
         }
 
-        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster && Map.Combat.Hooks.CanAttack(creature, p))];
+        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster && Map.Combat.CanAttackSingleTarget(creature, p))];
         if (creature.Combat.Victim is null && players.Length > 0)
         {
             // Engaged first: the unit AttackClosestEnemy would pick from the threat list once every player is on it.

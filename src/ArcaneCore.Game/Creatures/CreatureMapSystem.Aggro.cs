@@ -78,7 +78,7 @@ public sealed partial class CreatureMapSystem
             && IsProximityAggroAllowedFor(creature, who)
             && CanInitiateAttack(creature)
             && IsInAggroReach(creature, who, scriptedRange)
-            && Map.Combat.Hooks.CanAttackSingleTarget(creature, who)
+            && Map.Combat.CanAttackSingleTarget(creature, who)
             && _ai.Hostility.IsHostile(creature, who)
             && CanSeeForAggro(creature, who);
     }
@@ -101,7 +101,7 @@ public sealed partial class CreatureMapSystem
     {
         ArgumentNullException.ThrowIfNull(guard);
         ArgumentNullException.ThrowIfNull(who);
-        if (guard.Combat.Victim is not null || !IsAggroTarget(guard, who) || !CanInitiateAttack(guard) || !Map.Combat.Hooks.CanAttackSingleTarget(guard, who))
+        if (guard.Combat.Victim is not null || !IsAggroTarget(guard, who) || !CanInitiateAttack(guard) || !Map.Combat.CanAttackSingleTarget(guard, who))
         {
             return false;
         }

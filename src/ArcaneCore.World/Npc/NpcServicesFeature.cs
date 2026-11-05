@@ -136,7 +136,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             {
                 // vmangos WorldSession::SendDoFlight (TaxiHandler.cpp:113-114): the flight start ends Feign Death, then the spell mount goes.
                 SpellSystem? spells = services.GetService<SpellFeature>()?.System;
-                spells?.BreakFeignDeath(player);
+                spells?.BreakSuccessfulFeignDeath(player);
                 spells?.RemoveAurasByType(player, AuraType.Mounted);
             });
         Flights.FlightEnded += OnFlightEnded;

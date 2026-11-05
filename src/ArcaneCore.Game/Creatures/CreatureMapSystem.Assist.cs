@@ -164,7 +164,7 @@ public sealed partial class CreatureMapSystem
         }
 
         return _ai.Hostility.CanAssist(helper, caller)
-            && Map.Combat.Hooks.CanAttack(helper, enemy);
+            && Map.Combat.CanAttackSingleTarget(helper, enemy);
     }
 
     /// <summary>

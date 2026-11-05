@@ -297,7 +297,7 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
             spells.RemoveAurasWithInterruptFlags(player, AuraInterruptMask.Interacting);
         };
 
-        Services.BreakFeignDeath = player => spells.BreakFeignDeath(player);
+        Services.BreakFeignDeath = player => spells.BreakSuccessfulFeignDeath(player);
 
         spells.RegisterEffect(SpellEffectName.Bind, context =>
         {

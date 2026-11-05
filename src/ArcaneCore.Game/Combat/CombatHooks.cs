@@ -1,6 +1,5 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
-using ArcaneCore.Game.Ranged;
 
 namespace ArcaneCore.Game.Combat;
 
@@ -204,22 +203,6 @@ public class CombatHooks
     /// supplies the real reaction).
     /// </summary>
     public virtual bool IsHostileTo(Unit a, Unit b) => CanAttack(a, b);
-
-    /// <summary>
-    /// <see cref="CanAttack"/> for a single-target attack by a unit: additionally, a unit that is not a player or under a player's control
-    /// cannot target a victim feigning death (vmangos Unit::IsValidAttackTarget, Unit.cpp:6158, the non-player attacker branch with
-    /// <c>!forAoE</c> and <c>!helpful</c>). The feign state is the dead dynamic flag on a living unit, which Feign Death and Permanent Feign Death
-    /// set whether or not the creature resisted it (UNIT_STATE_FEIGN_DEATH is added either way). Area effects keep using <see cref="CanAttack"/>.
-    /// </summary>
-    public bool CanAttackSingleTarget(Unit attacker, Unit victim)
-    {
-        if (!attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsAlive && victim.HasFlag(UpdateFields.UnitDynamicFlags, UnitDynFlags.Dead))
-        {
-            return false;
-        }
-
-        return CanAttack(attacker, victim);
-    }
 
     /// <summary>
     /// Whether <paramref name="attacker"/> may attack <paramref name="victim"/> (the parts of

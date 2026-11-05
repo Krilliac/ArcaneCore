@@ -300,7 +300,7 @@ public sealed partial class CreatureMapSystem
 
         return candidates
             .Where(u => IsAggroTarget(creature, u) && WorldGeometry.DistanceSq3D(creature, u) <= rangeSq
-                && Map.Combat.Hooks.CanAttack(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
+                && Map.Combat.CanAttackSingleTarget(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
             .OrderBy(u => WorldGeometry.DistanceSq3D(creature, u))
             .FirstOrDefault();
     }

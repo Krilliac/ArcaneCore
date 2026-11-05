@@ -134,8 +134,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             return false;
         }
 
-        // vmangos Player::ActivateTaxiPathTo removes a spell mount before a scripted flight
-        // (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
+        // The before-flight step: vmangos SendDoFlight ends Feign Death (TaxiHandler.cpp:113-114), and Player::ActivateTaxiPathTo removes a
+        // spell mount before a scripted flight (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
         _beforeFlight?.Invoke(player);
 
         var flight = new Flight(player, map, hops, nodes.ToArray(), pathIds.ToArray(), legCosts.ToArray(), chargeLeg)
