@@ -444,7 +444,7 @@ public sealed class PlayerbotTileHoldTests
     {
         string? dir = AppContext.BaseDirectory;
         while (dir is not null && !Directory.Exists(Path.Combine(dir, "src", "ArcaneCore.Playerbots"))) dir = Path.GetDirectoryName(dir);
-        Assert.NotNull(dir);
+        Assert.True(dir is not null, "no src/ArcaneCore.Playerbots above the test binaries: " + AppContext.BaseDirectory);
         string[] allowed = ["PlayerbotNavigation.cs", "PlayerbotWater.cs", "PlayerbotRisk.cs", "PlayerbotRetreat.cs", "PlayerbotRecovery.cs",
             "PlayerbotElevator.cs", "PlayerbotTram.cs"];
         var bare = new System.Text.RegularExpressions.Regex(@"PlayerbotNavigation\.(TryPlan|TryPlanToward|TryPlanFar|TryPlanUnguarded)\(");
@@ -458,7 +458,7 @@ public sealed class PlayerbotTileHoldTests
                 if (!line.TrimStart().StartsWith("//", StringComparison.Ordinal) && bare.IsMatch(line)) offenders.Add(Path.GetFileName(file) + ": " + line.Trim());
         }
 
-        Assert.True(scanned > 50, "the scan found the sources");
+        Assert.True(scanned > 50, $"the scan found the sources: {scanned} files under {dir}");
         Assert.Empty(offenders);
     }
 
