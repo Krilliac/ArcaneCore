@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Tests.AntiCheat;
 /// The movement block of a solicited acknowledgement (speed, flag, root, knockback, turn rate) is judged before it is stored, like a movement
 /// packet. Before, the handlers stored it and only advanced the stored-position marker (AfterMovement), so a client could carry any
 /// position or flag in the ack of an order the server really sent, and the next block was then measured from there. vmangos runs the
-/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes :491-492 speed ack; MovementHandler.cpp :603-604 flag ack, :697-698 root ack in HandleMoveRootAck, :790-791 knockback ack).
+/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes :492-493 speed ack; MovementHandler.cpp :603-604 flag ack, :697-698 root ack in HandleMoveRootAck, :790-791 knockback ack).
 /// The tests wait real time between packets (Task.Delay), so the class runs in the serial timing stage.
 /// </summary>
 [Trait("Category", "Timing")]
@@ -359,6 +359,8 @@ public sealed class SolicitedAckJudgementTests
         await scene.BaselineAsync();
         await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
         await scene.Client.CollectThroughBarrierAsync();
+        AntiCheatFeature feature = scene.Host.WorldServices.GetRequiredService<AntiCheatFeature>();
+        float budgetBefore = await scene.Host.OnWorldAsync(() => feature.BudgetedYardsOf(scene.Player));
         float before = await scene.Host.OnWorldAsync(() =>
         {
             scene.Player.UnitFlags |= UnitFlags.TaxiFlight; // the flight system owns the position (TaxiFlightSystem relocates it each step)
@@ -373,9 +375,13 @@ public sealed class SolicitedAckJudgementTests
 
         // The order was acknowledged (vmangos erases it first, MovementHandler.cpp:671) but the block 80 yards off the flight path was not stored, so
         // the flight is not ended by drift and a pending order is no way off the taxi. Before, the position was stored.
+        float budgetAfter = await scene.Host.OnWorldAsync(() => feature.BudgetedYardsOf(scene.Player));
         (float x, bool pending) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)));
         Assert.Equal(before, x);
         Assert.False(pending);
+        // Nor was it judged: the checks would see the flight's own relocation and take the client's block as a new baseline (a client-chosen rubberband target).
+        Assert.Empty(scene.Seen);
+        Assert.Equal(budgetBefore, budgetAfter);
     }
 
     [Fact]
