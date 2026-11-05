@@ -144,6 +144,52 @@ public sealed class NaxxramasEncounterSpellTests
         Assert.Contains(bystander, raid.Creatures.Creatures);
     }
 
+    // Spell.dbc 30228 Despawn Summons has the shape of 30134 above: one SCRIPT_EFFECT at 22/7 over the caster's area.
+    private static SpellInfo DespawnSpell(uint id)
+        => SpellTestKit.Spell(id, ScriptAoeEffect()) with { RangeIndex = 6, Range = new SpellRange(0, 100) };
+
+    private static SpellEffectInfo ScriptAoeEffect()
+        => SpellTestKit.Effect(SpellEffectName.ScriptEffect, 1, SpellImplicitTarget.LocationCasterSrc,
+            targetB: SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc) with { Radius = 100 };
+
+    // Spell.dbc 29379 Despawn Crypt Guards, read from the 5875 client extract: TWO effects, both SCRIPT_EFFECT at 22/7 (Effect1 and Effect2 = 77).
+    // ClassicDB z2815 spell_script_target: (29379, 1, 16573, inverse mask 4) and (29379, 1, 16698, inverse mask 2). A row applies to the effects whose
+    // bit is clear in its mask, so 16573 serves effects 0 and 1 and 16698 serves effect 0 only.
+    private static SpellInfo DespawnCryptGuards()
+        => SpellTestKit.Spell(29379, ScriptAoeEffect(), ScriptAoeEffect()) with { RangeIndex = 6, Range = new SpellRange(0, 100) };
+
+    [Fact]
+    public void AnubRekhan_Evade_DespawnsItsSummonedGuardsAndScarabs_ButNotOtherCreatures()
+    {
+        using var raid = new Raid([DespawnCryptGuards()], [new(29379, 1, 16573, 4), new(29379, 1, 16698, 2)], [15956, 16573, 16698, 16124]);
+        Creature anub = raid.Spawn(15956, 1, 0, 270);
+        Creature guard = raid.Spawn(16573, 5, 0, 270);
+        Creature scarab = raid.Spawn(16698, 6, 0, 270);
+        Creature bystander = raid.Spawn(16124, 4, 0, 270);
+        anub.AI!.AttackStart(raid.Tank);
+        anub.AI.OnEvade();
+        raid.World.RunTick(0);
+        Assert.DoesNotContain(guard, raid.Creatures.Creatures);
+        Assert.DoesNotContain(scarab, raid.Creatures.Creatures);
+        Assert.Contains(bystander, raid.Creatures.Creatures);
+    }
+
+    [Fact]
+    public void Noth_Evade_DespawnsItsSummonedPlaguedAdds_ButNotOtherCreatures()
+    {
+        using var raid = new Raid([DespawnSpell(30228)], [new(30228, 1, 16981, 0), new(30228, 1, 16984, 0)], [15954, 16981, 16984, 16124]);
+        Creature noth = raid.Spawn(15954, 1, 0, 270);
+        Creature guardian = raid.Spawn(16981, 5, 0, 270); // Plagued Guardian (vmangos boss_noth.cpp:106-109)
+        Creature warrior = raid.Spawn(16984, 6, 0, 270);  // Plagued Warrior
+        Creature bystander = raid.Spawn(16124, 4, 0, 270);
+        noth.AI!.AttackStart(raid.Tank);
+        noth.AI.OnEvade();
+        raid.World.RunTick(0);
+        Assert.DoesNotContain(guardian, raid.Creatures.Creatures);
+        Assert.DoesNotContain(warrior, raid.Creatures.Creatures);
+        Assert.Contains(bystander, raid.Creatures.Creatures);
+    }
+
     [Fact]
     public void ThaddiusOverload_CoilShockRemovesTheSpawnStun_AndThaddiusEngages()
     {

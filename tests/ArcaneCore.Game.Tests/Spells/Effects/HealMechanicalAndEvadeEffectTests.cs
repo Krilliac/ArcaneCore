@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -13,7 +14,7 @@ namespace ArcaneCore.Game.Tests.Spells.Effects;
 /// The effects the wiring review found without a handler (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (Mechanical Patch Kit 15057), EVADE 21
 /// (Evade (DND) 108) and NOSTALRIUS 131 (silent).
 /// </summary>
-public sealed class MechanicalAndAreaEffectsTests
+public sealed class HealMechanicalAndEvadeEffectTests
 {
     private const uint PatchKit = 15057, EvadeDnd = 962103, FriendHeal = 962104;
 
@@ -160,16 +161,75 @@ public sealed class MechanicalAndAreaEffectsTests
         Assert.All(hits, e => Assert.Equal(0u, e.Amount));
     }
 
+    /// <summary>vmangos EffectHealMechanical (SpellEffects.cpp:1835): the effect value on another unit, with a heal log packet.</summary>
     [Fact]
-    public void HealMechanical_DoesNothingForADeadTarget()
+    public void HealMechanical_OnAnotherPlayer_HealsByTheEffectValue_AndSendsOneHealLog()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.MaxHealth = 2_000;
+        target.Health = 100;
+        session.Clear();
+
+        kit.System.CastSpell(caster, FriendHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.Equal(200u, target.Health);
+        Assert.Single(Packets(session, WorldOpcode.SmsgSpellheallog));
+    }
+
+    /// <summary>A live caster on a dead other target: CheckCast refuses with TargetsDead (SpellSystem.CheckCast, vmangos Spell.cpp:5572) and nothing is healed.</summary>
+    [Fact]
+    public void HealMechanical_LiveCasterOnADeadTarget_IsRefusedAsTargetsDead_AndHealsNothing()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.MaxHealth = 2_000;
+        target.Health = 0;
+
+        SpellCastResult result = kit.System.CastSpell(caster, FriendHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.Equal(SpellCastResult.TargetsDead, result);
+        Assert.Equal(0u, target.Health);
+    }
+
+    /// <summary>
+    /// A spell that may target the dead passes the CheckCast gate and reaches the effect. The effect's own dead-target guard then
+    /// suppresses the heal log (SMSG_SPELLHEALLOG); the damage sinks also refuse to heal a dead unit, so health alone cannot prove the guard.
+    /// </summary>
+    [Fact]
+    public void HealMechanical_OnADeadTargetOfASpellThatCanTargetTheDead_StillHealsNothing()
+    {
+        SpellInfo deadOk = Instant(962105, Effect(SpellEffectName.HealMechanical, 100, SpellImplicitTarget.UnitFriend))
+            with { AttributesEx2 = SpellAttributesEx2.AllowDeadTarget };
+        using SpellTestKit kit = new(deadOk);
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.MaxHealth = 2_000;
+        target.Health = 0;
+        session.Clear();
+
+        SpellCastResult result = kit.System.CastSpell(caster, 962105, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        FlushSpellBatch(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, result);
+        Assert.Equal(0u, target.Health);
+        Assert.Empty(Packets(session, WorldOpcode.SmsgSpellheallog));
+    }
+
+    /// <summary>The caster is dead: a triggered cast is not exempt from CheckCast's caster-dead refusal, so nothing happens.</summary>
+    [Fact]
+    public void HealMechanical_DeadCasterSelfCast_IsRefusedAsCasterDead()
     {
         using SpellTestKit kit = Kit();
         (Player player, _) = kit.AddPlayer(1);
         player.MaxHealth = 10_000;
         player.Health = 0;
 
-        kit.System.CastSpell(player, PatchKit, SpellCastTargets.ForSelf(), triggered: true);
+        SpellCastResult result = kit.System.CastSpell(player, PatchKit, SpellCastTargets.ForSelf(), triggered: true);
 
+        Assert.Equal(SpellCastResult.CasterDead, result);
         Assert.Equal(0u, player.Health);
     }
 
