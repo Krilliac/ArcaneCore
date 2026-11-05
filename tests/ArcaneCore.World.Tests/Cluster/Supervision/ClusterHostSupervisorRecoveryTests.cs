@@ -79,7 +79,8 @@ public sealed class ClusterHostSupervisorRecoveryTests
     [Fact]
     public async Task CrashLoop_GivesUpAfterMaxInWindow_FaultsAndRecords()
     {
-        long before = AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop"));
+        // The shared ledger is also written (and reset) by other tests in parallel, so its counter is not a baseline; capture this scenario's report instead.
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop") && n.Detail.StartsWith("failures=4 ", StringComparison.Ordinal));
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(options: o => o.CrashLoopMaxRestarts = 3));
         await rig.Supervisor.StartProcessAsync("world");
 
@@ -94,7 +95,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
 
         Assert.Equal(4, rig.Launcher.Launches);
         Assert.Contains("crash loop", rig.ConsoleText, StringComparison.Ordinal);
-        Assert.Equal(before + 1, AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop")));
+        Assert.True(capture.Any(AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop")), "the crash-loop report (failures=4) was raised");
     }
 
     [Fact]

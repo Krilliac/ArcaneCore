@@ -869,6 +869,8 @@ public sealed class WardenTests
         WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
         // OnAuthenticated runs on the session task after AUTH_OK is sent, so the client can see AUTH_OK before Warden is attached.
         await WorldTestHost.WaitForAsync(() => feature.Find(session) is not null, "Warden attached to the session");
+        // The session is registered before Start() sends MODULE_USE, so Find can see it while the state is still NotStarted.
+        await WorldTestHost.WaitForAsync(() => feature.Find(session)!.State == WardenState.AwaitingModuleStatus, "Warden to start (MODULE_USE sent)");
         Assert.Equal(WardenState.AwaitingModuleStatus, feature.Find(session)!.State);
 
         await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF));

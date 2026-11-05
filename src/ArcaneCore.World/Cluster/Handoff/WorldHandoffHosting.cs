@@ -64,7 +64,15 @@ public sealed class WorldHandoffInFlight
     /// <summary>The number of handoffs still running.</summary>
     public int Count
     {
-        get { lock (_gate) return _running.Count; }
+        get
+        {
+            // A task that has completed is no longer running even if its removal continuation has not run yet (it can lag the awaiting waiter on the thread pool).
+            lock (_gate)
+            {
+                _running.RemoveAll(static t => t.IsCompleted);
+                return _running.Count;
+            }
+        }
     }
 
     /// <summary>Completes when every handoff running now has ended (faulted ones included); throws only when <paramref name="cancellationToken"/> is cancelled.</summary>

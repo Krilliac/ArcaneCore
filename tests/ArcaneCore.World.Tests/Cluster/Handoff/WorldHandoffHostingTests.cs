@@ -363,6 +363,19 @@ public sealed class WorldHandoffHostingTests
     }
 
     [Fact]
+    public void ACompletedHandoff_IsNotCounted_EvenBeforeItsRemovalContinuationRuns()
+    {
+        var inFlight = new WorldHandoffInFlight();
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = inFlight.Track(gate.Task);
+        Assert.Equal(1, inFlight.Count);
+
+        gate.SetResult(1);
+
+        Assert.Equal(0, inFlight.Count);
+    }
+
+    [Fact]
     public async Task StopWaitsForAHandoffThatIsStillRunning_AndNeverCancelsIt()
     {
         var inFlight = new WorldHandoffInFlight();
