@@ -44,21 +44,28 @@ public sealed class SyntheticServerSqliteLockTests
             return db.Database.ExecuteSqlRawAsync("CREATE TABLE fixture_lock_probe (id INTEGER)", token);
         }, token);
 
-        // Held until the write itself has been running past 1.1 s (measured from its own start, so a slow pool start does not shorten the proof and a slow
-        // test thread does not lengthen the hold): a one-second bound has already failed the write by now; the shipped 5 s bound is still waiting.
-        while (Volatile.Read(ref writeStarted) == 0
-            || System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref writeStarted)).TotalMilliseconds < 1100)
+        // The lock is held until the write itself has been running for 1.5 s, measured from the write's own start so a slow pool start does not shorten the
+        // proof. A one-second bound has failed the write long before that (the margin over it is 500 ms, enough for the EF pipeline and the busy-wait overshoot);
+        // the shipped 5 s bound is still waiting. The release runs on a dedicated thread (LongRunning), so a starved thread pool cannot delay the COMMIT; the
+        // remaining way to fail is the host stalling that thread for about 3.5 s, since the write hits its 5 s bound before the COMMIT then.
+        Task<bool> release = Task.Factory.StartNew(() =>
         {
-            await Task.Delay(25, token);
-        }
+            while (Volatile.Read(ref writeStarted) == 0
+                || System.Diagnostics.Stopwatch.GetElapsedTime(Volatile.Read(ref writeStarted)).TotalMilliseconds < 1500)
+            {
+                token.ThrowIfCancellationRequested();
+                Thread.Sleep(10);
+            }
 
-        Assert.False(write.IsCompleted, write.Exception?.GetBaseException().Message ?? $"the write finished while the lock was held ({write.Status})");
-
-        await using (SqliteCommand commit = holder.CreateCommand())
-        {
+            bool stillWaiting = !write.IsCompleted;
+            using SqliteCommand commit = holder.CreateCommand();
             commit.CommandText = "COMMIT;";
-            await commit.ExecuteNonQueryAsync(token);
-        }
+            commit.ExecuteNonQuery();
+            return stillWaiting;
+        }, token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+        bool waitedOutTheHold = await release.WaitAsync(token);
+        Assert.True(waitedOutTheHold, "the write finished or failed while the lock was still held");
 
         await write.WaitAsync(token);
     }

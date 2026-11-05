@@ -130,8 +130,10 @@ public sealed class SqliteWriteGateFairnessTests
             // The first two waiters never force (max hold 0) so only the forcer below can release the leaked hold: a waiter that forced on its own
             // wake-up could race the queue count (a scheduling delay of 200 ms would let it release the leak before both were queued) or force a
             // later holder that a loaded machine kept for over 200 ms, which would run the handler twice.
-            Task a = StartAsyncWaiter(gate, 0, order, 3000, 0);
-            Task b = StartAsyncWaiter(gate, 1, order, 3000, 0);
+            // They queue one at a time: the gate serves in arrival order, so the strict order below needs a known arrival order.
+            Task a = StartAsyncWaiter(gate, 0, order, 10_000, 0);
+            WaitUntilWaiting(gate, 1);
+            Task b = StartAsyncWaiter(gate, 1, order, 10_000, 0);
             WaitUntilWaiting(gate, 2);
             WaitUntilHeldFor(leaked, 250);
             Task c = StartAsyncWaiter(gate, 2, order, 3000, 200);
@@ -170,9 +172,9 @@ public sealed class SqliteWriteGateFairnessTests
         try
         {
             var order = new List<int>();
-            Task a = StartSyncWaiter(gate, 0, order, 3000, 0);
+            Task a = StartSyncWaiter(gate, 0, order, 10_000, 0);
             WaitUntilWaiting(gate, 1);
-            Task b = StartSyncWaiter(gate, 1, order, 3000, 0);
+            Task b = StartSyncWaiter(gate, 1, order, 10_000, 0);
             WaitUntilWaiting(gate, 2);
             WaitUntilHeldFor(leaked, 250);
             Task c = StartSyncWaiter(gate, 2, order, 3000, 200);
