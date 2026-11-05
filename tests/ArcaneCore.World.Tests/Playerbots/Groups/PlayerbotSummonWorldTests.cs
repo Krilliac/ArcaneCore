@@ -1,6 +1,7 @@
 using System.Numerics;
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
