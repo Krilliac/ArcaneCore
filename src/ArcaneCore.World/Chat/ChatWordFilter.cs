@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Chat;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Chat;
 
@@ -21,20 +23,28 @@ public sealed class ChatWordFilter
     private static readonly TimeSpan DefaultMatchTimeout = TimeSpan.FromMilliseconds(50);
 
     private readonly ImmutableArray<(Regex Regex, ChatWordFilterAction Action)> _chat;
-    private readonly FaultLedger _ledger;
+    private static readonly long LogIntervalTicks = Stopwatch.Frequency * 60;
 
-    public ChatWordFilter(IEnumerable<ChatWordFilterRule> rules)
-        : this(rules, DefaultMatchTimeout, null)
+    private readonly FaultLedger _ledger;
+    private readonly ILogger? _logger;
+    private long _lastLogTimestamp;
+
+    /// <param name="rules">The rows to compile.</param>
+    /// <param name="logger">Receives a rate-limited warning (once a minute) when a rule times out; null for none (the fault ledger still counts it).</param>
+    public ChatWordFilter(IEnumerable<ChatWordFilterRule> rules, ILogger? logger = null)
+        : this(rules, DefaultMatchTimeout, null, logger)
     {
     }
 
     /// <param name="rules">The rows to compile.</param>
     /// <param name="matchTimeout">Timeout for patterns that cannot use the non-backtracking engine (tests shorten it).</param>
     /// <param name="ledger">Where a timeout is counted; null for <see cref="FaultLedger.Shared"/>.</param>
-    internal ChatWordFilter(IEnumerable<ChatWordFilterRule> rules, TimeSpan matchTimeout, FaultLedger? ledger)
+    /// <param name="logger">Where the rate-limited timeout warning goes; null for none.</param>
+    internal ChatWordFilter(IEnumerable<ChatWordFilterRule> rules, TimeSpan matchTimeout, FaultLedger? ledger, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(rules);
         _ledger = ledger ?? FaultLedger.Shared;
+        _logger = logger;
         var chat = ImmutableArray.CreateBuilder<(Regex, ChatWordFilterAction)>();
         var names = ImmutableArray.CreateBuilder<Regex>();
         var rejected = ImmutableArray.CreateBuilder<uint>();
@@ -119,9 +129,33 @@ public sealed class ChatWordFilter
             catch (RegexMatchTimeoutException ex)
             {
                 _ledger.Record("chat.word-filter-timeout", ex); // counted; this rule is skipped so clean text is not dropped because of a slow pattern or a busy machine
+                LogTimeout(action);
             }
         }
 
         return text;
+    }
+
+    /// <summary>At most one warning a minute (a slow Block rule would otherwise log on every chat line); the ledger keeps the exact count.</summary>
+    private void LogTimeout(ChatWordFilterAction action)
+    {
+        if (_logger is null)
+        {
+            return;
+        }
+
+        long now = Stopwatch.GetTimestamp();
+        long last = Interlocked.Read(ref _lastLogTimestamp);
+        if (last != 0 && now - last < LogIntervalTicks)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _lastLogTimestamp, now, last) != last)
+        {
+            return;
+        }
+
+        _logger.LogWarning("chat word filter: a {Action} rule timed out and was skipped for the message (counted as chat.word-filter-timeout; logged at most once a minute)", action);
     }
 }

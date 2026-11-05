@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Talents;
 using ArcaneCore.World.Gm.Args;
 using Xunit;
 
@@ -233,6 +234,49 @@ public sealed class CommandArgsTests
         Assert.True(new CommandArgs(StaffLink).ExtractUInt32KeyFromLink("Hitem", out uint linked));
         Assert.Equal(812u, linked);
         Assert.False(new CommandArgs("Sword").ExtractUInt32KeyFromLink("Hitem", out _));
+    }
+
+    private static TalentCatalog OneTalent() => new(
+        [new TalentTabRecord(1, 1, 0)],
+        [new TalentRecord(2232, 1, 0, 0, [11100u, 11101u, 11102u, 0u, 0u], 0, 0, 0)]);
+
+    [Theory]
+    [InlineData("133", 133u)]
+    [InlineData("|cff71d5ff|Hspell:21563|h[Command]|h|r", 21563u)]
+    [InlineData("|cff71d5ff|Henchant:7418|h[Enchanting: Bracer]|h|r", 7418u)]
+    [InlineData("|cff4e96f7|Htalent:2232:0|h[Taste]|h|r", 11100u)]
+    [InlineData("|cff4e96f7|Htalent:2232:2|h[Taste]|h|r", 11102u)]
+    [InlineData("|cff4e96f7|Htalent:2232:-1|h[Taste]|h|r", 11100u)] // an unlearned talent carries -1: rank 0
+    public void SpellIdFromLink_TakesNumbersSpellEnchantAndTalentLinks(string text, uint expected)
+    {
+        var args = new CommandArgs(text + " triggered");
+        Assert.True(args.ExtractSpellIdFromLink(OneTalent(), out uint spellId));
+        Assert.Equal(expected, spellId);
+        Assert.Equal("triggered", args.Rest);
+    }
+
+    [Theory]
+    [InlineData("|cff4e96f7|Htalent:2232:3|h[Taste]|h|r")]  // the fourth rank slot is empty
+    [InlineData("|cff4e96f7|Htalent:2232:5|h[Taste]|h|r")]  // past MAX_TALENT_RANK
+    [InlineData("|cff4e96f7|Htalent:9999:0|h[Nope]|h|r")]   // no such talent
+    [InlineData("|cff4e96f7|Htalent:2232|h[Taste]|h|r")]    // no rank field
+    [InlineData("|cffffffff|Hitem:812:0:0:0:0:0:0:0|h[Staff]|h|r")] // not a spell link
+    [InlineData("0")]
+    [InlineData("Fireball")]
+    public void SpellIdFromLink_RefusesWhatVmangosRefuses_AndKeepsTheCursor(string text)
+    {
+        var args = new CommandArgs(text);
+        Assert.False(args.ExtractSpellIdFromLink(OneTalent(), out uint spellId));
+        Assert.Equal(0u, spellId);
+        Assert.Equal(text, args.Rest);
+    }
+
+    [Fact]
+    public void SpellIdFromLink_WithoutATalentCatalog_RefusesATalentLinkOnly()
+    {
+        Assert.False(new CommandArgs("|cff4e96f7|Htalent:2232:0|h[Taste]|h|r").ExtractSpellIdFromLink(null, out _));
+        Assert.True(new CommandArgs("|cff71d5ff|Hspell:21563|h[Command]|h|r").ExtractSpellIdFromLink(null, out uint spellId));
+        Assert.Equal(21563u, spellId);
     }
 
     [Fact]

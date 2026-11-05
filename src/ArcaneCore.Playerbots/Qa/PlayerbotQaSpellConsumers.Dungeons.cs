@@ -56,5 +56,19 @@ internal static partial class QaSpellConsumers
             "Initialize Image: the per-image half of Initialize Images 794; the same direct health setup in SkeramAI.OnJustSummoned (cmangos boss_skeram.cpp:342-366)"),
         new(18969, K.UsePath, "ArcaneCore.Game/Creatures/Scripts/InDreamsAI.cs", "(taelan.AI as TaelanFordringAI)?.StruckDown()",
             "Taelan Death: the Isillien AI casts it and strikes Taelan down directly (vmangos creature_ai_events 184205, mangos-classic western_plaguelands.cpp:164)"),
+        // The 2026-11 baseline triage (spell contract sweep): consumers ArcaneCore already has but the gap analyzer cannot see.
+        DbScriptRow(16378, "Temperature Reading: set waypoint movement, pool search and kill credit of Krakle's Thermometer"),
+        DbScriptRow(21914, "Celebras Quit Escort: remove Celebras Waiting, stop WP movement, set run, move"),
+        DbScriptRow(21917, "Celebras Stone Trap: give quest completion 7046 after 25 s"),
+        new(84, K.UsePath, AnubisathFile, "if (Cast(Enrage, Me))",
+            "Low Health: the Defender's trigger for its Enrage or Explode below 10% health; AnubisathDefenderAI casts those directly (vmangos creature_ai_scripts 1527711 casts 84, creature_ai_events 1527708 reacts and runs 1527718 Explode or 1527728 Enrage)"),
+        new(23852, K.UsePath, "ArcaneCore.Game/Spells/Generic/OpenWorldDummyScripts.cs", "StartItemSpellCooldown(context.Target, HatchEgg, UnhatchedJublingEgg)",
+            "Jubling Cooldown (1 week): mangos-classic SpellEffects.cpp:3762-3764 casts it from 23853 as the cooldown marker; vmangos never casts it and starts the Hatch Egg 23851 item cooldown directly (SpellEffects.cpp:3745-3753), which JublingCooldownScript does"),
+        new(24746, K.AuraReader, "ArcaneCore.Game/Conditions/ConditionEvaluator.cs", "case ConditionType.Aura:",
+            "Twilight Cultist Disguise: the world DB aura condition reads it (vmangos conditions 887 and 888, type 1 aura 24746, which the gossip menu text rows of menus 6540, 6542 and 6543 test; classic-db conditions 887 and 888)"),
+        new(18800, K.UsePath, "ArcaneCore.Game/Spells/Gm/CustomSpellRegistry.cs", "new(18800,",
+            "Light Test: a GM staff tool taught by the GM spellbook (CustomSpellRegistry); its DUMMY aura is only the light visual"),
+        new(22690, K.UsePath, "ArcaneCore.Game/Spells/Gm/CustomSpellRegistry.cs", "new(22690,",
+            "Test Charge: a GM staff tool taught by the GM spellbook (CustomSpellRegistry); the charge effect does the work and the DUMMY aura carries nothing"),
     ];
 }

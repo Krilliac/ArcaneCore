@@ -334,7 +334,9 @@ public sealed class PlayerbotRoutePlanWatchTests
     public async Task DutyPolicy_RefusedAgainForTheSamePair_BacksOffTo30Then60Seconds_AndASuccessfulPlanStartsItOver()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
-        Assert.Equal(new uint[] { 10_000, 30_000, 60_000 }, PlayerbotRoutePlanWatch.DutyBackoffMs);
+        Assert.Equal(10_000u, PlayerbotRoutePlanWatch.DutySpanMs(1));
+        Assert.Equal(30_000u, PlayerbotRoutePlanWatch.DutySpanMs(2));
+        Assert.Equal(60_000u, PlayerbotRoutePlanWatch.DutySpanMs(3));
         Assert.Equal(60_000u, PlayerbotRoutePlanWatch.DutySpanMs(9));
 
         (Vector3 origin, Vector3 goal) = await SeedRefusalsAsync(world, PlayerbotRoutePlanWatch.Policy.Duty);
@@ -350,9 +352,9 @@ public sealed class PlayerbotRoutePlanWatchTests
         await RecordRefusalsAsync(world, origin, goal);
         await world.Host.World.AdvanceClockAsync(40_000);
         Assert.True(await Refused(world, origin, goal), "third hold: 60 s");
+        Assert.False(await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal)), "a duty goal is never blacklisted (asserted inside the hold: a blacklist would still run then, it lasts as long as the 60 s hold)");
         await world.Host.World.AdvanceClockAsync(25_000);
         Assert.False(await Refused(world, origin, goal), "third hold over after 60 s");
-        Assert.False(await world.OnWorldAsync(() => PlayerbotMotion.IsBlacklisted(world.Player, goal)), "a duty goal is never blacklisted");
 
         await world.OnWorldAsync(() =>
         {

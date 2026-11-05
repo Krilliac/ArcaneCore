@@ -48,6 +48,7 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 {
     private readonly ConcurrentDictionary<int, WorldSession> _byAccount = new();
     private readonly IDisposable _revocationSubscription;
+    private readonly AccountPlayHistory _playHistory = new();
 
     public SessionRegistry()
         : this(null, null)
@@ -105,9 +106,14 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
             return;
         }
 
-        if (previous is not null && !ReferenceEquals(previous, session))
+        // Consecutive play time carries over (vmangos World::AddSession_, World.cpp:285-300): from the session this one replaces (a double login must not
+        // reset it), else from the account's last logout when that was under five hours ago.
+        WorldSession? replaced = previous is not null && !ReferenceEquals(previous, session) ? previous : null;
+        session.InheritPlayTime(replaced, _playHistory);
+
+        if (replaced is not null)
         {
-            previous.Kick();
+            replaced.Kick();
         }
 
         Registered?.Invoke(session);
@@ -115,7 +121,12 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 
     public void Unregister(WorldSession session)
     {
-        _byAccount.TryRemove(new KeyValuePair<int, WorldSession>(session.AccountId, session));
+        if (_byAccount.TryRemove(new KeyValuePair<int, WorldSession>(session.AccountId, session)))
+        {
+            // Only the session that still held the account records its play time (vmangos World.cpp:2836, :3106); a replaced one passed it on.
+            session.RecordPlayTime(_playHistory);
+        }
+
         if (session.SessionClaim is { } claim)
         {
             Store.TryRelease(claim);

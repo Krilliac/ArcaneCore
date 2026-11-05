@@ -203,10 +203,10 @@ The 5 pairs: the `GameObjectMapSystem` chest rebuild (`GameObjectMapSystem.cs:18
 | `PlayerbotPopulationFeature`, the zone value pass (`troubleOf`, `stayedSince`) | `NowUnix()`, Game UTC, live | not two reads of one computation. `troubleOf` is a lambda that reads the clock each time it is called, for a count in the trouble window. `stayedSince` is one read, a cutoff compared with `UpdatedUnix`. Neither value is used with the other, so a second boundary between them can only move a window edge by one second. Not changed |
 
 Two reads of a tick-start clock in one expression are equal once ticks run, so they are not listed as faults: `PlayerbotGroupCoordinator` set-aside remaining (`until - Now` twice), `PlayerbotBattlegroundCoordinator`
-`PhaseSinceMs = Now, QueuedSinceMs = Now`, `PlayerbotElevatorSnapshot`, and the social lanes' `pass.NowMs`. `PlayerbotGroupAI` reads `Now` (Uptime, against `_resurrectAtMs`) and `World.NowMs` (World, into
-`InFight`, against `LastCombatMs`) on one line, each against its own family. The `BattlegroundManager` lines read an accumulator and go to lane Y22.
+`PhaseSinceMs = Now, QueuedSinceMs = Now`, `PlayerbotElevatorSnapshot`, and the social lanes' `pass.NowMs`. Whether those run off the world thread does not matter for the equality: each reads a clock that only its writer moves (World at the tick start, Uptime, or the Social accumulator at the top of `Update`), and none of those writers runs while a reader does, by the same phase separation as the `BattlegroundManager` row. `PlayerbotGroupAI` reads `Now` (Uptime, against `_resurrectAtMs`) and `World.NowMs` (World, into
+`InFight`, against `LastCombatMs`) on one line, each against its own family. The `BattlegroundManager` lines read an accumulator and were settled by lane Y22 ("Settled by lane Y22").
 
-`BattlegroundManager.NowMs` is the Battleground accumulator family above and is handed to lane Y22 (see "Handed to lane Y22"). Outside the two projects and not read: `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
+`BattlegroundManager.NowMs` is the Battleground accumulator family above and was settled by lane Y22 (see "Settled by lane Y22"). Outside the two projects and not read: `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
 a stopwatch), `DebugDrawFeature.Now` and `EconomyFeature`-style `Now` properties (world and wall respectively, in `ArcaneCore.World`).
 
 ## Method and tallies
@@ -249,7 +249,7 @@ record parameter, not a read), `TeleportService` (`StartedMs` and `StageSinceMs 
 (`Suspensions.Export(..., World.NowMs, unixMs)`: a World stamp and a Wall Unix-ms argument, separate parameters), `PlayerbotAreaTriggers` near 270 and 296
 (`TeleportRefusal(..., session.World.NowMs)`, a World stamp), `PlayerbotBrain` near 1517 and `PlayerbotBrain.Contention` near 414, `PlayerbotRecovery` near 1240 and
 1358, `PlayerbotMotion` near 716 (World `NowMs` handed to path planning, a signal or a send), `PlayerbotCombatSpells` near 545 (`_itemBlockedUntil - World.NowMs`,
-World deadline), `PlayerbotElevatorSnapshot` near 32 (`world.NowMs - trip.StageMs`, handed to Y22), `PlayerbotCommands` near 183 (`memory.NowMs`, the Wall unix-ms
+World deadline), `PlayerbotElevatorSnapshot` near 32 (`world.NowMs - trip.StageMs`, settled by lane Y22), `PlayerbotCommands` near 183 (`memory.NowMs`, the Wall unix-ms
 clock of `PlayerbotSocialMemory`, handed to a display helper), and the social lanes (`pass.NowMs`, Social accumulator: `PlayerbotConversations`,
 `PlayerbotGratitude`, `PlayerbotGuildChat`, `PlayerbotGuildFounding`). No stamp meets another family. A scan for a line ending in `=` alone finds nothing in either
 project. The delegates are covered by the grep named above the delegate table.
@@ -337,16 +337,20 @@ Within one pass a bot is not classified after its own think: `Think` has one cal
 that index, and its main lane does not call `Classify`. The serial path and the map path (then `PlayerbotThinkScheduler`) both reach it through `TickLanes`, with
 `frame.Now` read after the bot list was built.
 
-Not proved: that a map key is served at most once in one tick. `ThinkMap` sets `group.Thought` but does not test it, and `CollectUnthought` only keeps the
-fallback from repeating a served map. A second pass over the same key would classify bots that had thought in the first one, against the same `frame.Now`.
-This one is handed to lane Y22, with the other points below.
+Settled by lane Y22: a map key is served at most once in one tick, by construction and now by a guard. By construction: `Map.Update` has two callers, the serial loop and
+`RunMapsParallel` in `WorldRuntime.RunTick`, and only one of them runs per tick (`mapCount` is set to 0 after the parallel run). `Map.Update` walks its updaters once, and
+`EnsureMapStages` attaches a `MapBotThinkStage` only to a map with no entry in `_mapStages`, so a map holds one stage and `ThinkBots` runs once per update. The key is
+`MapKey(map.MapId, map.InstanceId)`, and the runtime holds one `Map` per (map id, instance id) (`WorldRuntime._maps`). The fallback, `FinishMapThinkTick`, takes only the keys that
+`CollectUnthought` reports, which are the keys no `ThinkMap` has marked since `Assign`. Nothing in that chain serves a key twice, but it relied on those facts. `ThinkMap` now tests
+`group.Thought` and returns 0 for a key already served in the pass, so a second walk against the same `frame.Now` cannot classify bots that thought in the first one, whatever the
+callers do. `BotThinkPerMapTests.AMapKeyServedTwiceInOnePass_IsWalkedOnce_AndWalksAgainAfterTheNextAssign` pins it. Not run when this was written.
 
 ### The social accumulator
 
 Every `pass.NowMs` stamp in the social lanes (PlayerbotNeedsVoice, PlayerbotGuildChat, PlayerbotMood, PlayerbotSocialEmotes, PlayerbotGuildFounding, PlayerbotRivalry,
 PlayerbotSocialFeature registry stamps, PlayerbotSocialInitiative, PlayerbotGratitude, PlayerbotHelpLane `LookAround`, PlayerbotEventLane) is on `_clockMs`, which
-advances once per pass (`_clockMs += elapsedMs`), and the two pass constructions hand it in. It is not `WorldClock.NowMs` or `Uptime`, and the "tick-start reading"
-statement above does not apply to it: two stamps in one pass are equal because the accumulator moves once per pass. Each field was read for sign and for the meaning
+advances once per `Update` (`_clockMs += elapsedMs`; a budgeted pass can yield and resume on a later `Update`, so the clock can move between stages of one logical pass but not within one `Update`), and the two pass constructions hand it in. It is not `WorldClock.NowMs` or `Uptime`, and the "tick-start reading"
+statement above does not apply to it: two stamps in one `Update` are equal because the accumulator moves once per `Update`. Each field was read for sign and for the meaning
 of a zero gap; each compares with `pass.NowMs` of a later pass. `PlayerbotNeedsVoice` `StateOf` seeds `TradeMs`/`LfgMs`/`QuestHelpMs` as `nowMs - random` on that same
 clock, and `SeenMs` is stamped from `pass.NowMs` at all four sites.
 
@@ -373,15 +377,24 @@ clock, and `SeenMs` is stamped from `pass.NowMs` at all four sites.
 
 Traced where the source is in these two projects (table above): `SpellSystem` (World in production), the two boards (Social accumulator, World fallback), SocialMemory
 (Wall), the `Clock` seams of PlayerbotOpportunities and PlayerbotWorldPvpObjectives (test only). `PlayerbotElevatorSnapshot` subtracts stamps from `world.NowMs`; the
-stamps arrive as `now` parameters from the elevator and are all World at the call sites read. The `BattlegroundManager` accumulator and the two sites that read it twice
-in one expression, and the proof that each injected clock in the battleground and defense lanes is served once per tick, go to lane Y22 below, with the
-`ThinkMap` question.
+stamps arrive as `now` parameters from the elevator and are all World at the call sites read. The points lane Y22 settled are in "Settled by lane Y22" below.
 
-## Handed to lane Y22
+## Settled by lane Y22
 
-The points this pass read but did not prove: a map key served at most once per tick (`ThinkMap`); the `BattlegroundManager` double read against `NowMs += diffMs` (which
-thread runs it); `PlayerbotElevatorSnapshot` stamps; `PlayerbotBattlegroundAI.Now`; `PlayerbotDefenseBoard.NowMs`; `SpellSystem.NowMs` as an injected delegate. None of
-these is a mixed-clock comparison on a reading of the code; the open question is only about thread and call frequency.
+The points the first pass read but did not prove, with the verdict of each. Citations are by symbol; the lines the task named (`BattlegroundManager.cs:1196`, `PlayerbotElevatorSnapshot.cs:33`,
+`PlayerbotBattlegroundAI.cs:172`, `PlayerbotDefenseBoard.cs:280`, `SpellSystem.cs:117`) had moved by a few lines on the tree this was settled in. All of it is read from source; nothing was run.
+
+| Point | Verdict |
+|---|---|
+| A map key served at most once per tick (`PlayerbotThinkScheduler.ThinkMap`) | proved by construction (see "LiveNowMs") and guarded: a second `ThinkMap` for a key already served in the pass now returns 0. That 0 is also what an empty key returns, so if the guard ever fired `RunMapThink` would still add that walk's combat and reserve to `CombatAssigned`/`MainAssigned`: latent only, since the proof makes it unreachable. Test: `BotThinkPerMapTests.AMapKeyServedTwiceInOnePass_IsWalkedOnce_AndWalksAgainAfterTheNextAssign` |
+| `BattlegroundManager` double read against `NowMs += diffMs` (`PlayerLoggedIn`, `StatusReports`, `OnInvited`) | no race, by phase separation rather than by a single thread. `Update` runs only in the world-tick phase: `BattlegroundFeature.OnWorldTick`, raised by `RaiseWorldTick` on the world thread, after `RunCommands` (WorldRuntime.cs:687, then 693) and after the cluster queue's `Pump`, which also runs on the world thread. The maps phase starts afterwards and the world thread waits on it. Map workers exist only inside that phase. With `MapUpdateThreads` above 1 and more than one map, `RunMapsParallel` runs `map.Update` on scheduler workers, so the Packets stage, which carries `CMSG_BATTLEFIELD_STATUS` into `StatusReports`, runs on a worker, under the serial gate by default and ungated with `World:Parallel:Ungated=Packets`; gated or not, it is inside the maps phase and so never overlaps `Update`. The other readers (posted commands, the cluster queue's `Execute`) run on the world thread outside the world-tick phase. Two readers on different map workers do not write, so they do not race each other either: the only writer is `Update`. `PlayerLoggedIn` read `NowMs` up to four times per queue on the base (send, compare, subtract, add), `StatusReports` up to three, and `OnInvited` twice, and a host callback sits between the reads of `PlayerLoggedIn`, so each now reads `NowMs` once into a local. No behaviour change, and no test: a read cannot be made to differ without a second thread running during `Update`, and the phases rule that out |
+| `PlayerbotElevatorSnapshot` stamps (`StageMs`, `BeganMs`) | proved World: `PlayerbotElevator` stamps both only from `session.World.NowMs` or from the `now` its callers hand it (`PlayerbotMotion.Pump`, `Drive`, `Settle`, `TryBegin`; each reads `session.World.NowMs` or the tick-start `gameNow`). The snapshot subtracts from `world.NowMs` modularly, which is the true age across the 49.7-day wrap, and the stamp is never later than the reading because the clock does not run backwards. The subtraction is now `ElevatorTripInfo.AgeMs`, with one reading for all rows. Tests: `PlayerbotElevatorSnapshotTests` |
+| Injected-delegate wrappers | traced: `SpellSystem` (this table) and the two boards (`PlayerbotDefenseBoard` in this table, `PlayerbotWorldEventBoard` at the wrapper table and "The two board clocks"); no second constructor or other family reaches them |
+| `PlayerbotBattlegroundAI.Now` (`Uptime`) | proved single-family: its stamps are `_restUntilMs`, the buff board (`PlayerbotBattlegroundBuffs.Update`, `GiveUp`) and the Alterac Valley claims (`ClaimsAt`, `Claim`, `RefreshAlteracValley`), and the shared buff board and AV state are reached only from this class, always with `Now`. Path planning uses `World.NowMs` as a separate argument. Two reads in a tick are equal on `Uptime`; there is no comparison across families. Documented on the property; no code change |
+| `PlayerbotDefenseBoard.NowMs` (`_clock()`) | the clock is the Social accumulator (World when the social feature is not registered, which does not change at runtime), so it moves only when the social feature advances `_clockMs` (once per `Update`, at its top), not within one `Update`. One latent double read existed (it cannot differ in production: `Sweep` is synchronous and both `EventClockMs` sources hold still during it, so only a test's synthetic clock shows the difference, and it is hardening): `Absorb`, called from `Sweep`'s merge loop, took a fresh `_clock()` for the merged centre while `Sweep` aged and closed calls by its own earlier reading, so a clock that moved between the two could judge one caller live in the sweep and stale in the merge. `Sweep` now hands its reading down (`AbsorbAt`); the public `Absorb` reads once and delegates. Test: `PlayerbotDefenseBoardTests.Sweep_MergesOnTheReadingItAgedCallsBy_EvenWhenTheClockMovesBetweenReads` |
+| `SpellSystem.NowMs` as an injected delegate | proved World in production: the only `new SpellSystem(` in `src` is `SpellFeature` (`() => _world?.NowMs ?? 0`); tests pass their own. Documented on the property; no code change |
+
+None of these was a mixed-clock comparison. The tests added by this lane were not run when this was written.
 
 ## Not covered
 

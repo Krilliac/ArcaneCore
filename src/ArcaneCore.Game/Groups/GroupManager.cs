@@ -416,9 +416,18 @@ public sealed partial class GroupManager(SocialContext context)
     public bool OnCharacterDeleted(ObjectGuid guid)
     {
         UninviteFromGroup(guid);
+
+        // A deleted character in a battleground raid leaves the raid first, which makes the parked original group current again (and drops its
+        // _originalOf link); removing it from the raid directly would disband a two-member raid and strand the survivors' parked groups.
+        bool wasMember = GetGroup(guid) is { IsBattlegroundGroup: true };
+        if (wasMember)
+        {
+            RemoveFromBattlegroundRaid(guid);
+        }
+
         if (GetGroup(guid) is not { } group)
         {
-            return false;
+            return wasMember;
         }
 
         RemoveFromGroup(group, guid, kicked: false);
@@ -559,7 +568,7 @@ public sealed partial class GroupManager(SocialContext context)
     {
         if (TryForward(player, CommandOf(player, GroupCommandKind.SetLootMethod, value: method, value2: threshold, master: master.Value))) return;
         if (method > (uint)LootMethod.NeedBeforeGreed || threshold is < Group.MinLootThreshold or > Group.MaxLootThreshold
-            || GroupForPartyRules(player.Guid) is not { } group || !group.IsLeader(player.Guid))
+            || GroupForLootRules(player.Guid) is not { } group || !group.IsLeader(player.Guid))
         {
             return;
         }
@@ -1079,10 +1088,22 @@ public sealed partial class GroupManager(SocialContext context)
 
     /// <summary>
     /// The party the invite and accept rules see (vmangos HandleGroupInviteOpcode, GroupHandler.cpp:90-96).
-    /// A battleground raid yields to the parked original group, which is null when there is none. Without a current group the original group is used too (vmangos
-    /// HandleLootMethodOpcode, GroupHandler.cpp:343-344); none is held then in practice, as an original group exists only behind a current raid.
+    /// A battleground raid yields to the parked original group, which is null when there is none; a player with no current group has none
+    /// (invites never fall back to an original group when there is no group at all).
     /// </summary>
     private Group? GroupForPartyRules(ObjectGuid guid)
+    {
+        Group? group = GetGroup(guid);
+        return group is { IsBattlegroundGroup: true } ? GetOriginalGroup(guid) : group;
+    }
+
+    /// <summary>
+    /// The group a loot-method request lands on (vmangos HandleLootMethodOpcode, GroupHandler.cpp:343-344): the current group, or the original
+    /// group when the player has no current group or is in a battleground raid. In practice an original group is held only while a raid is
+    /// current (it is parked by <see cref="AddToBattlegroundRaid"/>, or recorded when a normal group is joined from a raid) and is dropped when
+    /// that group ends, so the no-current-group fallback is a defensive match of the reference.
+    /// </summary>
+    private Group? GroupForLootRules(ObjectGuid guid)
     {
         Group? group = GetGroup(guid);
         return group is null or { IsBattlegroundGroup: true } ? GetOriginalGroup(guid) : group;

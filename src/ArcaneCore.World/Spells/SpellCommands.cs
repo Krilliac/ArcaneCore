@@ -1,11 +1,18 @@
 using System.Globalization;
+using System.Numerics;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Talents;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
+using ArcaneCore.World.Gm.Npc;
+using ArcaneCore.World.Talents;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Spells;
@@ -23,7 +30,9 @@ public sealed class SpellCommands : ICommandGroup
         new ChatCommand("unlearn", AccountSecurity.GameMaster, "Syntax: .unlearn #spell — make the selected player or yourself forget a spell.", Unlearn),
         new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist.", Cast, Children:
         [
-            // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (here Administrator like .cast).
+            // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (retail level 5, as the .cast entry itself). No RetailLevel is declared
+            // here: RetailCommandLevels.Apply gives the level 5 (entries "cast self" etc.), and with World:GmCommands:RetailLevels off the stored Administrator
+            // security applies to .cast and to each child alike.
             new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]\nMake the selected unit cast a spell on itself.", CastSelf),
             new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]\nMake the selected unit cast a spell on its victim.", CastTarget),
             new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]\nMake the selected unit cast a spell on you.", CastBack),
@@ -117,13 +126,20 @@ public sealed class SpellCommands : ICommandGroup
 
     private static bool Cast(CommandContext context, string args)
     {
-        if (!TryParseSpell(args, out uint spellId))
+        // A shift-click link is taken like a number; a trailing "triggered" is accepted, and the cast is always triggered (this command never cast anything else).
+        if (!TryParseCastArgs(context, args, withDistance: false, out uint spellId, out _, out _))
         {
             return false;
         }
 
         Player? target = Target(context);
         if (target is null)
+        {
+            return true;
+        }
+
+        // An unknown spell keeps the cast result (NotFound); only a known but broken one is refused here.
+        if (Feature(context).System.Store.Get(spellId) is not null && !SpellIsValid(context, spellId))
         {
             return true;
         }
@@ -137,16 +153,17 @@ public sealed class SpellCommands : ICommandGroup
     }
 
     /// <summary>
-    /// vmangos ExtractUint32 (spell id, a plain number with an optional leading #; the shift-click link form is not parsed), ExtractFloat and ExtractLiteralArg
-    /// "triggered" (UnitCommands.cpp:1212-1385): a spell id, an optional distance, then an optional <c>triggered</c> word. As in vmangos, anything after the
-    /// <c>triggered</c> word is ignored; without that word nothing may follow. False on any syntax error.
+    /// vmangos ExtractSpellIdFromLink (a plain number with an optional leading #, or a spell, enchant or talent shift-click link), ExtractFloat and
+    /// ExtractLiteralArg "triggered" (UnitCommands.cpp:1212-1385): a spell id, an optional distance, then an optional <c>triggered</c> word. As in vmangos,
+    /// anything after the <c>triggered</c> word is ignored; without that word nothing may follow. False on any syntax error.
     /// </summary>
-    private static bool TryParseCastArgs(string text, bool withDistance, out uint spellId, out float distance, out bool triggered)
+    private static bool TryParseCastArgs(CommandContext context, string text, bool withDistance, out uint spellId, out float distance, out bool triggered)
     {
         distance = 0f;
         triggered = false;
         var args = new CommandArgs(text.Trim().TrimStart('#'));
-        if (!args.ExtractUInt32(out spellId) || spellId == 0)
+        TalentCatalog? talents = context.Session.Services.GetService<TalentFeature>()?.Catalog;
+        if (!args.ExtractSpellIdFromLink(talents, out spellId))
         {
             return false;
         }
@@ -177,6 +194,62 @@ public sealed class SpellCommands : ICommandGroup
     private static void ReplyCast(CommandContext context, uint spellId, SpellCastResult result)
         => context.Reply(result == SpellCastResult.CastOk ? $"Cast spell {spellId}." : $"Spell {spellId} failed: {result}.");
 
+    private static int s_facingSplineId = 0x4000_0000;
+
+    /// <summary>
+    /// The unit turns to the invoker before it casts (vmangos Unit::SetFacingToObject, Unit.cpp:2796-2804, which runs on any Unit but only while it is stopped, and
+    /// Unit::SetFacingTo, Unit.cpp:2785-2794: the orientation, and a facing spline with no path that SMSG_MONSTER_MOVE carries to the observers). vmangos
+    /// Unit::IsStopped (Unit.h:1401) is !HasUnitState(UNIT_STATE_MOVING), and UNIT_STATE_MOVING (UnitDefines.h:407) is set only by the roaming, chase, follow and
+    /// fleeing motion generators, never by a player's own client-driven walking: so a player walking under client control counts as stopped and does turn. A
+    /// creature is stopped when it has no spline. Two limits of this server, with no vmangos counterpart: a player in taxi flight is left alone (its flight
+    /// spline is held by the client, and a one-point spline would cancel it), and so is a player on a transport (vmangos sends SMSG_MONSTER_MOVE_TRANSPORT there,
+    /// with transport-local coordinates, which this command does not build; the creature SetFacingTo has the same gap). A player's own client receives the
+    /// spline too.
+    /// </summary>
+    private static void FaceInvoker(CommandContext context, Unit caster)
+    {
+        Player invoker = context.Player;
+        float angle = Creature.NormalizeOrientation(MathF.Atan2(invoker.Y - caster.Y, invoker.X - caster.X));
+        if (caster is Creature { IsMoving: false } creature)
+        {
+            if (GmNpcCommands.SystemOf(context) is { } system)
+            {
+                system.SetFacingTo(creature, angle);
+            }
+
+            return;
+        }
+
+        if (caster is Player { Map: { } map } player && (player.UnitFlags & ArcaneCore.Game.UnitFlags.TaxiFlight) == 0
+            && !player.Movement.HasFlag(MovementFlags.OnTransport))
+        {
+            player.Orientation = angle;
+            uint id = unchecked((uint)Interlocked.Increment(ref s_facingSplineId));
+            // Duration 1 ms: vmangos MoveSpline.cpp:122,127 (minimal_duration 1) and :164-167 (a zero-length spline is forced to length 1); the creature path writes 1 too.
+            byte[] packet = CreatureMovePackets.BuildPath(player.Guid, new Vector3(player.X, player.Y, player.Z), id, SplineFacing.ToAngle(angle),
+                run: !player.Movement.HasFlag(MovementFlags.WalkMode), durationMs: 1, [new Vector3(player.X, player.Y, player.Z)]);
+            player.Session.Send(WorldOpcode.SmsgMonsterMove, packet);
+            map.BroadcastToObservers(player, WorldOpcode.SmsgMonsterMove, packet);
+        }
+    }
+
+    /// <summary>
+    /// vmangos SpellMgr::IsSpellValid (SpellMgr.cpp:2298), checked by cast, cast self and cast dist (LANG_COMMAND_SPELL_BROKEN, an error rather than a syntax
+    /// reply): a spell that creates, needs or teaches an item or spell that does not exist is refused with a reply. The text is mangos_string 483
+    /// (LANG_COMMAND_SPELL_BROKEN, "Spell %u broken and not allowed to cast or learn!"), from mangos-classic sql/base/mangos.sql:3835.
+    /// </summary>
+    private static bool SpellIsValid(CommandContext context, uint spellId)
+    {
+        if (SpellVariants.IsSpellValid(Feature(context).System, SpellVariants.LoadedItems(context), spellId))
+        {
+            return true;
+        }
+
+        context.Fail("spell-broken");
+        context.Reply($"Spell {spellId} broken and not allowed to cast or learn!");
+        return false;
+    }
+
     private static bool SpellExists(CommandContext context, uint spellId)
     {
         if (Feature(context).System.Store.Get(spellId) is not null)
@@ -190,7 +263,7 @@ public sealed class SpellCommands : ICommandGroup
 
     private static bool CastSelf(CommandContext context, string args)
     {
-        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        if (!TryParseCastArgs(context, args, withDistance: false, out uint spellId, out _, out bool triggered))
         {
             return false;
         }
@@ -200,7 +273,7 @@ public sealed class SpellCommands : ICommandGroup
             return true;
         }
 
-        if (SpellExists(context, spellId))
+        if (SpellExists(context, spellId) && SpellIsValid(context, spellId))
         {
             ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForSelf(), triggered));
         }
@@ -210,7 +283,7 @@ public sealed class SpellCommands : ICommandGroup
 
     private static bool CastTarget(CommandContext context, string args)
     {
-        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        if (!TryParseCastArgs(context, args, withDistance: false, out uint spellId, out _, out bool triggered))
         {
             return false;
         }
@@ -234,6 +307,7 @@ public sealed class SpellCommands : ICommandGroup
 
         if (SpellExists(context, spellId))
         {
+            FaceInvoker(context, caster);
             ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(victim.Guid), triggered));
         }
 
@@ -242,7 +316,7 @@ public sealed class SpellCommands : ICommandGroup
 
     private static bool CastBack(CommandContext context, string args)
     {
-        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        if (!TryParseCastArgs(context, args, withDistance: false, out uint spellId, out _, out bool triggered))
         {
             return false;
         }
@@ -254,6 +328,7 @@ public sealed class SpellCommands : ICommandGroup
 
         if (SpellExists(context, spellId))
         {
+            FaceInvoker(context, caster);
             ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(context.Player.Guid), triggered));
         }
 
@@ -262,21 +337,47 @@ public sealed class SpellCommands : ICommandGroup
 
     private static bool CastDist(CommandContext context, string args)
     {
-        if (!TryParseCastArgs(args, withDistance: true, out uint spellId, out float distance, out bool triggered))
+        if (!TryParseCastArgs(context, args, withDistance: true, out uint spellId, out float distance, out bool triggered))
         {
             return false;
         }
 
-        if (!SpellExists(context, spellId))
+        if (!SpellExists(context, spellId) || !SpellIsValid(context, spellId))
         {
             return true;
         }
 
-        // vmangos GetClosePoint(x, y, z, dist): the point `dist` yards in front of the invoker (its own size is not added here).
         Player player = context.Player;
-        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = PointInFront(player.X, player.Y, player.Z, player.Orientation, distance) };
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = ClosePoint(player, distance) };
         ReplyCast(context, spellId, Feature(context).System.CastSpell(player, spellId, targets, triggered));
         return true;
+    }
+
+    /// <summary>
+    /// vmangos GetClosePoint(x, y, z, dist) (Object.h:520, Object.cpp:2742-2783): the point <paramref name="distance"/> yards in front of the unit plus the unit's own
+    /// bounding radius (GetNearPoint2DAroundPosition adds it), with z moved onto the ground there plus 0.05 (UpdateGroundPositionZ, Object.cpp:2079) when a height is
+    /// known; otherwise the unit's own z. Not ported: vmangos' optional position-collision search (CONFIG_BOOL_DETECT_POS_COLLISION) and its
+    /// MaNGOS::NormalizeMapCoord clamp (Object.cpp:2726-2733), so a huge distance gives a point off the map (the terrain lookup then knows no height).
+    /// </summary>
+    internal static (float X, float Y, float Z) ClosePoint(Player player, float distance)
+        => ClosePoint(player.X, player.Y, player.Z, player.Orientation, player.BoundingRadius, distance,
+            player.Map is { } map ? new Func<float, float, float, float>((px, py, pz) => map.Collision.GetHeight(px, py, pz)) : null);
+
+    /// <summary>The close point from explicit values; <paramref name="height"/> is the ground lookup (null: none), whose answer is used when it is a real height.</summary>
+    internal static (float X, float Y, float Z) ClosePoint(
+        float x, float y, float z, float orientation, float radius, float distance, Func<float, float, float, float>? height)
+    {
+        (x, y, z) = PointInFront(x, y, z, orientation, distance + radius);
+        if (height is not null)
+        {
+            float ground = height(x, y, z);
+            if (float.IsFinite(ground) && ground > TerrainTile.InvalidHeight)
+            {
+                z = ground + 0.05f;
+            }
+        }
+
+        return (x, y, z);
     }
 
     /// <summary>The point <paramref name="distance"/> yards ahead of (<paramref name="x"/>, <paramref name="y"/>, <paramref name="z"/>) facing <paramref name="orientation"/> (radians); the height is kept.</summary>

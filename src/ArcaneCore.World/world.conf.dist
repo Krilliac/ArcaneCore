@@ -2429,12 +2429,12 @@ Cluster.Worker.CharactersSchemaVersion = 75
 #        Description: Content revision label both ends of the link must agree on; an override, used
 #                     only while VersionsFromDatabase is false.
 #        Type: string
-#        Default: "world-schema-68"
+#        Default: "world-schema-69"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.ContentRevision = "world-schema-68"
+Cluster.Worker.ContentRevision = "world-schema-69"
 
 #
 #    Cluster.Worker.Enabled
@@ -2557,12 +2557,12 @@ Cluster.Worker.VersionsFromDatabase = true
 #        Description: World schema version both ends must agree on (an override label, used only
 #                     while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 68
+#        Default: 69
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.WorldSchemaVersion = 68
+Cluster.Worker.WorldSchemaVersion = 69
 
 #----------------------------------------------------------------------------
 # Cluster:Worker:Handoff
@@ -4852,6 +4852,21 @@ Economy.CodExpireDays = 3
 #        Docs: docs/reference/configuration.md#economy
 #
 Economy.ExpirySweepSeconds = 60
+
+#
+#    Economy.GmCrossTeamTrade
+#        Description: Whether a game master with GM mode on may start a trade with a player of the
+#                     other team although AllowCrossTeamTrade is off (default true). An ArcaneCore
+#                     extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no
+#                     such rule, so false is the retail behaviour. Only the initiator is tested; a
+#                     player who invites a game master of the other team is refused.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#economy
+#
+Economy.GmCrossTeamTrade = true
 
 #
 #    Economy.LetterItemEntry
@@ -9573,6 +9588,36 @@ World.CharactersPerRealm = 10
 World.CommandTimeBudgetMs = 5
 
 #
+#    World.CompressMovementCount
+#        Description: Movement packets a session must be sent within 10 seconds before further
+#                     movement relays to it are batched into SMSG_COMPRESSED_MOVES (vmangos
+#                     Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300,
+#                     here 0 = never, which is what retail did). Packets over 253 bytes are never
+#                     batched. A batch is flushed on the session's next tick.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.CompressMovementCount = 0
+
+#
+#    World.ExpectedSpamRecords
+#        Description: Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the
+#                     day; '@' separates records, empty (the default) sends no packet.
+#                     mangos-classic sends the rows of its spam_records table the same way
+#                     (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the
+#                     client's use of them is unconfirmed.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.ExpectedSpamRecords = ""
+
+#
 #    World.GmLevelInWhoList
 #        Description: Highest staff level ordinary players see in /who (vmangos/cmangos
 #                     GM.InWhoList.Level default SEC_ADMINISTRATOR, i.e. every account). Values:
@@ -9596,6 +9641,24 @@ World.GmLevelInWhoList = Administrator
 #        Docs: docs/reference/configuration.md#world
 #
 World.InstantLogoutSecurity = Moderator
+
+#
+#    World.LimitPlayTime
+#        Description: The consecutive-play-time limit (vmangos LimitPlayTime,
+#                     CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that
+#                     is not retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3
+#                     h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its
+#                     character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and
+#                     NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h
+#                     (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420).
+#                     ArcaneCore.Game.Entities.PlayTimeLimit.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.LimitPlayTime = false
 
 #
 #    World.ListenRangeSay
@@ -12849,6 +12912,18 @@ World.Honor.DishonorableKills = true
 #        Docs: docs/reference/configuration.md#worldhonor
 #
 World.Honor.Enabled = true
+
+#
+#    World.Honor.GmCrossFactionInspect
+#        Description: A game master with GM mode on may inspect the other faction (default true, an
+#                     ArcaneCore extension; false is the vmangos behaviour).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldhonor
+#
+World.Honor.GmCrossFactionInspect = true
 
 #
 #    World.Honor.MaintenanceDay

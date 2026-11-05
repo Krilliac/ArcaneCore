@@ -1499,7 +1499,7 @@ internal sealed partial class PlayerbotRisk
         {
             _cornered = true;
             PlayerbotAnomalies.Report(player, "risk", "retreat-cornered",
-                $"retreat for '{Retreat.Reason}' ended with the bot still threatened (gave up after {Retreat.UsedEscapes.Count} escapes; last run point {(Retreat.Goal is { } goal ? $"{goal.X:F1},{goal.Y:F1},{goal.Z:F1}" : "none")} at {player.X:F1},{player.Y:F1},{player.Z:F1}); it fights on",
+                $"retreat for '{Retreat.Reason}' ended with the bot still threatened (gave up after {Retreat.UsedEscapes.Count} escapes; last run point {(Retreat.Goal is { } goal ? string.Create(CultureInfo.InvariantCulture, $"{goal.X:F1},{goal.Y:F1},{goal.Z:F1}") : "none")}); it fights on",
                 AnomalySeverity.Info);
         }
         return false;

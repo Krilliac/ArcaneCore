@@ -1830,6 +1830,96 @@ public sealed class CharacterSaveQueueTests
         }
     }
 
+    private static async Task WaitForRetainedAsync(CharacterSaveQueue queue, int id, bool retained)
+    {
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (queue.RetainedCharacterIds().Contains(id) != retained)
+        {
+            Assert.True(DateTime.UtcNow < deadline, retained ? "the refused snapshot was never retained" : "the retained snapshot was never dropped");
+            await Task.Delay(5);
+        }
+    }
+
+    [Fact]
+    public async Task ARefusalWhileSealed_IsRetained_AndAnAbortedHandoffsBarrierWritesIt()
+    {
+        await using var kit = new Kit();
+        int refuse = 1;
+        kit.Store.OnSave = (_, _) => Volatile.Read(ref refuse) == 1
+            ? Task.FromException(new CharacterOwnershipRejectedException("world", 7))
+            : Task.CompletedTask;
+        kit.Queue.SealWrites();
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await WaitForRetainedAsync(kit.Queue, 1, retained: true);
+        Assert.Contains(1, kit.Queue.UnsettledCharacterIds()); // a later flush of the same handoff attempt still sees it
+
+        Volatile.Write(ref refuse, 0);
+        kit.Queue.UnsealWrites();
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(11u, Assert.Single(kit.Store.Saved).Money);
+        Assert.Empty(kit.Queue.RetainedCharacterIds());
+    }
+
+    [Fact]
+    public async Task ARefusalWhileSealed_IsDroppedByTheRetirement()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+        kit.Queue.SealWrites();
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await WaitForRetainedAsync(kit.Queue, 1, retained: true);
+
+        kit.Queue.RetireEveryCharacter();
+        Assert.Empty(kit.Queue.RetainedCharacterIds());
+        await kit.Queue.StopAsync(); // nothing retained: the stop reports no undrained snapshot
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task ARefusalWhileSealed_IsNotAFailedDrainAtStop_WhenTheRetirementNeverArrived()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+        kit.Queue.SealWrites();
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await WaitForRetainedAsync(kit.Queue, 1, retained: true);
+
+        await kit.Queue.StopAsync(); // would throw "character saves did not drain" without the sealed tolerance
+        Assert.Empty(kit.Store.Saved);
+    }
+
+    [Fact]
+    public async Task ARefusalOfAnUnsealedQueue_IsStillTerminal_AndNotRetainedAsASealedOne()
+    {
+        await using var kit = new Kit();
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.Queue.FatalFailure += ex => fatal.TrySetResult(ex);
+        kit.Store.OnSave = (_, _) => Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        Exception observed = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.IsType<CharacterOwnershipRejectedException>(observed);
+    }
+
+    [Fact]
+    public async Task AQuarantinedCharactersRetainedSnapshot_IsNotSettledByAHandoffFlush()
+    {
+        // Named limit (docs/areas/persistence.md): quarantine means the old session's state is untrusted, so a handoff does not write it for the target to read.
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new InvalidOperationException("the disk said no"));
+        kit.Queue.Enqueue(State(1, 11));
+        kit.Queue.Start();
+        await WaitForRetainedAsync(kit.Queue, 1, retained: true);
+        Assert.Contains(1, kit.Queue.UnsettledCharacterIds());
+
+        kit.Queue.QuarantineCharacter(1);
+        Assert.Contains(1, kit.Queue.RetainedCharacterIds());
+        Assert.DoesNotContain(1, kit.Queue.UnsettledCharacterIds());
+    }
+
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
 
     private sealed class Kit : IAsyncDisposable

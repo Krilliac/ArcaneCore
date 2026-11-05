@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
@@ -125,6 +126,37 @@ public sealed class AppleBobOpeningWorldTests
         Assert.Equal(GameObjectState.Ready, state);
         Assert.Equal(0u, flags & 0x2);
 
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAt(Opening, bob));
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellStart);
+        await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        (ulong source, List<(uint ItemId, uint Count)> items) = ReadLootResponse(await client.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
+        Assert.Equal(bob, source);
+        Assert.Equal((BobItem, BobCount), Assert.Single(items));
+    }
+
+    /// <summary>
+    /// World:LimitPlayTime's NO_PLAY_TIME flag on OPEN_LOCK (vmangos Spell::CheckCast, Spell.cpp:5975-5976): the cast fails with SPELL_FAILED_PLAY_TIME (0x8E) before it
+    /// starts and no loot window opens. Clearing the flag is the positive control: the same packet at the same chest then opens it, so the refusal came from the flag.
+    /// Written without a build or test run (lane rule); unproven until the integration gate.
+    /// </summary>
+    [Fact]
+    public async Task CastingOpeningWithNoPlayTime_FailsWithPlayTimeAndOpensNothing_AndOpensOnceTheFlagIsGone()
+    {
+        await using WorldTestHost host = Start(out _);
+        await using WorldTestClient client = await host.EnterWorldAsync("BOBTIRED", "Bobtired");
+        ulong bob = BobGuid();
+        await GameObjectWorldTests.ReadUntilGameObjectCreateAsync(client, bob);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Bobtired")?.Skills is not null, "skills attached"); // without them the check answers BadTargets
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Bobtired")!.Flags |= PlayerFlags.NoPlayTime);
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAt(Opening, bob));
+        List<(WorldOpcode Opcode, byte[] Payload)> refused = await client.CollectFromAsync(WorldOpcode.SmsgCastResult);
+        byte[] playTimeFailure = [.. BitConverter.GetBytes(Opening), 2, 0x8E]; // u32 spell, u8 status 2 (failed), u8 SPELL_FAILED_PLAY_TIME
+        Assert.Equal(playTimeFailure, Assert.Single(refused, p => p.Opcode == WorldOpcode.SmsgCastResult).Payload);
+        Assert.DoesNotContain(refused, p => p.Opcode is WorldOpcode.SmsgSpellStart or WorldOpcode.SmsgSpellGo or WorldOpcode.SmsgLootResponse);
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgSpellGo, WorldOpcode.SmsgLootResponse);
+
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Bobtired")!.Flags &= ~PlayerFlags.NoPlayTime);
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastAt(Opening, bob));
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellStart);
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);

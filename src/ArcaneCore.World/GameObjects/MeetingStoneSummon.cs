@@ -38,7 +38,7 @@ internal sealed class MeetingStoneSummon(IServiceProvider services, WorldRuntime
             return GameObjectUseResult.NotUsable;
         }
 
-        if (target.MapId == stone.Map?.MapId && DistanceSquared(target, stone) <= StoneRadiusYards * StoneRadiusYards)
+        if (ReferenceEquals(target.Map, stone.Map) && DistanceSquared(target, stone) <= StoneRadiusYards * StoneRadiusYards)
         {
             return GameObjectUseResult.NotUsable;
         }

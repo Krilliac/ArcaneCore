@@ -22,7 +22,7 @@ public sealed partial class SummonService
     /// <paramref name="replacedCurrentRow"/> says the finished write replaced or removed the character's character_pet row (a stable or
     /// unstable), a failed abandon delete still owed for that row is cancelled: the store deletes by character, so running it later would
     /// destroy the pet the stable just wrote. <paramref name="write"/> runs on the thread pool. A failure is rethrown unrecorded: the caller
-    /// (<see cref="PetStableController"/>) owns recording and logging it.
+    /// (<see cref="PetStableController"/>) owns recording and logging it. The handoff fence seams (<see cref="WritesRetired"/>, <see cref="WritesSealed"/>) are not consulted here: these writes come from session handlers, so a refusal is the caller's failure to report.
     /// </summary>
     public async Task<T> QueueSerializedWriteAsync<T>(int characterId, Func<CancellationToken, Task<T>> write, Func<T, bool>? replacedCurrentRow = null)
     {

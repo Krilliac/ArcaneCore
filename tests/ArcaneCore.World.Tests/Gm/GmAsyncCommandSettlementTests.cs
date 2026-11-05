@@ -108,6 +108,27 @@ public sealed class GmAsyncCommandSettlementTests
         Assert.Equal(failure, context.Failure); // RA must report #done error, not #done ok
     }
 
+    [Theory]
+    [InlineData("dump.txt PDLADMIN x1", "Invalid character name!", "invalid-name")]
+    [InlineData("dump.txt PDLADMIN Clone 0", "Invalid character guid!", "invalid-guid")]
+    [InlineData("dump.txt PDLADMIN Clone 2147483648", "Invalid character guid!", "invalid-guid")]
+    [InlineData("dump.txt PDLADMIN Clone 4242", "Character guid 4242 in use!", "guid-in-use")]
+    [InlineData("sub/dump.txt PDLADMIN Clone", "Failed to open file: sub/dump.txt", "file-open-failed")]
+    public async Task APlayerDumpLoad_ThatIsRefusedBeforeItStarts_ReportsTheFailure(string args, string reply, string failure)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("PDLADMIN", "Pdladmin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+        host.WorldServices.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(4242, 77, "Taken", 1, 0, 1, 30));
+
+        (CommandContext context, bool early, ConcurrentQueue<string> replies) = await RunAsync(host, session, "pdump load", args);
+
+        Assert.False(early);
+        Assert.Equal(reply, Assert.Single(replies));
+        Assert.Equal(failure, context.Failure); // RA must report #done error, not #done ok
+    }
+
     [Fact]
     public async Task APlayerDumpWrite_WhoseFileCannotBeOpened_ReportsTheFailureFromTheWorker()
     {

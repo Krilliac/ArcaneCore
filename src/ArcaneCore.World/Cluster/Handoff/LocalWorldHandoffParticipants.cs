@@ -224,7 +224,7 @@ public sealed class LocalWorldHandoffSource(
         // The takeover moved the one ownership scope every write of this process runs under, so it holds no character any more, frozen, offline or never heard of. Every character, instance
         // and social write queue drops its writes silently and counts them, keys of no character included (the shared registry, consulted before a write is enqueued and again before it runs),
         // and the save queue drops its waiting and retained snapshots and skips later ones (one informational line), instead of attempting writes the fence must refuse. The flush left nothing
-        // open there, so a drop here is a write that came after it. Queues with no fence handling (pets, groups, GM audit, accounts, respawns, and the state-save queues of Silithyst, Fishing Extravaganza, Elemental Invasion and Nightmare Dragons) keep what the fence refuses; the keyed and respawn queues name it at stop, the state-save queues only log it. The war effort and Scourge invasion stores have no fence handling either.
+        // open there, so a drop here is a write that came after it. The pet saves and deletes follow the retirement through the summon service seams (retired: skipped and counted). Queues with no fence handling (groups, GM audit, accounts, respawns, and the state-save queues of Silithyst, Fishing Extravaganza, Elemental Invasion and Nightmare Dragons) keep what the fence refuses; the keyed and respawn queues name it at stop, the state-save queues only log it. The war effort and Scourge invasion stores have no fence handling either.
         retirement?.RetireAll();
         saveQueue.RetireEveryCharacter();
         return Task.CompletedTask;

@@ -476,6 +476,8 @@ public sealed class QuestRewardAsyncRecoveryTests
             await MockScenarios.ChooseRewardAsync(original.Connection, 1, token);
             await control.Committed.Task.WaitAsync(token);
             Assert.Equal(1, feature.PendingSettlementCount);
+            Assert.Equal([checked((int)original.Guid)], feature.SettlingCharacters);
+            Assert.Contains(checked((int)original.Guid), await new CharacterPersistenceBarrier(server.Services).OpenCharacterIdsAsync(token));
             await AssertStoredAsync(server, original.Guid, rewarded: true, token, flush: false);
             Assert.Empty(targets);
             ScenarioConnection connection = original.Connection;

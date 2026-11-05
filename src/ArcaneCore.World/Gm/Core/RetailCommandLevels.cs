@@ -28,6 +28,10 @@ public static class RetailCommandLevels
         ["learn"] = 5,               // 507  SEC_DEVELOPER (the "" entry)
         ["unlearn"] = 3,             // 515  SEC_GAMEMASTER (the "" entry; group 1255)
         ["cast"] = 5,                // 201  SEC_DEVELOPER (the "" entry)
+        ["cast self"] = 5,           // Chat.cpp:195-203 castCommandTable, SEC_DEVELOPER
+        ["cast target"] = 5,         // Chat.cpp:195-203 castCommandTable, SEC_DEVELOPER
+        ["cast back"] = 5,           // Chat.cpp:195-203 castCommandTable, SEC_DEVELOPER
+        ["cast dist"] = 5,           // Chat.cpp:195-203 castCommandTable, SEC_DEVELOPER
         ["unaura"] = 3,              // 1233 SEC_GAMEMASTER
         ["cooldown"] = 3,            // 1254 SEC_GAMEMASTER (list/clear 283-284)
         ["instance"] = 2,            // 1202 SEC_TICKETMASTER (the group)

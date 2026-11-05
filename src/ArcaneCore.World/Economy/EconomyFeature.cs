@@ -164,6 +164,8 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     public Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default)
         => Settlements.WaitForCharacterAsync(characterId, cancellationToken);
 
+    public IReadOnlyCollection<int> SettlingCharacters => Settlements.SettlingCharacters;
+
     public async Task StopAsync()
     {
         _stopping = true;

@@ -168,6 +168,11 @@ internal sealed partial class PlayerbotBattlegroundAI
     private readonly PlayerbotObjectiveReports _walkRefusals = new();
     private bool _reportedIdleInMatch;
 
+    /// <summary>
+    /// The Uptime clock (tick-start, non-wrapping). Every stamp this AI keeps (<c>_restUntilMs</c>, the buff board, the Alterac Valley claims) is taken from it and compared with it;
+    /// the shared match state (<c>PlayerbotBattlegroundBuffs</c> board, <c>PlayerbotAlteracValleyState</c>) is reached only from this class, so no other clock meets it. Path planning takes
+    /// the World clock (<c>World.NowMs</c>) separately and never mixes the two.
+    /// </summary>
     private long Now => (long)_session.World.Uptime.TotalMilliseconds;
 
     /// <summary>Drop every route, target and cast intention (the coordinator lets the bot go, or it changes its phase).</summary>
@@ -498,7 +503,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", detail);
     }
 
-    /// <summary>The refused walk to <paramref name="goal"/> as <c>objective-unreachable</c>, once per (goal, origin) cell pair until <see cref="Release"/>.</summary>
+    /// <summary>The refused walk to <paramref name="goal"/> as <c>objective-unreachable</c>, once per (goal, origin) cell pair until <see cref="Release"/>, and at most <see cref="PlayerbotObjectiveReports.MaxReports"/> (4) pairs a match: a bot refused from more spots reports only the first four, so counts of <c>bot-bg/objective-unreachable</c> are not comparable with those from before the cap.</summary>
     private void ReportWalkRefused(Player player, Vector3 goal, string detail)
     {
         if (_session.IsInChaosProbe || !_walkRefusals.TryAdd(goal, Position(player))) return;

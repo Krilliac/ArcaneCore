@@ -19,6 +19,7 @@ namespace ArcaneCore.World.HotCode;
 /// and counts it as <c>hotcode.audit-dropped</c> instead of blocking the world thread. A failure while reporting a failed write is
 /// counted as <c>hotcode.audit-report</c>. Which ledger and logger get the writer's own faults (write, drop) is the latest instance that supplied one
 /// (every instance on a path shares the writer); a flush timeout is reported to the ledger and logger of the instance that flushed.
+/// <see cref="FlushAll"/> has no instance: its timeout goes to <see cref="FaultLedger.Shared"/> with no logger (a line on standard error instead).
 /// </para>
 /// </summary>
 public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null, ILogger? logger = null, FaultLedger? ledger = null)

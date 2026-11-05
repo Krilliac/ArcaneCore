@@ -140,6 +140,9 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
+
+    /// <summary>The vmangos <c>conditionId</c> each <c>spell_script_target</c> row was read with (never stored; translated by <see cref="ResolveSpellScriptTargets"/>).</summary>
+    private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), uint> _spellScriptTargetConditionIds = [];
     private readonly Dictionary<uint, CreatureLinkRow> _links = [];
     private readonly Dictionary<(uint Entry, uint Map), CreatureTemplateLinkRow> _templateLinks = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
@@ -455,7 +458,9 @@ public sealed class CreatureDumpImporter
                         SpellId = U32(row, "entry"), Type = U32(row, "type"),
                         TargetEntry = U32(row, "targetEntry"), InverseEffectMask = U32(row, "inverseEffectMask"),
                     };
-                    _spellScriptTargets[(target.SpellId, target.Type, target.TargetEntry, target.InverseEffectMask)] = target;
+                    var targetKey = (target.SpellId, target.Type, target.TargetEntry, target.InverseEffectMask);
+                    _spellScriptTargets[targetKey] = target;
+                    _spellScriptTargetConditionIds[targetKey] = U32(row, "conditionId");
                     break;
                 }
                 case "creature_linking":
@@ -653,7 +658,9 @@ public sealed class CreatureDumpImporter
                 await InsertBatchedAsync(db, _models.Values.Select(m => m.Row), ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _spawns.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _movement.Values, ct).ConfigureAwait(false);
-                await InsertBatchedAsync(db, _spellScriptTargets.Values, ct).ConfigureAwait(false);
+                (List<SpellScriptTargetRow> targetRows, List<string> targetWarnings) = ResolveSpellScriptTargets();
+                await InsertBatchedAsync(db, targetRows, ct).ConfigureAwait(false);
+                targetWarnings.ForEach(Warn);
                 await InsertBatchedAsync(db, _links.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _templateLinks.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _movementTemplates.Values, ct).ConfigureAwait(false);
@@ -733,7 +740,7 @@ public sealed class CreatureDumpImporter
         RelayScriptTemplates = _relayTemplates.Count,
         DbScriptSteps = _dbScripts.ScriptRows.Count,
         ScriptWaypoints = _dbScripts.WaypointRowsToWrite.Count,
-        SpellScriptTargets = _spellScriptTargets.Count,
+        SpellScriptTargets = ResolveSpellScriptTargets().Rows.Count,
         CreatureLinks = _links.Count,
         CreatureTemplateLinks = _templateLinks.Count,
         DbScriptTables = _dbScripts.Counts,
@@ -767,7 +774,40 @@ public sealed class CreatureDumpImporter
     public (int Texts, int PathPoints) ScriptDevContentCounts()
         => (_scriptDevTextEntries.Count, _movementTemplates.Keys.Count(k => (k.PathId & ScriptDevPathBits) != 0));
 
-    public IReadOnlyCollection<SpellScriptTargetRow> SpellScriptTargets => [.. _spellScriptTargets.Values];
+    /// <summary>The <c>spell_script_target</c> rows to write, each with its vmangos condition translated (<see cref="ResolveSpellScriptTargets"/>).</summary>
+    public IReadOnlyCollection<SpellScriptTargetRow> SpellScriptTargets => ResolveSpellScriptTargets().Rows;
+
+    /// <summary>The rows <see cref="SpellScriptTargets"/> leaves out because their condition cannot be translated, one line each.</summary>
+    public IReadOnlyList<string> SpellScriptTargetWarnings => ResolveSpellScriptTargets().Warnings;
+
+    /// <summary>
+    /// The <c>spell_script_target</c> rows with their vmangos <c>conditionId</c> translated against the <c>conditions</c> rows of the same input
+    /// (<see cref="SpellScriptTargetConditionTranslator"/>): condition ids are per database, so the id is never copied into the cmangos-numbered
+    /// <c>conditions</c> table's namespace. A row whose condition is not in the input or has no translation is left out and named in the warnings:
+    /// selecting its target unconditioned would select a unit the retail condition rules out, so it is not written, and the warning says so.
+    /// </summary>
+    private (List<SpellScriptTargetRow> Rows, List<string> Warnings) ResolveSpellScriptTargets()
+    {
+        var rows = new List<SpellScriptTargetRow>(_spellScriptTargets.Count);
+        var warnings = new List<string>();
+        foreach (var (key, source) in _spellScriptTargets.OrderBy(pair => pair.Key))
+        {
+            uint conditionId = _spellScriptTargetConditionIds.GetValueOrDefault(key);
+            if (!SpellScriptTargetConditionTranslator.TryTranslate(conditionId, _dbScripts.VmangosCondition, out string expression, out string failure))
+            {
+                warnings.Add($"spell_script_target spell {source.SpellId} type {source.Type} entry {source.TargetEntry} not imported: {failure}");
+                continue;
+            }
+
+            rows.Add(new SpellScriptTargetRow
+            {
+                SpellId = source.SpellId, Type = source.Type, TargetEntry = source.TargetEntry,
+                InverseEffectMask = source.InverseEffectMask, TargetCondition = expression,
+            });
+        }
+
+        return (rows, warnings);
+    }
 
     public IReadOnlyCollection<CreatureLinkRow> CreatureLinks => [.. _links.Values];
     public IReadOnlyCollection<CreatureTemplateLinkRow> CreatureTemplateLinks => [.. _templateLinks.Values];
@@ -776,7 +816,7 @@ public sealed class CreatureDumpImporter
     {
         if (_spellScriptTargets.Count == 0) return;
         await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        await InsertBatchedAsync(db, _spellScriptTargets.Values, cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, ResolveSpellScriptTargets().Rows, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RefreshCreatureLinksAsync(WorldDbContext db, CancellationToken cancellationToken = default)

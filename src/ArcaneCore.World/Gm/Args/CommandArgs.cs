@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Kernel.Talents;
 
 namespace ArcaneCore.World.Gm.Args;
 
@@ -587,6 +588,47 @@ public sealed class CommandArgs(string text)
             return false;
         }
 
+        return true;
+    }
+
+    private static readonly string[] SpellLinkTypes = ["Hspell", "Htalent", "Henchant"];
+
+    /// <summary>
+    /// Chat.cpp:3321 ExtractSpellIdFromLink: a plain number, <c>|Hspell:id|</c>, <c>|Henchant:id|</c>, or <c>|Htalent:talentId:rank|</c> (the spell of that
+    /// talent rank, a negative rank counting as rank 0, from <paramref name="talents"/>). False, with the position kept, for an unknown talent, a rank
+    /// past the last or a zero id.
+    /// </summary>
+    public bool ExtractSpellIdFromLink(TalentCatalog? talents, out uint spellId)
+    {
+        spellId = 0;
+        int saved = _pos;
+        string? key = ExtractKeyFromLink(SpellLinkTypes, out int type, out string? something);
+        if (key is null || !new CommandArgs(key).ExtractUInt32(out uint id))
+        {
+            _pos = saved;
+            return false;
+        }
+
+        if (type == 1)
+        {
+            TalentRecord? talent = talents?.ById(id);
+            if (talent is null || !new CommandArgs(something ?? string.Empty).ExtractInt32(out int rank))
+            {
+                _pos = saved;
+                return false;
+            }
+
+            rank = Math.Max(rank, 0);
+            id = rank < TalentRecord.MaxRanks && rank < talent.RankSpells.Count ? talent.RankSpells[rank] : 0;
+        }
+
+        if (id == 0)
+        {
+            _pos = saved;
+            return false;
+        }
+
+        spellId = id;
         return true;
     }
 

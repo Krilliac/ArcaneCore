@@ -459,4 +459,148 @@ public sealed class ChannelManagerTests
         Assert.Equal("Club", reader.ReadCString());
         Assert.Equal("P1", reader.ReadCString());
     }
+
+    [Fact]
+    public void Moderate_NeedsAModerator_AndSilencesNonModeratorsUntilToggledOff()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        f.Context.Channels.Join(b, "Club", string.Empty);
+        Channel channel = f.Context.Channels.Find(Team.Alliance, "Club")!;
+
+        f.ClearAll();
+        f.Context.Channels.ToggleModerate(b, "Club");
+        Assert.Equal([ChatNotify.NotModerator], Notifies(f, b));
+        Assert.Empty(Notifies(f, a));
+        Assert.False(channel.Moderate);
+
+        f.ClearAll();
+        f.Context.Channels.ToggleModerate(a, "Club");
+        Assert.True(channel.Moderate);
+        Assert.Equal([ChatNotify.ModerationOn], Notifies(f, a));
+        Assert.Equal([ChatNotify.ModerationOn], Notifies(f, b));
+
+        f.ClearAll();
+        f.Context.Channels.Say(b, "Club", "hi", Language.Common);
+        Assert.Equal([ChatNotify.NotModerator], Notifies(f, b));
+        Assert.Empty(f.Sent(a, WorldOpcode.SmsgMessagechat));
+
+        f.ClearAll();
+        f.Context.Channels.Say(a, "Club", "hi", Language.Common);
+        Assert.NotEmpty(f.Sent(b, WorldOpcode.SmsgMessagechat));
+
+        f.ClearAll();
+        f.Context.Channels.ToggleModerate(a, "Club");
+        Assert.False(channel.Moderate);
+        Assert.Equal([ChatNotify.ModerationOff], Notifies(f, b));
+        f.Context.Channels.Say(b, "Club", "hi", Language.Common);
+        Assert.NotEmpty(f.Sent(a, WorldOpcode.SmsgMessagechat));
+    }
+
+    [Fact]
+    public void Announce_NeedsAModerator_AndTellsMembersOfJoinsAndLeavesWhileOn()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Player c = f.AddPlayer(3);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        Channel channel = f.Context.Channels.Find(Team.Alliance, "Club")!;
+        f.Context.Channels.Join(b, "Club", string.Empty);
+
+        f.ClearAll();
+        f.Context.Channels.ToggleAnnounce(b, "Club");
+        Assert.Equal([ChatNotify.NotModerator], Notifies(f, b));
+        Assert.True(channel.Announce); // a custom channel starts with announcements on
+
+        f.ClearAll();
+        f.Context.Channels.Join(c, "Club", string.Empty);
+        Assert.Equal([ChatNotify.Joined], Notifies(f, a));
+        f.ClearAll();
+        f.Context.Channels.Leave(c, "Club");
+        Assert.Equal([ChatNotify.Left], Notifies(f, a));
+
+        f.ClearAll();
+        f.Context.Channels.ToggleAnnounce(a, "Club");
+        Assert.False(channel.Announce);
+        Assert.Equal([ChatNotify.AnnouncementsOff], Notifies(f, a));
+
+        f.ClearAll();
+        f.Context.Channels.Join(c, "Club", string.Empty);
+        Assert.Empty(Notifies(f, a));
+        f.ClearAll();
+        f.Context.Channels.Leave(c, "Club");
+        Assert.Empty(Notifies(f, a));
+
+        f.ClearAll();
+        f.Context.Channels.ToggleAnnounce(a, "Club");
+        Assert.True(channel.Announce);
+        Assert.Equal([ChatNotify.AnnouncementsOn], Notifies(f, a));
+    }
+
+    [Fact]
+    public void Password_NeedsAModerator_GatesJoining_AndHonoursTheLengthCap()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Player c = f.AddPlayer(3);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        Channel channel = f.Context.Channels.Find(Team.Alliance, "Club")!;
+        f.Context.Channels.Join(b, "Club", string.Empty);
+
+        f.ClearAll();
+        f.Context.Channels.SetPassword(b, "Club", "pw");
+        Assert.Equal([ChatNotify.NotModerator], Notifies(f, b));
+        Assert.Equal(string.Empty, channel.Password);
+
+        f.ClearAll();
+        f.Context.Channels.SetPassword(a, "Club", "pw");
+        Assert.Equal("pw", channel.Password);
+        Assert.Equal([ChatNotify.PasswordChanged], Notifies(f, b));
+
+        f.ClearAll();
+        f.Context.Channels.Join(c, "Club", "nope");
+        Assert.Equal([ChatNotify.WrongPassword], Notifies(f, c));
+        Assert.False(channel.IsOn(c.Guid));
+
+        f.ClearAll();
+        f.Context.Channels.Join(c, "Club", "pw");
+        Assert.Equal([ChatNotify.YouJoined], Notifies(f, c));
+        Assert.True(channel.IsOn(c.Guid));
+
+        f.Context.Options.MaxChannelPassphraseLength = 3;
+        f.ClearAll();
+        f.Context.Channels.SetPassword(a, "Club", "toolong");
+        Assert.Equal("pw", channel.Password); // dropped silently, as World:Social:MaxChannelPassphraseLength says
+        Assert.Empty(Notifies(f, a));
+    }
+
+    [Fact]
+    public void LeaveAll_OnLogout_SendsNothing_PassesOwnershipAndDeletesChannelsLeftEmpty()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        f.Context.Channels.Join(a, "Solo", string.Empty);
+        f.Context.Channels.Join(b, "Club", string.Empty);
+        Channel club = f.Context.Channels.Find(Team.Alliance, "Club")!;
+        Assert.Equal(a.Guid, club.Owner);
+
+        f.ClearAll();
+        f.Context.Channels.LeaveAll(a);
+
+        Assert.Empty(Notifies(f, a)); // vmangos Channel::Leave(guid, false): no YOU_LEFT
+        Assert.Empty(f.Context.Channels.JoinedBy(a));
+        Assert.False(club.IsOn(a.Guid));
+        Assert.Equal(b.Guid, club.Owner);
+        Assert.Same(club, f.Context.Channels.Find(Team.Alliance, "Club"));
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "Solo"));
+
+        f.Context.Channels.LeaveAll(a); // a second call is a no-op
+        Assert.Same(club, f.Context.Channels.Find(Team.Alliance, "Club"));
+    }
 }

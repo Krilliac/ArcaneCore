@@ -34,6 +34,7 @@ public sealed class MovementScriptDataModule : IDataModule
         {
             entity.ToTable("spell_script_target");
             entity.HasKey(r => new { r.SpellId, r.Type, r.TargetEntry, r.InverseEffectMask });
+            entity.Property(r => r.TargetCondition).HasMaxLength(SpellScriptTargetConditionTranslator.MaxLength).HasDefaultValue(string.Empty).IsRequired();
         });
         modelBuilder.Entity<CreatureLinkRow>(entity =>
         {
