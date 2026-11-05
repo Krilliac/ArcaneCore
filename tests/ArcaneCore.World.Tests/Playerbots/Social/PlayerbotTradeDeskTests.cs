@@ -305,6 +305,12 @@ public sealed class PlayerbotTradeDeskTests
 
         public int BotSent(WorldOpcode opcode) => World.Log.Count(BotName, opcode);
 
+        /// <summary>
+        /// The desk cancels a window that has been open for <c>TradeTimeoutSeconds</c> (45 by default, wall time). A test that holds a window open through
+        /// several multi-second waits on a loaded machine must not meet that cancel, so it raises the limit.
+        /// </summary>
+        public Task RaiseTradeTimeoutAsync(int seconds = 180) => World.Host.OnWorldAsync(() => { Trading.TradeTimeoutSeconds = seconds; return true; });
+
         public PlayerbotTradeRecord? Ledger(ObjectGuid other)
             => HelpTestKit.RecorderOf(World).Ledger!.TryGet(Bot, other.Value, out PlayerbotTradeRecord record) ? record : null;
 
@@ -518,6 +524,7 @@ public sealed class PlayerbotTradeDeskTests
     {
         await using Scene scene = await Scene.StartAsync();
         await scene.AddCustomerAsync();
+        await scene.RaiseTradeTimeoutAsync();
         await scene.GiveAsync(BotName, DealEntry);
         Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
         await scene.OpenWindowAsync(scene.Customer!);
@@ -556,6 +563,7 @@ public sealed class PlayerbotTradeDeskTests
     {
         await using Scene scene = await Scene.StartAsync();
         await scene.AddCustomerAsync();
+        await scene.RaiseTradeTimeoutAsync();
         await scene.GiveAsync(BotName, DealEntry);
         Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
         await scene.OpenWindowAsync(scene.Customer!);
@@ -598,6 +606,7 @@ public sealed class PlayerbotTradeDeskTests
     {
         await using Scene scene = await Scene.StartAsync();
         await scene.AddCustomerAsync();
+        await scene.RaiseTradeTimeoutAsync();
         await scene.SetMoneyAsync(BotName, 5000);
         byte[] agreedItem = await scene.GiveAsync(CustomerName, DealEntry);
         byte[] swappedItem = await scene.GiveAsync(CustomerName, OtherEntry);
@@ -614,9 +623,9 @@ public sealed class PlayerbotTradeDeskTests
         await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeItem, swappedItem);
         await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result is { BotGold: 0, CustomerItems: 1 }, "the bot to take its gold back");
         await scene.AcceptAsync(scene.Customer!);
-        Assert.False(await Scene.WaitWhileAsync(() => scene.BotSent(WorldOpcode.CmsgAcceptTrade) > 1 || !scene.TradeAsync().Result.Exists, 3000), "the bot accepted, or the window completed, with the swapped item");
+        Assert.False(await Scene.WaitWhileAsync(() => scene.BotSent(WorldOpcode.CmsgAcceptTrade) > 1, 3000), "the bot accepted the swapped window");
         Trade trade = await scene.TradeAsync();
-        Assert.True(trade.Exists);
+        Assert.True(trade.Exists, "the window closed (cancelled or completed) instead of staying open with the swapped item");
         Assert.False(trade.BotAccepted);
         Assert.Equal(0u, trade.BotGold);
         Assert.Equal(5000u, await scene.MoneyAsync(BotName));
@@ -885,6 +894,7 @@ public sealed class PlayerbotTradeDeskTests
     {
         await using Scene scene = await Scene.StartAsync(generous: true);
         await scene.AddCustomerAsync();
+        await scene.RaiseTradeTimeoutAsync();
         await scene.SetMoneyAsync(BotName, 50_000);
         byte[] item = await scene.GiveAsync(CustomerName, DealEntry);
         PlayerbotDealQuote quote = await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry);
