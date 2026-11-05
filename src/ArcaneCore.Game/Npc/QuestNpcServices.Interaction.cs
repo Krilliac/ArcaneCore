@@ -276,9 +276,10 @@ public sealed partial class QuestNpcServices
         data.Explored = false;
         Array.Clear(data.CreatureOrGOCount);
         Array.Clear(data.ItemCount);
+        long nowUnix = UnixNow; // one reading: UnixNow is a live clock, and a shared end must not land a second early
         data.TimerEndUnix = !quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? 0
-            : sharedTimerEnd is { } shared ? checked(UnixNow + Math.Max(0, shared - UnixNow))
-            : checked(UnixNow + quest.Template.LimitTime);
+            : sharedTimerEnd is { } shared ? checked(nowUnix + Math.Max(0, shared - nowUnix))
+            : checked(nowUnix + quest.Template.LimitTime);
         if (data.TimerEndUnix != 0)
         {
             state.Quests.AddTimed(quest.Id);

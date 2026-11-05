@@ -3,10 +3,10 @@
 This audit covers the clock sources of `src/ArcaneCore.Playerbots` and `src/ArcaneCore.Game` that the greps in "Method and tallies" and the tables below name:
 the `Now`-style properties and methods found by the wrapper greps and listed in the wrapper tables, the injected clock delegates found by the name-filtered grep
 (`Func<long>`, `Func<uint>`) and the type greps, the accumulators in the accumulator table, and the game-UTC reads, each with its family. What the greps cannot see,
-wrappers included, is listed under "Not covered". It also covers the
+wrappers, conversions and double reads included, is listed under "Not covered". It also covers the
 fields assigned from a clock reading, by a scan of single-line and split-line assignments (the patterns are in "Method and tallies"), and the helpers that
-receive a reading. It records what each clock is, which sites share a clock, and the one
-double read it found and fixed. It is a static reading of the source; nothing here was run against a server. The tests named in this doc were not run
+receive a reading. It records what each clock is, which sites share a clock, and what it found: one mixed-clock stamp and one double read of a live clock, both
+fixed, and the other double reads of a live clock, which do no harm and are listed under "Double reads of a live clock". It is a static reading of the source; nothing here was run against a server. The tests named in this doc were not run
 when it was written.
 
 Citations name a file and a symbol, with a line only where the line was read in the tree this doc was committed in. Lines go stale as files change;
@@ -51,7 +51,7 @@ them, so a name is never proof of the family; the source is. The wrapper, delega
 
 ## Wrappers
 
-The `Now`-style properties and wrapper delegates, with their source and family. The table has 50 rows naming 64 wrappers (a row that names several counts each name).
+The `Now`-style properties and wrapper delegates, with their source and family. The table has 51 rows naming 65 wrappers (a row that names several counts each name).
 Every row is counted, Wall ones included. The rows come from the wrapper greps in "Method and tallies". The clock delegates held as fields or constructor parameters are in the next two tables.
 
 | Wrapper | Source |
@@ -85,9 +85,10 @@ Every row is counted, Wall ones included. The rows come from the wrapper greps i
 | `ILootStateCoordinator.UnixNow` | Game UTC. Production is `LootSettlements.UnixNow` (`ArcaneCore.World`): `DateTimeOffset.UtcNow` Unix seconds, a live read that does not follow the tick or the manual clock. `LootService` hands it to `RespawnAtUnix(go, now)`; `GameObjectMapSystem` reads it twice when it rebuilds a consumed chest. See "Cross-family conversions" |
 | `CreatureMapSystem.ClockMs`, `GameObjectMapSystem.ClockMs` | Map accumulator (`_clockMs`). The Game and Playerbots readers found by `git grep -nE "\.ClockMs\b"` compare it with a stamp of the same system: `Creature.RespawnAtMs` (`Creature`, `InstanceManager.Binds.SecondsUntilBack`, which uses the creature's own system), `GameObject.CreatedAtMs` (`KurinnaxxSandTrapScript`; every writer sets it from `_clockMs`), the pulses of `DireMaulDreadsteed`, `TrapSystem`, and `PendingRespawnAt` (`PlayerbotTaxi`) |
 | `GameObjectMapSystem.ClockSeconds` | Map accumulator in whole seconds (`_clockMs / 1000`). Stamps `ResetAfterSecond` and `RestockAfterSecond`, which are compared with `ClockSeconds` only |
-| `InstanceManager.Now` | Game UTC (`_unixNow()`, see the delegate table); three `now` locals, reset times against Unix seconds |
-| `QuestNpcServices.UnixNow` | Game UTC (`_unixNow()`, see the delegate table); quest `TimerEndUnix` and vendor restock times, Unix seconds on both sides |
+| `InstanceManager.Now` | Game UTC (`_unixNow()`, see the delegate table). Six `long now = Now;` locals (three in `InstanceManager.cs`, three in `InstanceManager.RaidSchedule.cs`) and six direct reads (one in `InstanceManager.Binds.cs`, five in `InstanceManager.Resolver.cs`, each once per expression). Reset times and the enter limiter, Unix seconds on both sides |
+| `QuestNpcServices.UnixNow` | Game UTC (`_unixNow()`, see the delegate table); quest `TimerEndUnix` and vendor restock times, Unix seconds on both sides. A live read: `AddQuest` read it twice in one expression and now reads it once (see "Double reads of a live clock") |
 | `MapCombat.NowSeconds` | Game UTC (`DeathHooks.For(world).Clock.UnixSeconds`) |
+| `GmAuditFeature.NowUnixSeconds` | Game UTC, in `ArcaneCore.World`. The one Playerbots reader, the bot chat mute in `ManagedPlayerbotFeature`, adds a duration and compares with `MutedUntil`, Unix seconds on both sides |
 | `PlayerbotWorldEventBoard.UnixSeconds` | Game UTC (`_setAsideTime` Unix seconds from `ManagedPlayerbotFeature`). One reader, `PlayerbotFestivalRules.StaggeredDay`: a calendar day, not a stamp |
 | `WorldStateHooks.LocalNow()`, `IGameTime.LocalNow()` | Game UTC (`IGameTime.UtcNow`) moved to a time zone. A calendar read (weather season, the login time, a GM command), never a stamp and never compared with a millisecond clock |
 | `WorldClock.UnixSeconds`, `WorldClock.UnixMilliseconds` | Game UTC: `WorldClock.UtcNow`, so tick-start like `NowMs` |
@@ -123,7 +124,7 @@ traced to the lambda its production constructor receives. "Result" is whether an
 | `GroupAuthority.MillisecondsClock`, `GroupManager.MillisecondsClock` | default `Kernel.Logging.Clock.Milliseconds` (`Environment.TickCount64`) | Wall | online-hint stamps and their age checks both use the delegate, both `long`; no other family reaches them |
 | `GroupAuthority.UnixSecondsClock`, `GroupManager.UnixSecondsClock`, `SpellSystem.UnixSecondsClock` | `DateTimeOffset.UtcNow` seconds (`SpellSystem` is overridden by `DuelFeature`) | Game UTC | Unix seconds against Unix seconds |
 | `InstanceManager._unixNow` | `InstanceFeature`: `time.GetUtcNow().ToUnixTimeSeconds()` | Game UTC | reset times against Unix seconds |
-| `InventoryItemService`, `QuestNpcServices._unixNow`, `TalentService._unixNow`, `PetController.UnixNow`, `LunarFestivalScripts.NowUnix`, `ChatRestrictionService` (`unixNow`) | `DateTimeOffset.UtcNow` / `TimeProvider` Unix seconds (`NpcServicesFeature`, `ChatRestrictionFeature`, class defaults) | Game UTC | persisted or calendar times; none meets `NowMs` |
+| `InventoryItemService`, `QuestNpcServices._unixNow`, `TalentService._unixNow`, `PetController.UnixNow`, `LunarFestivalScripts.NowUnix`, `ChatRestrictionService` (`unixNow`) | `DateTimeOffset.UtcNow` / `TimeProvider` Unix seconds (`NpcServicesFeature`, `ChatRestrictionFeature`, class defaults) | Game UTC | persisted or calendar times; none meets `NowMs`. `QuestNpcServices` and `ChatRestrictionService` each held a double read of this live clock (see "Double reads of a live clock") |
 | `PerfLogAggregator._nowMicros` | `WorldRuntime.PerfClockMicros`: `Clock.ElapsedMs * 1000` on the manual clock, else the runtime stopwatch | Wall (microseconds) | perf windows only |
 | `NavMeshQuery.DeadlineClock`, `TickStats.Clock` | `Stopwatch.GetTimestamp` | Wall | budgets and tick timing |
 | `PlayerbotPathJobs._clockMs` | `ManagedPlayerbotFeature`: `() => unchecked((uint)ClockMs)`, the feature accumulator | feature accumulator (`long`, truncated) | every stamp (`SubmittedAtMs`, `LastAskMs`, `_deadlineReported`, `_lastSummaryMs`) comes from `_clockMs()`; callers hand it no stamp (`WallMs` is a separate stopwatch field) |
@@ -157,15 +158,45 @@ a Unix due time); none is read against `NowMs`. Where a persisted Unix time has 
 ### Cross-family conversions
 
 A stored time outlives the process, but `_clockMs` and `NowMs` restart, so these sites read two families on purpose. Each subtracts within one family and adds the
-resulting duration to the other. None compares a stamp of one family with a reading of another. Found by
-`git grep -nE "(_clockMs|ClockMs|NowMs|\bnow\b|\bnowMs\b).*(Unix|_respawnClock|UtcNow)|(Unix|_respawnClock|UtcNow).*(_clockMs|ClockMs|NowMs)"` over the two projects
-and by the remaining-time sites of the set-aside ledgers; the grep sees one line at a time.
+resulting duration to the other. None compares a stamp of one family with a reading of another. Found by three greps over the two projects, comment lines dropped and every
+hit read; each sees one line at a time:
+
+1. A clock token and a Unix token on one line: `git grep -nE "(_clockMs|ClockMs|NowMs|\bnow\b|\bnowMs\b|\buntil\b).*([Uu]nix|_respawnClock|UtcNow)|([Uu]nix|_respawnClock|UtcNow).*(_clockMs|ClockMs|NowMs|\bnow\b|\bnowMs\b|\buntil\b)"`.
+2. Arithmetic on a Unix name, whatever is on the other side (this one finds `EndsAtUnixMs - nowUnixMs`): `git grep -nE "(\w*[Uu]nix\w*|\w*[Ee]pochMs\w*)\s*[-+]\s*\(?\w|\w\s*[-+]\s*\w*[Uu]nix\w*"`.
+3. A remaining time added to a clock: `git grep -nE "(\b(now|nowMs|Now|NowMs|_clockMs|ClockMs)\b)\s*\+\s*\(?(uint\)|long\))?\(?\w*([Rr]emaining|[Ll]eft)\w*"`.
+
+The hits not in this table stay inside one family (a Unix value against a Unix value, for example `RestService`, `RespecCost`, `AntiCheatScores`, `PopulationZoneVetoes`,
+`PlayerbotWorldBoss`), or hand a World and a Unix reading to separate parameters or record fields (`BotController`, `PlayerbotPolicyTelemetry`, `PlayerbotCombatTelemetry`).
 
 | Site | Direction | Result |
 |---|---|---|
 | `GameObjectMapSystem` durable chest rebuild (`go.RespawnAtMs = _clockMs + Math.Max(1L, consumed.RespawnAtUnix - durable.UnixNow) * 1000L`) | Game UTC to Map accumulator | benign. `RespawnAtUnix - UnixNow` is a remaining duration in one family, added to the map's clock; `RespawnAtMs` is then compared with `_clockMs` only. `long.MaxValue` (never) is tested first and gives 0, so the subtraction cannot overflow on it. `UnixNow` is live and is read twice (the `>` guard and the subtraction), so the second read can be one second later and the difference can reach 0; `Math.Max(1L, ...)` absorbs that. A double read with no bad result, so nothing to fix. Precision is whole seconds |
 | `GameObjectMapSystem.RespawnPersistence` save and load, `CreatureMapSystem.RespawnPersistence` save and load, `CreatureMapSystem.SpawnGroups` save | Map accumulator to Game UTC and back | benign, the same shape: save is `now + max(0, RespawnAtMs - _clockMs) / 1000`, load is `_clockMs + (unix - now) * 1000` behind `unix > now`. One `_respawnClock` read per save or load in the local-`now` forms |
-| `PlayerbotStallWatch` set-aside ledgers, `Export` and `Restore` (`ManagedPlayerbotFeature` hands `World.NowMs` and the Unix ms) | Uptime axis to Wall Unix ms and back | benign, the same shape: `unixNowMs + Remaining(until, now)` on export, `now + (ExpiresUnixMs - unixNowMs)` on restore. `T(nowMs)` puts the World reading on the Uptime axis through `PlayerbotWorldClock.Ms` |
+| `SpellSystem.CaptureState` and `RestoreCooldowns` (`SpellSystem.Persistence.cs`, the `PersistedCooldown.EndsAtUnixMs` rows). Callers hand `nowUnixMs`, one reading per call: `SpellFeature.UnixNowMs` (`ArcaneCore.World`, save and load) and `DateTimeOffset.UtcNow` in `SummonService.PersistentPets` | World to Game UTC and back | benign, the same shape. Save is `nowUnixMs + (until - now)` with `uint now = NowMs` read once, reached only behind `IsStillRunning(until, now)`, a signed wrap-safe test, so the `uint` difference is the true time left. Load is `remaining = EndsAtUnixMs - nowUnixMs`, skipped at `<= 0`, capped at `MaxReasonableCooldownMs` (seven days, reported as an anomaly), then `until = unchecked(now + (uint)remaining)`. `until` is compared wrap-safely with World readings only |
+| `SpellSystem.RestoreCooldowns` called with no Unix time: `DuelResetScript` (`nowUnixMs: 0`, the time left passed as the end) | World to World | benign. `Left(end, now)` is a duration on World, and `EndsAtUnixMs - 0` hands it back; no Unix reading is involved despite the names |
+| `SpellSystem.CaptureState` and `RestoreAurasCore`, aura rows | none crosses | an aura stores a duration (`RemainingMs`) and `SavedAtUnixMs`. `offline = max(0, nowUnixMs - SavedAtUnixMs)` is Unix against Unix and shortens the duration; no World stamp is stored |
+| `CreatureMapSystem.Pools` (`_respawnAt = _clockMs + delayMs`, then `_respawnClock.UnixSeconds + delayMs / 1000`) and `CreatureMapSystem.Removal` (`UnixSeconds + RemovedRespawnHorizonSeconds`; `IsRemovalRow` compares a Unix row with `UnixSeconds`) | one duration added to each family | benign. Nothing is subtracted across families |
+| `WorldDeathClock.UnixSeconds`, manual clock only | Uptime to Game UTC | benign. `anchor.UnixSeconds + (Uptime - anchor.UptimeMs) / 1000`: the difference is on Uptime and is added to the anchored Unix seconds. The real clock returns `DateTimeOffset.UtcNow` |
+| `PlayerbotStallWatch` set-aside ledgers, `Export` and `Restore` (`ManagedPlayerbotFeature` hands `World.NowMs` and the Unix ms) | Uptime axis to Wall Unix ms and back | benign, the same shape: `unixNowMs + Remaining(until, now)` or `unixNowMs + record.RemainingMs` on export, `now + (ExpiresUnixMs - unixNowMs)` on restore (the per-bot form goes through `PlayerbotDeferLedger.RestoreEntry`, `UntilMs = now + remainingMs`). `T(nowMs)` puts the World reading on the Uptime axis through `PlayerbotWorldClock.Ms` |
+
+### Double reads of a live clock
+
+A clock that moves between two reads can make one expression disagree with itself; a tick-start clock cannot. So these two scans took the live sources only (`UnixNow`, `NowUnix()`, `unixNow()`,
+`_unixNow()`, `UnixSecondsClock()`, `DateTimeOffset.UtcNow`, `DateTime.UtcNow`, `GetUtcNow()`, `TickCount64`, `_now()`, `Clock.Milliseconds()`, `_respawnClock.UnixSeconds`, `Clock.UnixSeconds`,
+`Clock.UnixMilliseconds`, `MillisecondsClock()`, `UnixNowMs`): two reads on one line, and two reads in one file no more than four lines apart. Comment lines were dropped. The hits that are
+a wrapper's own declaration are not double reads. These are the rest, with `PenaliseGhost`, which came from reading the `RestoreCooldowns` callers:
+
+| Site | Clock | Result |
+|---|---|---|
+| `QuestNpcServices.AddQuest`, shared timed quest | `UnixNow`, a fresh `_unixNow()` per read (production: `QuestNpcFeature`, `_clock.GetUtcNow()` seconds) | **Real, fixed.** `checked(UnixNow + Math.Max(0, shared - UnixNow))` read the clock twice. A second boundary between the reads put `TimerEndUnix` one second before the sharer's end, and no `Max` absorbs that. It now reads one `nowUnix` local, also used by the unshared arm. `QuestShareTests.ASharedTimedQuest_EndsWithTheSharer_WhenTheClockMovesBetweenReads` covers it (a clock that steps on every read); not run when this was written |
+| `GameObjectMapSystem` durable chest rebuild | `ILootStateCoordinator.UnixNow`, live | harmless; `Math.Max(1L, ...)` absorbs it (see "Cross-family conversions"). Not changed |
+| `ChatRestrictionService.MuteRemaining` | `unixNow()`, live | harmless. `until > unixNow() ? until - unixNow() : 0`: a later second read gives one second less, and a result of 0 or below means the mute has ended at that read. Every caller tests `> 0`. Not changed |
+| `UnstuckCommands.PenaliseGhost` (`ArcaneCore.World`) | `DateTimeOffset.UtcNow`, twice in one call | harmless. The end and `nowUnixMs` are separate reads, so the one-hour cooldown can start short by the gap between them. Not changed |
+| `PlayerbotPolicyTelemetry`, the wait loop on `Environment.TickCount64` | Wall | intended: a deadline stamp and a poll against it |
+
+Two reads of a tick-start clock in one expression are equal once ticks run, so they are not listed as faults: `PlayerbotGroupCoordinator` set-aside remaining (`until - Now` twice), `PlayerbotBattlegroundCoordinator`
+`PhaseSinceMs = Now, QueuedSinceMs = Now`, `PlayerbotElevatorSnapshot`, and the social lanes' `pass.NowMs`. `PlayerbotGroupAI` reads `Now` (Uptime, against `_resurrectAtMs`) and `World.NowMs` (World, into
+`InFight`, against `LastCombatMs`) on one line, each against its own family. The `BattlegroundManager` lines read an accumulator and go to lane Y22.
 
 `BattlegroundManager.NowMs` is the Battleground accumulator family above and is handed to lane Y22 (see "Handed to lane Y22"). Outside the two projects and not read: `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
 a stopwatch), `DebugDrawFeature.Now` and `EconomyFeature`-style `Now` properties (world and wall respectively, in `ArcaneCore.World`).
@@ -357,6 +388,10 @@ these is a mixed-clock comparison on a reading of the code; the open question is
   `Stopwatch.GetTimestamp`, so Wall) and the `unixSeconds` parameter of `PlayerbotWorldEventBoard` (Unix seconds, Game UTC). Others may exist.
 - Wrappers. The wrapper table is what the greps in "Method and tallies" found. A wrapper is not seen if its name has none of the name tokens and its body is a block that does more
   than return a clock read, or if its expression body spans lines or reaches the clock through a member not in the shape grep's token list. Others of that kind may exist.
+- Conversions. The three conversion greps see one line at a time and only the tokens they name. A conversion is not seen if its Unix value sits in a name with no `Unix` in it (for example a local
+  `end` or a field `ExpiresAt`) and its other side is not a `remaining` or `left` name, or if the two halves are on different lines with neither line matching. Others of that kind may exist.
+- Double reads. The two live-clock scans see the source names listed in "Double reads of a live clock", on one line or within four lines. Two reads further apart in one method, reads through a
+  live wrapper under another name, and a wrapper called from a helper in the same expression are not seen.
 - Interval timers beyond those named in the accumulator table, and any accumulator not found by the greps, are not claimed.
 - Behaviour. Nothing here shows the code runs correctly, only that no stamp was found compared against a different clock family.
 
