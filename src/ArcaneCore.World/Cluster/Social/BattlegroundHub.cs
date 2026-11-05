@@ -82,6 +82,8 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
     private string? _preferredNode;
     private long _preferredSeen;
     private long _holderSeen;
+    private long _lastTouch;
+    private bool _touched;
     private long _droppedCommands;
     private long _droppedNotices;
     private long _oversized;
@@ -152,7 +154,9 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
 
         lock (_gate)
         {
-            _workerSeen[workerId] = _time.GetTimestamp();
+            long submitNow = _time.GetTimestamp();
+            Touch(submitNow);
+            _workerSeen[workerId] = submitNow;
             foreach ((BattlegroundQueuedCommand Item, int Size) entry in sized)
             {
                 _commands.Enqueue(entry);
@@ -181,6 +185,7 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
         lock (_gate)
         {
             long now = _time.GetTimestamp();
+            Touch(now);
             if (preferred)
             {
                 _preferredNode = nodeId;
@@ -271,6 +276,7 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
 
         lock (_gate)
         {
+            Touch(_time.GetTimestamp());
             if (!string.Equals(_holder, nodeId, StringComparison.Ordinal))
             {
                 return false;
@@ -306,7 +312,9 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
 
         lock (_gate)
         {
-            _workerSeen[workerId] = _time.GetTimestamp();
+            long drainNow = _time.GetTimestamp();
+            Touch(drainNow);
+            _workerSeen[workerId] = drainNow;
             if (!_outboxes.TryGetValue(workerId, out Queue<(BattlegroundNotice Notice, int Size)>? box) || box.Count == 0)
             {
                 return [];
@@ -335,6 +343,24 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
 
             return batch;
         }
+    }
+
+    /// <summary>
+    /// Under the gate, at the start of every call. The worker stamps are only written while this hub is called, so when the hub itself saw no call for the worker time to live (a stall, or a
+    /// Social lease that left and came back) every stamp is stale through no fault of the workers: refresh them all, so a live worker is not reported gone on the first take afterwards.
+    /// </summary>
+    private void Touch(long now)
+    {
+        if (_touched && _time.GetElapsedTime(_lastTouch, now) > WorkerTtl)
+        {
+            foreach (string worker in _workerSeen.Keys.ToList())
+            {
+                _workerSeen[worker] = now;
+            }
+        }
+
+        _touched = true;
+        _lastTouch = now;
     }
 
     /// <summary>Under the gate.</summary>

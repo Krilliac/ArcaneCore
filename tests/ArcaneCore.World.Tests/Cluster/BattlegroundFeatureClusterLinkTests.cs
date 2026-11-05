@@ -22,7 +22,7 @@ namespace ArcaneCore.World.Tests.Cluster;
 /// <summary>
 /// The battleground feature wired to a <see cref="ClusterBattlegroundLink"/> over one in-process <see cref="BattlegroundHub"/>, as the cluster hosting registers it (row 218):
 /// the feature installs the link, a join from a plain worker reaches the holder's real queue and the holder's notice comes back to the worker's player, the holder node's own
-/// players take the same path through the hub, and the holder is chosen by the gateway's map rule (a list naming the battleground maps, or owning everything), not by instance-copy
+/// players skip the hub, and the holder is chosen by the gateway's map rule (a list naming the battleground maps, or owning everything), not by instance-copy
 /// ownership. The pumps run on their own threads; tests tick the worlds by hand inside a bounded wait. Unproven until the integration gate (no build in the lane).
 /// </summary>
 public sealed class BattlegroundFeatureClusterLinkTests
@@ -49,6 +49,8 @@ public sealed class BattlegroundFeatureClusterLinkTests
         public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<BattlegroundCommand> commands) => hub.Submit(workerId, commands);
 
         public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => hub.Take(nodeId);
+
+        public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred) => hub.Take(nodeId, preferred);
 
         public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices) => hub.Post(nodeId, notices);
 
@@ -231,7 +233,7 @@ public sealed class BattlegroundFeatureClusterLinkTests
     }
 
     [Fact]
-    public async Task TheHolderNodesOwnPlayer_LoopsThroughTheHub_AndIsQueuedWithItsStatus()
+    public async Task TheHolderNodesOwnPlayer_SkipsTheHub_AndIsQueuedWithItsStatus()
     {
         var hub = new BattlegroundHub();
         using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);

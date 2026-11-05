@@ -173,6 +173,30 @@ public sealed class BattlegroundHolderWiringTests
     }
 
     [Fact]
+    public void AHubThatSawNoCallForTheWorkerTtl_DoesNotReportLiveWorkersGone_ButStillReportsOneThatNeverReturns()
+    {
+        var clock = new BattlegroundHubTests.ManualClock();
+        var hub = new BattlegroundHub(clock, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
+        Assert.True(hub.Take("holder").IsHolder);
+        hub.Drain("ek");
+        hub.Drain("wow");
+
+        // The hub is stalled (or the Social lease was elsewhere) for 60 s: no stamp could have been written.
+        clock.Advance(TimeSpan.FromSeconds(60));
+        Assert.Empty(hub.Take("holder").Commands);
+        hub.Drain("ek");
+
+        // Both stamps were refreshed by the first call; "ek" keeps draining, "wow" never comes back.
+        clock.Advance(TimeSpan.FromSeconds(20));
+        hub.Drain("ek");
+        Assert.Empty(hub.Take("holder").Commands);
+        clock.Advance(TimeSpan.FromSeconds(20));
+        hub.Drain("ek");
+        BattlegroundQueuedCommand gone = Assert.Single(hub.Take("holder").Commands);
+        Assert.Equal("wow", gone.WorkerId);
+    }
+
+    [Fact]
     public void ADrainOrASubmit_KeepsAWorkerAlive_AndTheHolderIsNeverReportedGone()
     {
         var clock = new BattlegroundHubTests.ManualClock();
