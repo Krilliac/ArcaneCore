@@ -1084,7 +1084,7 @@ public sealed class PlayerbotQuestGoalsTests
     /// and, at the fixture's giver instead of its own quest, <see cref="Offered"/>: a level 10 quest, worth taking for a level 10 bot.
     /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
     /// </summary>
-    private sealed class FullLogQuests(QuestInteractionFixture original, int grey) : IQuestContentStore
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0) : IQuestContentStore
     {
         public const uint Filler = 910_000;
         public const uint Offered = 910_100;
@@ -1092,14 +1092,15 @@ public sealed class PlayerbotQuestGoalsTests
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
             QuestContent content = await ((IQuestContentStore)original).LoadAsync(cancellationToken);
-            static QuestTemplate Kill(uint entry, int level) => new()
+            static QuestTemplate Kill(uint entry, int level, uint classes = 0, int prev = 0) => new()
             {
                 Entry = entry, Method = 2, MinLevel = 1, QuestLevel = level, Title = "Quest " + entry, Details = "Kill one.",
                 RequestItemsText = "Kill one.", ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1,
+                RequiredClasses = classes, PrevQuestId = prev,
             };
             var templates = new List<QuestTemplate>(content.Templates);
             for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
-                templates.Add(Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
+                templates.Add(i == exemptIndex ? Kill(Filler + (uint)i, 3, requiredClasses, prevQuest) : Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
             templates.Add(Kill(Offered, 10));
             var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
             return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
@@ -1178,6 +1179,89 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    /// <summary>A grey class-restricted quest (class ability, totem, form or pet quest) is never abandoned, and is still hunted.</summary>
+    [Fact]
+    public async Task AGreyClassRestrictedQuest_IsNeitherDroppedNorSkippedForHunting()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!));
+            Assert.Equal(0u, PlayerbotQuestGoals.GreyQuestToDrop(player, quest.Feature.Services, state));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals, player)));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.False(goals.IsRefused(FullLogQuests.Filler));
+            goals.RefreshObjectiveEntry(player, quest.Feature.Services, state);
+            Assert.Equal(90u, goals.PreferredCreatureEntry);
+            return true;
+        });
+    }
+
+    /// <summary>A grey chain step (a quest with a previous quest) is kept like a class quest.</summary>
+    [Fact]
+    public async Task AGreyChainStep_IsNotDropped()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, prevQuest: (int)FullLogQuests.Filler + 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            Assert.NotEqual(0, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!.Template.PrevQuestId);
+            Assert.Equal(0u, PlayerbotQuestGoals.GreyQuestToDrop(player, quest.Feature.Services, state));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals, player)));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>With DropGreyQuests on, a full log does not shed a grey class quest (nothing to shed, so no room and the offer is not taken).</summary>
+    [Fact]
+    public async Task AFullLog_DoesNotShedAGreyClassQuest_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            Assert.Equal(FullLogQuests.Filler, PlayerbotQuestGoals.LowValueQuestToShed(player, quest.Feature.Services, state));
+            Assert.Equal(0u, PlayerbotQuestGoals.LowValueQuestToShed(player, quest.Feature.Services, state, keepClassAndChain: true));
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 4; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(0, abandons);
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.Null(state.Quests.Get(FullLogQuests.Offered));
+            return true;
+        });
+    }
+
+    /// <summary>Control for the test above: with DropGreyQuests off the full log sheds the grey class quest and takes the offer.</summary>
+    [Fact]
+    public async Task AFullLog_ShedsAGreyClassQuest_WhenDropGreyQuestsIsOff()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+            for (int think = 0; think < 4 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(1, abandons);
+            Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task WithDropGreyQuestsOff_AGreyQuestIsKeptAndStillHunted()
     {
@@ -1210,6 +1294,49 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
             return true;
         });
+    }
+
+    /// <summary>NowMs wraps (WorldRuntime.NowMs); a bot that logs in while it is past 2^31 must still drop grey quests: 0 is "never shed", not a deadline.</summary>
+    [Fact]
+    public async Task AGreyQuest_IsDropped_WhenTheWorldClockIsPastTwoToTheThirtyOne()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 3), manualClock: true, clockStartMs: 3_000_000_000L);
+        PlayerbotQuestGoals? goals = null;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.True(quest.Host.World.NowMs >= int.MaxValue);
+            PlayerNpcState state = AddFillers(quest, player, 3);
+            goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(1, OnFrozenThinkClock(() => Think(quest, goals!, player))); // the unfixed gate never opens here: 0
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals!, player))); // the deadline set at this now still holds
+            Assert.Equal(2, Fillers(state));
+            return true;
+        });
+        // The bot may also have started taking the fixture's offered quest (its giver never answers here), and a shed waits for that stage to
+        // time out (15 s, then a 2 s backoff). So step the clock and think until the second grey quest goes; it must not go before one interval.
+        uint firstShedMs = 0;
+        await quest.Host.OnWorldAsync(() => { firstShedMs = quest.Host.World.NowMs; return true; });
+        int shed = 0;
+        string diagnostics = "";
+        for (int step = 0; step < 16 && shed == 0; step++)
+        {
+            await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs / 2);
+            await quest.Host.OnWorldAsync(() =>
+            {
+                Player player = quest.Session.Player!;
+                PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+                uint now = quest.Host.World.NowMs;
+                diagnostics = $"alive={player.IsAlive} combat={player.Combat.IsInCombat} settling={player.IsQuestSettlementPending} fillers={Fillers(state)} "
+                    + $"now={now} backingOff={goals!.IsBackingOff(now)}";
+                shed = OnFrozenThinkClock(() => Think(quest, goals!, player));
+                if (shed != 0)
+                    Assert.True(unchecked(now - firstShedMs) >= PlayerbotQuestGoals.GreyShedIntervalMs, $"second shed came early: {unchecked(now - firstShedMs)} ms");
+                return true;
+            });
+        }
+
+        Assert.True(shed == 1, $"expected the second grey quest to be shed after the interval; {diagnostics}");
     }
 
     /// <summary>One abandon per think, and the next one waits <see cref="PlayerbotQuestGoals.GreyShedIntervalMs"/>.</summary>
@@ -1750,7 +1877,7 @@ public sealed class PlayerbotQuestGoalsTests
         public QuestNpcFeature Feature => Host.WorldServices.GetRequiredService<QuestNpcFeature>();
 
         public static async Task<QuestHost> StartAsync(QuestInteractionFixture? questFixture = null, bool manualClock = false,
-            Func<QuestInteractionFixture, IQuestContentStore>? quests = null)
+            Func<QuestInteractionFixture, IQuestContentStore>? quests = null, long? clockStartMs = null)
         {
             QuestInteractionFixture fixture = questFixture ?? new QuestInteractionFixture();
             string databasePath = Path.Combine(Path.GetTempPath(), "arcane-playerbot-quest-" + Guid.NewGuid().ToString("N") + ".db");
@@ -1767,7 +1894,7 @@ public sealed class PlayerbotQuestGoalsTests
                 host = WorldTestHost.Start(configureServices: services =>
                 {
                     services.AddCharacterDatabase(configuration);
-                    if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
+                    if (manualClock) services.AddSingleton<IWorldFeature>(new ManualClock(clockStartMs));
                     if (quests is not null) services.AddSingleton(quests(fixture));
                 });
             }
@@ -1777,9 +1904,9 @@ public sealed class PlayerbotQuestGoalsTests
             return new QuestHost(host, session);
         }
 
-        private sealed class ManualClock : IWorldFeature
+        private sealed class ManualClock(long? startAtMs) : IWorldFeature
         {
-            public void Attach(WorldRuntime world) => world.UseManualClock();
+            public void Attach(WorldRuntime world) { if (startAtMs is { } start) world.UseManualClockFrom(start); else world.UseManualClock(); }
         }
 
         public async ValueTask DisposeAsync()

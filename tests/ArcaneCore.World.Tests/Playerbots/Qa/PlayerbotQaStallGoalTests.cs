@@ -58,7 +58,7 @@ public sealed class PlayerbotQaStallGoalTests : IDisposable
         Assert.DoesNotContain("no spawn", PlayerbotQaClassifier.Classify(QaData.Parse(QaData.BotLine(QaData.Bot1, "Ironwander", "stalled 120s: goal=Explore target=3502 quest=0 at -10301.6,1431.5,39.4 map 0")), new FakeFacts()).Detail, StringComparison.Ordinal);
     }
 
-    /// <summary>A later Explore stall of a finding re-classifies it: a cause the first signal set does not outlive the classifier that set it.</summary>
+    /// <summary>A later signal on the finding's own key (a Vendor stall here) re-classifies it: a cause the first signal set does not outlive the classifier that set it.</summary>
     [Fact]
     public void ALaterSignalOfTheSameFinding_RefreshesItsCause()
     {

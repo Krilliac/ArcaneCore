@@ -82,7 +82,7 @@ public sealed class QuestGoalJourneyTests
     {
         var travel = new ScriptedTravel(begins: true);
         await using JourneyHost host = await JourneyHost.StartAsync(travel, OtherMapSpawn);
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()) { LoopMsSince = _ => 0 });
 
         Assert.True(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100, preferredQuestId: QuestInteractionFixture.QuestId)),
             "no journey to the hunted creature");
@@ -101,7 +101,7 @@ public sealed class QuestGoalJourneyTests
         var travel = new ScriptedTravel(begins: true);
         await using JourneyHost host = await JourneyHost.StartAsync(travel, OtherMapSpawn);
         await host.CompleteQuestAsync();
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()) { LoopMsSince = _ => 0 });
 
         Assert.False(await host.OnWorldAsync(() => destinations.Update(host.Player, 0, 100, QuestInteractionFixture.QuestId)));
         Assert.Empty(travel.Begun);
@@ -114,7 +114,7 @@ public sealed class QuestGoalJourneyTests
         await using JourneyHost host = await JourneyHost.StartAsync(travel, OtherMapSpawn);
         PlayerbotOptions options = Options();
         options.Travel.Enabled = false;
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options) { LoopMsSince = _ => 0 });
 
         Assert.False(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100)));
         Assert.Empty(travel.Begun);
@@ -130,7 +130,7 @@ public sealed class QuestGoalJourneyTests
         var travel = new ScriptedTravel(begins: false);
         await using JourneyHost host = await JourneyHost.StartAsync(travel, manualClock: true, OtherMapSpawn);
         PlayerbotOptions options = Options();
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options) { LoopMsSince = _ => 0 });
         uint first = options.Travel.BackoffMs(1), second = options.Travel.BackoffMs(2);
         Assert.Equal(2 * first, second);
         Task<bool> Hunt() => host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100));
@@ -189,7 +189,7 @@ public sealed class QuestGoalJourneyTests
         await host.PlaceAsync(1, Darkshore);
         PlayerbotOptions options = Options();
         options.Population.TramMinLevel = 10;
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, options) { LoopMsSince = _ => 0 });
 
         Assert.Equal(1u, await host.OnWorldAsync(() => host.Player.Level));
         await host.OnWorldAsync(() => destinations.Update(host.Player, 0, 100, QuestInteractionFixture.QuestId));
@@ -208,7 +208,7 @@ public sealed class QuestGoalJourneyTests
         await using JourneyHost host = await JourneyHost.StartAsync(travel, TeldrassilSpawn);
         await host.PlaceAsync(1, Darkshore);
         await host.Host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder()));
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()) { LoopMsSince = _ => 0 });
 
         Assert.False(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100)), "the refused journey owned the think");
         Assert.Equal([(1u, At(TeldrassilSpawn))], travel.Begun);
@@ -230,7 +230,7 @@ public sealed class QuestGoalJourneyTests
         await using JourneyHost host = await JourneyHost.StartAsync(travel, TeldrassilSpawn, DarkshoreSpawn);
         await host.PlaceAsync(1, Darkshore);
         await host.Host.OnWorldAsync(() => WorldCollision.Of(host.Host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder()));
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()) { LoopMsSince = _ => 0 });
         Assert.True(Vector3.Distance(Darkshore, At(TeldrassilSpawn)) < Vector3.Distance(Darkshore, At(DarkshoreSpawn)), "the fixture lost its point");
 
         Assert.True(await host.OnWorldAsync(() => destinations.Update(host.Player, Hunted, 100)), "no walk to the spawn on this side");

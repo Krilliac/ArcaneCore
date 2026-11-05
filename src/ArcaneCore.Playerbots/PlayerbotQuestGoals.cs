@@ -368,8 +368,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// the lowest grey one still incomplete (quest level at or below the player's grey level, vmangos <c>MaNGOS::XP::GetGrayLevel</c>:
     /// next to no experience). Completed quests are kept for their turn-in, and a quest whose level follows the player's (level 0 or
     /// less) is never grey. Zero when nothing qualifies: the bot then takes no new quest until one is turned in.
+    /// With <paramref name="keepClassAndChain"/> (DropGreyQuests on) a grey class or chain quest is not low value.
     /// </summary>
-    internal static uint LowValueQuestToShed(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null)
+    internal static uint LowValueQuestToShed(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null, bool keepClassAndChain = false)
     {
         uint best = 0;
         int bestRank = int.MaxValue;
@@ -379,7 +380,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (id == 0 || skip?.Invoke(id) == true || state.Quests.Get(id) is not { } status || status.Rewarded) continue;
             int rank;
             if (status.Status == QuestStatus.Failed) rank = -1;
-            else if (status.Status == QuestStatus.Incomplete && services.Quests.Get(id) is { } quest && IsGrey(player, quest))
+            else if (status.Status == QuestStatus.Incomplete && services.Quests.Get(id) is { } quest
+                     && (keepClassAndChain ? IsDroppableGrey(player, quest) : IsGrey(player, quest)))
                 rank = quest.QuestLevel;
             else continue;
             if (rank < bestRank || (rank == bestRank && id < best)) { best = id; bestRank = rank; }
@@ -433,6 +435,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// <summary>Minimum milliseconds between two grey-quest abandons of one bot (<see cref="TryShedGreyQuest"/>).</summary>
     internal const uint GreyShedIntervalMs = 5_000;
 
+    /// <summary>NowMs before which no grey quest is dropped; 0 until the first drop (never a deadline, as _backoffUntil).</summary>
     private uint _nextGreyShedMs;
 
     /// <summary>
@@ -447,7 +450,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             uint id = state.Quests.SlotQuestId(slot);
             if (id == 0 || skip?.Invoke(id) == true || state.Quests.Get(id) is not { Status: QuestStatus.Incomplete, Rewarded: false }
-                || services.Quests.Get(id) is not { } quest || !IsGrey(player, quest)) continue;
+                || services.Quests.Get(id) is not { } quest || !IsDroppableGrey(player, quest)) continue;
             if (quest.QuestLevel < bestLevel || (quest.QuestLevel == bestLevel && id < best)) { best = id; bestLevel = quest.QuestLevel; }
         }
 
@@ -462,13 +465,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private bool TryShedGreyQuest(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
     {
         if (!_options.DropGreyQuests || player.Combat.IsInCombat || !player.IsAlive
-            || unchecked((int)(_nextGreyShedMs - now)) > 0) return false;
+            || (_nextGreyShedMs != 0 && unchecked((int)(_nextGreyShedMs - now)) > 0)) return false;
         uint id = GreyQuestToDrop(player, services, state, IsRefused);
         if (id == 0) return false;
         int slot = state.Quests.FindSlot(id);
         if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
             || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
         _nextGreyShedMs = unchecked(now + GreyShedIntervalMs);
+        if (_nextGreyShedMs == 0) _nextGreyShedMs = 1;
         Refuse(id, now);
         return true;
     }
@@ -481,7 +485,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private bool TryMakeRoomInFullLog(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
     {
         if (HasFreeLogSlot(state) || player.Combat.IsInCombat || !player.IsAlive) return false;
-        uint id = LowValueQuestToShed(player, services, state, IsRefused);
+        uint id = LowValueQuestToShed(player, services, state, IsRefused, keepClassAndChain: _options.DropGreyQuests);
         if (id == 0) return false;
         int slot = state.Quests.FindSlot(id);
         if (slot >= QuestConstants.MaxQuestLogSize
@@ -501,6 +505,21 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// </summary>
     internal static bool IsGrey(Player player, Quest quest)
         => quest.QuestLevel > 0 && (uint)quest.QuestLevel <= ArcaneCore.Game.Progression.ExperienceFormulas.GrayLevel(player.Level);
+
+    /// <summary>A class-restricted quest (<c>RequiredClasses</c> != 0: class ability, totem, form and pet quests) or a chain step (<c>PrevQuestId</c> != 0): the two notions <see cref="PlayerbotHomeArea.QuestInValley"/> uses, kept by <see cref="PlayerbotOptions.DropGreyQuests"/> whatever their colour.</summary>
+    internal static bool IsClassOrChainQuest(Quest quest)
+        => quest.Template.RequiredClasses != 0 || quest.Template.PrevQuestId != 0;
+
+    /// <summary>
+    /// Whether <see cref="PlayerbotOptions.DropGreyQuests"/> may drop, skip at a giver or stop hunting <paramref name="quest"/>: it is grey
+    /// (<see cref="IsGrey"/>) and neither class-restricted nor a chain step (<see cref="IsClassOrChainQuest"/>). Those are kept and still offered.
+    /// </summary>
+    internal static bool IsDroppableGrey(Player player, Quest quest)
+        => IsGrey(player, quest) && !IsClassOrChainQuest(quest);
+
+    /// <summary>Grey for every decision of this controller: <see cref="IsGrey"/>, except that with <see cref="PlayerbotOptions.DropGreyQuests"/> on a class or chain quest is treated as worth keeping and taking (never grey).</summary>
+    private bool IsGreyForBot(Player player, Quest quest)
+        => _options.DropGreyQuests ? IsDroppableGrey(player, quest) : IsGrey(player, quest);
 
     internal static bool ReasonableReturnTrip(PlayerbotHomeArea home, uint mapId, float playerX, float playerY,
         ArcaneCore.Kernel.WorldData.Creatures.CreatureSpawn ender)
@@ -1074,9 +1093,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         _roomWanted |= _starterScan.RoomWanted;
                         continue;
                     }
-                    if (!hasFreeSlot && (_roomWanted || IsGrey(player, quest)))
+                    if (!hasFreeSlot && (_roomWanted || IsGreyForBot(player, quest)))
                         continue;
-                    if (_options.DropGreyQuests && IsGrey(player, quest))
+                    if (_options.DropGreyQuests && IsDroppableGrey(player, quest))
                         continue;
                     if (hasFreeSlot && !SourceItemFits(player, quest))
                         continue;
@@ -1094,7 +1113,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     // taking (not grey) is what a full log makes room for (Update, TryMakeRoomInFullLog); a grey one is skipped.
                     if (!hasFreeSlot)
                     {
-                        if (!IsGrey(player, quest)) _roomWanted = true;
+                        if (!IsGreyForBot(player, quest)) _roomWanted = true;
                         // Not remembered as judged: this is the quest the room is made for, and a later think of the pass must see it again once a slot is free.
                         continue;
                     }
@@ -1241,7 +1260,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (Suspensions?.IsQuestSuspended(questId, now) == true)
                 continue;
             // A grey quest still in the log (drop rate-limited or refused) is not hunted for: its objectives give next to no experience.
-            if (_options.DropGreyQuests && IsGrey(player, quest))
+            if (_options.DropGreyQuests && IsDroppableGrey(player, quest))
                 continue;
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
             {

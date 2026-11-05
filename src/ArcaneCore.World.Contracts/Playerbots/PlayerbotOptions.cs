@@ -211,7 +211,7 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it
-    /// (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
+    /// (on by default). A completed grey quest is still turned in, and a class-restricted or chain-step quest is kept and still offered whatever its colour. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
     /// </summary>
     public bool DropGreyQuests { get; set; } = true;
 
