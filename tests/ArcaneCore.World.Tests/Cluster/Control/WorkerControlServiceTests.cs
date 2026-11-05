@@ -88,10 +88,20 @@ public sealed class WorkerControlServiceTests
         await source.FreezeStarted.Task.WaitAsync(Budget);
 
         // More finished operations than the service remembers: the oldest finished ones go, the running Freeze must stay.
-        for (int i = 0; i < 600; i++)
+        // Sent in pipelined batches (not 600 sequential round trips) so a loaded machine does not spend its budget on latency.
+        for (int batch = 0; batch < 15; batch++)
         {
-            Guid other = journal.Add(WorldHandoffStage.Warm, PlayerTransferDecisionState.PreCommit);
-            Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, other, ControlVerb.StopAdmissions)).Status);
+            var sends = new List<Task<ControlReply>>(40);
+            for (int i = 0; i < 40; i++)
+            {
+                Guid other = journal.Add(WorldHandoffStage.Warm, PlayerTransferDecisionState.PreCommit);
+                sends.Add(rig.SendAsync(ControlKind.WorldHandoff, other, ControlVerb.StopAdmissions));
+            }
+
+            foreach (ControlReply done in await Task.WhenAll(sends))
+            {
+                Assert.Equal(ControlStatus.Ok, done.Status);
+            }
         }
 
         Task<ControlReply> repeat = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze);

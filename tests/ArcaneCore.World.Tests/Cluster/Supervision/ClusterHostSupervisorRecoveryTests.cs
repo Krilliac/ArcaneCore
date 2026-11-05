@@ -79,9 +79,13 @@ public sealed class ClusterHostSupervisorRecoveryTests
     [Fact]
     public async Task CrashLoop_GivesUpAfterMaxInWindow_FaultsAndRecords()
     {
-        long before = AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop"));
-        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(options: o => o.CrashLoopMaxRestarts = 3));
-        await rig.Supervisor.StartProcessAsync("world");
+        // The shared ledger is also written by other tests running in parallel (the crash-dialog tests report the same key with the default process name),
+        // so its counter is not a baseline. Capture only reports whose subject is this rig's unique process name, as AnomalyLedger.Capture advises.
+        const string Name = "crashloop-giveup-recovery";
+        string key = AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop");
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == key && n.Subject == Name);
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(Name, options: o => o.CrashLoopMaxRestarts = 3));
+        await rig.Supervisor.StartProcessAsync(Name);
 
         for (int i = 0; i < 3; i++)
         {
@@ -90,11 +94,14 @@ public sealed class ClusterHostSupervisorRecoveryTests
         }
 
         rig.Launcher.Processes[3].ExitWith(1); // the fourth failure in the window is one too many
-        await TestWait.UntilAsync(() => Snap(rig).State == SupervisedProcessState.Faulted, "the crash loop to be given up");
+        await TestWait.UntilAsync(() => Snap(rig, Name).State == SupervisedProcessState.Faulted, "the crash loop to be given up");
+        // Faulted is published under the gate but the 'crash loop' console line is routed after the gate is released, so wait for the line too.
+        await TestWait.UntilAsync(() => rig.ConsoleText.Contains("crash loop", StringComparison.Ordinal), "the crash-loop console line");
+        await TestWait.UntilAsync(() => capture.Count(key) > 0, "the crash-loop report"); // reported right after Faulted is set, so do not assume it is already visible
 
         Assert.Equal(4, rig.Launcher.Launches);
-        Assert.Contains("crash loop", rig.ConsoleText, StringComparison.Ordinal);
-        Assert.Equal(before + 1, AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-crash-loop")));
+        Assert.Equal(1, capture.Count(key));
+        Assert.StartsWith("failures=4 ", capture.Notices[0].Detail, StringComparison.Ordinal);
     }
 
     [Fact]
