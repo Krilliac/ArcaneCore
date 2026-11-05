@@ -1,6 +1,6 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Stores;
-using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Data.Creatures;
