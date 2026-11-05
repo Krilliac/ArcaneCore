@@ -57,6 +57,7 @@ Defaults are the vmangos values; a different value is a deliberate deviation.
 * Both vmangos quirks of `EffectDuel` that corrupt state are not copied: it deletes the target's duel object even when it belongs to a third
   player (unreachable on retail data because the cast check refuses a target in a duel), and a self challenge is not refused server-side
   (here: `BAD_TARGETS`).
+* A far teleport mid-duel that cannot enter its map returns the player to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded (vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
 * Team numbers: whichever participant the map tick reaches first gets team 1 (as in vmangos); tests only assert `{1, 2}`.
 * mangos-classic differences recorded, not adopted: `ForceHealthAndPowerUpdate` around duels, `PLAYER_DUEL_TEAM`-based reactions, copying the duel team
   to charmed units, the 50/40 yd distances (selectable by option), and blocking the logout request while dueling (vmangos only blocks it while in combat,
