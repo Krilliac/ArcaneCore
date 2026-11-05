@@ -67,14 +67,20 @@ internal static partial class PlayerbotRoutePlanWatch
     /// </summary>
     internal const uint DutySuppressMs = 10_000;
 
-    /// <summary>How a caller wants a suppressed pair handled: how long it is held, whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>, and whether repeat suppressions of the pair lengthen the hold (<see cref="SuppressionSpanMs"/>).</summary>
-    internal readonly record struct Policy(uint SuppressMs, bool Blacklist, bool Escalate)
+    /// <summary>The hold (ms) of a duty pair suppressed again: its 1st, 2nd and further suppressions (the last step repeats), so a goal that stays refused is asked about less often without being shelved; a successful plan for the pair starts it over.</summary>
+    internal static readonly uint[] DutyBackoffMs = [DutySuppressMs, 30_000, 60_000];
+
+    /// <summary>The hold (ms) of a pair's <paramref name="strikes"/>-th suppression under <see cref="Policy.Duty"/> (<see cref="DutyBackoffMs"/>).</summary>
+    internal static uint DutySpanMs(int strikes) => DutyBackoffMs[Math.Clamp(strikes - 1, 0, DutyBackoffMs.Length - 1)];
+
+    /// <summary>How a caller wants a suppressed pair handled: how long it is held, whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>, whether repeat suppressions of the pair lengthen the hold (<see cref="SuppressionSpanMs"/>), and whether they step through <see cref="DutyBackoffMs"/> instead.</summary>
+    internal readonly record struct Policy(uint SuppressMs, bool Blacklist, bool Escalate, bool DutyBackoff = false)
     {
         /// <summary>The long hold with the blacklist (every caller but the battleground AI).</summary>
         internal static readonly Policy Default = new(PlayerbotRoutePlanWatch.SuppressMs, true, true);
 
-        /// <summary>The short hold without the blacklist (a goal the bot must go on trying: <see cref="DutySuppressMs"/>).</summary>
-        internal static readonly Policy Duty = new(DutySuppressMs, false, false);
+        /// <summary>The short hold without the blacklist (a goal the bot must go on trying: <see cref="DutySuppressMs"/>, then 30 s and 60 s per pair, never longer).</summary>
+        internal static readonly Policy Duty = new(DutySuppressMs, false, false, DutyBackoff: true);
     }
 
     private const int MaxSuppressedEntries = 8;
@@ -172,6 +178,7 @@ internal static partial class PlayerbotRoutePlanWatch
         PruneExpired(state, now);
 
         uint mapId = player.Map?.MapId ?? player.MapId;
+        if (planned && (policy ?? Policy.Default).DutyBackoff) ForgetStrikes(state, mapId, origin, goal, now);
         float distNow = FlatDistance(origin, goal);
         Vector3 routeEnd = route is { Points.Count: > 0 } ? route.Points[^1] : goal;
 
@@ -254,8 +261,9 @@ internal static partial class PlayerbotRoutePlanWatch
             state.Suppressed.RemoveAt(evict >= 0 ? evict : 0);
         }
 
-        // A duty goal keeps its short flat hold: escalating it would shelve the bot again (#1498).
-        uint until = unchecked(now + (policy.Escalate ? SuppressionSpanMs(strikes) : policy.SuppressMs));
+        // A duty goal backs off per pair 10 s, 30 s, 60 s and stops there: the 180 s hold shelved the bot (#1498), a flat 10 s re-asks the mesh forever.
+        uint span = policy.DutyBackoff ? DutySpanMs(strikes) : policy.Escalate ? SuppressionSpanMs(strikes) : policy.SuppressMs;
+        uint until = unchecked(now + span);
         state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until, strikes, unchecked(until + StrikeMemoryMs)));
         state.Epoch = unchecked(state.Epoch + 1);
         state.LastStrikes = strikes;
@@ -263,6 +271,22 @@ internal static partial class PlayerbotRoutePlanWatch
         if (policy.Blacklist && player.IsAlive)
         {
             PlayerbotMotion.Blacklist(player, [goal, routeEnd], now);
+        }
+    }
+
+    /// <summary>A successful plan for a pair ends its refusals: the remembered strikes of the (no longer holding) pair are dropped, so a later refusal is a first one again.</summary>
+    private static void ForgetStrikes(WatchState state, uint mapId, Vector3 origin, Vector3 goal, uint now)
+    {
+        for (int i = state.Suppressed.Count - 1; i >= 0; i--)
+        {
+            SuppressedPair entry = state.Suppressed[i];
+            if (!IsActive(entry, now)
+                && entry.MapId == mapId
+                && FlatDistanceSquared(entry.Origin, origin) <= SameOriginYards * SameOriginYards
+                && FlatDistanceSquared(entry.Goal, goal) <= SameGoalYards * SameGoalYards)
+            {
+                state.Suppressed.RemoveAt(i);
+            }
         }
     }
 

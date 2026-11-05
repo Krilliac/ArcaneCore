@@ -404,7 +404,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// <summary>
     /// One warning when the configured <c>MaxBotsPerBattleground</c> is overridden for some type: at the first scan after the world starts
     /// (the templates are loaded), and again whenever a <c>.reload config</c> (or a template reload) changes the cap or which types are
-    /// raised. A reload that changes neither does not repeat it.
+    /// raised. The key compares templates by reference: a config reload that changes neither does not repeat it, but registering a new
+    /// template instance (even with the same limits) warns again while the cap stays raised.
     /// </summary>
     private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
     {

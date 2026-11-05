@@ -129,6 +129,34 @@ public sealed class PlayerbotAlteracValleyMatchCapWorldTests : PlayerbotAlteracV
     }
 
     [Fact]
+    public async Task Av_TemplateReload_WarnsAgainWhileTheCapStaysRaised()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAlteracValleyAsync(o => o.Battlegrounds.MaxBotsPerBattleground = 4, MinPerTeam);
+        await RunAsync(world, "bg-av-reload-rewarn", async context =>
+        {
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await AutonomousAsync(context, "Bgavreload", race: 1); // the coordinator scans while bots run
+            await context.StepAsync("the first scan warns once", async () =>
+            {
+                await context.WaitUntilAsync("a warning", () => coordinator.RaiseWarnings == 1, TimeSpan.FromSeconds(30));
+            });
+
+            await context.StepAsync("a content reload replaces the template with the same limits and the warning is logged again", async () =>
+            {
+                await context.ReadAsync(() =>
+                {
+                    BattlegroundManager manager = Manager(context);
+                    manager.RegisterTemplate(manager.TemplateOf(BattlegroundType.AlteracValley)! with { });
+                    return true;
+                });
+                await context.WaitUntilAsync("a second warning", () => coordinator.RaiseWarnings == 2, TimeSpan.FromSeconds(30));
+                await context.IdleAsync(TimeSpan.FromSeconds(20));
+                ScenarioContext.ExpectEqual(2, await context.ReadAsync(() => coordinator.RaiseWarnings), "warnings after the one reload");
+            });
+        });
+    }
+
+    [Fact]
     public async Task Av_RaiseCapOff_KeepsTheConfiguredCap_BotsQueueUpToIt_NoRefusal_AndNoMatchStarts()
     {
         // The behaviour before RaiseCapToFillTemplate: cap 4 allows 2 bots a team, below the template minimum of 3, so bots queue but no

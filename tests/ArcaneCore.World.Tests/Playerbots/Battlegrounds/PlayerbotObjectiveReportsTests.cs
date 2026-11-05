@@ -44,13 +44,14 @@ public sealed class PlayerbotObjectiveReportsTests
     }
 
     [Fact]
-    public void TryAdd_IsBounded_AndForgetsTheOldestPairFirst()
+    public void TryAdd_CapsTheReportsOfAMatch_SoNothingIsReportedTwice()
     {
         var reports = new PlayerbotObjectiveReports();
-        for (int i = 0; i < PlayerbotObjectiveReports.Capacity + 4; i++)
+        for (int i = 0; i < PlayerbotObjectiveReports.MaxReports; i++)
             Assert.True(reports.TryAdd(Goal + new Vector3(i * 50f, 0f, 0f), Graveyard));
-        Assert.Equal(PlayerbotObjectiveReports.Capacity, reports.Count);
-        Assert.True(reports.TryAdd(Goal, Graveyard), "the first pair was forgotten");
-        Assert.False(reports.TryAdd(Goal + new Vector3((PlayerbotObjectiveReports.Capacity + 3) * 50f, 0f, 0f), Graveyard), "the newest is kept");
+        Assert.False(reports.TryAdd(Goal + new Vector3(500f, 0f, 0f), Graveyard), "over the cap");
+        Assert.False(reports.TryAdd(Goal, Graveyard), "a first pair is not forgotten and re-reported");
+        reports.Clear();
+        Assert.True(reports.TryAdd(Goal, Graveyard), "the cap is per match");
     }
 }
