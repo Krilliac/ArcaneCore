@@ -299,6 +299,8 @@ public sealed class PlayerbotEconomyVisitBuyWorldTests : PlayerbotEconomyWorldTe
         await RunAsync(world, "economy-slot-search-shield", async c =>
         {
             EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            // Item content loads on first use (a login); nothing has logged in yet, so load it before reading the template.
+            await c.Services.GetRequiredService<ArcaneCore.World.Items.ItemsFeature>().EnsureLoadedAsync();
             uint cap = BuyCap(economy, Template(economy, ScenarioShield));
             ScenarioContext.Expect(cap > 1, "the shield has a buy cap to list at");
             var result = await VisitWithWornScoresAsync(c, "Econshield", (_, slot) => slot == InventorySlots.OffHand ? 0f : 100f, upgradeSlotSearches: 1,
