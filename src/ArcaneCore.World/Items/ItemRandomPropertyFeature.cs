@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Items;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
@@ -19,16 +20,11 @@ public sealed class ItemRandomPropertyOptions
     /// random property. A configured file that is unreadable or has another layout refuses startup.
     /// </summary>
     public string? DbcPath { get; set; }
-
-    /// <summary>
-    /// A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding <c>item_enchantment_template</c>; only that table is read. Both
-    /// this and <see cref="DbcPath"/> are needed for random properties. A configured dump that cannot be read refuses startup.
-    /// </summary>
-    public string? EnchantmentTemplateDumpPath { get; set; }
 }
 
 /// <summary>
-/// Random item properties in the world daemon: loads ItemRandomProperties.dbc and <c>item_enchantment_template</c> once at startup into the
+/// Random item properties in the world daemon: loads ItemRandomProperties.dbc and the world database's <c>item_enchantment_template</c>
+/// (<see cref="IItemEnchantmentTemplateStore"/>; filled by <c>arcane-content-importer import</c> or <c>refresh</c>) once at startup into the
 /// immutable <see cref="ItemRandomPropertyCatalog"/> and hands <see cref="ItemRandomProperties"/> to the items feature, which gives it to every
 /// inventory at login; new items of a template with <c>random_property</c> then roll their "of the …" property (vmangos
 /// Item::GenerateItemRandomPropertyId). Not hot-reloadable (the client's own DBC cannot change under a running world).
@@ -53,17 +49,29 @@ public sealed class ItemRandomPropertyFeature : IWorldFeature
 
     public void Attach(WorldRuntime world)
     {
-        bool dbc = !string.IsNullOrWhiteSpace(Options.DbcPath);
-        bool dump = !string.IsNullOrWhiteSpace(Options.EnchantmentTemplateDumpPath);
-        if (!dbc || !dump)
+        if (string.IsNullOrWhiteSpace(Options.DbcPath))
         {
-            _logger.LogWarning("ItemRandomProperties:DbcPath and ItemRandomProperties:EnchantmentTemplateDumpPath are not both set: new items get no random property");
+            _logger.LogWarning("ItemRandomProperties:DbcPath is not set: new items get no random property");
             return;
         }
 
-        // Fail closed: configured files that cannot be read refuse startup.
-        var catalog = new ItemRandomPropertyCatalog(
-            ItemRandomPropertiesDbcReader.Load(Options.DbcPath!), ItemEnchantmentTemplateDumpReader.Load(Options.EnchantmentTemplateDumpPath!));
+        // Fail closed: a configured file or a database that cannot be read refuses startup.
+        IReadOnlyList<ItemEnchantmentChance> chances = [];
+        using (IServiceScope scope = _services.GetRequiredService<IServiceScopeFactory>().CreateScope())
+        {
+            if (scope.ServiceProvider.GetService<IItemEnchantmentTemplateStore>() is { } store)
+            {
+                chances = store.LoadAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        if (chances.Count == 0)
+        {
+            _logger.LogWarning("The world database has no item_enchantment_template rows (import the content dump): new items get no random property");
+            return;
+        }
+
+        var catalog = new ItemRandomPropertyCatalog(ItemRandomPropertiesDbcReader.Load(Options.DbcPath), chances);
         Properties = new ItemRandomProperties(catalog, report: message => _logger.LogWarning("{Message}", message));
         _services.GetRequiredService<ItemsFeature>().RandomProperties = Properties;
         _logger.LogInformation("Loaded {Properties} random properties and {Groups} item_enchantment_template entries", catalog.PropertyCount, catalog.GroupCount);

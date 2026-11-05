@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Tests.Spells;
 
 /// <summary>
 /// Y87: SPELL_CUSTOM_IGNORE_ARMOR (vmangos SpellCaster.cpp:1283) and the ranged-slot +500 ms of a spell whose cast time row is the all-zero
-/// "instant" row 1 (SpellEntry.cpp:477-479 returns 0 only when the row is missing, :509-510 adds 500 otherwise).
+/// "instant" row 1 (SpellEntry.cpp:477 looks the row up, :480-481 returns 0 only when it is missing, :511-512 adds 500 otherwise).
 /// </summary>
 public sealed class SpellCombatGapsTests
 {
@@ -59,7 +59,7 @@ public sealed class SpellCombatGapsTests
     }
 
     [Fact]
-    public void ARowlessSpellWithADefaultCastTimeFlag_StaysInstantEvenWithANonDefaultCastTime()
+    public void AnExplicitlyRowlessSpell_IsInstantWhateverItsCastTimeField_NoFactoryBuildsThatState()
     {
         var spell = new SpellInfo { CastTime = new SpellCastTime(2000, 0, 0), Attributes = SpellAttributes.UsesRangedSlot, HasCastTimeEntry = false };
         Assert.Equal(0, spell.GetCastTime(60));

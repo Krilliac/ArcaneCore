@@ -73,7 +73,7 @@ public sealed class SpellStoreFactoryItemFieldsTests
     [Fact]
     public void CastingTimeIndexOne_AllZeroRow_IsPresentAndTakesTheRangedSlotHalfSecond()
     {
-        // vmangos SpellEntry.cpp:477-479 / :509-510: a missing row is instant with no surcharge, the all-zero row 1 still adds 500 ms.
+        // vmangos SpellEntry.cpp:477 (lookup), :480-481 (missing row) / :511-512 (surcharge): a missing row is instant with no surcharge, the all-zero row 1 still adds 500 ms.
         var castTimes = new Dictionary<uint, SpellCastTimeRow> { [1] = new SpellCastTimeRow { Id = 1 } };
         SpellInfo Build(uint index) => SpellStoreFactory.ToSpellInfo(
             new SpellTemplateRow { Id = 2764, CastingTimeIndex = index, Attributes = (uint)(SpellAttributes.UsesRangedSlot | SpellAttributes.IsAbility) },

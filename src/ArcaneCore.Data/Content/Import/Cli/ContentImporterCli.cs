@@ -57,7 +57,8 @@ public static partial class ContentImporterCli
                                 new-character (start position, starting spell, teleport target) and
                                 location (portal, GM teleport) and totem spell tables
                                 (and the starting outfit, playercreateinfo_item), the enchantment tables
-                                spell_proc_item_enchant and spell_enchant_charges, and the world-state
+                                spell_proc_item_enchant and spell_enchant_charges, the readable pages page_text and the random
+                                property groups item_enchantment_template, and the world-state
                                 tables game_weather (zone weather chances) and exploration_basexp, and the seven
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
@@ -443,6 +444,7 @@ public static partial class ContentImporterCli
         var onKill = new OnKillReputationDumpImporter();
         var reputationTemplates = new ReputationTemplatesDumpImporter();
         var enchantProcs = new EnchantProcDumpImporter();
+        var itemText = new ItemTextDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
@@ -484,6 +486,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             enchantProcs.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            itemText.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -633,6 +640,7 @@ public static partial class ContentImporterCli
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
         ReputationTemplatesImportReport reputationTemplatesReport = reputationTemplates.BuildReport();
         EnchantProcImportReport enchantProcReport = enchantProcs.BuildReport();
+        ItemTextImportReport itemTextReport = itemText.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
@@ -661,6 +669,7 @@ public static partial class ContentImporterCli
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
                     reputationTemplatesReport = await reputationTemplates.WriteAsync(db, replace, token).ConfigureAwait(false);
                     enchantProcReport = await enchantProcs.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    itemTextReport = await itemText.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -734,6 +743,8 @@ public static partial class ContentImporterCli
         AddEventOrphanWarning(warnings, gameEventReport);
         imported["spell_proc_item_enchant"] = enchantProcReport.ProcEnchants;
         imported["spell_enchant_charges"] = enchantProcReport.EnchantCharges;
+        imported[ItemTextWorldDataModule.PageTextTable] = itemTextReport.Pages;
+        imported[ItemTextWorldDataModule.EnchantmentTemplateTable] = itemTextReport.EnchantmentTemplates;
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
         imported["world_safe_locs"] = graveyardReport.SafeLocs;
@@ -1231,6 +1242,8 @@ public static partial class ContentImporterCli
                 ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 (SpellEffectModDataModule.Table, await db.Set<SpellEffectModRow>().CountAsync(ct).ConfigureAwait(false)),
+                (ItemTextWorldDataModule.PageTextTable, await db.Set<PageTextRow>().CountAsync(ct).ConfigureAwait(false)),
+                (ItemTextWorldDataModule.EnchantmentTemplateTable, await db.Set<ItemEnchantmentTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
             {

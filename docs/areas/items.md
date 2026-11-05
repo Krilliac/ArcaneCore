@@ -169,30 +169,28 @@ The auction outbid notification and bidder list are in [economy fidelity](../int
 
 | Setting | Content | Without it |
 |---|---|---|
-| `PageText:DumpPath` | A vmangos or cmangos classic-db world dump (plain or .gz) with `page_text` (entry, text, next_page); only that table is read. The full classic-db z2815 dump loads its 1427 pages in about 1 s. | Every page answers "Item page missing." |
+| world table `page_text` (world schema 70) | Rows (entry, text, next_page) imported from a vmangos or cmangos classic-db world dump by `arcane-content-importer import` or `refresh`. The world reads the table once at start (the classic-db z2815 dump has 1427 pages). | Every page answers "Item page missing." |
 | `ItemRandomProperties:DbcPath` | The developer-supplied build-5875 ItemRandomProperties.dbc (16 fields, strict). | No random properties. |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | A world dump with `item_enchantment_template` (entry, ench, chance; vmangos rows filtered to patch 10). z2815: 772 entries, about 1 s. | No random properties. |
+| world table `item_enchantment_template` (world schema 70) | Rows (entry, ench, chance) imported from a world dump by `arcane-content-importer import` or `refresh`; vmangos rows are filtered to patch 10 at import. z2815: 772 entries. | No random properties. |
 
 ### Optional client data (one command)
 
 `tools/content/set-optional-data.ps1 -AppSettings <appsettings.json> -DbcDirectory <refs-root>\client-dbc-5875-effective [-Dump <dump>]` (or
 `refresh-world-content.ps1 ... -AppSettings <appsettings.json>`, which runs it after the content refresh) checks every file (WDBC header and
-build-5875 field count, the directory's `SHA256SUMS`, both tables present in the dump), keeps the old `appsettings.json` as a `.bak` and sets:
+build-5875 field count, the directory's `SHA256SUMS`), keeps the old `appsettings.json` as a `.bak` and sets:
 
 | Key | File (`<refs-root>`\client-dbc-5875-effective, patch-2 over patch over dbc) | Rows | Feature |
 |---|---|---|---|
 | `ItemSets:DbcPath` | ItemSet.dbc (patch-2) | 172 sets | item set bonuses |
 | `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc (patch) | 2012 suffixes | random suffixes |
-| `ItemRandomProperties:EnchantmentTemplateDumpPath` | the classic-db dump (`item_enchantment_template`) | 772 entries | random suffixes |
 | `Enchanting:SpellItemEnchantmentDbcPath` | SpellItemEnchantment.dbc (patch-2) | 1460 enchantments | enchanting, and the stats of suffix enchantments (slots 3-5) |
-| `PageText:DumpPath` | the classic-db dump (`page_text`) | 1427 pages | readable items and text objects |
 | `CharacterCreation:CharSectionsDbcPath` | CharSections.dbc (patch) | 3603 available rows | the appearance check of a new character |
 | `CharacterCreation:CharacterFacialHairStylesDbcPath` | CharacterFacialHairStyles.dbc (patch) | 136 styles | the appearance check of a new character |
 
-Each is read once at startup (not hot-reloadable); a configured file that cannot be read refuses startup. With all seven the world logs none
-of the five "not set" warnings. 1.12.1 has no barber shop, so CharSections serves character creation only.
+Each is read once at startup (not hot-reloadable); a configured file that cannot be read refuses startup. With all five (and the `page_text` and `item_enchantment_template` rows imported) the world logs none
+of the "not set" warnings. 1.12.1 has no barber shop, so CharSections serves character creation only.
 
-`page_text` and `item_enchantment_template` are read from dumps because a world-database table for them needs a world schema number this lane did not have; moving them into the world database is a follow-up (a table module plus a content-import spec). Until then the world reads them from the dump at every start (about 2 s in all for z2815).
+`page_text` and `item_enchantment_template` are world-database tables (world schema **70**, `ItemTextWorldDataModule`; the number was taken on the 2026-11-05 integration branch and is renumbered at the integration if another step took it). The importer (`ItemTextDumpImporter`, content-import spec entries for both tables) fills them on `import` and `refresh`; the world reads them through `IPageTextStore` and `IItemEnchantmentTemplateStore` once at start. The former dump keys (the page text dump path and the enchantment template dump path) are retired, so the world no longer parses a dump at start. A database upgraded to 70 has no rows until the content dump is imported or refreshed; the update files are `sql/updates/world/<provider>/0070_ItemTextWorldDataModule.sql`.
 
 ### Schema
 
