@@ -212,8 +212,7 @@ public sealed class WorldHandoffRecoveryService(
 }
 
 /// <summary>
-/// Production registration of the whole-World handoff for a worker node. Registered only in worker mode (<c>Cluster:Worker:Enabled</c>) on an active worker
-/// (a standby is the handoff's target, never its source). <c>TryAdd</c>: a source, provider or in-flight tracker registered earlier (a test, a custom host) wins.
+/// Production registration of the whole-World handoff for a worker node. Registered only in worker mode (<c>Cluster:Worker:Enabled</c>) (on a standby only the source, resolved after its promotion). <c>TryAdd</c>: a source, provider or in-flight tracker registered earlier (a test, a custom host) wins.
 /// <para>
 /// Registers the draining source over this process's own world (<see cref="LocalWorldHandoffSource"/>), the coordinator provider and the start-up recovery. The journal comes
 /// from the characters data module (<c>EfTransferDecisionStore</c>). The standby target (<see cref="IWorldHandoffTarget"/>) and the router (<see cref="IWorldHandoffRouter"/>,
@@ -230,11 +229,13 @@ public static class WorldHandoffHosting
         ArgumentNullException.ThrowIfNull(configuration);
 
         IConfigurationSection worker = configuration.GetSection(GatewayWorkerOptions.SectionName);
-        if (!worker.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)) || worker.GetValue<bool>(nameof(GatewayWorkerOptions.Standby)))
+        if (!worker.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
         {
             return services;
         }
 
+        // The source is registered for a standby too, but only resolved once it is promoted (WorkerTransferHosting hands it to the control service then): a standby is the handoff's
+        // target while it waits, and the draining source of the next handoff after its promotion. The coordinator provider and the start-up recovery stay off a standby.
         services.TryAddSingleton<IWorldHandoffSource>(sp => new LocalWorldHandoffSource(
             new WorkerNodeId(sp.GetRequiredService<IOptions<GatewayWorkerOptions>>().Value.NodeId),
             sp.GetRequiredService<WorldRuntime>(),
@@ -243,6 +244,11 @@ public static class WorldHandoffHosting
             sp.GetRequiredService<WorldWriterGuard>(),
             sp.GetService<CharacterPersistenceBarrier>(),
             sp.GetService<CharacterRetirementRegistry>()));
+        if (worker.GetValue<bool>(nameof(GatewayWorkerOptions.Standby)))
+        {
+            return services;
+        }
+
         services.TryAddSingleton<WorldHandoffInFlight>();
         services.TryAddSingleton(sp => new WorldHandoffCoordinatorProvider(sp));
         services.AddHostedService(sp => new WorldHandoffRecoveryService(
