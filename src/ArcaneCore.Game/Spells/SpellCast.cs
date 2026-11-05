@@ -59,11 +59,33 @@ public sealed class SpellCast
     /// <summary>SEND_EVENT is once per effect even when target selection supplies several units.</summary>
     internal HashSet<int> DispatchedEventEffects { get; } = [];
 
-    /// <summary>Game objects selected for each ACTIVATE_OBJECT effect, including script-target area selections.</summary>
-    internal Dictionary<int, ObjectGuid[]> ObjectTargetsByEffect { get; } = [];
+    private Dictionary<int, ObjectGuid[]>? _objectTargetsByEffect;
+    private Dictionary<int, Unit>? _objectCarriers;
 
-    /// <summary>Per effect, the unit that only carries the effect for a game object found by target A 46 (no real unit target: no hit roll, no hit-list entry). Cast thread only.</summary>
-    internal Dictionary<int, Unit> ObjectCarriers { get; } = [];
+    /// <summary>
+    /// Game objects selected for each ACTIVATE_OBJECT effect, including script-target area selections. Created on first access (almost no cast
+    /// selects a game object); a reader that must not allocate uses <see cref="ObjectTargetsOrNull"/>. Cast thread only.
+    /// </summary>
+    internal Dictionary<int, ObjectGuid[]> ObjectTargetsByEffect => _objectTargetsByEffect ??= [];
+
+    /// <summary><see cref="ObjectTargetsByEffect"/> when something created it, else null (never allocates).</summary>
+    internal Dictionary<int, ObjectGuid[]>? ObjectTargetsOrNull => _objectTargetsByEffect;
+
+    /// <summary>
+    /// Per effect, the unit that only carries the effect for a game object found by target A 46 (no real unit target: no hit roll, no immunity test, no
+    /// hit-list entry, no threat or procs). Created on first access; a reader that must not allocate uses <see cref="ObjectCarriersOrNull"/>. Cast thread only.
+    /// </summary>
+    internal Dictionary<int, Unit> ObjectCarriers => _objectCarriers ??= [];
+
+    /// <summary><see cref="ObjectCarriers"/> when something created it, else null (never allocates).</summary>
+    internal Dictionary<int, Unit>? ObjectCarriersOrNull => _objectCarriers;
+
+    /// <summary>
+    /// A script-target selection (the destination of target 46) changed <see cref="Targets"/>
+    /// while the cast was aimed at nobody (a self cast): the effects selected afterwards still treat the cast as a self cast
+    /// (the explicit-or-self fallback of <c>SelectEffectTargets</c>). Cast thread only.
+    /// </summary>
+    internal bool ScriptTargetKeptSelfAim { get; set; }
 
     // A redirected cast keeps the chosen unit for all its explicit enemy effects, even after
     // selection consumed the last magnet charge and removed the protection aura.
