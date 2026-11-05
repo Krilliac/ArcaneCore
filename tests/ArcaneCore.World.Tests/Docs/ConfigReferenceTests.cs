@@ -199,6 +199,21 @@ public sealed class ConfigReferenceTests
         Assert.Contains("[`Fixture`](#fixture)", a, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Render_EscapesPipesInTheMeaningOfAKeyReadByName()
+    {
+        string page = ConfigReferenceRenderer.Render([], [new AdHocKey("A:B", "string", "null", "Either a | b.")], NoOverrides);
+        Assert.Contains("| `A:B` | `string` | `null` | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_LeavesTheMeaningOfAnElementFieldAsTheSummaryEscapedIt()
+    {
+        ConfigEntry entry = new("Solo", "Solo:Rows", "Row[]", "-", "Rows.", "-", ElementFields: [new ConfigElementField("Mode", "string", "a", "Either a \\| b.")]);
+        string page = ConfigReferenceRenderer.Render([entry], [], NoOverrides);
+        Assert.Contains("| `Mode` | `string` | `a` | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
     private static ConfigCoverage Coverage(params string[] paths) => new(
         new Dictionary<string, string> { ["FixtureOptions"] = "Fixture" },
         new HashSet<string>(paths),
@@ -519,6 +534,9 @@ public sealed class ConfigReferenceTests
     public void Production_ConfigurationReference_MatchesTheCommittedPage()
     {
         string page = ConfigReferenceRenderer.Render(Production.Entries, ConfigExceptionTable.AdHocKeys, ConfigExceptionTable.SkippedProperties);
+
+        // A pipe escaped twice shows a stray backslash and ends the cell. The golden cannot catch this: a regeneration would pin the bad text.
+        Assert.DoesNotContain("\\\\|", page, StringComparison.Ordinal);
         DocsGolden.Verify("docs/reference/configuration.md", page);
     }
 
@@ -531,6 +549,9 @@ public sealed class ConfigReferenceTests
             .Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
         Assert.Equal(ConfCatalogGenerator.Build(Production.Entries, ConfigExceptionTable.AdHocKeys).Keys.Count, rows);
         Assert.Equal(Production.Entries.Count + ConfigExceptionTable.AdHocKeys.Count, rows);
+
+        // A pipe escaped twice shows a stray backslash and ends the cell. The golden cannot catch this: a regeneration would pin the bad text.
+        Assert.DoesNotContain(pages, p => p.Text.Contains("\\\\|", StringComparison.Ordinal));
 
         // A page that no longer has an area (a section renamed or emptied) must not linger: it would describe options that are gone.
         string directory = Path.Combine(RepoRoot.Find(), ConfigReferenceRenderer.AreaDirectory.Replace('/', Path.DirectorySeparatorChar));

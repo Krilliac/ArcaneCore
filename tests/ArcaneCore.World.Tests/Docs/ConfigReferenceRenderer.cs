@@ -116,7 +116,7 @@ internal static class ConfigReferenceRenderer
         sb.Append("These keys are read directly rather than through an options class.\n\n| Key | Type | Default | Meaning |\n|---|---|---|---|\n");
         foreach (AdHocKey key in adHoc.OrderBy(k => k.Path, StringComparer.Ordinal))
         {
-            sb.Append("| `").Append(key.Path).Append("` | `").Append(key.TypeText).Append("` | `").Append(key.Default).Append("` | ").Append(key.Meaning).Append(" |\n");
+            sb.Append("| `").Append(key.Path).Append("` | `").Append(key.TypeText).Append("` | `").Append(key.Default).Append("` | ").Append(AdHocMeaningCell(key)).Append(" |\n");
         }
 
         sb.Append("\n## Aliases and framework sections\n\n");
@@ -146,7 +146,7 @@ internal static class ConfigReferenceRenderer
             sb.Append("| Field | Type | Default | Meaning |\n|---|---|---|---|\n");
             foreach (ConfigElementField field in entry.ElementFields!)
             {
-                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning.Replace("|", "\\|", StringComparison.Ordinal)).Append(" |\n");
+                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning).Append(" |\n");
             }
 
             sb.Append('\n');
@@ -188,7 +188,7 @@ internal static class ConfigReferenceRenderer
         List<AreaRow> rows =
         [
             .. entries.Select(e => new AreaRow(e.Path, e.Section, e.TypeText, e.Default, allowed[e.Path], e.Daemons, e.Reload switch { "live" => "live", "restart" => "restart", _ => "start" }, e.Meaning)),
-            .. adHoc.Select(a => new AreaRow(a.Path, a.Path[..a.Path.LastIndexOf(':')], a.TypeText, a.Default, allowed[a.Path], a.Daemons, "start", a.Meaning)),
+            .. adHoc.Select(a => new AreaRow(a.Path, a.Path[..a.Path.LastIndexOf(':')], a.TypeText, a.Default, allowed[a.Path], a.Daemons, "start", AdHocMeaningCell(a))),
         ];
 
         var worldGroupCounts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -242,7 +242,7 @@ internal static class ConfigReferenceRenderer
                     string option = entry.Path.StartsWith(prefix, StringComparison.Ordinal) ? entry.Path[prefix.Length..] : entry.Path;
                     sb.Append("| `").Append(option).Append("` | `").Append(entry.TypeText).Append("` | ").Append(Code(entry.Default)).Append(" | ")
                         .Append(entry.Allowed.Replace("|", "\\|", StringComparison.Ordinal)).Append(" | ").Append(entry.Daemons).Append(" | ")
-                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning.Replace("|", "\\|", StringComparison.Ordinal)).Append(" |\n");
+                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning).Append(" |\n");
                 }
 
                 sb.Append('\n');
@@ -268,7 +268,17 @@ internal static class ConfigReferenceRenderer
         return pages;
     }
 
-    /// <summary>One option as the area pages show it: an options-class entry or a key read by name.</summary>
+    /// <summary>
+    /// The table cell for the meaning of a key read by name. <see cref="AdHocKey.Meaning"/> is plain text, also shipped as is in the catalog, so its pipes
+    /// are escaped here. <see cref="ConfigEntry.Meaning"/> and <see cref="ConfigElementField.Meaning"/> need no such step: they are markdown already
+    /// (<see cref="ConfigSourceSummaries"/> escapes them).
+    /// </summary>
+    private static string AdHocMeaningCell(AdHocKey key) => key.Meaning.Replace("|", "\\|", StringComparison.Ordinal);
+
+    /// <summary>
+    /// One option as the area pages show it: an options-class entry or a key read by name. Meaning is the finished table cell, already
+    /// escaped; Allowed is plain text and the page escapes it.
+    /// </summary>
     private sealed record AreaRow(string Path, string Section, string TypeText, string Default, string Allowed, ConfigDaemon Daemons, string Reload, string Meaning);
 
     /// <summary>
