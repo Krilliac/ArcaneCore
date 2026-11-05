@@ -1082,12 +1082,16 @@ public sealed class PlayerbotQuestGoalsTests
     /// <summary>
     /// The quest giver's fixture with a full journal's worth of quests (<see cref="Filler"/>, kill quests of creature 90 no giver offers)
     /// and, at the fixture's giver instead of its own quest, <see cref="Offered"/>: a level 10 quest, worth taking for a level 10 bot.
+    /// With <c>offeredRequiredClasses</c> the offered quest is class-restricted (<see cref="AllClasses"/> is every class, so the bot qualifies).
     /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
     /// </summary>
-    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0) : IQuestContentStore
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0) : IQuestContentStore
     {
         public const uint Filler = 910_000;
         public const uint Offered = 910_100;
+
+        /// <summary>A RequiredClasses mask of every 1.12 class: nonzero (so the quest counts as class-restricted) and satisfied by any bot.</summary>
+        public const uint AllClasses = 0x5FF;
 
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
@@ -1101,7 +1105,7 @@ public sealed class PlayerbotQuestGoalsTests
             var templates = new List<QuestTemplate>(content.Templates);
             for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
                 templates.Add(i == exemptIndex ? Kill(Filler + (uint)i, 3, requiredClasses, prevQuest) : Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
-            templates.Add(Kill(Offered, 10));
+            templates.Add(Kill(Offered, 10, offeredRequiredClasses));
             var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
             return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
                 [.. content.Enders, offered]);
@@ -1319,9 +1323,19 @@ public sealed class PlayerbotQuestGoalsTests
         await quest.Host.OnWorldAsync(() => { firstShedMs = quest.Host.World.NowMs; return true; });
         int shed = 0;
         string diagnostics = "";
-        for (int step = 0; step < 16 && shed == 0; step++)
+        // Just short of one interval nothing may be shed (the gate holds whatever the accept stage does); then the clock steps one second at a
+        // time and the shed happens as soon as the pending accept stage and its backoff are over.
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs - 1000);
+        await quest.Host.OnWorldAsync(() =>
         {
-            await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs / 2);
+            Player player = quest.Session.Player!;
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals!, player)));
+            Assert.Equal(2, Fillers(quest.Feature.Services.StateOf(player)!));
+            return true;
+        });
+        for (int step = 0; step < 40 && shed == 0; step++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1000);
             await quest.Host.OnWorldAsync(() =>
             {
                 Player player = quest.Session.Player!;
@@ -1371,6 +1385,122 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(1, Fillers(state));
             return true;
         });
+    }
+
+    [Fact]
+    public void DropGreyQuests_DefaultsToOn()
+        => Assert.True(new PlayerbotOptions().DropGreyQuests);
+
+    [Fact]
+    public async Task ADeadBot_DoesNotDropAGreyQuest()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            Assert.False(player.IsAlive);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>With a free slot a giver's grey quest is skipped (never asked for) when DropGreyQuests is on.</summary>
+    [Fact]
+    public async Task AGreyQuestAtAGiver_WithAFreeSlot_IsNotTaken_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20; // the offered level 10 quest is grey now (grey level 13)
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            int asks = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode is WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest) asks++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 6; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(0, asks);
+            Assert.Null(state.Quests.Get(FullLogQuests.Offered));
+            return true;
+        });
+    }
+
+    /// <summary>Control for the test above: the same grey offer is taken when DropGreyQuests is off, so the skip is the option's doing.</summary>
+    [Fact]
+    public async Task AGreyQuestAtAGiver_WithAFreeSlot_IsTaken_WhenDropGreyQuestsIsOff()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20;
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+            for (int think = 0; think < 6 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>The giver-side exemption: a grey class-restricted offer is still taken with DropGreyQuests on (FindCandidate skips only droppable grey quests).</summary>
+    [Fact]
+    public async Task AGreyClassQuestAtAGiver_WithAFreeSlot_IsStillTaken_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0, offeredRequiredClasses: FullLogQuests.AllClasses));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20; // the offered level 10 quest is grey now
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Offered)!));
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 6 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>IsDroppableGrey and IsGreyForBot: a plain grey quest is grey for the bot either way; a grey class or chain quest only with DropGreyQuests off.</summary>
+    [Fact]
+    public async Task IsDroppableGreyAndIsGreyForBot_ExemptGreyClassAndChainQuests_OnlyWithDropGreyQuestsOn()
+    {
+        await using QuestHost classQuest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 2, exemptIndex: 0, requiredClasses: 1));
+        await classQuest.Host.OnWorldAsync(() =>
+        {
+            Player player = classQuest.Session.Player!;
+            player.Level = 10;
+            AssertGreyRules(classQuest, player, classQuest.Feature.Services.Quests.Get(FullLogQuests.Filler)!, classQuest.Feature.Services.Quests.Get(FullLogQuests.Filler + 1)!);
+            return true;
+        });
+        await using QuestHost chainQuest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 2, exemptIndex: 0, prevQuest: (int)FullLogQuests.Filler + 1));
+        await chainQuest.Host.OnWorldAsync(() =>
+        {
+            Player player = chainQuest.Session.Player!;
+            player.Level = 10;
+            AssertGreyRules(chainQuest, player, chainQuest.Feature.Services.Quests.Get(FullLogQuests.Filler)!, chainQuest.Feature.Services.Quests.Get(FullLogQuests.Filler + 1)!);
+            return true;
+        });
+    }
+
+    private static void AssertGreyRules(QuestHost quest, Player player, Quest exemptGrey, Quest plainGrey)
+    {
+        Assert.True(PlayerbotQuestGoals.IsGrey(player, exemptGrey));
+        Assert.True(PlayerbotQuestGoals.IsGrey(player, plainGrey));
+        Assert.False(PlayerbotQuestGoals.IsDroppableGrey(player, exemptGrey));
+        Assert.True(PlayerbotQuestGoals.IsDroppableGrey(player, plainGrey));
+        var on = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+        var off = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+        Assert.False(on.IsGreyForBot(player, exemptGrey));
+        Assert.True(on.IsGreyForBot(player, plainGrey));
+        Assert.True(off.IsGreyForBot(player, exemptGrey));
+        Assert.True(off.IsGreyForBot(player, plainGrey));
     }
 
     /// <summary>While the drop is rate-limited a grey quest still in the log gives the bot no kill objective to hunt.</summary>

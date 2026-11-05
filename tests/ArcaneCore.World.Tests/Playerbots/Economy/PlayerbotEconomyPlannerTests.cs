@@ -1307,6 +1307,7 @@ public sealed class PlayerbotEconomyPlannerTests
     [InlineData(Class.Paladin)]
     [InlineData(Class.Druid)]
     [InlineData(Class.Shaman)]
+    [InlineData(Class.Warlock)]
     public void UpgradeSearches_ARelicClassRangedSlot_SearchesForRelics(Class playerClass)
     {
         var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.Caster, playerClass), InventorySlots.Ranged);
@@ -1319,7 +1320,6 @@ public sealed class PlayerbotEconomyPlannerTests
     [InlineData(Class.Rogue)]
     [InlineData(Class.Mage)]
     [InlineData(Class.Priest)]
-    [InlineData(Class.Warlock)]
     public void UpgradeSearches_OtherClassesRangedSlot_SearchesTheWeaponPage(Class playerClass)
     {
         var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.Caster, playerClass), InventorySlots.Ranged);
@@ -1327,17 +1327,31 @@ public sealed class PlayerbotEconomyPlannerTests
     }
 
     [Theory]
-    [InlineData(InventoryType.Shield, ItemSubClasses.ArmorShield)]
-    [InlineData(InventoryType.Holdable, ItemSubClasses.ArmorMisc)]
-    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorLibram)]
-    public void UpgradeSearches_TheOffHandAndRangedKeys_CanReachTheArmorClassItemsThatFitThem(InventoryType type, uint subClass)
+    [InlineData(InventoryType.Shield, ItemSubClasses.ArmorShield, Class.Warrior)]
+    [InlineData(InventoryType.Holdable, ItemSubClasses.ArmorMisc, Class.Mage)]
+    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorLibram, Class.Paladin)]
+    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorIdol, Class.Druid)]
+    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorTotem, Class.Shaman)]
+    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorMisc, Class.Warlock)]
+    public void UpgradeSearches_TheOffHandAndRangedKeys_CanReachTheArmorClassItemsThatFitThem(InventoryType type, uint subClass, Class playerClass)
     {
         var item = new ItemTemplate { Entry = 1, Class = (uint)ItemClass.Armor, SubClass = subClass, InventoryType = (uint)type, Quality = 2 };
-        var profile = ProfileOf(type == InventoryType.Shield ? PlayerbotWeaponStyle.OneHandShield : PlayerbotWeaponStyle.Caster, type == InventoryType.Relic ? Class.Paladin : Class.Mage);
+        var profile = ProfileOf(type == InventoryType.Shield ? PlayerbotWeaponStyle.OneHandShield : PlayerbotWeaponStyle.Caster, playerClass);
         byte slot = type == InventoryType.Relic ? InventorySlots.Ranged : InventorySlots.OffHand;
         PlayerbotUpgradeSearch search = Assert.Single(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, (slot, 0f)), 1, profile));
         var query = new AuctionQuery(0, string.Empty, 0, 0, search.InventoryType, search.ItemClass, AuctionSearch.Any, 2, false);
         Assert.True(AuctionSearch.Matches(item, query), "the search finds the armor-class item");
+        Assert.Contains(slot, ItemTemplateRules.AllowedEquipSlots(item, playerClass, false), "the item the search finds fits the searched slot for that class");
+    }
+
+    [Theory]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(float.NegativeInfinity)]
+    public void FiniteOrZero_ANonFiniteScore_ReadsAsZero_AndAFiniteScoreIsKept(float bad)
+    {
+        Assert.Equal(0f, PlayerbotEconomyPlanner.FiniteOrZero(bad));
+        Assert.Equal(-2.5f, PlayerbotEconomyPlanner.FiniteOrZero(-2.5f));
     }
 
     [Fact]

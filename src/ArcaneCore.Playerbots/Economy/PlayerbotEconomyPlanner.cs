@@ -132,7 +132,8 @@ internal static class PlayerbotEconomyPlanner
         _ => WeaponPage, // MainHand: weapons of every hand and inventory type
     };
 
-    // Nothing goes in the off hand next to a two-hander. Otherwise a shield for a shield tank (and for a shield caster: paladin, shaman),
+    // Nothing goes in the off hand next to a two-hander. A TwoHand-style bot that wears no two-hander (it has none yet, or lost it) falls to the
+    // weapon page below, so the page may list any hand type and the scorer decides what fits. Otherwise a shield for a shield tank (and for a shield caster: paladin, shaman),
     // a held-in-off-hand item for the other casters, and the weapon page for builds that fill the hand with a weapon.
     private static PlayerbotUpgradeSearch? OffHandSearch(PlayerbotUpgradeProfile profile)
     {
@@ -143,13 +144,14 @@ internal static class PlayerbotEconomyPlanner
             PlayerbotWeaponStyle.Caster => profile.PlayerClass is Class.Paladin or Class.Shaman
                 ? new((uint)InventoryType.Shield, PlayerbotEconomyWire.Any)
                 : new((uint)InventoryType.Holdable, PlayerbotEconomyWire.Any),
-            _ => WeaponPage,
+            _ => WeaponPage, // DualWield, and TwoHand without a two-hander worn: the weapon page ranks the off hand like the main hand
         };
     }
 
-    // Paladin, druid and shaman wear a relic there (ItemTemplateRules.RelicSlot); every other class uses a ranged weapon, wand or thrown weapon.
+    // Paladin, druid, shaman and warlock wear a relic there (ItemTemplateRules.RelicSlot: libram, idol, totem and the warlock's misc-armor relic);
+    // every other class uses a ranged weapon, wand or thrown weapon.
     private static PlayerbotUpgradeSearch RangedSearch(PlayerbotUpgradeProfile profile)
-        => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman
+        => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman or Class.Warlock
             ? new((uint)InventoryType.Relic, PlayerbotEconomyWire.Any)
             : WeaponPage;
 
@@ -173,7 +175,7 @@ internal static class PlayerbotEconomyPlanner
         for (int i = 0; i < ranked.Length; i++)
         {
             float score = worn(UpgradeSlotOrder[i]);
-            ranked[i] = (UpgradeSlotOrder[i], float.IsFinite(score) ? score : 0f);
+            ranked[i] = (UpgradeSlotOrder[i], FiniteOrZero(score));
         }
 
         // OrderBy is stable, so equal scores keep the fixed order above.
@@ -187,6 +189,9 @@ internal static class PlayerbotEconomyPlanner
 
         return searches;
     }
+
+    /// <summary>A score with a NaN or infinite value read as 0 (the one guard the planner and the gear-score seam share).</summary>
+    internal static float FiniteOrZero(float score) => float.IsFinite(score) ? score : 0f;
 
     /// <summary>The listing slots a bot short of money gets on top of <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/>.</summary>
     internal const int MoneyGoalExtraListings = 3;
