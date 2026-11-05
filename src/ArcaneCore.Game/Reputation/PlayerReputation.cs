@@ -182,6 +182,51 @@ public sealed partial class PlayerReputation
             && (state.Flags & (FactionStateFlags.InvisibleForced | FactionStateFlags.Hidden)) == 0
             && SetAtWar(state, atWar);
 
+    /// <summary>The factions put at war by a creature entering combat with the player (vmangos Player::m_temporaryAtWarFactions); world thread.</summary>
+    private readonly HashSet<uint> _temporaryAtWar = [];
+
+    /// <summary>
+    /// vmangos Creature::OnEnterCombat (Creature.cpp:3678-3686): <c>ReputationMgr::SetAtWar(repListId, true)</c>, and when that changed the flag the
+    /// faction is remembered as temporarily at war (Player::SetTemporaryAtWarWithFaction). False when the faction is unknown, hidden, already at war or
+    /// kept at peace by its forced-peace flag; the caller then sends nothing.
+    /// </summary>
+    public bool StartTemporaryAtWar(FactionRecord faction)
+    {
+        ArgumentNullException.ThrowIfNull(faction);
+        if (!SetAtWarByClient(faction.ReputationListId, true))
+        {
+            return false;
+        }
+
+        _temporaryAtWar.Add(faction.Id);
+        return true;
+    }
+
+    /// <summary>
+    /// vmangos Player::ClearTemporaryWarWithFactions (Player.cpp:22736-22750): every temporarily-at-war faction whose rank is above Hostile loses its
+    /// at-war flag; the list is forgotten either way. Returns the reputation list slots that changed, for the caller to announce.
+    /// </summary>
+    public IReadOnlyList<int> ClearTemporaryAtWar()
+    {
+        if (_temporaryAtWar.Count == 0)
+        {
+            return [];
+        }
+
+        var cleared = new List<int>();
+        foreach (uint factionId in _temporaryAtWar)
+        {
+            FactionState? state = _states.Values.FirstOrDefault(s => s.Faction.Id == factionId);
+            if (state is not null && Rank(state.Faction) > ReputationRank.Hostile && SetAtWar(state, false))
+            {
+                cleared.Add(state.ListId);
+            }
+        }
+
+        _temporaryAtWar.Clear();
+        return cleared;
+    }
+
     /// <summary>CMSG_SET_FACTION_INACTIVE: only a visible, not hidden/forced-invisible faction may become inactive.</summary>
     public bool SetInactiveByClient(int listId, bool inactive)
         => _states.TryGetValue(listId, out FactionState? state) && SetInactive(state, inactive);

@@ -212,7 +212,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
 
         // vmangos HandleAutoEquipItemOpcode (ItemHandler.cpp:225-227): a bag that ends up in a bag slot is opened on the client.
         ObjectGuid moving = player.Inventory.GetItem(srcBag, srcSlot)?.Guid ?? ObjectGuid.Empty;
-        if (player.Inventory.AutoEquipItem(srcBag, srcSlot) && moving != ObjectGuid.Empty)
+        if (player.Inventory.AutoEquipItem(srcBag, srcSlot)) // false for an empty source slot, so a moving bag always has a guid here
         {
             session.Send(WorldOpcode.SmsgOpenContainer, ItemMiscPackets.OpenContainer(moving));
         }

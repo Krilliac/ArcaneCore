@@ -36,7 +36,8 @@ public sealed class ReputationCombatHooksTests
             TemplateOnly = new FactionCombatHooks(Templates);
             Hooks = new ReputationCombatHooks(TemplateOnly, Resolver);
             Map.Combat.Hooks = Hooks;
-            Player = CombatTestKit.AddPlayer(World, 1, 0, 0, new FakeSession(1));
+            Session = new FakeSession(1);
+            Player = CombatTestKit.AddPlayer(World, 1, 0, 0, Session);
             if (track)
             {
                 Service.Track(Player, Service.Create(Player, CharacterReputationData.Empty));
@@ -56,6 +57,8 @@ public sealed class ReputationCombatHooksTests
         public ReputationCombatHooks Hooks { get; }
 
         public Player Player { get; }
+
+        public FakeSession Session { get; }
 
         public CombatTestUnit Npc(uint template)
         {
@@ -215,6 +218,64 @@ public sealed class ReputationCombatHooksTests
         Assert.Equal(rig.TemplateOnly.IsHostileTo(guard, rig.Player), rig.Hooks.IsHostileTo(guard, rig.Player));
         Assert.False(new ReputationCreatureHostility(new FactionCreatureHostility(Templates), rig.Resolver)
             .IsHostile(rig.Creature(StormwindGuard), rig.Player));
+    }
+
+    [Fact]
+    public void CreatureEnteringCombat_PutsItsFactionAtWarForTheFight_AndTheFightEndingClearsIt()
+    {
+        // vmangos Creature::OnEnterCombat (Creature.cpp:3678-3686) and Player::ClearTemporaryWarWithFactions (Player.cpp:22736-22750), run by
+        // Unit::ClearInCombat (Unit.cpp:6111-6121): the goblin faction (list 0) is at war while the fight lasts, and the client hears both changes.
+        using var rig = new Rig();
+        CombatTestUnit goblin = rig.Npc(BootyBayGoblin);
+        Assert.False(rig.Service.IsAtWar(rig.Player, BootyBay));
+        rig.Session.Clear();
+
+        rig.Hooks.OnCreatureEnteredCombat(goblin, rig.Player);
+
+        Assert.True(rig.Service.IsAtWar(rig.Player, BootyBay));
+        Assert.Equal(
+            ReputationPackets.SetFactionAtWar(0, atWar: true),
+            Assert.Single(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar).Payload);
+
+        rig.Session.Clear();
+        MapCombat.ClearInCombat(rig.Player);
+
+        Assert.False(rig.Service.IsAtWar(rig.Player, BootyBay));
+        Assert.Equal(
+            ReputationPackets.SetFactionAtWar(0, atWar: false),
+            Assert.Single(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar).Payload);
+
+        rig.Session.Clear();
+        MapCombat.ClearInCombat(rig.Player); // nothing temporary is left: nothing is sent again
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar);
+    }
+
+    [Fact]
+    public void CreatureEnteringCombat_LeavesAFactionTheClientAlreadyDeclaredWarOnAtWar_AndSendsNothing()
+    {
+        using var rig = new Rig();
+        CombatTestUnit goblin = rig.Npc(BootyBayGoblin);
+        rig.Service.ModifyReputation(rig.Player, BootyBay, 1);
+        Assert.True(rig.Service.SetAtWar(rig.Player, 0, true)); // the player's own, permanent war
+        rig.Session.Clear();
+
+        rig.Hooks.OnCreatureEnteredCombat(goblin, rig.Player);
+        MapCombat.ClearInCombat(rig.Player);
+
+        Assert.True(rig.Service.IsAtWar(rig.Player, BootyBay)); // vmangos SetAtWar returned false: it was never made temporary
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar);
+    }
+
+    [Fact]
+    public void CreatureOfAFactionWithNoReputationSlot_PutsNothingAtWar()
+    {
+        using var rig = new Rig();
+        CombatTestUnit monster = rig.Npc(HostileMonster); // no faction
+        rig.Session.Clear();
+
+        rig.Hooks.OnCreatureEnteredCombat(monster, rig.Player);
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar);
     }
 
     [Fact]

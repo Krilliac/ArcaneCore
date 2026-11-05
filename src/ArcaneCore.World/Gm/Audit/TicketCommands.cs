@@ -202,6 +202,7 @@ public sealed class TicketCommands : ICommandGroup
         {
             owner.SendSystemMessage(GmAuditStrings.YourTicketDeleted);
             owner.Session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
+            owner.Session.Send(WorldOpcode.SmsgGmTicketStatusUpdate, GmTicketHandlers.BuildStatusUpdate(GmTicketHandlers.StatusUpdateClosed)); // as Close: the references have no delete analog
         }
 
         context.Reply(GmAuditStrings.TicketDeleted);

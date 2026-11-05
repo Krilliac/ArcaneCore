@@ -64,7 +64,7 @@ public static class ClientDbcConsumers
     /// <summary>The keys that take a directory of DBCs instead of one file; <c>ClientData:DbcDirectory</c> fills an unset one with itself.</summary>
     public static IReadOnlyList<ClientDbcDirectoryConsumer> Directories { get; } =
     [
-        new("World:GmCommands:LiveFxDbcDirectory", ".fx id checks and .fx lookup (SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName, WorldStateUI)",
+        new("World:GmCommands:LiveFxDbcDirectory", ".fx id checks and .fx lookup (SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName, WorldStateUI), and the channel kits of SpellVisual that gate SMSG_SPELL_UPDATE_CHAIN_TARGETS",
             "ids are sent unchecked and .fx lookup has no client data"),
     ];
 

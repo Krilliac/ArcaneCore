@@ -118,8 +118,8 @@ and say so.
   a second ticket answers CREATE_ERROR (3), not ALREADY_EXIST (1, which vmangos' 1.12 handler never sends); a create sends no time
   response (only get-ticket does); withdrawing without a ticket answers nothing. Escalation and "read by a GM" are always 0 (no
   escalation queue, viewing is not tracked). A create shorter than the fixed part is still answered with the create-error code; the
-  position fields are skipped and the server's own position stored. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328) is a later-client opcode and
-  is not sent. vmangos' "completed ticket" (the GM answer appended to the status text) has no counterpart: a response here leaves the
+  position fields are skipped and the server's own position stored. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328, in vmangos Opcodes_1_12_1.h:809) is
+  sent to an online owner: status 1 on `.ticket respond`, status 2 on `.ticket close` and `.ticket delete` (no survey status). vmangos' "completed ticket" (the GM answer appended to the status text) has no counterpart: a response here leaves the
   ticket open.
 * **Deferred:** `.gm visible` (needs a GM-invisibility concept in the visibility code); the cores' full-account `.gm list` (needs an
   account-listing method on `IAccountAdmin`, whose lane is also editing the ban seam); `mute` of an offline character (needs the account

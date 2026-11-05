@@ -49,6 +49,14 @@ public static class GameObjectPackets
         return writer.ToArray();
     }
 
+    /// <summary>SMSG_GAMEOBJECT_RESET_STATE: u64 guid (vmangos GameObject::SendGameObjectReset, GameObject.cpp:2460-2465).</summary>
+    public static byte[] ResetState(ObjectGuid guid)
+    {
+        var writer = new PacketWriter(8);
+        writer.WriteUInt64(guid.Value);
+        return writer.ToArray();
+    }
+
     /// <summary>SMSG_GAMEOBJECT_PAGETEXT: u64 guid (the client then queries the page text).</summary>
     public static byte[] PageText(ObjectGuid guid)
     {

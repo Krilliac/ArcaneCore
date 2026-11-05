@@ -785,6 +785,7 @@ public sealed partial class SpellSystem
 
                 caster.SetUInt64(UpdateFields.UnitFieldChannelObject, (unitTarget ?? caster).Guid.Value);
                 caster.SetUInt32(UpdateFields.UnitChannelSpell, spell.Id);
+                SendChannelChainTargets(cast, targetEffects);
             }
 
             ApplyToTargets(cast, targetEffects, ref currentFaultTarget);
@@ -2110,6 +2111,43 @@ public sealed partial class SpellSystem
     /// </summary>
     private static void SendInterrupted(SpellCast cast)
         => SendToSet(cast.Caster, WorldOpcode.SmsgSpellFailedOther, SpellPackets.BuildSpellFailedOther(cast.Caster.Guid, cast.Spell.Id), includeSelf: true);
+
+    /// <summary>
+    /// The visual ids (SpellVisual.dbc) whose ChannelKit is set, or null when that client table is not loaded. SMSG_SPELL_UPDATE_CHAIN_TARGETS is only
+    /// sent for a channel whose visual has a kit (vmangos Spell::SendChannelStart, Spell.cpp:4880-4906), so a null predicate sends nothing.
+    /// World thread; set once at attach.
+    /// </summary>
+    public Func<uint, bool>? HasChannelKit { get; set; }
+
+    /// <summary>
+    /// SMSG_SPELL_UPDATE_CHAIN_TARGETS at channel start (vmangos Spell::SendChannelStart, Spell.cpp:4880-4906; mangos-classic Spell.cpp:4277, build > 1.11.2):
+    /// for a channel with the IS_CHANNELED attribute whose SpellVisual has a ChannelKit, the guid list of the unit targets that are not the caster
+    /// (the caster itself counts only when a cast item is used and effect 0 hit), sent to the caster's observers and the caster. Nothing is sent
+    /// for an empty list. Called on the world thread after the targets are rolled.
+    /// </summary>
+    private void SendChannelChainTargets(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects)
+    {
+        SpellInfo spell = cast.Spell;
+        if (!spell.HasAttribute(SpellAttributesEx.IsChanneled) || HasChannelKit is not { } hasKit || !hasKit(spell.SpellVisual))
+        {
+            return;
+        }
+
+        var targets = new List<ulong>();
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
+        {
+            bool effectZeroHit = (entry.EffectMask & 1) != 0 && entry.Miss == SpellMissInfo.None && cast.CastItem is not null;
+            if (effectZeroHit || target.Guid != cast.Caster.Guid)
+            {
+                targets.Add(target.Guid.Value);
+            }
+        }
+
+        if (targets.Count > 0)
+        {
+            SendToSet(cast.Caster, WorldOpcode.SmsgSpellUpdateChainTargets, SpellPackets.BuildSpellUpdateChainTargets(cast.Caster.Guid.Value, spell.Id, targets), includeSelf: true);
+        }
+    }
 
     /// <summary>vmangos WorldObject::SendMessageToSet: the unit's own client (when asked) and every player that sees it.</summary>
     internal static void SendToSet(Unit unit, WorldOpcode opcode, byte[] payload, bool includeSelf)

@@ -138,7 +138,8 @@ public sealed class TicketCommandTests
     [Fact]
     public async Task Respond_And_Close_SendTheOnlineOwnerAGmTicketStatusUpdate_UpdatedThenClosed()
     {
-        // mangos-classic GMTicketMgr.cpp:1018 / 1333 send SMSG_GM_TICKET_STATUS_UPDATE (u32 1 updated, 2 closed) to the author.
+        // mangos-classic sends SMSG_GM_TICKET_STATUS_UPDATE (u32 1 updated: first assignment, GMTicketMgr.cpp:1149; 2 closed: GMTicketMgr.cpp:1333) to the author;
+        // ArcaneCore sends the updated status on every respond, which the client only answers by re-querying.
         await using WorldTestHost host = Start(new Clock());
         await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
         await using WorldTestClient one = await host.EnterWorldAsync("ONE", "Playerone");
@@ -232,6 +233,7 @@ public sealed class TicketCommandTests
 
         Assert.Equal("Your ticket has been deleted by staff.", (await one.ReadChatAsync()).Text);
         Assert.Equal(0x0Au, U32(await one.ReadUntilAsync(WorldOpcode.SmsgGmticketGetticket)));
+        Assert.Equal(GmTicketHandlers.StatusUpdateClosed, U32(await one.ReadUntilAsync(WorldOpcode.SmsgGmTicketStatusUpdate)));
         await WorldTestHost.WaitForAsync(() => StoreOf(host).Ticket(1) is null, "the row to go");
         Assert.Equal("Ticket 1 doesn't exist", await ReplyAsync(admin, ".ticket delete 1"));
         Assert.StartsWith("Syntax: .ticket delete", (await LinesAsync(admin, ".ticket delete"))[0], StringComparison.Ordinal);

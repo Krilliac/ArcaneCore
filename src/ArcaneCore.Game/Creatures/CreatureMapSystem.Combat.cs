@@ -60,6 +60,11 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             }
 
             TryStartNoMeleeFlee(creature, target); // after the aggro hook: a cast on aggro wins (cmangos Unit.cpp:7993)
+            if (target is Player engaged && Map.Combat.Hooks is Reputation.ReputationCombatHooks atWar)
+            {
+                atWar.OnCreatureEnteredCombat(creature, engaged); // vmangos Creature::OnEnterCombat (Creature.cpp:3678-3686): the faction goes to war with the player
+            }
+
             if ((creature.Template.Behaviour & CreatureBehaviourFlags.CallsGuards) != 0)
             {
                 SummonGuard(creature, target); // vmangos Creature::OnEnterCombat (Creature.cpp:3689-3690)
