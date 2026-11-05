@@ -12,7 +12,7 @@ public sealed class PlayerbotRunMetersTests
     [InlineData(false, "travel-timeout", PlayerbotRunMeters.Timeout)]
     [InlineData(false, "no-path-to-entrance", PlayerbotRunMeters.GivenUp)]
     [InlineData(false, null, PlayerbotRunMeters.GivenUp)]
-    public void EveryOutcomeOfARun_HasADistinctTallySlotInsideTheTally(bool complete, string? reason, string expected)
+    public void EveryOutcomeOfARun_HasTheExpectedLabel_AndATallySlotInsideTheTally(bool complete, string? reason, string expected)
     {
         string outcome = PlayerbotRunMeters.OutcomeOf(complete, reason);
         Assert.Equal(expected, outcome);
