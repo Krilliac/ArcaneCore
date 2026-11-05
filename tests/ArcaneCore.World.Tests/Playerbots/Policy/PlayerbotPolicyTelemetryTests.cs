@@ -44,6 +44,90 @@ public sealed class PlayerbotPolicyTelemetryTests
     }
 
     [Fact]
+    public void ACollidingCreate_IsRetriedUpToTheCap_ThenTheLineIsRefused()
+    {
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            byte[] line = new byte[200];
+            // Another process takes each number just before this writer creates it: 15 collisions, then the 16th create (the cap) succeeds.
+            using (var writer = new PlayerbotPolicyTelemetryWriter(directory, maxFileBytes: 256, maxFiles: 100))
+            {
+                int creates = 0;
+                writer.BeforeCreate = path =>
+                {
+                    creates++;
+                    if (creates < 16) File.WriteAllBytes(path, []);
+                };
+                Assert.True(writer.Write(line));
+                Assert.Equal(16, creates);
+                Assert.Equal(0, writer.Refused);
+            }
+
+            // Every number taken: exactly 16 creates, no 17th, and the line is refused instead of an exception.
+            string second = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+            try
+            {
+                using var writer = new PlayerbotPolicyTelemetryWriter(second, maxFileBytes: 256, maxFiles: 100);
+                int creates = 0;
+                writer.BeforeCreate = path =>
+                {
+                    creates++;
+                    File.WriteAllBytes(path, []);
+                };
+                Assert.False(writer.Write(line));
+                Assert.Equal(16, creates);
+                Assert.Equal(1, writer.Refused);
+                Assert.Equal(16, Directory.GetFiles(second).Length); // only the other process's files
+            }
+            finally { Directory.Delete(second, recursive: true); }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void WorkerDirectory_IsTheConfiguredFolderInCombinedMode_AndOneSubfolderPerWorkerInASplit()
+    {
+        string root = Path.Combine("telemetry", "policy");
+        Assert.Equal(root, PlayerbotPolicyTelemetry.WorkerDirectory(root, ArcaneCore.Game.Maps.MapOwnership.All));
+
+        var first = new ArcaneCore.Game.Maps.MapOwnership([new ArcaneCore.Game.Maps.MapOwnership.Range(0, 0)], allowInstanceMaps: false);
+        var second = new ArcaneCore.Game.Maps.MapOwnership([new ArcaneCore.Game.Maps.MapOwnership.Range(1, 1), new ArcaneCore.Game.Maps.MapOwnership.Range(30, 33)], allowInstanceMaps: true);
+        string a = PlayerbotPolicyTelemetry.WorkerDirectory(root, first);
+        string b = PlayerbotPolicyTelemetry.WorkerDirectory(root, second);
+        Assert.Equal(Path.Combine(root, "maps-0"), a);
+        Assert.Equal(Path.Combine(root, "maps-1_30-33"), b);
+        Assert.NotEqual(a, b);
+        Assert.Equal(a, PlayerbotPolicyTelemetry.WorkerDirectory(root, first)); // a restart reuses its own folder
+    }
+
+    [WindowsFileLockFact]
+    public void AReaderHoldingOneWorkersOldFile_DoesNotStopAnotherWorkersRotation()
+    {
+        string root = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            byte[] line = new byte[200];
+            line.AsSpan().Fill((byte)'x');
+            line[^1] = (byte)'\n';
+            string dirA = PlayerbotPolicyTelemetry.WorkerDirectory(root, new ArcaneCore.Game.Maps.MapOwnership([new ArcaneCore.Game.Maps.MapOwnership.Range(0, 0)], false));
+            string dirB = PlayerbotPolicyTelemetry.WorkerDirectory(root, new ArcaneCore.Game.Maps.MapOwnership([new ArcaneCore.Game.Maps.MapOwnership.Range(1, 1)], false));
+            using var a = new PlayerbotPolicyTelemetryWriter(dirA, maxFileBytes: 1024, maxFiles: 2);
+            using var b = new PlayerbotPolicyTelemetryWriter(dirB, maxFileBytes: 1024, maxFiles: 2);
+            for (int i = 0; i < 10; i++) Assert.True(a.Write(line));
+            string oldestA = a.Files().OrderBy(f => f, StringComparer.Ordinal).First();
+            using (new FileStream(oldestA, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                Assert.False(a.Write(line)); // A is stalled by its own reader...
+                for (int i = 0; i < 30; i++) Assert.True(b.Write(line)); // ...and B rotates freely in its own folder
+                Assert.Equal(2, b.Files().Count());
+                Assert.Equal(0, b.Refused);
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public async Task TheFiles_StayWithinTheirSizeBound()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;

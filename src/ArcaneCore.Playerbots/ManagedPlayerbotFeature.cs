@@ -496,7 +496,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _options.Social.WarMode.Link(ArcaneCore.Game.WorldState.WorldStateHooks.For(world).WarMode);
         // A service still running is kept, not replaced: a quiesce that failed before it stopped them is undone by a detach and
         // re-attach in one tick (FeatureHost), and a second policy engine, navigation worker or chat service would leak beside the first.
-        if (_options.Policy.Enabled && _policy is null) StartPolicy();
+        if (_options.Policy.Enabled && _policy is null) StartPolicy(world);
         if (_chat is null)
         {
             // A chat service whose stop was interrupted part way leaves its provider behind (StopServicesAsync takes all three chat fields before
@@ -2271,7 +2271,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Start the goal policy engine (<see cref="Attach"/>). Never throws for a bad model (one anomaly, then the rule ladder scores); a
     /// telemetry folder that cannot be made is a fault and a warning, and the policy runs without telemetry.
     /// </summary>
-    private void StartPolicy()
+    private void StartPolicy(WorldRuntime world)
     {
         string contentRoot = services.GetService<Microsoft.Extensions.Hosting.IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory;
         var policy = new Policy.PlayerbotPolicyEngine(_options.Policy, logger, contentRoot);
@@ -2280,7 +2280,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             try
             {
                 policy.Telemetry = new Policy.PlayerbotPolicyTelemetry(_options.Policy.Telemetry,
-                    Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), _setAsideTime, logger);
+                    Policy.PlayerbotPolicyTelemetry.WorkerDirectory(Path.Combine(contentRoot, _options.Policy.Telemetry.Directory), world.Ownership), _setAsideTime, logger);
                 if (services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>() is { Enabled: true } monitor)
                     policy.Telemetry.TickHealth = () => monitor.BudgetMicros < long.MaxValue ? new Policy.PlayerbotTickHealth(monitor.Overruns, monitor.BudgetMicros) : null;
             }

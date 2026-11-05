@@ -826,7 +826,9 @@ never came is not written), written after `OutcomeMinutes` (5) of world time wit
 The world thread only queues finished records (8192 at most; past that a record is dropped and counted); a writer task formats and appends
 them to `Directory` (`telemetry/playerbot-policy`, relative to the profile folder) as `policy-NNNNNNNN.jsonl`, each at most `MaxFileBytes`
 (16 MiB), at most `MaxFiles` (16) of them, the oldest deleted before the next is made (when a reader holds the oldest open, no new file is
-made and lines are refused and counted until it can be deleted; one warning when refusing starts, one line when it ends, and the counts in the five-minute line). A decision whose bot leaves, or gets a new brain (noticed at that brain's first policy think), before its window ends
+made and lines are refused and counted until it can be deleted; one warning when refusing starts, one line when it ends, and the counts in the five-minute line).
+In a split cluster each world worker writes its own subfolder of `Directory`, `maps-<owned map ranges>`, and the bound applies per subfolder; the offline tools
+(`tools/playerbot-policy`) read one flat folder, so point them at one worker's subfolder. Files left in `Directory` itself by a run from before the subfolders are no longer pruned; delete them by hand. A decision whose bot leaves, or gets a new brain (noticed at that brain's first policy think), before its window ends
 is dropped, never written with a partial outcome; deaths are seen only on thinks the brain drives (not while a group or battleground
 driver has the bot). A full disk or missing folder stops the telemetry (fault site `playerbot.policy-telemetry-io`), never the
 server.
