@@ -227,9 +227,44 @@ public sealed class TeleportAnomalyTests
         f.World.MapResolver = new Refusing(); // the destination cannot be entered now, nor can the way back
         Assert.True(f.Teleports.HandleWorldportAck(a));
         f.World.RunTick(50);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a)); // the origin's loading screen (it is on another map id than the one loaded)
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
 
-        Assert.Equal(1, cap.Count(EntryFailed));
+        Assert.Equal(2, cap.Count(EntryFailed));
         Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed"))); // the way back failed: the bind point is the fallback
+    }
+
+    [Fact]
+    public void FarTeleport_ThatCannotEnterTheDestination_ReturnsToAnOriginOnAnotherMap_WithANewLoadingScreen()
+    {
+        using var f = new Fixture();
+        Player a = f.Add(9113); // map 0 at the origin
+        (float originX, float originY) = (a.X, a.Y);
+        using AnomalyCapture cap = ServerAnomalies.CaptureFor(a);
+
+        Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
+        f.World.RunTick(50);
+        f.World.MapResolver = new RefusingFirst(f.World, refusals: 1); // only the destination refuses
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        // vmangos HandleReturnOnTeleportFail: TeleportTo(oldLoc) is a far teleport when the maps differ (Player.cpp:2130). The client loaded
+        // map 1 and must be told to load map 0 again; the server does not enter the origin behind its back.
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a));
+        Assert.Equal(0u, f.Teleports.DestinationOf(a)?.MapId);
+        Assert.Null(a.Map);
+
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+
+        Assert.False(((FakeSession)a.Session).Kicked);
+        Assert.NotNull(a.Map);
+        Assert.Equal(0u, a.Map!.MapId);
+        Assert.InRange(a.X, originX - 1f, originX + 1f);
+        Assert.InRange(a.Y, originY - 1f, originY + 1f);
+        Assert.Equal(0, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
     }
 
     [Fact]
@@ -243,6 +278,9 @@ public sealed class TeleportAnomalyTests
         Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
         f.World.RunTick(50);
         f.World.MapResolver = new RefusingFirst(f.World, refusals: 2); // the destination and the way back refuse, the bind point does not
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+        Assert.Equal(0u, f.Teleports.DestinationOf(a)?.MapId); // the origin's loading screen first
         Assert.True(f.Teleports.HandleWorldportAck(a));
         f.World.RunTick(50);
 
@@ -260,7 +298,7 @@ public sealed class TeleportAnomalyTests
         Assert.Equal(2u, a.Map!.MapId);
         Assert.InRange(a.X, 320f, 322f);
         Assert.InRange(a.Y, 653f, 655f);
-        Assert.Equal(1, cap.Count(EntryFailed));
+        Assert.Equal(2, cap.Count(EntryFailed));
         Assert.Equal(1, cap.Count(ServerAnomalies.Key("teleport", "return-failed")));
     }
 
@@ -275,6 +313,9 @@ public sealed class TeleportAnomalyTests
         Assert.True(f.Teleports.TeleportTo(a, 1, 1000, 2000, 30, 0));
         f.World.RunTick(50);
         f.World.MapResolver = new Refusing(); // nothing can be entered
+        Assert.True(f.Teleports.HandleWorldportAck(a));
+        f.World.RunTick(50);
+        Assert.Equal(0u, f.Teleports.DestinationOf(a)?.MapId); // the origin's loading screen
         Assert.True(f.Teleports.HandleWorldportAck(a));
         f.World.RunTick(50);
         Assert.Equal(TeleportStage.Far, f.Teleports.StageOf(a)); // the bind point's loading screen

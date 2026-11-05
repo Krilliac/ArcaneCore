@@ -698,11 +698,12 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return GmBattlegroundGo.NotBattleground;
         }
 
-        manager.ClearStaleBinding(subject.Guid);
         if (_gmMoves.ContainsKey(subject.Guid))
         {
             return GmBattlegroundGo.MoveInProgress;
         }
+
+        manager.ClearStaleBinding(subject.Guid);
 
         BattlegroundPlayerState state = manager.StateOf(subject.Guid);
         if (state.InBattleground && state.InstanceId == match.InstanceId && state.Type == match.Type)
