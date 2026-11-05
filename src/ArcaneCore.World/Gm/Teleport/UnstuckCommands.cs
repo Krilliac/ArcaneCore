@@ -68,8 +68,8 @@ public sealed class UnstuckCommands : ICommandGroup
     /// The unstuck rules and effect for <paramref name="player"/> (world thread), as <c>.unstuck</c> applies them; the GM ticket assistant uses this for a
     /// living author only. False with <see cref="Unavailable"/> when the rules refuse (nothing is changed); otherwise true with <see cref="Alive"/> (Undying
     /// Soul cast, death when it expires) or <see cref="Dead"/> (a ghost: sickness, the cooldown and the trip to the graveyard). As in vmangos the ghost's
-    /// reply and penalty do not depend on that trip: with a refused teleport it stays where it is and still gets both. The trip is a plain teleport that
-    /// never resurrects. A caller that must
+    /// reply and penalty do not depend on that trip: with a refused teleport it stays where it is and still gets both. The trip is a plain teleport, never the transport branch of
+    /// <c>RepopAtGraveyard</c> (entering a map above 1 that holds the ghost's corpse still revives it, as in vmangos). A caller that must
     /// know whether the ghost moved makes its own trip between <see cref="Permitted"/> and <see cref="PenaliseGhost"/>.
     /// </summary>
     internal static bool TryApply(IServiceProvider services, Player player, out string reply)
