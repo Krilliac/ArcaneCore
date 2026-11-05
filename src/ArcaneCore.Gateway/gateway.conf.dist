@@ -633,12 +633,14 @@ Diagnostics.FaultMaxSignatures = 512
 
 #
 #    Diagnostics.FirstChanceExceptions
-#        Description: Log every exception at the moment it is thrown
-#                     (AppDomain.FirstChanceException), before any handler sees it, at Debug level.
-#                     A development aid for finding swallowed exceptions; it is honoured only by a
-#                     Debug build of the Kernel (the hook is compiled out of Release), where a
-#                     Release daemon logs once that the key is ignored. Default off: the hook runs
-#                     on every throw, caught or not.
+#        Description: Log exceptions at the moment they are thrown (AppDomain.FirstChanceException),
+#                     before any handler sees them, at Debug level. The log is deduplicated per
+#                     exception type and throw site, rate limited and capped, so a hot throw site
+#                     cannot flood it; it is not a complete record of every throw. A development aid
+#                     for finding swallowed exceptions; it is honoured only by a Debug build of the
+#                     Kernel (the hook is compiled out of Release), where a Release daemon logs once
+#                     that the key is ignored. Default off: the hook runs on every throw, caught or
+#                     not.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -753,12 +755,12 @@ Gateway.CharactersSchemaVersion = 75
 #                     is at that version. Set it only to pin an explicit override (then set the
 #                     worker's labels and Cluster:Worker:VersionsFromDatabase=false to match).
 #        Type: string
-#        Default: "world-schema-67"
+#        Default: "world-schema-68"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#gateway
 #
-Gateway.ContentRevision = "world-schema-67"
+Gateway.ContentRevision = "world-schema-68"
 
 #
 #    Gateway.LinkRetryDelay
@@ -926,12 +928,12 @@ Gateway.WorkerPort = 8095
 #        Description: The world schema version this gateway advertises; defaults to the version this
 #                     build targets. Explicit override only.
 #        Type: int
-#        Default: 67
+#        Default: 68
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#gateway
 #
-Gateway.WorldSchemaVersion = 67
+Gateway.WorldSchemaVersion = 68
 
 #----------------------------------------------------------------------------
 # Gateway:Control

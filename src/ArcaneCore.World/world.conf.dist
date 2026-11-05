@@ -196,9 +196,12 @@ AntiCheat.Autoban.Threshold = 25
 #
 #    AntiCheat.BaselineGapMs
 #        Description: Caps the time-skip credit (milliseconds): all the skips the evidence supports
-#                     in ten seconds together earn at most this much. A silence between two movement
-#                     packets is never a free baseline; the step after it is judged against the time
-#                     that passed. Default 3000.
+#                     in ten seconds together earn at most this much. It also caps the time budget
+#                     of any single step (a silence buys at most this much movement in one step)
+#                     and, times four, the extra distance the multi-packet budget grants after a
+#                     stall (the packets a stall held arrive together). A silence between two
+#                     movement packets is never a free baseline; the step after it is judged against
+#                     the time that passed. Default 3000.
 #        Type: int
 #        Default: 3000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -2424,12 +2427,12 @@ Cluster.Worker.CharactersSchemaVersion = 75
 #        Description: Content revision label both ends of the link must agree on; an override, used
 #                     only while VersionsFromDatabase is false.
 #        Type: string
-#        Default: "world-schema-67"
+#        Default: "world-schema-68"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.ContentRevision = "world-schema-67"
+Cluster.Worker.ContentRevision = "world-schema-68"
 
 #
 #    Cluster.Worker.Enabled
@@ -2550,12 +2553,12 @@ Cluster.Worker.VersionsFromDatabase = true
 #        Description: World schema version both ends must agree on (an override label, used only
 #                     while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 67
+#        Default: 68
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.WorldSchemaVersion = 67
+Cluster.Worker.WorldSchemaVersion = 68
 
 #----------------------------------------------------------------------------
 # Cluster:Worker:Handoff
@@ -3706,6 +3709,22 @@ Creatures.RespawnPacifyMs = 5000
 Creatures.SendAiReaction = true
 
 #
+#    Creatures.SpellListContinueAfterCast
+#        Description: Creatures:SpellListContinueAfterCast (default off): a creature spell list
+#                     casts one blocking spell per tick, as cmangos doc/SpellLists.txt describes
+#                     retail ("always one spell is selected"). Switched on, the tick keeps walking
+#                     the eligible blocking entries after a success, as the cmangos loop in
+#                     UnitAI::UpdateSpellLists does; an instant spell can then fire a second one in
+#                     the same tick. A deviation from retail.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#creatures
+#
+Creatures.SpellListContinueAfterCast = false
+
+#
 #    Creatures.StealthAlertCooldownMs
 #        Description: Milliseconds between two alerts of one creature
 #                     (Creatures:StealthAlertCooldownMs): vmangos 10000 (AI/CreatureAI.cpp:366-367).
@@ -4452,12 +4471,14 @@ Diagnostics.FaultMaxSignatures = 512
 
 #
 #    Diagnostics.FirstChanceExceptions
-#        Description: Log every exception at the moment it is thrown
-#                     (AppDomain.FirstChanceException), before any handler sees it, at Debug level.
-#                     A development aid for finding swallowed exceptions; it is honoured only by a
-#                     Debug build of the Kernel (the hook is compiled out of Release), where a
-#                     Release daemon logs once that the key is ignored. Default off: the hook runs
-#                     on every throw, caught or not.
+#        Description: Log exceptions at the moment they are thrown (AppDomain.FirstChanceException),
+#                     before any handler sees them, at Debug level. The log is deduplicated per
+#                     exception type and throw site, rate limited and capped, so a hot throw site
+#                     cannot flood it; it is not a complete record of every throw. A development aid
+#                     for finding swallowed exceptions; it is honoured only by a Debug build of the
+#                     Kernel (the hook is compiled out of Release), where a Release daemon logs once
+#                     that the key is ignored. Default off: the hook runs on every throw, caught or
+#                     not.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
