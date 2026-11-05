@@ -19,7 +19,7 @@ namespace ArcaneCore.Game.Spells;
 /// <item><c>loot:state</c> - the candidate game object's <see cref="GameObjectLootState"/> (Conditions.cpp:558-561).</item>
 /// <item><c>gostate:state</c> - the candidate game object's <see cref="GameObjectState"/> (Conditions.cpp:615-618).</item>
 /// </list>
-/// As in vmangos (ConditionEntry::Meets, Conditions.cpp:119-141) a term whose candidate has the wrong kind (a unit check on a game object, or the
+/// As in vmangos (ConditionEntry::Meets, Conditions.cpp:119-140) a term whose candidate has the wrong kind (a unit check on a game object, or the
 /// reverse) is false, and the reverse flag does not turn that into true. A text this class cannot read holds for no candidate. Immutable; safe from any thread.
 /// </summary>
 public sealed class ScriptTargetCondition

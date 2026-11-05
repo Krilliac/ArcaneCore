@@ -365,7 +365,7 @@ public sealed class ScriptTargetConditionTests
         Assert.False(ScriptTargetCondition.Parse("!spawned")!.Holds(go, rig.Caster));
         Assert.True(ScriptTargetCondition.Parse("loot:1")!.Holds(go, rig.Caster));
         Assert.True(ScriptTargetCondition.Parse("!loot:2")!.Holds(go, rig.Caster));
-        // A term whose candidate has the wrong kind is false, and the reverse flag does not make it true (Conditions.cpp:119-141).
+        // A term whose candidate has the wrong kind is false, and the reverse flag does not make it true (Conditions.cpp:119-140).
         Assert.False(ScriptTargetCondition.Parse("spawned")!.Holds(unit, rig.Caster));
         Assert.False(ScriptTargetCondition.Parse("!spawned")!.Holds(unit, rig.Caster));
         Assert.False(ScriptTargetCondition.Parse("health:5:2")!.Holds(go, rig.Caster));

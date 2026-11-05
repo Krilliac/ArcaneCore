@@ -920,7 +920,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     /// moves on and the snapshot is retried later (<see cref="TakeRetained"/>, a barrier, or a newer snapshot of the character). Any other failure is retried inline up to
     /// <see cref="MaxAttempts"/> times and then thrown. While the queue is stopping, a busy failure is a plain failure and every snapshot keeps its <see cref="MaxAttempts"/> inline
     /// attempts with their backoff, as before the stop drain existed; what the stop adds is the save queue's stop-drain lane: once it has stalled, no first attempt starts
-    /// (<see cref="StopDrainBudget.Refuse"/>: the snapshot stays retained with a <see cref="StopDrainExhaustedException"/> and <see cref="StopAsync"/> names it) and no retry
+    /// (<see cref="StopDrainBudget.Refuse"/>: the snapshot stays retained and <see cref="StopAsync"/> names it, with a <see cref="StopDrainExhaustedException"/>, or with its own failure when it is a sealed ownership refusal that was already retained) and no retry
     /// follows a failure (the snapshot is retained with its real failure).
     /// Returns false when the snapshot was written (or dropped by quarantine).
     /// </summary>
