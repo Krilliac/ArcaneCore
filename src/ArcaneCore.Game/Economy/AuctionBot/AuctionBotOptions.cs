@@ -70,6 +70,12 @@ public sealed class AuctionBotOptions
     /// </summary>
     public bool DynamicMaxRequiredLevel { get; set; }
 
+    /// <summary>
+    /// With <see cref="DynamicMaxRequiredLevel"/>, leave characters of staff accounts (security above player) out of the highest-level count (cMaNGOS
+    /// AuctionHouseBot.Level.IgnoreGmAccounts, default false).
+    /// </summary>
+    public bool DynamicIgnoreGmAccounts { get; set; }
+
     /// <summary>Minutes between refreshes of the dynamic level cap (cMaNGOS AuctionHouseBot.Level.DynamicRefreshInterval, at least 1, default 10).</summary>
     public uint DynamicRefreshMinutes { get; set; } = 10;
 

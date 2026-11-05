@@ -48,6 +48,22 @@ public sealed class AuctionBotItemPool
         => configuredMaxItemLevel != 0 ? configuredMaxItemLevel : maxRequiredLevel >= DefaultMaxLevel ? uint.MaxValue : maxRequiredLevel + 5;
 
     /// <summary>
+    /// The levels that count for the dynamic cap: every online level, or with <paramref name="ignoreGmAccounts"/> only those of characters whose
+    /// account is not a staff account (cMaNGOS AuctionHouseBot.Level.IgnoreGmAccounts).
+    /// </summary>
+    public static IEnumerable<uint> CountedOnlineLevels(IEnumerable<(uint Level, bool IsGmAccount)> online, bool ignoreGmAccounts)
+    {
+        ArgumentNullException.ThrowIfNull(online);
+        foreach ((uint level, bool isGmAccount) in online)
+        {
+            if (!ignoreGmAccounts || !isGmAccount)
+            {
+                yield return level;
+            }
+        }
+    }
+
+    /// <summary>
     /// The dynamic required level cap (cMaNGOS UpdateDynamicMaxLevel): the highest of <paramref name="onlineLevels"/>, kept within 1-255;
     /// with nobody online the cap in force (<paramref name="current"/>) stays.
     /// </summary>

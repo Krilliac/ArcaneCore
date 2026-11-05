@@ -6,6 +6,11 @@ namespace ArcaneCore.Game.Creatures;
 /// <summary>
 /// The relay cast-spell script command (15) with a source that is no creature, which the spell scripts need (a player's own cast starts them, and
 /// SCRIPT_FLAG_REVERSE_DIRECTION makes the player the source): cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:2155-2202.
+/// <para>
+/// Not ported (cmangos does them, ArcaneCore does not): the game object as the spell's original caster (:2180), TRIGGERED_DO_NOT_PROC on every script
+/// cast (:2180, :2200), the full datalong2 cast flags (only bit 0x01 is read), a game object spell target (setGOTarget) and a destination target
+/// (TARGET_FLAG_DEST_LOCATION / TARGET_FLAG_SOURCE_LOCATION).
+/// </para>
 /// </summary>
 public sealed partial class CreatureMapSystem
 {
@@ -36,9 +41,22 @@ public sealed partial class CreatureMapSystem
         }
 
         uint spell = ScriptCastSpellId(step);
-        Unit? at = (step.DataFlags & FlagCommandAdditional) != 0 ? null : target as Unit;
-        CastSpellByUnit(caster, spell, at, triggered: (step.DataLong2 & 0x01) != 0);
+        CastSpellByUnit(caster, spell, ScriptCastTarget(step, caster, target, spell), triggered: (step.DataLong2 & 0x01) != 0);
         return false;
+    }
+
+    /// <summary>
+    /// The unit a script cast aims at: the target, except that a spell with SPELL_ATTR_EX_EXCLUDE_CASTER cast on its own source has no target,
+    /// and COMMAND_ADDITIONAL clears it (cmangos ScriptMgr.cpp:2167-2170, in that order).
+    /// </summary>
+    private Unit? ScriptCastTarget(RelayScriptStep step, WorldObject source, WorldObject? target, uint spell)
+    {
+        if (ReferenceEquals(target, source) && _ai.UnitSpells?.ExcludesCaster(spell) == true)
+        {
+            target = null;
+        }
+
+        return (step.DataFlags & FlagCommandAdditional) != 0 ? null : target as Unit;
     }
 
     /// <summary>datalong, or one of the filled dataint..dataint4 at random (cmangos urand(0, filledCount), :2158-2164).</summary>

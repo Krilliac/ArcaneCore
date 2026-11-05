@@ -165,6 +165,8 @@ None.
 |---|---|---|---|---|---|
 | 620 | Chicken | `npc_chicken_cluck` | AI | 111 | `world/npcs_special.cpp` |
 
+Done after this recount: entry 620 is `ChickenCluckAI` (`src/ArcaneCore.Game/Creatures/Scripts/ChickenCluckAI.cs`). The counts above are as of the recount.
+
 ### P3 dungeon and raid scripts (0)
 
 None.

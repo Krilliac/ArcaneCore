@@ -136,4 +136,27 @@ public sealed class ReputationTemplatesImportTests : IAsyncLifetime
         Assert.Equal(12, await verify.Set<ReputationSpilloverTemplateRow>().CountAsync());
         Assert.Equal(3, await verify.Set<ReputationRewardRateRow>().CountAsync());
     }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Write_WithReplace_KeepsATableTheDumpCarriedNoRowsFor(DatabaseProvider provider)
+    {
+        const string spilloverOnly = """
+            CREATE TABLE `reputation_spillover_template` (`faction` smallint unsigned NOT NULL, `faction1` smallint unsigned, `rate_1` float, `rank_1` tinyint unsigned, PRIMARY KEY (`faction`));
+            INSERT INTO `reputation_spillover_template` VALUES (21,72,0.25,7);
+            """;
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            await Import(Dump).WriteAsync(db, replace: false);
+            db.ChangeTracker.Clear();
+
+            await Import(spilloverOnly).WriteAsync(db, replace: true);
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(connection);
+        Assert.Equal([21u], await verify.Set<ReputationSpilloverTemplateRow>().Select(r => r.Faction).ToListAsync());
+        Assert.Equal(3, await verify.Set<ReputationRewardRateRow>().CountAsync());
+    }
 }

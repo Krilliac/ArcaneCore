@@ -276,6 +276,7 @@ public sealed class CreatureAiFactory
         [Scripts.StinkyIgnatzAI.Entry] = E(static c => new Scripts.StinkyIgnatzAI(c)),
         [Scripts.MagramiSpectreAI.Entry] = E(static c => new Scripts.MagramiSpectreAI(c)),
         [Scripts.PluckyJohnsonAI.Entry] = E(static c => new Scripts.PluckyJohnsonAI(c)),
+        [Scripts.ChickenCluckAI.Entry] = E(static c => new Scripts.ChickenCluckAI(c)),
         [Scripts.TriageDoctorAI.DoctorAlliance] = E(static c => new Scripts.TriageDoctorAI(c)),
         [Scripts.TriageDoctorAI.DoctorHorde] = E(static c => new Scripts.TriageDoctorAI(c)),
         [12923] = E(static c => new Scripts.InjuredPatientAI(c)),

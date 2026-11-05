@@ -630,8 +630,7 @@ public sealed partial class CreatureMapSystem
                     spell = (uint)step.DataInts[pick - 1];
                 }
 
-                Unit? at = (step.DataFlags & FlagCommandAdditional) != 0 ? null : target as Unit;
-                CastSpell(caster, spell, at, triggered: (step.DataLong2 & 0x01) != 0);
+                CastSpell(caster, spell, ScriptCastTarget(step, caster, target, spell), triggered: (step.DataLong2 & 0x01) != 0);
                 return false;
             }
 

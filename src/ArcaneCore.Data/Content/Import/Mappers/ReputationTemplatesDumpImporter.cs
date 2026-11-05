@@ -101,8 +101,8 @@ public sealed class ReputationTemplatesDumpImporter
     }
 
     /// <summary>
-    /// Write the rows atomically with the contract of <see cref="ImportTransaction"/>. With <paramref name="replace"/> both
-    /// tables are emptied first; without it an existing key fails the write and nothing changes.
+    /// Write the rows atomically with the contract of <see cref="ImportTransaction"/>. With <paramref name="replace"/> a table is
+    /// emptied first only when the dump carried rows for it (as <see cref="EnchantProcDumpImporter"/>); without it an existing key fails the write and nothing changes.
     /// </summary>
     public async Task<ReputationTemplatesImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {
@@ -115,9 +115,13 @@ public sealed class ReputationTemplatesDumpImporter
             db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
-                if (replace)
+                if (replace && spillovers.Count > 0)
                 {
                     await db.Set<ReputationSpilloverTemplateRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                }
+
+                if (replace && rates.Count > 0)
+                {
                     await db.Set<ReputationRewardRateRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                 }
 

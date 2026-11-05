@@ -82,16 +82,12 @@ All are `SEC_ADMINISTRATOR`, after cMaNGOS `ahbotCommandTable`. The root exists 
   (cMaNGOS `SetItemData`: add chance capped at 100, an amount of 0 means the stack size).
 - `.ahbot ledger` (ArcaneCore): the custody totals and the audit.
 
-## Gaps
-
-- The cMaNGOS option to ignore GM accounts when taking the dynamic level is not implemented: the dynamic max level counts every online character.
-
 ## Level caps and loot sets
 
 - **Gameobject loot** uses only the `gameobject_loot_template` tables of objects that have a spawn which respawns (cMaNGOS reads the
   same set), plus the entries a spawn can become through `gameobject_spawn_entry`.
 - **Dynamic max level.** With `DynamicMaxRequiredLevel` on, the required level cap is the highest level among the characters online,
-  refreshed every `DynamicRefreshMinutes` (default 10). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value.
+  refreshed every `DynamicRefreshMinutes` (default 10). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value. `DynamicIgnoreGmAccounts` (cMaNGOS `AuctionHouseBot.Level.IgnoreGmAccounts`, default off) leaves characters of staff accounts (security above player) out of that count.
   The item pool is rebuilt when the cap changes.
 - **`MaxItemLevel`** sets the item level cap directly. 0 (the default) keeps the cMaNGOS rule: no cap at a required level cap of 60 or
   more, else the cap + 5.
