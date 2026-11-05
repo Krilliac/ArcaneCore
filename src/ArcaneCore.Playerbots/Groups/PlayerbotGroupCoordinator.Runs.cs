@@ -79,12 +79,17 @@ public sealed partial class PlayerbotGroupCoordinator
     internal Func<double> RunRoll { get; set; } = () => Random.Shared.NextDouble();
 
     /// <summary>The runs completed and given up so far (status and tests).</summary>
-    internal (int Completed, int GivenUp) RunTotals => (_runsCompleted, _runsGivenUp);
+    internal (int Completed, int GivenUp) RunTotals => (Volatile.Read(ref _runsCompleted), Volatile.Read(ref _runsGivenUp));
 
-    private readonly int[] _runOutcomes = new int[3];
+    private readonly int[] _runOutcomes = new int[PlayerbotRunMeters.OutcomeSlots];
 
     /// <summary>How many runs of this coordinator ended with <paramref name="outcome"/> (a <see cref="PlayerbotRunMeters"/> label), counted beside the process-wide runs metric, which every coordinator in the process feeds.</summary>
-    internal int RunOutcomeCount(string outcome) => Volatile.Read(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
+    internal int RunOutcomeCount(string outcome)
+    {
+        int slot = PlayerbotRunMeters.IndexOf(outcome);
+        if (slot < 0) throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "not a run outcome label");
+        return Volatile.Read(ref _runOutcomes[slot]);
+    }
 
     /// <summary>
     /// The encounters in force (<see cref="InstanceEncounterCatalog"/>): the <c>instance_encounter</c> table as read when this
@@ -575,11 +580,13 @@ public sealed partial class PlayerbotGroupCoordinator
         string? reason = run.Complete ? null : run.Reason ?? group.Reason ?? "disbanded";
         string outcome = PlayerbotRunMeters.OutcomeOf(run.Complete, reason);
         PlayerbotRunMeters.Count(outcome);
-        Interlocked.Increment(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
-        if (run.Complete) _runsCompleted++;
+        // All three tallies use Interlocked: the tests and the status read them from other threads (Volatile.Read), so no thread-affinity assumption is needed.
+        int slot = PlayerbotRunMeters.IndexOf(outcome);
+        if (slot >= 0) Interlocked.Increment(ref _runOutcomes[slot]);
+        if (run.Complete) Interlocked.Increment(ref _runsCompleted);
         else
         {
-            _runsGivenUp++;
+            Interlocked.Increment(ref _runsGivenUp);
             ReportRunFailed(group, run, reason!);
         }
     }
@@ -726,7 +733,7 @@ public sealed partial class PlayerbotGroupCoordinator
             }
 
         return string.Create(CultureInfo.InvariantCulture,
-            $"runs {(runs.Enabled ? "enabled" : "disabled")}: dungeon {dungeons}/{runs.MaxConcurrentRuns} raid {raids}/{(runs.Raids.Enabled ? runs.Raids.MaxConcurrentRaids : 0)} completed {_runsCompleted} given-up {_runsGivenUp}; {_catalogue.Plans.Count} wings known, {_catalogue.Exclusions.Count} left out.");
+            $"runs {(runs.Enabled ? "enabled" : "disabled")}: dungeon {dungeons}/{runs.MaxConcurrentRuns} raid {raids}/{(runs.Raids.Enabled ? runs.Raids.MaxConcurrentRaids : 0)} completed {Volatile.Read(ref _runsCompleted)} given-up {Volatile.Read(ref _runsGivenUp)}; {_catalogue.Plans.Count} wings known, {_catalogue.Exclusions.Count} left out.");
     }
 
     private static string DescribeRun(PlayerbotRunMachine run)

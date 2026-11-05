@@ -16,6 +16,7 @@ using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Playerbots.Qa;
+using System.Diagnostics.Metrics;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Playerbots.Groups.GroupTestWorld;
@@ -34,13 +35,26 @@ public sealed class PlayerbotRunQaSignalWorldTests : PlayerbotRunWorldTestBase
     public async Task ARunGivenUpForAContentReason_ReportsOneRunFailedSignalToBotQa_WithNoBotOrGroupIdentity_AndCountsItByOutcome(string reason, string outcome)
     {
         var bus = new PlayerbotQaSignalBus(64);
+        // The process-wide runs metric: other tests' coordinators feed it too, so the listener asserts only that this outcome was counted at least once during the run (deleting the Count call in NoteRunEnded leaves none).
+        int meterCounts = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (ReferenceEquals(instrument, PlayerbotRunMeters.Runs)) l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+        {
+            foreach (KeyValuePair<string, object?> tag in tags)
+                if (tag.Key == "outcome" && Equals(tag.Value, outcome)) Interlocked.Add(ref meterCounts, (int)value);
+        });
+        listener.Start();
         await using GroupTestWorld world = await StartWithQaAsync(bus);
         (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qat");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        // Negative control: nothing has been counted yet, so the assertion below can only pass on a count this coordinator made.
+        // Precondition on a fresh coordinator (always true, not a negative control): nothing has been counted yet.
         Assert.Equal(0, world.Coordinator.RunOutcomeCount(outcome));
         // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the fault the group AI raises is injected the way its own are
         // (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout or a no-path.
@@ -67,6 +81,7 @@ public sealed class PlayerbotRunQaSignalWorldTests : PlayerbotRunWorldTestBase
         Assert.Equal($"{reason} in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
         Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
         Assert.Equal(1, world.Coordinator.RunOutcomeCount(outcome));
+        Assert.True(Volatile.Read(ref meterCounts) >= 1, "the process-wide runs metric counted no run with this outcome");
         Assert.Equal(1, new[] { PlayerbotRunMeters.Completed, PlayerbotRunMeters.GivenUp, PlayerbotRunMeters.Timeout }.Sum(world.Coordinator.RunOutcomeCount));
     }
 

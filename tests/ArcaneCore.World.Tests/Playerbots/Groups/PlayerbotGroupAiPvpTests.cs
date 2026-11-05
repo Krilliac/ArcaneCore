@@ -186,6 +186,40 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.Null(rig.Ai.TargetUnit);
     }), botLeads: true);
 
+    /// <summary>
+    /// The bot leads a siege raid that pushes through at its waypoint (waiting). Its attacker, a flagged player, stands 7 yd east of the bot; the waypoint is <paramref name="waypointDx"/> east of the bot
+    /// (negative: west), so the attacker is 7 - waypointDx yd from the waypoint, measured from the waypoint and not from the bot.
+    /// </summary>
+    private static void WaitingLeader(Rig rig, float waypointDx, bool answerSpent)
+    {
+        Player bot = rig.BotPlayer;
+        rig.Bot.ManagedBudget = new ManagedActionBudget(8);
+        rig.Enemy.Player!.Relocate(bot.X + 7, bot.Y, bot.Z, MathF.PI, rig.Host.World.NowMs);
+        var siege = new PlayerbotSiege(1, bot.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1)
+            { Push = PlayerbotSiegePush.Quiet, AtWaypoint = true, AnswerSpent = answerSpent, MoveTo = new Vector3(bot.X + waypointDx, bot.Y, bot.Z) };
+        PlayerbotPvpTestKit.Flag(rig.EnemyPlayer);
+        PlayerbotPvpTestKit.Flag(bot);
+        Assert.True(bot.Map!.Combat.Attack(rig.EnemyPlayer, bot));
+        bot.Map!.Combat.DealDamage(rig.EnemyPlayer, bot, 1);
+        Assert.True(rig.Group.LeaderPlayer(rig.Host.World)!.Guid == bot.Guid, "the bot leads the group");
+    }
+
+    /// <summary>
+    /// The fight-chase leash of a waiting siege leader (Fight's leash radius at the waiting-leader call): an attacker 20 yd from the waypoint, past WaypointYards and inside SiegeAnswerLeashYards, is chased
+    /// while the step's answer is not spent. A leash narrowed to WaypointYards at that call would stand the leader at "chase" and never reach the route planner (which fails here, the rig has no navmesh).
+    /// </summary>
+    [Fact]
+    public Task WaitingSiegeLeaderChasesAnAttackerBetweenWaypointYardsAndTheAnswerLeash_MeasuredFromTheWaypoint() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        WaitingLeader(rig, -13, answerSpent: false);
+        float fromWaypoint = Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z));
+        Assert.InRange(fromWaypoint, PlayerbotSiegeCommander.WaypointYards + 1, PlayerbotSiegeCommander.SiegeAnswerLeashYards - 1);
+        rig.Think();
+        Assert.Equal("fight:player:no-path", rig.Ai.Step);
+        Assert.Null(rig.Ai.TargetUnit);
+    }), botLeads: true);
+
     [Fact]
     public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>
     {
