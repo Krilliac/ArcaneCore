@@ -1303,6 +1303,14 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.DoesNotContain(((uint)InventoryType.Holdable, AnyKey), all);
     }
 
+    [Fact]
+    public void UpgradeSearches_AWarlockWithAWeakRangedSlot_SearchesRelicsAndTheWeaponPageForWands()
+    {
+        var profile = ProfileOf(PlayerbotWeaponStyle.Caster, Class.Warlock);
+        var keys = Keys(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, (InventorySlots.Ranged, 0f)), 2, profile));
+        Assert.Equal(new[] { ((uint)InventoryType.Relic, AnyKey), (AnyKey, WeaponKey) }, keys);
+    }
+
     [Theory]
     [InlineData(Class.Paladin)]
     [InlineData(Class.Druid)]
@@ -1341,7 +1349,7 @@ public sealed class PlayerbotEconomyPlannerTests
         PlayerbotUpgradeSearch search = Assert.Single(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, (slot, 0f)), 1, profile));
         var query = new AuctionQuery(0, string.Empty, 0, 0, search.InventoryType, search.ItemClass, AuctionSearch.Any, 2, false);
         Assert.True(AuctionSearch.Matches(item, query), "the search finds the armor-class item");
-        Assert.Contains(slot, ItemTemplateRules.AllowedEquipSlots(item, playerClass, false), "the item the search finds fits the searched slot for that class");
+        Assert.True(ItemTemplateRules.AllowedEquipSlots(item, playerClass, false).Contains(slot), "the item the search finds fits the searched slot for that class");
     }
 
     [Theory]

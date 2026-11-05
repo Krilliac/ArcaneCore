@@ -149,11 +149,18 @@ internal static class PlayerbotEconomyPlanner
     }
 
     // Paladin, druid, shaman and warlock wear a relic there (ItemTemplateRules.RelicSlot: libram, idol, totem and the warlock's misc-armor relic);
-    // every other class uses a ranged weapon, wand or thrown weapon.
+    // every other class uses a ranged weapon, wand or thrown weapon. A warlock also wields wands in the same slot, so it gets both searches.
     private static PlayerbotUpgradeSearch RangedSearch(PlayerbotUpgradeProfile profile)
         => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman or Class.Warlock
             ? new((uint)InventoryType.Relic, PlayerbotEconomyWire.Any)
             : WeaponPage;
+
+    // The searches one slot yields: normally the one of UpgradeSearchOf; the warlock ranged slot yields the relic and then the weapon page (wands).
+    private static IEnumerable<PlayerbotUpgradeSearch> UpgradeSearchesOf(byte slot, PlayerbotUpgradeProfile profile)
+    {
+        if (UpgradeSearchOf(slot, profile) is { } search) yield return search;
+        if (slot == InventorySlots.Ranged && profile.PlayerClass == Class.Warlock) yield return WeaponPage;
+    }
 
     /// <summary>
     /// The house searches of a visit. <paramref name="max"/> of 0 or less: the two class-wide pages of earlier versions (weapons, then armor).
@@ -182,9 +189,12 @@ internal static class PlayerbotEconomyPlanner
         List<PlayerbotUpgradeSearch> searches = new(max);
         foreach ((byte slot, _) in ranked.OrderBy(entry => entry.Score))
         {
+            foreach (PlayerbotUpgradeSearch search in UpgradeSearchesOf(slot, profile))
+            {
+                if (searches.Count >= max) break;
+                if (!searches.Contains(search)) searches.Add(search);
+            }
             if (searches.Count >= max) break;
-            if (UpgradeSearchOf(slot, profile) is not { } search) continue;
-            if (!searches.Contains(search)) searches.Add(search);
         }
 
         return searches;

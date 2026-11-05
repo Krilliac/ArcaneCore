@@ -1085,7 +1085,7 @@ public sealed class PlayerbotQuestGoalsTests
     /// With <c>offeredRequiredClasses</c> the offered quest is class-restricted (<see cref="AllClasses"/> is every class, so the bot qualifies).
     /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
     /// </summary>
-    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0) : IQuestContentStore
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0, int offeredLevel = 10, uint offeredPrevQuest = 0) : IQuestContentStore
     {
         public const uint Filler = 910_000;
         public const uint Offered = 910_100;
@@ -1105,7 +1105,7 @@ public sealed class PlayerbotQuestGoalsTests
             var templates = new List<QuestTemplate>(content.Templates);
             for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
                 templates.Add(i == exemptIndex ? Kill(Filler + (uint)i, 3, requiredClasses, prevQuest) : Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
-            templates.Add(Kill(Offered, 10, offeredRequiredClasses));
+            templates.Add(Kill(Offered, offeredLevel, offeredRequiredClasses, (int)offeredPrevQuest));
             var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
             return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
                 [.. content.Enders, offered]);
@@ -1369,14 +1369,14 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(2, Fillers(state));
             return true;
         });
-        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs / 2); // still inside the interval
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs - 1000); // still inside the interval, just short of the boundary
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = quest.Session.Player!;
             Assert.Equal(0, Think(quest, goals!, player));
             return true;
         });
-        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs);
+        await quest.Host.World.AdvanceClockAsync(1000); // the interval is now complete
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = quest.Session.Player!;
@@ -1465,6 +1465,48 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
             return true;
         });
+    }
+
+    /// <summary>
+    /// Full log, DropGreyQuests on: a grey class-restricted or chain offer counts as worth taking (IsGreyForBot false at both FindCandidate sites), so it
+    /// wants room and the failed quest in the log is abandoned (TryMakeRoomInFullLog); a plain grey offer wants no room (the control below). Reverting either
+    /// IsGreyForBot site in FindCandidate to IsGrey fails the first two cases.
+    /// </summary>
+    [Theory]
+    [InlineData(FullLogQuests.AllClasses, 0u)]
+    [InlineData(0u, FullLogQuests.Filler + 1)]
+    public async Task AFullLog_ShedsItsFailedQuest_ForAGreyClassOrChainOffer_WhenDropGreyQuestsIsOn(uint offeredClasses, uint offeredPrev)
+    {
+        Assert.True(await FullLogAbandonsAFailedQuestForAGreyOffer(offeredClasses, offeredPrev));
+    }
+
+    [Fact]
+    public async Task AFullLog_DoesNotShedItsFailedQuest_ForAPlainGreyOffer_WhenDropGreyQuestsIsOn()
+        => Assert.False(await FullLogAbandonsAFailedQuestForAGreyOffer(0, 0));
+
+    private static async Task<bool> FullLogAbandonsAFailedQuestForAGreyOffer(uint offeredClasses, uint offeredPrev)
+    {
+        // Level 10 bot: grey level 4, so the level 3 offer is grey while the level 10 fillers are not (the grey shed has nothing to drop).
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0,
+            offeredRequiredClasses: offeredClasses, offeredLevel: 3, offeredPrevQuest: offeredPrev));
+        bool abandoned = false;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Offered)!));
+            Assert.False(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!));
+            state.Quests.Get(FullLogQuests.Filler)!.Status = QuestStatus.Failed;
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 4 && abandons == 0; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            abandoned = abandons > 0;
+            if (abandoned) Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+        return abandoned;
     }
 
     /// <summary>IsDroppableGrey and IsGreyForBot: a plain grey quest is grey for the bot either way; a grey class or chain quest only with DropGreyQuests off.</summary>
