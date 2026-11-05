@@ -85,16 +85,18 @@ decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
 ### Known deviations without a switch (accepted temporary)
 
 Item 1 fails closed and has no configuration option, which the standing rule (every deliberate deviation behind a switch that defaults to
-retail) calls for. It is accepted for now and listed in `claude-handoff-20261003.md`. What a switch would choose between (fail closed or a
-documented pass per undecidable type, with neither being retail) is a design decision that belongs to the owner, so none was added. Item 2 was
+retail) calls for. It is accepted and listed in `claude-handoff-20261003.md`. What a switch would choose between (fail closed or a
+documented pass per undecidable type, with neither being retail) is not a choice worth a switch, so the row is closed with the current
+fail-closed behaviour as the documented default and no switch. Item 2 was
 superseded by the adapter gate.
 
 1. **Condition types that cannot be resolved here** (the "fail closed" rows of the Types table: PVP_RANK, the
    script and world-state types, the types undecidable from an NPC interaction, and SKILL/SKILL_BELOW while the
    skills feature is inactive). An undecidable leaf is *unknown* and the row is "not satisfied", so a gossip
    option, vendor row or quest guarded by it stays hidden; retail would evaluate it. Counted and logged at
-   startup (`ConditionFeature`), not configurable. Follow-up: a switch (default retail) choosing between
-   fail-closed and a documented pass for a given type, once the owning system exists.
+   startup (`ConditionFeature`), not configurable. Closed as a decision: the unresolvable types stay fail-closed by design (the safe direction,
+   and no retail-equivalent pass exists for a type whose data this base lacks); each type becomes evaluable when its owning system lands, and no
+   switch is planned.
 2. **`AcceptableQuest` refusals** (`QuestNpcServices.Support.cs`): superseded. The fixed list of refusals became the adapter gate
    (`QuestNeeds.Of`, `IQuestAdapterModule`): a quest is withheld only when its template needs a behaviour (source spell, source counters,
    party accept, auto reward, a reputation or exploration objective, a mail reward, the PvP type) that no registered adapter provides, and

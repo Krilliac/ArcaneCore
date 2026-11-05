@@ -340,32 +340,13 @@ public sealed partial class Player : Unit
             Flags |= PlayerFlags.Gm;
             FactionTemplate = GameMasterFactionTemplate;
             HostileRefs.SetOnlineOfflineState(this, false); // vmangos Player.cpp:2639: every threat list holding the GM parks the entry offline
-            StopCombatWithPet(); // Player.cpp:2640: CombatStopWithPets()
+            Map?.Combat.CombatStopWithPets(this); // Player.cpp:2640: CombatStopWithPets()
         }
         else
         {
             Flags &= ~PlayerFlags.Gm;
             FactionTemplate = _raceFactionTemplate;
             HostileRefs.SetOnlineOfflineState(this, true); // Player.cpp:2665
-        }
-    }
-
-    /// <summary>
-    /// vmangos Unit::CombatStopWithPets() as Player::SetGameMaster calls it (Player.cpp:2640, Unit.cpp:4657-4661, no cast interrupt): the player and
-    /// the pet in this map leave all fighting. Guardians and charms have no enumeration in this base (see docs/areas/duels.md).
-    /// </summary>
-    private void StopCombatWithPet()
-    {
-        if (Map is not { } map)
-        {
-            return;
-        }
-
-        map.Combat.CombatStop(this);
-        var petGuid = new ObjectGuid(GetUInt64(UpdateFields.UnitFieldSummon)); // Unit::GetPetGuid
-        if (!petGuid.IsEmpty && map.FindObject(petGuid) is Unit pet)
-        {
-            map.Combat.CombatStop(pet);
         }
     }
 

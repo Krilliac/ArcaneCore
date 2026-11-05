@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
@@ -138,6 +139,37 @@ public sealed partial class MapCombat
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackstop,
             CombatPackets.AttackStop(attacker.Guid, victim.Guid, attacker.Health == 0));
         return true;
+    }
+
+    /// <summary>
+    /// vmangos Unit::CombatStopWithPets without the cast interrupt (Unit.cpp:4657-4667): the unit and every unit it controls (its pet,
+    /// its guardians and the unit it charms, CONTROLLED_PET | CONTROLLED_GUARDIANS | CONTROLLED_CHARM) leave all fighting. A controlled
+    /// unit that is not in this map is skipped.
+    /// </summary>
+    public void CombatStopWithPets(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        CombatStop(unit);
+
+        ObjectGuid petGuid = unit.PetGuid;
+        if (!petGuid.IsEmpty && _map.FindObject(petGuid) is Unit pet)
+        {
+            CombatStop(pet);
+        }
+
+        if (_map.Pets is { } pets)
+        {
+            foreach (Creature guardian in pets.GuardiansOf(unit).ToArray())
+            {
+                CombatStop(guardian);
+            }
+        }
+
+        ObjectGuid charmGuid = unit.CharmGuid;
+        if (!charmGuid.IsEmpty && _map.FindObject(charmGuid) is Unit charm)
+        {
+            CombatStop(charm);
+        }
     }
 
     /// <summary>

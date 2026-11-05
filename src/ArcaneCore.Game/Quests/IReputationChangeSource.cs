@@ -5,9 +5,10 @@ namespace ArcaneCore.Game.Quests;
 /// <summary>
 /// Raised by the reputation owner after a standing changed, on the world thread, so quests with a reputation
 /// objective (quest_template.RepObjectiveFaction, vmangos Player::ReputationChanged, Player.cpp:14239-14264) can complete
-/// or revert. The quest side only consumes this seam; ReputationService belongs to the reputation lane, which raises it
-/// from its change path (<c>ApplyAndNotify</c>) once it registers an implementation in the service container.
-/// Until a source is registered the subscription is inert and reputation objectives refresh only on login and accept.
+/// or revert. In production the reputation feature does not go through this seam: it calls
+/// <c>QuestNpcServices.ReputationChanged</c> directly (<c>ReputationFeature.OnReputationChanged</c>), so objectives complete
+/// and revert as the standing crosses them. The seam remains for a source that wants to raise the event through a subscription
+/// (<c>ReputationObjectiveSubscription</c>, used by <c>QuestReputationObjectiveTests</c>); nothing in the server resolves it.
 /// </summary>
 public interface IReputationChangeSource
 {

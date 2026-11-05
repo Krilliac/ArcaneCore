@@ -97,8 +97,7 @@ name as covered. The quest feature installs its sink on the spell system (`Quest
 
 ### Reputation objectives (c78baca)
 `QuestNpcServices.ReputationChanged` (`Player::ReputationChanged`, `Player.cpp:14239-14264`) and the seam `IReputationChangeSource`. The
-**reputation lane must raise the event** from its change path (`ReputationService.ApplyAndNotify`) and register an implementation in the
-service container. The reputation feature instead calls `QuestNpcServices.ReputationChanged` directly (`ReputationFeature.OnReputationChanged`), so
+reputation feature does not raise the event through the seam; it calls `QuestNpcServices.ReputationChanged` directly (`ReputationFeature.OnReputationChanged`), so
 reputation objectives complete and revert when the standing crosses them; the subscriber binding that waited for the seam was removed.
 
 ### Giver marks (1599359)

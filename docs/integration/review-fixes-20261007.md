@@ -266,8 +266,13 @@ Status of these follow-ups at the uc2 integration branch (Y96 re-check):
   vmangos `ModifyMoney` clamps at zero, `Player.h:1025-1031`); only the launch-time total check can refuse a flight.
 - economy and gameobjects-items: the vmangos line citations in `docs/areas/vendors-trainers.md` were re-read against the references and corrected;
   the usable-filter row of `economy-fidelity.md` now says the filter is wired; the skills.md mail wording was corrected.
-- misc-systems (`ZoneAreaUpdater.OnRelocated` rethrow) and social-bans (`UnbanAccountAsync` on MariaDB and PostgreSQL): not addressed here. The provider
-  runs only exist on hosted CI, so those two stay open.
+- misc-systems (`ZoneAreaUpdater.OnRelocated` rethrow): already fixed. `TeleportService` catches and logs the rethrow and the arrival completes
+  (`src/ArcaneCore.Game/Teleport/TeleportService.cs:652-664`, with a comment that says so). Closed.
+- social-bans (`UnbanAccountAsync` on MariaDB and PostgreSQL): `BanStoreTests` already runs `UnbanAccountAsync` as provider theories
+  (`tests/ArcaneCore.Data.Tests/Bans/BanStoreTests.cs`), and `tools/ops/ci/node-ci.ps1 -WithDbProviders` runs MariaDB and PostgreSQL locally with the
+  hosted runners' services. Closed; the run is the gate's provider step.
+- Rows of the lists above that this block does not re-check (spell-cast findings 18, 34 and 36, the pets-totems dead-owner save, the creature-ai
+  CallForHelp default, instances-death, finding 126's RED) are outside the six items of this follow-up and keep their earlier status.
 
 ## Wave 2 updates (lane ops-social, 2026-10-07)
 

@@ -5,6 +5,7 @@ using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
@@ -84,6 +85,31 @@ public sealed class NpcServicesFeatureTaxiTests
         Assert.Equal(GryphonDisplay, relogged.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
         Assert.InRange(relogged.X, 31f, 33f);
         Assert.Equal(90f, relogged.Z);
+    }
+
+    [Fact]
+    public async Task ResumedFlight_ChargesALaterLegAtThePurse_ItNeverRefusesAndTheFlightGoesOn()
+    {
+        // vmangos FlightPathMovementGenerator::Update charges a later leg with ModifyMoney(-cost), which clamps at zero (Player.h:1025-1031):
+        // a character that cannot pay the second leg's fare after a relog pays what it has and still reaches the last node.
+        await using var rig = await Rig.CreateAsync(questNpcs: true);
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        stored.X = 32;
+        stored.Z = 90;
+        stored.Money = 20;
+        await rig.Store.SaveAsync(rig.CharacterId, new TaxiFlightRoute([1, 2, 3], [10, 11], [0, 50]));
+
+        Player relogged = await rig.LoadAsync();
+        rig.Enter(relogged);
+        QuestNpcServices quests = rig.Services.GetRequiredService<QuestNpcFeature>().Services;
+        quests.CompleteLoad(quests.Track(relogged), CharacterQuestData.Empty);
+        Assert.True(rig.Npcs.Flights!.IsFlying(relogged));
+        Assert.Equal(20u, relogged.Money);
+
+        rig.FlyUntilLanded(relogged);
+
+        Assert.Equal((64f, 64f), (relogged.X, relogged.Y));
+        Assert.Equal(0u, relogged.Money);
     }
 
     [Fact]
@@ -266,7 +292,7 @@ public sealed class NpcServicesFeatureTaxiTests
         public NpcServicesFeature Npcs { get; }
         public int CharacterId { get; }
 
-        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null)
+        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null, bool questNpcs = false)
         {
             var store = new FakeTaxiStore();
             var characters = new InMemoryCharacterStore();
@@ -279,6 +305,11 @@ public sealed class NpcServicesFeatureTaxiTests
             if (drain is not null)
             {
                 collection.AddSingleton(drain);
+            }
+
+            if (questNpcs)
+            {
+                collection.AddSingleton(sp => new QuestNpcFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<QuestNpcFeature>.Instance));
             }
 
             ServiceProvider services = collection
