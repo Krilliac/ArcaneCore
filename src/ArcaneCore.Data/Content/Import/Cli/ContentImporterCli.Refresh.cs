@@ -46,6 +46,8 @@ public static partial class ContentImporterCli
     /// <c>gameobject_template</c> rows (type 15) are written as the dump has them; every other object template is left alone. With
     /// <c>Map.dbc</c> and <c>AreaTable.dbc</c> in <c>--dbc-dir</c> it also replaces <c>map_template</c> (every map, the dungeon columns from
     /// the dump's <c>instance_template</c> or <c>map_template</c>) and <c>area_template</c> (every area); one without the other is refused.
+    /// <c>page_text</c> and <c>item_enchantment_template</c> (world 70, the readable pages and random property groups the world used to read from the
+    /// dump at every start) are replaced when the dump carries rows for them.
     /// Afterwards it checks the references the world logs at start (teleports and taverns without a trigger, battleground start locations
     /// without a safe location, transports without a type-15 object, portals to a map with no map_template row, graveyard links to a zone
     /// with no area_template row, and, with <c>TaxiPathNode.dbc</c>, every ship whose route the world could not build). Three groups are filled
@@ -109,6 +111,7 @@ public static partial class ContentImporterCli
         var instances = new InstanceTemplateDumpImporter();
         var dbScripts = new DbScriptDumpImporter();
         var effectMods = new SpellEffectModDumpImporter();
+        var itemText = new ItemTextDumpImporter();
         var gossip = new NpcDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
@@ -196,6 +199,12 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             effectMods.Read(reader);
+        }
+
+        // World schema 70: page_text and item_enchantment_template, which the world used to read from the dump at every start.
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            itemText.Read(reader);
         }
 
         IReadOnlyCollection<GossipMenuOption> scriptedOptions = gossip.ScriptedOptions;
@@ -355,6 +364,8 @@ public static partial class ContentImporterCli
         Count("gossip_menu (script_id)", dbScripts.MenuScripts.Count, dbScripts.MenuScripts.Count > 0);
         Count("gossip_menu_option (action_script_id)", scriptedOptions.Count, scriptedOptions.Count > 0);
         Count(Spells.SpellEffectModDataModule.Table, effectMods.Rows.Count, effectMods.HasRows);
+        Count(Items.ItemTextWorldDataModule.PageTextTable, itemText.PageSnapshot().Count, itemText.HasPages);
+        Count(Items.ItemTextWorldDataModule.EnchantmentTemplateTable, itemText.TemplateSnapshot().Count, itemText.HasEnchantmentTemplates);
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
         Count(MapDataModule.MapTemplateTable, mapTables?.Maps.Count ?? 0, mapTables is not null);
         Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
@@ -510,6 +521,8 @@ public static partial class ContentImporterCli
                     {
                         await effectMods.ReplaceAsync(db, token).ConfigureAwait(false);
                     }
+
+                    await itemText.ReplaceAsync(db, token).ConfigureAwait(false);
 
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);

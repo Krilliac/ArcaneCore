@@ -1,5 +1,3 @@
-using System.IO.Compression;
-using System.Text;
 using ArcaneCore.Data.Items;
 using ArcaneCore.Kernel.Items;
 using Xunit;
@@ -48,26 +46,6 @@ public sealed class PageTextDumpReaderTests
         Assert.Equal(0u, catalog.Find(11)!.NextPage);    // the page that closes the loop 10 → 11 → 10 ends the book
         Assert.Contains(reports, r => r.Contains("circular reference"));
         Assert.Null(catalog.Find(3));
-    }
-
-    [Fact]
-    public void Load_ReadsAGzipDump()
-    {
-        string path = Path.Combine(Path.GetTempPath(), "arcane-pages-" + Guid.NewGuid().ToString("N") + ".sql.gz");
-        try
-        {
-            using (FileStream file = File.Create(path))
-            using (var zip = new GZipStream(file, CompressionLevel.Fastest))
-            {
-                zip.Write(Encoding.UTF8.GetBytes(Dump));
-            }
-
-            Assert.Equal(5, PageTextDumpReader.Load(path).Count);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
     }
 
     [Fact]

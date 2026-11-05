@@ -22,7 +22,7 @@ Options:
                            ItemRandomProperties, SpellItemEnchantment, CharSections and CharacterFacialHairStyles.
                            The world reads the last six at every start: give a permanent directory.
   --dump <file>            the classic-db dump (default <$ARCANECORE_REFS_ROOT>/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz)
-  --no-optional-data       do not set the seven optional client data keys (refresh-world-content.ps1 without -AppSettings)
+  --no-optional-data       do not set the five optional client data keys (refresh-world-content.ps1 without -AppSettings)
   --no-transports          leave World:Transports:Enabled as it is (by default it is set true: 9 ships)
   --no-elevators           do not set GameObjects:TransportAnimationDbcPath
   --mangos-defense-wear    set Items:DurabilityLossChanceParry/Block/Absorb to 0.05/0.05/0.5 (the pre-wave-3 wear)

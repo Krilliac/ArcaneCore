@@ -128,7 +128,7 @@ Not switchable (flagged for a decision; none is default-on non-retail by intent,
 
 * Pet and totem casts never spend the owner's spell-mod charges (retail leaves a stuck -1 mod); `PassiveReapply` depth cap of 2.
 * `EffectHealthLeech` and the periodic leech tick treat an unset multiple value as 1.0 (vmangos heals 0).
-* `SpellInfo.GetCastTime` ignores the all-zero cast time row, so Throw and Multi-Shot miss the +500 ms ranged slot time.
+* Closed: `SpellInfo.HasCastTimeEntry` makes `GetCastTime` treat the all-zero cast time row as present, so Throw and Multi-Shot are 500 ms casts (the +500 ms ranged slot time).
 * With `Auras:ProcEngineBreaksDamageAuras=false` (no proc engine exists) the damage break still removes auras that carry proc flags so Polymorph, Sap, Gouge and Freezing Trap stay breakable; Wyvern Sting and Prowl (`SpellSystem.DamageBreakExemptSpells`) are spared, as vmangos does through `checkProcFlags`. Set the key once a proc engine exists.
 * Enchant spells fail closed with no `SpellItemEnchantment.dbc` or `Enchanting:Enabled=false` (no retail counterpart; safe direction).
 * Reputation: hardened packet length checks, kill credit by killer's group (no loot-tap primitive), forced reactions not sent by default.

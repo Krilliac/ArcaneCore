@@ -12,6 +12,9 @@ public sealed partial record SpellInfo
     /// <summary>vmangos SPELL_CUSTOM_POSITIVE (SpellDefines.h:1004).</summary>
     public const uint CustomPositive = 0x004;
 
+    /// <summary>vmangos SPELL_CUSTOM_IGNORE_ARMOR (SpellDefines.h:1007): physical spell damage skips armor mitigation (SpellCaster.cpp:1283). No data source fills <see cref="SpellInfo.CustomFlags"/> yet (spell_template has no custom column and the factory sets none), and the vmangos data sets the bit only on spell 12723 at builds 4222 and 4297, so no 1.12.1 spell carries it; the rule is honoured for a spell that does.</summary>
+    public const uint CustomIgnoreArmor = 0x020;
+
     private const uint FamilyGeneric = 0;
     private const uint FamilyWarlock = 5;
     private const int WarlockHellfireBit = 6;

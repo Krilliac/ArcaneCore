@@ -26,7 +26,7 @@ public sealed partial class SpellSystem
     /// <summary>Hit, crit, resist and armor rules for spell landing (default <see cref="SpellCombatRules.Neutral"/>; the world daemon installs <see cref="VanillaSpellCombatRules"/>).</summary>
     public ISpellCombatRules CombatRules { get; set; } = SpellCombatRules.Neutral;
 
-    /// <summary>Where SPELL_EFFECT_SUMMON lands (null until the creatures area installs one: the effect is a reported stub).</summary>
+    /// <summary>Where SPELL_EFFECT_SUMMON lands (installed by the pets feature through SummonService; null only in a bare spell system, where the effect is reported as unsupported).</summary>
     public ISpellSummonSink? Summons { get; set; }
 
     /// <summary>

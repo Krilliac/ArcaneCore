@@ -108,6 +108,7 @@ public static class SpellStoreFactory
             TargetCreatureType = row.TargetCreatureType,
             RequiresSpellFocus = row.RequiresSpellFocus,
             CastTime = castTime,
+            HasCastTimeEntry = castTimes.ContainsKey(row.CastingTimeIndex),
             RecoveryTime = row.RecoveryTime,
             CategoryRecoveryTime = row.CategoryRecoveryTime,
             InterruptFlags = (SpellInterruptFlags)row.InterruptFlags,

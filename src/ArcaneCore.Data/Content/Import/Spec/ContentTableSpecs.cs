@@ -271,6 +271,9 @@ public static class ContentTableSpecs
         new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
         new("spell_proc_item_enchant", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsProcColumn),
         new("spell_enchant_charges", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsChargesColumn),
+        // World schema 70 (ItemTextDumpImporter): vmangos ObjectMgr::LoadPageTexts and LoadRandomEnchantmentsTable; the patch range is vmangos only.
+        new("page_text", [new KeyColumn("entry")], ["text", "next_page"], []),
+        new("item_enchantment_template", [new KeyColumn("entry"), new KeyColumn("ench")], ["chance", "patch_min", "patch_max"], []),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
