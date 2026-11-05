@@ -511,6 +511,7 @@ public sealed class ScriptLocationTargetTests
         CasterSpellModules.Register(rig.Kit.System, null);
         rig.Kit.System.LearnSpell(rig.Caster, RadiusMod);
         rig.Kit.Advance(100);
+        rig.Session.Clear(); // the learned passive's own SMSG_SPELL_GO is not the cast under test
         rig.Spawn(Firecracker, 220);
 
         Assert.Equal(SpellCastResult.DontReport, rig.Cast());

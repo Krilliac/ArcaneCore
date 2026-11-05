@@ -25,8 +25,11 @@ public sealed class GameObjectResetStateWorldTests
     {
         uint[] bannerData = new uint[GameObjectTemplate.DataCount];
         bannerData[0] = BannerLock;
+        bannerData[11] = 1; // noDamageImmune: without it the spawn carries NODESPAWN and a script despawn leaves it in the world
         var banner = new GameObjectTemplate { Entry = BannerEntry, Type = (uint)GameObjectType.Goober, DisplayId = 1328, Name = "Reset banner", Data = bannerData };
-        var plain = new GameObjectTemplate { Entry = PlainEntry, Type = (uint)GameObjectType.Goober, DisplayId = 1329, Name = "Reset plain", Data = new uint[GameObjectTemplate.DataCount] };
+        uint[] plainData = new uint[GameObjectTemplate.DataCount];
+        plainData[11] = 1;
+        var plain = new GameObjectTemplate { Entry = PlainEntry, Type = (uint)GameObjectType.Goober, DisplayId = 1329, Name = "Reset plain", Data = plainData };
         GameObjectSpawn[] spawns =
         [
             new GameObjectSpawn { Guid = BannerSpawn, Entry = BannerEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f, SpawnTimeSeconds = 60 },
