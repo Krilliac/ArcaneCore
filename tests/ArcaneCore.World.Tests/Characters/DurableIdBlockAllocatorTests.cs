@@ -83,6 +83,9 @@ public sealed class DurableIdBlockAllocatorTests
 
         // Once all reserved blocks are exhausted, Next() fails closed with IdRangeExhaustedException.
         Assert.Throws<IdRangeExhaustedException>(() => itemAllocator.Next());
+
+        // The failing Next() starts one more background prefetch (it throws in the test store): finish it so no task outlives the test.
+        await blockAllocator.WaitForPendingPrefetchAsync().WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
