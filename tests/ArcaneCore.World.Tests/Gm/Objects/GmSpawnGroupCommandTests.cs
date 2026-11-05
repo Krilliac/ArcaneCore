@@ -80,11 +80,18 @@ public sealed class GmSpawnGroupCommandTests
         }
     }
 
+    /// <summary>
+    /// The command's system chat lines. Waits for the first line, then reads through the session barrier: a command writes all of its reply lines synchronously in its handler, so
+    /// every line comes before the barrier's answer. A fixed quiet window split the eight-line <c>info</c> reply when the session writer was descheduled for over 250 ms under load.
+    /// </summary>
     private static async Task<List<string>> SendAsync(WorldTestClient client, string command)
     {
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectFromAsync(WorldOpcode.SmsgMessagechat, Quiet);
-        return [.. packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.System).Select(p => ChatMessage.Parse(p.Payload).Text)];
+        var lines = new List<string> { (await client.ReadSystemChatAsync()).Text };
+
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await client.CollectThroughBarrierAsync();
+        lines.AddRange(packets.Where(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload[0] == (byte)ChatType.System).Select(p => ChatMessage.Parse(p.Payload).Text));
+        return lines;
     }
 
     private static async Task<WorldTestClient> EnterAsync(Scene scene, string account, string name, AccountSecurity security)
