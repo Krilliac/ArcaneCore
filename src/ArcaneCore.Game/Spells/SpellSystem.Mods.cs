@@ -34,8 +34,8 @@ public sealed partial class SpellSystem
     private Mods.SpellModWindow BeginModWindow(Mods.SpellModScope? scope) => scope is null || ModEngine is null ? default : ModEngine.Begin(scope);
 
     /// <summary>
-    /// The window of the first CheckCast (Spell::prepare, Spell.cpp:3405): only the operations CheckCast reads with the spell (range,
-    /// radius, jump targets) spend charges in it; the cost and cast time reads there are not counted (vmangos CheckPower uses the cost
+    /// The window of the first CheckCast (Spell::prepare, Spell.cpp:3405): only the range reads (Spell::CheckRange, Spell.cpp:6896, :6917) spend charges in it; the radius and jump-target reads of
+    /// Spell::SetTargetMap (:2059-2062) are not reached from Spell::CheckCast, and the cost and cast time reads there are not counted (vmangos CheckPower uses the cost
     /// computed before, without dropping charges). Dispose closes the window and lifts the restriction.
     /// </summary>
     private Mods.SpellModWindow BeginModCheckWindow(Mods.SpellModScope? scope)

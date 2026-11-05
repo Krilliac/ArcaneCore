@@ -26,7 +26,7 @@ internal static class PassiveReapply
 
         ReapplyOn(system, player, mod);
 
-        // Aura::ReapplyAffectedPassiveAuras (SpellAuras.cpp:1067-1073): the passives, area auras and talents on the player's pet and
+        // Aura::ReapplyAffectedPassiveAuras (SpellAuras.cpp:1074-1075): the passives, area auras and talents on the player's pet and
         // totems read the owner's mods too (GetSpellModOwner), so they are refreshed as well. Only when the owner-mod resolution is on.
         if (engine.Options.OwnerModsForPetsAndTotems)
         {

@@ -75,7 +75,7 @@ public static class SpellTargetSelectors
         if (!cast.Targets.HasDest)
         {
             Unit caster = cast.Caster;
-            // Spell.cpp:2051-2056: SetTargetMap applies SPELLMOD_RADIUS to the effect radius before this case; radius 0 (no radius index) stays 0.
+            // Spell.cpp:2059-2062: SetTargetMap applies SPELLMOD_RADIUS to the effect radius before this case; radius 0 (no radius index) stays 0.
             float radius = effect.Radius > 0 ? system.ModFloat(caster, cast.Spell, SpellModOp.Radius, effect.Radius) : effect.Radius;
             float angle = caster.Orientation + angleOffset;
             cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;

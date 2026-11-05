@@ -2,6 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Casters;
+using ArcaneCore.Game.Spells.PersistentAreaAuras;
 using ArcaneCore.Game.Spells.Targets;
 using ArcaneCore.Game.Tests.Spells;
 using Xunit;
@@ -183,5 +184,34 @@ public sealed class AuraAndTargetingModTests
         kit.System.LearnSpell(caster, MultiplyMod);
         kit.Advance(1000);
         Assert.Equal(15u, SpellSystem.GetPower(caster, PowerType.Mana));  // + 10 drained * 1.0
+    }
+
+    [Fact]
+    public void APersistentAreaAura_UsesTheRadiusMod_ForItsGroundObject()
+    {
+        // Spell::SetTargetMap applies SPELLMOD_RADIUS to the effect radius (vmangos Spell.cpp:2059-2062) before EffectPersistentAA
+        // creates the DynamicObject, so a radius 8 ground aura with a +25 percent mod puts a radius 10 object down.
+        const uint ground = 944020;
+        using var kit = new SpellTestKit(
+            InFamily(Spell(ground, Effect(SpellEffectName.PersistentAreaAura, 8, SpellImplicitTarget.LocationCasterDest, AuraType.PeriodicDamage, amplitude: 1000,
+                targetB: SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc) with { Radius = 8 }) with
+            {
+                School = SpellSchool.Holy,
+                Duration = new SpellDuration(8000, 0, 8000),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            }),
+            Pct(RadiusMod, SpellModOp.Radius, 25));
+        (Player caster, _) = kit.AddPlayer(1);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, ground, SpellCastTargets.ForSelf(), triggered: true));
+        DynamicObject plain = Assert.Single(kit.System.DynamicObjects);
+        Assert.Equal(8f, plain.GetFloat(UpdateFields.DynamicobjectRadius));
+
+        kit.System.LearnSpell(caster, RadiusMod);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, ground, SpellCastTargets.ForSelf(), triggered: true));
+
+        Assert.Contains(kit.System.DynamicObjects, o => Math.Abs(o.GetFloat(UpdateFields.DynamicobjectRadius) - 10f) < 0.01f);
     }
 }

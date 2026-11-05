@@ -632,7 +632,7 @@ public sealed partial class SpellSystem
 
         Unit? unitTarget = ResolveUnitTarget(caster, targets, spell);
         // vmangos Spell::prepare (Spell.cpp:3395, :3436): the cost is read without spending mod charges, the first CheckCast of a non-triggered
-        // cast spends the charges of the range, radius and jump-target mods it reads (Spell.cpp:6896, :6917, :2061-2062; a failed CheckCast restores them in
+        // cast spends the charges of the range mods it reads (Spell::CheckRange, Spell.cpp:6896, :6917; the Spell::CheckCast body has no other SPELLMOD read, and the radius and jump-target reads in Spell::SetTargetMap, :2059-2062, are reached only from Spell::cast and Spell::CanAutoCast; a failed CheckCast restores them in
         // finish(false)), the cast time is read after it with charges ("to prevent charge counting for first CheckCast fail"), the duration
         // never. An item cast has no power cost (Spell::CheckPower and TakePower return at once for m_CastItem, Spell.cpp:5053,7050-7052).
         SpellModScope? modScope = ModEngine?.CreateScope(caster, spell);
