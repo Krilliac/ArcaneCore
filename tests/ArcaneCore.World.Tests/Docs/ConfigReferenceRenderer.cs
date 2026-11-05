@@ -144,7 +144,7 @@ internal static class ConfigReferenceRenderer
             sb.Append("| Field | Type | Default | Meaning |\n|---|---|---|---|\n");
             foreach (ConfigElementField field in entry.ElementFields!)
             {
-                sb.Append("\|"| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning.Replace("|", "\\|",StringComparison.Ordinal)).Append(" |\n");
+                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning.Replace("|", "\\|", StringComparison.Ordinal)).Append(" |\n");
             }
 
             sb.Append('\n');
