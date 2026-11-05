@@ -57,6 +57,31 @@ public sealed class ParityTests(ITestOutputHelper output)
             ? "no ticks"
             : $"{run.TickMicroseconds.Count} tick(s), mean {run.TickMicroseconds.Average():0.0} us, max {run.TickMicroseconds.Max():0.0} us";
 
+    /// <summary>
+    /// The SET_SPELL_SET row (action 60) must do something both sides can show: the list it switches to casts its spell in combat, so a list
+    /// that was never switched to (or a converter that dropped the row) leaves no cast in the log.
+    /// </summary>
+    [Fact]
+    public void TheSetSpellListScenario_CastsFromTheNewList_OnBothSides()
+    {
+        ParityScenario scenario = ParityFixtures.All.Single(s => s.Name == "set-spell-list-switches-the-casting-list");
+        string cast = $"cast {ParityScenario.ListSpell} at player";
+
+        ParityRun old = ParityRunner.Run(scenario, ParitySide.Old);
+        ParityRun engine = ParityRunner.Run(scenario, ParitySide.Engine);
+
+        foreach (ParityRun run in new[] { old, engine })
+        {
+            // Casts before the evade step, none after it: list 0 clears the list.
+            int evade = run.Log.ToList().FindIndex(line => line.Contains("step evade", StringComparison.Ordinal));
+            Assert.True(evade > 0, "the evade step is not in the log");
+            Assert.Contains(run.Log.Take(evade), line => line.Contains(cast, StringComparison.Ordinal));
+            Assert.DoesNotContain(run.Log.Skip(evade), line => line.Contains(cast, StringComparison.Ordinal));
+        }
+
+        Assert.DoesNotContain(engine.Conversion!.Issues, i => i.SourceId is 128 or 129);
+    }
+
     [Fact]
     public void ScenarioNames_AreUnique()
     {
