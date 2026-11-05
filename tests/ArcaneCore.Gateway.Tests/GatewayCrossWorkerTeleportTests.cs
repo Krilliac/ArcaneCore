@@ -230,6 +230,48 @@ public sealed class GatewayCrossWorkerTeleportTests
     }
 
     [Fact]
+    public async Task AWorldportAckLetThroughBeforeTheStage_AndRoutedAfterTheSwitch_ReachesTheKalimdorWorker()
+    {
+        // The other re-route branch: nothing is staged when the transfer router lets the packet through, so it is not held and not dropped; the whole transfer then runs before the link is
+        // chosen. The generation under the redirect gate is no longer the one the packet was read under, and the packet must go down the new link. The player can only enter the map through
+        // this one ack, so sending it down the old link or dropping it fails the wait below.
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("TELEROUTE", "Teleroute", cts.Token);
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        int taken = 0;
+        long readUnder = 0;
+        using var passed = new ManualResetEventSlim();
+        cluster.Gateway.AfterInterceptClientPacket = (connection, opcode) =>
+        {
+            if (opcode != WorldOpcode.MsgMoveWorldportAck || Interlocked.Exchange(ref taken, 1) != 0)
+            {
+                return;
+            }
+
+            long read = connection.SessionGeneration;
+            Interlocked.Exchange(ref readUnder, read);
+            passed.Set();
+            while (!cts.IsCancellationRequested && (connection.SessionGeneration == read || cluster.Gateway.Transfers.StagedCount != 0))
+            {
+                Thread.Sleep(5);
+            }
+        };
+
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        passed.Wait(cts.Token);
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
+        cluster.Gateway.AfterInterceptClientPacket = null;
+        Assert.NotEqual(0, Interlocked.Read(ref readUnder));
+    }
+
+    [Fact]
     public async Task ATeleportToAFullKalimdorWorker_LeavesThePlayerOnTheEasternKingdomsWorker_AndTellsThem()
     {
         using var cts = new CancellationTokenSource(Deadline);

@@ -150,6 +150,9 @@ public sealed class GatewayServer : BackgroundService
     /// </summary>
     internal Action<GatewayClientConnection, ArcaneCore.Protocol.WorldOpcode>? BeforeRouteClientPacket { get; set; }
 
+    /// <summary>Test seam: runs on a client read loop after the transfer router let a packet through and before its link is chosen under the redirect gate. Null (the default) in production.</summary>
+    internal Action<GatewayClientConnection, ArcaneCore.Protocol.WorldOpcode>? AfterInterceptClientPacket { get; set; }
+
     /// <summary>The connection whose current session generation is <paramref name="generation"/>, or null.</summary>
     internal GatewayClientConnection? FindConnection(long generation)
     {

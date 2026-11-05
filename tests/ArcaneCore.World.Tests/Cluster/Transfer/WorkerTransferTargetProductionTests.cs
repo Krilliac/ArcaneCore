@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
@@ -10,6 +12,7 @@ using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
@@ -250,6 +253,45 @@ public sealed class WorkerTransferTargetProductionTests
         Assert.Equal(1, offline.Completions);
     }
 
+    /// <summary>
+    /// The life of a ghost travels through the characters database, not the bundle: the source's save wrote it, the production loader reads it on the target, and the arrival's logged-in
+    /// notification puts the body back (DeathFeature, vmangos Player::LoadCorpse). So the spirit arrives as a spirit, with its body where it was stored.
+    /// </summary>
+    [Fact]
+    public async Task AGhostThroughATransfer_ArrivesAsAGhost_WithItsBodyAtTheStoredPlace()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERGHOST", "Ghostmover", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var body = new CorpseSnapshot(0, -8940f, -130f, 83f, 1f, now - 100, (byte)CorpseType.ResurrectablePve);
+        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f)) with { Health = 1, IsGhost = true, Corpse = body };
+        ObjectGuid guid = new(bundle.CharacterGuid);
+
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
+        Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
+        Assert.True(await host.World.InvokeAsync(() => teleports.HandleWorldportAck(player)));
+        await WorldTestHost.WaitForAsync(() => player.Map is not null && output.Opcodes.Contains(WorldOpcode.SmsgUpdateObject), "the ghost to enter its map");
+        await host.WaitForWorldAsync(() => player.Combat.Corpse is not null, "the body to be put back");
+
+        await host.OnWorldAsync(() =>
+        {
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.Equal(DeathState.Dead, player.Combat.DeathState);
+            Assert.False(player.IsAlive);
+            Assert.Equal(1u, player.Health);
+            Corpse corpse = Assert.Single(player.Map!.Combat.Corpses);
+            Assert.Equal((body.X, body.Y, body.Z), (corpse.X, corpse.Y, corpse.Z));
+            Assert.Equal(player.Guid.Value, corpse.Owner.Value);
+        });
+    }
+
     [Fact]
     public async Task ReleasingAShadow_AfterItsSessionClosed_StillWorks()
     {
@@ -259,10 +301,13 @@ public sealed class WorkerTransferTargetProductionTests
         var loader = new CharacterHooksShadowLoader(_ => session, host.WorldServices);
         Player shadow = await loader.LoadAsync(NewBundle(Guid.NewGuid(), accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f)), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(30));
+        HonorService honor = host.WorldServices.GetRequiredService<HonorFeature>().ActiveService!;
+        Assert.NotNull(honor.For(shadow)); // the load tracked it, so the check below can fail
 
         await scope.DisposeAsync();
 
         loader.Release(shadow); // the honor service is shared: a shadow it keeps tracking is a leak
+        Assert.Null(honor.For(shadow));
     }
 
     private sealed class RecordingOfflineArrival : ITransferOfflineArrival

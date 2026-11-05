@@ -269,6 +269,7 @@ public sealed class WorkerSelfHealTests
             // Without a frozen player the row says nothing about this worker any more: the character may have logged in and out here since, so its saves are left alone.
             Assert.Equal(0, await heal.RunPassAsync(CancellationToken.None)); // nothing is held afterwards
             Assert.Equal(frozen ? 1 : 0, source.Retires);
+            Assert.Equal(frozen ? 1 : 0, heal.Healed); // a pass that ran no local step healed nothing
         }
     }
 

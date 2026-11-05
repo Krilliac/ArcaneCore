@@ -189,6 +189,11 @@ public sealed class PlayerTransferCoordinator
     private readonly Dictionary<WorkerNodeId, ITransferSourceWorker> _sourceWorkers = [];
     private readonly Dictionary<WorkerNodeId, ITransferTargetWorker> _targetWorkers = [];
 
+    /// <summary>Lets the test-only stage hold act (<see cref="TransferStageProbe"/>). False, the default, leaves it inert whatever the environment says.</summary>
+    public bool StageHoldEnabled { get; init; }
+
+    private Task ReachedStageAsync(PlayerTransferStage stage, CancellationToken cancellationToken) => TransferStageProbe.ReachedAsync(StageHoldEnabled, stage, cancellationToken);
+
     public PlayerTransferCoordinator(
         IClusterMapRouter mapRouter,
         ITransferDecisionStore decisionStore,
@@ -251,7 +256,7 @@ public sealed class PlayerTransferCoordinator
             cancellationToken,
             targetWorker.OwnershipScope);
 
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.CommitDecision, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.CommitDecision, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.CommitDecision, record, cancellationToken);
@@ -378,7 +383,7 @@ public sealed class PlayerTransferCoordinator
             record = await _decisionStore.RebindTargetInstanceAsync(request.TransferId, targetInstanceId, cancellationToken);
         }
 
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.Reserve, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.Reserve, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.Reserve, record, cancellationToken);
@@ -427,7 +432,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.SuspendAndCapture, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.SuspendAndCapture, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.SuspendAndCapture, record, cancellationToken);
@@ -444,7 +449,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.InstallPassive, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.InstallPassive, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.InstallPassive, record, cancellationToken);
@@ -471,7 +476,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.StageWorldPort, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.StageWorldPort, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.StageWorldPort, record, cancellationToken);
@@ -565,7 +570,7 @@ public sealed class PlayerTransferCoordinator
             cancellationToken);
 
         // Stage 6 is only half done here: the source is retired, the target is not yet active.
-        await TransferStageProbe.ReachedAsync(PlayerTransferStage.ActivateAndRetire, cancellationToken);
+        await ReachedStageAsync(PlayerTransferStage.ActivateAndRetire, cancellationToken);
 
         // A target that restarted after the commit runs under a new incarnation, and the committed token still names the dead one, which the
         // restarted target refuses (it only hands out tokens of its own incarnation). Move the commit to the live incarnation of the same worker
@@ -705,7 +710,8 @@ public sealed class PlayerTransferCoordinator
 }
 
 /// <summary>
-/// Test-only stage hold for the crash-mid-transfer scenarios (S6c). A no-op in production: it acts only when the process environment carries
+/// Test-only stage hold for the crash-mid-transfer scenarios (S6c). A no-op in production: it acts only when the coordinator has <see cref="PlayerTransferCoordinator.StageHoldEnabled"/>
+/// (Gateway:Transfers:TestStageHold, off by default, so an environment variable alone can never stall a production transfer) and the process environment carries
 /// <see cref="HoldStageVariable"/> (a <see cref="PlayerTransferStage"/> name) and <see cref="DirectoryVariable"/> (an existing directory), which only the
 /// cluster E2E fixture sets, and only on the gateway it launches. When the coordinator first reaches the named stage it writes the marker file
 /// <c>reached-&lt;Stage&gt;</c> in that directory and waits until the file <c>release</c> appears there (or the token is cancelled, or <see cref="MaximumHold"/> passes),
@@ -726,13 +732,12 @@ internal static class TransferStageProbe
 
     internal static string MarkerFileName(PlayerTransferStage stage) => "reached-" + stage;
 
-    internal static Task ReachedAsync(PlayerTransferStage stage, CancellationToken cancellationToken)
-    {
-        if (HoldStage is null || HoldStage.Value != stage || string.IsNullOrEmpty(HoldDirectory))
-            return Task.CompletedTask;
+    internal static Task ReachedAsync(bool enabled, PlayerTransferStage stage, CancellationToken cancellationToken)
+        => Holds(enabled, stage, HoldStage, HoldDirectory) ? HoldAsync(stage, HoldDirectory!, cancellationToken) : Task.CompletedTask;
 
-        return HoldAsync(stage, HoldDirectory, cancellationToken);
-    }
+    /// <summary>Whether reaching <paramref name="stage"/> holds: the switch is on and the environment names this stage and a directory.</summary>
+    internal static bool Holds(bool enabled, PlayerTransferStage stage, PlayerTransferStage? holdStage, string? directory)
+        => enabled && holdStage == stage && !string.IsNullOrEmpty(directory);
 
     private static async Task HoldAsync(PlayerTransferStage stage, string directory, CancellationToken cancellationToken)
     {

@@ -705,6 +705,8 @@ workers. It is a separate process from every world, so the coordinators it hosts
   `ResumeSource` is refused once the row is Committed; `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
   its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
   only the abort and roll-forward verbs are repeated, by recovery.
+- **Known limit: a client packet can be lost at a route switch.** The gateway chooses the link and the generation under its redirect gate but sends outside it. If a whole stage, commit and
+  route switch finish in that gap, the packet reaches the old worker under a generation that worker has closed, and its envelope rules drop it. One packet is lost; it is never applied to a character the worker no longer runs.
 - **Opt-in keys, all `false` by default:** `Cluster:Worker:Handoff:Enabled` and `Cluster:Worker:Transfers:Enabled` on a worker (it answers
   `Disabled` for a kind that is off), `Gateway:Handoff:Enabled` and `Gateway:Transfers:Enabled` on the gateway. With them off nothing is
   registered, the in-process coordinators and frames 24 to 27 behave as before, and a Combined or single-process world is unchanged

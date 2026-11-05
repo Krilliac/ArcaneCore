@@ -30,6 +30,9 @@ public sealed class GatewayTransferOptions
     /// <summary>How often the gateway looks for unresolved player transfers in the journal and recovers them (before the commit they abort, after it they roll forward). Default 5 s.</summary>
     public TimeSpan RecoveryInterval { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>`true` lets the crash scenarios of the test suite hold a transfer at a stage they name in the process environment. Never set it on a real gateway: a held transfer waits up to 4 minutes. `false`, the default, ignores that environment.</summary>
+    public bool TestStageHold { get; set; }
+
     /// <summary>How long a player transfer may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying). Default 10 minutes.</summary>
     public TimeSpan AnomalyAfter { get; set; } = TimeSpan.FromMinutes(10);
 
@@ -255,7 +258,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         _waitForMapOwner = wiring.WaitForMapOwner;
         _slotSet = new HashSet<string>(wiring.SlotNodes, StringComparer.Ordinal);
         _machine = new GatewaySlotStateMachine(wiring.SlotNodes);
-        _coordinator = new PlayerTransferCoordinator(wiring.MapRouter, store, wiring.GatewayRouter, wiring.Sources, wiring.Targets);
+        _coordinator = new PlayerTransferCoordinator(wiring.MapRouter, store, wiring.GatewayRouter, wiring.Sources, wiring.Targets) { StageHoldEnabled = options.TestStageHold };
         _host = new PlayerTransferCoordinatorHost(_coordinator, store, factory.CreateLogger<PlayerTransferCoordinatorHost>());
         _scan = new OwnedJournalScan(this);
         _recovery = new TransferRecoveryService(
@@ -473,7 +476,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         GatewaySessionLinkClient? link = worker.Link;
         if (link is null)
         {
-            return; // the link went down while the request was being taken; no answer is sent, so the worker's in-flight entry for it stays until its expiry (GatewayClusterFarTeleportRouter.InFlightExpiry)
+            return; // the link went down while the request was being taken: no answer is sent, and the worker ended its in-flight entry itself when it lost the link (GatewayClusterFarTeleportRouter.OnSessionLinkLost)
         }
 
         if (submit.Body is not ControlTransferSubmit body)
@@ -500,7 +503,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 
         PlayerTransferRequest request = RequestOf(node, body);
         GatewayTransferSubmission submission = await SubmitAsync(request, _runs.Token).ConfigureAwait(false);
-        // The submit can wait for a map owner's link, and the source's link may have been replaced meanwhile (a reconnect). Only this answer or the outcome notice ends the worker's in-flight entry.
+        // The submit can wait for a map owner's link, and the source's link may have been replaced meanwhile (a reconnect). This answer, the outcome notice or the worker's own link loss ends its in-flight entry.
         (worker.Link ?? link).SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason, submission.Code));
         if (!submission.Accepted || submission.Completion is not { } completion)
         {

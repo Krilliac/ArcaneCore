@@ -101,6 +101,7 @@ public sealed class TransferCrashTests(ITestOutputHelper output)
                 StartingItemEntry = StartItemEntry,
                 FirstGatewayEnvironment = new Dictionary<string, string>
                 {
+                    ["Gateway__Transfers__TestStageHold"] = "true",
                     ["ARCANECORE_TEST_TRANSFER_HOLD_STAGE"] = stage.ToString(),
                     ["ARCANECORE_TEST_TRANSFER_HOLD_DIR"] = holdDirectory,
                 },

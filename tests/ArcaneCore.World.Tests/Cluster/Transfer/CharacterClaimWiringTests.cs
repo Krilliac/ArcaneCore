@@ -730,6 +730,32 @@ public sealed class CharacterClaimWiringTests
         await claims.DrainAsync();
     }
 
+    /// <summary>A character this process gave away with a handoff is refused before anything is read, even under the token that holds its claim, and nothing is written.</summary>
+    [Fact]
+    public async Task TheOfflineArrival_OfARetiredCharacter_IsRefused_AndWritesNothing()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Retiree", money: 4321);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        rig.Holder.Current = a;
+        var retirement = new CharacterRetirementRegistry();
+        retirement.Retire([character]);
+        var arrival = new CharacterStoreOfflineArrival(rig.Services.GetRequiredService<IServiceScopeFactory>(), retirement);
+        PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(Guid.NewGuid(), ObjectGuid.Player((uint)character).Value, NodeA, NodeB) with
+        {
+            CharacterId = character,
+            AccountId = 1,
+            NotLeaveTransport = false,
+        };
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => arrival.CompleteAsync(bundle, a, 0, CancellationToken.None));
+
+        Assert.Contains("retired", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(0u, (await rig.CharacterAsync(character))!.MapId);
+    }
+
     /// <summary>A login of the character that supersedes the pending release ends its poll while the transfer is still unsettled, and the claim stays.</summary>
     [Fact]
     public async Task AReceivedClaimsReleasePoll_EndsWhenALoginSupersedesIt()
