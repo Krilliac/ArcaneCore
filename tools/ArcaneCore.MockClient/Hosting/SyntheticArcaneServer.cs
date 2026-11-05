@@ -55,8 +55,11 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     // A hang detector, not a performance assertion: it only fires when startup never completes, so it must sit far above the real cost. Startup
     // bootstraps several SQLite schemas and a real world host; 10 s was exceeded whenever the machine was busy (many agents building and testing).
     // The first fixture in a test process is cold (JIT, model building) and measured 27 s on an idle node; a gate runs four suites at once, and
-    // its first fixtures then took 45 s to over 60 s (gate logs 1c7134022, 59ddb6f25, 0c90a0289), so 60 s was not far above the real cost.
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(180);
+    // its first fixtures then took 45 s to over 60 s when four started together (gate logs 1c7134022, 59ddb6f25, 0c90a0289). The cause is
+    // that concurrency of cold starts, so the cold ones are serialized (ColdStartGate) instead of the bound being raised: it stays 60 s.
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(60);
+    private static readonly SemaphoreSlim ColdStartGate = new(1, 1);
+    private static bool s_warm;
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly object _gate = new();
     private readonly OwnedFixtureDirectory _directory;
@@ -134,26 +137,49 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
-        using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        startup.CancelAfter(StartupTimeout);
-        CancellationToken startupToken = startup.Token;
-        Task<SyntheticArcaneServer> starting = Task.Run(
-            () => CreateAndInitializeAsync(options, configureServices, startupToken), CancellationToken.None);
+        // Until one startup in this process has finished, startups go one at a time. The first fixture pays the one-off cold cost
+        // (JIT, EF model building, content registration); four of them doing it at once under a gate's load made each slower
+        // than the sum, and all of them missed the hang bound together. Waiting here is outside the bound: the bound times a
+        // startup's own work, never the queue, and a waiter still honours its caller's token.
+        bool holdsColdGate = false;
+        if (!Volatile.Read(ref s_warm))
+        {
+            await ColdStartGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            holdsColdGate = true;
+        }
+
         try
         {
-            return await starting.WaitAsync(startupToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancellation can win the wait as creation succeeds. Keep ownership of that
-            // unpublished result and dispose it as well as observing eventual failures.
-            _ = CleanupAbandonedStartupAsync(starting);
-            if (!cancellationToken.IsCancellationRequested)
+            using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            startup.CancelAfter(StartupTimeout);
+            CancellationToken startupToken = startup.Token;
+            Task<SyntheticArcaneServer> starting = Task.Run(
+                () => CreateAndInitializeAsync(options, configureServices, startupToken), CancellationToken.None);
+            try
             {
-                throw new TimeoutException($"Synthetic server startup exceeded {StartupTimeout.TotalSeconds:0} seconds.");
+                SyntheticArcaneServer server = await starting.WaitAsync(startupToken).ConfigureAwait(false);
+                Volatile.Write(ref s_warm, true);
+                return server;
             }
+            catch (OperationCanceledException)
+            {
+                // Cancellation can win the wait as creation succeeds. Keep ownership of that
+                // unpublished result and dispose it as well as observing eventual failures.
+                _ = CleanupAbandonedStartupAsync(starting);
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException($"Synthetic server startup exceeded {StartupTimeout.TotalSeconds:0} seconds.");
+                }
 
-            throw;
+                throw;
+            }
+        }
+        finally
+        {
+            if (holdsColdGate)
+            {
+                ColdStartGate.Release();
+            }
         }
     }
 
