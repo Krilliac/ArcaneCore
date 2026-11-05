@@ -106,6 +106,89 @@ public sealed class ManagedPlayerbotProvisionTests
         Assert.Empty(await store.LoadPendingAsync());
     }
 
+    /// <summary>Two workers' stores: two contexts (a context is one worker's) over one SQLite file, as the split cluster shares one auth database.</summary>
+    private sealed class TwoWorkers : IAsyncDisposable
+    {
+        private readonly string _path;
+
+        private TwoWorkers(AuthDbContext a, AuthDbContext b, string path)
+        {
+            _path = path;
+            DbA = a;
+            DbB = b;
+            A = new EfManagedPlayerbotProvisionStore(a);
+            B = new EfManagedPlayerbotProvisionStore(b);
+        }
+
+        public AuthDbContext DbA { get; }
+
+        public AuthDbContext DbB { get; }
+
+        public EfManagedPlayerbotProvisionStore A { get; }
+
+        public EfManagedPlayerbotProvisionStore B { get; }
+
+        public static async Task<TwoWorkers> StartAsync()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"arcanecore-provision-{Guid.NewGuid():N}.db");
+            DbContextOptions<AuthDbContext> options = new DbContextOptionsBuilder<AuthDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
+            var a = new AuthDbContext(options);
+            await SchemaBootstrapper.EnsureAsync(a, AuthDbContext.Schema);
+            return new TwoWorkers(a, new AuthDbContext(options), path);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await DbA.DisposeAsync();
+            await DbB.DisposeAsync();
+            try { File.Delete(_path); }
+            catch (IOException) { /* a temp file the OS still holds is removed with the temp folder */ }
+        }
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_SeeEachOthersPendingRows_AndOnlyOneCompletesARow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Guid botId = Guid.NewGuid();
+        Account stored = await workers.B.CreateAsync(botId, NewAccount("PBTWOW001"));
+
+        ManagedPlayerbotProvision seen = Assert.Single(await workers.A.LoadPendingAsync()); // worker A reads worker B's pending row
+        Assert.Equal((botId, stored.Id, "PBTWOW001"), (seen.BotId, seen.AccountId, seen.AccountName));
+        Assert.True(await workers.A.CompleteAsync(botId, stored.Id)); // what a sweep that took a young row would do ...
+        Assert.False(await workers.B.CompleteAsync(botId, stored.Id)); // ... makes the creator's own completion refused: the reason the split sweep takes only old rows
+        Assert.Empty(await workers.B.LoadPendingAsync());
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_RollBackTheSameRowOnce_AndTheSecondIsRefusedWithoutAThrow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Guid botId = Guid.NewGuid();
+        Account stored = await workers.B.CreateAsync(botId, NewAccount("PBTWOW002"));
+
+        Assert.True(await workers.A.RollbackEmptyOwnerAsync(botId, stored.Id));
+        Assert.False(await workers.B.RollbackEmptyOwnerAsync(botId, stored.Id));
+        Assert.False(await workers.B.CompleteAsync(botId, stored.Id)); // the creator that lost the race learns it from the refusal
+
+        Assert.Null(await workers.DbA.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+        Assert.Null(await workers.DbB.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+        Assert.Empty(await workers.A.LoadPendingAsync());
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_CreatingTheSameAccountName_RefuseTheSecond_AndLeaveOneRow()
+    {
+        await using TwoWorkers workers = await TwoWorkers.StartAsync();
+        Account first = await workers.A.CreateAsync(Guid.NewGuid(), NewAccount("PBTWOW003"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => workers.B.CreateAsync(Guid.NewGuid(), NewAccount("PBTWOW003")));
+
+        ManagedPlayerbotProvision only = Assert.Single(await workers.B.LoadPendingAsync());
+        Assert.Equal(first.Id, only.AccountId);
+        Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync());
+    }
+
     private static Account NewAccount(string username, AccountSecurity security = AccountSecurity.Player, byte[]? sessionKey = null)
         => new() { Username = username, Salt = new byte[32], Verifier = new byte[32], Security = security, SessionKey = sessionKey };
 }

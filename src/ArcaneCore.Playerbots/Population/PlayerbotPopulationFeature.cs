@@ -1462,7 +1462,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
     /// <summary>
     /// True for the refusals of a start that did nothing to the bot (another worker runs it, the owner of it could not be told, the whole feature is busy or stopping): they do not use an attempt.
-    /// A refusal that is not here (an owner the account store refuses, a failed start) uses one, so such a bot is bounded too.
+    /// A refusal that is not here (an owner the account store refuses, a failed start, a login refused after the check passed: <see cref="ManagedPlayerbotFeature.LoginRaced"/>) uses one, so such a bot is bounded too.
     /// </summary>
     internal static bool MadeNoStartAttempt(string code)
         => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
@@ -1581,9 +1581,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 if (band >= 0) ctx.Have[band]++;
             }
             else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
-            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown)
+            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown or ManagedPlayerbotFeature.LoginRaced)
             {
-                // Another worker runs this bot: not a failure and nothing was written. It is left alone for a while, like a bot saved on another worker's map.
+                // Another worker runs this bot: not a failure and nothing was left written (a raced login refusal put its row back, and used an attempt of a retry: MadeNoStartAttempt). It is left alone for a while, like a bot saved on another worker's map.
                 _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
                 if (band >= 0) planned[band]--; // it will not fill its band: a new bot may
             }

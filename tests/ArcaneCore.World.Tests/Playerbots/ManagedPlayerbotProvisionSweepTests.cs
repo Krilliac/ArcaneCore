@@ -310,4 +310,76 @@ public sealed class ManagedPlayerbotProvisionSweepTests
 
         Assert.True(result.Success, result.Code);
     }
+
+    [Fact]
+    public async Task ASplitHolder_Creating_SweepsOncePerInterval_NotOncePerCreate()
+    {
+        var shared = new Shared();
+        shared.Provisions.AddPendingOutOfBand(Guid.NewGuid(), 99_999, "PBGHOSTRATE", DateTimeOffset.UtcNow.ToUnixTimeSeconds() - 5000); // a stale row that can never be deleted
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+
+        Assert.True((await bots.CreateAsync("Ratefirst", 1, 1)).Success);
+        int afterFirst = shared.Provisions.LoadPendingCalls;
+        Assert.True((await bots.CreateAsync("Ratesecond", 1, 1)).Success);
+        Assert.Equal(afterFirst, shared.Provisions.LoadPendingCalls); // inside the interval: the second create did not sweep
+
+        bots.ProvisionSweepIntervalMs = 0;
+        Assert.True((await bots.CreateAsync("Ratethird", 1, 1)).Success);
+        Assert.True(shared.Provisions.LoadPendingCalls > afterFirst); // the interval allows it again
+        Assert.Single(await shared.Provisions.LoadPendingAsync()); // the ghost row is still pending
+    }
+
+    [Fact]
+    public async Task TheStaleSweep_IsSplitOnly_AndHolderOnly()
+    {
+        var combined = new Shared();
+        await combined.JournalRowAsync("PBSWEEPCOMB", ageSeconds: 5000);
+        await using WorldTestHost combinedHost = combined.Host(null);
+        var nonHolder = new Shared();
+        await nonHolder.JournalRowAsync("PBSWEEPNONH", ageSeconds: 5000);
+        await using WorldTestHost nonHolderHost = nonHolder.Host(0, nonHolder: true);
+
+        await BotsOf(combinedHost).SweepStaleProvisionsAsync(default);
+        await BotsOf(nonHolderHost).SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(0, combined.Provisions.LoadPendingCalls); // combined mode sweeps at startup and on create only
+        Assert.Equal(0, nonHolder.Provisions.LoadPendingCalls); // a non-holder leaves the repair to the holder
+        Assert.Equal(0, combined.Provisions.RollbackCount + nonHolder.Provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task TheStaleSweep_UnderALatchedSplitBrain_IssuesNoWrites_AndRunsAgainOnceItIsCleared()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPLATCH", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        await bots.ForceSplitBrainForTests();
+
+        await bots.SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(0, shared.Provisions.LoadPendingCalls);
+        Assert.Equal(0, shared.Provisions.RollbackCount);
+        await bots.ClearSplitBrainAsync();
+        await bots.SweepStaleProvisionsAsync(default); // the refused sweep did not use up the interval
+        Assert.Equal(1, shared.Provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task ACancelledStaleSweep_Propagates_AndDoesNotUseUpTheInterval()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPCANCEL", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        using var cancel = new CancellationTokenSource();
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bots.SweepStaleProvisionsAsync(cancel.Token));
+        Assert.Equal(0, shared.Provisions.RollbackCount);
+
+        await bots.SweepStaleProvisionsAsync(default);
+        Assert.Equal(1, shared.Provisions.RollbackCount);
+    }
 }

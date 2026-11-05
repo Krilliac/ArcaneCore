@@ -275,7 +275,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
 
         PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
 
-        Assert.Equal("live-on-other-worker", result.Code);
+        Assert.Equal("login-raced", result.Code);
         ManagedPlayerbot after = owners.Peek(id)!;
         Assert.Equal(before with { Revision = after.Revision, UpdatedUnix = after.UpdatedUnix }, after); // content as before, no Faulted, no ErrorCode
         Assert.Equal(ManagedPlayerbotState.Stopped, after.State);
@@ -297,11 +297,31 @@ public sealed class ManagedPlayerbotLiveOwnerTests
 
         PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
 
-        Assert.False(result.Success);
-        Assert.NotEqual("start-failed", result.Code);
+        Assert.Equal("login-raced", result.Code);
         ManagedPlayerbot after = owners.Peek(id)!;
         Assert.Equal(ManagedPlayerbotState.Stopped, after.State);
         Assert.Null(after.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AStart_WhoseFaultRowCannotBeWrittenEither_ReportsStartFailed_InsteadOfThrowing()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Faultwrite", 1, 1)).BotId!.Value;
+        ManagedPlayerbot before = owners.Peek(id)!;
+        owners.FailUpdatesOf(id); // the Starting write throws, and so does the fault row the failure handler then writes
+        try
+        {
+            PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
+
+            Assert.False(result.Success);
+            Assert.Equal("start-failed", result.Code);
+            Assert.Equal(before, owners.Peek(id));
+            Assert.False(feature.IsActive(id));
+        }
+        finally { owners.FailUpdatesOf(null); }
     }
 
     [Fact]
@@ -472,6 +492,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     [InlineData("playerbots-stopping", true)]
     [InlineData("playerbots-disabled", true)]
     [InlineData("playerbots-detaching", true)]
+    [InlineData("login-raced", false)]
     [InlineData("owner-refused", false)]
     [InlineData("start-failed", false)]
     [InlineData("retry-faulted", false)]
