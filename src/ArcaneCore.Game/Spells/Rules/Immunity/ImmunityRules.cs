@@ -204,7 +204,7 @@ public static class ImmunityRules
             // creature_immunities dispel rows: any spell of the dispel type, whatever its polarity (mangos-classic Unit::IsImmuneToSpell, Unit.cpp:7343-7354).
             // Unlike mangos-classic, self-casts are exempt (deliberate, as for the template masks above).
             // DISPEL_NONE (0) is not a dispel type a row can name (a 0 row would otherwise refuse every undispellable spell).
-            // Passive spells are left out, as they are for the dispel-immunity auras below (vmangos Unit::IsImmuneToSpell, Unit.cpp:5448).
+            // Passive spells are left out, as they are for the dispel-immunity auras below (vmangos Unit::IsImmuneToSpell, Unit.cpp:5448). mangos-classic (Unit.cpp:7351-7354) has no such exemption; following vmangos here is deliberate.
             if (spell.Dispel is >= 1 and < 32 && !spell.HasAttribute(SpellAttributes.Passive) && (creatures.DispelImmuneMask(target) & (1u << (int)spell.Dispel)) != 0)
             {
                 return true;

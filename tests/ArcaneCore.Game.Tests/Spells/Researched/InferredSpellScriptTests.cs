@@ -277,6 +277,19 @@ public sealed class InferredSpellScriptTests
     }
 
     [Fact]
+    public void EnigmaBonus_AWinningChannel_StillEndsWhenTheCasterDies()
+    {
+        using var scene = new EnigmaScene(roll: 0, withBonus: true);
+        Assert.True(scene.Cast.Uninterruptible);
+
+        scene.Caster.Health = 0;
+        Assert.False(scene.Caster.IsAlive);
+        scene.Kit.System.OnUnitDied(scene.Caster); // RemoveAurasOnDeath cancels the current cast; Cancel has no Uninterruptible check
+
+        Assert.Null(scene.Kit.System.GetState(scene.Caster.Guid)!.CurrentCast);
+    }
+
+    [Fact]
     public void EnigmaBonus_TheNextChannel_RollsAgain()
     {
         using var scene = new EnigmaScene(roll: 0, withBonus: true);
@@ -499,8 +512,10 @@ public sealed class InferredSpellScriptTests
     public void AgroDrones_ACharmedDroneIsLeftAlone()
     {
         using var scene = new DroneScene();
+        // The controller is a creature guid, not a player: a player controller would make Hooks.CanAttack refuse the unflagged victim on its own,
+        // so the test would pass without the guard. With a creature controller the attack succeeds unless AgroDronesEffectScript skips the drone.
         Creature charmed = scene.Spawn(AgroDronesEffectScript.VeknissDroneEntry, 10);
-        charmed.SetUInt64(UpdateFields.UnitFieldCharmedby, scene.Bystander.Guid.Value);
+        charmed.SetUInt64(UpdateFields.UnitFieldCharmedby, ObjectGuid.WithEntry(HighGuid.Unit, 5006, 999).Value);
 
         scene.Cast();
 
@@ -512,8 +527,9 @@ public sealed class InferredSpellScriptTests
     public void AgroDrones_AnOwnedDroneIsLeftAlone()
     {
         using var scene = new DroneScene();
+        // Creature controller for the same reason as the charmed case: only the script's guard keeps this drone out of the fight.
         Creature owned = scene.Spawn(AgroDronesEffectScript.VeknissDroneEntry, 10);
-        owned.SetUInt64(UpdateFields.UnitFieldSummonedby, scene.Bystander.Guid.Value);
+        owned.SetUInt64(UpdateFields.UnitFieldSummonedby, ObjectGuid.WithEntry(HighGuid.Unit, 5006, 999).Value);
 
         scene.Cast();
 
