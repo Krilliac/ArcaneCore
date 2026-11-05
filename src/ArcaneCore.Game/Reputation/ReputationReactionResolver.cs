@@ -19,7 +19,7 @@ namespace ArcaneCore.Game.Reputation;
 /// callers fall back to the template-only hooks instead of guessing. An unknown template or a faction missing from
 /// Faction.dbc reads as the vmangos answer (Neutral, or the template relations), not as a failure.
 /// </para>
-/// Not modelled: free-for-all PvP (<c>IsFFAPvP</c>; no such state exists here). World thread.
+/// Free-for-all PvP (<c>IsFFAPvP</c>, <see cref="PlayerFlags.FfaPvp"/>) is modelled: two ungrouped free-for-all players, and the units acting for them, are Hostile. World thread.
 /// </summary>
 public sealed class ReputationReactionResolver(
     FactionTemplateCatalog templates,
@@ -117,6 +117,15 @@ public sealed class ReputationReactionResolver(
                 if (sameRaid?.Invoke(selfOwner, targetOwner) == true)
                 {
                     rank = ReputationRank.Friendly;
+                    return true;
+                }
+
+                // Two free-for-all players that are not grouped are hostile whatever their teams and templates, and so are the pets, totems and
+                // charmed units acting for them (Object.cpp:3659-3660, IsFFAPvP on both affecting players). The unit-level flags above gate
+                // the clause like vmangos; CombatHooks.CanAttack uses the same pair test for players.
+                if ((selfOwner.Flags & PlayerFlags.FfaPvp) != 0 && (targetOwner.Flags & PlayerFlags.FfaPvp) != 0)
+                {
+                    rank = ReputationRank.Hostile;
                     return true;
                 }
             }

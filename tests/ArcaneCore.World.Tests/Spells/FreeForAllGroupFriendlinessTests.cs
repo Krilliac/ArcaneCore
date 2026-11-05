@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,7 +33,7 @@ public sealed class FreeForAllGroupFriendlinessTests
     }
 
     [Fact]
-    public void AfterSpellFeatureAttaches_GroupedFreeForAllPlayersAreFriends_AndUngroupedOnesAreHostile()
+    public async Task AfterSpellFeatureAttaches_GroupedFreeForAllPlayersAreFriends_AndUngroupedOnesAreHostile()
     {
         using var kit = new AreaAuraGroupKit();
         using ServiceProvider services = new ServiceCollection()
@@ -41,7 +42,8 @@ public sealed class FreeForAllGroupFriendlinessTests
             .AddSingleton(kit.Social)
             .BuildServiceProvider();
         services.GetRequiredService<TeleportFeature>().Attach(kit.World);
-        new SpellFeature(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance).Attach(kit.World);
+        await using SpellFeature feature = new(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance);
+        feature.Attach(kit.World);
 
         Player grouped = kit.Players[1];
         Player mate = kit.Players[2];
@@ -62,5 +64,59 @@ public sealed class FreeForAllGroupFriendlinessTests
         // Without the free-for-all flag the same team is friendly whether grouped or not.
         outsider.Flags &= ~PlayerFlags.FfaPvp;
         Assert.True(hooks.IsFriendly(grouped, outsider));
+    }
+
+    [Fact]
+    public void SameTeamPairs_ReadTheGroupOnlyWhenItCanChangeTheAnswer()
+    {
+        using var kit = new AreaAuraGroupKit();
+        int reads = 0;
+        CombatHooks.RegisterSameGroup(kit.World, (_, _) =>
+        {
+            reads++;
+            return false;
+        });
+        Player a = kit.Players[1];
+        Player b = kit.Players[2];
+        CombatHooks hooks = CombatHooks.Default;
+
+        // Same team, nobody free-for-all: friendly on the team alone, the (world-thread only) group manager is not touched.
+        Assert.True(hooks.IsFriendly(a, b));
+        Assert.Equal(0, reads);
+
+        // One side flagged is still not a free-for-all pair.
+        a.Flags |= PlayerFlags.FfaPvp;
+        Assert.True(hooks.IsFriendly(a, b));
+        Assert.Equal(0, reads);
+
+        // A free-for-all pair: the group decides.
+        b.Flags |= PlayerFlags.FfaPvp;
+        Assert.False(hooks.IsFriendly(a, b));
+        Assert.Equal(1, reads);
+    }
+
+    [Fact]
+    public void AreInSameGroup_DoesNotAllocate_ForGroupMatesOrStrangers()
+    {
+        using var kit = new AreaAuraGroupKit();
+        var groups = new WorldSpellGroups(() => kit.Groups);
+        Player a = kit.Players[1];
+        Player mate = kit.Players[2];
+        Player stranger = kit.Players[5];
+        kit.Groups.Leave(stranger);
+        Assert.True(groups.AreInSameGroup(a, mate));
+        Assert.False(groups.AreInSameGroup(a, stranger));
+
+        void Window()
+        {
+            for (int i = 0; i < 1000; i++)
+            {
+                _ = groups.AreInSameGroup(a, mate);
+                _ = groups.AreInSameGroup(a, stranger);
+                _ = groups.AreInSameGroup(stranger, a);
+            }
+        }
+
+        AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "AreInSameGroup");
     }
 }

@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Spells;
 /// </summary>
 public sealed class WorldSpellGroups(Func<GroupManager?> groups) : ISpellGroupResolver
 {
-    /// <summary>Whether two players share a group (vmangos Player::IsInRaidWith), for the free-for-all friendliness rule of the combat hooks.</summary>
+    /// <summary>Whether two players share a group (vmangos Unit::IsInRaidWith, Unit.h:1173, which GetReactionTo calls), for the free-for-all friendliness rule of the combat hooks.</summary>
     public bool AreInSameGroup(Player a, Player b) => Manager()?.AreInSameGroup(a.Guid, b.Guid) == true;
 
     private GroupManager? Manager()
