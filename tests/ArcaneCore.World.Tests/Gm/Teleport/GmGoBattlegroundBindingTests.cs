@@ -271,6 +271,53 @@ public sealed class GmGoBattlegroundBindingTests : GmGoBattlegroundAndInstanceTe
     }
 
     [Fact]
+    public async Task BeginGmMove_WithAMoveInProgress_IsRefused_AndLeavesAStaleBindingUncleared()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-move-in-progress-stale", async context =>
+        {
+            (ScenarioBot ally, _, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngpally", "Scngphorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOPROG", "Gmgoprog", AccountSecurity.Administrator);
+            await using ClientTap victim = await ClientTap.EnterAsync(world, "GMGOPROGV", "Gmgoprogv", AccountSecurity.Player);
+
+            // 1. A move record exists for the victim.
+            await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
+                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "first begin outcome");
+                ScenarioContext.Expect(feature.HasGmMove(vic.Guid), "no move record");
+                return true;
+            });
+
+            // 2. The victim is then bound to a match that is deleted before it arrives: a stale binding.
+            uint ghostId = await context.ReadAsync(() =>
+            {
+                Battleground ghost = CreateSecondMatch(context, match);
+                Battlegrounds(context).Manager.BindPlayer(GuidOf(context, victim.Name), ghost, ally.RequirePlayer().Team);
+                return ghost.InstanceId;
+            });
+            await context.WaitUntilAsync("the unused match is deleted", () => Battlegrounds(context).Manager.GetBattleground(ghostId, BattlegroundType.WarsongGulch) is null);
+            ScenarioContext.Expect(await context.ReadAsync(() => Battlegrounds(context).Manager.StateOf(GuidOf(context, victim.Name)).InBattleground),
+                "the stale binding is not there; the scenario needs it");
+
+            // 3. A refused second move must not touch the binding.
+            await context.ReadAsync(() =>
+            {
+                BattlegroundFeature feature = Battlegrounds(context);
+                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
+                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
+                ScenarioContext.ExpectEqual(GmBattlegroundGo.MoveInProgress, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "second begin outcome");
+                ScenarioContext.Expect(feature.Manager.StateOf(vic.Guid).InBattleground, "a refused move cleared the stale binding");
+                feature.CancelGmMove(vic);
+                return true;
+            });
+        });
+    }
+
+    [Fact]
     public async Task Namego_OfAPlayerInAnotherMatch_LeavesThatMatchOnlyAtTheCommit_WithoutDeserter()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
