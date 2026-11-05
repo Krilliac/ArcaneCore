@@ -1166,7 +1166,17 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
   has none nearby. When a stalled Explore goal is given up and the atlas holds no creature of the bot's level within `StrandedExploreRings` (3 rings, about 480 yards)
   on its map and creatures more than `StrandedLevelMargin` (2) levels above it stand there, the bot teleports to its bind point (non-urgent, the five-minute bind-teleport
   cooldown; live 2026-10-12, bot QA #286 and others), unless it is already within `BindArrivedYards` (100) of the bind point or the bind point is stranded for its level too.
-  An over-levelled bot in a low zone or a city, and a homed bot (which keeps `InwardLeg`), are not teleported.
+  **Over-levelled unhomed bots:** the opposite case (live 2026-10-25, bot QA #1487: level 60 bots in the Valley of Trials, stalled again and again on a Vendor errand that named no vendor).
+  When a stalled Vendor, Train, Mount or Explore goal is given up, the bot has no home, and the atlas holds no creature of its level within `StrandedExploreRings` rings
+  and none more than `StrandedLevelMargin` levels above it (a low zone, or a city), it leaves in one of two ways. (1) Its own hearthstone to its bind point, when the stone is
+  carried and ready (no stone: no trip, never the direct teleport), the bind point is more than `BindArrivedYards` away and the atlas holds creatures of its level within
+  `StrandedExploreRings` rings of it; so an unhomed level 60 bot in a city can now hearth to its bind point. (2) Otherwise (the bind point is beside the bot, as every
+  new character's is at its start, so the Valley of Trials stall point is inside `BindArrivedYards` of it; or the bind point holds nothing for the level; or the stone is not ready) a
+  journey through the travel seam (`IPlayerbotTravel.TryBegin`, as a quest goal on another map uses) to the nearest cell on its map that the explore atlas lists for its
+  level (`PlayerbotBrain.TryJourneyToFittingGround`): flight path, zeppelin, hearthstone or walk, whichever the planner finds. A journey the planner refuses sets that cell aside
+  for explore and waits the transit backoff (`TransitBackoffSeconds`, doubling per failure up to `TransitBackoffMaxSeconds`) before the next try. Neither runs in combat, a duel, a group or on a battleground, with travel
+  off, or for a bot that has a home (which keeps `InwardLeg` and the home return rules); the journey is as good as the planner's route, and a bot the planner has no route for stays
+  where it is and explores.
 * **Errands override the walk home.** A vendor or trainer visit that has something useful to do (`PlayerbotTownGoals.HasCandidate`,
   `PlayerbotTrainerDestinations.HasCandidate`), a quest exchange already under way, and the turn-in of a completed quest (the way to its ender is never
   restricted) may take the bot anywhere, in any zone; the bot walks home afterwards. The zone clip does not change this: a capital trip for a trainer or a
