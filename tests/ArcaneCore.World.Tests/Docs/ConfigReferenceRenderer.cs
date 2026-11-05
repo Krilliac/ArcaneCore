@@ -1,4 +1,5 @@
 using System.Text;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.Reload;
 
@@ -68,6 +69,7 @@ internal static class ConfigReferenceRenderer
         sb.Append("Both daemons build their configuration with the .NET generic host defaults: `appsettings.json` from the content root (the working directory the daemon starts in), then environment variables, then command-line arguments. ");
         sb.Append("The environment variable for a key is the key with each `:` replaced by `__` (a command-line argument uses `--Section:Key=value`), for example `World:GmCommands:LowerSecurity` is `World__GmCommands__LowerSecurity`. ");
         sb.Append("`ArcaneCore.World.exe check-config` validates the result and the daemon runs the same check at every start (exit code 78 when invalid).\n\n");
+        sb.Append("The same options are also split by area, one page per feature, in [config/README.md](config/README.md).\n\n");
         sb.Append("How to read the tables:\n\n");
         sb.Append("- **Default** is the value of a freshly constructed options object, so it cannot disagree with the code. ");
         sb.Append("A section that is absent from the file simply keeps every default.\n");
@@ -114,7 +116,7 @@ internal static class ConfigReferenceRenderer
         sb.Append("These keys are read directly rather than through an options class.\n\n| Key | Type | Default | Meaning |\n|---|---|---|---|\n");
         foreach (AdHocKey key in adHoc.OrderBy(k => k.Path, StringComparer.Ordinal))
         {
-            sb.Append("| `").Append(key.Path).Append("` | `").Append(key.TypeText).Append("` | `").Append(key.Default).Append("` | ").Append(key.Meaning).Append(" |\n");
+            sb.Append("| `").Append(key.Path).Append("` | `").Append(key.TypeText).Append("` | `").Append(key.Default).Append("` | ").Append(AdHocMeaningCell(key)).Append(" |\n");
         }
 
         sb.Append("\n## Aliases and framework sections\n\n");
@@ -144,11 +146,185 @@ internal static class ConfigReferenceRenderer
             sb.Append("| Field | Type | Default | Meaning |\n|---|---|---|---|\n");
             foreach (ConfigElementField field in entry.ElementFields!)
             {
-                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning.Replace("|", "\\|", StringComparison.Ordinal)).Append(" |\n");
+                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning).Append(" |\n");
             }
 
             sb.Append('\n');
         }
+    }
+
+    /// <summary>Where the per-area pages live, relative to the repository root.</summary>
+    internal const string AreaDirectory = "docs/reference/config";
+
+    /// <summary>A top-level section, or a <c>World:X</c> group, with at least this many keys gets its own page.</summary>
+    internal const int OwnPageMinimumKeys = 5;
+
+    internal const string WorldCoreArea = "World core";
+
+    internal const string SmallSectionsArea = "Small sections";
+
+    /// <summary>One generated page: its path relative to the repository root and its text (LF line endings).</summary>
+    internal sealed record AreaPage(string Path, string Text);
+
+    /// <summary>
+    /// Renders the per-area configuration pages and their index. One page per top-level section; <c>World:X</c> (the second path segment) gets its
+    /// own page at <see cref="OwnPageMinimumKeys"/> or more keys and otherwise joins "World core" together with the keys directly under <c>World</c>;
+    /// any other top-level section below that size joins "Small sections". Every option lands on exactly one page. The result is ordered by area name.
+    /// The keys read by name (<paramref name="adHoc"/>) are options too: they count, are grouped and get a row like the options-class entries, so the
+    /// pages list the same keys as the shipped catalog (<see cref="ConfCatalogGenerator.Build"/> with the same arguments). A <c>World:X</c> group and a
+    /// top-level section called <c>X</c> share the page file <c>x.md</c> (there is no per-area name override).
+    /// The pages leave out the "List and map element fields" tables of configuration.md; every page links to it.
+    /// </summary>
+    public static IReadOnlyList<AreaPage> RenderByArea(IReadOnlyList<ConfigEntry> entries, IReadOnlyList<AdHocKey> adHoc)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(adHoc);
+        Dictionary<string, string> allowed = [];
+        foreach (ConfKey key in ConfCatalogGenerator.Build(entries, adHoc).Keys)
+        {
+            allowed[key.Path] = key.Allowed;
+        }
+
+        List<AreaRow> rows =
+        [
+            .. entries.Select(e => new AreaRow(e.Path, e.Section, e.TypeText, e.Default, allowed[e.Path], e.Daemons, e.Reload switch { "live" => "live", "restart" => "restart", _ => "start" }, e.Meaning)),
+            .. adHoc.Select(a => new AreaRow(a.Path, a.Path[..a.Path.LastIndexOf(':')], a.TypeText, a.Default, allowed[a.Path], a.Daemons, "start", AdHocMeaningCell(a))),
+        ];
+
+        var worldGroupCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var topCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (AreaRow entry in rows)
+        {
+            string[] segments = entry.Path.Split(':');
+            if (segments[0] == "World")
+            {
+                if (segments.Length >= 3)
+                {
+                    worldGroupCounts[segments[1]] = worldGroupCounts.GetValueOrDefault(segments[1]) + 1;
+                }
+            }
+            else
+            {
+                topCounts[segments[0]] = topCounts.GetValueOrDefault(segments[0]) + 1;
+            }
+        }
+
+        string AreaOf(AreaRow entry)
+        {
+            string[] segments = entry.Path.Split(':');
+            if (segments[0] == "World")
+            {
+                return segments.Length >= 3 && worldGroupCounts[segments[1]] >= OwnPageMinimumKeys ? segments[1] : WorldCoreArea;
+            }
+
+            return topCounts[segments[0]] >= OwnPageMinimumKeys ? segments[0] : SmallSectionsArea;
+        }
+
+        List<IGrouping<string, AreaRow>> areas = [.. rows.GroupBy(AreaOf, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)];
+        var pages = new List<AreaPage>();
+        var index = new List<(string Area, int Count, string File)>();
+        foreach (IGrouping<string, AreaRow> area in areas)
+        {
+            string file = AreaFileName(area.Key);
+            var sb = new StringBuilder();
+            sb.Append('#').Append(' ').Append(area.Key).Append(" options\n\n");
+            sb.Append("<!-- GENERATED by tests/ArcaneCore.World.Tests/Docs (ConfigReferenceRenderer.RenderByArea) from the options classes. Do not edit by hand.\n");
+            sb.Append("     Regenerate: ").Append(DocsGolden.RegenerateCommand).Append(" -->\n\n");
+            sb.Append(area.Count()).Append(" options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).\n\n");
+            sb.Append("Daemon says which server reads it. Reload says whether `.reload config` applies it: `live` is applied to the running server, `restart` keeps its value until the next start, `start` is read once when the daemon starts.\n\n");
+            foreach (IGrouping<string, AreaRow> section in area.GroupBy(e => e.Section, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                sb.Append("## `").Append(section.Key).Append("`\n\n");
+                sb.Append("| Option | Type | Default | Allowed | Daemon | Reload | Meaning |\n|---|---|---|---|---|---|---|\n");
+                string prefix = section.Key + ":";
+                foreach (AreaRow entry in section.OrderBy(e => e.Path, StringComparer.Ordinal))
+                {
+                    string option = entry.Path.StartsWith(prefix, StringComparison.Ordinal) ? entry.Path[prefix.Length..] : entry.Path;
+                    sb.Append("| `").Append(option).Append("` | `").Append(entry.TypeText).Append("` | ").Append(Code(entry.Default)).Append(" | ")
+                        .Append(entry.Allowed.Replace("|", "\\|", StringComparison.Ordinal)).Append(" | ").Append(entry.Daemons).Append(" | ")
+                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning).Append(" |\n");
+                }
+
+                sb.Append('\n');
+            }
+
+            pages.Add(new AreaPage(AreaDirectory + "/" + file, sb.ToString()));
+            index.Add((area.Key, area.Count(), file));
+        }
+
+        var readme = new StringBuilder();
+        readme.Append("# Server options by area\n\n");
+        readme.Append("<!-- GENERATED by tests/ArcaneCore.World.Tests/Docs (ConfigReferenceRenderer.RenderByArea) from the options classes. Do not edit by hand.\n");
+        readme.Append("     Regenerate: ").Append(DocsGolden.RegenerateCommand).Append(" -->\n\n");
+        readme.Append(rows.Count).Append(" options in ").Append(index.Count).Append(" files.\n\n");
+        readme.Append("The full reference, with every option on one page, is [configuration.md](../configuration.md). configuration.md also carries the element fields of the list and map options, which these pages leave out. Both are generated from the same catalog, which includes the keys read by name.\n\n");
+        readme.Append("| Area | Options | File |\n|---|---|---|\n");
+        foreach ((string area, int count, string file) in index)
+        {
+            readme.Append("| ").Append(area).Append(" | ").Append(count).Append(" | [").Append(file).Append("](").Append(file).Append(") |\n");
+        }
+
+        pages.Add(new AreaPage(AreaDirectory + "/README.md", readme.ToString()));
+        return pages;
+    }
+
+    /// <summary>
+    /// The table cell for the meaning of a key read by name. <see cref="AdHocKey.Meaning"/> is plain text, also shipped as is in the catalog, so its pipes
+    /// are escaped here. <see cref="ConfigEntry.Meaning"/> and <see cref="ConfigElementField.Meaning"/> need no such step: they are markdown already
+    /// (<see cref="ConfigSourceSummaries"/> escapes them).
+    /// </summary>
+    private static string AdHocMeaningCell(AdHocKey key) => key.Meaning.Replace("|", "\\|", StringComparison.Ordinal);
+
+    /// <summary>
+    /// One option as the area pages show it: an options-class entry or a key read by name. Meaning is the finished table cell, already
+    /// escaped; Allowed is plain text and the page escapes it.
+    /// </summary>
+    private sealed record AreaRow(string Path, string Section, string TypeText, string Default, string Allowed, ConfigDaemon Daemons, string Reload, string Meaning);
+
+    /// <summary>
+    /// The files under <paramref name="directory"/> (any depth) that are not one of <paramref name="pages"/>: full paths, ordered. A page that no longer
+    /// has an area would describe options that are gone. Empty when the directory does not exist.
+    /// </summary>
+    internal static IReadOnlyList<string> StrayFiles(string directory, IEnumerable<AreaPage> pages)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        HashSet<string> expected = [.. pages.Select(p => System.IO.Path.GetFileName(p.Path))];
+        return
+        [
+            .. Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Where(f => !(System.IO.Path.GetDirectoryName(f) is { } parent
+                    && string.Equals(System.IO.Path.GetFullPath(parent), System.IO.Path.GetFullPath(directory).TrimEnd(System.IO.Path.DirectorySeparatorChar), StringComparison.Ordinal)
+                    && expected.Contains(System.IO.Path.GetFileName(f))))
+                .Order(StringComparer.Ordinal),
+        ];
+    }
+
+    /// <summary>The page file name of an area: lower-case words joined by hyphens ("GameObjects" is game-objects.md, "World core" is world-core.md).</summary>
+    internal static string AreaFileName(string area)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < area.Length; i++)
+        {
+            char c = area[i];
+            if (c == ' ')
+            {
+                sb.Append('-');
+                continue;
+            }
+
+            if (char.IsUpper(c) && i > 0 && area[i - 1] != ' ' && !char.IsUpper(area[i - 1]))
+            {
+                sb.Append('-');
+            }
+
+            sb.Append(char.ToLowerInvariant(c));
+        }
+
+        return sb.Append(".md").ToString();
     }
 
     private static string Code(string value) => value.Contains('|', StringComparison.Ordinal) ? "`" + value.Replace("|", "\\|", StringComparison.Ordinal) + "`" : "`" + value + "`";

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Reload;
 using Xunit;
 
@@ -198,6 +199,21 @@ public sealed class ConfigReferenceTests
         Assert.Contains("[`Fixture`](#fixture)", a, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Render_EscapesPipesInTheMeaningOfAKeyReadByName()
+    {
+        string page = ConfigReferenceRenderer.Render([], [new AdHocKey("A:B", "string", "null", "Either a | b.")], NoOverrides);
+        Assert.Contains("| `A:B` | `string` | `null` | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_LeavesTheMeaningOfAnElementFieldAsTheSummaryEscapedIt()
+    {
+        ConfigEntry entry = new("Solo", "Solo:Rows", "Row[]", "-", "Rows.", "-", ElementFields: [new ConfigElementField("Mode", "string", "a", "Either a \\| b.")]);
+        string page = ConfigReferenceRenderer.Render([entry], [], NoOverrides);
+        Assert.Contains("| `Mode` | `string` | `a` | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
     private static ConfigCoverage Coverage(params string[] paths) => new(
         new Dictionary<string, string> { ["FixtureOptions"] = "Fixture" },
         new HashSet<string>(paths),
@@ -243,6 +259,150 @@ public sealed class ConfigReferenceTests
         }
 
         Assert.Empty(ConfigSourceScan.FindUncovered([("f.cs", "class FixtureOptions { const string SectionName = \"Fixture\"; void A() { x.GetSection(SectionName); } }")], Coverage("Fixture:Flag")));
+    }
+
+    private static ConfigEntry Entry(string section, string path, string reload = "-") =>
+        new(section, path, "bool", "true", "Meaning of " + path + ".", reload);
+
+    [Theory]
+    [InlineData("GameObjects", "game-objects.md")]
+    [InlineData("AuctionHouseBot", "auction-house-bot.md")]
+    [InlineData("NpcServices", "npc-services.md")]
+    [InlineData("Small sections", "small-sections.md")]
+    [InlineData("World core", "world-core.md")]
+    [InlineData("Ops", "ops.md")]
+    public void AreaFileName_IsLowerCaseWordsJoinedByHyphens(string area, string file)
+    {
+        Assert.Equal(file, ConfigReferenceRenderer.AreaFileName(area));
+    }
+
+    [Fact]
+    public void RenderByArea_SplitsWorldGroupsAtFiveKeys_AndCollectsTheSmallSections()
+    {
+        List<ConfigEntry> entries =
+        [
+            .. new[] { "A", "B", "C", "D", "E" }.Select(k => Entry("World:Big", "World:Big:" + k)),
+            Entry("World:Four:Sub", "World:Four:Sub:A", "live"),
+            .. new[] { "A", "B", "C" }.Select(k => Entry("World:Four", "World:Four:" + k)),
+            Entry("World", "World:Direct", "restart"),
+            Entry("World:Small", "World:Small:A"),
+            .. new[] { "A", "B", "C", "D" }.Select(k => Entry("Alpha:Inner", "Alpha:Inner:" + k)),
+            Entry("Alpha", "Alpha:Top"),
+            Entry("Tiny", "Tiny:A"),
+            Entry("Beta:X", "Beta:X:A"),
+        ];
+
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(entries, []);
+        Assert.Equal(
+            ["alpha.md", "big.md", "small-sections.md", "world-core.md", "README.md"],
+            pages.Select(p => p.Path.Replace(ConfigReferenceRenderer.AreaDirectory + "/", string.Empty, StringComparison.Ordinal)));
+
+        string Page(string file) => pages.Single(p => p.Path == ConfigReferenceRenderer.AreaDirectory + "/" + file).Text;
+        string alpha = Page("alpha.md");
+        Assert.Contains("# Alpha options\n", alpha, StringComparison.Ordinal);
+        Assert.Contains("\n5 options.", alpha, StringComparison.Ordinal);
+        Assert.Contains("## `Alpha`\n\n", alpha, StringComparison.Ordinal);
+        Assert.Contains("## `Alpha:Inner`\n\n", alpha, StringComparison.Ordinal);
+        Assert.Contains("| `Top` | `bool` | `true` | true \\| false | World | start | Meaning of Alpha:Top. |\n", alpha, StringComparison.Ordinal);
+        Assert.Contains("| `A` | `bool` | `true` | true \\| false | World | start | Meaning of Alpha:Inner:A. |\n", alpha, StringComparison.Ordinal);
+        Assert.True(alpha.IndexOf("## `Alpha`", StringComparison.Ordinal) < alpha.IndexOf("## `Alpha:Inner`", StringComparison.Ordinal));
+
+        Assert.Contains("\n5 options.", Page("big.md"), StringComparison.Ordinal);
+        Assert.Contains("| `A` | `bool` | `true` | true \\| false | World | start | Meaning of World:Big:A. |\n", Page("big.md"), StringComparison.Ordinal);
+
+        // World:Four has 4 keys below it (its own three and the one of World:Four:Sub), World:Small has 1: both join World core with the direct key.
+        string core = Page("world-core.md");
+        Assert.Contains("\n6 options.", core, StringComparison.Ordinal);
+        Assert.Contains("| `Direct` | `bool` | `true` | true \\| false | World | restart | Meaning of World:Direct. |\n", core, StringComparison.Ordinal);
+        Assert.Contains("## `World:Four:Sub`\n\n", core, StringComparison.Ordinal);
+        Assert.Contains("| `A` | `bool` | `true` | true \\| false | World | live | Meaning of World:Four:Sub:A. |\n", core, StringComparison.Ordinal);
+
+        string small = Page("small-sections.md");
+        Assert.Contains("\n2 options.", small, StringComparison.Ordinal);
+        Assert.Contains("## `Beta:X`", small, StringComparison.Ordinal);
+        Assert.Contains("## `Tiny`", small, StringComparison.Ordinal);
+
+        string index = Page("README.md");
+        Assert.Contains(entries.Count + " options in 4 files.", index, StringComparison.Ordinal);
+        Assert.Contains("| Alpha | 5 | [alpha.md](alpha.md) |\n", index, StringComparison.Ordinal);
+        Assert.Contains("| Small sections | 2 | [small-sections.md](small-sections.md) |\n", index, StringComparison.Ordinal);
+        Assert.Contains("| World core | 6 | [world-core.md](world-core.md) |\n", index, StringComparison.Ordinal);
+
+        // Every entry lands on exactly one page.
+        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
+        Assert.Equal(entries.Count, rows);
+        Assert.Equal(pages.Select(p => p.Text), ConfigReferenceRenderer.RenderByArea(entries, []).Select(p => p.Text));
+    }
+
+    [Fact]
+    public void RenderByArea_EscapesPipesInTheCells_AndShowsTheDaemons()
+    {
+        ConfigEntry entry = new("Solo", "Solo:Mode", "FixtureMode", "Fast", "Either a \\| b.", "-", ConfigDaemon.Both | ConfigDaemon.Gateway, EnumValues: ["Off", "Fast"]);
+        string page = ConfigReferenceRenderer.RenderByArea([entry], []).Single(p => p.Path.EndsWith("small-sections.md", StringComparison.Ordinal)).Text;
+        Assert.Contains("| `Mode` | `FixtureMode` | `Fast` | Off \\| Fast | Both, Gateway | start | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderByArea_IncludesTheKeysReadByName_InTheCountsTheGroupingAndTheRows()
+    {
+        List<ConfigEntry> entries =
+        [
+            .. new[] { "A", "B", "C", "D" }.Select(k => Entry("Items", "Items:" + k)),
+            Entry("Tiny", "Tiny:A"),
+        ];
+        AdHocKey[] adHoc =
+        [
+            new("Items:ByName", "string", "null", "Read by name | with a pipe.", ConfigDaemon.World),
+            new("Lone:Switch", "bool", "false", "A lone key read by name.", ConfigDaemon.Both),
+        ];
+
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(entries, adHoc);
+        string Page(string file) => pages.Single(p => p.Path == ConfigReferenceRenderer.AreaDirectory + "/" + file).Text;
+
+        // The ad-hoc key is the fifth key of Items, so the section gets its own page only because the key is counted.
+        string items = Page("items.md");
+        Assert.Contains("\n5 options.", items, StringComparison.Ordinal);
+        Assert.Contains("| `ByName` | `string` | `null` | ", items, StringComparison.Ordinal);
+        Assert.Contains(" | World | start | Read by name \\| with a pipe. |\n", items, StringComparison.Ordinal);
+
+        string small = Page("small-sections.md");
+        Assert.Contains("\n2 options.", small, StringComparison.Ordinal);
+        Assert.Contains("## `Lone`\n\n", small, StringComparison.Ordinal);
+        Assert.Contains("| `Switch` | `bool` | `false` | true \\| false | Both | start | A lone key read by name. |\n", small, StringComparison.Ordinal);
+
+        Assert.Contains("7 options in 2 files.", Page("README.md"), StringComparison.Ordinal);
+        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
+        Assert.Equal(entries.Count + adHoc.Length, rows);
+        Assert.Equal(ConfCatalogGenerator.Build(entries, adHoc).Keys.Count, rows);
+    }
+
+    [Fact]
+    public void StrayFiles_FindsAnyFileThatIsNotAPage_AtAnyDepth()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "arcanecore-config-pages-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = [new("pages/a.md", "a"), new("pages/README.md", "r")];
+            Assert.Empty(ConfigReferenceRenderer.StrayFiles(root, pages));
+
+            Directory.CreateDirectory(Path.Combine(root, "sub"));
+            File.WriteAllText(Path.Combine(root, "a.md"), "a");
+            File.WriteAllText(Path.Combine(root, "README.md"), "r");
+            Assert.Empty(ConfigReferenceRenderer.StrayFiles(root, pages));
+
+            File.WriteAllText(Path.Combine(root, "gone.md"), "x");
+            File.WriteAllText(Path.Combine(root, "sub", "a.md"), "same name, wrong place");
+            Assert.Equal(
+                [Path.Combine(root, "gone.md"), Path.Combine(root, "sub", "a.md")],
+                ConfigReferenceRenderer.StrayFiles(root, pages));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ production
@@ -374,6 +534,55 @@ public sealed class ConfigReferenceTests
     public void Production_ConfigurationReference_MatchesTheCommittedPage()
     {
         string page = ConfigReferenceRenderer.Render(Production.Entries, ConfigExceptionTable.AdHocKeys, ConfigExceptionTable.SkippedProperties);
+
+        // A pipe escaped twice shows a stray backslash and ends the cell. The golden cannot catch this: a regeneration would pin the bad text.
+        Assert.DoesNotContain("\\\\|", page, StringComparison.Ordinal);
         DocsGolden.Verify("docs/reference/configuration.md", page);
+    }
+
+    [Fact]
+    public void Production_ConfigurationByArea_MatchesTheCommittedPages()
+    {
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(Production.Entries, ConfigExceptionTable.AdHocKeys);
+        Assert.True(pages.Count > 10, "the by-area split must produce many pages; it produced " + pages.Count);
+        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal))
+            .Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
+        Assert.Equal(ConfCatalogGenerator.Build(Production.Entries, ConfigExceptionTable.AdHocKeys).Keys.Count, rows);
+        Assert.Equal(Production.Entries.Count + ConfigExceptionTable.AdHocKeys.Count, rows);
+
+        // A pipe escaped twice shows a stray backslash and ends the cell. The golden cannot catch this: a regeneration would pin the bad text.
+        Assert.DoesNotContain(pages, p => p.Text.Contains("\\\\|", StringComparison.Ordinal));
+
+        // A page that no longer has an area (a section renamed or emptied) must not linger: it would describe options that are gone.
+        string directory = Path.Combine(RepoRoot.Find(), ConfigReferenceRenderer.AreaDirectory.Replace('/', Path.DirectorySeparatorChar));
+        bool update = Environment.GetEnvironmentVariable(DocsGolden.UpdateVariable) == "1";
+        IReadOnlyList<string> stray = ConfigReferenceRenderer.StrayFiles(directory, pages);
+        if (update)
+        {
+            foreach (string file in stray)
+            {
+                File.Delete(file);
+            }
+        }
+        else
+        {
+            Assert.True(stray.Count == 0, "stale files with no area in " + ConfigReferenceRenderer.AreaDirectory + ": "
+                + string.Join(", ", stray.Select(f => Path.GetRelativePath(directory, f))) + ". Remove them: " + DocsGolden.RegenerateCommand);
+        }
+
+        var failures = new List<string>();
+        foreach (ConfigReferenceRenderer.AreaPage page in pages)
+        {
+            try
+            {
+                DocsGolden.Verify(page.Path, page.Text);
+            }
+            catch (Xunit.Sdk.XunitException ex)
+            {
+                failures.Add(ex.Message);
+            }
+        }
+
+        Assert.True(failures.Count == 0, failures.Count + " by-area page(s) differ from the generator:\n" + string.Join("\n", failures));
     }
 }
