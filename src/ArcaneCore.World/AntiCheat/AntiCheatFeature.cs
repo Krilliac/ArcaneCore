@@ -398,7 +398,6 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 // Tracing never changes what the anticheat records or decides.
-                FaultLedger.Shared.Record("gm.trace-anticheat", ex);
                 logger.LogFault("gm.trace-anticheat", ex, "AntiCheat: GM stream publish threw for account {Account}", session.AccountId);
             }
         }

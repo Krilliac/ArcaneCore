@@ -8,6 +8,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Gm.Diagnostics;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Tests.PacketHeuristics;
 using Microsoft.Extensions.DependencyInjection;
@@ -172,5 +173,104 @@ public sealed class AntiCheatGmStreamTests
         var lines = new List<GmStreamLine>();
         stream.Drain(lines.Add);
         Assert.Equal(Watcher, Assert.Single(lines).Gm);
+    }
+
+    [Fact]
+    public async Task APacketHeuristicsReport_OfAClientInTheWorld_CarriesTheGuid_NoName_AndRoutesToTheGmSelectingThatGuid()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHGUID", "Phguid");
+        await using (client)
+        {
+            Player player = session.Player!;
+            var selecting = new ObjectGuid(900_010);
+            var selectingOther = new ObjectGuid(900_011);
+            var stream = new GmStream(new GmStreamOptions { MaxLinesPerSecond = 100 });
+            stream.Subscribe(selecting, GmStreamChannels.AntiCheat, GmStreamScope.Target);
+            stream.Subscribe(selectingOther, GmStreamChannels.AntiCheat, GmStreamScope.Target);
+            stream.RefreshViewers(g => g == selecting
+                ? new GmStreamViewer(player.Guid, 0, 0, 0, 0, 0, 100f)
+                : new GmStreamViewer(new ObjectGuid(12345), 0, 0, 0, 0, 0, 100f));
+            host.World.GmTrace = stream;
+            using AnomalyCapture capture = ledger.Capture();
+
+            await client.SendAsync(WorldOpcode.CmsgCharEnum, []); // allowed at the character screen only
+            await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.WrongState, PacketTraffic.Player) >= 1, "the wrong-state finding");
+
+            AnomalyNotice notice = Assert.Single(capture.Notices, n => n.Key == "packet/" + PacketChecks.Code(PacketCheck.WrongState));
+            var lines = new List<GmStreamLine>();
+            stream.Drain(lines.Add);
+            GmStreamLine delivered = Assert.Single(lines);
+            Assert.Equal(selecting, delivered.Gm);
+            Account account = (await host.Accounts.FindByUsernameAsync("PHGUID"))!;
+            Assert.StartsWith($"[anticheat] packet {PacketChecks.Code(PacketCheck.WrongState)} (Player:{player.Guid.Low}) account {account.Id}: ", delivered.Text, StringComparison.Ordinal);
+            Assert.EndsWith($": {notice.Detail} [Warning]", delivered.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Phguid", delivered.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("PHGUID", delivered.Text, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>A sink that claims a subscriber and then fails every publish.</summary>
+    private sealed class ThrowingSink : IGmTraceSink
+    {
+        public int Attempts;
+
+        public bool IsActive => true;
+
+        public bool HasSubscribers(string channel) => true;
+
+        public int Publish<TState>(string channel, in GmTraceSubject subject, TState state, Func<TState, string> format)
+        {
+            Attempts++;
+            throw new InvalidOperationException("sink failure under test");
+        }
+    }
+
+    [Fact]
+    public async Task AFailingPublish_NeverChangesAFindingsRecordingScoreOrVerdict()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        AntiCheatFeature feature = host.WorldServices.GetRequiredService<AntiCheatFeature>();
+        await host.OnWorldAsync(() => feature.ApplyOptions(new AntiCheatOptions { Action = AntiCheatAction.GmAlert, DecayPerSecond = 0 }));
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "ACTHROW", "Acthrow");
+        await using (client)
+        {
+            Player player = session.Player!;
+            var sink = new ThrowingSink();
+            host.World.GmTrace = sink;
+            long before = feature.Recorded;
+            var verdicts = new List<AntiCheatAction>();
+            feature.FindingRecorded += (_, _, _, action) => verdicts.Add(action);
+
+            await host.OnWorldAsync(() => feature.OnRejected(session, player, AntiCheatViolation.Interact, 15f, "first"));
+            await host.OnWorldAsync(() => feature.OnRejected(session, player, AntiCheatViolation.Interact, 20f, "second"));
+
+            Assert.Equal(2, sink.Attempts);
+            Assert.Equal(before + 2, feature.Recorded);
+            Assert.Equal(35f, await host.OnWorldAsync(() => feature.ScoreOf((int)player.Guid.Low)), 0.001f);
+            Assert.Equal([AntiCheatAction.Log, AntiCheatAction.GmAlert], verdicts);
+        }
+    }
+
+    [Fact]
+    public async Task AFailingPublish_NeverStopsAPacketReportsLedgerEntryOrCount()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        (PacketHeuristicsFeature feature, AnomalyLedger ledger) = PacketHeuristicsTestKit.Enable(host);
+        var sink = new ThrowingSink();
+        host.World.GmTrace = sink;
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHTHROW", "Phthrow");
+        await using (client)
+        {
+            using AnomalyCapture capture = ledger.Capture();
+
+            await client.SendAsync(WorldOpcode.CmsgCharEnum, []);
+            await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.WrongState, PacketTraffic.Player) >= 1, "the wrong-state finding despite the failing sink");
+
+            Assert.True(sink.Attempts >= 1);
+            Assert.Single(capture.Notices, n => n.Key == "packet/" + PacketChecks.Code(PacketCheck.WrongState));
+            Assert.Equal(SessionState.InWorld, session.State);
+        }
     }
 }
