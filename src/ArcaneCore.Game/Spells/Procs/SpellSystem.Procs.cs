@@ -817,7 +817,7 @@ public sealed partial class SpellSystem
     internal void AddProcCooldown(Unit unit, SpellInfo spell, uint cooldownMs)
     {
         UnitSpellState state = GetOrCreateState(unit);
-        uint until = NowMs + cooldownMs;
+        uint until = NowMs + Math.Min(cooldownMs, MaxReasonableCooldownMs); // bounded like the cast path so IsStillRunning's signed compare cannot wrap
         if (!state.SpellCooldowns.TryGetValue(spell.Id, out uint current) || IsStillRunning(until, current))
         {
             state.SpellCooldowns[spell.Id] = until;

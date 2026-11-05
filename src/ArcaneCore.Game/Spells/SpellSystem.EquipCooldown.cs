@@ -67,7 +67,8 @@ public sealed partial class SpellSystem
             }
         }
 
-        uint recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)EquipCooldownMs), 0);
+        // Same bound as the cast path (Cooldowns.cs): a mod result past it cannot wrap the IsStillRunning signed compare.
+        uint recovery = Math.Min((uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)EquipCooldownMs), 0), MaxReasonableCooldownMs);
         if (recovery > 0)
         {
             state.SpellCooldowns[spell.Id] = now + recovery;
@@ -82,7 +83,7 @@ public sealed partial class SpellSystem
                 state.CategoryOwners[category] = spell.Id;
             }
 
-            state.CategoryCooldowns[category] = now + spell.CategoryRecoveryTime;
+            state.CategoryCooldowns[category] = now + Math.Min(spell.CategoryRecoveryTime, MaxReasonableCooldownMs);
         }
 
         state.CooldownOwners.Remove(spell.Id);
