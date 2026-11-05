@@ -28,6 +28,10 @@ namespace ArcaneCore.World.Tests.Cluster;
 public sealed class BattlegroundFeatureClusterLinkTests
 {
     private const uint WsgMap = 489;
+
+    /// <summary>A shared map (MAP_COMMON, so instance 0 is where a player really stands) on the list of worker:instances: the holder owns no continent, so its own player stands here.</summary>
+    private const uint DeeprunTramMap = 369;
+    private const uint DeeprunTramZone = 2257;
     private const string HolderNode = "worker:instances";
     private const string WorkerNode = "worker:ek";
 
@@ -62,9 +66,10 @@ public sealed class BattlegroundFeatureClusterLinkTests
         private static readonly MapContent Content = new(
             [
                 new MapTemplate(0, 0, MapType.Common, 12, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(DeeprunTramMap, 0, MapType.Common, DeeprunTramZone, 0, 0, -1, 0, 0, "Deeprun Tram", ""),
                 new MapTemplate(WsgMap, 0, MapType.Battleground, 0, 10, 0, -1, 0, 0, "Battleground", ""),
             ],
-            [new AreaTemplate(12, 0, 0, 0, 0, 0, "Elwynn", 0, 0)],
+            [new AreaTemplate(12, 0, 0, 0, 0, 0, "Elwynn", 0, 0), new AreaTemplate(DeeprunTramZone, DeeprunTramMap, 0, 0, 0, 0, "Deeprun Tram", 0, 0)],
             [], [], []);
 
         private readonly ServiceProvider _services;
@@ -113,12 +118,13 @@ public sealed class BattlegroundFeatureClusterLinkTests
 
         public BattlegroundFeature Feature { get; }
 
-        public (Player Player, RecordingPlayerSession Session) AddPlayer(uint id)
+        /// <summary>Logs a character in on a map this node owns: the default is Elwynn on Eastern Kingdoms, which a node without map 0 on its list must not use (GetMap throws MapNotOwnedException).</summary>
+        public (Player Player, RecordingPlayerSession Session) AddPlayer(uint id, uint mapId = 0, uint zoneId = 12)
         {
             var session = new RecordingPlayerSession();
             var character = new CharacterRecord
             {
-                Id = (int)id, AccountId = 1, Name = "Bgnode" + id, Race = 1, Class = 1, Gender = 0, Level = 60, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
+                Id = (int)id, AccountId = 1, Name = "Bgnode" + id, Race = 1, Class = 1, Gender = 0, Level = 60, MapId = mapId, ZoneId = zoneId, X = 0, Y = 0, Z = 83.5f,
             };
             var player = new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), session);
             World.AddPlayer(player);
@@ -178,7 +184,7 @@ public sealed class BattlegroundFeatureClusterLinkTests
     [Fact]
     public void TheShippedTopology_HasExactlyTheInstancesWorkerAsHolder_AndEveryBattlegroundMapOnIt()
     {
-        // AllowInstanceMaps is on for every split world, as start-cluster.ps1 sets it.
+        // AllowInstanceMaps is on for all three here, which is stricter than the launcher (start-cluster.ps1 sets it only on the instances world): instance copies must not make a continent worker a holder.
         Assert.True(MapOwnership.TryParse(DefaultListOf("worker:instances"), true, out MapOwnership instances, out string? error), error);
         Assert.True(MapOwnership.TryParse(DefaultListOf("worker:EK"), true, out MapOwnership ek, out error), error);
         Assert.True(MapOwnership.TryParse(DefaultListOf("worker:Kalimdor"), true, out MapOwnership kalimdor, out error), error);
@@ -229,7 +235,9 @@ public sealed class BattlegroundFeatureClusterLinkTests
     {
         var hub = new BattlegroundHub();
         using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
-        (Player player, RecordingPlayerSession session) = holder.AddPlayer(2);
+        Assert.False(holder.World.Owns(0));   // the rig keeps the real list: no continent on the holder, so the player cannot use the default map
+        (Player player, RecordingPlayerSession session) = holder.AddPlayer(2, DeeprunTramMap, DeeprunTramZone);
+        Assert.Equal(DeeprunTramMap, player.MapId);
         await Eventually(() => holder.Link.IsHolder, holder);
 
         holder.Join(player);
@@ -237,6 +245,8 @@ public sealed class BattlegroundFeatureClusterLinkTests
 
         Assert.Equal(HolderNode, hub.Holder);
         Assert.Equal(0, holder.Link.NoticesDropped);
+        // The join stored the return point where the player stood.
+        Assert.True(holder.Feature.EntryPointOf(player.Guid) is { MapId: DeeprunTramMap });
     }
 
     [Fact]
