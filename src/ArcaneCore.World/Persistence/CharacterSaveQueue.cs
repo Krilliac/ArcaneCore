@@ -348,6 +348,14 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 _retired.Add(id); // before the early continue: a character already quarantined still has its in-flight fence refusal expected
                 if (!_quarantined.Add(id))
                 {
+                    // Already quarantined (a settlement failure): its retained snapshot is still dropped, or the stop would report it as undrained.
+                    if (_failed.Remove(id))
+                    {
+                        lostRetained.Add(id);
+                        dropped++;
+                    }
+
+                    _exhaustedReported.Remove(id);
                     continue;
                 }
 
@@ -418,6 +426,16 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         lock (_gate)
         {
             return _held.Contains(characterId);
+        }
+    }
+
+    /// <summary>Under <c>_gate</c>: a retired character's snapshot can never be written (the fence refuses it), so a failure path that just retained it discards it again.</summary>
+    private void DropRetainedIfRetiredLocked(int characterId)
+    {
+        if (_retired.Contains(characterId))
+        {
+            _failed.Remove(characterId);
+            _exhaustedReported.Remove(characterId);
         }
     }
 
@@ -588,6 +606,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 throw new InvalidOperationException("character saves stopped after a terminal ownership failure", terminal);
             }
+            foreach (int retiredId in _retired)
+            {
+                DropRetainedIfRetiredLocked(retiredId); // final pass: whatever a failure path re-retained after the retirement
+            }
+
             if (_failed.Count > 0)
             {
                 notDrained = new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
@@ -831,6 +854,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, refused);
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 throw refused; // nothing is attempted: the snapshot stays retained and StopAsync names it
@@ -935,6 +959,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex, Deferred: true);
+                    DropRetainedIfRetiredLocked(state.Id);
                     long ticks = (long)(BusyBackoff[Math.Min(_busyStreak, BusyBackoff.Count - 1)].TotalSeconds * Stopwatch.Frequency);
                     streak = ++_busyStreak;
                     _busyUntil = Stopwatch.GetTimestamp() + ticks;
@@ -967,6 +992,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, ex);
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 FaultLedger.Shared.Record("writequeue.character-retry", ex);
@@ -986,6 +1012,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 lock (_gate)
                 {
                     _failed[state.Id] = new FailedSave(state, new OperationCanceledException(cancellationToken));
+                    DropRetainedIfRetiredLocked(state.Id);
                 }
 
                 throw;
@@ -1009,6 +1036,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             _failed[state.Id] = new FailedSave(state, ex);
             newEpisode = _exhaustedReported.Add(state.Id); // a retained snapshot failing again is the same episode
+            DropRetainedIfRetiredLocked(state.Id);
         }
 
         if (newEpisode)

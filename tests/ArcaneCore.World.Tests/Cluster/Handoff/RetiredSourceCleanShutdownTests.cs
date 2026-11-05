@@ -105,6 +105,49 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.Empty(store.Saved);
     }
 
+    /// <summary>A settlement failure quarantines a character without clearing its retained snapshot; retiring it afterwards must still drop that snapshot, or the stop reports it as undrained.</summary>
+    [Fact]
+    public async Task ARetainedSnapshotOfAnAlreadyQuarantinedCharacter_IsDroppedByTheRetirement_AndTheQueueStopsCleanly()
+    {
+        var store = new FencedStore(moved: 5) { BusyOnce = 5 };
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger());
+
+        queue.Enqueue(State(5, 55));
+        queue.Start();
+        await WorldTestHost.WaitForAsync(() => queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained");
+
+        queue.QuarantineCharacter(5);
+        Assert.Equal(new[] { 5 }, queue.RetainedCharacterIds()); // quarantine keeps the retained snapshot
+        Assert.Equal(1, queue.RetireCharacters([5]));
+        Assert.Empty(queue.RetainedCharacterIds());
+
+        await queue.StopAsync(); // must not throw: nothing retained is left to report as undrained
+
+        Assert.Null(queue.TerminalFailure);
+        Assert.Empty(store.Saved);
+    }
+
+    /// <summary>The write is in flight when the handoff retires the character and fails as a locked database: the failure path re-retains it, and it must not survive to the stop.</summary>
+    [Fact]
+    public async Task ABusyFailureOfAWriteInFlightAtRetirement_DoesNotLeaveARetainedSnapshot_AndTheQueueStopsCleanly()
+    {
+        var store = new FencedStore(moved: 5) { BusyOnce = 5 };
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger());
+        store.OnSave = state => queue.RetireCharacters([state.Id]); // retired while inside the store call, which then reports the database locked
+
+        queue.Enqueue(State(5, 55));
+        queue.Start();
+        await WorldTestHost.WaitForAsync(() => !store.Attempts.IsEmpty, "the write of character 5 to be attempted");
+
+        await queue.StopAsync(); // must not throw: the busy failure's retained snapshot of a retired character is discarded
+
+        Assert.Null(queue.TerminalFailure);
+        Assert.Empty(queue.RetainedCharacterIds());
+        Assert.Empty(store.Saved);
+    }
+
     [Fact]
     public async Task WithoutRetirement_TheFenceRefusalOfAMovedCharacter_IsTerminalForTheQueue()
     {

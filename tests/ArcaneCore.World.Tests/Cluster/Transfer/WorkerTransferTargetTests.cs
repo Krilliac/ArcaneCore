@@ -347,11 +347,11 @@ public sealed class WorkerTransferTargetTests : IDisposable
     }
 
     /// <summary>
-    /// Every step of a failed arrival's undo runs even when one of them fails: the arrival throws on send, and the session's kick (the last step) throws too. The claim ticket is abandoned,
-    /// the teleport forgotten, the player detached and the kick attempted, and the caller still sees the original failure, not the kick's.
+    /// Every step of a failed arrival's undo runs even when earlier ones fail: the arrival throws on send, forgetting the teleport throws (the observer's resume of the held saves finds the session scope closed),
+    /// and the session's kick throws too. The player must still be detached (the step that follows the failing Forget), the kick attempted, and the caller sees the original failure.
     /// </summary>
     [Fact]
-    public async Task AFailedArrival_RunsEveryUndoStep_EvenWhenTheKickFails_AndRethrowsTheOriginalFailure()
+    public async Task AFailedArrival_RunsEveryUndoStep_EvenWhenForgetAndTheKickFail_AndRethrowsTheOriginalFailure()
     {
         var worker = new CharacterOwnershipToken("worker:b", 4, Guid.NewGuid());
         _world.CharacterOwnership = worker; // a worker-shard world: the activation issues a claim ticket for the received claim
@@ -362,10 +362,12 @@ public sealed class WorkerTransferTargetTests : IDisposable
         await target.TryReserveSlotAsync(id, 7, 1, 0);
         _session.ThrowOnSend = true;
         _session.ThrowOnKick = true;
+        _entry.ThrowOnResume = true; // Forget -> observer.Abandoned -> ResumeSaves throws, which on unguarded code skips the detach
 
         Exception failure = await Assert.ThrowsAnyAsync<Exception>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), worker));
 
         Assert.Contains("send failed", failure.GetBaseException().Message, StringComparison.Ordinal); // not "kick failed"
+        Assert.True(_entry.ResumeAttempts >= 1); // the Forget step did reach the failing observer
         Assert.Equal(0, LiveTicketCount(claims)); // abandon the claim ticket
         Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount)); // forget the teleport
         Assert.False(_world.IsOnline(new ObjectGuid(7))); // detach the player
@@ -500,7 +502,23 @@ public sealed class WorkerTransferTargetTests : IDisposable
             return true;
         }
 
-        public void ResumeSaves(Player player) => events.Enqueue("resume");
+        private int _resumeAttempts;
+
+        public int ResumeAttempts => Volatile.Read(ref _resumeAttempts);
+
+        /// <summary>Makes <see cref="ResumeSaves"/> throw, the way the production one does when the session's scope has already closed.</summary>
+        public volatile bool ThrowOnResume;
+
+        public void ResumeSaves(Player player)
+        {
+            Interlocked.Increment(ref _resumeAttempts);
+            if (ThrowOnResume)
+            {
+                throw new ObjectDisposedException("session scope");
+            }
+
+            events.Enqueue("resume");
+        }
     }
 
     private sealed class RecordingSession(int accountId, long generation) : IPlayerSession
