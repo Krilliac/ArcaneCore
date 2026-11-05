@@ -160,6 +160,11 @@ public sealed class ClusterSupervisorConfigChecksTests
     [InlineData("--Some:Key=\"x --World:Realm:Id=0\"", true, "an argument form the supervisor cannot read")]
     [InlineData("--Some:Key=\"two words\" --World:Realm:Id=0", false, "")]
     [InlineData("--Some:Key=1", true, "no value, so the default 1")]
+    [InlineData("/Cluster:Fencing:Shard --World:Realm:Id=0", true, "an argument form the supervisor cannot read")]
+    [InlineData("/Some:Key --World:Realm:Id=0", true, "an argument form the supervisor cannot read")]
+    [InlineData("/Some:Key=1 --World:Realm:Id=0", false, "")]
+    [InlineData("--A=\"b\\\" --World:Realm:Id=0 c\"", true, "an argument form the supervisor cannot read")]
+    [InlineData("--World:Realm:Id=0 --A=\"b\\\"", true, "an argument form the supervisor cannot read")]
     public void ResolveChildRealmId_ReadsTheCommandLineLikeTheChildDoes(string arguments, bool writesRow, string message)
     {
         string resolved = ClusterSupervisorConfigChecks.ResolveChildRealmId(arguments, out bool writes);

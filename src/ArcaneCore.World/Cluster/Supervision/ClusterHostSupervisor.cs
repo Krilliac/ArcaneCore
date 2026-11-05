@@ -1459,34 +1459,17 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 HandleChildRestartRequest(entry, process, childRestart);
                 return;
             }
-
-            // A protocol-shaped line that no parser accepted (a stray control character, a trailing word) may still hold the real per-run token, because the
-            // child writes it on every beat. It is ordinary output for the console and the child log, but the token must not reach them. A line that parsed with
-            // a wrong token cannot hold the real one, so it is shown as it is.
-            if (!parsedAsProtocol)
-                line = RedactProtocolToken(line);
         }
 
+        // Whatever a line is (a rejected protocol-shaped line with a trailing word or a stray control character, a line with text before "heartbeat ", or stderr),
+        // it must never carry this run's real token to the console or the child log: the token is exactly the secret, so it is replaced wherever it appears.
+        line = RedactProtocolToken(line, _protocolToken);
         _multiplexer.RouteLine(entry.Config, line, isStdErr);
     }
 
-    /// <summary>
-    /// <paramref name="line"/> with the value of every <c>token=</c> replaced by <c>&lt;redacted&gt;</c> when it starts like a supervisor protocol line
-    /// (<c>heartbeat </c> or <c>lifecycle </c>); any other line is returned unchanged.
-    /// </summary>
-    internal static string RedactProtocolToken(string line)
-    {
-        if (line is null
-            || !(line.StartsWith("heartbeat ", StringComparison.Ordinal) || line.StartsWith("lifecycle ", StringComparison.Ordinal))
-            || !line.Contains("token=", StringComparison.Ordinal))
-        {
-            return line!;
-        }
-
-        return ProtocolTokenValue.Replace(line, "token=<redacted>");
-    }
-
-    private static readonly System.Text.RegularExpressions.Regex ProtocolTokenValue = new(@"token=[^\s]*", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    /// <summary><paramref name="line"/> with every occurrence of the exact per-run <paramref name="token"/> replaced by <c>&lt;redacted&gt;</c>; a line without it (a wrong token included) is returned unchanged.</summary>
+    internal static string RedactProtocolToken(string line, string token)
+        => string.IsNullOrEmpty(token) || string.IsNullOrEmpty(line) ? line : line.Replace(token, "<redacted>", StringComparison.Ordinal);
 
     private void RecordBeat(ManagedEntry entry, ISupervisedProcess process, SupervisorHeartbeatState beat)
     {
@@ -1719,8 +1702,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// <para>
     /// <paramref name="standby"/> <c>false</c> is a promotion request: <see cref="WithStandbyArgument"/> strips <see cref="StandbyArgument"/> from the child's launch arguments, so a worker
     /// that is configured as a standby and was never promoted comes back as an active world, not as a standby. That is the operator's explicit request (it is how a restart by name
-    /// makes a standby the active world); a caller that only wants the child relaunched in its present role passes <paramref name="standby"/> as the child's current role
-    /// (<see cref="SupervisedProcessSnapshot"/>).
+    /// makes a standby the active world). Do not derive the argument from <see cref="SupervisedProcessSnapshot"/>.Standby: that flag is false for a standby that is only configured
+    /// with the argument and has never been moved at runtime, so passing it would promote that child. A caller that wants the present role kept must pass true for a child whose
+    /// configured Arguments hold <see cref="StandbyArgument"/> or whose snapshot says standby.
     /// </para>
     /// </summary>
     public async Task<SupervisedProcessSnapshot> RestartProcessAsync(string name, bool standby, CancellationToken ct = default)
@@ -2404,10 +2388,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// Records one failure of <paramref name="entry"/> at <paramref name="now"/> and, when that is more than <c>CrashLoopMaxRestarts</c> inside the window,
     /// marks the child Faulted, writes the ledgers and returns true with the message to show. Call under <c>_gate</c>.
     /// <para>
-    /// Accepted limit: only failures inside the sliding window count, so a child that fails more slowly than <c>CrashLoopMaxRestarts</c> times per
-    /// <c>CrashLoopWindowSeconds</c> (with the defaults, a crash cycle of six minutes or longer) is relaunched after its backoff for ever and never gives up. A child
-    /// that stays up that long between crashes is not a tight loop, and the hang watch, the fault ledger and the anomaly ledger still show each crash. To give up
-    /// on a slower cycle, raise <c>CrashLoopWindowSeconds</c> or lower <c>CrashLoopMaxRestarts</c>.
+    /// Accepted limit: the child gives up only when more than <c>CrashLoopMaxRestarts</c> failures (so MaxRestarts + 1, six with the default of 5) fall inside the sliding
+    /// <c>CrashLoopWindowSeconds</c> window (300 s by default), so a child that fails more slowly than that (a steady cycle longer than about window / MaxRestarts, roughly
+    /// 60 s with the defaults) is relaunched after its backoff for ever and never gives up. Such a crash is recorded only by the console announcement and the crash dialog
+    /// offer on the exit path (the hang watch covers hangs only); the fault and anomaly ledger entries below are written only when the child gives up. To give up on a slower
+    /// cycle, raise <c>CrashLoopWindowSeconds</c> or lower <c>CrashLoopMaxRestarts</c>.
     /// </para>
     /// </summary>
     private bool GiveUpOnCrashLoopUnderLock(ManagedEntry entry, long now, int? exitCode, out string? message)

@@ -199,7 +199,9 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     /// The line is split the way the child's command line is (whitespace outside double quotes, the quotes themselves removed), so a mention that sits inside a quoted
     /// value of another key is not a setting of its own and is refused as unreadable, and so is a mention that follows a <c>--Key</c> with no <c>=</c>
     /// (the configuration command-line provider takes that next word as the key's value, not as a key). With several mentions the message names the offending
-    /// value (the first that is not 0), not the last one.
+    /// value (the first that is not 0), not the last one. A bare <c>/Key</c> counts like a bare <c>--Key</c> (the command-line provider reads both the same way), and a line holding a
+    /// backslash before a double quote is refused outright (the operating system's escape rules are not modelled here). The check is deliberately over-strict: <c>--A --B --World:Realm:Id=0</c>
+    /// is refused although the provider gives <c>--A</c> the value <c>--B</c> and does read the id; that fails closed.
     /// </summary>
     internal static string ResolveChildRealmId(string arguments, out bool writesRow)
     {
@@ -209,6 +211,15 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         string? offending = null;
         bool unreadable = false;
         bool previousWasBareKey = false;
+
+        // The Arguments string reaches the child raw and the operating system's argument parsing treats a backslash before a double quote as an escape, which this
+        // splitter does not model; a line holding one cannot be read reliably here, so it is refused rather than guessed at.
+        if (arguments.Contains("\\\"", StringComparison.Ordinal))
+        {
+            writesRow = true;
+            return "an argument form the supervisor cannot read";
+        }
+
         foreach (string text in SplitCommandLine(arguments))
         {
             bool mentions = text.Contains(KeyName, StringComparison.OrdinalIgnoreCase);
@@ -230,7 +241,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 }
             }
 
-            previousWasBareKey = text.StartsWith("--", StringComparison.Ordinal) && !text.Contains('=', StringComparison.Ordinal);
+            previousWasBareKey = (text.StartsWith("--", StringComparison.Ordinal) || text.StartsWith('/')) && !text.Contains('=', StringComparison.Ordinal);
         }
 
         writesRow = last is null || unreadable || offending is not null;
