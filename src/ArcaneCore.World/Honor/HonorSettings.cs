@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Honor;
 
 /// <summary>
 /// The configuration section <c>World:Honor</c> as the binder sees it (mutable properties); <see cref="ToOptions"/> builds
-/// the <see cref="HonorOptions"/> the game code reads (init-only, except <c>Rate</c>, which <c>.rates set</c> changes live). Every default is the retail 1.12 value
+/// the <see cref="HonorOptions"/> the game code reads (init-only, except <c>Rate</c>, which <c>.rates set</c> changes live). Every default is the retail 1.12 value, except <c>GmCrossFactionInspect</c> (true: a game master may inspect the other faction)
 /// (docs/areas/honor.md lists the keys).
 /// </summary>
 public sealed class HonorSettings
@@ -50,6 +50,9 @@ public sealed class HonorSettings
     /// </summary>
     public float Rate { get; set; } = 1.0f;
 
+    /// <summary>A game master with GM mode on may inspect the other faction (default true, an ArcaneCore extension; false is the vmangos behaviour).</summary>
+    public bool GmCrossFactionInspect { get; set; } = true;
+
     /// <summary>The validated options: the decay is clamped to 0..1 and the weekday to 0..6 (vmangos setConfigMinMax).</summary>
     public HonorOptions ToOptions() => new()
     {
@@ -65,5 +68,6 @@ public sealed class HonorSettings
         MaintenanceMode = MaintenanceMode,
         ReportDirectory = ReportDirectory ?? string.Empty,
         Rate = float.IsFinite(Rate) && Rate >= 0f ? Rate : 1.0f,
+        GmCrossFactionInspect = GmCrossFactionInspect,
     };
 }

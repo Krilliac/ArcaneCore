@@ -51,6 +51,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
     private readonly List<MatchRuntime> _matchScratch = [];
+    private readonly List<Map> _closingMaps = [];   // maps of deleted matches that still had players; world thread
     private bool _matchScratchInUse;
     private readonly Dictionary<ObjectGuid, GmMove> _gmMoves = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
@@ -354,6 +355,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             SweepGmMoves();
         }
 
+        if (_closingMaps.Count > 0)
+        {
+            CloseEmptyingMaps();
+        }
+
         WireSpiritGuideTimer();
     }
 
@@ -534,6 +540,69 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             match.Detach();
             if (match.Map is { } map)
             {
+                CloseMap(map);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The map of a deleted match closes: everyone still on it (a game master that visited, or a participant whose leave has not run) is sent to
+    /// its entry point, or its bind point, and the map is unloaded once nobody is on it. <see cref="WorldRuntime.UnloadMap"/> drops a request for a
+    /// map that still has players, so a map that is not empty yet is asked again by <see cref="OnWorldTick"/> until it is. This follows vmangos <c>Map::TeleportAllPlayersTo</c>
+    /// (Map.cpp:2045-2072) with <c>TELEPORT_LOCATION_BG_ENTRY_POINT</c>, <c>TeleportToBGEntryPoint</c> falling back to the bind point (Player.cpp:2144). World thread.
+    /// </summary>
+    private void CloseMap(Map map)
+    {
+        EvictFromClosedMap(map);
+        if (map.PlayerCount == 0)
+        {
+            World.UnloadMap(map);
+        }
+        else if (!_closingMaps.Contains(map))
+        {
+            _closingMaps.Add(map);
+        }
+    }
+
+    /// <summary>Send every player on a closing map, whose teleport is not already under way, to its entry point or bind point. A refused teleport is tried again next tick.</summary>
+    private void EvictFromClosedMap(Map map)
+    {
+        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
+        {
+            return;
+        }
+
+        foreach (Player player in map.Players.ToArray())
+        {
+            if (teleports.IsBeingTeleported(player))
+            {
+                continue;
+            }
+
+            if (EntryPointOf(player.Guid) is { } point
+                && teleports.TeleportTo(player, point.MapId, point.X, point.Y, point.Z, point.Orientation))
+            {
+                ForgetEntryPoint(player.Guid);
+                continue;
+            }
+
+            if (teleports.TeleportToHomebind(player))
+            {
+                ForgetEntryPoint(player.Guid);
+            }
+        }
+    }
+
+    /// <summary>Retry the closing maps: evict whoever is left and request the unload of those that are empty.</summary>
+    private void CloseEmptyingMaps()
+    {
+        for (int i = _closingMaps.Count - 1; i >= 0; i--)
+        {
+            Map map = _closingMaps[i];
+            EvictFromClosedMap(map);
+            if (map.PlayerCount == 0)
+            {
+                _closingMaps.RemoveAt(i);
                 World.UnloadMap(map);
             }
         }

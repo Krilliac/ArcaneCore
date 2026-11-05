@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Tests.Duel;
 using Xunit;
 
@@ -81,6 +82,21 @@ public sealed class GmCrossFactionAccessTests
         byte[] reply = await a.ReadUntilAsync(WorldOpcode.MsgInspectHonorStats);
 
         Assert.Equal(enemy, BinaryPrimitives.ReadUInt64LittleEndian(reply));
+    }
+
+    /// <summary>With the <c>World:Honor:GmCrossFactionInspect</c> option off (the vmangos rule) a game master is refused like anyone else.</summary>
+    [Fact]
+    public async Task Inspect_OfAFlaggedEnemyFactionPlayer_IsRefusedForAGmWhenTheGmExemptionIsOff()
+    {
+        (WorldTestHost host, WorldTestClient _, ulong enemy) = await InspectWorldAsync();
+        await using WorldTestHost owner = host;
+        await SetGmModeAsync(host, "Gmxinspa", true);
+
+        bool withOption = await host.PlayerStateAsync("Gmxinspa", p => InspectHandlers.InspectableTarget(p, new ObjectGuid(enemy), gmCrossFaction: true) is not null);
+        bool withoutOption = await host.PlayerStateAsync("Gmxinspa", p => InspectHandlers.InspectableTarget(p, new ObjectGuid(enemy), gmCrossFaction: false) is not null);
+
+        Assert.True(withOption);
+        Assert.False(withoutOption);
     }
 
     // ---------------------------------------------------------------------------------------------------- group invite
