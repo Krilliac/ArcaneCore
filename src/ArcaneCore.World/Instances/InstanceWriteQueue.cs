@@ -1075,7 +1075,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 progress.Succeeded();
                 return null;
             }
-            catch (Exception refused) when (OwnershipRefusal.Find(refused) is not null && DropsRefused(key)) // a refusal EF wrapped counts too
+            catch (Exception unwrapped) when (OwnershipRefusal.Find(unwrapped) is not null && DropsRefused(key)) // a refusal EF wrapped counts too
             {
                 return null; // refused because this write moved to another world with the handoff: counted, neither logged nor terminal
             }
