@@ -51,8 +51,10 @@ public sealed class ScourgeInvasionTickBoundTests(ITestOutputHelper output)
         }
 
         public Task<ScourgeInvasionSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Call(() => State);
+        public bool FailStart { get; set; }
         public Task<bool> StartAsync(CancellationToken cancellationToken = default) => Call(() =>
         {
+            if (FailStart) throw new InvalidOperationException("injected start failure");
             State = new ScourgeInvasionSnapshot(ScourgeInvasionState.Enabled, 0, 0,
                 ScourgeInvasionCatalog.Zones.Select(z => new ScourgeInvasionZoneProgress(z.ZoneId, z.Necropolises, 0)).ToArray());
             return true;
@@ -184,6 +186,42 @@ public sealed class ScourgeInvasionTickBoundTests(ITestOutputHelper output)
         store.Gate.Set();
         await rig.Invasion.StopAsync();
         Assert.Equal(ScourgeInvasionState.Enabled, store.State.State);
+    }
+
+    [Fact]
+    public async Task HandoffFlushWritesWhatTheFrozenWorldThreadStillHadQueued()
+    {
+        var store = new SlowStore();
+        using var rig = new Rig(store, inline: false);
+        store.Gate.Reset();
+        rig.Tick(5_000); // a refresh job, stuck in the store
+        Assert.True(rig.Events.Service!.StartEvent(17)); // queued behind it
+        rig.Invasion.CaptureForHandoff(); // what the freeze's Park does on the world thread
+
+        Task flush = rig.Invasion.FlushStateWritesAsync(); // the world thread never ticks again here: no apply step runs
+        Assert.False(flush.IsCompleted);
+        store.Gate.Set();
+        await flush.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(ScourgeInvasionState.Enabled, store.State.State);
+    }
+
+    [Fact]
+    public async Task HandoffFlushFailsWhenAQueuedWriteIsRefused()
+    {
+        var store = new SlowStore();
+        using var rig = new Rig(store, inline: false);
+        store.Gate.Reset();
+        rig.Tick(5_000);
+        Assert.True(rig.Events.Service!.StartEvent(17));
+        rig.Invasion.CaptureForHandoff();
+        store.FailStart = true;
+
+        Task flush = rig.Invasion.FlushStateWritesAsync();
+        store.Gate.Set();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => flush.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(ScourgeInvasionState.Disabled, store.State.State);
     }
 
     /// <summary>

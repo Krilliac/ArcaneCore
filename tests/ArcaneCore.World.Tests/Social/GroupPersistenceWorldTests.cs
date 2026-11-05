@@ -2,15 +2,18 @@ using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Tests.Instances;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -308,16 +311,32 @@ public sealed class GroupPersistenceWorldTests
     /// characters database without the group.
     /// </summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AHandoffFlush_WritesAGroupChangedInTheLastSecondBeforeTheFreeze(bool withBarrier)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AHandoffFlush_WritesAGroupChangedInTheLastSecondBeforeTheFreeze(bool withBarrier, bool viaHosting)
     {
         var groups = new InMemoryGroupStore();
+        WorldRuntime? world = null;
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
         {
             services.AddSingleton<IGroupStore>(groups);
             services.AddSingleton<TimeProvider>(new FrozenClock(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000)));
+            if (!viaHosting)
+                return;
+
+            // The production registration (AddWorldHandoff) builds the source from the container: a dropped argument there brings the bug back with a hand-built source still green.
+            services.AddSingleton(_ => world ?? throw new InvalidOperationException("the world is not built yet"));
+            services.AddSingleton(new ArcaneCore.World.Cluster.Gateway.WorkerAdmission());
+            services.AddSingleton(new WorldWriterGuard());
+            services.Configure<ArcaneCore.World.Cluster.Gateway.GatewayWorkerOptions>(o => o.NodeId = "w1");
+            if (withBarrier)
+                services.AddSingleton(sp => new ArcaneCore.World.Persistence.CharacterPersistenceBarrier(sp));
+            services.AddWorldHandoff(new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Cluster:Worker:Enabled"] = "true" }).Build());
         });
+        world = host.World;
         await using WorldTestClient leader = await host.EnterWorldAsync("LEADA", "Leader");
         await using WorldTestClient member = await host.EnterWorldAsync("MEMBA", "Member");
         await leader.SendAsync(WorldOpcode.CmsgGroupInvite, CString("member"));
@@ -331,15 +350,18 @@ public sealed class GroupPersistenceWorldTests
         Assert.Empty(groups.All()); // the precondition: nothing but a sync can have written the new group
 
         ArcaneCore.World.Persistence.CharacterPersistenceBarrier? barrier = withBarrier ? new ArcaneCore.World.Persistence.CharacterPersistenceBarrier(host.WorldServices) : null;
-        using var source = new ArcaneCore.World.Cluster.Handoff.LocalWorldHandoffSource(
-            new ArcaneCore.Kernel.Cluster.Transfer.WorkerNodeId("w1"),
-            host.World,
-            host.SaveQueue,
-            new ArcaneCore.World.Cluster.Gateway.WorkerAdmission(),
-            new WorldWriterGuard(),
-            barrier,
-            retirement: null,
-            groups: persistence);
+        ArcaneCore.World.Cluster.Handoff.IWorldHandoffSource source = viaHosting
+            ? host.WorldServices.GetRequiredService<ArcaneCore.World.Cluster.Handoff.IWorldHandoffSource>()
+            : new ArcaneCore.World.Cluster.Handoff.LocalWorldHandoffSource(
+                new ArcaneCore.Kernel.Cluster.Transfer.WorkerNodeId("w1"),
+                host.World,
+                host.SaveQueue,
+                new ArcaneCore.World.Cluster.Gateway.WorkerAdmission(),
+                new WorldWriterGuard(),
+                barrier,
+                retirement: null,
+                groups: persistence);
+        using IDisposable? ownedSource = viaHosting ? null : source as IDisposable; // the container disposes a resolved one
         try
         {
             await source.FreezeAsync(CancellationToken.None);

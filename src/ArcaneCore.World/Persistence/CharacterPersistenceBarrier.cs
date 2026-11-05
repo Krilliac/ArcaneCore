@@ -345,7 +345,7 @@ public sealed class CharacterPersistenceBarrier
     /// Extravaganza, Elemental Invasion, Nightmare Dragons). Each queue retries what it retains and faults while one is still not durable. Every queue is attempted even when an earlier one
     /// faults, so a refused handoff has written all it could: one failure is thrown as it is, several as one <see cref="InvalidOperationException"/> whose inner exception is the
     /// <see cref="AggregateException"/> of them. All under one <see cref="DefaultTimeout"/> (a timeout or a cancellation stops the rest). The last time this process can write them: B reads the
-    /// characters database, and the fence refuses A after the takeover. A lease refusal (<see cref="ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"/>) of a keyed queue's write is not checked here: for a group the holder has the data, but a GM ticket taken on a non-holder is not durable, is not on B, and is only named at stop. Pet saves are flushed per character (<see cref="FlushCharacterAsync(int, TimeSpan?, CancellationToken)"/>), not here. Not covered: the running game-event set, which a separate sink writes to the characters database, and the war effort and Scourge invasion state: those features queue their writes on the world thread and run them as one off-thread store job each, which only the parked world thread can launch or settle, so a write of the last seconds before the freeze can be lost if the handoff commits (see <see cref="Cluster.Handoff.IWorldHandoffSource.FlushAsync"/>). A state-save queue drops a value a store refused for the realm lease, and a failed value that a newer one of its key replaces, so the flush does not check those.
+    /// characters database, and the fence refuses A after the takeover. A lease refusal (<see cref="ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"/>) of a keyed queue's write is not checked here: for a group the holder has the data, but a GM ticket taken on a non-holder is not durable, is not on B, and is only named at stop. Pet saves are flushed per character (<see cref="FlushCharacterAsync(int, TimeSpan?, CancellationToken)"/>), not here. The war effort (phase start, Colossus deaths) and Scourge invasion (start/stop, city defeats, Necropolis deaths) writers are covered through their <c>FlushStateWritesAsync</c>: the freeze's Park copies their in-memory queues on the world thread, and the flush waits for the store job in flight and writes the copy the way their StopAsync does, with no world thread (only a job's apply step needs it). A write that fails fails the flush. Not covered: the running game-event set, which a separate sink writes to the characters database. A state-save queue drops a value a store refused for the realm lease, and a failed value that a newer one of its key replaces, so the flush does not check those.
     /// </summary>
     public async Task FlushSharedWritesAsync(CancellationToken cancellationToken = default)
     {
@@ -391,6 +391,10 @@ public sealed class CharacterPersistenceBarrier
             await RunAsync(holiday.FlushStateWritesAsync()).ConfigureAwait(false);
         if (_services.GetService<NightmareDragonsFeature>() is { } dragons)
             await RunAsync(dragons.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<WarEffortFeature>() is { } warEffort)
+            await RunAsync(warEffort.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<ScourgeInvasionFeature>() is { } scourge)
+            await RunAsync(scourge.FlushStateWritesAsync()).ConfigureAwait(false);
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();

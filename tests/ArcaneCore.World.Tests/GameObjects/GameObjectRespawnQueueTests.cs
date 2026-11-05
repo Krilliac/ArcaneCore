@@ -141,6 +141,8 @@ public sealed class GameObjectRespawnQueueTests
         Assert.Equal([7u], store.InstancesDeleted); // instance 0 queued nothing
         lock (store.Saved)
         {
+            Assert.Contains("save:6", store.Calls);
+            Assert.Contains("instance:7", store.Calls);
             Assert.True(store.Calls.IndexOf("save:6") < store.Calls.IndexOf("instance:7"), "the instance delete ran before the earlier save of that instance: " + string.Join(", ", store.Calls));
         }
     }

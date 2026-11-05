@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -251,7 +252,9 @@ public static class WorldHandoffHosting
             sp.GetRequiredService<WorldWriterGuard>(),
             sp.GetService<CharacterPersistenceBarrier>(),
             sp.GetService<CharacterRetirementRegistry>(),
-            sp.GetService<SocialGroupPersistenceFeature>()));
+            sp.GetService<SocialGroupPersistenceFeature>(),
+            sp.GetService<WarEffortFeature>(),
+            sp.GetService<ScourgeInvasionFeature>()));
         services.TryAddSingleton<WorldHandoffInFlight>();
         services.TryAddSingleton(sp => new WorldHandoffCoordinatorProvider(sp));
         services.AddHostedService(sp => new WorldHandoffRecoveryService(
