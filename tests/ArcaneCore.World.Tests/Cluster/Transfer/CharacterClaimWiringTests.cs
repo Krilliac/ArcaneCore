@@ -652,13 +652,79 @@ public sealed class CharacterClaimWiringTests
     public Task ALogin_GivesTheClaimBack_WhenTheWorldDataIsMissingAfterTheClaim()
         => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE11", "Nodata",
             (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
-                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)));
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)),
+            alterRecordWhenClaimed: ChangeRace);
 
     [Fact]
     public Task ALogin_GivesTheClaimBack_WhenTheWorldDataReadThrowsAfterTheClaim()
         => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE12", "Databoom",
             (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
-                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)));
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)),
+            alterRecordWhenClaimed: ChangeRace);
+
+    /// <summary>
+    /// The post-claim race and class lookup is made only when the record read after the claim names another race, gender or class than the one read before it, so the tests of a
+    /// failing lookup change the race while the claim is held (the in-memory record is the one the login reads next).
+    /// </summary>
+    private static void ChangeRace(CharacterRecord record) => record.Race = (byte)(record.Race == 1 ? 2 : 1);
+
+    /// <summary>The login reads race and class data once and not again after the claim while the character's race, gender and class are unchanged.</summary>
+    [Fact]
+    public async Task ALogin_DoesNotReadTheRaceDataAgainAfterTheClaim_WhenTheRaceIsUnchanged()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var counter = new CountingWorldData();
+        await using WorldTestHost host = rig.StartWorld(a, configure: services =>
+        {
+            counter.Inner = (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!;
+            services.AddSingleton<IWorldDataStore>(counter);
+        });
+        (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE15", "Cacher");
+        counter.Reset();
+
+        await client.LoginAsync((ulong)id);
+
+        Assert.True(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id)); // the claim was taken, so the post-claim branch ran
+        Assert.Equal(1, counter.RaceReads);
+        Assert.Equal(1, counter.ClassReads);
+    }
+
+    private sealed class CountingWorldData : IWorldDataStore
+    {
+        private int _raceReads;
+        private int _classReads;
+
+        public IWorldDataStore Inner { get; set; } = null!;
+
+        public int RaceReads => Volatile.Read(ref _raceReads);
+
+        public int ClassReads => Volatile.Read(ref _classReads);
+
+        public void Reset()
+        {
+            Volatile.Write(ref _raceReads, 0);
+            Volatile.Write(ref _classReads, 0);
+        }
+
+        public Task<StartPosition?> GetStartPositionAsync(byte race, byte cls, CancellationToken cancellationToken = default) => Inner.GetStartPositionAsync(race, cls, cancellationToken);
+
+        public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default) => Inner.IsValidRaceClassAsync(race, cls, cancellationToken);
+
+        public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _classReads);
+            return Inner.GetClassInfoAsync(cls, cancellationToken);
+        }
+
+        public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _raceReads);
+            return Inner.GetRaceInfoAsync(race, gender, cancellationToken);
+        }
+    }
 
     [Fact]
     public Task ALogin_GivesTheClaimBack_WhenThePlayerBuildThrowsAfterTheClaim()
@@ -669,7 +735,8 @@ public sealed class CharacterClaimWiringTests
     /// names this world, so the same checks made before the claim pass and the login really claims. The login is answered as failed, the fault saw the claim held, no player exists, and the
     /// claim is given back: a login on another worker can then claim the character.
     /// </summary>
-    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip, StaleReadStore> faultAfterClaim)
+    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip, StaleReadStore> faultAfterClaim,
+        Action<CharacterRecord>? alterRecordWhenClaimed = null)
     {
         using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
         await using Rig rig = await Rig.CreateAsync(directory);
@@ -682,6 +749,26 @@ public sealed class CharacterClaimWiringTests
             StaleReadStore reads = StaleReadStore.Wrap(inner);
             services.AddSingleton((ICharacterStore)(object)reads);
             faultAfterClaim(services, trip, reads);
+            if (alterRecordWhenClaimed is not null)
+            {
+                Func<Task>? prior = reads.BeforeRead;
+                reads.BeforeRead = async () =>
+                {
+                    if (prior is not null)
+                    {
+                        await prior();
+                    }
+
+                    // The read that follows is the one made after the claim: the record it returns names another race.
+                    if (await trip.ClaimedAsync() && await inner.GetByIdAsync(trip.CharacterId) is { } live)
+                    {
+                        lock (live)
+                        {
+                            alterRecordWhenClaimed(live);
+                        }
+                    }
+                };
+            }
         });
         (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, account, name);
         trip.CharacterId = id;
@@ -1107,7 +1194,10 @@ public sealed class CharacterClaimWiringTests
         private async Task<CharacterRecord?> ReadAfterAsync(Func<Task> before, int id, CancellationToken ct)
         {
             await before();
-            return await _inner.GetByIdAsync(id, ct);
+
+            // A copy, like the armed read: the in-memory store hands out its live record, and a login that keeps the record it read before the claim must not see a later change to it.
+            CharacterRecord? record = await _inner.GetByIdAsync(id, ct);
+            return record is null ? null : Copy(record);
         }
 
         private async Task<IReadOnlyList<ActionButton>> ActionButtonsAfterAsync(Func<Task> before, int id, CancellationToken ct)

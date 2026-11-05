@@ -803,21 +803,20 @@ public sealed class WardenTests
     }
 
     [Fact]
-    public Task APacketAfterTheSessionClosed_StillReportsTheHeldCount() => ReportsTheHeldCountAfterTheSessionClosedAsync(firstTickHold: TimeSpan.Zero, waitForFirstTick: true);
+    public Task APacketAfterTheSessionClosed_StillReportsTheHeldCount() => ReportsTheHeldCountAfterTheSessionClosedAsync(firstTickHold: TimeSpan.Zero);
 
     [Fact]
     public Task APacketAfterTheSessionClosed_StillReportsTheHeldCount_WhenTheFirstTickIsHeldPastTheClose()
-        => ReportsTheHeldCountAfterTheSessionClosedAsync(firstTickHold: TimeSpan.FromSeconds(2), waitForFirstTick: true);
+        => ReportsTheHeldCountAfterTheSessionClosedAsync(firstTickHold: TimeSpan.FromSeconds(2));
 
     /// <summary>
     /// A tick interval far beyond the test keeps the world tick from removing the closed session first: the packet sent after the close is the one that
     /// raced the tick's flush. The world loop still runs its first tick as soon as its thread starts, before it waits one interval (WorldRuntime.Run), and
     /// on a loaded machine that tick can land after the session closed (WardenFeature.OnWorldTick then removes the session and Handle reports nothing).
     /// The host is therefore not used until that first tick has finished, and the next one is 600 s away. <paramref name="firstTickHold"/> holds the first
-    /// tick on the world thread (before it starts) for that long, which is what a starved machine does; <paramref name="waitForFirstTick"/> false is the
-    /// old, unguarded shape of the test and exists only so the hold can be shown to fail it.
+    /// tick on the world thread (before it starts) for that long, which is what a starved machine does.
     /// </summary>
-    private static async Task ReportsTheHeldCountAfterTheSessionClosedAsync(TimeSpan firstTickHold, bool waitForFirstTick)
+    private static async Task ReportsTheHeldCountAfterTheSessionClosedAsync(TimeSpan firstTickHold)
     {
         var release = new ManualResetEventSlim(firstTickHold == TimeSpan.Zero);
         await using var host = WorldTestHost.Start(configure: o => o.TickIntervalMs = 600_000, configureServices: services =>
@@ -829,7 +828,7 @@ public sealed class WardenTests
         },
         // The close command of a closing session runs only inside a tick and the next one is 600 s away, so the session's wait for it would run its
         // full default bound (10 s) before the host could be disposed.
-        sessionOptions: new WorldSessionOptions { WorldCloseGrace = TimeSpan.FromMilliseconds(300) });
+        sessionOptions: new WorldSessionOptions { PreAuthTimeout = WorldTestHost.TestPreAuthTimeout, WorldCloseGrace = TimeSpan.FromMilliseconds(300) });
         if (firstTickHold > TimeSpan.Zero)
         {
             _ = Task.Run(async () =>
@@ -839,15 +838,12 @@ public sealed class WardenTests
             });
         }
 
-        if (waitForFirstTick)
+        // The first tick is not quick on a loaded node (seconds, measured on Node1), so the wait is far longer than WaitForAsync's 10 s. A finished
+        // first tick is the one that has a duration: it is written after WorldTick (where Warden removes closed sessions) has run.
+        using var firstTick = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        while (host.World.LastTickDurationMicros == 0)
         {
-            // The first tick is not quick on a loaded node (seconds, measured on Node1), so the wait is far longer than WaitForAsync's 10 s. A finished
-            // first tick is the one that has a duration: it is written after WorldTick (where Warden removes closed sessions) has run.
-            using var firstTick = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-            while (host.World.LastTickDurationMicros == 0)
-            {
-                await Task.Delay(10, firstTick.Token);
-            }
+            await Task.Delay(10, firstTick.Token);
         }
 
         WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
@@ -864,13 +860,6 @@ public sealed class WardenTests
         await WorldTestHost.WaitForAsync(() => !verdicts.IsEmpty, "the first failure to be reported");
         await connection.DisposeAsync();
         await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session to close");
-        release.Set(); // the held first tick runs after the close (the guarded shape has already seen it finish)
-        using var afterClose = new CancellationTokenSource(TimeSpan.FromSeconds(120));
-        while (host.World.LastTickDurationMicros == 0)
-        {
-            await Task.Delay(10, afterClose.Token);
-        }
-
         feature.Handle(session, warden.Write(0xFF)); // throttled: held, then reported because the session is closed
 
         Assert.Equal(0, scanner.HeldVerdicts);
