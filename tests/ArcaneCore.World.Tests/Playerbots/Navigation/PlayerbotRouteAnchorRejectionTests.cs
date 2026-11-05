@@ -54,7 +54,8 @@ public sealed class PlayerbotRouteAnchorRejectionTests
                 return (seen, PlayerbotMotion.ConsumeLoop(player), PlayerbotMotion.IsBlacklisted(player, destinations[^1]));
             });
 
-            Assert.Equal([1, 2, 3], counts);
+            // The guard clears the count in the call that reaches MaxRejectionsBeforeLoop, so the third read is 0 (loopPending and the blacklist prove it fired).
+            Assert.Equal([1, 2, 0], counts);
             Assert.True(loopPending, "Expected the loop guard to fire at MaxRejectionsBeforeLoop rejections at one anchor.");
             Assert.True(lastBlacklisted, "Expected the third destination to be given up.");
         }

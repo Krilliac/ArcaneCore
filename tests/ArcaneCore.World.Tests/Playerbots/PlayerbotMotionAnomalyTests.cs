@@ -660,13 +660,15 @@ public sealed class PlayerbotMotionAnomalyTests
 
     // ---- resuming a route away from its leg (#776) -------------------------------------------------------------------------------
 
-    [Fact]
-    public async Task AMeshRouteResumedBehindAWall_WalksTheMeshsWayBackOntoItsLeg_NotThroughTheWall()
+    [Theory]
+    [InlineData(4f)]
+    [InlineData(6f)]
+    public async Task AMeshRouteResumedBehindAWall_WalksTheMeshsWayBackOntoItsLeg_NotThroughTheWall(float yardsOffLeg)
     {
         var mesh = new ScriptedMesh();
         await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false, mesh: mesh);
         Vector3 origin = scenario.Route.Points[0], corner = scenario.Route.Points[1];
-        Vector3 aside = origin + new Vector3(5, 6, 0), around = origin + new Vector3(25, 6, 0);
+        Vector3 aside = origin + new Vector3(5, yardsOffLeg, 0), around = origin + new Vector3(25, yardsOffLeg, 0);
         // A wall between the leg and where the bot now stands, open past its east end: the mesh goes around it.
         Func<Vector3, Vector3, bool> wall = (a, b) => CrossesWall(a, b, origin);
         scenario.Ground.Blocked = (a, b, _) => wall(a, b);
@@ -682,13 +684,15 @@ public sealed class PlayerbotMotionAnomalyTests
         Assert.True(Vector2.Distance(new(at.X, at.Y), new(around.X, around.Y)) < 3f, $"the bot is at {at}, not past {around}");
     }
 
-    [Fact]
-    public async Task AMeshRouteResumedBehindAWall_WithNoWayBack_IsDropped_NotWalkedThroughTheWall()
+    [Theory]
+    [InlineData(4f)] // under OffLegYards: only the guard refuses it, the base's off-leg drop does not apply
+    [InlineData(6f)]
+    public async Task AMeshRouteResumedBehindAWall_WithNoWayBack_IsDropped_NotWalkedThroughTheWall(float yardsOffLeg)
     {
         await using Scenario scenario = await Scenario.StartAsync(blocked: static (_, _, _) => false, start: false);
         Vector3 origin = scenario.Route.Points[0];
         scenario.Ground.Blocked = (a, b, _) => CrossesWall(a, b, origin);
-        await PlaceAsync(scenario, origin + new Vector3(5, 6, 0));
+        await PlaceAsync(scenario, origin + new Vector3(5, yardsOffLeg, 0));
 
         bool started = await scenario.StartAsync();
         await scenario.WalkAsync(3000);

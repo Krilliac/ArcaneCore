@@ -105,6 +105,8 @@ internal static partial class PlayerbotMotion
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
         internal int LoopCount;
+        /// <summary>Times the consecutive-rejection guard fired (the count itself returns to 0 in the same call).</summary>
+        internal int RejectionTrips;
         internal int ConsecutiveRejections;
         internal Vector3 LastRejectedDestination;
         /// <summary>Where the last rejected walk broke (the bot's anchor); a rejection at the same place counts as consecutive whatever the destination.</summary>
@@ -175,6 +177,9 @@ internal static partial class PlayerbotMotion
 
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;
+
+    /// <summary>Times the consecutive-rejection guard gave a destination up (inspection; ConsecutiveRejections is back to 0 by then).</summary>
+    internal static int RejectionTrips(Player player) => States.TryGetValue(player, out MotionState? state) ? state.RejectionTrips : 0;
 
     /// <summary>Loops detected so far (inspection).</summary>
     internal static int LoopCount(Player player) => States.TryGetValue(player, out MotionState? state) ? state.LoopCount : 0;
@@ -285,7 +290,7 @@ internal static partial class PlayerbotMotion
     /// <see cref="MaxRejectionsBeforeLoop"/> times in a row and that is still remembered: a route through it breaks at the same corner whatever
     /// its destination (bot-motion/route-blocked, #1485). A place within <see cref="SamePlaceYards"/> of the route's start is where the bot
     /// stands, and a bot is never refused the way out of where it stands (navmesh corners are often 1-4 yards apart). Places remembered on
-    /// another map instance are dropped. Expired entries are dropped. Allocation-free. Thread affinity: the world update.
+    /// another map instance are dropped. Expired entries are dropped. Allocation-free (no closure over <c>now</c>). Thread affinity: the world update.
     /// </summary>
     internal static bool CrossesRejectedPlace(Player player, PlayerbotRoute route)
         => States.TryGetValue(player, out MotionState? state) && state.RejectedPlaces.Count != 0 && state.World is { } world
@@ -301,7 +306,9 @@ internal static partial class PlayerbotMotion
             return false;
         }
 
-        places.RemoveAll(entry => unchecked((int)(entry.UntilMs - now)) <= 0);
+        for (int index = places.Count - 1; index >= 0; index--)
+            if (unchecked((int)(places[index].UntilMs - now)) <= 0) places.RemoveAt(index);
+        if (places.Count == 0) return false;
         Vector2 start = Flat(route.Points[0]);
         for (int point = 1; point < route.Points.Count; point++)
         {
@@ -429,9 +436,10 @@ internal static partial class PlayerbotMotion
         // for the straight line from here to that leg's corner: the mesh's legs are walkable, the way back onto them is not, and the
         // navigated walk would cut through whatever stands between (#776). A clear straight line, else the mesh's way back, else a
         // refusal: the caller drops the route and plans again from here.
-        if (!route.Complete && OffRoute(route, current) && !PlayerbotMoveCheck.CanStep(map, current, route.Points[route.NextPoint])
+        if (OffRoute(route, current) && !PlayerbotMoveCheck.CanStep(map, current, route.Points[route.NextPoint])
             && !PlayerbotNavigation.TryRejoin(map, route, current, options))
         {
+            route.NextPoint = route.Points.Count; // dropped, as OnLeg drops a route too far off its leg: the brain must not read it as an explore cell to block
             if (!keepMotion) Stop(session, player);
             return false;
         }
@@ -1506,6 +1514,7 @@ internal static partial class PlayerbotMotion
             }
 
             GiveUp(session, player, state, [destination, waypoint], now);
+            state.RejectionTrips++;
             // The guard fired: the next goal from here gets its own MaxRejectionsBeforeLoop attempts, not one.
             ClearRejections(state);
         }
