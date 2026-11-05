@@ -52,16 +52,19 @@ thread starts a pass, if the previous one has finished:
    one burst twice.
 4. **Publish.** `PlayerbotPopulationFeature.Status` is replaced by an immutable `PopulationStatus` (readable from any thread; the
    command prints it).
-5. **Log.** A pass that parked, started, created or moved bots adds that to the action log, which writes one information line at
+5. **Log.** A pass that parked, started, created or moved bots, or held something back, adds that to the action log, which writes one information line at
    most every `ActionLogSeconds` of world time (default 60; 0 = every such pass), adding up the passes in between:
 
    ```
    Playerbot population: parked 3 (dead 1, sick 2), started 0, created 1, moved 0 in 2 passes; state over-budget: tick p95 101.2 ms
-   is over the 95 ms budget; operator bots running 280, population share 720; bands 1-10 want 120 have 49, 11-20 want 120 have 0, ...
+   is over the 95 ms budget; operator bots running 280, population share 720, out of band 0; bands 1-10 want 120 have 49, 11-20 want 120 have 0, ...
    ```
 
-   The park reasons are those of `PopulationParking.Order` (below). A pass that changes nothing writes nothing, but hands out what
-   earlier passes added once the interval is up.
+   The park reasons are those of `PopulationParking.Order` (below). A pass that held something back appends `; held back: <why>` to
+   the action part (the last such note of the window), and `out of band N` counts the population's own running bots whose level is in no
+   band: they count in the totals but fill no band, so a band can be short while the pass is at target (made visible, behaviour
+   unchanged). A pass that changes nothing and holds nothing back writes nothing, but hands out what earlier passes added once the
+   interval is up. A note-only pass counts in "in N passes" and uses up the interval like a change.
 
 ### The decision, in order
 

@@ -21,6 +21,29 @@ public sealed class PlayerbotPolicyTelemetryTests
     }
 
     [Fact]
+    public void TwoWriters_OnOneFolder_NeverCollideOnARotation()
+    {
+        // The workers of a split cluster share one telemetry folder: each writer's rotation must pick a number no other process has used.
+        string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;
+        try
+        {
+            using var first = new PlayerbotPolicyTelemetryWriter(directory, maxFileBytes: 256, maxFiles: 50);
+            using var second = new PlayerbotPolicyTelemetryWriter(directory, maxFileBytes: 256, maxFiles: 50);
+            byte[] line = new byte[200];
+            for (int i = 0; i < 10; i++)
+            {
+                Assert.True(first.Write(line));
+                Assert.True(second.Write(line));
+            }
+
+            Assert.Equal(0, first.Refused);
+            Assert.Equal(0, second.Refused);
+            Assert.Equal(20, Directory.GetFiles(directory).Length);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public async Task TheFiles_StayWithinTheirSizeBound()
     {
         string directory = Directory.CreateTempSubdirectory("policy-telemetry-").FullName;

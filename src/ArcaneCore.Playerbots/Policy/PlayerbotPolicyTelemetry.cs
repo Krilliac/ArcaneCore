@@ -401,6 +401,7 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
 {
     private const string Prefix = "policy-";
     private const string Suffix = ".jsonl";
+    private const int MaxCreateAttempts = 16;
     private readonly long _maxFileBytes;
     private readonly int _maxFiles;
     private FileStream? _current;
@@ -456,9 +457,19 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
             catch (UnauthorizedAccessException) { break; }
         }
         if (kept > _maxFiles - 1) return false;
-        string path = Path.Combine(Directory, Prefix + (++_sequence).ToString("D8", CultureInfo.InvariantCulture) + Suffix);
-        _current = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        return true;
+        // Several processes (the workers of a split cluster) may write one folder: the next number is the highest on disk, not the highest this writer made,
+        // and a file another process made between the scan and the create is skipped, not an error.
+        if (files.Length > 0) _sequence = Math.Max(_sequence, SequenceOf(files[^1]));
+        for (int attempt = 0; ; attempt++)
+        {
+            string path = Path.Combine(Directory, Prefix + (++_sequence).ToString("D8", CultureInfo.InvariantCulture) + Suffix);
+            try
+            {
+                _current = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                return true;
+            }
+            catch (IOException) when (attempt < MaxCreateAttempts && File.Exists(path)) { }
+        }
     }
 
     internal IEnumerable<string> Files() => System.IO.Directory.EnumerateFiles(Directory, Prefix + "*" + Suffix).Where(file => SequenceOf(file) > 0);
