@@ -14,8 +14,8 @@ public static class SmartScriptSupport
 
     private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 20, 21, 22, 25, 34, 38, 52, 59, 60, 61, 62, 64 }.ToFrozenSet();
 
-    // GO: UPDATE_OOC, AI_INIT, TIMED_EVENT_TRIGGERED, UPDATE, LINK, JUST_CREATED, GOSSIP_HELLO (the ArcaneCore GO hooks: Update and OnUse).
-    private static readonly FrozenSet<byte> GameObjectEvents = new byte[] { 1, 37, 59, 60, 61, 63, 64 }.ToFrozenSet();
+    // GO: UPDATE_OOC, AI_INIT, DATA_SET (raised by SMART_ACTION_SET_DATA), TIMED_EVENT_TRIGGERED, UPDATE, LINK, JUST_CREATED, GOSSIP_HELLO (the ArcaneCore GO hooks: Update and OnUse).
+    private static readonly FrozenSet<byte> GameObjectEvents = new byte[] { 1, 37, 38, 59, 60, 61, 63, 64 }.ToFrozenSet();
 
     // Area trigger: AREATRIGGER_ONTRIGGER and LINK.
     private static readonly FrozenSet<byte> AreaTriggerEvents = new byte[] { 46, 61 }.ToFrozenSet();
@@ -31,10 +31,10 @@ public static class SmartScriptSupport
 
     // ---- actions ----
 
-    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 2, 3, 4, 5, 8, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 30, 31, 34, 37, 39, 41, 49, 50, 67, 69, 73, 74, 80, 87, 88 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureActions = new byte[] { 1, 2, 3, 4, 5, 8, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 30, 31, 34, 37, 39, 41, 45, 49, 50, 67, 69, 72, 73, 74, 80, 87, 88 }.ToFrozenSet();
 
     // SUMMON_CREATURE (12) and MOVE_TO_POS (69) need a creature owner; a GO has no summoner or motion master here.
-    private static readonly FrozenSet<byte> GameObjectActions = new byte[] { 1, 11, 22, 23, 30, 31, 34, 50, 67, 73, 74, 80, 87, 88 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> GameObjectActions = new byte[] { 1, 11, 22, 23, 30, 31, 34, 45, 50, 67, 72, 73, 74, 80, 87, 88 }.ToFrozenSet();
 
     private static readonly FrozenSet<byte> AreaTriggerActions = new byte[] { 1, 80, 87, 88 }.ToFrozenSet();
 
@@ -206,8 +206,8 @@ public static class SmartScriptSupport
                 return row.EventParam3 != 0
                     ? $"MOVEMENTINFORM path id {row.EventParam3} cannot be matched: the waypoint path id of a creature is not tracked (use 0 for any)" : null;
             case 38:
-                // SMART_EVENT_DATA_SET: IsMinMaxValid on the cooldown (SmartScriptMgr.cpp event DATA_SET). Limit: creatures only (AC also raises it
-                // for game objects, SmartAI.cpp:1537), and nothing calls CreatureSmartAI.SetData yet because SMART_ACTION_SET_DATA (45) is not wired.
+                // SMART_EVENT_DATA_SET: IsMinMaxValid on the cooldown (SmartScriptMgr.cpp event DATA_SET). Raised by SMART_ACTION_SET_DATA (45) for smart
+                // creatures and smart game objects (SmartAI.cpp:1160-1173, 1524-1537).
                 return row.EventParam3 > row.EventParam4 ? $"DATA_SET cooldown {row.EventParam3}..{row.EventParam4} has min above max" : null;
             case 14:
                 // SMART_EVENT_FRIENDLY_HEALTH: a radius, and a valid repeat (SmartScriptMgr.cpp:1190-1196).
