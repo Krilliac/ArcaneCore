@@ -1,153 +1,215 @@
-# World clock read audit (partial)
+# World clock read audit
 
-This is a partial audit. It records what was read and what was not. It does not show that no same-tick double-read bug exists. Everything here is a
-static reading of the source; nothing was run against a server or a test.
+This audit covers every clock read under `src/ArcaneCore.Playerbots` and `src/ArcaneCore.Game`: every field and property assigned from a clock, every
+`Now`-style wrapper, and every call that hands a clock reading to a helper. It records what each clock is, which sites share a clock, and the one
+double read it found and fixed. It is a static reading of the source; nothing here was run against a server. The tests named in this doc were not run
+when it was written.
 
-Citations are file:line positions read in the tree this doc was committed in. They go stale as files change; re-grep rather than trusting a line
-number.
+Citations name a file and a symbol, with a line only where the line was read in the tree this doc was committed in. Lines go stale as files change;
+re-grep the symbol rather than trusting a number.
+
+## What "double read" means here
+
+Two distinct failure shapes were looked for:
+
+1. A stamp taken from one clock and compared with, or subtracted from, a reading of another clock (a mixed-clock comparison). It gives a wrong
+   duration at best and a wrap or a huge gap at worst.
+2. Two reads of one clock inside a single tick where the code wants the time the work took. On the world clock both reads are the tick-start value, so the
+   difference is 0. Only `LiveNowMs`, a wall clock or an accumulator that moves inside a tick can give a non-zero difference.
 
 ## Clock semantics
 
-`WorldClock` (WorldClock.cs) exposes `NowMs`, `ElapsedMs`, `LiveNowMs` and `UtcNow`. `Uptime` is on `WorldRuntime` (WorldRuntime.ManualClock.cs),
-not on `WorldClock`. While a tick runs, `NowMs`, `UtcNow` and `Uptime` are the tick-start reading, so two reads in one tick are equal and a
-duration taken between two of them in one tick is 0. Exception: on the real clock `ElapsedMs`, and so `NowMs`, `UtcNow` and `Uptime`, is a live
-stopwatch read until the first tick (WorldClock.cs:65-71). `LiveNowMs` is the reading that moves inside a tick, and it must not be compared with
-a stamp taken from `NowMs`.
+`WorldClock` (WorldClock.cs) exposes `NowMs`, `ElapsedMs`, `LiveNowMs` and `UtcNow`. `Uptime` is on `WorldRuntime` (WorldRuntime.ManualClock.cs), not on
+`WorldClock`. While a tick runs, `NowMs`, `UtcNow` and `Uptime` are the tick-start reading, so two reads in one tick are equal and a duration taken
+between two of them in one tick is 0. Exception: on the real clock `ElapsedMs`, and so `NowMs`, `UtcNow` and `Uptime`, is a live stopwatch read until
+the first tick (`WorldClock.ElapsedMs`). `LiveNowMs` is the reading that moves inside a tick, and it must not be compared with a stamp taken from `NowMs`.
 
-## What was read
+`NowMs` is a wrapped `uint` (vmangos `getMSTime`). `Uptime` is the same time as a non-wrapping 64-bit value (`TimeSpan.FromMilliseconds(ElapsedMs)`). The
+two agree modulo 2^32, so a `Uptime`-based stamp and a `NowMs`-based one are never compared with each other (see "Result").
 
-Not a complete pass. The fields below were picked from rough greps. Every pattern in this doc is run from the repo root as
-`git grep -nE '<pattern>' -- 'src/*.cs'`, and each count is the number of lines that command printed when this doc was last changed. A count is
-lines matched, comments included. It is not a number of stamps; none of these results was classified.
+## Clock families
 
-- `_[A-Za-z]+ = [A-Za-z_.]*(NowMs|Uptime)`, a field assigned straight from a clock read: 20 lines. It misses wrapped forms such as
-  `_x = Math.Max(1u, _session.World.NowMs)`.
-- `_[A-Za-z]+ = now;`, a field assigned from a local: 131 lines. The local is not always a world clock reading.
-- `Ms = .*NowMs`, any `Ms` name assigned from a line holding `NowMs`: 88 lines.
+Every reading in the two projects comes from one of these. The name `NowMs` is reused by several of them, so a name is never proof of the family;
+the source is.
 
-The tables below are samples read by hand. They are not the full set.
+| Family | Source | Type | Where |
+|---|---|---|---|
+| World | `WorldRuntime.NowMs` / `Clock.NowMs` (tick start) | `uint`, wraps | most of the playerbot brain, Game systems that hold a `WorldRuntime` |
+| Uptime | `WorldRuntime.Uptime.TotalMilliseconds` (tick start) | `long` | the four `Now` wrappers below, PlayerbotRecovery, PlayerbotBrain loot stamp, the defer ledger, ScenarioClock |
+| Live | `WorldClock.LiveNowMs` | `uint`, wraps | ManagedPlayerbotFeature think-gap and starvation code only |
+| Map accumulator | a system's own `_clockMs += diffMs` | `long` | CreatureMapSystem, GameObjectMapSystem, GridContainer, FishingService, FireworksShow, HolidayObjectScripts, RegtharDeathgateAI |
+| Social accumulator | `PlayerbotSocialFeature._clockMs += elapsedMs` (`PlayerbotSocialPass.NowMs`, `ClockMs`) | `long` | every playerbot social lane; also the event board and defense board clock |
+| Population accumulator | `PlayerbotPopulationFeature._clockMs += elapsedMs` | `long` | population feature only |
+| Battleground accumulator | `BattlegroundManager.NowMs += diffMs` | `uint` | BattlegroundManager and BattlegroundQueue |
+| Receive stamp | `Clock.Milliseconds()` at the gateway or at `ManagedWorldSession` | `uint` | `MovementSample.ReceivedMs`, `MovementAntiCheat`, `SpeedHackDetector`, `LocomotionState` reject window |
+| Wall | `Environment.TickCount(64)`, `Stopwatch`, `DateTimeOffset.UtcNow`, `TimeProvider.GetUtcNow` | `long` | rate limits, persistence rows, budgets, chat limiter, logs |
 
-Read by hand:
-- The fields in the tables below.
-- The four `LiveNowMs` consumers in ManagedPlayerbotFeature.cs (2659, 2927, 3078, 4646). `git grep -n LiveNowMs` finds only these and the
-  definition at WorldClock.cs:84.
-- The lines that hold both a wall read and a world clock read:
-  `git grep -nE 'Stopwatch|Environment\.TickCount|DateTime(Offset)?\.(UtcNow|Now)' -- 'src/*.cs' | grep -E '(\.NowMs|\.Uptime|LiveNowMs|\.UnixSeconds|\.UnixMilliseconds)\b'`
-  prints 3 lines: WorldDeathClock.cs:33 (builds an anchor from both), BotController.cs:375 (records both in one event) and PlayerbotBrain.cs:739
-  (passes them as separate arguments). None subtracts one from the other. This does not cover a world reading held in a local or a `Now` wrapper,
-  and it does not cover separate statements. By the same two patterns taken per file, 30 files under `src/` hold both kinds of read; those files
-  were not read across statements.
+## Wrappers
 
-## Sampled stamp fields: world clock (`NowMs` / `Uptime`)
+Every property or delegate in the two projects (and the playerbot reads in `ArcaneCore.World` that call them) that returns a clock reading, with its
+source. 14 world-related wrappers plus the social pass, listed by name:
 
-In each row the stamp and the comparison read the same source, and a zero gap inside the tick that set the stamp means what the code wants (a
-spacing gap, a bound). Those two points are all that was checked. No problem of that kind showed up in these rows.
+| Wrapper | Source |
+|---|---|
+| `PlayerbotGroupAI.Now` | Uptime |
+| `PlayerbotBattlegroundAI.Now` | Uptime |
+| `PlayerbotFollower.Now` | Uptime plus `ClockOffsetMs` (a test seam, 0 in production) |
+| `PlayerbotPartyAI.Now` | Uptime plus `ClockOffsetMs` (same seam; it also sets the follower's) |
+| `PlayerbotBattlegroundCoordinator.Now` | World (`_world?.NowMs ?? 0`) |
+| `PlayerbotGroupCoordinator.Now` | World (`_world?.NowMs ?? 0`) |
+| `ManagedEventScenarioHost.NowMs` | World |
+| `PlayerbotOpportunities.Now` | `Clock?.Invoke()` test seam, else World |
+| `PlayerbotWorldPvpObjectives.Now` | `Clock?.Invoke()` test seam, else World |
+| `SpellSystem.NowMs` | a delegate; the only production constructor is `SpellFeature` (`() => _world?.NowMs ?? 0`), so World. Tests pass their own |
+| `PlayerbotDefenseBoard.NowMs`, `PlayerbotWorldEventBoard.NowMs` | a delegate; `ManagedPlayerbotFeature.EventClockMs` gives both the Social accumulator (`social.ClockMs`), or World when the social feature is not registered. The service is a singleton, so one process uses one of the two for good |
+| `PlayerbotSocialMemory.NowMs` | a delegate; `ManagedPlayerbotFeature` passes `_setAsideTime.GetUtcNow().ToUnixTimeMilliseconds()`, so Wall (unix ms) |
+| `PlayerbotChat.NowMs` | Wall (unix ms, `TimeProvider`) |
+| `PlayerbotWorldClock.UptimeMs` and `Ms(world, nowMs)` | Uptime; `Ms` places a wrapped `NowMs` on the Uptime axis relative to the present (the defer ledger's bridge between the two) |
+| `PlayerbotSocialPass.NowMs` | Social accumulator |
 
-| Field | Set at | Compared at |
+Outside the question and not read as world coverage: `BattlegroundManager.NowMs` (accumulator), `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
+a stopwatch), `DebugDrawFeature.Now` and `EconomyFeature`-style `Now` properties (world and wall respectively, in `ArcaneCore.World`).
+
+## Method and tallies
+
+A one-off scan over the two projects (not kept in the repo) took every single-line assignment whose right side holds a clock read, and classified the
+target by the family of the right side. When the right side is a local named `now`-like, it followed the local's declaration back up to 120 lines. It
+found 1160 such sites:
+
+| Class of right side | Sites |
+|---|---|
+| World (`NowMs`, `World.NowMs`, `Now` of a World wrapper) | 338 |
+| Local declared from World | 60 |
+| Local, family not resolved by the scan (a name such as `swimNow`) | 33 |
+| Parameter (`now`, `nowMs` handed in by the caller) | 276 |
+| Wall | 250 |
+| Map or social accumulator | 157 |
+| Local declared from accumulator or wall | 22 |
+| Uptime | 16 |
+| Live | 8 (4 direct, 4 through a local) |
+
+The scan cannot see a parameter's source, a statement split over lines, or a delegate. So the following checks were done by reading:
+
+1. **Fields assigned from more than one family.** The scan reports a field name assigned in one file from two families. There were 15; ten were the
+   local name `now` in different methods, and the rest (`StageMs`, `NextPlanMs`, `StateMs`, `LastDriveMs`, `StepSinceMs`, `_dropNextMs`, `AnchorMs`,
+   `FollowedMs`, `RenewedMs`, `SeenMs`) are a constructor or method parameter in one place and `session.World.NowMs` in another. Every caller was read:
+   each hands a World reading or a local of one. None mixes families.
+2. **Every file holding two or more families** (25 files with a World and a Wall read; 12 with both Uptime and World). The lines were read, not just
+   counted. Mixed-clock subtraction: none. Where both appear in one function they go to different fields (a wall stopwatch for a budget, World for a stamp).
+3. **The four Uptime wrappers.** Every helper that receives their `Now` was checked for a second caller on another family. `RivalryOptOut.Handle` and
+   `InviteOptOut.Handle` (shared across bots, `_answered` stamps) have one caller, `PlayerbotPartyAI`. `LfgLookupBudget` has one. The episode, reply,
+   follow-drop, unreachable and watch helpers are instances owned by one AI. `PlayerbotBattlegroundBuffs.Update/GiveUp` have one caller.
+   `PlayerbotGroupAI.NoteStuck` is static and called twice, both with `Now`. `PlayerbotPartyAI` converts to `uint` once (`unchecked((uint)Now)`) for its own
+   unreachable memory, and both its `Mark` and `Has` take that value.
+4. **`PlayerbotChatEvents`.** Its events are stamped on the owner's `Observe` clock (PartyAI, Uptime). Callers on the social accumulator use `NoteNow` and
+   `LatestNow`, which read `LastNowMs`, so no event is stamped or aged on the wrong clock. The `_talkedAbout` stamps in PlayerbotConversations are `ev.AtMs`.
+5. **The two board clocks.** Brains hand the boards no stamp of their own. `PlayerbotWorldEventGoals` reads `board.NowMs`; the brain's defense code asks
+   `found.IsOpen(board.NowMs)` and keeps its own World stamps (`_defenseSince`, `_defenseReportAtMs`) for itself.
+6. **`PlayerbotRecovery`.** `_progressMs`, `_closingMs` and the three keep-body stamps are all Uptime, set and compared through `now` read from `Uptime` at
+   the top of each method. The few `session.World.NowMs` reads in the file are path-plan arguments and `Relocate` stamps, not mixed into those fields.
+7. **The wall reads in the 25 files** (`Environment.TickCount64` in `PlayerbotShip`'s dock cache, `PlayerbotMood._now`, `PlayerbotSocialFeature` lane
+   fault gap, `PlayerbotNavigation` wall budget, `ScenarioContext._wall`, `PlayerbotChaosEngine` movement payloads). Each pairs a wall stamp with a wall
+   comparison in the same method or type.
+
+## Result per field family
+
+World clock stamps. In each case the stamp and the comparison read the same source, and a zero gap inside the tick that set the stamp means what the code
+wants (a spacing gap, a bound, a retry time). No mixed-clock comparison was found in any of these:
+
+| Field | File | Source of stamp and comparison |
 |---|---|---|
-| `_stepEndedMs` | PlayerbotKite.cs:266 | :202 (`now` from `NowMs`, :135) |
-| `_nextVisitAt` | PlayerbotEconomy.cs:296, :300; :243 is the test and inspection seam | :303 `Reached(now, ...)` (`now` from `NowMs`, :272) |
-| `_fallStartMs` | PlayerbotFollower.cs:556 | :564 (fall time bound; zero at the start is intended) |
-| `_wanderCellLastMs` | PlayerbotBrain.cs:3365 | :3377 (`now` from `NowMs`) |
-| `_startedMs` | PlayerbotRetreat.cs:146 | :255 |
-| `_followedFrom` | ScenarioClock.cs:27 | :19 (both `Uptime`) |
-| `_lastUpdateMs` | SpellFeature.cs:225 (attach), :305 (each update) | :304 (`diff` between ticks) against `System.NowMs`, which is `world.NowMs` through the closure at :71 |
+| `_stepEndedMs` | PlayerbotKite.cs | `session.World.NowMs`; compared with the `now` of the same think |
+| `_nextVisitAt` | PlayerbotEconomy.cs | `now` from `NowMs`; the test and inspection seam is a separate setter; compared by `Reached(now, ...)` |
+| `_fallStartMs` | PlayerbotFollower.cs | `_session.World.NowMs`; the fall time bound (zero at the start is intended) |
+| `_wanderCellLastMs` | PlayerbotBrain.cs | `_session.World.NowMs` |
+| `_startedMs` | PlayerbotRetreat.cs | `session.World.NowMs` |
+| `_followedFrom` | ScenarioClock.cs | `world.Uptime` both sides |
+| `_lastUpdateMs` | SpellFeature.cs | `world.NowMs` at attach and each update; compared as `diff` between ticks against `System.NowMs`, which is `world.NowMs` through the delegate given to `SpellSystem` |
 
-## Sampled stamp fields: the social accumulator
+Other stamps read call by call and classified as World, with the comparison on the same source: `_lootStartedMs` (Uptime, set and compared in PlayerbotBrain),
+`_errand`, `_fightSinceMs`, `_retreatEndedMs`, `_retreatDiedMs`, TeleportService `StartedMs` and `StageSinceMs` (`_world.NowMs - pending.StartedMs`; a teleport
+request and its timeout check are on different ticks and the subtraction is non-negative), Knockback `LastTeleportOrKnockbackMs`, SanctuaryEffect, PlayerbotMotion
+`RenewedMs`/`AnchorMs`/`FollowedMs` (World `now` from `TryAdvance` and `Pump`; `ManagedPlayerbotFeature` passes the tick-start `gameNow`, see below),
+PlayerbotPortalBoard `StateMs`, PlayerbotGroupAI `AnswerRequestedMs`, DebugPathFollow `LastCheckMs`, MovementHandlers `LastNonFiniteReportServerMs`, and the
+deadlines `NowMs + delta` in PlayerbotBrain, PlayerbotBrain.Defense, PlayerbotBrain.Help, PlayerbotCombatSpells, PlayerbotQuestGoals, PlayerbotTownGoals,
+PlayerbotGroupAI, PlayerbotPartyAI and ManagedPlayerbotFeature (each a wrapped `unchecked` add compared with a signed `unchecked((int)(deadline - now))`).
 
-Every row in this table is stamped from `pass.NowMs`. `PlayerbotSocialPass.NowMs` (PlayerbotSocialFeature.cs:137) is `_clockMs`, a private
-accumulator (`_clockMs += elapsedMs`, PlayerbotSocialFeature.cs:492), and the only two constructions of the pass, at :548 and :664, hand it in. It is
-not a read of `WorldClock.NowMs` or `Uptime`, so these rows are not coverage of the world clock read question. They were read only for sign and
-zero-gap meaning on their own clock, and the "tick-start reading" statement above does not apply to them.
+Stamps read as reads, not stamps: `PlayerbotGroupAI` `Now - _lootOpenedMs` (the `Now` read at `_lootOpenedMs = Now`, set when the loot window opened, is the stamp; the
+later `Now - _lootOpenedMs < 5_000` is a read, both Uptime) and `PlayerbotBattlegroundCoordinator` `InPhaseMs = unchecked(Now - t.PhaseSinceMs)` (a read in
+the facts builder; the stamps are `PhaseSinceMs = Now`, `QueuedSinceMs = Now`, `LeaveSentMs = Now`, all World).
 
-| Field | Set at | Compared at |
-|---|---|---|
-| `_prunedMs` | PlayerbotNeedsVoice.cs:1169 | :1168 |
-| `_sweptAtMs` | PlayerbotGuildChat.cs:189, PlayerbotMood.cs:169, PlayerbotSocialEmotes.cs:40 | same files, `pass.NowMs` |
-| `_lastAttemptMs` | PlayerbotGuildFounding.cs:102, 144, 166 | :70 |
-| `_now` | PlayerbotRivalry.cs:303 | :339 |
-| `_registryAtMs`, `_registryCheckedAtMs` | PlayerbotSocialFeature.cs:950, 974, 975 | :947, :948 |
-| `_passNowMs` | PlayerbotSocialInitiative.cs:239 | :539 (a said-at stamp) |
+### LiveNowMs
 
-## Other reads outside the world clock
+`git grep -n LiveNowMs -- 'src/*.cs'` finds the four consumers in `ManagedPlayerbotFeature.cs` and the definition in `WorldClock.cs`:
 
-`_lastHandoffMs` (SqliteWriteGate.cs) has nothing to do with the social accumulator or the world clock. It is stamped at :298 from `_clock.NowMs`
-on `IWriteGateClock` (interface at :576, field at :63), implemented by `SystemWriteGateClock` (:589), a live stopwatch. It is read at :254 (copied
-to `handoffNow`, which becomes `progress.ResetNow` at :261) and at :312 (published as `_pendingGrantSinceMs`, read at :375). Those comparisons were
-not audited; it is listed only so nobody counts it as world clock coverage.
+| Read | Use |
+|---|---|
+| tick entry (`uint now = world.Clock.LiveNowMs;` beside `uint gameNow = world.NowMs;`) | `frame.Now`, the starvation and think-gap clock; `gameNow` is the tick-start game time every movement and think stamp carries. The comment there states the two are never subtracted |
+| after the map-think thinks (`frame.Now = world.Clock.LiveNowMs`) | refreshes `frame.Now` so starvation reports compare with a time after the thinks |
+| `ThinkCore` (`uint thinkNowMs = world.Clock.LiveNowMs;`) | read once per think, used for `sinceLast = thinkNowMs - active.LastUpdateMs` and stored into `LastUpdateMs` |
+| `ActiveBot.LastUpdateMs` field initialiser | the seed of the same field |
 
-Three more sites read a clock of their own, so they are not world clock coverage:
-- BattlegroundManager.cs:1122 and :1169 each read `BattlegroundManager.NowMs` twice in one expression. That property (:274) is its own accumulator
-  (`NowMs += diffMs`, :1196). Which thread runs these reads, and whether they can race :1196, was not determined.
-- PlayerbotSocialFeature.cs:948 reads `pass.NowMs`, the social accumulator.
-- PlayerbotHelpLane.cs:255 reads `pass.NowMs` in `LookAround`, whose parameter is a `PlayerbotSocialPass` (:198), so it is the social accumulator too.
+`thinkNowMs` is therefore Live, the same family as `LastUpdateMs` and `frame.Now`. Every `LastUpdateMs` write and read sits on `LiveNowMs`; none uses `NowMs`.
 
-Two world clock sites were looked at and read as not being duration bugs. PlayerbotElevatorSnapshot.cs:33 subtracts stamps from `world.NowMs` for an
-inspection row; the stamps themselves arrive as `now` parameters and were not traced to their source. WorldDeathClock.cs:27 adds a wall anchor to a
-game delta, on the manual clock only.
+Only the map-think path refreshes `frame.Now` after the thinks. The serial path passes the pre-think `frame.Now` to `ReportStarvedBots`, so bots that thought this
+tick have `LastUpdateMs` later than `now`. The underflow is guarded in `ReportStarvedBots` and `PlayerbotThinkStarvation.ShouldReport` (`silent > int.MaxValue`
+returns false), so it is harmless there.
 
-## LiveNowMs
+`Classify` computes `unchecked(now - bot.LastUpdateMs)` with the pre-think `frame.Now` and has no such guard. An underflow would wrap and choose the Priority lane.
+Within one pass a bot is not classified after its own think: `Think` has one call site (inside `Visit`), `TickLanes` classifies each index once, before the `Visit` of
+that index, and its main lane does not call `Classify`. The serial path and the map path (then `PlayerbotThinkScheduler`) both reach it through `TickLanes`, with
+`frame.Now` read after the bot list was built.
 
-Every `LastUpdateMs` write (ManagedPlayerbotFeature.cs:3081, :4646) and every read of it (:2570, :3013, :3015, :3019, :3079) sits on `LiveNowMs`:
-`now` there is `frame.Now`, which comes from :2659 through :2765, or from :2927. There is no mixing with `NowMs`.
+Not proved: that a map key is served at most once in one tick. `ThinkMap` sets `group.Thought` but does not test it, and `CollectUnthought` only keeps the
+fallback from repeating a served map. A second pass over the same key would classify bots that had thought in the first one, against the same `frame.Now`.
+This one is handed to lane Y22, with the other points below.
 
-Only the map-think path refreshes `frame.Now` after the thinks (:2927). The serial path passes the pre-think `frame.Now` (:2765, :2800) to
-`ReportStarvedBots`, so bots that thought this tick have `LastUpdateMs` later than `now`. The underflow is guarded at ManagedPlayerbotFeature.cs:3014
-and PlayerbotThinkBudget.cs:263, so `ReportStarvedBots` is harmless on this point.
+### The social accumulator
 
-`Classify` (:2567) computes `unchecked(now - bot.LastUpdateMs)` at :2570 with the pre-think `frame.Now` and has no such guard. An underflow would
-wrap and choose the Priority lane. Within one pass a bot is not classified after its own think. `Think` has one call site (:2593, inside `Visit`).
-`TickLanes` classifies each index once, before the `Visit` of that index (PlayerbotThinkRotation.cs:283-285), and its main lane does not call
-`Classify`. The serial path (:2636-2637) and the map path (:2953-2954, then PlayerbotThinkScheduler.cs:178) both reach it through `TickLanes`, with
-`frame.Now` read after the bot list was built (:2656-2659).
+Every `pass.NowMs` stamp in the social lanes (PlayerbotNeedsVoice, PlayerbotGuildChat, PlayerbotMood, PlayerbotSocialEmotes, PlayerbotGuildFounding, PlayerbotRivalry,
+PlayerbotSocialFeature registry stamps, PlayerbotSocialInitiative, PlayerbotGratitude, PlayerbotHelpLane `LookAround`, PlayerbotEventLane) is on `_clockMs`, which
+advances once per pass (`_clockMs += elapsedMs`), and the two pass constructions hand it in. It is not `WorldClock.NowMs` or `Uptime`, and the "tick-start reading"
+statement above does not apply to it: two stamps in one pass are equal because the accumulator moves once per pass. Each field was read for sign and for the meaning
+of a zero gap; each compares with `pass.NowMs` of a later pass. `PlayerbotNeedsVoice` `StateOf` seeds `TradeMs`/`LfgMs`/`QuestHelpMs` as `nowMs - random` on that same
+clock, and `SeenMs` is stamped from `pass.NowMs` at all four sites.
 
-Not proved: that a map key is served at most once in one tick. `ThinkMap` sets `group.Thought` (PlayerbotThinkScheduler.cs:176) but does not test
-it, and `CollectUnthought` only keeps the fallback from repeating a served map. A second pass over the same key would classify bots that had thought
-in the first one, against the same `frame.Now`.
+### The named misses
 
-## Not read (the remainder)
+- `ManagedPlayerbotFeature` `Volatile.Write(ref _lastProvisionSweepMs, now)` (`TakeProvisionSweepSlot` and `SweepStaleProvisionsAsync`). Wall (`Environment.TickCount64`),
+  stamp and comparison both wall, nothing to do with the world clock. It did hold a real read-then-act gap: `SweepStaleProvisionsAsync` read `_lastProvisionSweepMs`
+  and checked the interval before it took `_operations`, and a create holding the lock in between could have taken the slot through `TakeProvisionSweepSlot`. The
+  sweep then wrote and ran a second time inside one interval. Fixed: the interval is checked again under the lock. The window is two adjacent statements, so no
+  deterministic test reproduces it; the existing `ManagedPlayerbotProvisionSweepTests` still pin the once-per-interval behaviour, which the recheck does not change.
+- `MovementAntiCheat._lastSeenMs = receivedMs` (and `now`, `_lastReceived`). Receive stamp family: `session.CurrentPacketReceivedMs`, set from the gateway stamp
+  (`GatewayClientConnection`, `Clock.Milliseconds`) or `ManagedWorldSession`'s receive clock. Every stamp and every comparison in `MovementAntiCheat` and
+  `SpeedHackDetector` is a packet stamp against a packet stamp; no `NowMs`, `Uptime` or accumulator reaches it. `SupportedSkip` reads `_lastSeenMs` from the previous
+  packet and takes the new packet's `receivedMs` as an argument; it is not a double read.
+- `Creature._evadeWindowStartMs = clockMs` (Creature.Anomalies). `clockMs` is the `CreatureMapSystem._clockMs` map accumulator at all three call sites
+  (`RecordEvadeForAnomaly`, `RecordLeashResetForAnomaly`, `ShouldSampleUnderMap` in CreatureMapSystem.Anomalies.cs). The creature stays on one map, so its stamps and
+  comparisons share the accumulator; `-1` and `0` are the unset sentinels.
+- `GameObjectMapSystem._nextDespawnAtMs = at`. `at = _clockMs + despawnAfterSeconds * 1000L` on the map's own accumulator (`_clockMs += diffMs`); the compare in
+  `Update` reads the same `_clockMs`. The `:125-127` citation in the task does not hold a clock read on this tree (it is the spawn grid list code); the clock fields are
+  the `_clockMs`, `_despawnAt` and `_nextDespawnAtMs` declarations near the top of the file.
 
-Row 88 stays open. The lists below are examples, not the complete remainder, and the greps below are a starting point. They do not define the set.
+### Injected-delegate wrappers
 
-Run with the command form given under "What was read", when the review happens:
+Traced where the source is in these two projects (table above): `SpellSystem` (World in production), the two boards (Social accumulator, World fallback), SocialMemory
+(Wall), the `Clock` seams of PlayerbotOpportunities and PlayerbotWorldPvpObjectives (test only). `PlayerbotElevatorSnapshot` subtracts stamps from `world.NowMs`; the
+stamps arrive as `now` parameters from the elevator and are all World at the call sites read. The `BattlegroundManager` accumulator and the two sites that read it twice
+in one expression, and the proof that each injected clock in the battleground and defense lanes is served once per tick, go to lane Y22 below, with the
+`ThinkMap` question.
 
-- Stamps: ` = .*\b(_?now(Ms)?|[A-Za-z_]*Now(Ms)?|Uptime)\b` printed 2179 lines. It takes `now`, `nowMs`, `_now`, `Now`, `NowMs` and prefixed forms
-  such as `thinkNowMs`, in any target including tuples, and needs no particular field suffix. Many of the lines are locals and non-world clocks
-  (`UtcNow` matches on purpose).
-- Deadlines: `\b(_?now(Ms)?|[A-Za-z_]*Now(Ms)?|Uptime)\b(\.[A-Za-z]+)?\)* \+ ` printed 360 lines.
-- Wrappers: `\b[A-Za-z_]*Now[A-Za-z]* *(\(\))? *(=>|\{ *get)` printed 76 lines, many of them wall clocks.
+## Handed to lane Y22
 
-Each stamp, deadline and wrapper cited in the lists below and in the tables above matches its pattern: 62 of 62 stamps, 17 of 17 deadlines, 14 of 14
-wrappers. That was checked by looking each citation up in the grep output, and the same check flagged PlayerbotCombatSpells.cs:124 against an earlier,
-narrower pattern, so it can fail.
+The points this pass read but did not prove: a map key served at most once per tick (`ThinkMap`); the `BattlegroundManager` double read against `NowMs += diffMs` (which
+thread runs it); `PlayerbotElevatorSnapshot` stamps; `PlayerbotBattlegroundAI.Now`; `PlayerbotDefenseBoard.NowMs`; `SpellSystem.NowMs` as an injected delegate. None of
+these is a mixed-clock comparison on a reading of the code; the open question is only about thread and call frequency.
 
-These greps are known to miss:
-- A stamp that is not an assignment, such as `Volatile.Write(ref _lastProvisionSweepMs, now)` (ManagedPlayerbotFeature.cs:4486).
-- A stamp from a differently named variable or parameter, such as `_lastSeenMs = receivedMs` (MovementAntiCheat.cs:307), `_evadeWindowStartMs =
-  clockMs` (Creature.Anomalies.cs:81) and `_nextDespawnAtMs = at` (GameObjectMapSystem.cs:1570). Whether these carry a world clock reading was not
-  checked.
-- A reading taken through a delegate such as `_clock()` or `Clock?.Invoke()`, unless the line also names `now`.
-- Any statement split across lines so that the `=` and the clock read are on different lines.
+## Not covered
 
-Stamp fields and their comparisons not read call by call:
-- Direct assignments missing from the tables: ScenarioClock.cs:67 `_createdAt`; PlayerbotBrain.cs:1642 `_lootStartedMs`, :2214 `_errand`;
-  PlayerbotRisk.cs:223/1282/1285 (`_fightSinceMs`, `_retreatEndedMs`, `_retreatDiedMs`); TeleportService.cs 478-479, 510-511, 587-588, 703, 780,
-  943-944 (`StartedMs`, `StageSinceMs`); Knockback.cs:99/122 `LastTeleportOrKnockbackMs`; SanctuaryEffect.cs:29; PlayerbotMotion.cs:1556
-  `RenewedMs` (compared at :521); PlayerbotPortalBoard.cs:304 `StateMs` (compared at :261); PlayerbotGroupAI.cs:456 `AnswerRequestedMs`;
-  DebugPathFollow.cs:150 `LastCheckMs`; MovementHandlers.cs:507 `LastNonFiniteReportServerMs`.
-- `NowMs + delta` deadlines: PlayerbotBrain.cs:2405/2470/3504; PlayerbotBrain.Defense.cs:130/146; PlayerbotBrain.Help.cs:89/163;
-  PlayerbotCombatSpells.cs:298/317/325/557; PlayerbotQuestGoals.cs:2087; PlayerbotTownGoals.cs:247/503; PlayerbotGroupAI.cs:1628;
-  PlayerbotPartyAI.cs:2351; ManagedPlayerbotFeature.cs:2270.
-- Stamps taken through a local (`_x = now`) and `Math.Max(1u, ...)` forms, for example PlayerbotCombatSpells.cs:124.
-- The `Now` and `NowMs` wrapper properties, which are stamp sources and were not read call by call. On the world clock by their own body:
-  PlayerbotGroupAI.cs:252 (stamps at :1554/:1588), PlayerbotBattlegroundCoordinator.cs:180 (:441/:444/:688/:504),
-  PlayerbotGroupCoordinator.cs:379 (:1890/:1939), PlayerbotBattlegroundAI.cs:172, ManagedEventScenarioHost.cs:38. Also on it but with an offset added:
-  PlayerbotPartyAI.cs:327, PlayerbotFollower.cs:146. With a replaceable clock in front: PlayerbotOpportunities.cs:141,
-  PlayerbotWorldPvpObjectives.cs:204. Through an injected delegate, source not traced here: SpellSystem.cs:117, PlayerbotDefenseBoard.cs:280,
-  PlayerbotWorldEventBoard.cs:99, PlayerbotSocialMemory.cs:81.
+- The projects outside `ArcaneCore.Playerbots` and `ArcaneCore.Game` (World, Data, Gateway, Kernel) except the playerbot reads of them named above.
+- Multi-line assignments, where the `=` and the clock read are on different lines; and a delegate invocation (`_clock()`) is covered only for the wrappers named above.
+- Behaviour. Nothing here shows the code runs correctly, only that no stamp was found compared against a different clock family.
 
-Outside the world clock question, not read: PlayerbotNeedsVoice.cs 204/215/354/407/452/714/855 and PlayerbotGratitude.cs:363/381. They stamp from
-`pass.NowMs`, and every `pass` declared in those two files is a `PlayerbotSocialPass`, so they are on the social accumulator. Their comparisons were
-not checked on that clock either.
-
-Nothing mechanically enforces this audit.
+Nothing mechanically enforces this audit. Re-run it by listing every assignment from a clock read, grouping by family as above, and reading every field that
+appears under two families.
