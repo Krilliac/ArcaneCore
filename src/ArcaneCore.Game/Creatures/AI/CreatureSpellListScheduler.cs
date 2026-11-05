@@ -23,6 +23,12 @@ public interface ICreatureSpellListHost<TTarget>
     /// <summary>The spell is off cooldown for the creature.</summary>
     bool IsSpellReady(uint spellId);
 
+    /// <summary>
+    /// Whether the combat condition an entry names holds for the creature and the spell's range (cmangos ObjectMgr::IsCombatConditionSatisfied).
+    /// Asked only for entries whose <see cref="CreatureSpellListEntry.HasCombatCondition"/> is true; false skips the entry.
+    /// </summary>
+    bool IsCombatConditionSatisfied(int combatCondition, uint spellId);
+
     /// <summary>Resolve a target id of the list (<see cref="CreatureSpellListTargets"/> or a targeting row). False: no valid target, skip the entry. A true result with a null target means a self-cast or an untargeted spell.</summary>
     bool TryChooseTarget(uint targetId, uint spellId, out TTarget? target);
 
@@ -34,14 +40,26 @@ public interface ICreatureSpellListHost<TTarget>
 }
 
 /// <summary>
-/// The combat spell scheduler for one creature (cmangos UnitAI::UpdateSpellLists, UnitAI.cpp:1181-1291, re-expressed). Every
+/// The combat spell scheduler for one creature (cmangos UnitAI::UpdateSpellLists, UnitAI.cpp:1181-1288, re-expressed). Every
 /// <see cref="CreatureSpellList.TickMs"/> in combat it rolls the support and ranged gates once, collects the entries that pass their
-/// gates, are off cooldown and have a target, casts the non-blocking ones, then casts one blocking entry chosen by probability weight
-/// (lowest position first when every weight is zero) and falls back to the next one when a cast is refused. At most one blocking
-/// entry is cast per tick.
+/// gates (disabled-for-AI, support chance, combat condition, ranged chance), are off cooldown and have a target, casts the non-blocking
+/// ones, then casts one blocking entry chosen by probability weight (lowest position first when every weight is zero) and falls back to
+/// the next one when a cast is refused.
+/// <para>
+/// Deliberate deviation: this scheduler stops after the first successful blocking cast. The reference keeps iterating its inner loop
+/// after a success (it ends the outer loop only afterwards), so an instant blocking spell could fire a second entry there unless
+/// something else, such as a global cooldown, stops it (not traced). Here a tick casts one blocking entry, following the spec ("choose
+/// one eligible blocking spell") and cmangos doc/SpellLists.txt ("always one spell is selected").
+/// </para>
+/// <para>
+/// Not modelled: the cmangos cooldown map keyed per unit and spell. Cooldowns here are per entry index, so two entries naming the same
+/// spell do not share one, and <see cref="Bind"/> forgets them. The <see cref="CreatureSpellListFlags.CategoryCooldown"/> flag is not read;
+/// the host reads it from the entry in <see cref="ICreatureSpellListHost{TTarget}.OnCast"/> when it applies the spell system cooldown.
+/// </para>
 /// <para>
 /// Ownership: the instance owns only its cooldown clock and the entries an availability roll kept; the list it was bound to is immutable
-/// content. Not thread safe: the creature's map thread drives it. A tick that finds nothing eligible allocates nothing.
+/// content. Not thread safe: the creature's map thread drives it, and the <see cref="Random"/> it is given must not be shared across map
+/// threads (a per-map instance or <see cref="Random.Shared"/>). A tick that finds nothing eligible allocates nothing.
 /// </para>
 /// </summary>
 public sealed class CreatureSpellListScheduler<TTarget>
@@ -74,12 +92,17 @@ public sealed class CreatureSpellListScheduler<TTarget>
 
     /// <summary>
     /// Assign a list (on spawn, respawn or an explicit set-list). Each entry below availability 100 is kept only when a roll of 0..100 does
-    /// not exceed its availability (cmangos Creature.cpp:2447-2450). Clears every cooldown. A null list clears the assignment.
+    /// not exceed its availability (cmangos Creature.cpp:2447-2450). Clears every cooldown. A null list clears the assignment, and so does a
+    /// <see cref="CreatureSpellList.Disabled"/> list (<see cref="List"/> still reports it, but nothing is scheduled).
+    /// <para>
+    /// Binding does not arm initial cooldowns. A set-list in the middle of a fight must be followed by <see cref="EnterCombat"/> by the
+    /// caller (cmangos UnitAI::SpellListChanged calls AddInitialCooldowns while in combat), or the new entries cast at once.
+    /// </para>
     /// </summary>
     public void Bind(CreatureSpellList? list)
     {
         _list = list;
-        if (list is null)
+        if (list is null || list.Disabled)
         {
             _active = [];
         }
@@ -150,6 +173,7 @@ public sealed class CreatureSpellListScheduler<TTarget>
             CreatureSpellListEntry entry = _active[i];
             if (entry.DisabledForAI) continue;
             if ((entry.Flags & CreatureSpellListFlags.SupportAction) != 0 && supportRoll > (int)_list.ChanceSupportAction) continue;
+            if (entry.HasCombatCondition && !_host.IsCombatConditionSatisfied(entry.CombatCondition, entry.SpellId)) continue;
             if ((entry.Flags & CreatureSpellListFlags.RangedAction) != 0 && rangedRoll > rangedChance) continue;
             if (_readyAtMs[i] > _nowMs || !_host.IsSpellReady(entry.SpellId)) continue;
             if (!_host.TryChooseTarget(entry.TargetId, entry.SpellId, out TTarget? target)) continue;
@@ -179,14 +203,13 @@ public sealed class CreatureSpellListScheduler<TTarget>
         long roll = sum == 0 ? -1 : _random.NextInt64(0, sum);
         while (blocking.Count > 0)
         {
-            bool cast = false;
             for (int k = 0; k < blocking.Count;)
             {
                 Candidate candidate = blocking[k];
                 uint probability = _active[candidate.Index].Probability;
                 if (roll < probability)
                 {
-                    cast = Execute(candidate);
+                    bool cast = Execute(candidate);
                     blocking.RemoveAt(k);
                     if (cast) return;
                 }

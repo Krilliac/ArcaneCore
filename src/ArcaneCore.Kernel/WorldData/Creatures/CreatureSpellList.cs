@@ -15,7 +15,10 @@ public enum CreatureSpellListFlags : uint
     /// <summary>Gated by the list's ranged-attack chance (minus 50 while the creature fights in melee mode); the creature's main ranged spell.</summary>
     RangedAction = 2,
 
-    /// <summary>The cooldown the cast imposes is the spell's category cooldown rather than its own.</summary>
+    /// <summary>
+    /// The cast imposes the spell's category cooldown rather than its own. Metadata for the host: the scheduler never reads this flag (it runs
+    /// one repeat timer per entry either way); the host reads it from the entry when it applies the spell system cooldown after a cast.
+    /// </summary>
     CategoryCooldown = 4,
 
     /// <summary>Cast in addition to the one blocking spell of a tick, outside the roll for it.</summary>
@@ -36,7 +39,24 @@ public static class CreatureSpellListTargets
     public const uint FriendlyMissingBuff = 5;
     public const uint FriendlyMissingBuffNoSelf = 6;
     public const uint CurrentNotAlone = 7;
+
+    /// <summary>Target ids below this are the hardcoded ones above; ids from here on name a <see cref="CreatureSpellListTargeting"/> row.</summary>
+    public const uint HardcodedMax = 100;
 }
+
+/// <summary>Kind of a targeting row (cmangos <c>SpellListTargetingType</c>).</summary>
+public enum CreatureSpellListTargetingType : uint
+{
+    Hardcoded = 0,
+    Attack = 1,
+    Support = 2,
+}
+
+/// <summary>
+/// One targeting row a spell-list entry can name by id (cmangos <c>CreatureSpellListTargeting</c>, the <c>creature_spell_targeting</c> table).
+/// The scheduler never reads it; the host that resolves <see cref="CreatureSpellListEntry.TargetId"/> interprets the type, the parameters and the unit condition.
+/// </summary>
+public sealed record CreatureSpellListTargeting(uint Id, CreatureSpellListTargetingType Type, uint Param1, uint Param2, uint Param3, int UnitCondition);
 
 /// <summary>
 /// One spell of a creature spell list. Times are milliseconds. <see cref="Probability"/> is the weight when several entries are
@@ -58,6 +78,12 @@ public sealed record CreatureSpellListEntry(
 {
     /// <summary>The entry is skipped by the AI scheduler (it stays on a charm bar).</summary>
     public bool DisabledForAI { get; init; }
+
+    /// <summary>The combat condition id the entry is gated by (cmangos <c>CombatCondition</c>); 0 and -1 mean none.</summary>
+    public int CombatCondition { get; init; }
+
+    /// <summary>Whether <see cref="CombatCondition"/> names a condition (cmangos skips the check for 0 and -1).</summary>
+    public bool HasCombatCondition => CombatCondition is not (0 or -1);
 }
 
 /// <summary>One spell list: the chances that gate its support and ranged entries, and its entries in position order.</summary>
@@ -100,6 +126,9 @@ public sealed class CreatureSpellList
 
     public string Name { get; }
 
+    /// <summary>The whole list is switched off (cmangos <c>Disabled</c>, the compatibility flag for creature_template_spells): nothing of it is scheduled.</summary>
+    public bool Disabled { get; init; }
+
     public uint ChanceSupportAction { get; }
 
     public uint ChanceRangedAttack { get; }
@@ -116,19 +145,37 @@ public sealed class CreatureSpellListCatalog
     public static readonly CreatureSpellListCatalog Empty = new([]);
 
     private readonly Dictionary<uint, CreatureSpellList> _lists;
+    private readonly Dictionary<uint, CreatureSpellListTargeting> _targeting = [];
 
-    public CreatureSpellListCatalog(IEnumerable<CreatureSpellList> lists)
+    /// <summary>Build the catalog. Throws when a list or targeting id repeats, a targeting row uses a hardcoded id, or an entry names a targeting id from 100 up that has no row.</summary>
+    public CreatureSpellListCatalog(IEnumerable<CreatureSpellList> lists, IEnumerable<CreatureSpellListTargeting>? targeting = null)
     {
         ArgumentNullException.ThrowIfNull(lists);
+        foreach (CreatureSpellListTargeting row in targeting ?? [])
+        {
+            if (row.Id < CreatureSpellListTargets.HardcodedMax)
+                throw new ArgumentException($"Targeting row {row.Id} uses an id reserved for the hardcoded targets.", nameof(targeting));
+            if (!_targeting.TryAdd(row.Id, row))
+                throw new ArgumentException($"Targeting row {row.Id} is defined twice.", nameof(targeting));
+        }
+
         _lists = [];
         foreach (CreatureSpellList list in lists)
         {
             if (!_lists.TryAdd(list.Id, list))
                 throw new ArgumentException($"Spell list {list.Id} is defined twice.", nameof(lists));
+            foreach (CreatureSpellListEntry entry in list.Entries)
+            {
+                if (entry.TargetId >= CreatureSpellListTargets.HardcodedMax && !_targeting.ContainsKey(entry.TargetId))
+                    throw new ArgumentException($"Spell list {list.Id} position {entry.Position} names missing targeting row {entry.TargetId}.", nameof(lists));
+            }
         }
     }
 
     public int Count => _lists.Count;
+
+    /// <summary>The targeting row with this id, or null (hardcoded ids below 100 have no row).</summary>
+    public CreatureSpellListTargeting? FindTargeting(uint id) => _targeting.GetValueOrDefault(id);
 
     /// <summary>The list with this id, or null (an id of 0 is no list).</summary>
     public CreatureSpellList? Find(uint id) => id == 0 ? null : _lists.GetValueOrDefault(id);

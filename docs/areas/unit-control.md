@@ -91,7 +91,10 @@ Behaviour, in the order vmangos runs it:
 * **Data**: the creature spell slots a charm or possession puts on the bar (vmangos `Creature::m_spells` from `creature_spells` /
   `creature_template.spell_list_id`) are not in the repository: `CharmService.CreatureSpells` is the seam and defaults to none, so a charmed or
   possessed creature's bar holds the commands only. A charmed demon's spells therefore need that data.
-* **Creature spell lists**: the content model (`CreatureSpellListCatalog`) and the 1200 ms combat scheduler (`CreatureSpellListScheduler`, cmangos UnitAI::UpdateSpellLists) exist and are unit-tested against a fake host. They are not yet loaded from the database (no `creature_spell_list` flags/targeting columns, no `creature_template.spell_list_id` on the template row) and not yet attached to a creature AI, so no creature runs a list and AV entry scripts still only melee.
+* **Creature spell lists**: the content model (`CreatureSpellListCatalog`) and the 1200 ms combat scheduler (`CreatureSpellListScheduler`, cmangos
+  UnitAI::UpdateSpellLists) exist and are unit-tested against a fake host. They are not loaded from the database (no flags/targeting columns,
+  no `creature_template.spell_list_id`) and not attached to a creature AI, so no creature runs a list and AV entry scripts still only melee.
+  Design record: `docs/design/creature-spell-lists.md`.
 * A charmed **player** is not moved by the server (vmangos MoveChase/MoveFollow: players have no server movement generator here) and casts no
   spells (PlayerControlledAI's usable-spell list); it melees what its controller fights. The group update broadcast at the end of a charm on a
   player and the loot release when a looting player is charmed are not done.

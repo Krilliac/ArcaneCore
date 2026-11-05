@@ -4,10 +4,41 @@ using Xunit;
 
 namespace ArcaneCore.Game.Tests.CreatureAi;
 
-/// <summary>The creature spell-list scheduler (cmangos UnitAI::UpdateSpellLists semantics) against a fake host.</summary>
+/// <summary>The creature spell-list scheduler (cmangos UnitAI::UpdateSpellLists semantics) against a fake host and a scripted Random.</summary>
 public sealed class CreatureSpellListSchedulerTests
 {
     private sealed class Marker;
+
+    /// <summary>A Random whose draws are scripted per call kind, recording the bounds each draw asked for.</summary>
+    private sealed class ScriptedRandom : Random
+    {
+        /// <summary>Answers of Next(min, max): the 0..100 rolls (availability, support gate, ranged gate), in call order. Empty: the minimum.</summary>
+        public Queue<int> Rolls { get; } = new();
+
+        /// <summary>Answers of Next(max): the shuffle picks. Empty: 0.</summary>
+        public Queue<int> Picks { get; } = new();
+
+        /// <summary>Answers of NextInt64(min, max): the weight roll and the cooldown ranges. Empty: the minimum.</summary>
+        public Queue<long> Longs { get; } = new();
+
+        public List<(int Min, int Max)> RollRanges { get; } = [];
+
+        public List<(long Min, long Max)> LongRanges { get; } = [];
+
+        public override int Next(int minValue, int maxValue)
+        {
+            RollRanges.Add((minValue, maxValue));
+            return Rolls.Count > 0 ? Rolls.Dequeue() : minValue;
+        }
+
+        public override int Next(int maxValue) => Picks.Count > 0 ? Picks.Dequeue() : 0;
+
+        public override long NextInt64(long minValue, long maxValue)
+        {
+            LongRanges.Add((minValue, maxValue));
+            return Longs.Count > 0 ? Longs.Dequeue() : minValue;
+        }
+    }
 
     private sealed class FakeHost : ICreatureSpellListHost<Marker>
     {
@@ -16,14 +47,27 @@ public sealed class CreatureSpellListSchedulerTests
         public bool InRangedMode { get; set; }
         public HashSet<uint> Refused { get; } = [];
         public HashSet<uint> NoTarget { get; } = [];
+        public HashSet<uint> NotReady { get; } = [];
+        public HashSet<int> ConditionFalse { get; } = [];
         public List<uint> Casts { get; } = [];
+        public List<Marker?> CastTargets { get; } = [];
         public List<uint> Scripts { get; } = [];
+        public List<Marker?> ScriptTargets { get; } = [];
+        public List<int> ConditionsAsked { get; } = [];
+        public List<uint> TargetIdsAsked { get; } = [];
         public Marker Victim { get; } = new();
 
-        public bool IsSpellReady(uint spellId) => true;
+        public bool IsSpellReady(uint spellId) => !NotReady.Contains(spellId);
+
+        public bool IsCombatConditionSatisfied(int combatCondition, uint spellId)
+        {
+            ConditionsAsked.Add(combatCondition);
+            return !ConditionFalse.Contains(combatCondition);
+        }
 
         public bool TryChooseTarget(uint targetId, uint spellId, out Marker? target)
         {
+            TargetIdsAsked.Add(targetId);
             target = targetId == CreatureSpellListTargets.Current ? Victim : null;
             return !NoTarget.Contains(spellId);
         }
@@ -32,22 +76,32 @@ public sealed class CreatureSpellListSchedulerTests
         {
             if (Refused.Contains(spellId)) return false;
             Casts.Add(spellId);
+            CastTargets.Add(target);
             return true;
         }
 
-        public void OnCast(CreatureSpellListEntry entry, Marker? target) => Scripts.Add(entry.ScriptId);
+        public void OnCast(CreatureSpellListEntry entry, Marker? target)
+        {
+            Scripts.Add(entry.ScriptId);
+            ScriptTargets.Add(target);
+        }
     }
 
     private static CreatureSpellListEntry Entry(uint pos, uint spell, uint probability = 0, uint initial = 0, uint repeat = 0,
-        CreatureSpellListFlags flags = CreatureSpellListFlags.None, uint availability = 100, uint script = 0)
-        => new(pos, spell, flags, CreatureSpellListTargets.Current, script, availability, probability, initial, initial, repeat, repeat);
+        CreatureSpellListFlags flags = CreatureSpellListFlags.None, uint availability = 100, uint script = 0,
+        uint target = CreatureSpellListTargets.Current, bool disabledForAi = false, int condition = 0)
+        => new(pos, spell, flags, target, script, availability, probability, initial, initial, repeat, repeat)
+        {
+            DisabledForAI = disabledForAi,
+            CombatCondition = condition,
+        };
 
     private static CreatureSpellList List(uint chanceSupport, uint chanceRanged, params CreatureSpellListEntry[] entries)
         => new(1, "test", chanceSupport, chanceRanged, entries);
 
-    private static CreatureSpellListScheduler<Marker> Make(FakeHost host, CreatureSpellList list, int seed = 1)
+    private static CreatureSpellListScheduler<Marker> Make(FakeHost host, CreatureSpellList list, ScriptedRandom? random = null)
     {
-        CreatureSpellListScheduler<Marker> s = new(host, new Random(seed));
+        CreatureSpellListScheduler<Marker> s = new(host, random ?? new ScriptedRandom());
         s.Bind(list);
         s.EnterCombat();
         return s;
@@ -66,6 +120,23 @@ public sealed class CreatureSpellListSchedulerTests
     }
 
     [Fact]
+    public void Catalog_TargetingRows_AreIndexed_AndEntriesMustNameExistingRows()
+    {
+        CreatureSpellListTargeting row = new(150, CreatureSpellListTargetingType.Support, 1, 2, 3, -4);
+        CreatureSpellList withTarget = List(0, 0, Entry(0, 10, target: 150));
+        CreatureSpellListCatalog catalog = new([withTarget], [row]);
+        Assert.Same(row, catalog.FindTargeting(150));
+        Assert.Null(catalog.FindTargeting(151));
+
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([withTarget]));
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([List(0, 0, Entry(0, 10, target: 100))], [row]));
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([], [row, row]));
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([], [row with { Id = 99 }]));
+        CreatureSpellListCatalog hardcoded = new([List(0, 0, Entry(0, 10, target: CreatureSpellListTargets.CurrentNotAlone))]);
+        Assert.Equal(1, hardcoded.Count); // hardcoded ids need no row
+    }
+
+    [Fact]
     public void Tick_AllProbabilitiesZero_CastsLowestPositionFirst()
     {
         FakeHost host = new();
@@ -75,20 +146,45 @@ public sealed class CreatureSpellListSchedulerTests
     }
 
     [Fact]
-    public void Tick_InitialCooldownDelaysFirstCast_RepeatCooldownDelaysNext()
+    public void Tick_InitialAndRepeatCooldownsUseTheirRandomRanges()
     {
         FakeHost host = new();
-        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0, Entry(0, 11, initial: 3000, repeat: 6000)));
+        ScriptedRandom random = new();
+        random.Longs.Enqueue(4000); // initial cooldown out of 1000..5000
+        random.Longs.Enqueue(2500); // repeat cooldown out of 2000..3000
+        CreatureSpellListScheduler<Marker> s = new(host, random);
+        s.Bind(List(0, 0, new CreatureSpellListEntry(0, 11, CreatureSpellListFlags.None, 1, 0, 100, 0, 1000, 5000, 2000, 3000)));
+        s.EnterCombat();
+        Assert.Equal((1000L, 5001L), Assert.Single(random.LongRanges));
+
         s.Update(1200);
         s.Update(1200);
+        s.Update(1200); // 3600 ms: inside the 4000 ms initial cooldown (a minimum-only roll would have cast at 1200)
         Assert.Empty(host.Casts);
-        s.Update(1200); // 3600 ms: past the 3000 ms initial cooldown
-        Assert.Single(host.Casts);
-        for (int i = 0; i < 4; i++) s.Update(1200); // 4800 ms after the cast, still inside 6000 ms
-        Assert.Single(host.Casts);
+        s.Update(1200); // 4800 ms
+        Assert.Equal([11u], host.Casts);
+        Assert.Equal((2000L, 3001L), random.LongRanges[1]);
+
         s.Update(1200);
+        s.Update(1200); // 7200 ms, repeat ready at 7300
+        Assert.Single(host.Casts);
+        s.Update(1200); // 8400 ms
+        Assert.Equal([11u, 11u], host.Casts);
+    }
+
+    [Fact]
+    public void Bind_DoesNotArmInitialCooldowns_ButEnterCombatDoes()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = new(host, new ScriptedRandom());
+        s.Bind(List(0, 0, Entry(1, 11, initial: 60000)));
         s.Update(1200);
-        Assert.Equal(2, host.Casts.Count);
+        Assert.Equal([11u], host.Casts); // a bind alone leaves the entry ready
+
+        s.Bind(List(0, 0, Entry(1, 11, initial: 60000)));
+        s.EnterCombat();
+        s.Update(1200);
+        Assert.Single(host.Casts);
     }
 
     [Fact]
@@ -124,6 +220,42 @@ public sealed class CreatureSpellListSchedulerTests
     }
 
     [Fact]
+    public void Tick_SpellNotReady_IsSkipped_AndCastsOnceReady()
+    {
+        FakeHost host = new();
+        host.NotReady.Add(11);
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0, Entry(1, 11), Entry(2, 22)));
+        s.Update(0);
+        Assert.Equal([22u], host.Casts);
+        host.NotReady.Clear();
+        s.Update(1200);
+        Assert.Equal([22u, 11u], host.Casts);
+
+        FakeHost only = new();
+        only.NotReady.Add(11);
+        CreatureSpellListScheduler<Marker> lone = Make(only, List(0, 0, Entry(1, 11)));
+        lone.Update(0);
+        Assert.Empty(only.Casts);
+    }
+
+    [Fact]
+    public void Tick_PassesTheChosenTargetToTheCastAndTheScript()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0,
+            Entry(1, 11, target: CreatureSpellListTargets.Current, script: 5),
+            Entry(2, 22, target: CreatureSpellListTargets.SelfTarget, flags: CreatureSpellListFlags.NonBlocking, script: 6)));
+        s.Update(0);
+        Assert.Equal([22u, 11u], host.Casts); // the non-blocking entry runs first
+        Assert.Equal([CreatureSpellListTargets.Current, CreatureSpellListTargets.SelfTarget], host.TargetIdsAsked);
+        Assert.Null(host.CastTargets[0]);
+        Assert.Same(host.Victim, host.CastTargets[1]);
+        Assert.Null(host.ScriptTargets[0]);
+        Assert.Same(host.Victim, host.ScriptTargets[1]);
+        Assert.Equal([6u, 5u], host.Scripts);
+    }
+
+    [Fact]
     public void Tick_NonBlockingSpellCastsAlongsideTheBlockingOne_AndRunsItsScript()
     {
         FakeHost host = new();
@@ -135,46 +267,139 @@ public sealed class CreatureSpellListSchedulerTests
         Assert.Equal([77u, 0u], host.Scripts);
     }
 
-    [Fact]
-    public void Tick_OnlyOneBlockingSpellPerTick_ByProbabilityWeight()
+    [Theory]
+    [InlineData(1, 29L, 11u)] // order A,B: a roll below A's weight picks A
+    [InlineData(1, 30L, 22u)] // a roll at A's weight falls through to B
+    [InlineData(0, 69L, 22u)] // shuffled to B,A: a roll below B's weight picks B
+    [InlineData(0, 70L, 11u)] // shuffled to B,A: a roll at B's weight falls through to A
+    public void Tick_OneBlockingSpellPerTick_ChosenByShuffleAndWeightRoll(int pick, long roll, uint expectedSpell)
     {
         FakeHost host = new();
-        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0, Entry(1, 11, probability: 50), Entry(2, 22, probability: 50)));
+        ScriptedRandom random = new();
+        random.Picks.Enqueue(pick); // Fisher-Yates over two items: 0 swaps them, 1 keeps them
+        random.Longs.Enqueue(roll);
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0, Entry(1, 11, probability: 30), Entry(2, 22, probability: 70)), random);
         s.Update(0);
-        Assert.Single(host.Casts);
+        Assert.Equal([expectedSpell], host.Casts);
+        Assert.Equal((0L, 100L), random.LongRanges[0]);
     }
 
     [Fact]
-    public void Tick_RangedGate_ChanceDropsByFiftyInMeleeMode()
-    {
-        // Ranged chance 50: always passes in ranged mode only when the roll is <= 50, never gated at 0 in melee mode beyond roll 0.
-        // With chance 100 in ranged mode every roll passes; in melee mode the chance is 50 so some of 200 ticks must fail.
-        FakeHost ranged = new() { InRangedMode = true };
-        FakeHost melee = new() { InRangedMode = false };
-        CreatureSpellList list = List(0, 100, Entry(1, 11, flags: CreatureSpellListFlags.RangedAction));
-        CreatureSpellListScheduler<Marker> a = Make(ranged, list, 7);
-        CreatureSpellListScheduler<Marker> b = Make(melee, list, 7);
-        for (int i = 0; i < 200; i++)
-        {
-            a.Update(1200);
-            b.Update(1200);
-        }
-
-        Assert.Equal(200, ranged.Casts.Count);
-        Assert.InRange(melee.Casts.Count, 60, 140);
-    }
-
-    [Fact]
-    public void Bind_AvailabilityZeroRollsOutAnEntryAndNullClears()
+    public void Tick_SupportGate_UsesTheSupportRollAgainstTheListChance()
     {
         FakeHost host = new();
-        CreatureSpellListScheduler<Marker> s = new(host, new Random(3));
-        s.Bind(List(0, 0, Entry(1, 11), Entry(2, 22, availability: 0)));
-        Assert.True(s.ActiveEntries.Count is 1 or 2);
-        Assert.Contains(s.ActiveEntries, e => e.SpellId == 11);
+        ScriptedRandom random = new();
+        CreatureSpellListScheduler<Marker> s = Make(host, List(50, 0,
+            Entry(1, 11, flags: CreatureSpellListFlags.SupportAction),
+            Entry(2, 22, flags: CreatureSpellListFlags.NonBlocking)), random);
+        random.Rolls.Enqueue(51); // support roll above the chance: the support entry is gated out
+        random.Rolls.Enqueue(0);  // ranged roll
+        s.Update(0);
+        Assert.Equal([22u], host.Casts); // the entry without the support flag is not gated
+        host.Casts.Clear();
+        random.Rolls.Enqueue(50); // equal to the chance passes
+        random.Rolls.Enqueue(0);
+        s.Update(1200);
+        Assert.Equal([22u, 11u], host.Casts);
+        Assert.All(random.RollRanges, r => Assert.Equal((0, 101), r));
+    }
+
+    [Theory]
+    [InlineData(true, 100, 100, true)]
+    [InlineData(true, 100, 101, false)] // not reachable by a real roll; pins the comparison direction
+    [InlineData(false, 100, 50, true)]  // melee mode: chance 100 - 50
+    [InlineData(false, 100, 51, false)]
+    [InlineData(false, 30, 0, true)]    // chance - 50 floors at 0, a roll of 0 still passes
+    [InlineData(false, 30, 1, false)]
+    [InlineData(true, 30, 30, true)]
+    [InlineData(true, 30, 31, false)]
+    public void Tick_RangedGate_ChanceDropsByFiftyInMeleeMode(bool rangedMode, uint chance, int roll, bool casts)
+    {
+        FakeHost host = new() { InRangedMode = rangedMode };
+        ScriptedRandom random = new();
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, chance, Entry(1, 11, flags: CreatureSpellListFlags.RangedAction)), random);
+        random.Rolls.Enqueue(0);    // support roll
+        random.Rolls.Enqueue(roll); // ranged roll
+        s.Update(0);
+        Assert.Equal(casts, host.Casts.Count == 1);
+        Assert.All(host.Casts, c => Assert.Equal(11u, c));
+    }
+
+    [Fact]
+    public void Tick_DisabledForAiEntry_IsSkipped()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0,
+            Entry(1, 11, disabledForAi: true),
+            Entry(2, 22, disabledForAi: true, flags: CreatureSpellListFlags.NonBlocking),
+            Entry(3, 33)));
+        s.Update(0);
+        Assert.Equal([33u], host.Casts);
+
+        FakeHost only = new();
+        CreatureSpellListScheduler<Marker> lone = Make(only, List(0, 0, Entry(1, 11, disabledForAi: true)));
+        lone.Update(0);
+        Assert.Empty(only.Casts);
+    }
+
+    [Fact]
+    public void Tick_CombatCondition_GatesTheEntry_AndZeroOrMinusOneAreNoCondition()
+    {
+        FakeHost host = new();
+        host.ConditionFalse.Add(7);
+        CreatureSpellListScheduler<Marker> s = Make(host, List(0, 0,
+            Entry(1, 11, condition: 7),
+            Entry(2, 22, condition: 0, flags: CreatureSpellListFlags.NonBlocking),
+            Entry(3, 33, condition: -1, flags: CreatureSpellListFlags.NonBlocking)));
+        s.Update(0);
+        Assert.Equal([22u, 33u], host.Casts);
+        Assert.Equal([7], host.ConditionsAsked); // 0 and -1 are never asked of the host
+
+        host.ConditionFalse.Clear();
+        s.Update(1200);
+        Assert.Equal([22u, 33u, 22u, 33u, 11u], host.Casts);
+    }
+
+    [Fact]
+    public void Bind_AvailabilityRoll_KeepsAtOrBelowTheAvailability_AndDropsAbove()
+    {
+        FakeHost host = new();
+        ScriptedRandom random = new();
+        CreatureSpellListScheduler<Marker> s = new(host, random);
+        CreatureSpellList list = List(0, 0, Entry(1, 11), Entry(2, 22, availability: 40), Entry(3, 33, availability: 0));
+
+        random.Rolls.Enqueue(41); // above 40: dropped
+        random.Rolls.Enqueue(0);  // 0 does not exceed 0: kept
+        s.Bind(list);
+        Assert.Equal([11u, 33u], s.ActiveEntries.Select(e => e.SpellId));
+        Assert.Equal([(0, 101), (0, 101)], random.RollRanges); // the availability-100 entry draws nothing
+
+        random.Rolls.Enqueue(40); // equal to 40: kept
+        random.Rolls.Enqueue(1);  // above 0: dropped
+        s.Bind(list);
+        Assert.Equal([11u, 22u], s.ActiveEntries.Select(e => e.SpellId));
+
+        s.Update(1200);
+        Assert.Equal([11u], host.Casts); // only kept entries are scheduled
+
         s.Bind(null);
         Assert.False(s.HasSpells);
+        Assert.Null(s.List);
         Assert.False(s.Update(5000));
+    }
+
+    [Fact]
+    public void Bind_DisabledList_SchedulesNothing_ButStaysBound()
+    {
+        FakeHost host = new();
+        CreatureSpellListScheduler<Marker> s = new(host, new ScriptedRandom());
+        CreatureSpellList disabled = new(1, "off", 0, 0, [Entry(1, 11)]) { Disabled = true };
+        s.Bind(disabled);
+        s.EnterCombat();
+        Assert.Same(disabled, s.List);
+        Assert.False(s.HasSpells);
+        Assert.False(s.Update(1200));
+        Assert.Empty(host.Casts);
     }
 
     [Fact]
