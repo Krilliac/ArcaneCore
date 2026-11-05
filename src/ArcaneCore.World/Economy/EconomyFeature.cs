@@ -94,6 +94,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         _items = _services.GetService<ItemsFeature>();
         _directory = _services.GetService<CharacterDirectory>();
         _leaseKeeper = _services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
+        _auctionCacheStale = !HoldsEconomyLease;
         Settlements.Attach(world, _services.GetService<CharacterSaveQueue>(), _services.GetService<TeleportFeature>());
         using (IServiceScope scope = _scopes.CreateScope())
         {
@@ -490,6 +491,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         // Only the Economy lease holder runs expiry (auctions, letters, recovery): a worker that forwards its requests, or a worker that does not hold the
         // economy lease, would settle the same rows twice (writer-lock design section 2b: the sweep ran on every worker before).
         if (!Enabled || _stopping || !IsEconomyHolder || !HoldsEconomyLease)
+        {
+            return;
+        }
+
+        // A node that took the lease over after attach holds a cache the previous holder has written past: nothing is expired or settled from it until a fresh snapshot replaced it.
+        if (!EnsureAuctionCacheCurrent())
         {
             return;
         }

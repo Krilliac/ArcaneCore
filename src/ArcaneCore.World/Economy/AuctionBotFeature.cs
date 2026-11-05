@@ -152,6 +152,12 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         _timer = new Timer(_ => world.Post(Tick), null, period, period);
     }
 
+    /// <summary>
+    /// Whether this node is attached but not running the bot because another node holds the economy lease (never on a node with no lease keeper). The <c>.ahbot</c> commands
+    /// refuse on it: it has read no ledger or overrides, so their answers would be empty and an <c>item</c> change would never reach the holder.
+    /// </summary>
+    public bool IsDormant => !HoldsEconomyLease();
+
     /// <summary>Whether this node may run the bot now: always when nothing is clustered, otherwise only while it holds the economy lease.</summary>
     private bool HoldsEconomyLease()
         => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_keeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy);
@@ -179,8 +185,8 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
     /// <summary>
     /// World thread, from <see cref="Ready"/>: this node now holds the economy lease but has not read the state the previous holder wrote. Reads the custody rows and the
-    /// <c>ahbot_items</c> rows on the thread pool (the SQLite provider runs its async calls synchronously, so never on the tick) and finishes on the world thread; a failed read is
-    /// logged and tried again by a later tick. The bot does nothing until it is finished.
+    /// <c>ahbot_items</c> rows on the thread pool (the SQLite provider runs its async calls synchronously, so never on the tick) and finishes on the world thread; a failed read (of either table) is
+    /// logged and tried again by a later tick. The bot does nothing until it is finished, and until the economy feature has replaced its auction cache (<see cref="EconomyFeature.EnsureAuctionCacheCurrent"/>).
     /// </summary>
     private void BeginTakeoverLoad()
     {
@@ -205,14 +211,23 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
                     }
                 }
 
-                overrides = await ReadOverridesAsync().ConfigureAwait(false);
+                overrides = await ReadOverridesAsync(throwOnFailure: true).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 failure = ex;
             }
 
-            world.Post(() => FinishTakeoverLoad(rows, overrides, failure));
+            try
+            {
+                world.Post(() => FinishTakeoverLoad(rows, overrides, failure));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // world.Post can throw once the world has shut down; nothing is left to finish.
+                _activating = false;
+                logger.LogFault("ahbot.takeover-post", ex, "AHBot: the state read after taking over the economy lease could not be applied");
+            }
         });
     }
 
@@ -221,8 +236,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         _activating = false;
         if (failure is not null)
         {
-            FaultLedger.Shared.Record("economy.ahbot-takeover-load", failure);
-            logger.LogFault("ahbot.takeover-load", failure, "AHBot: reading the custody ledger after taking over the economy lease failed; trying again on a later tick");
+            logger.LogFault("ahbot.takeover-load", failure, "AHBot: reading the custody ledger and item overrides after taking over the economy lease failed; trying again on a later tick");
             return;
         }
 
@@ -572,7 +586,13 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         if (!_stateLoaded)
         {
             BeginTakeoverLoad();
+            economy.EnsureAuctionCacheCurrent(); // the auction snapshot read runs beside the state read
             return false;
+        }
+
+        if (!economy.EnsureAuctionCacheCurrent())
+        {
+            return false; // taken over: the bot reads the auctions only once the cache holds the previous holder's rows
         }
 
         planner = EnsurePlanner();
@@ -608,8 +628,8 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
     }
 
-    /// <summary>Read the <c>ahbot_items</c> rows: null when there is no store (keep what is held), empty when the read failed.</summary>
-    private async Task<Dictionary<uint, AuctionBotItemOverride>?> ReadOverridesAsync()
+    /// <summary>Read the <c>ahbot_items</c> rows: null when there is no store (keep what is held), empty when the read failed (with <paramref name="throwOnFailure"/> the failure propagates instead, so a takeover tries again).</summary>
+    private async Task<Dictionary<uint, AuctionBotItemOverride>?> ReadOverridesAsync(bool throwOnFailure = false)
     {
         try
         {
@@ -624,7 +644,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             logger.LogInformation("AHBot: {Count} ahbot_items rows", loaded.Count);
             return loaded;
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
+        catch (Exception ex) when (!throwOnFailure && ex is not OutOfMemoryException)
         {
             FaultLedger.Shared.Record("economy.ahbot-load-overrides", ex);
             logger.LogFault("ahbot.load-overrides", ex, "AHBot: loading ahbot_items failed; no item overrides");

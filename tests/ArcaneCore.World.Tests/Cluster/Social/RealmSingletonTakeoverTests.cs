@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Tests.Cluster.Social;
 
 /// <summary>
 /// The social and economy realm singletons follow the lease at run time: attached dormant on every map worker, they start by themselves when the node takes the lease over.
-/// (The auction bot's own takeover test is in AuctionBotFeatureTests.) Unproven until the integration gate runs them.
+/// (The auction bot's own takeover test is in AuctionBotFeatureTests.)
 /// </summary>
 public sealed class RealmSingletonTakeoverTests
 {

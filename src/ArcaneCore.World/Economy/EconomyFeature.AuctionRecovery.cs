@@ -24,6 +24,97 @@ public sealed partial class EconomyFeature
     internal long? AuctionRecoveryNotBeforeMs(uint auctionId)
         => _auctionRecoveries.TryGetValue(auctionId, out AuctionRecovery? recovery) ? recovery.NotBeforeMs : null;
 
+    // True from Attach on a clustered node that did not hold the Economy lease then: the auction cache was read at Attach and the holder has written since,
+    // so it is replaced by a fresh snapshot the first time this node finds the lease held (world thread).
+    private bool _auctionCacheStale;
+    private bool _auctionRefreshing;
+
+    /// <summary>
+    /// World thread: whether the auction cache is current for this node's holding of the Economy lease. Always true on a node that held the lease at attach (or runs no keeper).
+    /// On a node that took the lease over later it is false until a fresh snapshot of the auctions has replaced the cache: the first call that finds the lease held starts the read
+    /// (off the world thread), and the expiry sweep, the recovery sweep and the auction bot act only once this is true. A failed read is tried again by the next call.
+    /// </summary>
+    public bool EnsureAuctionCacheCurrent()
+    {
+        if (!_auctionCacheStale)
+        {
+            return true;
+        }
+
+        if (HoldsEconomyLease && Enabled && !_stopping)
+        {
+            BeginAuctionRefresh();
+        }
+
+        return false;
+    }
+
+    private void BeginAuctionRefresh()
+    {
+        if (_auctionRefreshing)
+        {
+            return;
+        }
+
+        _auctionRefreshing = true;
+        Read(async (store, ct) =>
+        {
+            // Rows and escrow from one snapshot, the id seed read after it (as Attach does), so every row seen is at or below the seed.
+            AuctionSnapshot snapshot = await store.GetAuctionSnapshotAsync(new AuctionSnapshotFilter(), ct).ConfigureAwait(false);
+            EconomyIdSeed seed = await store.GetIdSeedAsync(ct).ConfigureAwait(false);
+            return (Snapshot: snapshot, Seed: seed);
+        }, result =>
+        {
+            _auctionRefreshing = false;
+            if (_stopping || !_auctionCacheStale)
+            {
+                return;
+            }
+
+            ApplyAuctionSnapshot(result.Snapshot, result.Seed);
+            _auctionCacheStale = false;
+            _logger.LogInformation("Auction cache reloaded after taking over the economy lease: {Auctions} auctions ({Reserved} reserved)", _auctions.Count, _auctionRecoveries.Count);
+        }, () => _auctionRefreshing = false);
+    }
+
+    /// <summary>World thread: replace the auction cache with <paramref name="snapshot"/> (rows the cache holds and the snapshot lacks are gone; a row whose escrow item does not match is reserved, as at Attach) and raise the id allocators.</summary>
+    private void ApplyAuctionSnapshot(AuctionSnapshot snapshot, EconomyIdSeed seed)
+    {
+        RaiseTo(ref _lastMailId, seed.MaxMailId);
+        RaiseTo(ref _lastAuctionId, seed.MaxAuctionId);
+        RaiseTo(ref _lastTextId, seed.MaxItemTextId);
+        HashSet<uint> present = [.. snapshot.Auctions.Select(a => a.Id)];
+        foreach (uint gone in _auctions.Keys.Where(id => !present.Contains(id)).ToList())
+        {
+            _auctions.Remove(gone);
+            _expiryBackoff.Remove(gone);
+            _auctionRecoveries.Remove(gone);
+            _busyAuctions.Remove(gone);
+        }
+
+        foreach (AuctionRecord auction in snapshot.Auctions)
+        {
+            if (snapshot.Escrow.TryGetValue(auction.ItemGuid, out ItemInstanceData? item) && EscrowMatches(auction, item))
+            {
+                if (!_auctions.TryGetValue(auction.Id, out AuctionView? previous) || previous.Auction != auction)
+                {
+                    _expiryBackoff.Remove(auction.Id);
+                }
+
+                _auctions[auction.Id] = new AuctionView(auction, item);
+                if (_auctionRecoveries.Remove(auction.Id))
+                {
+                    _busyAuctions.Remove(auction.Id);
+                }
+            }
+            else
+            {
+                _auctions.Remove(auction.Id);
+                ReserveMismatchedAuction(auction);
+            }
+        }
+    }
+
     private long _recoveryReads;
 
     /// <summary>Recovery reads this node has started (tests: a node without the economy lease starts none).</summary>
@@ -85,7 +176,7 @@ public sealed partial class EconomyFeature
     internal void RecoverAuctions()
     {
         // The recovery timer is not the sweep: a node that is not the economy lease holder never settles a reserved auction either.
-        if (_stopping || !HoldsEconomyLease)
+        if (_stopping || !HoldsEconomyLease || !EnsureAuctionCacheCurrent())
         {
             return;
         }

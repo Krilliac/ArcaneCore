@@ -36,19 +36,39 @@ public sealed class AuctionBotCommands : ICommandGroup
     public bool IsEnabled(IServiceProvider? services)
         => services is null || services.GetService<IConfiguration>()?.GetValue<bool>($"{AuctionBotOptions.SectionName}:{nameof(AuctionBotOptions.Enabled)}") == true;
 
+    /// <summary>
+    /// Why the <c>.ahbot</c> subcommands cannot run here, or null when they can. A map worker attaches the bot on every node but it only works on the node that
+    /// holds the economy lease: on any other (<see cref="AuctionBotFeature.IsDormant"/>) it has no ledger or overrides and a subcommand would reply as if it had
+    /// succeeded (an empty ledger, a rebuild that expires and lists nothing) or write <c>ahbot_items</c> that the holder's in-memory overrides never see. A node
+    /// whose host never attached the bot (a role without it) refuses too.
+    /// </summary>
+    internal static string? Unavailable(AuctionBotFeature? bot, Features.FeatureHost? features)
+    {
+        if (bot is null || !bot.Options.Enabled)
+        {
+            return "The auction house bot is disabled (AuctionHouseBot:Enabled).";
+        }
+
+        if (features is { HasAttached: true } && !features.IsAttached(bot))
+        {
+            return "The auction house bot does not run on this node (it is not attached here).";
+        }
+
+        if (bot.IsDormant)
+        {
+            return "The auction house bot does not run on this node (the economy lease is held by another node).";
+        }
+
+        return null;
+    }
+
     private static AuctionBotFeature? Bot(CommandContext context)
     {
         AuctionBotFeature? bot = context.Session.Services.GetService<AuctionBotFeature>();
-        if (bot is null || !bot.Options.Enabled)
+        string? reason = Unavailable(bot, context.Session.Services.GetService<Features.FeatureHost>());
+        if (reason is not null || bot is null)
         {
-            context.Reply("The auction house bot is disabled (AuctionHouseBot:Enabled).");
-            return null;
-        }
-
-        // On a map worker the bot runs only on the node that holds the economy lease; elsewhere the feature exists but was never attached.
-        if (context.Session.Services.GetService<Features.FeatureHost>() is { HasAttached: true } features && !features.IsAttached(bot))
-        {
-            context.Reply("The auction house bot does not run on this node (the economy lease is held by another node).");
+            context.Reply(reason ?? "The auction house bot is disabled (AuctionHouseBot:Enabled).");
             return null;
         }
 

@@ -42,14 +42,15 @@ public sealed class AuctionBotFeatureTests
         Assert.Equal(1, await fixture.CountAsync<AuctionRow>());
     }
 
-    [Fact]
-    public async Task Bot_on_a_node_without_the_economy_lease_stays_dormant_then_starts_when_it_takes_the_lease_over()
+    private const string EconomyScope = ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy;
+
+    /// <summary>A map worker (worker-a) whose economy scope is held by worker-b, which never renews it.</summary>
+    private static async Task<(ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper Keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider Time)> DormantWorkerKeeperAsync()
     {
-        // worker-b held the economy lease and died: it never renews. Unproven until the integration gate runs it.
         var time = new ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero));
         var store = new ArcaneCore.Kernel.Cluster.Social.InMemoryRealmAuthorityLeaseStore();
-        store.TryAcquire(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), time.GetUtcNow());
-        await using var keeper = new ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper(store,
+        store.TryAcquire(EconomyScope, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), time.GetUtcNow());
+        var keeper = new ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper(store,
             Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Social.ClusterNodeOptions
             {
                 Role = ArcaneCore.World.Cluster.Social.ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10,
@@ -57,32 +58,107 @@ public sealed class AuctionBotFeatureTests
             Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Gateway.GatewayWorkerOptions { Enabled = true, NodeId = "worker-a" }),
             NullLogger<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>.Instance, null, time, _ => { });
         await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
-        Assert.False(keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy));
+        Assert.False(keeper.Holds(EconomyScope));
+        return (keeper, time);
+    }
 
+    [Fact]
+    public async Task Bot_on_a_node_without_the_economy_lease_stays_dormant_then_reads_what_the_dead_holder_wrote_and_buys_and_bids()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
         await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper,
             extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
         Assert.False(fixture.Bot.StateLoaded); // nothing read while another node holds the lease
+        Assert.True(fixture.Bot.IsDormant);
         Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
+        Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
         Assert.Empty(fixture.Bot.Ledger.Rows);
+        Assert.Equal(1, await fixture.OnWorld(() => fixture.Economy.Auctions.Count)); // the cache read at attach: the player auction of the fixture
+
+        // After this node attached, the holder (worker-b) wrote: a player auction open for bids, a bot bid that stands (auction 3, bidder 0), and its custody rows.
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            foreach ((uint id, uint guid, uint bid) in new[] { (2u, 501u, 0u), (3u, 502u, 700u) })
+            {
+                var item = new ItemInstanceRow { Guid = guid };
+                item.CopyFrom(0, new ItemInstanceData { Guid = guid, Entry = Fixture.Entry, Count = 1 });
+                db.Add(item);
+                var auction = new AuctionRow();
+                auction.CopyFrom(new AuctionRecord
+                {
+                    Id = id, HouseId = House, ItemGuid = guid, ItemEntry = Fixture.Entry, ItemCount = 1, SellerId = fixture.SellerId,
+                    StartBid = 500, Buyout = 100_000, ExpireTime = now + (48 * 3600), BidderId = 0, Bid = bid, Deposit = 0,
+                });
+                db.Add(auction);
+            }
+
+            await db.SaveChangesAsync();
+            await new EfAuctionBotCustodyStore(db).SaveAsync(
+            [
+                new AuctionBotCustodyRecord("ahbot:list:7", (byte)AuctionBotCustodyKind.Item, (byte)AuctionBotCustodyRole.Listing, (byte)AuctionBotCustodyState.TerminalOk,
+                    House, 7, 900, Fixture.Entry, 1, 0, now, now),
+                new AuctionBotCustodyRecord("ahbot:bid:3:1", (byte)AuctionBotCustodyKind.Gold, (byte)AuctionBotCustodyRole.Bid, (byte)AuctionBotCustodyState.TerminalOk,
+                    House, 3, 502, Fixture.Entry, 1, 700, now, now),
+            ], []);
+        }
 
         for (int i = 0; i < 4; i++)
         {
             time.Advance(TimeSpan.FromSeconds(10)); // worker-b's lease lapses at 30 s, and the keeper's renewal tick takes it over
         }
 
-        Assert.True(keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy));
+        Assert.True(keeper.Holds(EconomyScope));
         using var timeout = new CancellationTokenSource(Fixture.Budget);
         while (!await fixture.OnWorld(() =>
                {
-                   fixture.Bot.Tick(); // the first tick that finds the lease held starts the takeover read
-                   return fixture.Bot.StateLoaded;
+                   fixture.Bot.Tick(); // the first tick that finds the lease held starts the state read and the auction cache read
+                   return fixture.Bot.StateLoaded && fixture.Economy.EnsureAuctionCacheCurrent();
                }).WaitAsync(timeout.Token))
         {
             await Task.Delay(10, timeout.Token);
         }
 
-        Assert.Equal(3, await fixture.OnWorld(() => fixture.Bot.Sell(House))); // the daily item budget: it lists without a restart
         Assert.True(fixture.Bot.Persistent);
+        Assert.False(fixture.Bot.IsDormant);
+        // The custody rows the dead holder wrote are in this node's ledger.
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.IdemKey == "ahbot:list:7" && r.State == AuctionBotCustodyState.TerminalOk);
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.IdemKey == "ahbot:bid:3:1" && r.State == AuctionBotCustodyState.TerminalOk);
+        // The auction cache holds the rows written after attach, so the standing bid was not released (a stale cache lacks auction 3) and the new auction is seen.
+        Assert.Equal(3, await fixture.OnWorld(() => fixture.Economy.Auctions.Count));
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(2)));
+        Assert.Equal(700u, await fixture.OnWorld(() => fixture.Economy.FindAuction(3)!.Bid));
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, await fixture.OnWorld(() => fixture.Bot.Ledger.StandingBid(3)!.State));
+
+        // It buys out the player auction the bot values above its buyout and bids on auction 2; auction 3 already carries the bot's bid.
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
+        await fixture.TickUntilAsync(() => fixture.Bot.Ledger.Rows.Count(r => r.Role != AuctionBotCustodyRole.Listing && r.State == AuctionBotCustodyState.TerminalOk) == 3);
+        AuctionBotCustodyRow bid = fixture.Bot.Ledger.Rows.Single(r => r.Role == AuctionBotCustodyRole.Bid && r.AuctionId == 2);
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, bid.State);
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.Role == AuctionBotCustodyRole.Buyout && r.AuctionId == 1);
+        Assert.True(await fixture.OnWorld(() => fixture.Economy.FindAuction(2)!.Bid > 0));
+    }
+
+    [Fact]
+    public async Task Ahbot_commands_refuse_on_a_node_that_does_not_hold_the_economy_lease_and_run_once_it_does()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper);
+
+        string? refused = AuctionBotCommands.Unavailable(fixture.Bot, null);
+        Assert.NotNull(refused);
+        Assert.Contains("economy lease is held by another node", refused);
+
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        Assert.Null(AuctionBotCommands.Unavailable(fixture.Bot, null));
+        Assert.Contains("disabled", AuctionBotCommands.Unavailable(null, null));
     }
 
     [Fact]
