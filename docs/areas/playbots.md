@@ -2016,10 +2016,11 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
 - **LFG talk** (`World:Playerbots:Chat:Lfg`: `Enabled`, `AnswerRepeatSeconds`, `MaxTrackedVolunteers`, all live): the only part of
   the group talk the server answers is a whispered offer to join a bot's LFG or LFM call ("inv", "can i come"). The offer is detected by
   `PlayerbotVoiceFacts.AsksInvite`; `PlayerbotLfgIntents.RoleOf` then reads the role the player states in the same line ("tank"/"mt",
-  "heal"/"healer", "dps"/"dd"; a class word states none). Limit: `PlayerbotLfgIntents.Read`, `Resolve`, `HasGroupCue`, the
-  `PlayerbotLfgZoneIndex` and the other intent code (group searches such as "any groups for SFK?", guild requests and searches, an "inv" in
-  a channel) are not called by the server: no heard line reaches them, nothing answers a search, a guild or a channel line, and they have
-  no options.
+  "heal"/"healer", "dps"/"dd"; a class word states none). Limit: only that whispered offer is read. The server does not answer group
+  searches such as "any groups for SFK?", guild requests and searches, or an "inv" in a channel; the code that would read them was removed
+  rather than kept uncalled. Volunteering is deliberately a partial port of the earlier design: the level answer for a player above the
+  bots' range (`LevelHigh`) is kept, while the "noted far, meet at" outcome and the level-below refusal are left out, since a player who
+  cannot be placed (too far, another map, below the range) gets the general `CannotPlace` answer.
 - **Volunteering** (a real player whispers "inv" to a bot's LFG or LFM call): the poster, or any bot of the same waiting group (`Enabled`),
   answers. `PlayerbotGroupCoordinator.Volunteer` checks in this order, the first failure deciding: the same team, a level of at least the
   goal's ("sorry, need 14+"), not in a group (or with an invitation pending), no recent decline, an instance goal's anchor, no ignore or
@@ -2027,7 +2028,8 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   or beyond 1500 yards is not promised an invitation), then, when the player would take the group's last place and it is a tank's or a
   healer's, a role the player's class can fill ("sorry, we need a healer"; a stated role, "i can tank", is used for the match when the class
   can play it and dropped when it cannot; a stated damage role is never placed in a tank or healer place), then the dry-run match as before
-  (Ready, Noted or CannotPlace). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
+  (Ready, Noted or CannotPlace; LevelHigh, "sorry, this group tops out at 12", when the player is more than `Groups:LevelRange` above the
+  highest waiting bot, checked once placing has failed). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
   (a different outcome, such as CannotPlace then Noted, is answered again; after Ready the repeat is quiet and the post stays); `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
   only the whisper to the poster itself.
 

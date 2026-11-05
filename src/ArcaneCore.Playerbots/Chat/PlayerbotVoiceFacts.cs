@@ -233,12 +233,6 @@ internal static partial class PlayerbotVoiceFacts
     /// <summary>Whether a whisper to an LFG or LFM poster asks for an invitation ("inv", "invite pls", "can i come", "i can tank", "me").</summary>
     internal static bool AsksInvite(string text) => !string.IsNullOrWhiteSpace(text) && InviteWords().IsMatch(text.ToLowerInvariant());
 
-    /// <summary>
-    /// The stricter form for a line said in a channel, where a bare "me", "x", "+1" or "1" is anything but a request: the words of
-    /// <see cref="AsksInvite"/> without those and without "spot".
-    /// </summary>
-    internal static bool AsksInviteInChannel(string text) => !string.IsNullOrWhiteSpace(text) && ChannelInviteWords().IsMatch(text.ToLowerInvariant());
-
     /// <summary>Whether a whisper to a seller asks about its offer (the item's name or a word of it, a price, "still", "wts", "how much", "?").</summary>
     internal static bool AsksAbout(string text, string item)
     {
@@ -255,9 +249,6 @@ internal static partial class PlayerbotVoiceFacts
 
     [GeneratedRegex(@"^\s*(inv|invite|inv me|inv pls|inv plz|invite me|me|x|\+1|1)\b|\b(inv|invite)( me)?( pls| plz| please)?\b|\bcan i (come|join)\b|\bi('?m| am) (in|down|interested)\b|\bi can (tank|heal|dps)\b|\broom for\b|\bspot\b")]
     private static partial Regex InviteWords();
-
-    [GeneratedRegex(@"\b(inv|invite)( me)?( pls| plz| please)?\b|\bcan i (come|join)\b|\bi('?m| am) (in|down|interested)\b|\bi can (tank|heal|dps)\b|\broom for\b")]
-    private static partial Regex ChannelInviteWords();
 
     [GeneratedRegex(@"\b(how much|price|cost|h/m|hm\?|still (have|selling|got)|wts|buy|cod|interested)\b|\?\s*$")]
     private static partial Regex PriceWords();

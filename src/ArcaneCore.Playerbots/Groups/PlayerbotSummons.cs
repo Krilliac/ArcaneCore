@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
@@ -44,9 +45,11 @@ internal sealed class SummonJob(SummonKind kind, ObjectGuid summoner, ObjectGuid
     public TravelCastLeg? Cast { get; set; }
 
     public bool Announced { get; set; }
+
+    /// <summary>When the summoner last used the stone, and how often (a stone job only; a ritual helper keeps its own count in the bot's state).</summary>
     public uint LastUseMs { get; set; }
+
     public int UseTries { get; set; }
-    public TravelWalk Walk { get; } = new();
 }
 
 /// <summary>
@@ -99,7 +102,17 @@ internal sealed class PlayerbotSummons
     private readonly Dictionary<ObjectGuid, uint> _cooldownUntil = [];
     private readonly Dictionary<ObjectGuid, uint> _farSince = [];
     private readonly Dictionary<ObjectGuid, BotState> _bots = [];
+    private readonly Dictionary<Map, StoneCache> _stones = [];
+    private readonly List<ObjectGuid> _goneHelpers = [];
     private uint _lastPruneMs;
+    private uint _groupsRetryMs;
+    private bool _groupsFaulted;
+
+    /// <summary>The meeting stones of one map, scanned from its objects at <c>BuiltMs</c> (the stones are spawns that do not come and go, so the scan is not repeated every think).</summary>
+    private readonly record struct StoneCache(uint BuiltMs, GameObject[] Stones);
+
+    /// <summary>How long a map's stone list is used before the map's objects are scanned again.</summary>
+    private const uint StoneScanMs = 60_000;
 
     /// <summary>The summons begun since the start (tests).</summary>
     internal int Started { get; private set; }
@@ -122,6 +135,11 @@ internal sealed class PlayerbotSummons
         public uint RitualSpellId;
         public SummonJob? WalkJob;
         public readonly TravelWalk Walk = new();
+
+        /// <summary>The ritual job this bot clicked the portal for as a helper, and its own click count and last click (not shared with the other helpers).</summary>
+        public SummonJob? ClickJob;
+        public int ClickTries;
+        public uint ClickLastMs;
         public ObjectGuid RefusedTarget;
         public uint RefusedUntilMs;
     }
@@ -135,12 +153,12 @@ internal sealed class PlayerbotSummons
     {
         if (!options.Summon.Enabled)
         {
-            if (_bots.Count > 0 || _bySummoner.Count > 0) Clear();
+            if (_bots.Count > 0 || _bySummoner.Count > 0 || _stones.Count > 0) Clear(session);
             return false;
         }
 
         uint now = session.World.NowMs;
-        if (!player.IsInWorld || !player.IsAlive || player.Map is not { } map || Groups(session) is not { } groups
+        if (!player.IsInWorld || !player.IsAlive || player.Map is not { } map || Groups(session, now) is not { } groups
             || groups.GetGroup(player.Guid) is not { IsBattlegroundGroup: false, MemberCount: >= 2 } group
             || map.Template is { IsBattleground: true })
         {
@@ -161,7 +179,7 @@ internal sealed class PlayerbotSummons
 
         if (state.NextEvalMs != 0 && unchecked((int)(now - state.NextEvalMs)) < 0) return false; // 0 is a fresh state, never a time to wait for
         state.NextEvalMs = now + EvalGapMs == 0 ? 1 : now + EvalGapMs;
-        return TryStart(session, player, options, groups, group, groupState, state, elapsedMs, now);
+        return TryStart(session, player, options, group, groupState, state, elapsedMs, now);
     }
 
     // --- accepting -----------------------------------------------------------------------------------------------------
@@ -179,7 +197,8 @@ internal sealed class PlayerbotSummons
         Accepted++;
     }
 
-    private bool IsHelper(ObjectGuid guid)
+    /// <summary>Whether the bot holds a helper place of a job under way (the accept step and tests).</summary>
+    internal bool IsHelper(ObjectGuid guid)
     {
         foreach (SummonJob job in _bySummoner.Values)
             if (job.Helpers.Contains(guid)) return true;
@@ -188,7 +207,7 @@ internal sealed class PlayerbotSummons
 
     // --- starting ------------------------------------------------------------------------------------------------------
 
-    private bool TryStart(WorldSession session, Player player, PlayerbotOptions options, GroupManager groups, Group group, PlayerbotGroupState? groupState,
+    private bool TryStart(WorldSession session, Player player, PlayerbotOptions options, Group group, PlayerbotGroupState? groupState,
         BotState state, uint elapsedMs, uint now)
     {
         if (player.Combat.IsInCombat || player.Transport is not null || PlayerbotTaxi.IsFlying(player)) return false;
@@ -204,7 +223,7 @@ internal sealed class PlayerbotSummons
         if (ritualReady && (player.Movement.HasFlag(MovementFlags.MaskMoving) || PlayerbotMotion.IsActive(player))) return false;
         if (ritualReady)
         {
-            Player? target = PickTarget(session, player, groups, group, cfg, now, anchor: null);
+            Player? target = PickTarget(session, player, group, cfg, now, anchor: null);
             if (target is null) return false;
             if (player.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects) return false;
             int needed = Math.Max(1, (int)(objects.FindTemplate(GameObjectMapSystem.PlayerSummoningRitualEntry)?.GetData(GameObjectMapSystem.RitualParticipantsData) ?? 3) - 1);
@@ -216,9 +235,9 @@ internal sealed class PlayerbotSummons
             return DriveSummoner(session, player, options, group, job, state, elapsedMs, now);
         }
 
-        if (player.Map?.FindUpdater<GameObjectMapSystem>() is not { } stones || FindStone(stones, player, cfg.HelperYards) is not { } stone) return false;
+        if (FindStone(player, now, cfg.HelperYards) is not { } stone) return false;
         Vector3 at = new(stone.X, stone.Y, stone.Z);
-        Player? aimed = PickTarget(session, player, groups, group, cfg, now, anchor: at);
+        Player? aimed = PickTarget(session, player, group, cfg, now, anchor: at);
         if (aimed is null || CountHelpers(session, player, aimed, group, at, cfg.HelperYards) < 1) return false;
         var stoneJob = new SummonJob(SummonKind.Stone, player.Guid, aimed.Guid, player.MapId, now, 1) { Anchor = stone.Guid, AnchorPosition = at };
         _bySummoner[player.Guid] = stoneJob;
@@ -232,12 +251,18 @@ internal sealed class PlayerbotSummons
     /// a battleground, not in a dungeon other than the summoner's map, and far (another map, or farther than <see cref="PlayerbotSummonOptions.FarYards"/>
     /// from the summoner or the stone) for <see cref="FarDebounceMs"/>.
     /// </summary>
-    private Player? PickTarget(WorldSession session, Player summoner, GroupManager groups, Group group, PlayerbotSummonOptions cfg, uint now, Vector3? anchor)
+    private Player? PickTarget(WorldSession session, Player summoner, Group group, PlayerbotSummonOptions cfg, uint now, Vector3? anchor)
     {
         Player? pick = null;
         foreach (GroupMemberSlot slot in group.Members)
         {
-            if (slot.Guid == summoner.Guid || session.World.FindOnlinePlayer(slot.Guid) is not { IsInWorld: true, IsAlive: true, Map: { } map } member) continue;
+            if (slot.Guid == summoner.Guid) continue;
+            if (session.World.FindOnlinePlayer(slot.Guid) is not { IsInWorld: true, IsAlive: true, Map: { } map } member)
+            {
+                _farSince.Remove(slot.Guid); // offline or dead: the far time starts over when the member is back
+                continue;
+            }
+
             bool far = member.MapId != summoner.MapId
                 || Vector3.Distance(new Vector3(member.X, member.Y, member.Z), anchor ?? new Vector3(summoner.X, summoner.Y, summoner.Z)) > cfg.FarYards;
             if (!far)
@@ -279,13 +304,25 @@ internal sealed class PlayerbotSummons
         return count;
     }
 
-    private static GameObject? FindStone(GameObjectMapSystem objects, Player player, float yards)
+    /// <summary>The spawned meeting stone nearest to the player within <paramref name="yards"/>, from the map's cached stone list (the object table is scanned once a minute per map, not on every think).</summary>
+    private GameObject? FindStone(Player player, uint now, float yards)
     {
+        if (player.Map is not { } map) return null;
+        if (!_stones.TryGetValue(map, out StoneCache cache) || unchecked(now - cache.BuiltMs) >= StoneScanMs)
+        {
+            if (map.FindUpdater<GameObjectMapSystem>() is not { } objects) return null;
+            List<GameObject> found = [];
+            foreach (GameObject go in objects.GameObjects)
+                if (go.Type == GameObjectType.MeetingStone) found.Add(go);
+            cache = new StoneCache(now == 0 ? 1 : now, [.. found]);
+            _stones[map] = cache;
+        }
+
         GameObject? best = null;
         float bestDistance = yards;
-        foreach (GameObject go in objects.GameObjects)
+        foreach (GameObject go in cache.Stones)
         {
-            if (go.Type != GameObjectType.MeetingStone || !go.IsSpawned) continue;
+            if (!go.IsSpawned) continue;
             float d = Vector3.Distance(new Vector3(go.X, go.Y, go.Z), new Vector3(player.X, player.Y, player.Z));
             if (d > bestDistance) continue;
             best = go;
@@ -355,11 +392,11 @@ internal sealed class PlayerbotSummons
         if (offered)
         {
             if (job.Kind == SummonKind.Ritual && job.Cast is not null) StopRitual(session, player, job.Cast.SpellId);
-            return End(player, job);
+            return End(player);
         }
 
         uint limit = job.Kind == SummonKind.Ritual ? RitualMaxMs : StoneMaxMs;
-        if (!options.Summon.Enabled || target is not { IsInWorld: true, IsAlive: true } || player.Combat.IsInCombat || group.Find(job.Target) is null
+        if (target is not { IsInWorld: true, IsAlive: true } || player.Combat.IsInCombat || group.Find(job.Target) is null
             || unchecked(now - job.StartMs) > limit || player.MapId != job.MapId || player.Transport is not null)
             return Fail(session, player, job);
 
@@ -447,7 +484,7 @@ internal sealed class PlayerbotSummons
         if (player.Selection != target.Guid) session.TryManagedAction(WorldOpcode.CmsgSetSelection, PlayerbotNavigation.GuidPayload(target.Guid.Value));
         if (!session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(stone.Guid.Value))) return true;
         Announce(session, player, options, group, job, target);
-        if (target.PendingSummon is { } offer && offer.Summoner == player.Guid) return End(player, job);
+        if (target.PendingSummon is { } offer && offer.Summoner == player.Guid) return End(player);
         return true;
     }
 
@@ -490,11 +527,19 @@ internal sealed class PlayerbotSummons
         if (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)) return true;
         if (job.Kind == SummonKind.Ritual && !anchor.Participants.Contains(player.Guid))
         {
-            // CMSG_GAMEOBJ_USE: counted once the owner channels; tried up to twelve times a second apart; after that the helper keeps its place until the job ends (its time bound).
-            if (job.UseTries < 12 && unchecked(now - job.LastUseMs) >= MinRetryGapMs)
+            // CMSG_GAMEOBJ_USE: counted once the owner channels; each helper tries up to twelve times a second apart (its own count and gap, not the other helper's);
+            // after that the helper keeps its place until the job ends (its time bound).
+            if (state.ClickJob != job)
             {
-                job.LastUseMs = now == 0 ? 1 : now;
-                job.UseTries++;
+                state.ClickJob = job;
+                state.ClickTries = 0;
+                state.ClickLastMs = 0;
+            }
+
+            if (state.ClickTries < 12 && (state.ClickLastMs == 0 || unchecked(now - state.ClickLastMs) >= MinRetryGapMs))
+            {
+                state.ClickLastMs = now == 0 ? 1 : now;
+                state.ClickTries++;
                 session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(anchor.Guid.Value));
             }
         }
@@ -513,7 +558,7 @@ internal sealed class PlayerbotSummons
 
     // --- ends -----------------------------------------------------------------------------------------------------------
 
-    private bool End(Player summoner, SummonJob job)
+    private bool End(Player summoner)
     {
         _bySummoner.Remove(summoner.Guid);
         return false;
@@ -522,7 +567,7 @@ internal sealed class PlayerbotSummons
     private bool Fail(WorldSession session, Player summoner, SummonJob job)
     {
         if (job.Kind == SummonKind.Ritual && job.Cast is { Stage: TravelCastStage.Casting }) StopRitual(session, summoner, job.Cast.SpellId);
-        return End(summoner, job);
+        return End(summoner);
     }
 
     /// <summary>
@@ -554,34 +599,67 @@ internal sealed class PlayerbotSummons
         foreach (SummonJob other in _bySummoner.Values) other.Helpers.Remove(player.Guid);
     }
 
-    private void Clear()
+    private void Clear(WorldSession session)
     {
+        foreach (SummonJob job in _bySummoner.Values) Abandon(session, job);
         _bots.Clear();
         _bySummoner.Clear();
+        _stones.Clear();
         _farSince.Clear();
         _cooldownUntil.Clear();
     }
 
     /// <summary>A job outlives its own bound by this much before any bot's think drops it (the summoner's own think ends it first).</summary>
-    private const uint StaleGraceMs = 5_000;
+    internal const uint StaleGraceMs = 5_000;
 
     /// <summary>
     /// Drops the jobs whose summoner is no longer in the world (logged out, kicked) or that outlived their time bound, whoever thinks. The summoner's own
     /// think ends a job normally; this is for a summoner that stopped reaching <see cref="Drive"/> (logged out, moved to a driver that skips it),
     /// which would otherwise freeze the stone's helper and bar the target from every other summon.
     /// </summary>
-    private void DropStale(WorldSession session, uint now)
+    internal void DropStale(WorldSession session, uint now)
     {
         if (_bySummoner.Count == 0) return;
-        List<ObjectGuid>? stale = null;
+        List<SummonJob>? stale = null;
         foreach (SummonJob job in _bySummoner.Values)
         {
             uint limit = (job.Kind == SummonKind.Ritual ? RitualMaxMs : StoneMaxMs) + StaleGraceMs;
-            if (session.World.FindOnlinePlayer(job.Summoner) is not { IsInWorld: true } || unchecked(now - job.StartMs) > limit) (stale ??= []).Add(job.Summoner);
+            if (session.World.FindOnlinePlayer(job.Summoner) is not { IsInWorld: true } || unchecked(now - job.StartMs) > limit)
+            {
+                (stale ??= []).Add(job);
+                continue;
+            }
+
+            DropGoneHelpers(session, job);
         }
 
         if (stale is null) return;
-        foreach (ObjectGuid summoner in stale) _bySummoner.Remove(summoner);
+        foreach (SummonJob job in stale)
+        {
+            Abandon(session, job);
+            _bySummoner.Remove(job.Summoner);
+        }
+    }
+
+    /// <summary>Takes the helpers that left the world or died (and no longer think here) off a job, so they stop filling its places.</summary>
+    private void DropGoneHelpers(WorldSession session, SummonJob job)
+    {
+        if (job.Helpers.Count == 0) return;
+        _goneHelpers.Clear();
+        foreach (ObjectGuid helper in job.Helpers)
+            if (session.World.FindOnlinePlayer(helper) is not { IsInWorld: true, IsAlive: true }) _goneHelpers.Add(helper);
+        foreach (ObjectGuid helper in _goneHelpers) job.Helpers.Remove(helper);
+        _goneHelpers.Clear();
+    }
+
+    /// <summary>
+    /// A job dropped without its summoner's own think (summons switched off, stale): a ritual channel the summoner still runs is stopped through the
+    /// summoner's own session, as <see cref="Fail"/> does, so the warlock is not left casting with its portal gone.
+    /// </summary>
+    private static void Abandon(WorldSession session, SummonJob job)
+    {
+        if (job.Kind != SummonKind.Ritual || job.Cast is not { Stage: TravelCastStage.Casting } cast) return;
+        if (session.World.FindOnlinePlayer(job.Summoner) is { } summoner && summoner.Session is WorldSession own) StopRitual(own, summoner, cast.SpellId);
     }
 
     /// <summary>Drop what has not been seen for five minutes (a bot logged out, a target long gone), once a minute.</summary>
@@ -600,6 +678,11 @@ internal sealed class PlayerbotSummons
         if (cooled is not null)
             foreach (ObjectGuid guid in cooled) _cooldownUntil.Remove(guid);
         if (_farSince.Count > 256) _farSince.Clear();
+        List<Map>? aged = null;
+        foreach ((Map map, StoneCache cache) in _stones)
+            if (unchecked(now - cache.BuiltMs) > 300_000) (aged ??= []).Add(map);
+        if (aged is not null)
+            foreach (Map map in aged) _stones.Remove(map);
     }
 
     // --- talking --------------------------------------------------------------------------------------------------------
@@ -620,16 +703,29 @@ internal sealed class PlayerbotSummons
     /// <summary>Whether the player is one of the managed bots (a real player's session is not managed).</summary>
     private static bool IsBot(Player player) => player.Session is WorldSession { IsManaged: true };
 
-    private static GroupManager? Groups(WorldSession session)
+    /// <summary>
+    /// The group manager, or null when the social feature is not attached (a world without it). That is no error of this think: it is recorded once,
+    /// and the lookup is not tried again for <see cref="GroupsRetryMs"/> (the failed lookup throws).
+    /// </summary>
+    private GroupManager? Groups(WorldSession session, uint now)
     {
+        if (_groupsRetryMs != 0 && unchecked((int)(now - _groupsRetryMs)) < 0) return null;
         try
         {
-            return session.Services.GetService<SocialFeature>()?.Context.Groups;
+            GroupManager? groups = session.Services.GetService<SocialFeature>()?.Context.Groups;
+            _groupsFaulted = false;
+            _groupsRetryMs = 0;
+            return groups;
         }
         catch (InvalidOperationException ex)
         {
-            FaultLedger.Shared.Record("playerbot.summons", ex);
-            return null; // the social feature is not attached (a world without it)
+            if (!_groupsFaulted) FaultLedger.Shared.Record("playerbot.summons", ex);
+            _groupsFaulted = true;
+            uint retry = now + GroupsRetryMs;
+            _groupsRetryMs = retry == 0 ? 1 : retry;
+            return null;
         }
     }
+
+    private const uint GroupsRetryMs = 5_000;
 }

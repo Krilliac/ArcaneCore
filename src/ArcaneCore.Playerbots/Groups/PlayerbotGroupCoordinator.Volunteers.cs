@@ -41,13 +41,20 @@ internal enum PlayerbotVolunteerOutcome : byte
     /// <summary>The group's last place is a tank's or a healer's and the player's class (or the role it stated) cannot fill it.</summary>
     Role,
 
+    /// <summary>
+    /// The player is above the level range of every waiting bot of the goal (more than <see cref="PlayerbotGroupOptions.LevelRange"/> over the highest
+    /// of them), so no group of these bots can take them; <see cref="PlayerbotVolunteerResult.Level"/> names the highest level they could be.
+    /// </summary>
+    LevelHigh,
+
     /// <summary>The player ignores a waiting bot of the group, or a waiting bot holds the player as a rival: no invitation and no reply.</summary>
     Ignored,
 }
 
 /// <summary>
 /// The answer to <see cref="PlayerbotGroupCoordinator.Volunteer"/>: the outcome and, when noted, how many more the group still lacks (always above 0).
-/// <paramref name="Level"/> is the lowest level the goal takes for <see cref="PlayerbotVolunteerOutcome.Level"/> (0 for any other outcome);
+/// <paramref name="Level"/> is the lowest level the goal takes for <see cref="PlayerbotVolunteerOutcome.Level"/>, the highest the waiting bots take for
+/// <see cref="PlayerbotVolunteerOutcome.LevelHigh"/> (0 for any other outcome);
 /// <paramref name="Needed"/> is the role the group lacks for its last place for <see cref="PlayerbotVolunteerOutcome.Role"/>.
 /// </summary>
 internal readonly record struct PlayerbotVolunteerResult(PlayerbotVolunteerOutcome Outcome, int Missing = 0, int Level = 0, PlayerbotGroupRole? Needed = null);
@@ -74,7 +81,8 @@ public sealed partial class PlayerbotGroupCoordinator
     /// World thread: <paramref name="player"/> asked <paramref name="botId"/>, which waits for partners, for an invitation. Ready when a
     /// dry-run match over the bot's real candidates includes the player (the group then forms at once); Noted, with the true number the
     /// group still lacks (above 0), when the player could be placed but the bots are too few: the player is kept until they are enough;
-    /// CannotPlace when the coordinator could not place the player however many bots come (nothing is kept). Role when the group's last
+    /// CannotPlace when the coordinator could not place the player however many bots come (nothing is kept); LevelHigh when the player is above the
+    /// level range of every waiting bot (nothing is kept). Role when the group's last
     /// place is a tank's or a healer's and the player cannot fill it; Ignored (no reply) when the player ignores a waiting bot of the goal
     /// or one of them holds the player as a rival.
     /// </summary>
@@ -125,6 +133,11 @@ public sealed partial class PlayerbotGroupCoordinator
             Form(goal with { Size = size }, plan);
             return new(PlayerbotVolunteerOutcome.Ready);
         }
+
+        // A player more than the level range above every waiting bot is placed in no window of them: say so instead of the general refusal.
+        int highest = 0;
+        foreach (PlayerbotGroupCandidate candidate in candidates) highest = Math.Max(highest, candidate.Level);
+        if (player.Level > highest + _options.Groups.LevelRange) return new(PlayerbotVolunteerOutcome.LevelHigh, Level: highest + _options.Groups.LevelRange);
 
         // The dry run came first: the role answer is for a player the coordinator could not place (a dual-role bot may tank or heal, so the roles are only counted once placing failed).
         if (size - candidates.Count <= 1)

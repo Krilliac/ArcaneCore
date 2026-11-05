@@ -95,9 +95,6 @@ internal static partial class PlayerbotDungeons
         }
     }
 
-    /// <summary>Whether a dungeon is named by a token as short as the abbreviations players typed (three letters or fewer: "st", "dm", "sm", "gy").</summary>
-    internal static bool IsShortToken(string token) => token.Length <= 3;
-
     /// <summary>Whether a bot of <paramref name="level"/> may go to <paramref name="dungeon"/> (its range, two levels of slack either side).</summary>
     internal static bool Fits(PlayerbotDungeon dungeon, int level) => !dungeon.Raid && level >= dungeon.MinLevel - 2 && level <= dungeon.MaxLevel + 2;
 
