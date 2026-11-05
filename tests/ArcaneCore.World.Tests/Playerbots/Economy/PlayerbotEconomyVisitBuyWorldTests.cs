@@ -304,7 +304,9 @@ public sealed class PlayerbotEconomyVisitBuyWorldTests : PlayerbotEconomyWorldTe
             var result = await VisitWithWornScoresAsync(c, "Econshield", (_, slot) => slot == InventorySlots.OffHand ? 0f : 100f, upgradeSlotSearches: 1,
                 entry: ScenarioShield, buyout: cap,
                 profile: new PlayerbotUpgradeProfile(PlayerbotWeaponStyle.OneHandShield, false, Class.Warrior),
-                gain: (_, template) => template.InventoryType == (uint)InventoryType.Shield ? 10f : null);
+                // Only the scenario shield gets the fixed gain; every other item falls through to the production scorer, so a class
+                // running in parallel that reads the seam while this visit runs sees its normal values.
+                gain: (player, template) => template.Entry == ScenarioShield ? 10f : PlayerbotGearScoreSeam.DefaultUpgradeGain(player, template));
 
             // A class-wide weapon page cannot return the shield (class Armor): the off-hand slot searches by its own inventory type.
             ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Shield, PlayerbotEconomyWire.Any)]), "the one search is for shields");

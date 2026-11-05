@@ -62,7 +62,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_queries"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_ticks"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotFleetCommands.s_nextPostId"] = "post id, Interlocked.Increment",
-        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam, set by tests before the world runs",
+        ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeGain (property)"] = "test seam: the shield visit test in PlayerbotEconomyVisitBuyWorldTests swaps it on the world thread (a single reference write, atomic) and restores it in a finally; the override answers only for its own scenario item and delegates every other item to DefaultUpgradeGain, so economy classes running in parallel read production values",
         ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.WornScore (property)"] = "test seam: the economy world tests swap it on the world thread (a single reference write, atomic); only PlayerbotEconomyVisitBuyWorldTests writes it, one test at a time, and other classes' visits read the default",
         ["ArcaneCore.World.Playerbots.PlayerbotGearScoreSeam.UpgradeProfile (property)"] = "test seam: swapped like WornScore (atomic reference write, one test at a time in PlayerbotEconomyVisitBuyWorldTests)",
         ["ArcaneCore.World.Playerbots.PlayerbotRegionRoutes.s_syncFallbacks"] = "telemetry counter, Interlocked.Increment and Interlocked.Read only",
