@@ -463,7 +463,7 @@ internal sealed class PlayerbotGroupAI
             // A rally where the leader stands only because it found no path (RetreatNoPath) has no point to hold.
             PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
             if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards, leader);
-            else Fight(player, target, interval, waiting?.MoveTo, WaitingLeashYards(waiting), leader);
+            else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards, leader);
             if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader, interval);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
@@ -1279,16 +1279,9 @@ internal sealed class PlayerbotGroupAI
     /// <summary>How long a group gives up a creature whose fight went nowhere (<see cref="PlayerbotFightWatch"/>).</summary>
     internal const uint FightStallShunMs = 300_000;
 
-    /// <summary>The leash radius of a waiting siege leader's fight: the answer leash while the step's answer is unspent, the waypoint disk once it is spent (no raid: the answer leash, the leash centre is null then).</summary>
-    internal static float WaitingLeashYards(PlayerbotSiegeRaid? waiting)
-        => waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards;
-
-    /// <summary>The yards from the kite centre a hurt ranged bot's kite step may end within: the fight's leash radius around a siege waypoint or rally point, the answer leash around the leader (no centre of the fight's own).</summary>
-    internal static float KiteLeashYards(Vector3? leashCentre, float leashYards)
-        => leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards;
-
     /// <summary>The last <see cref="Fight"/> could plan no way to its target.</summary>
     private bool _noPathToTarget;
+
     /// <param name="leashCentre">The waypoint of a waiting siege leader, or the retreat point of a rallying one: the player chases a target out of reach only while the target is within <paramref name="leashYards"/> of it, and otherwise stands (a cast, or a swing once the target is in reach).</param>
     /// <param name="leashYards">The leash radius: <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/>, or the disk once the step's answer bound is spent; <see cref="PlayerbotSiegeCommander.RallyYards"/> at a rally.</param>
     private void Fight(Player player, Unit target, uint interval, Vector3? leashCentre = null, float leashYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards,
@@ -1315,7 +1308,7 @@ internal sealed class PlayerbotGroupAI
         Vector3? kiteCentre = leashCentre;
         if (kiteCentre is null && leader is not null && leader.Guid != player.Guid && ReferenceEquals(leader.Map, player.Map))
             kiteCentre = new Vector3(leader.X, leader.Y, leader.Z);
-        if (_kite.Update(player, target, interval, kiteCentre, KiteLeashYards(leashCentre, leashYards), _risk, grouped: true))
+        if (_kite.Update(player, target, interval, kiteCentre, leashCentre is null ? PlayerbotSiegeCommander.SiegeAnswerLeashYards : leashYards, _risk, grouped: true))
         {
             _route = null;
             _rangedIdleMs = 0;

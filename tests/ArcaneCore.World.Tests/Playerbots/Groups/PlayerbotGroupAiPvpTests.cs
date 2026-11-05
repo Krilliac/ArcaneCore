@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -187,8 +188,8 @@ public sealed class PlayerbotGroupAiPvpTests
     }), botLeads: true);
 
     /// <summary>
-    /// The bot leads a siege raid that pushes through at its waypoint (waiting). Its attacker, a flagged player, stands 7 yd east of the bot; the waypoint is <paramref name="waypointDx"/> east of the bot
-    /// (negative: west), so the attacker is 7 - waypointDx yd from the waypoint, measured from the waypoint and not from the bot. <paramref name="attackerDx"/> moves the attacker (east of the bot, default 7 yd).
+    /// The bot leads a siege raid that pushes through at its waypoint (waiting). Its attacker, a flagged player, stands <paramref name="attackerDx"/> yd east of the bot (default 7); the waypoint is <paramref name="waypointDx"/> east of the bot
+    /// (negative: west), so the attacker is attackerDx - waypointDx yd from the waypoint, measured from the waypoint and not from the bot.
     /// </summary>
     private static void WaitingLeader(Rig rig, float waypointDx, bool answerSpent, float attackerDx = 7f)
     {
@@ -263,26 +264,85 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.Equal("lead:siege-hold", rig.Ai.Step);
     }), botLeads: true);
 
-    /// <summary>
-    /// The leash the waiting leader's fight hands to the kite (the spent-answer case): unspent, the answer leash; spent, the waypoint disk only. The kite then gets the fight's leash radius around the waypoint or rally point,
-    /// and the answer leash around the leader when the fight has no centre of its own (a kite step ending 20 yd out is acceptable only in the first two).
-    /// </summary>
-    [Fact]
-    public void TheKiteLeash_IsTheDiskOnceTheAnswerIsSpent_TheAnswerLeashBeforeIt_AndTheAnswerLeashAroundTheLeaderWithNoCentre()
-    {
-        var siege = new PlayerbotSiege(1, 0, 990_000, [Vector3.Zero], Vector3.Zero, 0);
-        var unspent = new PlayerbotSiegeRaid(siege, 1) { AnswerSpent = false };
-        var spent = new PlayerbotSiegeRaid(siege, 1) { AnswerSpent = true };
-        Assert.Equal(PlayerbotSiegeCommander.SiegeAnswerLeashYards, PlayerbotGroupAI.WaitingLeashYards(unspent));
-        Assert.Equal(PlayerbotSiegeCommander.WaypointYards, PlayerbotGroupAI.WaitingLeashYards(spent));
-        Assert.NotEqual(PlayerbotGroupAI.WaitingLeashYards(unspent), PlayerbotGroupAI.WaitingLeashYards(spent));
+    private static CreatureTemplate SlowCreature(uint entry) => new()
+        { Entry = entry, Name = "dummy" + entry, CreatureType = 1, MinLevel = 1, MaxLevel = 1, MinLevelHealth = 500, MaxLevelHealth = 500, SpeedRun = 0.5f };
 
-        var waypoint = new Vector3(10, 0, 0);
-        Assert.Equal(PlayerbotSiegeCommander.WaypointYards, PlayerbotGroupAI.KiteLeashYards(waypoint, PlayerbotGroupAI.WaitingLeashYards(spent)));
-        Assert.Equal(PlayerbotSiegeCommander.SiegeAnswerLeashYards, PlayerbotGroupAI.KiteLeashYards(waypoint, PlayerbotGroupAI.WaitingLeashYards(unspent)));
-        Assert.Equal(PlayerbotSiegeCommander.RallyYards, PlayerbotGroupAI.KiteLeashYards(waypoint, PlayerbotSiegeCommander.RallyYards));
-        Assert.Equal(PlayerbotSiegeCommander.SiegeAnswerLeashYards, PlayerbotGroupAI.KiteLeashYards(null, PlayerbotSiegeCommander.WaypointYards));
+    /// <summary>Flat ground at <c>z</c>: what the kite's floor probes, leg clip and line-of-sight checks read.</summary>
+    private sealed class FlatGround(float z) : ILineOfSight
+    {
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z2, float maxSearchDistance) => z;
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z2, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
     }
+
+    /// <summary>
+    /// The kite is the only observable effect of the leash the waiting leader's fight hands to <c>PlayerbotKite.Update</c>: the bot is a hurt mage (45% health) that leads a siege raid waiting at its waypoint, with a creature
+    /// of 0.5 run speed (out-walked, so no slow is needed) 2 yd from it, and the waypoint under its feet. Every kite step is 10 yd long (the clip keeps at least 7.5), so it ends past WaypointYards of the waypoint in every direction.
+    /// Unspent, the leash is SiegeAnswerLeashYards and the first think steps (the step ends ":kite"); spent, it is WaypointYards and no direction has a spot, so no think kites and the bot stays within the disk. The unspent
+    /// run is the control: the same setup does step. Replacing the spent leash passed to the kite by the answer leash (at the waiting-leader Fight call, or in the kite call inside Fight) makes the spent run step.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task AHurtRangedWaitingSiegeLeaderKitesWithinTheAnswerLeash_AndNotPastWaypointYardsOnceTheAnswerIsSpent(bool answerSpent) => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        Player bot = rig.BotPlayer;
+        WorldCollision.Of(rig.Host.World).Install(lineOfSight: new FlatGround(bot.Z));
+        rig.Enemy.Player!.Relocate(bot.X + 150, bot.Y, bot.Z, MathF.PI, rig.Host.World.NowMs); // nobody else near
+        bot.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Mage);
+        var fireball = new SpellInfo
+        {
+            Id = 992_501, Name = "Fireball", Rank = "Rank 1", CastTime = new SpellCastTime(0, 0, 0), RangeIndex = 5, Range = new SpellRange(0f, 30f),
+            StartRecoveryCategory = 133, StartRecoveryTime = 1500, DamageClass = SpellDamageClass.Magic,
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, TargetA = SpellImplicitTarget.UnitEnemy, BasePoints = 0, BaseDice = 1, DieSides = 1 }, new SpellEffectInfo(), new SpellEffectInfo()],
+        };
+        var spellFeature = bot.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>();
+        spellFeature.System.Store = new SpellStore([.. spellFeature.System.Store.All, fireball], [], []);
+        Assert.True(spellFeature.Spellbook.LearnSpell(bot, fireball.Id));
+
+        var siege = new PlayerbotSiege(1, bot.MapId, 990_000, [Vector3.Zero], Vector3.Zero, 0);
+        rig.Group.Siege = new PlayerbotSiegeRaid(siege, 1)
+            { Push = PlayerbotSiegePush.Quiet, AtWaypoint = true, AnswerSpent = answerSpent, MoveTo = new Vector3(bot.X, bot.Y, bot.Z) };
+        Assert.True(rig.Group.LeaderPlayer(rig.Host.World)!.Guid == bot.Guid, "the bot leads the group");
+
+        var system = new CreatureMapSystem(bot.Map!, new CreatureContent([SlowCreature(990_441)], [], [], [], []), random: new Random(5));
+        Creature mob = system.SpawnTemporary(SlowCreature(990_441), bot.X + 2, bot.Y, bot.Z, 0f);
+        Assert.True(bot.Map!.Combat.Attack(mob, bot));
+        bot.Map!.Combat.DealDamage(mob, bot, 1);
+        bot.Health = bot.MaxHealth * 45 / 100;
+        Assert.InRange(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(mob.X, mob.Y, mob.Z)), 1f, PlayerbotSiegeCommander.WaypointYards - 1);
+        Assert.True(mob.RunSpeed <= bot.RunSpeed * PlayerbotKiteModel.SlowSpeedRatio, "the creature is out-walked, so the kite needs no slow");
+
+        if (!answerSpent)
+        {
+            rig.Think();
+            Assert.Same(mob, rig.Ai.TargetUnit);
+            Assert.EndsWith(":kite", rig.Ai.Step);
+            return;
+        }
+
+        for (int i = 0; i < 3; i++)
+        {
+            rig.Think();
+            Assert.Same(mob, rig.Ai.TargetUnit);
+            Assert.False(rig.Ai.Step.EndsWith(":kite", StringComparison.Ordinal), "a kite step toward a spot past the waypoint disk: " + rig.Ai.Step);
+            Assert.True(Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(bot.X, bot.Y, bot.Z)) <= PlayerbotSiegeCommander.WaypointYards);
+        }
+    }), botLeads: true);
 
     [Fact]
     public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>
