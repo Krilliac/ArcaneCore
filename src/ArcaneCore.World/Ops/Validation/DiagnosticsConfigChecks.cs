@@ -5,7 +5,7 @@ using Microsoft.Extensions.Configuration;
 namespace ArcaneCore.World.Ops.Validation;
 
 /// <summary>
-/// The <c>Diagnostics</c> section (docs/ops/invariants.md): every policy must be one of its enum's
+/// The <c>Diagnostics</c> section (docs/ops/invariants.md; its <c>CrashDump</c> subsection is <c>CrashDumpConfigChecks</c> in the Kernel): every policy must be one of its enum's
 /// names and the invariant log limit must not be negative. Checked by <c>check-config</c> and at every
 /// start, so an unknown policy name is one listed line and exit 78 instead of a binder exception.
 /// </summary>
@@ -40,39 +40,10 @@ public sealed class DiagnosticsConfigChecks : IConfigCheck
             }
         }
 
-        string dump = DiagnosticsOptions.SectionName + ":CrashDump";
-        IConfigurationSection dumpSection = section.GetSection("CrashDump");
-        Enum<CrashDumpMode>(issues, dumpSection, nameof(CrashDumpOptions.Mode), dump);
-        IntRange(issues, dumpSection, nameof(CrashDumpOptions.MaxFiles), dump, 0, int.MaxValue, "0 keeps every file; default 5");
-        IntRange(issues, dumpSection, nameof(CrashDumpOptions.FullMinFreeGB), dump, 0, int.MaxValue, "0 never falls back for space; default 16");
-        IntRange(issues, dumpSection, nameof(CrashDumpOptions.TimeoutSeconds), dump, 1, MaxDumpTimeoutSeconds, "seconds; the whole dump may take three times this; default 120");
-
         return issues;
     }
 
-    /// <summary>The largest <c>CrashDump:TimeoutSeconds</c>: far above any real dump, and the announced maximum (three times it) stays a small number of seconds.</summary>
-    private const int MaxDumpTimeoutSeconds = 3600;
-
-    private static void IntRange(List<ConfigIssue> issues, IConfigurationSection section, string name, string prefix, int min, int max, string hint)
-    {
-        string? text = section[name];
-        if (text is null)
-        {
-            return;
-        }
-
-        string key = prefix + ":" + name;
-        if (!int.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value))
-        {
-            issues.Add(new ConfigIssue(ConfigSeverity.Error, key, $"'{text}' is not a whole number.", $"use a whole number from {min} to {max} ({hint})"));
-        }
-        else if (value < min || value > max)
-        {
-            issues.Add(new ConfigIssue(ConfigSeverity.Error, key, $"{value} is outside {min} to {max}.", $"use a whole number from {min} to {max} ({hint})"));
-        }
-    }
-
-    private static void Enum<T>(List<ConfigIssue> issues, IConfigurationSection section, string name, string? prefix = null)
+    private static void Enum<T>(List<ConfigIssue> issues, IConfigurationSection section, string name)
         where T : struct, Enum
     {
         string? text = section[name];
@@ -86,7 +57,7 @@ public sealed class DiagnosticsConfigChecks : IConfigCheck
         {
             issues.Add(new ConfigIssue(
                 ConfigSeverity.Error,
-                (prefix ?? DiagnosticsOptions.SectionName) + ":" + name,
+                DiagnosticsOptions.SectionName + ":" + name,
                 $"'{text}' is not a {typeof(T).Name}.",
                 "use one of " + string.Join(", ", System.Enum.GetNames<T>())));
         }

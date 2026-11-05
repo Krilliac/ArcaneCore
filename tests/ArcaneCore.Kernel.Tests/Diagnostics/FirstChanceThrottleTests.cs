@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
-using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using Xunit;
 

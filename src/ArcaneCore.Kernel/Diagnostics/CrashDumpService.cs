@@ -38,7 +38,7 @@ public sealed record CrashDumpOutcome(string? Path, CrashDumpMode Mode, string N
 
 /// <summary>
 /// The in-process crash dump (<c>Diagnostics:CrashDump</c>): picks the directory and the file name, walks the Full, Heap, Mini fallback chain
-/// with the answer timeout shared across the whole chain (at most <see cref="MaxWaitSeconds"/> in all), restricts the file to its owner on Unix, and prunes the oldest files beyond <c>MaxFiles</c>.
+/// with a per-attempt answer timeout bounded by what is left of the chain's maximum (<see cref="MaxWaitSeconds"/> in all), restricts the file to its owner on Unix, and prunes the oldest files beyond <c>MaxFiles</c>.
 /// <para>
 /// Ownership: one instance per <see cref="CrashHandler"/>; no static state. Threading: <see cref="Run"/> is called on the crashing thread, which
 /// blocks while the dump is written on a dedicated background thread (never the thread pool, which a crash may have starved), so a hung runtime

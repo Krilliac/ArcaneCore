@@ -36,7 +36,7 @@ it is called on every failure path and may be called directly.
 
 Defaults keep the process behaving as the .NET runtime does without this section, except that every event is now reported
 first. None of the keys is live (`.reload config` does not touch them). The world daemon's `check-config` validates the section
-(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78); the realm daemon has
+(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78; the `CrashDump` subsection is checked the same way by every daemon, `CrashDumpConfigChecks`); the realm daemon has
 no `check-config`, so `UseArcaneDiagnostics` itself writes the binder's message to standard error and exits 78 before anything
 binds or touches a database.
 
@@ -99,7 +99,7 @@ ends. The dump is requested from the process's own diagnostics endpoint, the mec
 | `Diagnostics:CrashDump:Directory` | empty | empty: `dumps` beside the log file (`logs/dumps`), the directory `.debug dump` uses; without file logging, `dumps` in the daemon's directory |
 | `Diagnostics:CrashDump:MaxFiles` | `5` | the newest N files of the pattern are kept; 0 keeps all. Other files in the directory are never touched |
 | `Diagnostics:CrashDump:FullMinFreeGB` | `16` | below this much free space on the volume Full starts at Heap (the launcher's threshold) |
-| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. 1 to 3600, checked at start. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. 1 to 3600, checked at start by every daemon (`CrashDumpConfigChecks`), so three times it cannot overflow. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
 
 The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names the path that writes the dump in a `[crash dump]` section
 ("written in-process by ArcaneCore", "written by the runtime", or "none"), and the log carries one line per attempt, failure and prune. When

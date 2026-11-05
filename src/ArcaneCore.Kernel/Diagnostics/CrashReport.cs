@@ -79,13 +79,10 @@ public static class CrashReport
         AppendException(sb, exception);
         if (throwSite is not null)
         {
-            sb.Append("[throw site]
-").Append(throwSite);
-            if (throwSite.Length > 0 && throwSite[^1] != '
-')
+            sb.Append("[throw site]\n").Append(throwSite);
+            if (throwSite.Length > 0 && throwSite[^1] != '\n')
             {
-                sb.Append('
-');
+                sb.Append('\n');
             }
         }
 
