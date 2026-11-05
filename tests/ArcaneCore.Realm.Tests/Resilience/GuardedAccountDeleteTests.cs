@@ -191,6 +191,8 @@ public sealed class GuardedAccountDeleteTests
         await rig.Counts.SetCountAsync(1, 99, 0);
         using IServiceScope scope = rig.Services.CreateScope();
         IRealmCharacterCountStore guarded = scope.ServiceProvider.GetRequiredService<IRealmCharacterCountStore>();
+        Assert.Equal("GuardedRealmCharacterCountStore", guarded.GetType().Name);
+        Assert.NotSame(rig.Counts, guarded);
 
         Assert.Equal(2, await guarded.DeleteByAccountAsync(AccountId));
 

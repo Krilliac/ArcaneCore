@@ -3,13 +3,16 @@ using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Character;
+using ArcaneCore.World.RealmList;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Gm;
@@ -99,5 +102,72 @@ public sealed class PlayerDumpCommandTests : IDisposable
         Assert.Equal("Invalid character name!", await RunAsync(gm, ".pdump load dumpme.txt PDGM"));
         File.WriteAllText(Path.Combine(_dir, "broken.txt"), "characters\t{oops\n");
         Assert.Equal("Dump file have broken data!", await RunAsync(gm, ".pdump load broken.txt PDGM Other"));
+    }
+
+    /// <summary>
+    /// A successful import recounts the owner and stores it, so a stale 0 (which the realm's irreversible <c>account delete</c> trusts) cannot
+    /// survive it. The host's character store is the in-memory one, which holds the GM's own character on the account, so the recount is 1; the
+    /// seeded 0 stands for the count the world recorded before the import. Without the refresh the 0 stays.
+    /// </summary>
+    [Theory]
+    [InlineData(7, true)]
+    [InlineData(0, false)]
+    public async Task Load_RefreshesTheOwnersRealmCharacterCount(int realmId, bool expectRefresh)
+    {
+        await using (CharacterDbContext db = Db())
+        {
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        }
+
+        var counts = new CountStore();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddDbContext<CharacterDbContext>(o => o.UseSqlite(_connection));
+            services.AddSingleton(new PlayerDumpOptions { Directory = _dir });
+            services.AddSingleton<IRealmCharacterCountStore>(counts);
+            services.AddSingleton(Options.Create(new RealmStatusOptions { Id = realmId }));
+        });
+        await using WorldTestClient gm = await host.EnterWorldAsync("PDGM", "Pdgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        int account = (await host.Accounts.FindByUsernameAsync("PDGM"))!.Id;
+        Assert.Equal(1, await host.Characters.CountByAccountAsync(account));
+
+        await using (CharacterDbContext db = Db())
+        {
+            var row = new CharacterRecord { AccountId = 77, Name = "Dumpme", Level = 30, Race = 1, Class = 1 };
+            db.Characters.Add(row);
+            await db.SaveChangesAsync();
+            host.WorldServices.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(row.Id, 77, "Dumpme", 1, 0, 1, 30));
+        }
+
+        Assert.Equal("Character dumped successfully!", await RunAsync(gm, ".pdump write dumpme.txt Dumpme"));
+        await counts.SetCountAsync(7, account, 0); // the stale 0
+        int writesBefore = counts.Writes;
+
+        Assert.Equal("Character loaded successfully!", await RunAsync(gm, ".pdump load dumpme.txt PDGM Clone"));
+
+        Assert.Equal(expectRefresh ? 1 : 0, (await counts.GetCountsAsync(account))[7]);
+        Assert.Equal(expectRefresh ? writesBefore + 1 : writesBefore, counts.Writes);
+    }
+
+    private sealed class CountStore : IRealmCharacterCountStore
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int Realm, int Account), int> _counts = new();
+        private int _writes;
+
+        public int Writes => Volatile.Read(ref _writes);
+
+        public Task<IReadOnlyDictionary<int, int>> GetCountsAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyDictionary<int, int>>(_counts.Where(c => c.Key.Account == accountId).ToDictionary(c => c.Key.Realm, c => c.Value));
+
+        public Task SetCountAsync(int realmId, int accountId, int count, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _writes);
+            _counts[(realmId, accountId)] = count;
+            return Task.CompletedTask;
+        }
+
+        public Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_counts.Keys.Where(k => k.Account == accountId).Count(k => _counts.TryRemove(k, out _)));
     }
 }

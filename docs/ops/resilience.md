@@ -77,8 +77,10 @@ contain no `async` state machine).
 ### Applied to the logon daemon (`src/ArcaneCore.Realm`)
 
 - `AddRealmResilience` (`Net/RealmResilienceServiceCollectionExtensions.cs`) registers the guard and decorates
-  `IAccountStore`, `IRealmStore` and `IBanStore` with `GuardedAccountStore` / `GuardedRealmStore` / `GuardedBanStore`
-  (`Resilience/GuardedAuthStores.cs`). The EF store is resolved *inside* the guarded call, because with MariaDB the
+  `IAccountStore`, `IRealmStore`, `IBanStore`, `IAccountLoginInfoStore`, `IRealmCharacterCountStore` and `IAccountAdmin`
+  with `GuardedAccountStore` / `GuardedRealmStore` / `GuardedBanStore` / `GuardedAccountLoginInfoStore` /
+  `GuardedRealmCharacterCountStore` / `GuardedAccountAdmin` (`Resilience/GuardedAuthStores.cs`; the login-info store is
+  decorated only when registered). The console's irreversible `account delete` therefore runs under the guard. The EF store is resolved *inside* the guarded call, because with MariaDB the
   `DbContext` constructor already connects (`ServerVersion.AutoDetect`) and that failure has to count too, and from a
   DI scope of that call's own (`GuardedCalls<TStore>`), created and disposed inside the guarded operation, so a call
   the SQLite deadline abandons keeps its pooled `AuthDbContext` until it ends instead of handing it to the next call
