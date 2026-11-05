@@ -596,19 +596,28 @@ public sealed class MovementAntiCheat
         }
 
         uint receivedDelta = unchecked(now - _lastReceived);
+        float speed = airborne ? allowed * AirborneSpeedFactor : allowed;
+        float perSecondAllowed = speed * (1f + (Options.SpeedTolerancePercent / 100f));
         int maxGapMs = Options.SpeedClock.MaxGapMs;
-        bool stampAhead = maxGapMs > 0 && (long)clientDelta > (long)receivedDelta + maxGapMs;
-        if (stampAhead)
+        bool stampAhead = false;
+        if (maxGapMs > 0 && (long)clientDelta > (long)receivedDelta + maxGapMs
+            && horizontal > (perSecondAllowed * (receivedDelta / 1000f)) + Options.SpeedSlackYards)
         {
-            // No honest clock runs that far ahead of real time (a stall only leaves client time out): the independent clock discards
-            // such a pair, so it is scored here, and the step gets no latency slack (only the real interval).
+            // A stamp far ahead of real time that the step actually spends: more yards than the real interval allows. An honest lag desync
+            // (a held stop and a start sent seconds later that arrive together) spends none and is left to the independent clock, which
+            // discards such a pair (SpeedHackDetector). The step then gets the real interval and no latency slack. The weight (15) is a
+            // deliberate choice of this server (no reference scores it), in step with the other timing findings.
+            stampAhead = true;
             findings.Add(new AntiCheatFinding(AntiCheatViolation.TimeSync, 15f, "client timestamp far ahead of real time"));
             clientDelta = (int)Math.Min(receivedDelta, (uint)int.MaxValue);
         }
 
         long wallMs = (long)receivedDelta + (stampAhead ? 0 : Slack(sample.LatencyMs));
         long budgetMs = Math.Max(Math.Min((long)clientDelta, wallMs), Math.Min((long)clientDelta + skipBudgetMs, (long)receivedDelta));
-        float speed = airborne ? allowed * AirborneSpeedFactor : allowed;
+
+        // A step that spans a silence (held packets, a long stall) buys at most BaselineGapMs of movement, however long the silence:
+        // an hour of held packets must not buy an hour of run speed in one step.
+        budgetMs = Math.Min(budgetMs, Math.Max(0, Options.BaselineGapMs));
         float seconds = budgetMs / 1000f;
         float teleport = Options.TeleportDistance + (speed * seconds);
         if (horizontal > teleport)
@@ -627,19 +636,20 @@ public sealed class MovementAntiCheat
             return;
         }
 
-        CheckDistanceBudget(sample, speed, horizontal, budgetMs, receivedDelta, findings);
+        CheckDistanceBudget(sample, speed, horizontal, receivedDelta, findings);
     }
 
     /// <summary>
     /// The distance a player may have covered over many steps, whatever each step's own budget was. A step's budget alone is blind to a
     /// stream of packets stamped at or behind the last (no client time, so only <see cref="AntiCheatOptions.SpeedSlackYards"/> a step) and
-    /// adds the latency slack again for every packet. Here the yards stand in a bucket that the allowed speed (with the tolerance) refills by
-    /// the time that passed (the larger of the real interval and the step's own time budget, so lag bunching refills what it
-    /// carries and a stamp going back or standing still refills only real time), at most <see cref="AntiCheatOptions.SpeedSlackYards"/>
-    /// plus the speed over the latency slack (or one step's refill when that is more); every step spends its horizontal distance.
-    /// An overdraft is a Speed finding, and the bucket restarts empty.
+    /// adds the latency slack again for every packet. Here the yards stand in a bucket that the allowed speed (with the tolerance) refills
+    /// by the REAL time that passed (the receive interval; no client stamp buys any refill, so stamps alternating far ahead and behind
+    /// refill nothing but real time). The refill stops at a ceiling of <see cref="AntiCheatOptions.SpeedSlackYards"/> plus the speed over the
+    /// latency slack, or, after a genuine stall, the speed over the real silence (at most <see cref="AntiCheatOptions.BaselineGapMs"/>): the
+    /// packets a stall held arrive together and carry the distance covered while it lasted. A balance already above the ceiling never grows.
+    /// Every step spends its horizontal distance; an overdraft is a Speed finding, and the bucket restarts empty.
     /// </summary>
-    private void CheckDistanceBudget(in MovementSample sample, float speed, float horizontal, long stepBudgetMs, uint receivedDelta, List<AntiCheatFinding> findings)
+    private void CheckDistanceBudget(in MovementSample sample, float speed, float horizontal, uint receivedDelta, List<AntiCheatFinding> findings)
     {
         if (!(speed > 0f))
         {
@@ -648,16 +658,16 @@ public sealed class MovementAntiCheat
         }
 
         float perSecond = speed * (1f + (Options.SpeedTolerancePercent / 100f));
-        long refillMs = Math.Max((long)receivedDelta, stepBudgetMs);
-        float refill = perSecond * (refillMs / 1000f);
-        float cap = Math.Max(Options.SpeedSlackYards + (perSecond * (Slack(sample.LatencyMs) / 1000f)), refill);
+        float refill = perSecond * (receivedDelta / 1000f);
+        long stallMs = Math.Min((long)receivedDelta, Math.Max(0, Options.BaselineGapMs));
+        float ceiling = Math.Max(Options.SpeedSlackYards + (perSecond * (Slack(sample.LatencyMs) / 1000f)), perSecond * (stallMs / 1000f));
         if (!_bucketActive)
         {
             _bucketActive = true;
-            _bucketYards = cap;
+            _bucketYards = ceiling;
         }
 
-        _bucketYards = Math.Min(cap, _bucketYards + refill) - horizontal;
+        _bucketYards = Math.Min(Math.Max(ceiling, _bucketYards), _bucketYards + refill) - horizontal;
         if (_bucketYards < 0f)
         {
             float overdraft = -_bucketYards;

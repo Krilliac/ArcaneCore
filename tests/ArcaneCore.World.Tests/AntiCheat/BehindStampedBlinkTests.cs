@@ -20,7 +20,8 @@ namespace ArcaneCore.World.Tests.AntiCheat;
 /// still score as a teleport through the real handlers: such a block spans no client time, so its step is judged against the teleport slack alone
 /// (docs/areas/anticheat.md). Covers the paths outside HandleMovement that store a client block:
 /// <c>CMSG_MOVE_NOT_ACTIVE_MOVER</c> naming the player itself (AntiCheatFeature.BeforeMovement) and a possessed creature moved by its controller
-/// (AntiCheatFeature.BeforeControlledMovement), whose time-skip path is also fed to the controlled unit's checks.
+/// (AntiCheatFeature.BeforeControlledMovement), and CMSG_MOVE_NOT_ACTIVE_MOVER naming a unit the player controlled (same method). The time skip and terrain
+/// paths of controlled units are covered in ControlledUnitAntiCheatTests; the session trace shadow in SessionTraceAntiCheatTests.
 /// </summary>
 public sealed class BehindStampedBlinkTests
 {
@@ -56,6 +57,7 @@ public sealed class BehindStampedBlinkTests
     private static byte[] Guid64(ulong guid) => BitConverter.GetBytes(guid);
 
     [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
     public async Task ABehindStampedBlink_InANotActiveMoverNamingThePlayerItself_ScoresTeleport()
     {
         await using var host = WorldTestHost.Start();
@@ -82,6 +84,7 @@ public sealed class BehindStampedBlinkTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
     public async Task ABehindStampedBlink_OfAPossessedCreature_ScoresTeleportAgainstTheController()
     {
         await using var host = WorldTestHost.Start();
@@ -117,6 +120,7 @@ public sealed class BehindStampedBlinkTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
     public async Task ABehindStampedBlink_OfThePlayer_ThroughMovementPackets_ScoresTeleport()
     {
         await using var host = WorldTestHost.Start();
@@ -139,5 +143,44 @@ public sealed class BehindStampedBlinkTests
         await client.CollectThroughBarrierAsync();
 
         Assert.Contains(seen, s => s.Player == "Behindown" && s.Finding.Type == AntiCheatViolation.Teleport);
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task ABehindStampedBlink_InANotActiveMoverNamingAnExControlledCreature_ScoresTeleportAgainstTheSender()
+    {
+        await using var host = WorldTestHost.Start();
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = await ArmAsync(host);
+        await using WorldTestClient client = await host.EnterWorldAsync("BEHINDEX", "Behindex");
+        await client.CollectAsync();
+        Player player = await host.PlayerAsync("Behindex");
+        (ulong guid, float x, float y, float z, Creature mob) = await host.OnWorldAsync(() =>
+        {
+            var template = new CreatureTemplate { Entry = 991_722, Name = "Possessed mob", MinLevel = 1, MaxLevel = 1, DisplayIds = [903], Faction = 14, AIName = "NullAI" };
+            Creature unit = host.WorldServices.GetRequiredService<CreatureWorldFeature>().GetOrCreateSystem(player.Map!)
+                .SpawnTemporary(template, player.X + 5, player.Y, player.Z, 0);
+            host.WorldServices.GetRequiredService<PetsFeature>().Service.Charms.ModPossess(player, unit, apply: true, AuraRemoveMode.Default, spell: null);
+            Assert.Same(unit, player.GetMover());
+            return (unit.Guid.Value, unit.X, unit.Y, unit.Z, unit);
+        });
+
+        // The possession gives the unit's checks a judged baseline, then ends; the client names the unit as the mover it gives up.
+        await client.SendAsync(WorldOpcode.CmsgSetActiveMover, Guid64(guid));
+        uint time = 100_000;
+        await client.SendAsync(WorldOpcode.MsgMoveStartForward, Block(time, x, y, z));
+        await Task.Delay(100);
+        time += 100;
+        await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(time, x + 0.7f, y, z));
+        await client.CollectThroughBarrierAsync();
+        Assert.Empty(seen);
+        await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<PetsFeature>().Service.Charms.ModPossess(player, mob, apply: false, AuraRemoveMode.Default, spell: null));
+        Assert.NotSame(mob, await host.OnWorldAsync(() => player.GetMover()));
+
+        await Task.Delay(100);
+        await client.SendAsync(WorldOpcode.CmsgMoveNotActiveMover, NotActiveMover(guid, time - Behind, x + 0.7f + Blink, y, z));
+        await client.CollectThroughBarrierAsync();
+
+        Assert.Contains(seen, s => s.Player == "Behindex" && s.Finding.Type == AntiCheatViolation.Teleport);
+        Assert.DoesNotContain(seen, s => s.Finding.Type == AntiCheatViolation.PacketTiming);
     }
 }

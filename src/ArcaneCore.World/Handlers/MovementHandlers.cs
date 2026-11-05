@@ -70,6 +70,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         }
         else if (player.GetMover() is { } mover && !ReferenceEquals(mover, player) && mover.Guid.Value == guid)
         {
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnControlledTimeSkipped(session, player, mover, lag);
             // vmangos GetMoverFromGuid: a possessed unit's skip goes to its observers too.
             mover.Map?.BroadcastToObservers(mover, WorldOpcode.MsgMoveTimeSkipped, MiscPackets.BuildMoveTimeSkipped(mover.Guid, lag), except: player);
         }

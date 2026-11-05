@@ -281,13 +281,91 @@ public sealed class MovementAntiCheatTests
         client.Send(WorldOpcode.MsgMoveStartForward);
         client.RunFor(4, Run);
 
-        // 12 heartbeats sent 500 ms apart by the client but delivered 10 ms apart: the client's clock vouches for the distance.
-        for (int i = 0; i < 12; i++)
+        // A real stall: nothing arrives for 3 s (the first heartbeat carries it), then the five heartbeats the client sent meanwhile arrive 10 ms
+        // apart. The 3 s of real time refills the bucket, so the 21 yards the client covered in 3 s of its own clock are not an overdraft.
+        client.Step(500, Run * 0.5f, receivedMs: 3000);
+        for (int i = 0; i < 5; i++)
         {
             client.Step(500, Run * 0.5f, receivedMs: 10);
         }
 
         Assert.DoesNotContain(client.All, f => f.Type is AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+    }
+
+    [Fact]
+    public void LagBunchedSteps_WithNoStallBehindThem_AreNotRefilledByTheClientClock()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // 12 heartbeats the client stamped 500 ms apart arrive 10 ms apart with no silence before them: only 120 ms of real time passed, and the
+        // 42 yards they carry are more than that time (plus the latency slack) can cover. The client's clock does not refill the bucket.
+        for (int i = 0; i < 12; i++)
+        {
+            client.Step(500, Run * 0.5f, receivedMs: 10);
+        }
+
+        Assert.Contains(client.All, f => f.Type == AntiCheatViolation.Speed && f.Detail == "faster than the allowed speed over several packets");
+    }
+
+    [Fact]
+    public void AStreamOfStampsAlternatingFiveHundredAheadAndBehind_ScoresSpeed_WhateverTheStampsClaim()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // Packets 20 ms apart; the stamp goes +500 then -500 (exactly the regression threshold, so no finding of its own). The forward step has
+        // 500 ms of client time (5.85 yd allowed alone), the back step none (2 yd slack): 7 yd per 40 ms, about 175 yd/s, each step alone unscored.
+        int firstSpeed = -1;
+        for (int i = 0; i < 100; i++)
+        {
+            bool forward = i % 2 == 0;
+            client.ClientTime = unchecked(forward ? client.ClientTime + 500 : client.ClientTime - 500);
+            client.Received += 20;
+            client.X += forward ? 5f : 2f;
+            if (client.Send().Any(f => f.Type == AntiCheatViolation.Speed) && firstSpeed < 0)
+            {
+                firstSpeed = i;
+            }
+        }
+
+        Assert.InRange(firstSpeed, 0, 10);
+    }
+
+    [Fact]
+    public void AStepSpanningAnHourOfSilence_BuysAtMostTheBaselineGapOfMovement()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // The client clock and the receive clock both cover an hour of held packets; 25,000 yards is the hour at run speed. The budget of one
+        // step is capped at BaselineGapMs (3 s: about 21 yards plus TeleportDistance), however long the silence.
+        Assert.True(Has(client.Step(3_600_000, 25_000f), AntiCheatViolation.Teleport));
+
+        var tenMinutes = new Client();
+        tenMinutes.Send(WorldOpcode.MsgMoveStartForward);
+        tenMinutes.RunFor(4, Run);
+        Assert.True(Has(tenMinutes.Step(600_000, 100f), AntiCheatViolation.Teleport), "100 yards after ten minutes of silence is a blink, not the ten minutes at run speed");
+    }
+
+    [Fact]
+    public void AHeldStop_AndAStartSentSecondsLater_ArrivingTogether_IsAnHonestDesync_NotAStampAhead()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // The stop is held 3.5 s by a stall; the start the player sent 3.2 s after it arrives in the same millisecond. The pair reads 3200 ms of
+        // client time over 1 ms of real time, with the player standing where it stopped: nothing is spent, so nothing is scored.
+        client.Flags = MovementFlags.None;
+        client.Step(100, 0f, WorldOpcode.MsgMoveStop, receivedMs: 3500);
+        client.Flags = MovementFlags.Forward;
+        List<AntiCheatFinding> start = client.Step(3200, 0f, WorldOpcode.MsgMoveStartForward, receivedMs: 1);
+        Assert.DoesNotContain(client.All, f => f.Type is AntiCheatViolation.TimeSync or AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+        Assert.Empty(start);
     }
 
     [Fact]
