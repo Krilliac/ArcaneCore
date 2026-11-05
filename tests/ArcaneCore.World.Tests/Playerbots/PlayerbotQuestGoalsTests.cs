@@ -52,10 +52,10 @@ public sealed class PlayerbotQuestGoalsTests
             };
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(1, queries);
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             return true;
         });
@@ -69,7 +69,7 @@ public sealed class PlayerbotQuestGoalsTests
         {
             Player player = quest.Session.Player!;
             Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
-            Assert.False(new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }).HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }).HasCandidate(player)));
             return true;
         });
     }
@@ -83,7 +83,7 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = quest.Session.Player!;
             Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            for (int think = 0; think < 10; think++) Assert.False(goals.HasCandidate(player));
+            for (int think = 0; think < 10; think++) Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             Assert.Equal(1, goals.TripEvaluations);
             return true;
         });
@@ -114,7 +114,7 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.True(goals.AbandonDistantCompletedQuest(player));
             Assert.Equal(QuestStatus.None, state.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             Assert.Equal(QuestConstants.MaxQuestLogSize, state.Quests.FindSlot(QuestInteractionFixture.QuestId));
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt));
             // The unreachable-ender mark lasts a minute first (PlayerbotDeferLedger), then ends: a repeat is what makes it longer.
             Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 59_000));
@@ -170,7 +170,7 @@ public sealed class PlayerbotQuestGoalsTests
                 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded == false; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
             Assert.True(quest.Feature.PendingSettlementCount > 0
                 || quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded,
@@ -497,7 +497,7 @@ public sealed class PlayerbotQuestGoalsTests
             quest.Host.WorldServices.GetRequiredService<GameObjectLootFeature>().ReplaceLootContent(new LootContent(
                 [(LootTableKind.Creature, new LootStoreRow(3127, 4886, -40f, 0, 1, 1))], []));
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            Assert.True(goals.HasCandidate(quest.Session.Player!));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(quest.Session.Player!)));
             return true;
         });
     }
@@ -529,12 +529,12 @@ public sealed class PlayerbotQuestGoalsTests
             quest.Feature.Options.OrdinaryRewardQuestIds = [];
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
             Player player = quest.Session.Player!;
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             for (int i = 0; i < 3; i++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
             quest.Feature.Options.OrdinaryRewardQuestIds = [QuestInteractionFixture.QuestId];
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             return true;
         });
     }
@@ -561,13 +561,13 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = session.Player!;
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             // The bags fill once the exchange has begun: a giver of a source item the full bags cannot take is not asked at all (c2f3484f).
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
                 Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
             for (int think = 0; think < 3; think++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(1, queries);
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // refused
             return true;
@@ -579,7 +579,7 @@ public sealed class PlayerbotQuestGoalsTests
             await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
             {
                 for (int think = 0; think < 2; think++)
-                { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(session.Player!, 500); }
+                { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(session.Player!, 500)); }
                 return true;
             }));
         }
@@ -587,7 +587,7 @@ public sealed class PlayerbotQuestGoalsTests
         await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
         {
             Assert.Equal(1, queries);
-            Assert.False(goals.HasCandidate(session.Player!));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(session.Player!)));
             return true;
         }));
     }
@@ -641,7 +641,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 5; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.False(goals.Update(player, 500));
+                Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             }
 
             Assert.Equal(0, chooseRewardSent);
@@ -785,7 +785,7 @@ public sealed class PlayerbotQuestGoalsTests
             // First think sends CmsgQuestgiverCompleteQuest and transitions to CompleteResponse,
             // while the server immediately queues SmsgQuestgiverRequestItems into the session's managed inbox:
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal("CompleteResponse", goals.StageName);
             return true;
         });
@@ -800,7 +800,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int i = 0; i < 3; i++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.Null(goals.LastTurnInRefusal);
@@ -843,18 +843,18 @@ public sealed class PlayerbotQuestGoalsTests
             configure(feature);
             var player = session.Player!;
             session.ManagedBudget = new ManagedActionBudget(0);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Null(feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
             for (int i = 0; i < 2; i++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(QuestStatus.Incomplete, feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
-            session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500);
+            session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(90u, goals.PreferredCreatureEntry);
             Assert.False(feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded);
             // A producer event supplies completed progress; the bot never fabricates it.
             feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
             for (int i = 0; i < 3; i++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.True(feature.PendingSettlementCount > 0 || feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded,
                 "Reward stage=" + goals.StageName + "; packets=" + string.Join(',', session.DrainManagedPackets().Select(p => p.Opcode)));
             return true;
@@ -920,7 +920,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.False(goals.Update(player, 500));
+                Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
                 Assert.Equal(0u, goals.QuestId);
                 Assert.Equal(0u, goals.TargetEntry);
             }
@@ -946,7 +946,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
@@ -971,7 +971,7 @@ public sealed class PlayerbotQuestGoalsTests
         {
             Player player = session.Player!;
             session.ManagedBudget = new ManagedActionBudget(1);
-            Assert.False(goals.Update(player, 500));
+            Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
             return true;
         });
@@ -1004,7 +1004,7 @@ public sealed class PlayerbotQuestGoalsTests
                 && !quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             return true;
@@ -1016,7 +1016,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int i = 0; i < 6 && suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Q)) != 0; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals!.Update(player, 500);
+                OnFrozenThinkClock(() => goals!.Update(player, 500));
             }
 
             Assert.True(quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded);
@@ -1138,7 +1138,7 @@ public sealed class PlayerbotQuestGoalsTests
         int abandons = 0;
         quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
         quest.Session.ManagedBudget = new ManagedActionBudget(1);
-        goals.Update(player, 500);
+        OnFrozenThinkClock(() => goals.Update(player, 500));
         return abandons;
     }
 
@@ -1413,9 +1413,9 @@ public sealed class PlayerbotQuestGoalsTests
                 if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++;
             };
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             for (int think = 0; think < 4; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(0, asks);
             Assert.Equal(0, abandons);
             Assert.Null(state.Quests.Get(FullLogQuests.Offered));
@@ -1441,7 +1441,7 @@ public sealed class PlayerbotQuestGoalsTests
             using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
             for (int think = 0; think < 4 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
 
             Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
             Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler + 1)?.Status); // the one shed
@@ -1472,7 +1472,7 @@ public sealed class PlayerbotQuestGoalsTests
             };
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
             for (int think = 0; think < 4; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(0, abandons);
             Assert.Equal(0, asks);
             return true;
@@ -1498,7 +1498,7 @@ public sealed class PlayerbotQuestGoalsTests
             (homeX, homeY, homeZ) = (player.X, player.Y, player.Z);
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(1, queries);
             Assert.Equal("AcceptDetails", goals.StageName);
             // Pulled away before the response was read: 44 yards off, as in the live report.
@@ -1513,7 +1513,7 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = session.Player!;
             using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             session.ManagedBudget = new ManagedActionBudget(0);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
             Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
             Assert.False(goals.Busy);
@@ -1521,7 +1521,7 @@ public sealed class PlayerbotQuestGoalsTests
             // Back at the giver it asks again and takes the quest.
             player.Relocate(homeX, homeY, homeZ, player.Orientation, quest.Host.World.NowMs);
             for (int think = 0; think < 4 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(2, queries);
             Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             return true;
@@ -1619,7 +1619,7 @@ public sealed class PlayerbotQuestGoalsTests
             };
 
             session.ManagedBudget = new ManagedActionBudget(1);
-            Assert.True(goals.Update(player, 500));
+            Assert.True(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.Contains(WorldOpcode.CmsgQuestgiverCompleteQuest, opcodes);
             Assert.DoesNotContain(WorldOpcode.CmsgQuestgiverQueryQuest, opcodes);
             Assert.Equal(QuestInteractionFixture.QuestId, goals.QuestId);
@@ -1655,7 +1655,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.True(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
@@ -1715,7 +1715,7 @@ public sealed class PlayerbotQuestGoalsTests
 
             Assert.Equal(0u, goals.CompletedReturnQuest(player));
             session.ManagedBudget = new ManagedActionBudget(4);
-            Assert.False(goals.Update(player, 500));
+            Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
 
             session.ManagedBudget = new ManagedActionBudget(4);
@@ -1784,6 +1784,7 @@ public sealed class PlayerbotQuestGoalsTests
     /// </summary>
     private static T OnFrozenThinkClock<T>(Func<T> body)
     {
+        if (PlayerbotThinkProbe.Active is not null) return body(); // already inside a think (a nested call from an outer frozen one)
         var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
         probe.Begin();
         try { return body(); }
@@ -1832,7 +1833,7 @@ public sealed class PlayerbotQuestGoalsTests
             try
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
             finally
             {

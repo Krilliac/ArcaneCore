@@ -35,6 +35,7 @@ public sealed class ServerLifecycleCrossWorldTests
     [Fact]
     public async Task ServerRestart_WithOtherRealmId_EmitsRequest_AndDoesNotStopThisWorld()
     {
+        ExitCodes.Current = ExitCodes.Success; // a class outside this collection may have left a stop code; the assertion below is about this test only
         var stdout = new StringWriter();
         await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(new SupervisorProtocolChannel(TextWriter.Synchronized(stdout), "tok", ownRealmId: 1)));
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
@@ -66,6 +67,7 @@ public sealed class ServerLifecycleCrossWorldTests
     [Fact]
     public async Task ServerRestart_WithOtherRealmId_NoSupervisor_ReportsAndDoesNothing()
     {
+        ExitCodes.Current = ExitCodes.Success; // see ServerRestart_WithOtherRealmId_EmitsRequest_AndDoesNotStopThisWorld
         await using var host = WorldTestHost.Start(); // no supervisor channel registered, and the test process is not a supervised child
         await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
         ServerLifecycleFeature feature = host.WorldServices.GetRequiredService<ServerLifecycleFeature>();

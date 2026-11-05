@@ -44,7 +44,8 @@ public sealed class MovementRelayTests
         bad.Flags |= MovementFlags.Jumping;
         bad.JumpZSpeed = float.NaN;
         await a.SendAsync(WorldOpcode.MsgMoveJump, Encode(bad));
-        await b.AssertSilentAsync(TimeSpan.FromMilliseconds(300));
+        await a.CollectThroughBarrierAsync(); // a's world queue is FIFO: once its barrier is answered the jump has been handled (and not relayed)
+        await b.AssertNoPacketsAsync(WorldOpcode.MsgMoveJump);
 
         // The sender is still connected, and a valid packet afterwards is relayed.
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Valid(StartX + 2)));
@@ -63,7 +64,8 @@ public sealed class MovementRelayTests
 
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Valid(17066.2f)));   // > MAP_HALFSIZE - 0.5
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Valid(float.PositiveInfinity)));
-        await b.AssertSilentAsync(TimeSpan.FromMilliseconds(300));
+        await a.CollectThroughBarrierAsync(); // both heartbeats are handled (and dropped) once a's barrier is answered
+        await b.AssertNoPacketsAsync(WorldOpcode.MsgMoveHeartbeat);
 
         await a.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Valid(StartX + 3)));
         Assert.Equal(WorldOpcode.MsgMoveHeartbeat, (await b.ReadAsync()).Opcode);

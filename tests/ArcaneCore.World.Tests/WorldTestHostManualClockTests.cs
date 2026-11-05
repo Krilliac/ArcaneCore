@@ -1,4 +1,9 @@
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Spells;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests;
@@ -42,7 +47,8 @@ public sealed class WorldTestHostManualClockTests
     [Fact]
     public async Task TwoRunsWithTheSameSeedAndSteps_ProduceIdenticalOutboundBytes()
     {
-        // Scoped down from a full cast/combat/loot run: a scripted login, chat and played-time interaction over fixed steps.
+        // A scripted login, chat and played-time interaction over fixed steps. The cast is in the next test; combat and loot still draw from
+        // Random.Shared (ICombatRandom / LootGenerator default to it), so they need a seeded source before they can join this comparison.
         List<(WorldOpcode Opcode, byte[] Payload)> first = await RunScriptedAsync();
         List<(WorldOpcode Opcode, byte[] Payload)> second = await RunScriptedAsync();
 
@@ -53,6 +59,44 @@ public sealed class WorldTestHostManualClockTests
             Assert.Equal(first[i].Opcode, second[i].Opcode);
             Assert.True(first[i].Payload.AsSpan().SequenceEqual(second[i].Payload), $"packet {i} ({first[i].Opcode}) differs between the runs");
         }
+    }
+
+    [Fact]
+    public async Task TwoRunsOfTheSameCastOnTheManualClock_ProduceIdenticalSpellGoBytes()
+    {
+        byte[] first = await RunCastAsync();
+        byte[] second = await RunCastAsync();
+
+        Assert.NotEmpty(first);
+        Assert.True(first.AsSpan().SequenceEqual(second), "SMSG_SPELL_GO differs between two identical scripted casts");
+    }
+
+    private static async Task<byte[]> RunCastAsync()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual(startMs: 1000));
+        await using WorldTestClient client = await host.EnterWorldAsync("castrepro", "Castrepro");
+        await host.OnWorldAsync(() =>
+        {
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
+            {
+                Id = 994011, Name = "Synthetic Determinism Aura", Duration = new SpellDuration(20_000, 0, 20_000),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, BasePoints = 16,
+                    BaseDice = 1, DieSides = 1, AuraType = AuraType.ModPowerRegen, MiscValue = (int)PowerType.Rage,
+                    TargetA = SpellImplicitTarget.UnitCaster }],
+            }], [], []);
+            Player player = host.World.FindOnlinePlayer("Castrepro")!;
+            feature.Spellbook.LearnSpell(player, 994011);
+        });
+
+        var writer = new PacketWriter(16);
+        writer.WriteUInt32(994011);
+        SpellCastTargets.ForSelf().Write(writer);
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, writer.ToArray());
+        await host.StepAsync();
+        // With spell batching on the go is held to the next batch boundary, which the manual clock only reaches when the test runs it there.
+        await host.AdvanceAsync(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs));
+        return await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
     }
 
     private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> RunScriptedAsync()

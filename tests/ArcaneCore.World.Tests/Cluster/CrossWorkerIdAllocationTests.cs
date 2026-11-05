@@ -23,6 +23,8 @@ using ArcaneCore.World.Pets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using MySqlConnector;
+using Npgsql;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster;
@@ -57,16 +59,16 @@ public sealed class CrossWorkerIdAllocationTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        var failures = new List<Exception>();
         foreach (DatabaseConnectionOptions options in _created.Where(o => o.Provider != DatabaseProvider.Sqlite))
         {
             try
             {
-                await using CharacterDbContext db = NewContext(options);
-                await db.Database.EnsureDeletedAsync();
+                await DropAsync(options);
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            catch (Exception ex) when (ex is System.Data.Common.DbException or TimeoutException)
             {
-                // A scratch database that cannot be dropped is left for the server's own cleanup; the test result stands.
+                failures.Add(ex); // the other databases are still dropped; the failures are reported below
             }
         }
 
@@ -78,6 +80,57 @@ public sealed class CrossWorkerIdAllocationTests : IAsyncLifetime
         catch (IOException)
         {
             // The temp directory is reclaimed by the OS temp cleanup.
+        }
+
+        if (failures.Count > 0)
+            throw new AggregateException($"{failures.Count} scratch database(s) could not be dropped and are left on the server", failures);
+    }
+
+    /// <summary>
+    /// Drops a scratch database. EnsureDeleted refuses while a pooled session is still attached (PostgreSQL 55006), and a swallowed refusal left
+    /// the database on the server for good, so this closes this database's own pool, drops with FORCE (PostgreSQL) and retries.
+    /// </summary>
+    private static async Task DropAsync(DatabaseConnectionOptions options)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (options.Provider == DatabaseProvider.PostgreSql)
+                {
+                    using (var pooled = new NpgsqlConnection(options.ConnectionString))
+                        NpgsqlConnection.ClearPool(pooled);
+                    var builder = new NpgsqlConnectionStringBuilder(options.ConnectionString) { Pooling = false };
+                    string name = builder.Database!;
+                    builder.Database = "postgres";
+                    await using var connection = new NpgsqlConnection(builder.ConnectionString);
+                    await connection.OpenAsync();
+                    await using NpgsqlCommand drop = connection.CreateCommand();
+                    drop.CommandTimeout = 120;
+                    drop.CommandText = "DROP DATABASE IF EXISTS \"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\" WITH (FORCE)";
+                    await drop.ExecuteNonQueryAsync();
+                }
+                else
+                {
+                    using (var pooled = new MySqlConnection(options.ConnectionString))
+                        MySqlConnection.ClearPool(pooled);
+                    var builder = new MySqlConnectionStringBuilder(options.ConnectionString) { Pooling = false };
+                    string name = builder.Database;
+                    builder.Database = string.Empty;
+                    await using var connection = new MySqlConnection(builder.ConnectionString);
+                    await connection.OpenAsync();
+                    await using MySqlCommand drop = connection.CreateCommand();
+                    drop.CommandTimeout = 120;
+                    drop.CommandText = "DROP DATABASE IF EXISTS `" + name.Replace("`", "``", StringComparison.Ordinal) + "`";
+                    await drop.ExecuteNonQueryAsync();
+                }
+
+                return;
+            }
+            catch (Exception ex) when (attempt < 4 && (ex is System.Data.Common.DbException || ex is TimeoutException))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt));
+            }
         }
     }
 

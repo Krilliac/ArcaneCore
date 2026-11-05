@@ -481,7 +481,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// <summary>
     /// Assert that none of the packets the server sends for what this client has already sent has one of <paramref name="opcodes"/>:
     /// <see cref="CollectRepliesAsync"/> (the barrier, then a short quiet tail), filtered to the opcodes under test. Unlike
-    /// <c>Assert.Empty(await CollectAsync(quiet))</c> it does not fail on an unrelated packet that enter-world delivers late
+    /// an emptiness assertion over a fixed-window <see cref="CollectAsync"/> it does not fail on an unrelated packet that enter-world delivers late
     /// (SMSG_CLEAR_FAR_SIGHT, an update, an area packet) and it does not pass because the answer was merely slower than a fixed window.
     /// </summary>
     public async Task AssertNoPacketsAsync(params WorldOpcode[] opcodes)
@@ -490,17 +490,15 @@ internal sealed class WorldTestClient : IAsyncDisposable
         Assert.Empty(packets.Where(p => Array.IndexOf(opcodes, p.Opcode) >= 0).Select(p => WorldOpcodeNames.GetName(p.Opcode)));
     }
 
-    /// <summary>Assert the server sends nothing more within <paramref name="window"/>.</summary>
-    public async Task AssertSilentAsync(TimeSpan window)
+    /// <summary>
+    /// <see cref="AssertNoPacketsAsync"/> after letting <paramref name="window"/> pass first. For silence that depends on a server timer
+    /// (a 1 s zone poll, say) and so needs real time to elapse before the barrier; the opcode filter keeps an unrelated late packet from
+    /// failing it, and the barrier keeps a slow answer from passing it.
+    /// </summary>
+    public async Task AssertNoPacketsAfterAsync(TimeSpan window, params WorldOpcode[] opcodes)
     {
         await Task.Delay(window);
-        while (IgnoreEnergyRegenUpdates && _client.Available > 0)
-        {
-            (WorldOpcode op, byte[] payload) = await ReadRawAsync();
-            Assert.True(IsEnergyRegenUpdate(op, payload), $"expected silence, got {WorldOpcodeNames.GetName(op)}");
-        }
-
-        Assert.Equal(0, _client.Available);
+        await AssertNoPacketsAsync(opcodes);
     }
 
     /// <summary>True once the server has closed the connection.</summary>

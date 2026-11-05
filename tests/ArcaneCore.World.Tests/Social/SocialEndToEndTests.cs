@@ -76,7 +76,7 @@ public sealed class SocialEndToEndTests
         await member.SendChatAsync(ChatType.Party, Language.Common, "inc");
         ChatMessage heard = await leader.ReadChatAsync();
         Assert.Equal((ChatType.Party, Language.Common, 2ul, "inc"), (heard.Type, heard.Language, heard.Sender, heard.Text));
-        await outsider.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+        await outsider.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat); // the leader already heard it, so the relay is done
     }
 
     [Fact]

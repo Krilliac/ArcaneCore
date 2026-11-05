@@ -42,7 +42,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     [Fact]
     public async Task SettlementCapacity_EightHeldRealTurnInsLeaveTheNinthPlayerActiveAndAbleToRetry()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource(); // armed once the server is up (TestDeadlines): startup keeps its own bound
         CancellationToken token = deadline.Token;
         var hold = new CapacityHold();
         var clients = new List<OwnedClient>();
@@ -56,7 +56,8 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
             services.AddScoped<ICharacterQuestRewardStore>(provider => new CapacityRewardStore(
                 new EfCharacterQuestRewardStore(provider.GetRequiredService<CharacterDbContext>()), hold));
             services.AddLogging(logging => logging.AddProvider(new LogCapture(serverLogs)));
-        }, token);
+        });
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
         try
         {
             stage = "preparing nine journals";
@@ -216,7 +217,7 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     [Fact]
     public async Task BlockedRewardStore_WorldTicksCommandsAndAnotherPlayersQuestPacketsProgressBeforeRelease()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource(); // armed once the server is up (TestDeadlines): startup keeps its own bound
         CancellationToken token = deadline.Token;
         var hold = new RewardStoreHold();
         var probe = new MapTickProbe();
@@ -229,7 +230,8 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
 
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
             services.AddScoped<ICharacterQuestRewardStore>(provider => new HeldRewardStore(
-                new EfCharacterQuestRewardStore(provider.GetRequiredService<CharacterDbContext>()), hold)), token);
+                new EfCharacterQuestRewardStore(provider.GetRequiredService<CharacterDbContext>()), hold)));
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         try
         {
             await server.World.InvokeAsync(() =>
