@@ -90,8 +90,10 @@ public sealed class StandbyPromotionControlTests
     public async Task AVerbDuringThePromotionWindow_IsServedByTheStandbyParticipants_AndTheAttachWaitsForTheCompletedPromotion()
     {
         using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer active = await SyntheticArcaneServer.StartAsync(
+            new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(standby: false) }, configureServices: null, cts.Token);
         await using SyntheticArcaneServer standby = await SyntheticArcaneServer.StartAsync(
-            new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(standby: true) }, configureServices: null, cts.Token);
+            new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = active.DataDirectory, Configuration = Worker(standby: true) }, configureServices: null, cts.Token);
         WorkerControlHandoff waiting = standby.Services.GetRequiredService<WorkerControlService>().Handoff!;
         int builds = 0;
         bool completed = false;
@@ -114,7 +116,7 @@ public sealed class StandbyPromotionControlTests
         Assert.Equal(ControlStatus.Ok, describe.Status);
         Assert.False(Assert.IsType<ControlDescribePayload>(describe.Payload).IsStandby);
         ControlReply freeze = await Handoff(control, 2, Guid.NewGuid(), ControlVerb.Freeze, cts.Token);
-        Assert.Equal(ControlStatus.Refused, freeze.Status); // the journal has no such handoff; the verb ran against the standby's participants, it did not fail
+        Assert.Equal(ControlStatus.Refused, freeze.Status); // the journal has no such handoff (answered by either participant set); only builds == 0 below proves the attach is deferred
         Assert.Null(control.Transfers);
         Assert.Equal(0, builds);
 
