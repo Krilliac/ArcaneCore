@@ -47,19 +47,6 @@ public sealed partial class CreatureMapSystem
         return null;
     }
 
-    /// <summary>
-    /// A copy of the map's creatures in a pooled array (the first <paramref name="count"/> slots; the caller returns the array to
-    /// <see cref="System.Buffers.ArrayPool{T}.Shared"/> with <c>clearArray: true</c>). A linked event can respawn, despawn or summon creatures
-    /// while it walks them, so it walks a copy; a pooled copy keeps the walk allocation-free, and each nested event rents its own array.
-    /// </summary>
-    private int SnapshotCreatures(out Creature[] buffer)
-    {
-        int count = _creatures.Count;
-        buffer = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
-        _creatures.Values.CopyTo(buffer, 0);
-        return count;
-    }
-
     /// <summary>cmangos DoCreatureLinkingEvent for the evade, death, respawn and despawn events (CreatureLinkingMgr.cpp:401-510).</summary>
     private void DoLinkedEvent(Creature source, LinkEvent e)
     {
@@ -69,7 +56,10 @@ public sealed partial class CreatureMapSystem
 
         if (isMaster && _linkEventsInUse.Add(source.Guid))
         {
-            int count = SnapshotCreatures(out Creature[] snapshot);
+            // A linked event can respawn, despawn or summon creatures while it walks them, so it walks a pooled copy; each nested event rents its own.
+            int count = _creatures.Count;
+            Creature[] snapshot = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
+            _creatures.Values.CopyTo(snapshot, 0);
             try
             {
                 uint mask = EventMask(e);
@@ -214,7 +204,10 @@ public sealed partial class CreatureMapSystem
         bool isMaster = _linkMasterGuids!.Contains(sourceSpawn.Guid) || _linkMasterEntries!.Contains(source.Entry);
         if (isMaster && instance?.CarriesAggroLinking(source.Entry) != true && _linkEventsInUse.Add(source.Guid))
         {
-            int count = SnapshotCreatures(out Creature[] snapshot);
+            // A linked event can respawn, despawn or summon creatures while it walks them, so it walks a pooled copy; each nested event rents its own.
+            int count = _creatures.Count;
+            Creature[] snapshot = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
+            _creatures.Values.CopyTo(snapshot, 0);
             try
             {
                 for (int i = 0; i < count; i++)

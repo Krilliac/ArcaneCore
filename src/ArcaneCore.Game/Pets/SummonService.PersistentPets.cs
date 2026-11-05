@@ -820,6 +820,7 @@ public sealed partial class SummonService
         }
 
         int characterId = (int)owner.Guid.Low;
+        bool isWarlock = owner.Class == Class.Warlock; // world-thread-only Unit.Class, read before the first await
         long generation;
         lock (_cacheGate) generation = _cacheGeneration.GetValueOrDefault(characterId);
         PersistentPetSnapshot? snapshot = LoadPersistence is { } load
@@ -828,7 +829,7 @@ public sealed partial class SummonService
                 ? await store.LoadCurrentAsync(characterId, cancellationToken).ConfigureAwait(false)
                 : null;
         // A warlock's other saved demons come with the login read, so summoning an entry again needs no database call on the world thread.
-        IReadOnlyList<PersistentPetSnapshot> demons = owner.Class != Class.Warlock ? []
+        IReadOnlyList<PersistentPetSnapshot> demons = !isWarlock ? []
             : LoadDemonsPersistence is { } loadDemons ? await loadDemons(characterId, cancellationToken).ConfigureAwait(false)
             : Persistence is { } demonStore ? await demonStore.LoadDemonsAsync(characterId, cancellationToken).ConfigureAwait(false)
             : [];
