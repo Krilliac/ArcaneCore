@@ -1766,7 +1766,7 @@ test('settings show folder, build and cache size; Forget folder deletes the hand
         await clickText(page, 'Change folder');
         // The state stays "ready" from the first pick while the second validates, so the state alone does not say the re-pick is done: the
         // dialog that Change folder opens closes only when the new folder is stored. Forgetting earlier raced the store of the re-pick.
-        await page.waitFor('window.__pickerCalls.length === 2 && !document.querySelector('[data-clientfs="dialog"]') && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again and its folder to be stored', 60_000);
+        await page.waitFor('window.__pickerCalls.length === 2 && !document.querySelector(\'[data-clientfs="dialog"]\') && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again and its folder to be stored', 60_000);
 
         // Forget folder.
         await page.evaluate('cf.openClientFilesSettings()');
