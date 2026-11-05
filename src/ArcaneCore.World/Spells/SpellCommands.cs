@@ -23,14 +23,10 @@ public sealed class SpellCommands : ICommandGroup
         new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist.", Cast, Children:
         [
             // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (here Administrator like .cast).
-            new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]
-Make the selected unit cast a spell on itself.", CastSelf),
-            new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]
-Make the selected unit cast a spell on its victim.", CastTarget),
-            new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]
-Make the selected unit cast a spell on you.", CastBack),
-            new ChatCommand("dist", AccountSecurity.Administrator, "Syntax: .cast dist #spell #distance [triggered]
-Cast a spell at a point the given distance in front of you.", CastDist),
+            new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]\nMake the selected unit cast a spell on itself.", CastSelf),
+            new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]\nMake the selected unit cast a spell on its victim.", CastTarget),
+            new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]\nMake the selected unit cast a spell on you.", CastBack),
+            new ChatCommand("dist", AccountSecurity.Administrator, "Syntax: .cast dist #spell #distance [triggered]\nCast a spell at a point the given distance in front of you.", CastDist),
         ]),
         new ChatCommand("unaura", AccountSecurity.GameMaster, "Syntax: .unaura #spell|all — remove auras from the selected player or yourself.", Unaura),
         new ChatCommand("cooldown", AccountSecurity.Administrator, "Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself.", Cooldown, Children:
@@ -140,8 +136,9 @@ Cast a spell at a point the given distance in front of you.", CastDist),
     }
 
     /// <summary>
-    /// vmangos ExtractSpellIdFromLink, ExtractFloat and ExtractLiteralArg "triggered" (UnitCommands.cpp:1212-1385): a spell id, an optional distance, then an
-    /// optional <c>triggered</c> word and nothing else. False on any syntax error.
+    /// vmangos ExtractUint32 (spell id, a plain number with an optional leading #; the shift-click link form is not parsed), ExtractFloat and ExtractLiteralArg
+    /// "triggered" (UnitCommands.cpp:1212-1385): a spell id, an optional distance, then an optional <c>triggered</c> word. As in vmangos, anything after the
+    /// <c>triggered</c> word is ignored; without that word nothing may follow. False on any syntax error.
     /// </summary>
     private static bool TryParseCastArgs(string text, bool withDistance, out uint spellId, out float distance, out bool triggered)
     {
@@ -228,6 +225,12 @@ Cast a spell at a point the given distance in front of you.", CastDist),
             return true;
         }
 
+        // vmangos has no check here; this repo is stricter (GM.LowerSecurity): a spell may not be forced onto a player the invoker cannot act on.
+        if (victim is Player victimPlayer && !context.CanActOn(victimPlayer))
+        {
+            return true;
+        }
+
         if (SpellExists(context, spellId))
         {
             ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(victim.Guid), triggered));
@@ -270,14 +273,14 @@ Cast a spell at a point the given distance in front of you.", CastDist),
 
         // vmangos GetClosePoint(x, y, z, dist): the point `dist` yards in front of the invoker (its own size is not added here).
         Player player = context.Player;
-        var targets = new SpellCastTargets
-        {
-            Mask = SpellCastTargetFlags.DestLocation,
-            Dest = (player.X + (MathF.Cos(player.Orientation) * distance), player.Y + (MathF.Sin(player.Orientation) * distance), player.Z),
-        };
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = PointInFront(player.X, player.Y, player.Z, player.Orientation, distance) };
         ReplyCast(context, spellId, Feature(context).System.CastSpell(player, spellId, targets, triggered));
         return true;
     }
+
+    /// <summary>The point <paramref name="distance"/> yards ahead of (<paramref name="x"/>, <paramref name="y"/>, <paramref name="z"/>) facing <paramref name="orientation"/> (radians); the height is kept.</summary>
+    internal static (float X, float Y, float Z) PointInFront(float x, float y, float z, float orientation, float distance)
+        => (x + (MathF.Cos(orientation) * distance), y + (MathF.Sin(orientation) * distance), z);
 
     private static bool Unaura(CommandContext context, string args)
     {

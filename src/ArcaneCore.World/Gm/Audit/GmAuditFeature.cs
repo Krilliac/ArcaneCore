@@ -200,6 +200,8 @@ public sealed partial class GmAuditFeature(
             return;
         }
 
+        string safePlayer = LogSafe.Escape(player);
+        string safeCommand = LogSafe.Escape(commandText, MaxTailCommandLength);
         lock (_gate)
         {
             while (_tail.Count >= _tailSize)
@@ -207,7 +209,7 @@ public sealed partial class GmAuditFeature(
                 _tail.Dequeue();
             }
 
-            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, LogSafe.Escape(player), LogSafe.Escape(commandText, MaxTailCommandLength), line));
+            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, safePlayer, safeCommand, line));
         }
     }
 

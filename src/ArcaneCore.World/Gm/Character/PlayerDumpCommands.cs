@@ -163,6 +163,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
 
         if (ResolvePath(context, file) is not { } path)
         {
+            context.Fail("file-open-failed");
             context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
             return true;
         }

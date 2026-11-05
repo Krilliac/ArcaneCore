@@ -224,16 +224,26 @@ public sealed class WorldportSpikeTests
     [Fact]
     public async Task Far_WithoutAnAck_IsAbandonedAtTheCustomAbandonAfter_AfterTheTimeoutWasReported()
     {
-        await using Rig rig = await StartAsync("ABAND", ackTimeout: TimeSpan.FromMilliseconds(100), abandonAfter: TimeSpan.FromMilliseconds(600));
+        await using Rig rig = await StartAsync("ABAND", ackTimeout: TimeSpan.FromMilliseconds(100), abandonAfter: TimeSpan.FromMilliseconds(1500)); // above the 10 x ack default (1 s), so a tick that ignored AbandonAfter abandons too early
 
         await rig.Admin.SendChatAsync(ChatType.Say, Language.Common, ".worldport far");
         await rig.Admin.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
-        await rig.Host.WaitForWorldAsync(() => rig.Spike.Recent[^1].Finished, "the run is abandoned");
+        double finishedAtMs = -1; // read on the world thread the first time the run is seen finished; the trace clock keeps running after Finish
+        await rig.Host.WaitForWorldAsync(() =>
+        {
+            WorldportTrace last = rig.Spike.Recent[^1];
+            if (last.Finished && finishedAtMs < 0)
+            {
+                finishedAtMs = last.ElapsedMs;
+            }
+
+            return last.Finished;
+        }, "the run is abandoned");
 
         WorldportTrace run = await LastRunAsync(rig);
         Assert.Equal("failed: never re-added (abandoned)", run.Outcome);
         Assert.Contains(run.Steps, s => s.Name == "ack-timeout");
-        Assert.True(run.ElapsedMs >= 600, $"abandoned after {run.ElapsedMs} ms, before the custom 600 ms");
+        Assert.True(finishedAtMs >= 1500, $"abandoned after {finishedAtMs} ms, before the custom 1500 ms");
     }
 
     [Fact]

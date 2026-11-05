@@ -197,7 +197,7 @@ Skipped because the primitive belongs to another lane or is absent, or because i
 * gm-teleport: `.tele group|add|del`, `.groupgo`, `.go` creature/object/grid/graveyard/forward/up/relative/target,
   `.start`, `.unstuck` (need group, spawn-index, graveyard and spell primitives). `.go xyz` keeps its cmangos optional-Z form.
 * gm-lookup: `.lookup spell|itemset|quest|area|faction|skill|taxinode|event|pool|player`, `.list`.
-* gm-spells (`.aura`, `.nameaura`, retail `.cast` subcommands and untriggered casts, `.learn all`, `.cooldown list|clear`),
+* gm-spells (`.aura`, `.nameaura`, untriggered plain `.cast`, `.learn all`, `.cooldown list|clear`),
   gm-npc (`.npc`, `.respawn`; the non-retail `.creature` root is **kept**, so creature tests and tools still work),
   gm-gobject, gm-spawn-persistence, gm-quest, gm-combat-cheats (`.damage`, `.cheat`): not started; several need the spell,
   creature-AI and quest lanes' primitives.

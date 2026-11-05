@@ -211,14 +211,12 @@ public sealed class ArcaneCommandTests
         await using WorldTestHost host = Start();
         GmAuditFeature audit = AuditOf(host);
 
-        audit.RecordCommand(7, "Gm
-Forged", "say hi
-[Audit] fake line[2J‮", "line");
+        audit.RecordCommand(7, "Gm\r\nForged", "say hi\r\n[Audit] fake line\u001B[2J\u202E", "line");
         audit.RecordCommand(7, "Gm", new string('a', GmAuditFeature.MaxTailCommandLength + 50), "line");
 
         GmAuditEntry[] tail = [.. audit.Tail(10)];
-        Assert.Equal("Gm\nForged", tail[0].Player);
-        Assert.Equal("say hi\r\n[Audit] fake line\u001B[2J\u202E", tail[0].Command);
+        Assert.Equal("Gm\\r\\nForged", tail[0].Player);
+        Assert.Equal("say hi\\r\\n[Audit] fake line\\u001B[2J\\u202E", tail[0].Command);
         Assert.DoesNotContain(tail, e => e.Command.Any(char.IsControl) || e.Player.Any(char.IsControl));
         Assert.Equal(GmAuditFeature.MaxTailCommandLength + 3, tail[1].Command.Length); // truncated with the "..." marker
     }
