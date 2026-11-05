@@ -160,17 +160,17 @@ public sealed class PlayerbotSummonWorldTests
         await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
         await GroupAsync(world, "Summonanchor", warlock, helperOne, helperTwo, far);
 
-        int participants = 0;
+        int helpers = 0;
         bool arrived = await world.RunUntilAsync(180_000, () =>
         {
-            participants = Math.Max(participants, Portals(world).Select(g => g.Participants.Count).DefaultIfEmpty(0).Max());
+            helpers = Math.Max(helpers, world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Helpers.Count ?? 0); // the portal fires (and goes) in the tick of the last click, so its own participant list is never seen full
             return world.Bots.Summons.Accepted >= 1 && Distance(world.Player(far.Id), world.Player(warlock.Id)) < 12f;
         });
 
         Assert.True(arrived, await world.TraceAsync());
         Assert.Equal(1, world.Bots.Summons.Started);
         Assert.True(world.Bots.Summons.Accepted >= 1, "the far member never answered a summon request"); // the bot answers within the tick the request lands in, so no tick boundary sees the pending request
-        Assert.True(participants >= 3, $"the portal took {participants} participants");
+        Assert.True(helpers >= 2, $"{helpers} bots helped at the portal"); // the request itself proves the server counted all three participants (the portal template asks for three)
         Assert.Equal(2u, await world.OnWorldAsync(() => world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)));
     }
 
