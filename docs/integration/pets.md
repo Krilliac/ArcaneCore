@@ -294,7 +294,7 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   (the stats lane), the template's school resistances, `LearnPetPassives` (skill-line passives),
   `CastPetAuras` (`spell_pet_auras`), the owner's teach spells (`AddTeachSpell`: the player learning the
   summoned demon's spells), `GetPetCreateSpellEntry` rows by creature spell list (`pet_spell_list_id`), the
-  hunter pet branch and `pet_name_generation`. The pet name is the creature name, not the family name of
+  the scale and pet-specific flags of the hunter pet branch, and `pet_name_generation`. The pet name is the creature name, not the family name of
   `CreatureFamily.dbc` (`InitializeDefaultName`).
 * **Pet spell lists.** A summoned pet starts with no spells: its spell list comes from
   `petcreateinfo_spell` / the creature spell list (vmangos `InitPetCreateSpells`), the data of slice P4.

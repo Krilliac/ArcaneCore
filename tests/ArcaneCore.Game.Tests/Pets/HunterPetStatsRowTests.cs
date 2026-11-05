@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
@@ -68,6 +69,31 @@ public sealed class HunterPetStatsRowTests
         float attackTime = pet.GetUInt32(UpdateFields.UnitFieldBaseattacktime);
         Assert.Equal((float)(pet.Level * 1.15 * 1.05 * attackTime / 2000), pet.GetFloat(UpdateFields.UnitFieldMindamage), 3);
         Assert.Equal((float)(pet.Level * 1.45 * 1.05 * attackTime / 2000), pet.GetFloat(UpdateFields.UnitFieldMaxdamage), 3);
+    }
+
+    [Fact]
+    public async Task HunterPet_LevelUpWhileHasted_UsesTheUnhastedAttackTime()
+    {
+        PetLevelStats shared = new(1, 1, 700, 0, 0, 0, 0, 1, 1, 1, 1, 1);
+        using PetTestKit kit = new([Spell(CallSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0))], new PetContent([shared], []));
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        kit.Service.LoadPersistence = (_, _) => Task.FromResult<PersistentPetSnapshot?>(
+            new(1, 804, PetTestKit.PetEntry, 1, 0, 50, 0, 0, 1, [], []));
+        await kit.Service.ReadCurrentPetAsync(owner);
+        kit.Cast(owner, CallSpell);
+        Creature pet = Assert.Single(kit.Creatures.Creatures);
+
+        uint unhasted = pet.Combat.GetAttackTime(WeaponAttackType.BaseAttack);
+        pet.Combat.ApplyAttackTimePercentMod(WeaponAttackType.BaseAttack, 100f, true); // the field halves, the multiplier is 0.5
+        Assert.NotEqual(unhasted, pet.GetUInt32(UpdateFields.UnitFieldBaseattacktime));
+
+        kit.Service.GivePetLevel(pet, owner, 25);
+
+        // Pet.cpp:1411-1412 uses the unhasted time, so the damage is the level formula for the template's time, not the hasted field.
+        Assert.Equal((byte)25, pet.Level);
+        Assert.Equal((float)(25 * 1.15 * 1.05 * unhasted / 2000), pet.GetFloat(UpdateFields.UnitFieldMindamage), 2);
+        Assert.Equal((float)(25 * 1.45 * 1.05 * unhasted / 2000), pet.GetFloat(UpdateFields.UnitFieldMaxdamage), 2);
     }
 
     [Fact]

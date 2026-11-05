@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
@@ -43,8 +44,9 @@ internal static class PetInitializer
         if (hunter)
         {
             // HUNTER_PET (Pet.cpp:1409-1414): the damage comes from the Nostalrius level formula, never from pet_levelstats (the creature id 1 rows
-            // carry no damage, and classic-db has no damage columns for them); damageMod is 1 for a player owner. The weapon speed is the template's.
-            float attackTime = pet.GetUInt32(UpdateFields.UnitFieldBaseattacktime);
+            // carry no damage, and classic-db has no damage columns for them); damageMod is 1 for a player owner. The weapon speed is the UNHASTED
+            // base time (Pet.cpp:1411 GetAttackTime, the field divided by the speed multiplier), so a haste or slow aura on the pet does not change the damage.
+            float attackTime = pet.Combat.GetAttackTime(WeaponAttackType.BaseAttack);
             pet.SetFloat(UpdateFields.UnitFieldMindamage, (float)(level * 1.15 * 1.05 * attackTime / 2000));
             pet.SetFloat(UpdateFields.UnitFieldMaxdamage, (float)(level * 1.45 * 1.05 * attackTime / 2000));
         }
