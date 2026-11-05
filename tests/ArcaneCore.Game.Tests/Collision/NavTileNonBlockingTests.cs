@@ -125,11 +125,11 @@ public sealed class NavTileNonBlockingTests : IDisposable
     [Fact]
     public async Task ABackgroundRead_NeverRunsOnAThreadPoolThread()
     {
-        _gated = _ => false;
-        NavMeshPathfinder nav = Gated();
+        NavMeshPathfinder nav = Gated(); // the read is held at the gate until the pending answer is in: a read that finished between the two endpoint polls would install the tile mid-query
 
         Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
         Task read = nav.PendingTileRead(0, 31, 31)!;
+        _gate.Set();
         Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
         await read;
 
@@ -140,8 +140,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
     [Fact]
     public void ABackgroundRead_FinishesWhileEveryThreadPoolWorkerIsBusy()
     {
-        _gated = _ => false;
-        NavMeshPathfinder nav = Gated();
+        NavMeshPathfinder nav = Gated(); // the read is held at the gate until the pending answer is in: a read that finished between the two endpoint polls would install the tile mid-query
         // Not disposed: blockers still queued when the test ends must find it set, not disposed.
         var release = new ManualResetEventSlim();
         int blockers = Environment.ProcessorCount * 4 + 8;
@@ -154,6 +153,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
 
             Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
             Task read = nav.PendingTileRead(0, 31, 31)!;
+            _gate.Set();
             Assert.True(SpinWait.SpinUntil(() => read.IsCompleted, HangGuard), "the read did not finish while the shared pool was held busy");
         }
         finally
