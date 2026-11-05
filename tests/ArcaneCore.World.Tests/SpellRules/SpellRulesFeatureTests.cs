@@ -57,6 +57,7 @@ public sealed class SpellRulesFeatureTests
             ["SpellRules:ImmunityEnforcement"] = "false",
             ["SpellRules:DiminishingResetSweepMs"] = "5000",
             ["SpellRules:FrostShockDiminishesAsRoot"] = "true",
+            ["SpellRules:MagnetRequiresAttackable"] = "true",
         }).Build();
 
         SpellRuleOptions bound = SpellRulesCoreFeature.BindOptions(configuration);
@@ -67,6 +68,29 @@ public sealed class SpellRulesFeatureTests
         Assert.False(defaults.CreatureSpellCrit);
         Assert.Equal((5000u, true), (bound.DiminishingResetSweepMs, bound.FrostShockDiminishesAsRoot));
         Assert.Equal((0u, false), (defaults.DiminishingResetSweepMs, defaults.FrostShockDiminishesAsRoot));
+        Assert.True(bound.MagnetRequiresAttackable);
+        Assert.False(defaults.MagnetRequiresAttackable);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CoreFeature_HandsTheMagnetOption_ToTheSpellSystem(bool configured)
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["SpellRules:MagnetRequiresAttackable"] = configured ? "true" : "false",
+            }).Build()));
+        await using WorldTestClient client = await host.EnterWorldAsync("MAGNETPLAYER", "Magnetplayer");
+
+        bool seen = await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Magnetplayer")!;
+            return ((WorldSession)player.Session).Services.GetRequiredService<SpellFeature>().System.MagnetRequiresAttackable;
+        });
+
+        Assert.Equal(configured, seen);
     }
 
     [Fact]

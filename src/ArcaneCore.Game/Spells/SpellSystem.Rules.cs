@@ -33,6 +33,12 @@ public sealed partial class SpellSystem
     /// </summary>
     public bool ImmunityEnforcement { get; set; } = true;
 
+    /// <summary>
+    /// Whether SelectMagnetTarget skips a magnet the caster may not attack (<c>SpellRules:MagnetRequiresAttackable</c>). Default false:
+    /// vmangos SpellCaster::SelectMagnetTarget has no such test. true is the mangos-classic rule (Unit.cpp:6924).
+    /// </summary>
+    public bool MagnetRequiresAttackable { get; set; }
+
     /// <summary>The static immunities of creatures: <see cref="Rules.Immunity.CreatureDataImmunities"/> from the built-in <see cref="Rules.Immunity.CreatureDataImmunityModule"/> (wrapped by script modules); null means none.</summary>
     public ICreatureImmunityProvider? CreatureImmunities { get; set; }
 

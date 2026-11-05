@@ -15,9 +15,10 @@ public sealed partial class SpellSystem
     /// <summary>
     /// SpellCaster::SelectMagnetTarget (vmangos SpellCaster.cpp:31-68), re-implemented: only enemy
     /// explicit selectors consult SPELL_MAGNET; abilities, poisons and the no-redirection /
-    /// suppress-target-procs attributes bypass it. One deliberate addition over vmangos, taken from
+    /// suppress-target-procs attributes bypass it. With <see cref="MagnetRequiresAttackable"/> (default off,
+    /// <c>SpellRules:MagnetRequiresAttackable</c>) one addition over vmangos applies, taken from
     /// mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924, <c>magnet->IsAlive() &amp;&amp; CanAttack(magnet)</c>):
-    /// a magnet the caster may not attack is skipped. vmangos has no such test; mangos-classic applies it to every
+    /// a magnet the caster may not attack is skipped. vmangos has no such test (the default; mangoszero refuses only unattackable-flagged targets); mangos-classic applies it to every
     /// cast, here it is limited to the scope of the explicit-hostile gate in CheckCast (non-triggered casts and
     /// client-named blocks). See the Discrepancies table in docs/areas/spells.md. Charges are spent at selection, before hit
     /// resolution, including misses. The caster ownership token prevents GUID reuse from
@@ -47,12 +48,12 @@ public sealed partial class SpellSystem
                 || ResolveAuraCaster(holder) is not { IsAlive: true } magnet
                 || !ReferenceEquals(magnet.Map, cast.Caster.Map) || IsQuestSettlementPending(magnet)
                 || !IsMagnetTargetEligible(spell, magnet, casterSelector: !updateExplicitTarget)
-                || (updateExplicitTarget && (!cast.IsTriggered || cast.Targets.FromClient)
+                || (MagnetRequiresAttackable && updateExplicitTarget && (!cast.IsTriggered || cast.Targets.FromClient)
                     && CheckExplicitHostileTargetRules(cast.Caster, spell, magnet) != SpellCastResult.CastOk
                     && !IsFreeForAllOpponentOwned(cast.Caster, magnet)))
             {
-                // The last two tests are the mangos-classic CanAttack(magnet) rule (Unit.cpp:6924), expressed through the explicit-hostile-target
-                // gate. The landing CheckCast ran against the client's named unit (the victim), not the magnet, so a legitimately hostile
+                // The last test applies only with MagnetRequiresAttackable (default off, as vmangos). It is the mangos-classic CanAttack(magnet) rule
+                // (Unit.cpp:6924), expressed through the explicit-hostile-target gate. The landing CheckCast ran against the client's named unit (the victim), not the magnet, so a legitimately hostile
                 // victim that holds a magnet the caster may not attack (a friendly or unflagged owner's totem) is skipped here instead of
                 // being redirected onto it. A magnet that a free-for-all opponent of the caster controls is attackable (see
                 // IsFreeForAllOpponentOwned) and is not skipped. This is a gameplay eligibility rule, not an anti-crafting protection: a client
@@ -65,7 +66,7 @@ public sealed partial class SpellSystem
             if (updateExplicitTarget)
             {
                 // The redirect keeps FromClient, so a later reader of the block (SpellCastTargets.ForUnit(guid, parentCast), which re-aims a
-                // child at the unit) sees a client-named target and gates it again. The magnet itself was gated in the loop above.
+                // child at the unit) sees a client-named target and gates it again. With MagnetRequiresAttackable on, the magnet itself was gated in the loop above.
                 cast.Targets.Unit = magnet.Guid;
             }
             if (holder.Charges > 0)
