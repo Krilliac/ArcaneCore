@@ -62,6 +62,9 @@ public sealed class SpellCast
     /// <summary>Game objects selected for each ACTIVATE_OBJECT effect, including script-target area selections.</summary>
     internal Dictionary<int, ObjectGuid[]> ObjectTargetsByEffect { get; } = [];
 
+    /// <summary>Per effect, the unit that only carries the effect for a game object found by target A 46 (no real unit target: no hit roll, no hit-list entry). Cast thread only.</summary>
+    internal Dictionary<int, Unit> ObjectCarriers { get; } = [];
+
     // A redirected cast keeps the chosen unit for all its explicit enemy effects, even after
     // selection consumed the last magnet charge and removed the protection aura.
     internal Unit? MagnetTarget { get; set; }

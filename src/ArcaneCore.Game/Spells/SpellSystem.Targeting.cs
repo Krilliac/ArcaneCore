@@ -104,6 +104,9 @@ public sealed partial class SpellSystem
                 }
                 else
                 {
+                    // A unit B selected is a real target of the effect, even when it is also the A 46 carrier (the caster).
+                    if (cast.ObjectCarriers.TryGetValue(i, out Unit? carrier) && fromB.Exists(entryB => ReferenceEquals(entryB.Unit, carrier)))
+                        cast.ObjectCarriers.Remove(i);
                     units = [.. units, .. fromB];
                 }
             }

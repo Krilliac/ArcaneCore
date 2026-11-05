@@ -129,7 +129,7 @@ public sealed partial class SpellSystem
     /// object of the nearest spell_script_target row within the effect radius (else the spell's maximum range, 200 yd for an "anywhere" range)
     /// becomes the destination. Row type 0 is a game object, 1 a living creature, 2 a dead creature, 3 a player; a valid explicit unit is preferred
     /// to the nearest one. The found object is also a target of the effect only when target A is 46 and the effect is not a persistent area aura
-    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target (with the caster as carrier only for the effects that read one). Nothing within range leaves
+    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target (carried by the caster for every effect except aura-applying ones; the carrier is no unit target, see <c>ObjectCarriers</c>). Nothing within range leaves
     /// the destination alone and selects nothing; the cast itself is refused beforehand (<c>CheckCast</c>, <see cref="ScriptLocationTargetMissing"/>).
     /// Target B 46 beside another target A only sets the destination.
     /// </summary>
@@ -147,7 +147,9 @@ public sealed partial class SpellSystem
         // vmangos calls AddGOTarget here (Spell.cpp:590-591) and DoAllEffectOnTarget(GOTargetInfo) then runs HandleEffects(nullptr, nullptr, go, i)
         // (Spell.cpp:1841-1843), so a summon (SummonWild, SummonObjectWild), Dummy or activate effect still runs and reads the destination. The unit pipeline
         // needs a unit, so the caster carries the effect (the carrier is no hit, see IsObjectCarriedEffect); an aura effect would apply to the carrier, so it is skipped.
-        return IsAuraApplyingEffect(effect.Effect) ? [] : [(caster, 1f)];
+        if (IsAuraApplyingEffect(effect.Effect)) return [];
+        cast.ObjectCarriers[effectIndex] = caster;
+        return [(caster, 1f)];
     }
 
     /// <summary>An effect that puts an aura on its unit target, which a game object carrier must not receive.</summary>
@@ -155,9 +157,9 @@ public sealed partial class SpellSystem
         or SpellEffectName.ApplyAreaAuraPet or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy
         or SpellEffectName.ApplyAreaAuraRaid or SpellEffectName.ApplyAreaAuraOwner or SpellEffectName.PersistentAreaAura;
 
-    /// <summary>Whether effect <paramref name="effectIndex"/> runs on a game object found by target A 46, carried by the caster (no unit hit).</summary>
-    private static bool IsObjectCarriedEffect(SpellCast cast, int effectIndex)
-        => cast.ObjectTargetsByEffect.ContainsKey(effectIndex) && cast.Spell.Effects[effectIndex].TargetA == SpellImplicitTarget.LocationScriptNearCaster;
+    /// <summary>Whether <paramref name="target"/> only carries effect <paramref name="effectIndex"/> for a game object found by target A 46 (no unit hit). A unit that target B also selected is a real target and not a carrier.</summary>
+    private static bool IsObjectCarriedEffect(SpellCast cast, int effectIndex, Unit target)
+        => cast.ObjectCarriers.TryGetValue(effectIndex, out Unit? carrier) && ReferenceEquals(carrier, target);
 
     /// <summary>Extra yards the grid pre-filter of the 46 unit search adds beyond the caster's reach, so a large target combat reach is still a candidate (the exact check follows).</summary>
     private const float MaxCombatReachMargin = 20f;

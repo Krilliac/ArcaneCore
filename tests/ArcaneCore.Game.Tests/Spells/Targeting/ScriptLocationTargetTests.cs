@@ -395,6 +395,24 @@ public sealed class ScriptLocationTargetTests
     }
 
     [Fact]
+    public void TargetA46BesideAUnitTargetB_ANonCasterUnitOfB_IsRolledAndListedAsAHit_WhileTheCarrierIsNot()
+    {
+        SpellInfo spell = Spell(LocationThenList, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46, targetB: (SpellImplicitTarget)ListedByB))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(LocationThenList, 0, Firecracker, 0)]);
+        (Player other, _) = rig.Kit.AddPlayer(2, 1f, 0f);
+        rig.Kit.System.RegisterSpellTargetSelector(LocationThenList, (SpellImplicitTarget)ListedByB, (_, _, _, _) => [(other, 1f)]);
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationThenList));
+
+        ulong[] hits = rig.SpellGoHits();
+        Assert.Contains(listed.Guid.Value, hits);
+        Assert.Contains(other.Guid.Value, hits);
+        Assert.DoesNotContain(rig.Caster.Guid.Value, hits); // the carrier of the found object is no hit
+    }
+
+    [Fact]
     public void TargetB46BesideATarget38_WithNoRows_FailsWithBadTargets()
     {
         // 16074 and 28392 are A38 / B46 with no spell_script_target row: vmangos refuses on the B 46 too (Spell.cpp:446-460).
