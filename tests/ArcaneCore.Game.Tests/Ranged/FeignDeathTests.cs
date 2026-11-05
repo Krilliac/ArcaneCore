@@ -205,7 +205,7 @@ public sealed class FeignDeathTests : IDisposable
         Assert.Equal(SpellCastResult.CastOk, CastFeign());
 
         Assert.Null(_spells.GetState(enemy.Guid)?.CurrentCast);
-        Assert.NotNull(_spells.GetState(friend.Guid)?.CurrentCast); // vmangos only interrupts non-friendly casters (a friend can only be casting something helpful at the feigner)
+        Assert.NotNull(_spells.GetState(friend.Guid)?.CurrentCast); // non-friendly casters are interrupted (vmangos InterruptSpellsCastedOnMe); this friend casts a helpful spell and keeps its bar
     }
 
     [Fact]

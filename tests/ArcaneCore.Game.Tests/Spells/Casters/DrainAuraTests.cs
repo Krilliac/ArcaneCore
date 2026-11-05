@@ -31,9 +31,9 @@ public sealed class DrainAuraTests
 
         public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
         {
-            if (damage == 0 && !periodic)
+            if (damage == 0 && !periodic && spell.Id is DrainLife or DrainLifeBig or DrainMana or ImprovedDrain)
             {
-                return 0; // the combat start of a hostile hit on a really attackable target, not a drain tick
+                return 0; // the zero-damage combat start of a drain spell hitting a really attackable target, not a drain tick
             }
 
             Damage.Add(damage);
