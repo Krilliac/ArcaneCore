@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Social;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -66,11 +67,18 @@ public sealed class WorldHandoffInFlight
     {
         get
         {
-            // A task that has completed is no longer running even if its removal continuation has not run yet (it can lag the awaiting waiter on the thread pool).
+            // A task that has completed is no longer running even if its removal continuation has not run yet (it can lag the awaiting waiter on the thread pool). Counted, not removed: a getter changes
+            // nothing, and the continuation of Track is the only thing that removes a task.
             lock (_gate)
             {
-                _running.RemoveAll(static t => t.IsCompleted);
-                return _running.Count;
+                int running = 0;
+                foreach (Task task in _running)
+                {
+                    if (!task.IsCompleted)
+                        running++;
+                }
+
+                return running;
             }
         }
     }
@@ -242,7 +250,8 @@ public static class WorldHandoffHosting
             sp.GetRequiredService<WorkerAdmission>(),
             sp.GetRequiredService<WorldWriterGuard>(),
             sp.GetService<CharacterPersistenceBarrier>(),
-            sp.GetService<CharacterRetirementRegistry>()));
+            sp.GetService<CharacterRetirementRegistry>(),
+            sp.GetService<SocialGroupPersistenceFeature>()));
         services.TryAddSingleton<WorldHandoffInFlight>();
         services.TryAddSingleton(sp => new WorldHandoffCoordinatorProvider(sp));
         services.AddHostedService(sp => new WorldHandoffRecoveryService(

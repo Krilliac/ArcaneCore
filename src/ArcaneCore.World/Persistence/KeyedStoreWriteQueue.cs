@@ -159,7 +159,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         return _channel.Writer.TryWrite(new Work(string.Empty, Kind.Barrier, done)) ? done.Task : Task.CompletedTask;
     }
 
-    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable, except a key whose failure is <see cref="RealmLeaseNotHeldException"/>: that refusal is not checked here. For a group the lease holder owns the data; a GM ticket taken on a non-holder is not durable, is not seen by another node, and is only named at stop.</summary>
+    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable, except a key whose failure is <see cref="RealmLeaseNotHeldException"/>: that refusal is not checked here and its write is not re-run by this call either (the periodic retry and <see cref="StopAsync"/> still retry it). For a group the lease holder owns the data; a GM ticket taken on a non-holder is not durable, is not seen by another node, and is only named at stop.</summary>
     public Task RetryRetainedAsync()
     {
         if (_consumer is null || _stopped)
@@ -245,14 +245,19 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
     private Task RetainedFailureTask()
     {
-        string[] failed = OwedKeys();
-        Exception? first;
+        // One look under the gate: a key cannot leave the table between naming it and reading its failure (a write that lands removes the entry).
+        (string[] failed, Exception? first) = OwedKeysAndFirstFailure();
+        return failed.Length == 0 ? Task.CompletedTask : Task.FromException(NotDurable(failed, first));
+    }
+
+    /// <summary>The <see cref="OwedKeys"/> and the failure of the first of them, read together under one hold of the gate.</summary>
+    private (string[] Keys, Exception? First) OwedKeysAndFirstFailure()
+    {
         lock (_gate)
         {
-            first = failed.Length > 0 ? _keys[failed[0]].Failure : null;
+            KeyValuePair<string, Unsaved>[] owed = [.. _keys.Where(k => k.Value.Failure is not null and not RealmLeaseNotHeldException).OrderBy(k => k.Key, StringComparer.Ordinal)];
+            return ([.. owed.Select(k => k.Key)], owed.Length > 0 ? owed[0].Value.Failure : null);
         }
-
-        return failed.Length == 0 ? Task.CompletedTask : Task.FromException(NotDurable(failed, first));
     }
 
     private InvalidOperationException NotDurable(IReadOnlyList<string> keys, Exception? failure)
@@ -312,24 +317,21 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
                         break;
                     case Kind.RetryRetained:
-                        foreach (string key in RetainedKeys)
+                        // A flush's retry (it carries a completion) skips the keys a store refused for the realm lease: the flush does not check them (OwedKeys), so
+                        // re-running them (MaxAttempts, RetryDelay each) would spend the handoff's one shared budget on writes it never reports. The periodic retry and the stop
+                        // (no completion) still retry every retained key, so a regained lease lands them.
+                        foreach (string key in work.Done is null ? RetainedKeys : OwedKeys())
                         {
                             await ExecuteAsync(key, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
 
-                        string[] failed = OwedKeys();
+                        (string[] failed, Exception? first) = OwedKeysAndFirstFailure();
                         if (failed.Length == 0)
                         {
                             work.Done?.TrySetResult();
                         }
                         else
                         {
-                            Exception? first;
-                            lock (_gate)
-                            {
-                                first = _keys.TryGetValue(failed[0], out Unsaved? unsaved) ? unsaved.Failure : null;
-                            }
-
                             work.Done?.TrySetException(NotDurable(failed, first));
                         }
 

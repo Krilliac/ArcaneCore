@@ -295,4 +295,62 @@ public sealed class GroupPersistenceWorldTests
         await using WorldTestHost host = WorldTestHost.Start();
         Assert.Null(host.WorldServices.GetRequiredService<SocialGroupPersistenceFeature>().Writes);
     }
+
+    /// <summary>A clock that never moves: the once-a-second group sweep of the world tick runs on the first tick and never again, so only an explicit sync writes a later change.</summary>
+    private sealed class FrozenClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    /// <summary>
+    /// A group changes in the last second before a handoff's freeze: the world tick has not written it (the clock is frozen after its first sweep, which models "inside the second"), so it is in no queue.
+    /// A flush through a real <see cref="ArcaneCore.World.Cluster.Handoff.LocalWorldHandoffSource"/> must queue and write it, with and without the persistence barrier (which the production hosting passes), or B would read the
+    /// characters database without the group.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AHandoffFlush_WritesAGroupChangedInTheLastSecondBeforeTheFreeze(bool withBarrier)
+    {
+        var groups = new InMemoryGroupStore();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IGroupStore>(groups);
+            services.AddSingleton<TimeProvider>(new FrozenClock(DateTimeOffset.FromUnixTimeSeconds(1_700_000_000)));
+        });
+        await using WorldTestClient leader = await host.EnterWorldAsync("LEADA", "Leader");
+        await using WorldTestClient member = await host.EnterWorldAsync("MEMBA", "Member");
+        await leader.SendAsync(WorldOpcode.CmsgGroupInvite, CString("member"));
+        await member.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        await member.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await ReadGroupListAsync(leader, others: 1);
+
+        SocialGroupPersistenceFeature persistence = host.WorldServices.GetRequiredService<SocialGroupPersistenceFeature>();
+        await host.OnWorldAsync(() => { }); // the world thread has run everything the client sent
+        await persistence.Writes!.FlushAsync();
+        Assert.Empty(groups.All()); // the precondition: nothing but a sync can have written the new group
+
+        ArcaneCore.World.Persistence.CharacterPersistenceBarrier? barrier = withBarrier ? new ArcaneCore.World.Persistence.CharacterPersistenceBarrier(host.WorldServices) : null;
+        using var source = new ArcaneCore.World.Cluster.Handoff.LocalWorldHandoffSource(
+            new ArcaneCore.Kernel.Cluster.Transfer.WorkerNodeId("w1"),
+            host.World,
+            host.SaveQueue,
+            new ArcaneCore.World.Cluster.Gateway.WorkerAdmission(),
+            new WorldWriterGuard(),
+            barrier,
+            retirement: null,
+            groups: persistence);
+        try
+        {
+            await source.FreezeAsync(CancellationToken.None);
+            await source.FlushAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(60));
+
+            GroupRecord stored = Assert.Single(groups.All());
+            Assert.Equal(2, stored.Members.Count);
+        }
+        finally
+        {
+            await source.ResumeAsync(CancellationToken.None);
+        }
+    }
 }
