@@ -12,9 +12,16 @@ namespace ArcaneCore.Game.Tests.Stats;
 public sealed class IntellectSpellCritSourceTests
 {
     private const uint Bolt = 900_201;
+    private const uint SchoolCrit = 900_210;
+    private const uint GenericCrit = 900_211;
+    private const uint AttackerCrit = 900_212;
     private const float Tol = 0.001f;
 
-    private static SpellTestKit Kit() => new(RuleTestKit.Magic(Bolt, SpellSchool.Fire));
+    private static SpellTestKit Kit() => new(
+        RuleTestKit.Magic(Bolt, SpellSchool.Fire),
+        RuleTestKit.Grant(SchoolCrit, AuraType.ModSpellCritChanceSchool, 7, 1 << (int)SpellSchool.Fire),
+        RuleTestKit.Grant(GenericCrit, AuraType.ModSpellCritChance, 3),
+        RuleTestKit.Grant(AttackerCrit, AuraType.ModAttackerSpellCritChance, 12, 1 << (int)SpellSchool.Fire));
 
     private static Player MakePlayer(SpellTestKit kit, uint guid, Class cls, byte level, uint intellect)
     {
@@ -91,5 +98,25 @@ public sealed class IntellectSpellCritSourceTests
 
         Assert.Equal(5.5597f, rules.CritChance(kit.System, mage, bolt), Tol);
         Assert.Equal(100f / 600f, rules.CritChance(kit.System, warrior, bolt), Tol);
+    }
+
+    [Fact]
+    public void CritChance_AddsTheCasterAndVictimAuraBonuses_OnTopOfTheIntellectBase()
+    {
+        // SpellCombatRules.CritChance: source + MOD_SPELL_CRIT_CHANCE + MOD_SPELL_CRIT_CHANCE_SCHOOL (caster) + MOD_ATTACKER_SPELL_CRIT_CHANCE (hostile target).
+        using SpellTestKit kit = Kit();
+        Player mage = MakePlayer(kit, 1, Class.Mage, 60, 100);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        SpellInfo bolt = kit.Store.Get(Bolt)!;
+        var rules = new VanillaSpellCombatRules { CritSource = new IntellectSpellCritSource() };
+        float baseChance = rules.CritChance(kit.System, mage, target, bolt);
+        Assert.Equal(5.5597f, baseChance, Tol);
+
+        RuleTestKit.Apply(kit, mage, SchoolCrit);
+        RuleTestKit.Apply(kit, mage, GenericCrit);
+        Assert.Equal(5.5597f + 7f + 3f, rules.CritChance(kit.System, mage, target, bolt), Tol);
+
+        RuleTestKit.Apply(kit, target, AttackerCrit);
+        Assert.Equal(5.5597f + 7f + 3f + 12f, rules.CritChance(kit.System, mage, target, bolt), Tol);
     }
 }

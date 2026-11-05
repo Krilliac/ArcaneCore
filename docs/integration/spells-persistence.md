@@ -100,7 +100,7 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   1–99 (miss = SPELL_MISS_RESIST); melee/ranged spells roll miss/dodge/parry from the combat
   area's roll input. A miss sends SMSG_SPELLLOGMISS, lists the target as missed in SMSG_SPELL_GO
   and deals 0 damage to a hostile target so combat starts.
-- Crit: magic = 5% player base + `MOD_SPELL_CRIT_CHANCE(_SCHOOL)`, ×1.5; melee/ranged =
+- Crit: magic = base + `MOD_SPELL_CRIT_CHANCE(_SCHOOL)` (+ `MOD_ATTACKER_SPELL_CRIT_CHANCE` on a hostile target), ×1.5; the base is the intellect table value for players when `IntellectSpellCritSource` is installed (the world daemon installs it; see stats.md) and a flat 5% otherwise (`PlayerBaseSpellCrit`); melee/ranged =
   `PLAYER_(RANGED_)CRIT_PERCENTAGE` (creatures 5%) + `MOD_CRIT_PERCENT`, ×2; `CANT_CRIT` and
   damage class NONE never crit. Heals can crit. The damage log carries hitInfo 0x2.
 - Partial resist (magic, non-holy, non-binary spells, direct and periodic): average fraction =
@@ -180,5 +180,5 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
 ## Suggested next slice
 
 Proc system (`PROC_FLAG_*`, charges consumption, `SPELL_AURA_PROC_TRIGGER_SPELL`), stat-driven
-spell crit/hit, totems and summoned creatures through `ISpellSummonSink`, and an autosave hook so
+spell hit (stat-driven spell crit now exists via `IntellectSpellCritSource`, not proven retail), totems and summoned creatures through `ISpellSummonSink`, and an autosave hook so
 auras/cooldowns survive a crash.
