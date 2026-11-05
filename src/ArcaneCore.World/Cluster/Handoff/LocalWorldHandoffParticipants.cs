@@ -39,7 +39,9 @@ public sealed class LocalWorldHandoffSource(
     private const int OpenSavePasses = 3;
 
     private readonly Lock _gate = new();
-    private readonly ManualResetEventSlim _release = new(false);
+    // One release event per freeze, never reset: a Resume that sets it and a quick second freeze must not be able to un-set it under the old Park, which would strand the simulation thread in that
+    // Park and leave the new one queued behind it (a timed-out freeze). The old Park wakes on its own event whenever it gets to run; the new Park waits on a fresh one. Guarded by _gate.
+    private ManualResetEventSlim _release = new(false);
     private readonly List<int> _heldHere = [];
     private Task<bool>? _parked;
     private Task<IReadOnlyList<Task>>? _frozen;
@@ -77,10 +79,11 @@ public sealed class LocalWorldHandoffSource(
                 throw new InvalidOperationException("a retired world is not frozen again");
             if (_frozen is null)
             {
-                _release.Reset();
+                _release = new ManualResetEventSlim(false);
+                ManualResetEventSlim release = _release;
                 var captured = new TaskCompletionSource<IReadOnlyList<Task>>(TaskCreationOptions.RunContinuationsAsynchronously);
                 _frozen = captured.Task;
-                _parked = world.InvokeAsync(() => Park(captured), CancellationToken.None);
+                _parked = world.InvokeAsync(() => Park(captured, release), CancellationToken.None);
                 // A park that never ran (the world stopped) or failed before capturing fails the freeze too.
                 _ = _parked.ContinueWith(
                     parked => captured.TrySetException(parked.Exception?.InnerException ?? new InvalidOperationException("the simulation did not freeze")),
@@ -111,7 +114,7 @@ public sealed class LocalWorldHandoffSource(
                 await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
         }
 
-        // Then what any queue still has open for characters the freeze did not capture: an offline character's retained, waiting or in-flight write, in the save queue or a keyed queue. A still
+        // Then what the save queue and the barrier's registered keyed queues still have open for characters the freeze did not capture: an offline character's retained, waiting or in-flight write, in the save queue or a keyed queue. A still
         // owns them here and can write them; after the commit the fence would refuse them and B would read without them. One that cannot be written fails the flush, and the handoff aborts with
         // nothing lost. A quarantined character has none open: its retained snapshot is superseded by design and never retried. The simulation is parked, so a pass adds nothing new; the repeat
         // catches a late settlement's write. Then the same for the writes of no one character (instance rows, guilds, ...), which no id names.
@@ -221,10 +224,11 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>Releases a parked simulation thread (the process is stopping), retired or not.</summary>
     public void Dispose()
     {
-        _release.Set();
+        lock (_gate)
+            _release.Set();
     }
 
-    private bool Park(TaskCompletionSource<IReadOnlyList<Task>> captured)
+    private bool Park(TaskCompletionSource<IReadOnlyList<Task>> captured, ManualResetEventSlim release)
     {
         // On the simulation thread, between two ticks.
         var saves = new List<Task>();
@@ -268,7 +272,7 @@ public sealed class LocalWorldHandoffSource(
         }
 
         captured.TrySetResult(saves);
-        _release.Wait();
+        release.Wait();
         return true;
     }
 }

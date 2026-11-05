@@ -52,8 +52,10 @@ public sealed class CharacterRetirementRegistry
 
     /// <summary>
     /// From now on, until <see cref="Unseal"/> or <see cref="RetireAll"/> decides, a fence refusal of any character is dropped and counted instead of stopping the process
-    /// (<see cref="TryDropRefused"/>). Writes are still attempted: before the takeover they land. A write that is refused here cannot be lost by the drop: A's token is stale, so it could never
-    /// have been written, and on the abort path (A lost the ownership some other way) the next write after <see cref="Unseal"/> is refused and goes terminal as ever. Idempotent.
+    /// (<see cref="TryDropRefused"/>). Writes are still attempted: before the takeover they land. A refusal by the characters fence (A's epoch token is stale after the takeover) could never have
+    /// been written, so dropping it loses nothing. A refusal by the realm lease (RealmLeaseFenceLostException, or the lease not held) is also dropped, including the shared drop
+    /// (<see cref="TryDropSharedRefused"/>), and that write is not proven unwritable: the drop is accepted because the flush left nothing open, so what a sealed write carries is a
+    /// write that came after it. On the abort path (A lost the ownership some other way) the next write after <see cref="Unseal"/> is refused and goes terminal as ever. Idempotent.
     /// </summary>
     public void Seal()
     {

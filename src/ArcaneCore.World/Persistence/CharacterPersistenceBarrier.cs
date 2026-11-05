@@ -293,7 +293,7 @@ public sealed class CharacterPersistenceBarrier
     }
 
     /// <summary>
-    /// The characters any feature queue still has a write open for, whoever they are: a handoff flushes these too, or an offline character's retained write would never be named and would
+    /// The characters the keyed feature queues that this barrier knows still have a write open for, whoever they are (a queue not registered with the barrier is not asked): a handoff flushes these too, or an offline character's retained write would never be named and would
     /// miss the commit. Each queue first runs its ordered barrier (which never retries), so a write still queued has landed or is retained by the time it is read; a queue with no such barrier
     /// reports what it has waiting as well. The save queue is not included (<see cref="CharacterSaveQueue.UnsettledCharacterIds"/>). Faults, under <see cref="DefaultTimeout"/>, when a queue does not
     /// answer. Ascending.
