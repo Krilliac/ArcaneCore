@@ -131,7 +131,7 @@ public sealed class RealmLeaseNotHeldException(string scope)
 /// lease nobody has taken over yet is still the only one that could be written under, and the keeper's timer handles that case.
 /// <para>Two guards, by site: a write that verifies the lease row at commit uses <see cref="RequireFence"/> (the commit fence decides a node the keeper marked lost locally); a write with no commit check uses
 /// <see cref="RequireHeld"/>, which also refuses after a local loss. Known residual, accepted: a WAL stall that loses renewals (they commit with synchronous_commit off, see <see cref="EfRealmAuthorityLeaseStore"/>),
-/// plus a PostgreSQL crash, plus a concurrent start of another node can let that node take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
+/// plus a PostgreSQL crash can let another node (any live map worker: its renewal tick takes a lapsed instances, maintenance or worldstate lease, not only a node at start) take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
 /// <see cref="RequireHeld"/> (no commit check) can still write briefly after the takeover. Stores behind <see cref="RequireFence"/> are refused at commit.</para>
 /// <para>Stateless; every call works on the caller's context, which stays on the caller's logical call (a context is single-threaded).</para>
 /// </summary>
