@@ -91,6 +91,21 @@ public sealed class WorldRuntimeOptions
     public bool AllowTwoSideWhoList { get; set; }
 
     /// <summary>
+    /// The consecutive-play-time limit (vmangos LimitPlayTime, CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that is not
+    /// retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3 h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its
+    /// character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h
+    /// (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420). <see cref="ArcaneCore.Game.Entities.PlayTimeLimit"/>.
+    /// </summary>
+    public bool LimitPlayTime { get; set; }
+
+    /// <summary>
+    /// Movement packets a session must be sent within 10 seconds before further movement relays to it are batched into SMSG_COMPRESSED_MOVES
+    /// (vmangos Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300, here 0 = never, which is what retail did). Packets over
+    /// 253 bytes are never batched. A batch is flushed on the session's next tick.
+    /// </summary>
+    public int CompressMovementCount { get; set; }
+
+    /// <summary>
     /// How long a requested logout counts down before the player leaves the world (vmangos
     /// WorldSession::ShouldLogOut hard-codes 20 seconds; configurable here for tests and tuning).
     /// </summary>

@@ -90,11 +90,11 @@ public sealed class ClientRequestHandlerTests
             Assert.Equal(2, tracker.Count(WorldOpcode.CmsgChatFiltered));
             Assert.Equal("2 bytes", tracker.Last(WorldOpcode.CmsgChatFiltered));
             Assert.Equal(1, tracker.Count(WorldOpcode.CmsgMinigameMove));
-            Assert.Equal("13 bytes guid 0x1122334455667788", tracker.Last(WorldOpcode.CmsgMinigameMove));
+            Assert.Equal("13 bytes guid 0x1122334455667788 cell 1 value 9", tracker.Last(WorldOpcode.CmsgMinigameMove));
             Assert.Equal(2, tracker.Count(WorldOpcode.CmsgSetLookingForGroup));
             Assert.Equal("3 bytes", tracker.Last(WorldOpcode.CmsgSetLookingForGroup)); // the short one came last
 
-            Assert.Equal("22 bytes values 1/2/3 text 'note\nline'", ClientRequestHandlers.Summarise(WorldOpcode.CmsgSetLookingForGroup, LfgPayload()));
+            Assert.Equal("22 bytes values 1/2/3 text 'note\\nline'", ClientRequestHandlers.Summarise(WorldOpcode.CmsgSetLookingForGroup, LfgPayload()));
             Assert.True(capture.Notices.Count >= 9); // the ledger is process-wide: another test may add entries
             Assert.All(capture.Notices, n => Assert.Equal(AnomalySeverity.Info, n.Severity));
             Assert.Contains(capture.Notices, n => n.Subject == "CMSG_CHAT_FILTERED");
@@ -102,5 +102,35 @@ public sealed class ClientRequestHandlerTests
             Assert.Equal(SessionState.InWorld, session.State);
             Assert.Equal((money, level), await host.OnWorldAsync(() => (player.Money, player.Level)));
         }
+    }
+
+    [Fact]
+    public void Summarise_DecodesTheClientLayouts_AndFallsBackToTheLengthForAShortPacket()
+    {
+        // Layouts from the static check of Wow.exe: AUTOSTORE_GROUND_ITEM u64, STORE_LOOT_IN_SLOT 3 x u8, SKILL_BUY_STEP u32,
+        // SKILL_BUY_RANK u32 count then (u32, u32) pairs, MINIGAME_MOVE u64 + u8 + u32.
+        var guid = new PacketWriter();
+        guid.WriteUInt64(0xAABBCCDD00112233UL);
+        Assert.Equal("8 bytes guid 0xAABBCCDD00112233", ClientRequestHandlers.Summarise(WorldOpcode.CmsgAutostoreGroundItem, guid.ToArray()));
+        Assert.Equal("3 bytes bytes 4/5/6", ClientRequestHandlers.Summarise(WorldOpcode.CmsgStoreLootInSlot, [4, 5, 6]));
+        Assert.Equal("2 bytes", ClientRequestHandlers.Summarise(WorldOpcode.CmsgStoreLootInSlot, [4, 5]));
+
+        var step = new PacketWriter();
+        step.WriteUInt32(77);
+        Assert.Equal("4 bytes value 77", ClientRequestHandlers.Summarise(WorldOpcode.CmsgSkillBuyStep, step.ToArray()));
+
+        var rank = new PacketWriter();
+        rank.WriteUInt32(2);
+        rank.WriteUInt32(43);
+        rank.WriteUInt32(300);
+        rank.WriteUInt32(44);
+        rank.WriteUInt32(150);
+        Assert.Equal("20 bytes count 2 43=300 44=150", ClientRequestHandlers.Summarise(WorldOpcode.CmsgSkillBuyRank, rank.ToArray()));
+
+        var hugeCount = new PacketWriter();
+        hugeCount.WriteUInt32(uint.MaxValue); // a forged count never loops past the bytes present
+        Assert.Equal("4 bytes count 4294967295", ClientRequestHandlers.Summarise(WorldOpcode.CmsgSkillBuyRank, hugeCount.ToArray()));
+        Assert.Equal("13 bytes guid 0x1122334455667788 cell 1 value 9", ClientRequestHandlers.Summarise(WorldOpcode.CmsgMinigameMove, GuidPayload()));
+        Assert.Equal("9 bytes guid 0x1122334455667788", ClientRequestHandlers.Summarise(WorldOpcode.CmsgMinigameMove, GuidPayload()[..9]));
     }
 }

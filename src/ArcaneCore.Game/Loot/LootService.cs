@@ -1381,6 +1381,13 @@ public sealed partial class LootService : IViewerFieldFilter
             return MasterGiveResult.TargetNotEligible;
         }
 
+        // LootHandler.cpp:642-646: a recipient flagged NO_PLAY_TIME (World:LimitPlayTime) cannot be given loot.
+        if ((target.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, LootError.MasterOther));
+            return MasterGiveResult.TargetOther;
+        }
+
         InventoryResult stored = AwardItem(target, bag, item);
         if (stored == InventoryResult.Ok)
         {

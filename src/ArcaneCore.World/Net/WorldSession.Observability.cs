@@ -200,6 +200,9 @@ public sealed partial class WorldSession
     /// request (the client feature silently does nothing), Info for any other named opcode; obsolete opcodes and unnamed values are not reported. A stripped developer
     /// opcode has a (stripped) handler and never gets here. The subject is the opcode name, so the ledger's subject count says how many opcodes are missing.
     /// Cost: two table loads, then the ledger call (no allocation of its own: the subject is the tracker's label).
+    /// The Warning branch is a guard: every opcode in <c>UnhandledGameplay</c> is handled today (the Z30 lane gave CMSG_STORE_LOOT_IN_SLOT and
+    /// CMSG_SKILL_BUY_STEP handlers), so it cannot fire in production until a gameplay opcode is added to that list or loses its handler; the tests call
+    /// this method directly for that reason (<c>SessionAnomalyTests</c>), and the Info branch is the one a real session reaches.
     /// </summary>
     internal static void NoteUnhandledOpcode(WorldOpcode opcode)
     {

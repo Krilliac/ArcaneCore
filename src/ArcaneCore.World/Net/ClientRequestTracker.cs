@@ -4,9 +4,11 @@ namespace ArcaneCore.World.Net;
 
 /// <summary>
 /// Counts the client requests a real 1.12.1 client has send code for but that no reference server models
-/// (<see cref="ArcaneCore.World.Handlers.ClientRequestHandlers"/>), per opcode, and keeps the last decoded summary of each so an operator or a
-/// test can see what arrived. Bounded by the opcode space (one counter and one string slot per opcode value). Thread affinity: any thread;
-/// <see cref="Record"/> is one <see cref="Interlocked.Increment(ref long)"/> and one reference write.
+/// (<see cref="ArcaneCore.World.Handlers.ClientRequestHandlers"/>), per opcode, and keeps the last decoded summary of each. What an operator reads is the
+/// Info <c>client/unmodelled-request</c> ledger entry the handler reports; this tracker is the per-opcode count and last summary that tests and code can
+/// query (<see cref="Count"/>, <see cref="Last"/>), and it is not exposed by any command or endpoint of its own. Bounded by the opcode space (one counter and
+/// one string slot per opcode value). Thread affinity: any thread; <see cref="Record"/> is one <see cref="Interlocked.Increment(ref long)"/> and one
+/// reference write.
 /// </summary>
 public sealed class ClientRequestTracker
 {
@@ -29,6 +31,16 @@ public sealed class ClientRequestTracker
 
         Interlocked.Increment(ref _counts[value]);
         Volatile.Write(ref _last[value], summary);
+    }
+
+    /// <summary>Count one request without a summary (past the handler's detail limit, so a flood costs one increment). Values outside the opcode space are ignored.</summary>
+    public void RecordCountOnly(WorldOpcode opcode)
+    {
+        int value = (ushort)opcode;
+        if (value < Slots)
+        {
+            Interlocked.Increment(ref _counts[value]);
+        }
     }
 
     /// <summary>How many requests of <paramref name="opcode"/> were recorded.</summary>

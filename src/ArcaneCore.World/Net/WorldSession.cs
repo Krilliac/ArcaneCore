@@ -460,6 +460,8 @@ public sealed partial class WorldSession : IPlayerSession
         // Player and map state are owned by the world thread; this is the only consumer of _worldQueue.
         Invariant.Assert(World.IsWorldThread, "in-world packets are handled on the world thread");
         CheckLogoutOverdue(player);
+        TickMovementBatch();
+        CheckPlayTime(player);
         for (int budget = _options.MaxWorldPacketsPerTick; budget > 0 && _worldQueue.TryDequeue(out QueuedPacket packet); budget--)
         {
             Release(packet);
@@ -660,6 +662,7 @@ public sealed partial class WorldSession : IPlayerSession
 
             Player = null;
             DiscardQueuedPackets();
+            ClearMovementBatch();
             _state = SessionState.CharacterSelect;
             Volatile.Write(ref _leftWorldTick, Environment.TickCount64);
             _heuristicsGm = false; // no player, so no GM mode: the next character's first world packet learns its own

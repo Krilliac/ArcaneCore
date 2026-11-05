@@ -215,6 +215,17 @@ public sealed partial class QuestNpcServices
             return false;
         }
 
+        // Player.cpp:12730-12736: a player flagged NO_PLAY_TIME (World:LimitPlayTime) is refused the reward, with the unhealthy-time warning when msg.
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            if (msg)
+            {
+                PlayTimeLimit.SendUnhealthyWarning(player);
+            }
+
+            return false;
+        }
+
         return true;
     }
 

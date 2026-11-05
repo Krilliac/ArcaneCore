@@ -103,6 +103,17 @@ public sealed partial class PlayerProgression : IQuestExperience
     public uint GiveXp(Player player, uint xp, ObjectGuid victim)
     {
         ArgumentNullException.ThrowIfNull(player);
+        // vmangos Player::GiveXP (Player.cpp:3011-3015): the play-time flags (only set under World:LimitPlayTime) act before the personal rate.
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            return 0;
+        }
+
+        if ((player.Flags & PlayerFlags.PartialPlayTime) != 0)
+        {
+            xp /= 2;
+        }
+
         xp = ApplyPersonalRate(player, xp);
         if (xp < 1 || !player.IsAlive || !player.CanMutateQuestSettlementState || player.Level >= Options.MaxPlayerLevel)
         {

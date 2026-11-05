@@ -55,7 +55,7 @@ public sealed partial class Map
             {
                 try
                 {
-                    other.Session.Send(opcode, payload);
+                    other.Session.SendMovement(opcode, payload);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
