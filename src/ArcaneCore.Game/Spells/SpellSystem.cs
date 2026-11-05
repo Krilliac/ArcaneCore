@@ -116,6 +116,10 @@ public sealed partial class SpellSystem
     /// <summary>Units with live spell state.</summary>
     public int TrackedUnitCount => _states.Count;
 
+    /// <summary>
+    /// The spell clock in wrapped milliseconds, read through the delegate given at construction. The only production construction (<c>SpellFeature</c>) hands it
+    /// <c>() =&gt; _world?.NowMs ?? 0</c>, the tick-start World clock, so two reads in one tick are equal and a stamp meets only World readings; tests pass their own.
+    /// </summary>
     public uint NowMs => _clock();
 
     /// <summary>
