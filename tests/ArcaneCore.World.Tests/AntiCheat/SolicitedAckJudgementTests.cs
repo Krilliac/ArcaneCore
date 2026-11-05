@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Tests.AntiCheat;
 /// The movement block of a solicited acknowledgement (speed, flag, root, knockback, turn rate) is judged before it is stored, like a movement
 /// packet. Before, the handlers stored it and only advanced the stored-position marker (AfterMovement), so a client could carry any
 /// position or flag in the ack of an order the server really sent, and the next block was then measured from there. vmangos runs the
-/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes, MovementHandler.cpp:603-604 flag ack, :697-698 root ack, :790-791 knockback ack).
+/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes :491-492 speed ack; MovementHandler.cpp :603-604 flag ack, :697-698 root ack in HandleMoveRootAck, :790-791 knockback ack).
 /// The tests wait real time between packets (Task.Delay), so the class runs in the serial timing stage.
 /// </summary>
 [Trait("Category", "Timing")]
@@ -216,7 +216,7 @@ public sealed class SolicitedAckJudgementTests
         await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Root, 0.7f, _ => { }));
         await scene.Client.CollectThroughBarrierAsync();
         Assert.Empty(scene.Seen);
-        // IsRooted is what the rooted-while-moving check reads (AntiCheatFeature.cs:175); only Player.SetRooted sets it.
+        // IsRooted is what the rooted-while-moving check reads (AntiCheatFeature.Judge, the Rooted term); only Player.SetRooted sets it.
         Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.IsRooted && scene.Player.Movement.HasFlag(MovementFlags.Root)));
     }
 
@@ -350,5 +350,53 @@ public sealed class SolicitedAckJudgementTests
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
+    }
+
+    [Fact]
+    public async Task ASolicitedRootAck_DuringATaxiFlight_IsHonouredButItsPositionIsNotStored()
+    {
+        await using Scene scene = await StartAsync("ROOTTAXI", "Roottaxi");
+        await scene.BaselineAsync();
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+        await scene.Client.CollectThroughBarrierAsync();
+        float before = await scene.Host.OnWorldAsync(() =>
+        {
+            scene.Player.UnitFlags |= UnitFlags.TaxiFlight; // the flight system owns the position (TaxiFlightSystem relocates it each step)
+            return scene.Player.X;
+        });
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Root, 80.7f, _ => { }));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        // The order was acknowledged (vmangos erases it first, MovementHandler.cpp:671) but the block 80 yards off the flight path was not stored, so
+        // the flight is not ended by drift and a pending order is no way off the taxi. Before, the position was stored.
+        (float x, bool pending) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)));
+        Assert.Equal(before, x);
+        Assert.False(pending);
+    }
+
+    [Fact]
+    public async Task TheFirstRootAck_WithALaterUnrootStillPending_IsNotScoredAsMovingWhileRooted()
+    {
+        await using Scene scene = await StartAsync("ROOTPEND", "Rootpend");
+        await scene.BaselineAsync();
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+        uint rootCounter = await scene.LastCounterAsync();
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: false));
+        await scene.Client.CollectThroughBarrierAsync();
+        Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.Locomotion.Pending.Count == 2));
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(rootCounter, MovementFlags.Forward | MovementFlags.Root, 0.7f, _ => { }));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        // The acked order is erased and another root order is still pending: vmangos scores ROOT_MOVE only without a pending root change
+        // (MovementAnticheat.cpp:777-780), so the block is exempt, unlike TheFirstRootAck_CarryingAMovingBlock_IsScoredAsMovingWhileRooted.
+        Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)));
+        Assert.DoesNotContain(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
     }
 }

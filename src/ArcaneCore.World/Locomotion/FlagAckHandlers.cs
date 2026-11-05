@@ -62,7 +62,7 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
             _ => MovementFlags.None,
         };
         antiCheat?.JudgeAcknowledgedMovement(session, player, opcode, ack.Movement, orderGrant);
-        MovementHandlers.ApplyObserved(session, player, opcode, ack.Movement);
+        MovementHandlers.ApplyObservedAck(session, player, opcode, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);
         MovementControl.ApplyReal(player, type, ack.Apply);

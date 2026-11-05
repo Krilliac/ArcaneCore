@@ -53,7 +53,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
         // Judged like a movement packet before it is stored (vmangos MovementHandler.cpp:790-791).
         antiCheat?.JudgeAcknowledgedMovement(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement, MovementFlags.None);
-        MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
+        MovementHandlers.ApplyObservedAck(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);
         player.Locomotion.ResetFall();

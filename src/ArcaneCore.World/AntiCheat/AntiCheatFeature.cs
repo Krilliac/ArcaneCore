@@ -155,8 +155,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     /// <summary>
     /// The movement block of an honoured solicited acknowledgement (speed, flag, root, knockback, turn rate), judged before it is stored
-    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating, HandleForceSpeedChangeAckOpcodes,
-    /// MovementHandler.cpp:603-604 flag ack, :697-698 root ack, :790-791 knockback ack). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
+    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating: HandleForceSpeedChangeAckOpcodes :491-492 speed ack,
+    /// and in MovementHandler.cpp :603-604 flag ack, :697-698 root ack (HandleMoveRootAck), :790-791 knockback ack). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
     /// so the block carrying it is not a forgery). Only the acknowledgement of an unroot order is exempt from the rooted-while-moving check (the client's own clock decides when it stops moving, vmangos MovementAnticheat.cpp:777-780 skips CMSG_FORCE_MOVE_UNROOT_ACK alone); every other acknowledgement, a root ack included, is checked like a movement packet.</summary>
     public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
         => Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
@@ -183,8 +183,9 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             AllowedSpeed = AllowedSpeed(player),
             Alive = player.IsAlive,
             // An honoured root ack is judged before MovementControl.ApplyReal sets the Root flag, so the server does not hold the root yet; the order it
-            // acknowledges is what the block is held to (a client that stops on a root order never acknowledges it with a moving block).
-            Rooted = acknowledgement && opcode == WorldOpcode.CmsgForceMoveRootAck
+            // acknowledges is what the block is held to (a client that stops on a root order never acknowledges it with a moving block). A later root or unroot order still pending
+            // exempts it, as in vmangos (MovementAnticheat.cpp:777-780 scores ROOT_MOVE only without a pending root change, after the acked order was erased).
+            Rooted = acknowledgement && opcode == WorldOpcode.CmsgForceMoveRootAck && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)
                 || !(acknowledgement && opcode == WorldOpcode.CmsgForceMoveUnrootAck) && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
             GrantedFlags = GrantedFlags(player, state.ExplicitGrants) | extraGrants,
             ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
