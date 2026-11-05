@@ -23,8 +23,19 @@ public sealed class PlayerbotQaKindExhaustivenessTests : IDisposable
         Kind = kind, AtUtc = QaData.T0, BotKey = QaData.Bot1, BotCount = 3, Goal = "Quest", Quest = 1656, Target = 6747, HasPosition = true, Map = 0,
         X = 10, Y = 20, Z = 30, Attackers = [3], ExceptionType = "InvalidOperationException", FaultCode = "playerbot-recovery-x", Detail = "MOVEMENT",
         Relay = 7, PathId = 2, Entry = 3, Seconds = 120, Count = 3, Minutes = 30, Spell = 133, SpellName = "Fireball", SpellRank = "Rank 1", EffectIndex = 0,
-        EffectName = "SchoolDamage", EffectValue = 14, Reason = kind == QaSignalKind.SpellRefused ? "NoPower" : QaSpellGaps.Effect, BotClass = 8,
+        EffectName = "SchoolDamage", EffectValue = 14, Reason = ReasonOf(kind), BotClass = 8, Npc = 11, GameObject = 12, Item = 13, Code = 2,
         Message = "a sample line",
+    };
+
+    private static string ReasonOf(QaSignalKind kind) => kind switch
+    {
+        QaSignalKind.SpellRefused => "NoPower",
+        QaSignalKind.InteractionFailed => "buy-not-sold",
+        QaSignalKind.QuestBroken => "invalid",
+        QaSignalKind.ObjectUnsupported => "type",
+        QaSignalKind.ScriptUnsupported => "ai-name",
+        QaSignalKind.OpcodeUnhandled => "no-handler",
+        _ => QaSpellGaps.Effect,
     };
 
     [Fact]

@@ -264,7 +264,8 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
                 : null,
             ReputationRewards: reputation is { Factions.Count: > 0 } ? reputation : null,
             SpellCaster: progression && _services.GetService<SpellFeature>() is { } caster ? new SpellSystemQuestCaster(caster.System) : null,
-            Party: progression ? new WorldQuestParty(_services, () => _world) : null), npcs),
+            Party: progression ? new WorldQuestParty(_services, () => _world) : null,
+            Qa: _services.GetService<Game.Diagnostics.IGameQaObserver>()), npcs),
         Options, new PersistenceSink(this), () => _clock.GetUtcNow().ToUnixTimeSeconds(), _logger);
 
     private void OnPersistenceFatalFailure(Exception failure)

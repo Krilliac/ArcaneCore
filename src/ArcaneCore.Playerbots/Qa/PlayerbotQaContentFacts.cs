@@ -57,6 +57,18 @@ internal interface IQaContentFacts
     /// A template without a ScriptName is true.
     /// </summary>
     bool HasScript(uint entry, uint map);
+
+    /// <summary>The name of a creature entry (the interaction kinds' issue text); null when unknown.</summary>
+    string? CreatureName(uint entry) => null;
+
+    /// <summary>The name of a game object entry; null when unknown.</summary>
+    string? GameObjectName(uint entry) => null;
+
+    /// <summary>The name of an item entry; null when unknown.</summary>
+    string? ItemName(uint entry) => null;
+
+    /// <summary>A quest's objectives in words (its objective text, then each required creature, object and item with its count); empty when unknown.</summary>
+    string QuestObjectives(uint quest) => string.Empty;
 }
 
 /// <summary>No content: nothing is claimed.</summary>
@@ -176,6 +188,31 @@ internal sealed class PlayerbotQaContentFacts(IServiceProvider services) : IQaCo
 
     public bool HasScript(uint entry, uint map)
         => Creatures is { } creatures && QaScriptFacts.Has(creatures.AiServices.Factory, creatures.Content, entry, map);
+
+    public string? CreatureName(uint entry) => entry == 0 ? null : Creatures?.Content.FindTemplate(entry)?.Name;
+
+    public string? GameObjectName(uint entry)
+        => entry == 0 ? null : services.GetService<GameObjects.GameObjectLootFeature>()?.Content.FindTemplate(entry)?.Name is { Length: > 0 } name ? name : null;
+
+    public string? ItemName(uint entry) => entry == 0 ? null : services.GetService<Items.ItemsFeature>()?.Templates.Find(entry)?.Name;
+
+    public string QuestObjectives(uint quest)
+    {
+        if (quest == 0 || Quests?.Get(quest) is not { } q) return string.Empty;
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(q.Objectives)) parts.Add("\"" + (q.Objectives.Length <= 200 ? q.Objectives : q.Objectives[..200] + "...") + "\"");
+        for (int i = 0; i < Game.Quests.QuestConstants.ObjectivesCount; i++)
+        {
+            int target = q.ReqCreatureOrGOId[i];
+            if (target > 0) parts.Add(System.FormattableString.Invariant($"kill/speak {q.ReqCreatureOrGOCount[i]} x creature {target}") + Named(CreatureName((uint)target)));
+            else if (target < 0) parts.Add(System.FormattableString.Invariant($"use {q.ReqCreatureOrGOCount[i]} x object {-(long)target}") + Named(GameObjectName((uint)-target)));
+            if (q.ReqItemId[i] != 0) parts.Add(System.FormattableString.Invariant($"bring {q.ReqItemCount[i]} x item {q.ReqItemId[i]}") + Named(ItemName(q.ReqItemId[i])));
+        }
+
+        return string.Join("; ", parts);
+    }
+
+    private static string Named(string? name) => string.IsNullOrEmpty(name) ? string.Empty : " (" + name + ")";
 }
 
 /// <summary>The script question of the classifier, answered by the script catalogue (every layer, for the signal's map).</summary>

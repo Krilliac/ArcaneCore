@@ -71,9 +71,11 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         Map map, CreatureContent content, CreatureOptions? options = null, ICreatureHeightProvider? height = null,
         Random? random = null, Func<uint>? serverTime = null, ILogger? logger = null, CreatureAiServices? aiServices = null,
         ICreatureRespawnPersistence? respawnPersistence = null, IRespawnClock? respawnClock = null,
-        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null, IUnderMapClassifier? underMap = null)
+        Func<uint, CreatureDisplayModelMetadata?>? displayModelResolver = null, IUnderMapClassifier? underMap = null,
+        Diagnostics.IGameQaObserver? qa = null)
     {
         ArgumentNullException.ThrowIfNull(map);
+        Qa = qa; // before the loaded grids spawn below: their AI gaps are reported too
         ArgumentNullException.ThrowIfNull(content);
         Map = map;
         _content = content;
@@ -121,6 +123,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
     }
 
     public Map Map { get; }
+
+    /// <summary>
+    /// Bot QA (docs/areas/playbots-qa.md): told of the creature AI and script gaps this system meets (an unknown AIName, unsupported EventAI parts,
+    /// a summon of a missing creature_template, an escort with no points), once per gap, next to the warning. Null: nobody listens.
+    /// </summary>
+    public Diagnostics.IGameQaObserver? Qa { get; set; }
 
     /// <summary>This system's clock: the sum of every update's diff (ms).</summary>
     public long ClockMs => _clockMs;

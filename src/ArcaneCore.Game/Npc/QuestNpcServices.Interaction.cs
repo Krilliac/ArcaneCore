@@ -231,7 +231,7 @@ public sealed partial class QuestNpcServices
         {
             if (refusal.Message is { } reason)
             {
-                Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                QuestInvalid(player, quest.Id, reason);
             }
 
             return false;
@@ -239,6 +239,12 @@ public sealed partial class QuestNpcServices
 
         if (!((state.Quests.Get(quest.Id)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest)))
         {
+            if (Deps.Qa is { } qa && !AcceptableQuest(quest))
+            {
+                // Withheld without a word to the client: a quest whose behaviour this server lacks (bot QA reports it, docs/areas/playbots-qa.md).
+                qa.OnQuestRefused(player, quest.Id, Diagnostics.QuestFailure.Unsupported, 0, MissingAdapters(quest).ToString());
+            }
+
             return false;
         }
 

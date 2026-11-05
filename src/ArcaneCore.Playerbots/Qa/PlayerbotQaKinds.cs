@@ -11,7 +11,9 @@ namespace ArcaneCore.World.Playerbots.Qa;
 /// <param name="BotIndependent">The finding comes from data rather than from bots: it has no bot count to threshold on.</param>
 /// <param name="SingleOccurrence">One occurrence is enough to report it (instead of <see cref="PlayerbotQaGitHubOptions.MinOccurrences"/>).</param>
 /// <param name="SpellKind">A spell finding: it carries the spell section in its issue and counts against the spell publish caps.</param>
-internal sealed record QaKindInfo(QaSignalKind Kind, string Label, string Slug, double Weight, bool BotIndependent, bool SingleOccurrence, bool SpellKind)
+/// <param name="Cap">The kind's own publish caps (issues per pass and per rolling day, persisted), on top of the hourly cap; null for none.</param>
+internal sealed record QaKindInfo(QaSignalKind Kind, string Label, string Slug, double Weight, bool BotIndependent, bool SingleOccurrence, bool SpellKind,
+    QaKindCap? Cap = null)
 {
     /// <summary>The kind's GitHub label (added to the configured labels when <see cref="PlayerbotQaGitHubOptions.KindLabels"/> is on).</summary>
     public string GitHubLabel => "bot-qa:" + Slug;
@@ -22,6 +24,9 @@ internal sealed record QaKindInfo(QaSignalKind Kind, string Label, string Slug, 
     /// </summary>
     public bool ServerSide => Kind is QaSignalKind.ServerFault or QaSignalKind.TickHang;
 }
+
+/// <summary>A kind's own publish caps: at most <paramref name="PerPass"/> issues of the kind created in one publish pass and <paramref name="PerDay"/> per rolling 24 hours.</summary>
+internal readonly record struct QaKindCap(int PerPass, int PerDay);
 
 /// <summary>
 /// The one table of the kinds. Adding a <see cref="QaSignalKind"/> means adding its row here and its cases to
@@ -54,6 +59,18 @@ internal static class QaKinds
         new(QaSignalKind.TickHang, "tick hang", "tick-hang", 50, BotIndependent: true, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.UnreachableGoal, "unreachable goal", "unreachable-goal", 18, BotIndependent: false, SingleOccurrence: false, SpellKind: false),
         new(QaSignalKind.Anomaly, "bot anomaly", "bot-anomaly", 26, BotIndependent: true, SingleOccurrence: true, SpellKind: false),
+        // The interaction kinds (docs/areas/playbots-qa.md, Interaction signals). Each has its own caps, so a first deploy that finds many of one kind
+        // opens a few issues a pass and a day, never one per finding; the bot-independent ones are the tightest.
+        new(QaSignalKind.InteractionFailed, "interaction failed", "interaction-failed", 22, BotIndependent: false, SingleOccurrence: false, SpellKind: false,
+            new QaKindCap(PerPass: 2, PerDay: 8)),
+        new(QaSignalKind.QuestBroken, "quest broken", "quest-broken", 32, BotIndependent: false, SingleOccurrence: false, SpellKind: false,
+            new QaKindCap(PerPass: 2, PerDay: 8)),
+        new(QaSignalKind.ObjectUnsupported, "object unsupported", "object-unsupported", 28, BotIndependent: true, SingleOccurrence: true, SpellKind: false,
+            new QaKindCap(PerPass: 1, PerDay: 4)),
+        new(QaSignalKind.ScriptUnsupported, "script unsupported", "script-unsupported", 24, BotIndependent: true, SingleOccurrence: true, SpellKind: false,
+            new QaKindCap(PerPass: 1, PerDay: 4)),
+        new(QaSignalKind.OpcodeUnhandled, "opcode unhandled", "opcode-unhandled", 26, BotIndependent: true, SingleOccurrence: true, SpellKind: false,
+            new QaKindCap(PerPass: 1, PerDay: 3)),
     ]);
 
     /// <summary>Every row, in kind order.</summary>

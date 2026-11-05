@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
@@ -227,6 +228,12 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     public ILootQuestJournal? Quests { get; }
 
     public IGameObjectQuestGiver? QuestGiver { get; set; }
+
+    /// <summary>
+    /// Bot QA (docs/areas/playbots-qa.md): told when a use reaches something this system does not implement (<see cref="GameObjectUseResult.Unsupported"/>)
+    /// and when a player's use succeeds. Null: nobody listens.
+    /// </summary>
+    public IGameQaObserver? Qa { get; set; }
 
     /// <summary>Skill values for lock checks; defaults to the inventory's requirements seam (vmangos GetSkillValue).</summary>
     public Func<Player, uint, uint> SkillValue { get; set; } = static (player, skill) => player.Inventory.Requirements.SkillValue(player.Inventory, skill);
@@ -715,7 +722,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             GameObjectType.Text => UseText(player, go),
             GameObjectType.Chair => UseChair(player, go),
             GameObjectType.Camera => UseCamera(player, go),
-            GameObjectType.QuestGiver => QuestGiver is { } giver && giver.OpenQuestMenu(player, go) ? GameObjectUseResult.Ok : GameObjectUseResult.Unsupported,
+            GameObjectType.QuestGiver => QuestGiver is { } giver && giver.OpenQuestMenu(player, go) ? GameObjectUseResult.Ok : Unsupported(player, go, "quest-menu"),
             GameObjectType.Mailbox => GameObjectUseResult.Ok,
             GameObjectType.SpellCaster => UseSpellCaster(player, go),
             GameObjectType.SummoningRitual => UseRitual(player, go),
@@ -726,16 +733,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             GameObjectType.Generic or GameObjectType.Trap or GameObjectType.Binder or GameObjectType.MeetingStone
                 or GameObjectType.MapObject or GameObjectType.AuctionHouse or GameObjectType.GuardPost
                 or GameObjectType.Transport or GameObjectType.MoTransport or GameObjectType.DuelArbiter => GameObjectUseResult.NotUsable,
-            _ => GameObjectUseResult.Unsupported,
+            _ => Unsupported(player, go, "type"),
         };
 
         if (result == GameObjectUseResult.Ok)
         {
             Map.FindUpdater<Instances.Scripts.InstanceData>()?.OnObjectUsed(player, go);
             Used?.Invoke(player, go);
+            Qa?.OnObjectUsed(player, go);
         }
 
         return result;
+    }
+
+    /// <summary>A use this system does not implement: bot QA hears of it (<see cref="Qa"/>), the caller gets <see cref="GameObjectUseResult.Unsupported"/>.</summary>
+    private GameObjectUseResult Unsupported(Unit? user, GameObject go, string gap, uint value = 0)
+    {
+        Qa?.OnObjectUnsupported(user, go, gap, value);
+        return GameObjectUseResult.Unsupported;
     }
 
     /// <summary>
@@ -1239,7 +1254,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         if (Loot is null)
         {
-            return GameObjectUseResult.Unsupported;
+            return Unsupported(player, go, "loot-service");
         }
 
         // Ordinary instance unload can preserve its bind while recreating the whole map. A chest
@@ -1248,7 +1263,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         LootStateKey? key = DurableKeyOf(go);
         if (Map.InstanceId != 0 && key is null)
         {
-            return GameObjectUseResult.Unsupported;
+            return Unsupported(player, go, "instance-chest");
         }
 
         if (go.LootState == GameObjectLootState.JustDeactivated)
@@ -1275,7 +1290,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         {
             LootResult.Ok => GameObjectUseResult.Ok,
             LootResult.NotAllowed => GameObjectUseResult.InUse,
-            LootResult.Unsupported => GameObjectUseResult.Unsupported,
+            LootResult.Unsupported => Unsupported(player, go, "loot-store"),
             _ => GameObjectUseResult.NotUsable,
         };
     }

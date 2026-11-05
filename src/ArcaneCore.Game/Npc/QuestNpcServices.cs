@@ -22,7 +22,8 @@ public sealed record QuestNpcDependencies(
     IQuestReputationSettlement? ReputationRewards = null,
     Honor.IPlayerHonor? Honor = null,
     IQuestSpellCaster? SpellCaster = null,
-    IQuestParty? Party = null);
+    IQuestParty? Party = null,
+    Diagnostics.IGameQaObserver? Qa = null);
 
 /// <summary>Where quest/NPC state changes go (the world daemon's save queue). World thread.</summary>
 public interface IQuestNpcSink
@@ -193,6 +194,20 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     private uint DisplayOf(uint itemId) => itemId != 0 ? Deps.Items?.GetItem(itemId)?.DisplayId ?? 0 : 0;
 
     private static void Send(Player player, WorldOpcode opcode, PacketWriter body) => player.Session.Send(opcode, body.AsSpan());
+
+    /// <summary>SMSG_QUESTGIVER_QUEST_INVALID for <paramref name="questId"/>; bot QA (<see cref="QuestNpcDependencies.Qa"/>) hears of it.</summary>
+    private void QuestInvalid(Player player, uint questId, QuestInvalidReason reason)
+    {
+        Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+        Deps.Qa?.OnQuestRefused(player, questId, Diagnostics.QuestFailure.Invalid, (int)reason, string.Empty);
+    }
+
+    /// <summary>SMSG_QUESTGIVER_QUEST_FAILED for <paramref name="questId"/>; bot QA (<see cref="QuestNpcDependencies.Qa"/>) hears of it.</summary>
+    private void QuestTurnInFailed(Player player, uint questId, QuestInvalidReason reason)
+    {
+        Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(questId, reason));
+        Deps.Qa?.OnQuestRefused(player, questId, Diagnostics.QuestFailure.TurnInRefused, (int)reason, string.Empty);
+    }
 
     /// <summary>vmangos Player::ModifyMoney (clamped to 0..MAX_MONEY_AMOUNT), then MoneyChanged.</summary>
     private void ModifyMoney(PlayerNpcState state, long delta, bool saveCharacter = true)

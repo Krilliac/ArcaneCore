@@ -146,7 +146,7 @@ public sealed partial class GameObjectMapSystem
             _logger.LogWarning("GameObject::Use unhandled GameObject type {Type} (entry {Entry}), used by {Player}", (uint)go.Type, go.Entry, player.Guid);
         }
 
-        return GameObjectUseResult.Unsupported;
+        return Unsupported(player, go, "type");
     }
 
     private static float CentreDistanceSquared(WorldObject a, WorldObject b)

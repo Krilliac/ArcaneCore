@@ -133,6 +133,12 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
             session.LogSilentDrop(WorldOpcode.CmsgLoot, "loot open refused: " + result, source.Value, source.Entry, (uint)result);
         }
 
+        if (result != LootResult.Ok && session.IsPlayerbot)
+        {
+            // A bot's refused loot is a bot QA interaction signal (docs/areas/playbots-qa.md); a real player's is never reported.
+            session.Services.GetService<Game.Diagnostics.IGameQaObserver>()?.OnLootRefused(player, source, result);
+        }
+
         if (result != LootResult.Ok && session.Logger.IsEnabled(LogLevel.Debug))
         {
             string diagnostic = JsonSerializer.Serialize(loot.DescribeOpen(player, source, result));
