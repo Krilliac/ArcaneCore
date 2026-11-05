@@ -52,6 +52,28 @@ public sealed class BaselineTests
     }
 
     [Fact]
+    public void AnAssemblyEntry_SilencesTheAllowUnsafeBlocksFinding()
+    {
+        var diagnostics = AnalyzerHarness.Analyze("class C { }", "ARC0003|assembly:TestAssembly|<assembly>|AllowUnsafeBlocks|1", allowUnsafe: true);
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void AnAssemblyEntry_WithoutAllowUnsafeBlocks_IsStale()
+    {
+        var diagnostics = AnalyzerHarness.Analyze("class C { }", "ARC0003|assembly:TestAssembly|<assembly>|AllowUnsafeBlocks|1", allowUnsafe: false);
+        Assert.Equal(["ARC9001"], AnalyzerHarness.Ids(diagnostics));
+    }
+
+    [Fact]
+    public void AnAssemblyEntryForAnotherAssembly_IsNotJudged_AndDoesNotCover()
+    {
+        const string other = "ARC0003|assembly:OtherAssembly|<assembly>|AllowUnsafeBlocks|1";
+        Assert.Empty(AnalyzerHarness.Analyze("class C { }", other, allowUnsafe: false));
+        Assert.Equal(["ARC0003"], AnalyzerHarness.Ids(AnalyzerHarness.Analyze("class C { }", other, allowUnsafe: true)));
+    }
+
+    [Fact]
     public void MalformedLines_AreReported_AndCommentsAreNot()
     {
         var diagnostics = AnalyzerHarness.Analyze("class C { }", "# a comment\n\nnot a baseline line\nARC0006|src/Test.cs|C.A|Task.Result|zero");
