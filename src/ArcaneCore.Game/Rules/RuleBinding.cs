@@ -79,11 +79,11 @@ public sealed class RuleSubjectState
 
     public RuleBinding Binding { get; }
 
-    /// <summary>The current phase, 0..31 (<c>set_phase</c> changes it).</summary>
+    /// <summary>The current phase (<c>set_phase</c> changes it). The phase gate tests bit <c>Phase</c> of a rule's mask, so only 0..31 can pass a rule that has a phase mask.</summary>
     public int Phase { get; set; }
 
     /// <summary>
-    /// The phase the evaluator's phase gate tests instead of <see cref="Phase"/> while it is 0..31; -1 (the default) tests <see cref="Phase"/>.
+    /// The phase the evaluator's phase gate tests instead of <see cref="Phase"/> while it is 0 or more (a value past 31 matches no phase mask); -1 (the default) tests <see cref="Phase"/>.
     /// A host that readies rules before it processes them (the creature host, as cmangos EventAI does) sets it around <c>Fire</c> and clears it
     /// after. Actions always read and write <see cref="Phase"/>; only the check honours this, so <c>Update</c> and list starts (which do not
     /// gate on phase) are unaffected.
@@ -111,7 +111,7 @@ public sealed class RuleSubjectState
     /// <summary>When the rule in <paramref name="slot"/> may fire again (host clock, ms; 0 = now).</summary>
     public long CooldownOf(int slot) => CooldownUntil[slot];
 
-    /// <summary>Back to the spawn state: phase 0, no cooldowns, nothing fired, nothing pending (the host calls it on evade, respawn and similar resets).</summary>
+    /// <summary>Back to the spawn state: phase 0, no cooldowns, nothing fired, nothing pending (the host calls it on evade, respawn and similar resets). <see cref="GatePhase"/> is NOT cleared: the host that sets it clears it itself around each <c>Fire</c>.</summary>
     public void Reset()
     {
         Phase = 0;
