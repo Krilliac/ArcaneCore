@@ -108,7 +108,7 @@ public sealed class CharacterHonorDataModule : IDataModule, ICharacterDataCleanu
             entity.Property(r => r.Date).HasColumnName("date");
             entity.Property(r => r.Type).HasColumnName("type");
             entity.Property(r => r.OperationId).HasColumnName("operation_id").HasMaxLength(36);
-            entity.HasIndex(r => r.OperationId).IsUnique();
+            entity.HasIndex(r => new { r.CharacterId, r.OperationId }).IsUnique();
             entity.HasIndex(r => new { r.CharacterId, r.Date });
             entity.HasIndex(r => r.Date);
         });

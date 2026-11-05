@@ -80,7 +80,7 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
             // insert trips the unique index; pass 1 re-checks and then finds them stored.
             for (int pass = 0; ; pass++)
             {
-                IReadOnlyList<HonorCpRecord> fresh = await WithoutStoredAsync(rows, cancellationToken).ConfigureAwait(false);
+                IReadOnlyList<HonorCpRecord> fresh = await WithoutStoredAsync(characterId, rows, cancellationToken).ConfigureAwait(false);
                 if (fresh.Count == 0)
                 {
                     return;
@@ -121,15 +121,15 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     /// <paramref name="rows"/> without the ones whose operation id is stored, and without a second row of the same id in the batch. Rows
     /// without an id are always kept.
     /// </summary>
-    private async Task<IReadOnlyList<HonorCpRecord>> WithoutStoredAsync(IReadOnlyList<HonorCpRecord> rows, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<HonorCpRecord>> WithoutStoredAsync(int characterId, IReadOnlyList<HonorCpRecord> rows, CancellationToken cancellationToken)
     {
         string[] ids = [.. rows.Where(r => r.OperationId != Guid.Empty).Select(r => r.OperationId.ToString("D")).Distinct()];
         HashSet<string> seen = [];
         for (int offset = 0; offset < ids.Length; offset += ChunkSize)
         {
-            string[] chunk = ids[offset..Math.Min(ids.Length, offset + ChunkSize)];
+            List<string> chunk = [.. ids[offset..Math.Min(ids.Length, offset + ChunkSize)]];
             seen.UnionWith(await db.Set<HonorCpRow>().AsNoTracking()
-                .Where(r => r.OperationId != null && chunk.Contains(r.OperationId))
+                .Where(r => r.CharacterId == characterId && r.OperationId != null && chunk.Contains(r.OperationId))
                 .Select(r => r.OperationId!)
                 .ToListAsync(cancellationToken).ConfigureAwait(false));
         }

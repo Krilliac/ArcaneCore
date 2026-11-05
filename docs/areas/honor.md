@@ -60,7 +60,7 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
   which refreshes only on those events and before a save). The derived fields are not persisted.
 - **Contribution rows are written exactly once per queued row.** `HonorWriteQueue.AppendCp` stamps every row with an operation id (`HonorCpRecord.OperationId`)
   when it takes it, and a retained or retried write carries the same ids. `EfHonorStore.AppendCpAsync` skips a row whose id is already stored in
-  `character_honor_cp.operation_id` (unique index, schema 76), so a commit whose acknowledgement was lost does not add the batch a second time; a concurrent
+  `character_honor_cp.operation_id` (unique together with the character id, schema 76), so a commit whose acknowledgement was lost does not add the batch a second time; a concurrent
   attempt that wins the race trips the unique index and the second pass finds the rows stored. A row without an id (not queued through the write queue) is
   always appended. Rows written before schema 76 have a null id. A write queued while the weekly calculation runs can overwrite an online player's new numbers with older ones (the job
   re-queues the post-maintenance state to narrow that window).
@@ -70,7 +70,7 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
 
 Characters schema **version 23** (allocated as 21 by the lane; renumbered at wave-4 integration) (`CharacterHonorDataModule.Version`, the next free number in this tree; the integrator renumbers it, tests use the constant).
 Three new tables, nothing existing changes. Characters schema **version 76** (`HonorCpOperationDataModule.Version`, renumbered by the integrator like the others)
-adds `character_honor_cp.operation_id` and its unique index to databases created at 23 or later:
+adds `character_honor_cp.operation_id` and its unique (character, operation id) index to databases created at 23 or later:
 
 | Table | Columns | Replaces (vmangos) |
 |---|---|---|
