@@ -1,0 +1,25 @@
+# Quests options
+
+14 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `Quests`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `AreaTriggerQuests` | QuestAreaTrigger[] | `(empty)` | a list: numbered keys 0, 1, 2, ...; each entry is a group of keys | World | start | areatrigger_involvedrelation rows (trigger id → exploration quest). Exploration/event quests without a relation stay unavailable: nothing else could complete them. |
+| `FactionTemplateDbcPath` | string | `(empty)` | text | World | start | Optional developer-supplied build-5875 FactionTemplate.dbc; absent means unknown NPC factions. |
+| `HighLevelHideDiff` | int | `7` | a whole number, -2147483648 to 2147483647 | World | start | Quests.HighLevelHideDiff (negative = never hide). |
+| `IgnoreRaid` | bool | `false` | true \| false | World | start | Quests.IgnoreRaid (vmangos CONFIG_BOOL_QUEST_IGNORE_RAID, default off): every quest counts as allowed in raid groups (`Quest::IsAllowedInRaid`); otherwise raid group members get no kill credit and no quest drops for ordinary quests. |
+| `LogWithheld` | bool | `true` | true \| false | World | start | Quests:LogWithheld (default true): log at startup how many quests are withheld and why. |
+| `LowLevelHideDiff` | int | `4` | a whole number, -2147483648 to 2147483647 | World | start | Quests.LowLevelHideDiff (negative = never grey out). |
+| `MaxPlayerLevel` | uint | `60` | a whole number, 0 to 4294967295 | World | start | MaxPlayerLevel (quest XP turns into money at this level). |
+| `OrdinaryRewardQuestIds` | uint[] | `(empty)` | a list: numbered keys 0, 1, 2, ...; each value is a whole number, 0 to 4294967295 | World | start | Developer-validated ordinary item/money quests. The imported template omits reputation, mail and script rewards, so a template alone cannot prove that rewarding it is supported. |
+| `RateDropMoney` | float | `1` | a number, '.' is the decimal point | World | start | Rate.Drop.Money (quest money rewards). |
+| `RateXpQuest` | float | `1` | a number, '.' is the decimal point | World | start | Rate.XP.Quest. |
+| `RewardMode` | QuestRewardMode | `AllSupported` | AllSupported \| AllowlistOnly | World | start | Quests:RewardMode. `QuestRewardMode.AllSupported` (default, retail) rewards every quest whose needs have adapters; `QuestRewardMode.AllowlistOnly` restores the earlier opt-in through `OrdinaryRewardQuestIds`. Values: `AllSupported`, `AllowlistOnly`. |
+| `SettlementBudgetSeconds` | int | `15` | a whole number, -2147483648 to 2147483647 | World | start | Seconds one reward settlement may take end to end (save, drains, the reward transaction) before it is abandoned and reconciled from the stored rows. Operational, not a gameplay rule: 15 is the shipped value. It covers three typical lock waits of the shipped 5 s Database:SqliteWriteTimeoutMs in a row (an unrelated character's write already in flight on the character save queue's one consumer, the settlement's own save, the reward transaction), so one locked write ahead of it cannot use up the budget. A write-gate wait is not capped at one bound: it gives up after 5 s without a hand-off or 20 s of active waiting, but the settlement's budget token ends any wait it is passed to earlier. A test that deliberately holds a settlement open raises it so its observation window is not a race against this deadline. |
+| `SharePushRequiresQuest` | bool | `false` | true \| false | World | start | Quests:SharePushRequiresQuest (default false, retail): vmangos HandlePushQuestToParty (QuestHandler.cpp:403-459) offers any quest id to the party without checking that the pusher holds it; the receiver's accept does check (Player::CanShareQuest). Switch on to refuse such pushes up front. |
+| `XpSource` | QuestXpSource | `Auto` | Auto \| RewXpColumn \| Derived | World | start | Quests:XpSource. `QuestXpSource.Auto` (default) uses the RewXP column when the loaded quests have one (vmangos data) and derives the experience from RewMoneyMaxLevel otherwise (classic-db data). Values: `Auto`, `RewXpColumn`, `Derived`. |

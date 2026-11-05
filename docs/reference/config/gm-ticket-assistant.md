@@ -1,0 +1,23 @@
+# GmTicketAssistant options
+
+12 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `World:GmTicketAssistant`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `ActionCooldownSeconds` | int | `600` | a whole number from 0 to 86400 | World | start | Seconds before the same account gets another world-changing fix (unstuck, revive, combat reset) (0..86400). |
+| `AssistantName` | string | `Ticketbot` | text | World | start | The name the assistant's answers carry ("&lt;GM&gt;Name answers your ticket: ...") and the actor of its audit lines. |
+| `DeadSeconds` | int | `180` | a whole number from 0 to 86400 | World | start | Seconds since the assistant first saw the author dead (not since the release) before a ghost is resurrected at a graveyard (0..86400). |
+| `Enabled` | bool | `false` | true \| false | World | start | Whether the assistant handles tickets at all (default false). `.ticket assistant on\|off` changes it until restart. |
+| `FaqPath` | string | `(empty)` | text | World | start | Path of the FAQ text the assistant answers questions from; empty uses the starter FAQ built into the server. |
+| `MaxActionsPerAccountPerDay` | int | `3` | a whole number from 0 to 1000 | World | start | The most automatic actions (fixes and answers) per account per UTC day (0..1000); past it the ticket is left to a human. 0 allows none. |
+| `ModelTimeoutSeconds` | int | `15` | a whole number from 1 to 120 | World | start | Seconds a model call (classification or answer) may take before the keyword fallback or an escalation takes over (1..120). |
+| `PollSeconds` | int | `30` | a whole number from 1 to 86400 | World | start | Seconds between passes over the open tickets (1..86400). |
+| `SignalWindowSeconds` | int | `900` | a whole number from 1 to 86400 | World | start | Seconds an anomaly signal (under the terrain floor, client-reported) is shown to the GM with a ticket; it never triggers an action (1..86400). |
+| `StaleCombatSeconds` | int | `30` | a whole number from 0 to 86400 | World | start | Seconds the author must have been "in combat" with nobody fighting them before the combat state is cleared (0..86400). |
+| `StuckIdleSeconds` | int | `120` | a whole number from 0 to 86400 | World | start | Seconds the author must not have moved before "stuck" counts as evidence (0..86400). |
+| `UseModel` | bool | `false` | true \| false | World | start | Whether a model may classify tickets and draft answers (when the playerbot chat stack has a model provider). Default false: keywords only, no answers drafted, so no model-written text reaches a player and an FAQ ticket is left to a GM. On, the model picks the category and also writes the player-visible answer that closes a Question ticket. |
