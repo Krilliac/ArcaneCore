@@ -31,7 +31,7 @@ public interface IScriptQuestEvents
     bool IsQuestIncomplete(Player player, uint questId) => false;
 
     /// <summary>
-    /// Whether <paramref name="questId"/> is in the player's log with every objective done and not yet turned in (cmangos <c>Player::GetQuestStatus(questId) ==
+    /// Whether <paramref name="questId"/> is in the player's log with its status complete, which a non-repeatable quest also keeps after it is turned in (the log keeps status Complete with the rewarded mark; cmangos <c>Player::GetQuestStatus(questId) ==
     /// QUEST_STATUS_COMPLETE</c>, as the ScriptDev2 creature scripts ask it). False by default.
     /// </summary>
     bool IsQuestComplete(Player player, uint questId) => false;

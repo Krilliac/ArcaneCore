@@ -87,7 +87,7 @@ All are `SEC_ADMINISTRATOR`, after cMaNGOS `ahbotCommandTable`. The root exists 
 - **Gameobject loot** uses only the `gameobject_loot_template` tables of objects that have a spawn which respawns (cMaNGOS reads the
   same set), plus the entries a spawn can become through `gameobject_spawn_entry`.
 - **Dynamic max level.** With `DynamicMaxRequiredLevel` on, the required level cap is the highest level among the characters online,
-  refreshed every `DynamicRefreshMinutes` (default 10). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value. `DynamicIgnoreGmAccounts` (cMaNGOS `AuctionHouseBot.Level.IgnoreGmAccounts`, default off) leaves characters of staff accounts (security above player) out of that count.
+  refreshed every `DynamicRefreshMinutes` (default 10). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value. `DynamicIgnoreGmAccounts` (cMaNGOS `AuctionHouseBot.Level.IgnoreGmAccounts`, default off) leaves characters of staff accounts (security above player) out of that count; when only staff are online, the highest staff level is the fallback (as cMaNGOS: "if no valid non-GM characters are online, the bot will fallback to the highest-level online GM character").
   The item pool is rebuilt when the cap changes.
 - **`MaxItemLevel`** sets the item level cap directly. 0 (the default) keeps the cMaNGOS rule: no cap at a required level cap of 60 or
   more, else the cap + 5.

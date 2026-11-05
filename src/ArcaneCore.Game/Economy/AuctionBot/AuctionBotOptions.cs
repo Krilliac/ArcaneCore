@@ -72,7 +72,7 @@ public sealed class AuctionBotOptions
 
     /// <summary>
     /// With <see cref="DynamicMaxRequiredLevel"/>, leave characters of staff accounts (security above player) out of the highest-level count (cMaNGOS
-    /// AuctionHouseBot.Level.IgnoreGmAccounts, default false).
+    /// AuctionHouseBot.Level.IgnoreGmAccounts, default false). When only staff characters are online the highest of their levels is the fallback, as in cMaNGOS.
     /// </summary>
     public bool DynamicIgnoreGmAccounts { get; set; }
 

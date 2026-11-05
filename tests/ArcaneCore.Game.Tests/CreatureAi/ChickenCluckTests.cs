@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Creatures.Scripts;
 using ArcaneCore.Game.Entities;
@@ -90,7 +91,7 @@ public sealed class ChickenCluckTests
     }
 
     [Fact]
-    public void AChickenEmote_OffersOnlyOnTheOneInFiftyDraw()
+    public void AChickenEmote_OffersOnlyOnceTheRandomDrawWins()
     {
         (WorldRuntime world, Creature chicken, Player player, ChickenCluckAI ai) = Rig(new CompleteQuests());
         using (world)
@@ -102,8 +103,28 @@ public sealed class ChickenCluckTests
                 emotes++;
             }
 
-            Assert.True(ai.Offering, "5000 /chicken emotes never won the 1 in 50 draw");
+            Assert.True(ai.Offering, "5000 /chicken emotes never won the random draw");
             Assert.Equal(ChickenCluckAI.FactionFriendly, chicken.FactionTemplate);
+        }
+    }
+
+    [Fact]
+    public void ACritterTypeChicken_KeepsTheCritterBehaviour_ItFleesFromAHitAndDoesNotRetaliate()
+    {
+        CreatureContent content = new([Template(ChickenCluckAI.Entry) with { CreatureType = 8 }], [Spawn(1, ChickenCluckAI.Entry, 0, 0)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { ScriptQuests = new CompleteQuests() });
+        using (world)
+        {
+            (Player player, FakeSession _) = AddPlayer(world, 1, 2, 0);
+            Creature chicken = Assert.Single(system.Creatures);
+            Assert.IsAssignableFrom<CritterAI>(Assert.IsType<ChickenCluckAI>(chicken.AI));
+            world.RunTick(100);
+
+            map.Combat.DealDamage(player, chicken, 1, direct: false);
+
+            Assert.Equal(MovementGeneratorType.Fleeing, chicken.Motion.CurrentType);
+            Assert.Null(chicken.Combat.Victim);
+            Assert.False(chicken.AI!.AttackStart(player));
         }
     }
 

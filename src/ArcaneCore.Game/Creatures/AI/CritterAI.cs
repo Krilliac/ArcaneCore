@@ -10,8 +10,9 @@ namespace ArcaneCore.Game.Creatures;
 /// permit contest, AI/CreatureAISelector.cpp:78-79) unless its AIName names another AI (or, with the opt-in <c>Creatures:ImplicitEventAi</c>, it has EventAI rows); also available by name.
 /// Limits: vmangos' DamageTaken hook sees the damage before it is applied, <see cref="OnAttackedBy"/> runs after a non-lethal hit (a lethal hit does not run it,
 /// like the reference's <c>uiDamage &lt; health</c> test); the damage amount is not part of the hook.
+/// Not sealed: a script that keeps the critter behaviour derives from it (as vmangos <c>npc_chicken_cluckAI : public CritterAI</c>, <see cref="Scripts.ChickenCluckAI"/>).
 /// </summary>
-public sealed class CritterAI(Creature creature) : CreatureAI(creature)
+public class CritterAI(Creature creature) : CreatureAI(creature)
 {
     /// <summary>vmangos ESCAPE_TIMER: how long a critter flees and how long it stays in combat without a new hit.</summary>
     public const uint EscapeTimerMs = 30000;

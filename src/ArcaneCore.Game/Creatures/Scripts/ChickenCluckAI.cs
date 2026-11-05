@@ -4,12 +4,15 @@ using ArcaneCore.Game.Npc;
 namespace ArcaneCore.Game.Creatures.Scripts;
 
 /// <summary>
-/// Chicken (entry 620), "Cluck!" (quest 3861): mangos-classic ScriptDev2 <c>npc_chicken_cluck</c> (world/npcs_special.cpp at
-/// D:/refs/mangos-classic, npc_chicken_cluckAI). The chicken is a neutral critter (faction 31) without the quest-giver flag. A /chicken at
-/// it has a 1 in 50 chance to make it friendly (faction 35), quest-giver and say its first line; a /cheer from a player whose Cluck! is
-/// complete does the same with the second line. 20 seconds after that it evades, which resets faction and flag.
+/// Chicken (entry 620), "Cluck!" (quest 3861): the ScriptDev2 <c>npc_chicken_cluck</c> of mangos-classic (npcs_special.cpp, npc_chicken_cluckAI),
+/// which in vmangos derives from CritterAI (npcs_special.cpp, <c>npc_chicken_cluckAI : public CritterAI</c>); so this keeps the critter
+/// behaviour of <see cref="CritterAI"/>: it never attacks and runs from a hit for 30 seconds. The chicken is a neutral critter (faction 31)
+/// without the quest-giver flag. A /chicken at it has a 1 in 50 chance to make it friendly (faction 35), quest-giver and say its first line;
+/// a /cheer from a player whose Cluck! is complete does the same with the second line. 20 seconds after that it evades, which resets
+/// faction and flag. Where the references differ on the /chicken branch, this takes mangos-classic: 1 in 50 with no quest check (vmangos
+/// uses 1 in 30 and only for a player whose Cluck! status is none); neither is a retail ruling.
 /// </summary>
-public sealed class ChickenCluckAI(Creature creature) : CreatureAI(creature)
+public sealed class ChickenCluckAI(Creature creature) : CritterAI(creature)
 {
     public const uint Entry = 620, QuestCluck = 3861, FactionFriendly = 35, FactionChicken = 31, ResetFlagMs = 20_000;
     public const uint TextEmoteCheer = 21, TextEmoteChicken = 22;
@@ -78,6 +81,6 @@ public sealed class ChickenCluckAI(Creature creature) : CreatureAI(creature)
             }
         }
 
-        UpdateVictim();
+        base.OnUpdate(diffMs); // the critter's combat timer; a critter never selects a victim
     }
 }
