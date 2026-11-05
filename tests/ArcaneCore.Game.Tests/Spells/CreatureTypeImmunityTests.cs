@@ -1,9 +1,10 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -16,13 +17,6 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// </summary>
 public sealed class CreatureTypeImmunityTests
 {
-    /// <summary>The production resolver (WorldSpellUnitResolver): any unit of the caster's map by GUID.</summary>
-    private sealed class MapObjectResolver : ISpellUnitResolver
-    {
-        public Unit? Find(Unit reference, ObjectGuid guid)
-            => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
-    }
-
     private const uint Beast = 1;
     private const uint Elemental = 4;
     private const uint Mechanical = 9;
@@ -147,9 +141,8 @@ public sealed class CreatureTypeImmunityTests
         const uint entry = 932_001;
         const uint friendlyHeal = 932_110;
         using SpellTestKit kit = new(Hostile(friendlyHeal, Effect(SpellEffectName.Heal, 100, SpellImplicitTarget.UnitFriend)));
-        kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
         kit.System.Units = new MapObjectResolver(); // the default resolver only finds players; this lets the creature resolve as an explicit target
-        (Player healer, _) = kit.AddPlayer(1);
+        (Player healer, FakeSession session) = kit.AddPlayer(1);
         CreatureTemplate template = Template(entry, t =>
         {
             t.MinLevelHealth = 500;
@@ -158,10 +151,31 @@ public sealed class CreatureTypeImmunityTests
         (_, _, CreatureMapSystem creatures) = ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit.CreateAiSystem(Content([template], []), world: kit.World);
         Creature target = creatures.SpawnTemporary(template, healer.X + 3, healer.Y, healer.Z, 0);
         target.Health = 30;
+        session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, friendlyHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true));
         kit.Advance(kit.System.SpellBatchWindowMs);
 
         Assert.Equal(expectedHealth, target.Health);
+
+        // vmangos Spell::WriteSpellGoTargets: a target whose only effect was dropped as immune is listed as a miss with IMMUNE2, any other target as a hit.
+        var reader = new PacketReader(Assert.Single(Packets(session, WorldOpcode.SmsgSpellGo)));
+        _ = reader.ReadPackedGuid();
+        _ = reader.ReadPackedGuid();
+        Assert.Equal(friendlyHeal, reader.ReadUInt32());
+        _ = reader.ReadUInt16();
+        if (type == Mechanical)
+        {
+            Assert.Equal(0, reader.ReadByte());
+            Assert.Equal(1, reader.ReadByte());
+            Assert.Equal(target.Guid.Value, reader.ReadUInt64());
+            Assert.Equal((byte)SpellMissInfo.Immune2, reader.ReadByte());
+        }
+        else
+        {
+            Assert.Equal(1, reader.ReadByte());
+            Assert.Equal(target.Guid.Value, reader.ReadUInt64());
+            Assert.Equal(0, reader.ReadByte());
+        }
     }
 }

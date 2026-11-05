@@ -56,7 +56,7 @@ internal static class EnigmaBlizzardBonus
                 continue;
             }
 
-            foreach (SpellAura? aura in holder.Auras)
+            foreach (SpellAura? aura in holder.AuraSpan)
             {
                 if (aura is { Type: AuraType.OverrideClassScripts, MiscValue: ScriptMiscValue }
                     && (system.AffectMask(holder.Spell, aura.EffectIndex) & spell.SpellFamilyFlags) != 0)
