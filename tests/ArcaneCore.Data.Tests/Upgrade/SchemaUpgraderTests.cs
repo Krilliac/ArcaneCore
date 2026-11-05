@@ -393,11 +393,13 @@ public sealed class SchemaUpgraderTests : IAsyncLifetime
     /// <summary>Take the component's schema lock from a separate connection, the way another process would.</summary>
     private static async Task<IAsyncDisposable> HoldSchemaLockAsync(DatabaseConnectionOptions options, string component)
     {
+        // Unpooled on every provider: these locks belong to the session, so disposing a pooled connection would leave the
+        // lock held by an idle pooled session until that session happens to be reset.
         DbConnection connection = options.Provider switch
         {
             DatabaseProvider.Sqlite => new SqliteConnection(options.ConnectionString + ";Pooling=False"),
-            DatabaseProvider.PostgreSql => new NpgsqlConnection(options.ConnectionString),
-            _ => new MySqlConnection(options.ConnectionString),
+            DatabaseProvider.PostgreSql => new NpgsqlConnection(new NpgsqlConnectionStringBuilder(options.ConnectionString) { Pooling = false }.ConnectionString),
+            _ => new MySqlConnection(new MySqlConnectionStringBuilder(options.ConnectionString) { Pooling = false }.ConnectionString),
         };
         await connection.OpenAsync();
         string sql = options.Provider switch
