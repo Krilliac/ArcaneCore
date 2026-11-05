@@ -66,7 +66,7 @@ internal sealed class PlayerbotRuleSubject : BotRuleSubject
 /// The bot host's shared, read-mostly state for a world: which catalog the ladder runs and the counters. One per <see cref="RuleFeature"/>,
 /// or one per service provider when a build has no rule feature (brain tests). It holds NO evaluator: a <see cref="RuleEvaluator"/> keeps
 /// per-firing state and a random sequence, so every brain gets its own through <see cref="CreateLadder"/> (a pass on one brain can never
-/// disturb another). Brains on different map threads share it under per-map think, so its counters are updated with <c>Interlocked</c> and the rest is read-only after construction. The cached host assumes <see cref="RuleFeature"/> is a singleton of the provider (world features are registered as singletons by <c>WorldFeatures</c>).
+/// disturb another). Brains on different map threads share it under per-map think, so its counters are updated with <c>Interlocked</c>, the catalog choice is a volatile cache, and the fallback-warning latch is set with <c>Interlocked</c>. The cached host assumes <see cref="RuleFeature"/> is a singleton of the provider (world features are registered as singletons by <c>WorldFeatures</c>).
 /// <para>
 /// The catalog is the loaded rule store's when it carries the shipped ladder (the rung rows of <c>playerbot_goal</c> AND at least one ladder
 /// rule 10001-10016, enabled or deliberately disabled), else the shipped content (<see cref="PlayerbotLadderContent"/>, the rows the world schema step seeds), so a
@@ -114,7 +114,7 @@ internal sealed class PlayerbotRuleLadder
     }
 
     /// <summary>
-    /// A new ladder with its own evaluator for one brain; world thread only. The evaluator's random sequence (chance and cooldown rolls of
+    /// A new ladder with its own evaluator for one brain, called from that brain's think pass (world thread, or its map thread under per-map think). The evaluator's random sequence (chance and cooldown rolls of
     /// custom rules) is seeded from <paramref name="guid"/>, so bots roll differently from each other but a given bot rolls the same way
     /// every run; the brain's own random stream is not touched.
     /// </summary>

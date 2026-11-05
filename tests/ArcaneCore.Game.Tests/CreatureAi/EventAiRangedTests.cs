@@ -276,6 +276,46 @@ public sealed class EventAiRangedTests
         Assert.Same(attacker, calm.Combat.Victim);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnIdleCreatureWithAFleeingOrConfusedGeneratorOnTop_AndNoFlag_IsPutInCombatByAnAttacker_ButDoesNotRetaliate(bool fear)
+    {
+        // The motion-type clause of the retaliation guard (CreatureMapSystem.Combat.cs): the generator can be on top while the unit flag is not
+        // (MotionMaster.MoveFleeing pushes without writing the flag), so the flag test alone would let the creature retaliate.
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0), Spawn(2, WolfEntry, 3, 0)]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
+        using WorldRuntime world = runtime;
+        (Player player, _) = AddPlayer(world, 1, 45, 0);
+        Creature[] wolves = [.. system.Creatures];
+        Assert.Equal(2, wolves.Length);
+        foreach (Creature w in wolves)
+        {
+            w.AI!.CombatMovement = false;
+        }
+
+        Creature attacker = wolves[0];
+        Creature impaired = wolves[1];
+        attacker.AI!.AttackStart(player);
+        Assert.Same(player, attacker.Combat.Victim);
+        if (fear)
+        {
+            impaired.Motion.MoveFleeing(null, 0);
+        }
+        else
+        {
+            impaired.Motion.SyncCrowdControl(CrowdControlMovement.Confuse, null);
+        }
+
+        Assert.Equal(fear ? MovementGeneratorType.Fleeing : MovementGeneratorType.Confused, impaired.Motion.CurrentType);
+        Assert.Equal((UnitFlags)0, impaired.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
+
+        system.EnterCombatWithTarget(attacker, impaired);
+
+        Assert.True(impaired.Combat.IsInCombat);
+        Assert.Null(impaired.Combat.Victim);
+    }
+
     [Fact]
     public void AMindControlledPlayersSwing_PulsesItsCharmersPvpFlag_NotItsOwn()
     {
