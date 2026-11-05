@@ -2,8 +2,9 @@
 
 Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client** (checklist: [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md)). This is phase 3a of
 [Hot reload tiers](../design/hot-reload-tiers.md#53-phases): a separate `ArcaneCore.Gateway` process owns the client
-socket and forwards plaintext opcodes to a World running in worker mode. There is no handoff yet: a gateway restart drops
-its clients, and a World restart drops them too. With the default configuration nothing here is active and the World
+socket and forwards plaintext opcodes to a World running in worker mode. A gateway restart drops its clients. A World restart
+drops them too, unless the opt-in `.cluster restart` hands the worker's slot to a standby (see
+[Handoff and transfers over the control channel](#handoff-and-transfers-over-the-control-channel-opt-in)). With the default configuration nothing here is active and the World
 runs exactly as before (`Combined` mode).
 
 Related: [Clustering design](../CLUSTERING_DESIGN.md) (M15.1 gateway target), [netguard](../ops/netguard.md),
@@ -151,7 +152,7 @@ A far teleport routes the same way a login redirect does, and a worker whose lin
 
 Tests: `GatewayCrossWorkerTeleportTests` (in process, the target worker up during a 30 s backoff), `GatewayTransferServiceTests` (the outcomes of the wait) and `ClusterControlChannelScenarioTests` (a late-started worker, multi-process).
 
-### Whole-World handoff (Tier 3b groundwork, in process only)
+### Whole-World handoff (Tier 3b groundwork)
 
 `WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over
 three participants and journals each stage in the characters database (`cluster_world_handoff`, schema 62):
@@ -361,12 +362,11 @@ stage 4 (the target session opens at stage 4, after the passive shadow install).
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
-- The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
-- The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
-- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process only, not on a real client.
+- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process, and over real gateway and world processes under the opt-in keys with a mock client (`CrossWorkerTransferTests`, `ClusterControlChannelScenarioTests`, skipped without `ARCANECORE_TEST_POSTGRES`), but never on a real client.
 - The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
-- A gateway or World restart still drops every client. An authenticated operator trigger for the handoff is not built.
+- A gateway restart still drops every client: `.cluster restart` takes only a worker. A World restart drops its clients too, unless it goes through that handoff, which needs the opt-in handoff keys and a standby for the slot; without them a `.cluster restart` starts nothing.
+- The gateway's Warden runs `Warden:Checks` and the timing scan, not the `warden_checks` table the design gives it: the gateway has no world database.
 - The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
   gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
   link client and the handoff router seam; those need their own split before the reference can go.
