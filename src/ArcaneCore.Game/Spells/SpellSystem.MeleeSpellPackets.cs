@@ -93,13 +93,16 @@ public sealed partial class SpellSystem
             }
         }
 
+        // The sub-damage school goes out as a school INDEX, not a mask: vmangos Combat.cpp:203 (MeleeDamageLog serialisation) and
+        // cmangos-classic Unit.cpp:6112 (Unit::SendAttackStateUpdate) both write GetFirstSchoolInMask(damageSchoolMask). Writing the mask
+        // made a physical melee spell (mask 1) read as Holy (index 1) on the client.
         SubDamage[] subDamage = components is null
             ? dealt == 0 && absorbed == 0 && resisted == 0
                 ? []
-                : [new SubDamage(spell.SchoolMask(), dealt, absorbed, checked((int)resisted))]
+                : [new SubDamage((uint)SpellSchoolMasks.FirstSchoolIn(spell.SchoolMask()), dealt, absorbed, checked((int)resisted))]
             : [.. components.Where(component => component.Dealt != 0 || component.Absorbed != 0 || component.Resisted != 0)
                 .GroupBy(component => component.SchoolMask).Select(school => new SubDamage(
-                school.Key,
+                (uint)SpellSchoolMasks.FirstSchoolIn(school.Key),
                 checked((uint)school.Sum(component => (long)component.Dealt)),
                 checked((uint)school.Sum(component => (long)component.Absorbed)),
                 checked((int)school.Sum(component => (long)component.Resisted))))];

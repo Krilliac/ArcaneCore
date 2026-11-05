@@ -3,7 +3,10 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
 
-/// <summary>One damage component of an SMSG_ATTACKERSTATEUPDATE (vmangos DamageStructs.h SubDamageInfo).</summary>
+/// <summary>
+/// One damage component of an SMSG_ATTACKERSTATEUPDATE (vmangos DamageStructs.h SubDamageInfo). <see cref="School"/> is a school INDEX
+/// (0 = Normal), as the servers write it: vmangos Combat.cpp:203 and cmangos-classic Unit.cpp:6112 send GetFirstSchoolInMask(mask).
+/// </summary>
 public readonly record struct SubDamage(uint School, uint Damage, uint Absorb, int Resist);
 
 /// <summary>

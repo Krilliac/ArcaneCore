@@ -37,11 +37,11 @@ public sealed class StartingZoneCombatTests
         ObjectGuid victim = ObjectGuid.WithEntry(HighGuid.Unit, 6, 0x2002);
         byte[] body = CombatPackets.AttackerStateUpdate(
             HitInfo.AffectsVictim, attacker, victim, 19,
-            [new SubDamage(1, 19, 0, 0)], VictimState.Normal, 0, meleeSpellId: 78);
+            [new SubDamage(0, 19, 0, 0)], VictimState.Normal, 0, meleeSpellId: 78);
 
         Assert.True(StartingZoneCombat.TryReadAttackerState(body, out StartingZoneCombat.AttackerState state));
         Assert.Equal(78u, state.MeleeSpellId);
-        Assert.Equal(1u, state.School);
+        Assert.Equal(0u, state.School);
         Assert.True(state.DisplayDamage > 0);
         Assert.True(StartingZoneCombat.IsHeroicExecution(state, castSuccess: true, healthBefore: 42, healthAfter: 23));
         Assert.False(StartingZoneCombat.IsHeroicExecution(state, castSuccess: true, healthBefore: 23, healthAfter: 23));
