@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
@@ -624,13 +625,13 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         switch (action)
         {
             case TicketAction.Unstuck:
-                if (!player.IsAlive && OnTransport(player))
+                if (!player.IsAlive)
                 {
-                    return (false, GhostOnTransport);
+                    return UnstuckGhost(player, map);
                 }
 
                 return UnstuckCommands.TryApply(services, player, out string reply)
-                    ? (true, reply.StartsWith(UnstuckCommands.Dead, StringComparison.Ordinal) ? "unstuck: ghost sent to the graveyard" : "unstuck: Undying Soul cast")
+                    ? (true, "unstuck: Undying Soul cast")
                     : (false, "unstuck refused: " + reply);
 
             case TicketAction.Revive:
@@ -647,11 +648,86 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
     private const string GhostOnTransport = "a ghost on a transport; left where it is";
 
+    private const string GraveyardTeleportRefused = "the teleport to the graveyard was refused; still a ghost";
+
     /// <summary>
     /// RepopAtGraveyard brings a spirit on a transport back to life on the spot, before its teleport and without the spirit healer's costs (vmangos
     /// Player::RepopAtGraveyard), and the movement flag it goes by is the client's. So the assistant never sends such a ghost there; a GM decides.
     /// </summary>
     private static bool OnTransport(Player player) => player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0;
+
+    /// <summary>
+    /// Whether <paramref name="player"/>, a ghost, can be sent to the graveyard a released spirit would go to: not on a transport, with the graveyard and
+    /// teleport services there, no teleport under way and a graveyard for it. Changes nothing; <paramref name="refusal"/> says why not.
+    /// </summary>
+    private bool CanSendGhost(Player player, Map map, [NotNullWhen(true)] out ArcaneCore.Game.Graveyards.GraveyardRepopService? graveyards,
+        [NotNullWhen(true)] out ArcaneCore.Kernel.WorldData.WorldSafeLoc? graveyard, out string refusal)
+    {
+        graveyards = null;
+        graveyard = null;
+        refusal = string.Empty;
+        if (OnTransport(player))
+        {
+            refusal = GhostOnTransport;
+            return false;
+        }
+
+        if (services.GetService<GraveyardFeature>()?.Service is not { } service)
+        {
+            refusal = "no graveyard service";
+            return false;
+        }
+
+        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
+        {
+            refusal = "no teleport service";
+            return false;
+        }
+
+        if (teleports.IsBeingTeleported(player))
+        {
+            refusal = "already being teleported";
+            return false;
+        }
+
+        uint team = player.Team == Team.Alliance ? ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamAlliance : ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamHorde;
+        if (service.ChooseNearest(player, map, team) is not { Location: var location })
+        {
+            refusal = "no graveyard for this ghost; left where it is";
+            return false;
+        }
+
+        graveyards = service;
+        graveyard = location;
+        return true;
+    }
+
+    /// <summary>
+    /// The ghost half of an unstuck for a ticket. Unlike <c>.unstuck</c>, which penalises first and whose reply does not depend on the trip (vmangos), the
+    /// ghost is sent first and pays the sickness and the cooldown only once its teleport has started. So with no graveyard, no teleport service or a refused
+    /// teleport nothing changes and the ticket goes to a GM, and nobody is told they were moved when they were not.
+    /// </summary>
+    private (bool Done, string Detail) UnstuckGhost(Player player, Map map)
+    {
+        if (UnstuckCommands.Permitted(services, player) is not { } spells)
+        {
+            return (false, "unstuck refused: " + UnstuckCommands.Unavailable);
+        }
+
+        if (!CanSendGhost(player, map, out var graveyards, out _, out string refusal))
+        {
+            return (false, refusal);
+        }
+
+        if (!graveyards.RepopAtGraveyard(player))
+        {
+            return (false, GraveyardTeleportRefused);
+        }
+
+        UnstuckCommands.PenaliseGhost(spells, player);
+        UnstuckCommands.LogUse(services, player);
+        return (true, "unstuck: ghost sent to the graveyard");
+    }
 
     /// <summary>
     /// The first half of a revive: a ghost is sent, still a ghost, to the graveyard a released spirit would go to, and <see cref="SettleRevives"/>
@@ -666,36 +742,19 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             return (false, "not a ghost; release the spirit first");
         }
 
-        if (OnTransport(player))
+        if (!CanSendGhost(player, map, out var graveyards, out var graveyard, out string refusal))
         {
-            return (false, GhostOnTransport);
+            return (false, refusal);
         }
 
-        var graveyards = services.GetService<GraveyardFeature>()?.Service;
-        if (graveyards is null || services.GetService<QuestNpcFeature>()?.Services.Deps.Items is null)
+        if (services.GetService<QuestNpcFeature>()?.Services.Deps.Items is null)
         {
-            return (false, "no graveyard or item service");
-        }
-
-        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
-        {
-            return (false, "no teleport service");
-        }
-
-        if (teleports.IsBeingTeleported(player))
-        {
-            return (false, "already being teleported");
-        }
-
-        uint team = player.Team == Team.Alliance ? ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamAlliance : ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamHorde;
-        if (graveyards.ChooseNearest(player, map, team) is not { Location: var graveyard })
-        {
-            return (false, "no graveyard for this ghost; left where it is");
+            return (false, "no item service");
         }
 
         if (!graveyards.RepopAtGraveyard(player))
         {
-            return (false, "the teleport to the graveyard was refused; still a ghost");
+            return (false, GraveyardTeleportRefused);
         }
 
         _revives[player.Guid] = new PendingRevive(ticketId, player.Name, graveyard.MapId, graveyard.X, graveyard.Y, graveyard.Z, Now + ReviveArrivalSeconds);
@@ -811,7 +870,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
         bool performed = action == TicketAction.Answer || step.Performed;
         string evidence = action == step.Decision.Action ? step.Decision.Evidence : string.Empty;
-        string detail = performed ? step.Detail : step.LimitNote ?? (step.Decision.Action == TicketAction.Answer ? "no answer drafted" : "no evidence or no action allowed");
+        string detail = performed ? step.Detail
+            : step.LimitNote ?? (step.Detail.Length > 0 ? step.Detail : step.Decision.Action == TicketAction.Answer ? "no answer drafted" : "no evidence or no action allowed");
 
         // The player's view first, then the record.
         GmTicketRecord? updated = close ? audit.CloseTicket(ticket.Id, name, text) : audit.RespondToTicket(ticket.Id, text);

@@ -148,7 +148,7 @@ for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `Act
 | Category | Action | Evidence |
 |---|---|---|
 | Question | an FAQ answer from the model (moderated, redacted), then close | the model drafted one |
-| Stuck | the `.unstuck` path, then close | no movement for `StuckIdleSeconds` |
+| Stuck | the `.unstuck` path, then close. A ghost is sent to the graveyard first and pays the sickness and the cooldown only when the teleport starts; with no graveyard or a refused teleport nothing changes and the ticket stays open for a GM (`.unstuck` itself keeps the vmangos reply and penalty in that case) | no movement for `StuckIdleSeconds` |
 | Stuck | clear the combat state, then close | in combat for `StaleCombatSeconds` with no attacker, victim or threat |
 | DeadCantRes | the ghost is sent to the graveyard a released spirit would go to and resurrected once it stands there, with sickness and durability loss (the spirit healer rules), then close. No graveyard for the ghost, a refused teleport, or a ghost on a transport: nothing happens and the ticket goes to a GM | seen dead for `DeadSeconds` (counted from the assistant's first sight of the death, not from the release) and a ghost; an unreleased body is left to release its spirit |
 | anything else | "logged for a GM", an internal note (`.ticket show`), the ticket stays open | none |

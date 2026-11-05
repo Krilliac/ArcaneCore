@@ -299,17 +299,26 @@ public sealed class GmTicketAssistantTests
         Assert.Contains("Escalate", Assert.Single(AssistantAudit(host)).Line, StringComparison.Ordinal);
     }
 
-    // The Undying Soul spell the unstuck path casts, and a level that may use it.
+    private const uint Sickness = ArcaneCore.Game.Npc.SpiritHealerResurrection.ResurrectionSicknessSpell;
+
+    // The Undying Soul spell the unstuck path casts, the sickness a ghost gets from it (castable by the dead, or a ghost could never show it), and a level that may use it.
     private static Task AllowUnstuckAsync(WorldTestHost host, string name)
         => host.OnWorldAsync(() =>
         {
             SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
             spells.Store = new SpellStore(
             [
-                .. spells.Store.All.Where(s => s.Id != UnstuckCommands.UndyingSoul),
+                .. spells.Store.All.Where(s => s.Id != UnstuckCommands.UndyingSoul && s.Id != Sickness),
                 new SpellInfo
                 {
                     Id = UnstuckCommands.UndyingSoul, Name = "Undying Soul", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                    Duration = new SpellDuration(600_000, 0, 600_000),
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Dummy, TargetA = SpellImplicitTarget.UnitCaster }],
+                },
+                new SpellInfo
+                {
+                    Id = Sickness, Name = "Resurrection Sickness", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+                    Attributes = SpellAttributes.AllowCastWhileDead, AttributesEx2 = SpellAttributesEx2.AllowDeadTarget,
                     Duration = new SpellDuration(600_000, 0, 600_000),
                     Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Dummy, TargetA = SpellImplicitTarget.UnitCaster }],
                 },
@@ -567,6 +576,84 @@ public sealed class GmTicketAssistantTests
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         await AssertLeftAGhostAsync(host, ticket, outcome, -8900f, before);
+    }
+
+    private static Task<bool> SickAsync(WorldTestHost host) => host.PlayerStateAsync("Plainone", p =>
+        host.WorldServices.GetRequiredService<SpellFeature>().System.GetAuras(p).Any(h => !h.IsRemoved && h.Spell.Id == Sickness));
+
+    private static Task<bool> UnstuckReadyAsync(WorldTestHost host) => host.PlayerStateAsync("Plainone", p =>
+    {
+        SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+        return spells.IsSpellReady(p, spells.Store.Get(UnstuckCommands.UndyingSoul)!);
+    });
+
+    // A ghost the assistant may unstuck, with its Stuck ticket processed against graveyards; the ghost stands away from every graveyard.
+    private static async Task AssertGhostUnstuckIsLeftToAGmAsync(GraveyardContent graveyards, string reason)
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel },
+            items: WornSword(), graveyards: graveyards);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        uint before = await SwordDurabilityAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        await AssertLeftAGhostAsync(host, ticket, outcome, -8900f, before);
+        Assert.False(await SickAsync(host));
+        Assert.True(await UnstuckReadyAsync(host));
+        Assert.Equal(0, AssistantOf(host).Status().Fixed);
+        Assert.True(AssistantOf(host).NeedsHuman(ticket.Id));
+        Assert.Contains(AssistantOf(host).NotesOf(ticket.Id), n => n.Contains(reason, StringComparison.Ordinal));
+        Assert.DoesNotContain(AssistantAudit(host), e => e.Line.Contains("sent to the graveyard", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(99u, 0u)] // a graveyard linked to another zone only
+    [InlineData(12u, 67u)] // the ghost's zone links only the enemy faction's graveyard
+    public Task Stuck_AGhostWithNoGraveyard_PaysNothing_AndTheTicketStaysOpen(uint linkedZone, uint linkedTeam)
+        => AssertGhostUnstuckIsLeftToAGmAsync(
+            new([new WorldSafeLoc(1, 0, GraveyardX, -100f, 90f, 1.5f, "Goldshire")], [new GraveyardLink(1, linkedZone, linkedTeam)]),
+            "no graveyard for this ghost");
+
+    [Fact]
+    public Task Stuck_ARefusedTeleport_LeavesAGhostThatPaidNothing_AndTheTicketOpen()
+        // A graveyard the map's coordinates cannot hold: TeleportService.TeleportTo refuses it.
+        => AssertGhostUnstuckIsLeftToAGmAsync(
+            new([new WorldSafeLoc(1, 0, 1_000_000f, -100f, 90f, 1.5f, "Nowhere")], [new GraveyardLink(1, 12, 0)]),
+            "the teleport to the graveyard was refused");
+
+    [Fact]
+    public async Task Stuck_AGhost_IsSentToTheGraveyard_StaysAGhost_PaysTheCost_AndTheTicketCloses()
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel },
+            items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+        await player.CollectAsync();
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Unstuck, outcome.Action);
+        Assert.True(outcome.Performed);
+        Assert.True(outcome.Closed);
+        Assert.Null(AuditOf(host).OpenTicket(ticket.Id));
+
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
+
+        Assert.Equal((GraveyardX, -100f), await host.PlayerStateAsync("Plainone", p => (p.X, p.Y)));
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.NotEqual(0u, await host.PlayerStateAsync("Plainone", p => (uint)(p.Flags & PlayerFlags.Ghost)));
+        Assert.True(await SickAsync(host));
+        Assert.False(await UnstuckReadyAsync(host));
+        Assert.Equal(1, AssistantOf(host).Status().Fixed);
+        Assert.Contains(AssistantAudit(host), e => e.Line.Contains("unstuck: ghost sent to the graveyard", StringComparison.Ordinal));
     }
 
     [Fact]
