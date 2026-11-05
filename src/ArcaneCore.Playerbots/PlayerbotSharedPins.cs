@@ -8,19 +8,29 @@ namespace ArcaneCore.World.Playerbots;
 /// within <see cref="WindowMs"/> is a world pin for <see cref="PinMs"/>: explore candidates keep out of it
 /// (<see cref="PlayerbotNavigation.IsWorldPin"/>), and a bot's first stall inside it already counts as a dead-end pin, so it escapes at once.
 /// World pins never refuse a plan (<see cref="PlayerbotNavigation.IsDeadEndPin"/> is per bot): an NPC or a flag in the cell stays reachable.
-/// The caller reports only from open-world maps outside cities (PlayerbotBrain.DeadEndPinShareBlock: the area rule, then the cut-region exemption); cells are kept per map instance anyway.
+/// The caller reports only from open-world maps outside cities (PlayerbotBrain.DeadEndPinShareBlock, the area rule); cells are kept per map instance anyway.
+/// A report from a cut region (<see cref="PlayerbotNavigation.IsCutRegion"/>) is weak evidence: bots in a tunnel stall in each other's way, so such reports
+/// make a world pin only as a crowd of <see cref="CutRegionBotsToShare"/> different bots. A world pin cannot shut a tunnel, since it refuses no plan.
 /// Live 2026-10-25: 60 bots were pinned at two Deadwind Pass spawn points; the pin ledger is per bot, so each of them needed two stalls of
 /// two minutes or more to learn what the first had already found. A repeat after a pin ended lasts twice as long (at most
 /// <see cref="MaxPinMs"/>); bounded by <see cref="MaxKeys"/> (the one reported longest ago goes first). Kept in memory only: a restart relearns it.
 /// <para>
 /// Thread affinity: any thread. The bots of different maps think in parallel, so every access takes <see cref="_gate"/>; the critical
-/// sections are a dictionary lookup (and, on a report, a scan of at most <see cref="BotsToShare"/> stalls).
+/// sections are a dictionary lookup (and, on a report, a scan of at most <see cref="CutRegionBotsToShare"/> stalls).
 /// </para>
 /// </summary>
 internal sealed class PlayerbotSharedPins
 {
     /// <summary>Different bots that must dead-end-pin one cell for it to be a world pin.</summary>
     internal const int BotsToShare = 2;
+
+    /// <summary>
+    /// Different bots that must dead-end-pin one cell for it to be a world pin when their stalls lie in a cut region. Size cannot tell a tunnel
+    /// from open ground (Timbermaw Hold's largest region holds 4882 polygons, the Deadwind Pass region of audit cid 44 holds 4323, and cut regions hold about
+    /// 11% of each continent), the number of bots in one 10-yard cell can: in the live logs of 2026-10 no Timbermaw cell had more than 2 different bots within
+    /// <see cref="WindowMs"/>, and the Deadwind cell had 21. Those logs are throttled, so both counts are floors.
+    /// </summary>
+    internal const int CutRegionBotsToShare = 4;
 
     /// <summary>How long a bot's dead-end pin counts towards <see cref="BotsToShare"/>.</summary>
     internal const uint WindowMs = 1_800_000;
@@ -60,8 +70,9 @@ internal sealed class PlayerbotSharedPins
     /// <summary>
     /// Bot <paramref name="bot"/> dead-end-pinned the cell containing <c>(x, y)</c> on <paramref name="map"/> at world time
     /// <paramref name="nowMs"/>. Returns a description (cell and length) when the cell newly became a world pin, else null.
+    /// <paramref name="inCutRegion"/>: the stall lay in a cut region, so it counts only towards <see cref="CutRegionBotsToShare"/>.
     /// </summary>
-    internal string? Report(uint map, uint instance, float x, float y, ulong bot, uint nowMs)
+    internal string? Report(uint map, uint instance, float x, float y, ulong bot, uint nowMs, bool inCutRegion = false)
     {
         if (!float.IsFinite(x) || !float.IsFinite(y)) return null;
         (ulong, uint) key = (PlayerbotStallWatch.PinKey(map, x, y).Id, instance);
@@ -83,8 +94,8 @@ internal sealed class PlayerbotSharedPins
             record.LastMs = now;
             if (Active(record, now)) return null; // already a world pin: nobody is kept waiting to make it one
             record.Bots.RemoveAll(seen => now - seen.AtMs > WindowMs || seen.Bot == bot);
-            record.Bots.Add(new Seen(bot, now));
-            if (record.Bots.Count < BotsToShare) return null;
+            record.Bots.Add(new Seen(bot, now, inCutRegion));
+            if (!Enough(record.Bots)) return null;
             uint length = (uint)Math.Min((ulong)PinMs << Math.Min(record.Times, 8), MaxPinMs);
             record.Times = Math.Min(record.Times + 1, 8);
             record.UntilMs = now + length;
@@ -120,7 +131,17 @@ internal sealed class PlayerbotSharedPins
 
     private static bool Active(Record record, long now) => record.UntilMs != 0 && record.UntilMs > now;
 
-    private readonly record struct Seen(ulong Bot, long AtMs);
+    /// <summary>Whether the bots seen in a cell make it a world pin: <see cref="BotsToShare"/> outside a cut region, or a crowd of <see cref="CutRegionBotsToShare"/> counting those in one. A cell can hold both, on two floors.</summary>
+    private static bool Enough(List<Seen> bots)
+    {
+        if (bots.Count >= CutRegionBotsToShare) return true;
+        int outside = 0;
+        foreach (Seen seen in bots)
+            if (!seen.InCutRegion) outside++;
+        return outside >= BotsToShare;
+    }
+
+    private readonly record struct Seen(ulong Bot, long AtMs, bool InCutRegion);
 
     private sealed class Record
     {
