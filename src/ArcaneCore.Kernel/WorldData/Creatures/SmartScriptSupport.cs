@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.WorldData.Creatures;
 /// What each smart-script source can run, in AzerothCore numbering (src/server/game/AI/SmartScripts/SmartScriptMgr.h), and the structural rules
 /// a row must pass before the catalog accepts it. The sets here are the single source of truth: <c>SmartScriptCatalog</c> validates against
 /// them and the engine enums in ArcaneCore.Game are asserted to match them in tests. Everything outside a set is rejected at load with a
-/// reason, never silently skipped (ARCANECORE_CHARTER.md: unknown input fails closed).
+/// reason, never silently skipped (unknown input fails closed).
 /// </summary>
 public static class SmartScriptSupport
 {

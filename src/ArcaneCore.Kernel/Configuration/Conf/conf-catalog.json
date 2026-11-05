@@ -1622,7 +1622,7 @@
       "defaultEntries": [],
       "daemons": "Realm",
       "reload": "start",
-      "meaning": "Logon/realm TCP port. Vanilla default is 3724 (Charter §3).",
+      "meaning": "Logon/realm TCP port. Vanilla default is 3724.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#auth",
       "isCollection": false
@@ -12372,7 +12372,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "restart",
-      "meaning": "World TCP port. Vanilla default is 8085 (Charter §3).",
+      "meaning": "World TCP port. Vanilla default is 8085.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#world",
       "isCollection": false

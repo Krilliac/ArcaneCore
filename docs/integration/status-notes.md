@@ -12,7 +12,7 @@ economy work is in [the takeover ledger](takeover-20261003.md). Continue from
 
 ## M13a and M13b follow-ups
 
-The [M13a follow-up](../../MILESTONE_M13A.md) restores saved quest journals before login, serves quest/NPC text queries, and persists timed
-expiry across relogs and map transfers. Full quest/NPC interaction and [real-client acceptance](../M13A_ACCEPTANCE.md) remain
-pending. The [M13b slice](../../MILESTONE_M13B.md) adds guarded live-creature quest status, details, acceptance and abandonment for
+The M13a follow-up (see [quests-npc](../areas/quests-npc.md)) restores saved quest journals before login, serves quest/NPC text queries, and persists timed
+expiry across relogs and map transfers. Full quest/NPC interaction and [real-client acceptance](../guide/client-acceptance.md) remain
+pending. The M13b slice adds guarded live-creature quest status, details, acceptance and abandonment for
 ordinary non-repeatable quests; rewards, objective event adapters and broader NPC services remain subsequent work.

@@ -13,7 +13,7 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.Realm.Net;
 
 /// <summary>
-/// TCP listener for the logon/realm daemon (default port 3724, Charter §3). Accepts
+/// TCP listener for the logon/realm daemon (default port 3724). Accepts
 /// connections and runs each through a <see cref="LogonSession"/> on its own DI scope.
 /// Admission (connection caps, per-address connection rate) and the per-address failure budget
 /// live in one <see cref="NetGuard"/> built from <c>Net:Protection</c> when the listener starts

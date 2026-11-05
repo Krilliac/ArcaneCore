@@ -20,7 +20,7 @@ namespace ArcaneCore.Realm.Net;
 
 /// <summary>
 /// Handles one logon connection: the SRP6 challenge/proof exchange and the realm-list
-/// reply. Drives the command loop documented in docs/M1_ACCEPTANCE.md.
+/// reply. Drives the command loop checked by the logon steps in docs/guide/client-acceptance.md.
 ///
 /// Flow and packet shapes verified against vmangos src/realmd/AuthSocket.cpp; the
 /// auto-create-on-login behavior follows WCell Services/WCell.AuthServer/Authentication.cs.

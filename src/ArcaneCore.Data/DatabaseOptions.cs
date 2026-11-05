@@ -1,8 +1,8 @@
 namespace ArcaneCore.Data;
 
 /// <summary>
-/// Supported relational engines. MariaDB is primary; MySQL and PostgreSQL 16 are supported
-/// (charter §2); SQLite serves zero-setup development and the end-to-end tests (ROADMAP).
+/// Supported relational engines. MariaDB is primary; MySQL and PostgreSQL 16 are supported;
+/// SQLite serves zero-setup development and the end-to-end tests (ROADMAP).
 /// </summary>
 public enum DatabaseProvider
 {

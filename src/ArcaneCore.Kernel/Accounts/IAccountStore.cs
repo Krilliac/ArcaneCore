@@ -3,7 +3,7 @@ namespace ArcaneCore.Kernel.Accounts;
 /// <summary>
 /// Persistence seam for accounts. The realm daemon talks to this abstraction, never to
 /// the database directly — this is the boundary where clustering / a remote account
-/// service will later slot in without rewriting the auth logic (Charter §5).
+/// service will later slot in without rewriting the auth logic.
 /// </summary>
 public interface IAccountStore
 {

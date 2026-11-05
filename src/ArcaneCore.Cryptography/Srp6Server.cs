@@ -14,7 +14,7 @@ namespace ArcaneCore.Cryptography;
 ///      exposes the 40-byte <see cref="SessionKey"/> and the M2 <see cref="ServerProof"/>.
 ///
 /// The math lives in <see cref="Srp6Math"/>, verified against the gtker/wow_srp KATs and
-/// cross-checked against vmangos SRP6.cpp (Charter §3/§4).
+/// cross-checked against vmangos SRP6.cpp.
 /// </summary>
 public sealed class Srp6Server
 {

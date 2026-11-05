@@ -44,7 +44,7 @@ One real correctness bug on the dev-runner path (finding 1) and one hardening ga
 
 5. LOW (config default change) - `src/ArcaneCore.Realm/appsettings.json`: `AutocreateAccounts` true -> false.
    This is a security improvement and is documented (`docs/security/hardening.md:65`). README.md:104-120 and
-   `docs/M1_ACCEPTANCE.md:31` still describe it as an enable-it step, so they are consistent. Existing dev setups that relied on
+   `docs/M1_ACCEPTANCE.md:31` (since retired; now `docs/guide/client-acceptance.md`) still describe it as an enable-it step, so they are consistent. Existing dev setups that relied on
    the shipped `true` will now get "unknown account". Flag it in the release notes.
 
 6. INFO - `scripts/dev-runner.ps1:308-317`. The dev runner enables `HotReload__Commands`, `World__HotCode__Enabled` and the

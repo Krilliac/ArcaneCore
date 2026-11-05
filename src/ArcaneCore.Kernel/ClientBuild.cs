@@ -1,7 +1,7 @@
 namespace ArcaneCore.Kernel;
 
 /// <summary>
-/// Supported client build(s). ArcaneCore targets vanilla 1.12.1 only today (Charter §2); the multi-version design
+/// Supported client build(s). ArcaneCore targets vanilla 1.12.1 only today; the multi-version design
 /// (docs/design/multi-version.md) adds builds behind a protocol adapter for each build. Until then
 /// <see cref="IsSupported"/> accepts exactly <see cref="Vanilla1121"/>.
 /// </summary>

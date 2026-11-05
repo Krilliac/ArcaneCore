@@ -9934,7 +9934,7 @@ World.PlayerCommands = true
 
 #
 #    World.Port
-#        Description: World TCP port. Vanilla default is 8085 (Charter §3).
+#        Description: World TCP port. Vanilla default is 8085.
 #        Type: int
 #        Default: 8085
 #        Allowed: a whole number, -2147483648 to 2147483647

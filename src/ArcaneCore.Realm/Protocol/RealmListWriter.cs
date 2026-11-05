@@ -9,7 +9,7 @@ namespace ArcaneCore.Realm.Protocol;
 ///     u32 = 0 (unused), u8 realm count,
 ///     per realm: u32 type, u8 flags, cstring name, cstring address,
 ///                float population, u8 character count, u8 category, u8 0x00,
-///     u16 = 0x0002 (trailing unused — vmangos uses 2, not 0; noted in MILESTONE_M1.md).
+///     u16 = 0x0002 (trailing unused — vmangos uses 2, not 0; noted in docs/areas/protocol-decisions.md).
 /// </summary>
 public static class RealmListWriter
 {

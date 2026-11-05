@@ -5,7 +5,7 @@ Outputs (checked in, regenerate after changing this script):
   src/ArcaneCore.Protocol/WorldOpcode.g.cs  -- every 1.12.1 world opcode + wire names
   src/ArcaneCore.Game/UpdateFields.g.cs     -- every 1.12.1 update field + visibility flags
 
-Sources and cross-checks (charter §1.1 / §4):
+Sources and cross-checks (docs/guide/contributing.md, references):
   * vmangos  src/game/Server/Protocol/Opcodes_1_12_1.h   (names + values, all 825 opcodes)
   * vmangos  src/game/Objects/UpdateFields_1_12_1.cpp    (names, offsets, sizes, types, flags)
   * gtker/wow_messages intermediate_representation.json  (MIT/Apache) -- every opcode and every

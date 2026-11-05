@@ -5,7 +5,7 @@ namespace ArcaneCore.Protocol;
 
 /// <summary>
 /// Vanilla 1.12.1 packet-header cipher — the rolling byte cipher seeded directly from the
-/// SRP6 session key (Charter §3). **NOT ARC4**, and not the HMAC-derived key TBC+ uses:
+/// SRP6 session key (docs/areas/protocol-decisions.md). **NOT ARC4**, and not the HMAC-derived key TBC+ uses:
 /// vanilla feeds the raw 40-byte session key as the cipher key.
 ///
 /// Only the packet *header* is enciphered: 4 bytes outgoing (SMSG: size + opcode), 6 bytes

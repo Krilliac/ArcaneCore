@@ -25,7 +25,7 @@ and requires it to be covered by the catalog or the exception table, so a lane t
 Every `docs/...md` path and `#anchor` that code, scripts, project files and workflows cite resolves too, with the exact case CI's
 file system needs (`CodeDocReferenceTests`).
 
-**Drift fixed** (each was wrong at the lane base, and a test now ties the statement to the code): README and the M1 acceptance page told operators to enable `Auth:AutocreateAccounts` without saying it is off in the shipped
+**Drift fixed** (each was wrong at the lane base, and a test now ties the statement to the code): README and the logon acceptance page (now the real-client acceptance checklist) told operators to enable `Auth:AutocreateAccounts` without saying it is off in the shipped
 configuration and not retail; `docs/security/hardening.md` gave `WriterDrainGrace` as 5 s in one place and `00:00:00` (wait forever, the code default) in another, and listed the pre-auth deadline and the inbound queue bounds as
 not delivered although they are; `docs/areas/quests-npc.md` said gossip, vendor and trainer behaviour does not exist; and the creature-AI and live-reload pages named keys without their section prefix, so an operator copying
 an unprefixed `EventAi` key would have set a key nothing reads.

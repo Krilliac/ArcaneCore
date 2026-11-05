@@ -143,7 +143,7 @@ Auth.MaxSessionDurationSeconds = 300
 
 #
 #    Auth.Port
-#        Description: Logon/realm TCP port. Vanilla default is 3724 (Charter §3).
+#        Description: Logon/realm TCP port. Vanilla default is 3724.
 #        Type: int
 #        Default: 3724
 #        Allowed: a whole number, -2147483648 to 2147483647
