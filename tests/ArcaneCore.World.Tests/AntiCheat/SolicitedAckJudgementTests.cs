@@ -13,7 +13,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.AntiCheat;
 
 /// <summary>
-/// The movement block of a solicited acknowledgement (speed, flag, root, knockback) is judged before it is stored, like a movement
+/// The movement block of a solicited acknowledgement (speed, flag, root, knockback, turn rate) is judged before it is stored, like a movement
 /// packet. Before, the handlers stored it and only advanced the stored-position marker (AfterMovement), so a client could carry any
 /// position or flag in the ack of an order the server really sent, and the next block was then measured from there. vmangos runs the
 /// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes, MovementHandler.cpp:489-494).
@@ -134,7 +134,7 @@ public sealed class SolicitedAckJudgementTests
     [InlineData(MovementChangeType.WaterWalk, WorldOpcode.CmsgMoveWaterWalkAck)]
     [InlineData(MovementChangeType.Hover, WorldOpcode.CmsgMoveHoverAck)]
     [InlineData(MovementChangeType.FeatherFall, WorldOpcode.CmsgMoveFeatherFallAck)]
-    public async Task AHonestSolicitedFlagAck_IsNotScored(MovementChangeType type, WorldOpcode ackOpcode)
+    public async Task AHonestSolicitedFlagAck_WithAnAppliedOrder_IsNotScored(MovementChangeType type, WorldOpcode ackOpcode)
     {
         await using Scene scene = await StartAsync("FLAGHONEST", "Flaghonest");
         await scene.BaselineAsync();
@@ -189,5 +189,116 @@ public sealed class SolicitedAckJudgementTests
 
         // Levitating is never granted here; the knockback re-baselines the position checks, but the flag checks still run on the block.
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Flag);
+    }
+
+    /// <summary>Roots the player through a real order and an honest ack, so the server holds the Root flag when the next block arrives.</summary>
+    private static async Task RootAsync(Scene scene)
+    {
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+        await scene.Client.CollectThroughBarrierAsync();
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(0, MovementFlags.Root, 0.7f, _ => { }));
+        await scene.Client.CollectThroughBarrierAsync();
+        Assert.Empty(scene.Seen);
+        Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.Movement.HasFlag(MovementFlags.Root)));
+    }
+
+    [Fact]
+    public async Task ASolicitedTurnRateAck_CarryingABlinkPosition_IsScored()
+    {
+        await using Scene scene = await StartAsync("TURNJUDGE", "Turnjudge");
+        await scene.BaselineAsync();
+        float rate = await scene.Host.OnWorldAsync(() =>
+        {
+            UnitSpeed.SetTurnRate(scene.Player, 1.5f);
+            return scene.Player.TurnRate;
+        });
+        await scene.Client.ReadUntilAsync(WorldOpcode.SmsgForceTurnRateChange);
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, scene.Ack(0, MovementFlags.Forward, 80.7f, w => w.WriteSingle(rate)));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Teleport);
+    }
+
+    [Fact]
+    public async Task AHonestSolicitedSpeedAck_IsNotScored()
+    {
+        await using Scene scene = await StartAsync("SPEEDHONEST", "Speedhonest");
+        await scene.BaselineAsync();
+        float target = UnitSpeed.BaseSpeed(MoveType.Run) * 1.4f;
+        await scene.Host.OnWorldAsync(() => UnitSpeed.SetRate(scene.Player, MoveType.Run, 1.4f));
+        await scene.Client.ReadUntilAsync(SpeedPackets.ForceOpcode(MoveType.Run));
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(0, MovementFlags.Forward, 1.4f, w => w.WriteSingle(target)));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        Assert.Empty(scene.Seen);
+    }
+
+    [Fact]
+    public async Task AHonestSolicitedRootAck_IsNotScored()
+    {
+        await using Scene scene = await StartAsync("ROOTHONEST", "Roothonest");
+        await scene.BaselineAsync();
+        await RootAsync(scene);
+    }
+
+    [Fact]
+    public async Task AnUnrootAck_CarryingAMovingBlock_IsNotScoredAsMovingWhileRooted()
+    {
+        await using Scene scene = await StartAsync("UNROOTHONEST", "Unroothonest");
+        await scene.BaselineAsync();
+        await RootAsync(scene);
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: false));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveUnrootAck, scene.Ack(0, MovementFlags.Forward, 1.4f, _ => { }));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        // The only ack the rooted-while-moving check exempts (vmangos MovementAnticheat.cpp:777-780).
+        Assert.Empty(scene.Seen);
+    }
+
+    [Fact]
+    public async Task AFlagAck_UnderARoot_CarryingAMovingBlock_IsScoredAsMovingWhileRooted()
+    {
+        await using Scene scene = await StartAsync("ROOTEDFLAG", "Rootedflag");
+        await scene.BaselineAsync();
+        await RootAsync(scene);
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Hover, apply: true));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.CmsgMoveHoverAck, scene.Ack(0, MovementFlags.Forward | MovementFlags.Root | MovementFlags.Hover, 0.7f, w => w.WriteUInt32(1)));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
+    }
+
+    [Fact]
+    public async Task ASpeedAck_UnderARoot_CarryingAMovingBlock_IsScoredAsMovingWhileRooted()
+    {
+        await using Scene scene = await StartAsync("ROOTEDSPEED", "Rootedspeed");
+        await scene.BaselineAsync();
+        await RootAsync(scene);
+        float target = UnitSpeed.BaseSpeed(MoveType.Run) * 1.4f;
+        await scene.Host.OnWorldAsync(() => UnitSpeed.SetRate(scene.Player, MoveType.Run, 1.4f));
+        await scene.Client.ReadUntilAsync(SpeedPackets.ForceOpcode(MoveType.Run));
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(0, MovementFlags.Forward | MovementFlags.Root, 0.7f, w => w.WriteSingle(target)));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
     }
 }
