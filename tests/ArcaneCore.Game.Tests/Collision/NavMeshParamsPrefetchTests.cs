@@ -16,31 +16,43 @@ public sealed class NavMeshParamsPrefetchTests : IDisposable
     public void Dispose() => _fixture.Dispose();
 
     [Fact]
-    public async Task APrefetchedMap_IsReadOffTheCallingThread_AndTheFirstQueryReadsNothing()
+    public async Task APrefetchedMap_ReturnsBeforeTheRead_AndTheFirstQueryReadsNothing()
     {
         _fixture.WriteParams(0);
-        int callerThread = Environment.CurrentManagedThreadId;
-        var readOn = new List<int>();
+        // The read is held on a gate: PrefetchMap returning while the reader is still blocked proves the read is not done by the caller,
+        // without comparing thread ids (a pool thread that called PrefetchMap could legitimately run the queued read itself).
+        using var gate = new ManualResetEventSlim(false);
+        using var started = new ManualResetEventSlim(false);
+        int reads = 0;
         var nav = new NavMeshPathfinder(_fixture.Directory)
         {
             FileReader = path =>
             {
-                lock (readOn) readOn.Add(Environment.CurrentManagedThreadId);
+                Interlocked.Increment(ref reads);
+                started.Set();
+                gate.Wait(TimeSpan.FromSeconds(30));
                 return File.Exists(path) ? File.ReadAllBytes(path) : null;
             },
         };
 
-        ((ICollisionMapPrefetch)nav).PrefetchMap(0);
-        ((ICollisionMapPrefetch)nav).PrefetchMap(0); // a second instance of the map: no second read
-        await nav.MapPrefetch(0)!.WaitAsync(TimeSpan.FromSeconds(30));
-        lock (readOn)
+        try
         {
-            Assert.Single(readOn);
-            Assert.NotEqual(callerThread, readOn[0]);
+            ((ICollisionMapPrefetch)nav).PrefetchMap(0);
+            ((ICollisionMapPrefetch)nav).PrefetchMap(0); // a second instance of the map: no second read
+            Task prefetch = nav.MapPrefetch(0)!;
+            Assert.False(prefetch.IsCompleted); // PrefetchMap returned while the read is still held
+            Assert.True(started.Wait(TimeSpan.FromSeconds(30)));
+            Assert.False(prefetch.IsCompleted);
+        }
+        finally
+        {
+            gate.Set();
         }
 
+        await nav.MapPrefetch(0)!.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, Volatile.Read(ref reads));
         Assert.True(nav.HasNavigationData(0)); // the first query
-        lock (readOn) Assert.Single(readOn); // it took the prefetched bytes
+        Assert.Equal(1, Volatile.Read(ref reads)); // it took the prefetched bytes
     }
 
     [Fact]

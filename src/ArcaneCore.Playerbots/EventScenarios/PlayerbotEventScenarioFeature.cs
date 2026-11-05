@@ -67,7 +67,7 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     internal Func<IEventScenarioHost?>? HostFactory { get; set; }
 
     /// <summary>
-    /// The table read of the last attach: completed once its result was applied on the world thread (or it found nothing to apply). A
+    /// The table read of the last attach: completed once its result was applied on the world thread (or it found nothing to apply).
     /// If the world stops before it drains its queue the task stays pending (tests wait on it).
     /// </summary>
     internal Task Loading { get; private set; } = Task.CompletedTask;
@@ -89,6 +89,7 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         _catalog = EventScenarioCatalog.Empty;
         _content = GameEventPlayerbotContent.Empty;
         Loading = Task.CompletedTask;
+        _read = Task.CompletedTask;
         int generation = Interlocked.Increment(ref _loadGeneration); // a read still running for an earlier attach is ignored when it ends
         if (services.GetService<IOptions<PlayerbotOptions>>()?.Value is not { Enabled: true }) return;
         if (ContentSource is { } source)
@@ -103,8 +104,12 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         // live world included) never waits on the database. Until then the scenario set is empty and nothing listens or ticks.
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Loading = done.Task;
-        _ = Task.Run(() => LoadAsync(world, subscriptions, scopes, generation, done));
+        _read = Task.Run(() => LoadAsync(world, subscriptions, scopes, generation, done));
     }
+
+    // The pool read of the last attach (ends once the result is posted, not once the world applied it): quiesce waits on this, never on
+    // Loading, which stays pending when the world stops.
+    private Task _read = Task.CompletedTask;
 
     /// <summary>World thread: take <paramref name="content"/> and, when it has rows, start listening and ticking.</summary>
     private void ApplyContent(WorldRuntime world, FeatureSubscriptions subscriptions, GameEventPlayerbotContent content)
@@ -125,6 +130,7 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     public async Task QuiesceAsync(CancellationToken cancellationToken)
     {
         _quiesced = true;
+        await _read.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (_host is { } host) await host.IdleAsync(cancellationToken).ConfigureAwait(false);
     }
 
