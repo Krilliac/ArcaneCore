@@ -20,7 +20,7 @@ public sealed class TicketAssistantCommands : ICommandExtension
             Assistant),
     ];
 
-    /// <summary>Why a Game Master is refused on/off/run: they change the world for players (revive, unstuck, teleport), so they need an Administrator.</summary>
+    /// <summary>Why a Game Master is refused on/off/run: they change the world for players (revive, unstuck, combat reset), so they need an Administrator.</summary>
     internal const string AdministratorOnly = "Only an Administrator can switch the ticket assistant or run it on a ticket. status is open to Game Masters.";
 
     private static bool Assistant(CommandContext context, string text)

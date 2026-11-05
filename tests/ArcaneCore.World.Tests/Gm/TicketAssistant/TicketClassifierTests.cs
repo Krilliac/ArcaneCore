@@ -113,7 +113,7 @@ public sealed class TicketClassifierTests
     {
         Assert.Equal(new TicketDecision(TicketAction.Revive, TicketPolicy.EvidenceDeadLong),
             TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 180), Options));
-        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 179), Options).Action);
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 179), Options).Action);
         Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: true, dead: 999), Options).Action);
     }
 
@@ -131,18 +131,6 @@ public sealed class TicketClassifierTests
     [Fact]
     public void Stuck_InCombatOrADuel_IsNeverUnstuck_EvenWhenIdle()
         => Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(combat: true, idle: 999), Options).Action);
-
-    [Theory]
-    [InlineData("reason=below-terrain map=0 pos=(-8800.00,-100.50,90.00) floor=95.00", true, -8800f, -100.5f)]
-    [InlineData("map=0 pos=(1,2)", true, 1f, 2f)]
-    [InlineData("reason=below-terrain map=0", false, 0f, 0f)]
-    [InlineData("pos=(x,2,3)", false, 0f, 0f)]
-    [InlineData("pos=(1,2", false, 0f, 0f)]
-    public void EvidenceLog_ReadsThePositionOfASignal(string detail, bool found, float x, float y)
-    {
-        Assert.Equal(found, TicketEvidenceLog.TryPositionOf(detail, out float px, out float py));
-        Assert.Equal((x, y), (px, py));
-    }
 
     [Theory]
     [InlineData(TicketCategory.QuestBroken)]

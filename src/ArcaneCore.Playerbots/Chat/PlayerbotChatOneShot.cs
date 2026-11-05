@@ -11,8 +11,8 @@ internal sealed partial class PlayerbotChat
     /// <summary>
     /// Worker or any non-world thread: one model request that belongs to no bot conversation (the GM ticket assistant). The same
     /// guards as <see cref="AnswerAsync"/>: personal data is stripped from <paramref name="untrustedText"/> when that is on, the rest is
-    /// screened by the local filter (a flagged or unjudged text reaches no model), each provider's input moderation runs (a flagged text reaches no
-    /// provider, a failed step skips that provider), provider budgets and cool-downs apply, and the request has the chat timeout.
+    /// screened by the local filter (a flagged or unjudged text reaches no model), each provider's input moderation runs on the first chat line of it (255 characters, while the prompt carries
+    /// up to 500, so the rest is seen by the local filter only; a flagged text reaches no provider, a failed step skips that provider), provider budgets and cool-downs apply, and the request has the chat timeout.
     /// With <paramref name="screenOutput"/> the reply is also stripped of personal data, cut to one chat line, moderated by the same
     /// provider step and screened by the local filter; a reply that fails any of these is not returned. Null when no provider answered.
     /// </summary>

@@ -150,10 +150,12 @@ for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `Act
 | Question | an FAQ answer from the model (moderated, redacted), then close | the model drafted one |
 | Stuck | the `.unstuck` path, then close | no movement for `StuckIdleSeconds` |
 | Stuck | clear the combat state, then close | in combat for `StaleCombatSeconds` with no attacker, victim or threat |
-| DeadCantRes | graveyard resurrection with sickness and durability loss (the spirit healer rules, the player is moved to the graveyard), then close | a ghost for `DeadSeconds`; an unreleased body is left to release its spirit |
+| DeadCantRes | the ghost is sent to the graveyard a released spirit would go to and resurrected once it stands there, with sickness and durability loss (the spirit healer rules), then close. No graveyard for the ghost, a refused teleport, or a ghost on a transport: nothing happens and the ticket goes to a GM | seen dead for `DeadSeconds` (counted from the assistant's first sight of the death, not from the release) and a ghost; an unreleased body is left to release its spirit |
 | anything else | "logged for a GM", an internal note (`.ticket show`), the ticket stays open | none |
 
 An `under-map` anomaly is the client's own movement packet as the server applied it (AntiCheat defaults to Log), so one crafted packet can produce it. It is shown to the GM in the ticket's note and is never evidence for a teleport or a resurrection: the assistant does not teleport an author to the bind point or resurrect anyone in place.
+
+With `UseModel` off the category comes from keywords alone, and "stuck" outranks "quest": "my quest is stuck" from a living player who stood still for `StuckIdleSeconds` (writing the ticket can take that long) gets Undying Soul, which kills them when it ends. Weigh that before setting `Enabled`.
 
 Never given by any action: items, gold, experience, reputation, levels; never done: bans, kicks, mutes or account changes. Not delivered:
 a stuck taxi flight, transport passenger, cast, loot window or trade window reset (no clean API for the evidence), a visible persona on GM

@@ -62,7 +62,7 @@ public sealed class TicketEvidenceLog
         }
     }
 
-    /// <summary>Whether a ledger report is a position signal (the codes the assistant accepts as evidence).</summary>
+    /// <summary>Whether a ledger report is a position signal (the codes the assistant shows the GM).</summary>
     public static bool IsPositionSignal(string subsystem, string code)
         => subsystem == "move" && code == "under-map";
 
@@ -115,31 +115,6 @@ public sealed class TicketEvidenceLog
         {
             return _signals.TryGetValue(guid, out List<TicketSignal>? list) && list[^1].AtUnix >= cutoff ? list[^1] : null;
         }
-    }
-
-    /// <summary>The horizontal position a signal's detail names (<c>pos=(x,y,z)</c>), or false when it names none.</summary>
-    public static bool TryPositionOf(string detail, out float x, out float y)
-    {
-        x = y = 0f;
-        const string marker = "pos=(";
-        int start = detail.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0)
-        {
-            return false;
-        }
-
-        start += marker.Length;
-        int end = detail.IndexOf(')', start);
-        if (end < 0)
-        {
-            return false;
-        }
-
-        string[] parts = detail[start..end].Split(',');
-        return parts.Length >= 2
-            && float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out x)
-            && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y)
-            && float.IsFinite(x) && float.IsFinite(y);
     }
 
     internal static uint? GuidOf(string subject)

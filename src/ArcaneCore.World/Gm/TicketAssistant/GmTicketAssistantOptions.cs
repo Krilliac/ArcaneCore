@@ -32,16 +32,16 @@ public sealed class GmTicketAssistantOptions
     /// <summary>The most automatic actions (fixes and answers) per account per UTC day (0..1000); past it the ticket is left to a human. 0 allows none.</summary>
     public int MaxActionsPerAccountPerDay { get; set; } = 3;
 
-    /// <summary>Seconds before the same account gets another world-changing fix (teleport, unstuck, revive, combat reset) (0..86400).</summary>
+    /// <summary>Seconds before the same account gets another world-changing fix (unstuck, revive, combat reset) (0..86400).</summary>
     public int ActionCooldownSeconds { get; set; } = 600;
 
     /// <summary>Seconds an anomaly signal (under the terrain floor, client-reported) is shown to the GM with a ticket; it never triggers an action (1..86400).</summary>
     public int SignalWindowSeconds { get; set; } = 900;
 
-    /// <summary>Seconds the author must not have moved before "stuck" counts as evidence without an anomaly signal (0..86400).</summary>
+    /// <summary>Seconds the author must not have moved before "stuck" counts as evidence (0..86400).</summary>
     public int StuckIdleSeconds { get; set; } = 120;
 
-    /// <summary>Seconds the author must have been dead or a ghost before a graveyard resurrection (0..86400).</summary>
+    /// <summary>Seconds since the assistant first saw the author dead (not since the release) before a ghost is resurrected at a graveyard (0..86400).</summary>
     public int DeadSeconds { get; set; } = 180;
 
     /// <summary>Seconds the author must have been "in combat" with nobody fighting them before the combat state is cleared (0..86400).</summary>

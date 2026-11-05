@@ -12,7 +12,7 @@ public static class TicketPolicy
     /// <summary>Evidence of <see cref="TicketAction.Unstuck"/>: the author has not moved for the configured time.</summary>
     public const string EvidenceIdle = "idle";
 
-    /// <summary>Evidence of <see cref="TicketAction.Revive"/>: a ghost for the configured time.</summary>
+    /// <summary>Evidence of <see cref="TicketAction.Revive"/>: a ghost, seen dead for the configured time.</summary>
     public const string EvidenceDeadLong = "dead-long";
 
     /// <summary>Evidence of <see cref="TicketAction.ClearCombat"/>: in combat, with no attacker, victim or threat, for the configured time.</summary>

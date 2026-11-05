@@ -81,7 +81,12 @@ public sealed class UnstuckCommands : ICommandGroup
 
         if (player.IsAlive)
         {
-            spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false);
+            if (spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false) != SpellCastResult.CastOk)
+            {
+                reply = Unavailable;
+                return false;
+            }
+
             reply = Alive;
         }
         else

@@ -60,6 +60,12 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     private const int MaxNotesPerTicket = 8;
     private const int MaxTracked = 4096;
 
+    /// <summary>
+    /// Seconds a ghost sent to a graveyard has to arrive and be resurrected. Longer than the stall sweep's enforcement of a near teleport the client
+    /// never acks (<c>TeleportService.NearAckBudgetMs</c> + <c>NearAckRecoveryGraceMs</c>, 120 s) and than a far one's budget (90 s).
+    /// </summary>
+    internal const int ReviveArrivalSeconds = 180;
+
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly Lock _gate = new();
     private readonly SemaphoreSlim _serial = new(1, 1);
@@ -69,6 +75,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     private readonly Dictionary<int, (long Day, int Count)> _actionsToday = [];
     private readonly Dictionary<int, long> _lastFixAt = [];
     private readonly Dictionary<ObjectGuid, Watch> _watch = [];
+    private readonly Dictionary<ObjectGuid, PendingRevive> _revives = []; // world thread only
     private TicketEvidenceLog? _evidence;
     private WorldRuntime? _world;
     private GmTicketAssistantOptions _options = new();
@@ -90,13 +97,16 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         public long StaleSince;
     }
 
+    /// <summary>A ghost on its way to the graveyard at this position, resurrected only once it stands there (<see cref="SettleRevives"/>).</summary>
+    private sealed record PendingRevive(int TicketId, string Name, uint MapId, float X, float Y, float Z, long Deadline);
+
     /// <summary>The options in force.</summary>
     public GmTicketAssistantOptions Options => _options;
 
     /// <summary>Whether tickets are handled now (the configuration, or <see cref="SetEnabled"/>).</summary>
     public bool Enabled => _enabled;
 
-    /// <summary>The recent position anomalies per character (the evidence of the movement fixes).</summary>
+    /// <summary>The recent position anomalies per character (shown to the GM with a ticket; never evidence for an action).</summary>
     public TicketEvidenceLog Evidence => _evidence ??= new TicketEvidenceLog(_clock);
 
     private long Now => _clock.GetUtcNow().ToUnixTimeSeconds();
@@ -159,6 +169,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
     private void OnUpdated(uint diffMs)
     {
+        // Before the switch: a ghost already sent to a graveyard gets what its closed ticket told it, even if the assistant was turned off since.
+        SettleRevives();
         if (!_enabled || _world is not { } world)
         {
             return;
@@ -360,7 +372,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         try
         {
             string? text = await model.DraftAnswerAsync(ticketText, Faq(), timeout.Token).ConfigureAwait(false);
-            // Screened before the 255-character cut of CleanReason, so an overlong draft is refused rather than silently truncated.
+            // MaxDraftLength is CleanReason's cut, so a draft that passes the screen is not cut. The playerbot chat stack has already cut its reply to one
+            // chat line by then, so this length check only ever refuses a model behind the seam that does not cut.
             return string.IsNullOrWhiteSpace(text) || ScreenDraft(text.Trim(), Faq()) is not { } screened ? null : AuditCommands.CleanReason(screened);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -374,8 +387,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         }
     }
 
-    /// <summary>The longest drafted answer sent to a player (the model is told 200; this is the code-side bound).</summary>
-    internal const int MaxDraftLength = 300;
+    /// <summary>The longest drafted answer sent to a player (the model is told 200; this is the code-side bound, and the cut of <c>AuditCommands.CleanReason</c>).</summary>
+    internal const int MaxDraftLength = 255;
 
     // A command prefix of the command table ('.' or '!') at the start of a word.
     private static readonly Regex DraftCommandPattern = new(@"(?<![\w.!])[.!][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
@@ -553,7 +566,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             return new Step(facts, decision, false, string.Empty, limit);
         }
 
-        (bool done, string detail) = player is null ? (false, "author offline") : Perform(decision.Action, player);
+        (bool done, string detail) = player is null ? (false, "author offline") : Perform(decision.Action, player, ticket.Id);
         if (done)
         {
             lock (_gate)
@@ -601,7 +614,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     }
 
     /// <summary>World thread: carry out one allowlisted action on the ticket's author. The result is whether the world was changed.</summary>
-    private (bool Done, string Detail) Perform(TicketAction action, Player player)
+    private (bool Done, string Detail) Perform(TicketAction action, Player player, int ticketId)
     {
         if (player.Map is not { } map)
         {
@@ -611,12 +624,17 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         switch (action)
         {
             case TicketAction.Unstuck:
+                if (!player.IsAlive && OnTransport(player))
+                {
+                    return (false, GhostOnTransport);
+                }
+
                 return UnstuckCommands.TryApply(services, player, out string reply)
                     ? (true, reply.StartsWith(UnstuckCommands.Dead, StringComparison.Ordinal) ? "unstuck: ghost sent to the graveyard" : "unstuck: Undying Soul cast")
                     : (false, "unstuck refused: " + reply);
 
             case TicketAction.Revive:
-                return Revive(player);
+                return Revive(player, map, ticketId);
 
             case TicketAction.ClearCombat:
                 map.Combat.CombatStop(player);
@@ -627,46 +645,128 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         }
     }
 
+    private const string GhostOnTransport = "a ghost on a transport; left where it is";
+
     /// <summary>
-    /// A ghost is resurrected by the spirit healer's rules (<see cref="SpiritHealerResurrection"/> with the real item service, so the 25% durability
-    /// loss and the sickness apply), and is then at a graveyard: the corpse's graveyard when it differs from the ghost's (the resurrection's own
-    /// step), otherwise the ghost's nearest one, so a ghost that walked back to its body does not come back on the spot.
+    /// RepopAtGraveyard brings a spirit on a transport back to life on the spot, before its teleport and without the spirit healer's costs (vmangos
+    /// Player::RepopAtGraveyard), and the movement flag it goes by is the client's. So the assistant never sends such a ghost there; a GM decides.
     /// </summary>
-    private (bool Done, string Detail) Revive(Player player)
+    private static bool OnTransport(Player player) => player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0;
+
+    /// <summary>
+    /// The first half of a revive: a ghost is sent, still a ghost, to the graveyard a released spirit would go to, and <see cref="SettleRevives"/>
+    /// resurrects it once it stands there. So there is no way to come back where the ghost stood: with no graveyard, no teleport service or a refused
+    /// teleport nothing is resurrected and the ticket goes to a GM, and an alive player never waits for its client's teleport ack at the ghost's position
+    /// (a near teleport moves the player only on that ack, which a client can hold back).
+    /// </summary>
+    private (bool Done, string Detail) Revive(Player player, Map map, int ticketId)
     {
         if ((player.Flags & PlayerFlags.Ghost) == 0)
         {
             return (false, "not a ghost; release the spirit first");
         }
 
+        if (OnTransport(player))
+        {
+            return (false, GhostOnTransport);
+        }
+
         var graveyards = services.GetService<GraveyardFeature>()?.Service;
-        IItemService? items = services.GetService<QuestNpcFeature>()?.Services.Deps.Items;
-        if (graveyards is null || items is null)
+        if (graveyards is null || services.GetService<QuestNpcFeature>()?.Services.Deps.Items is null)
         {
             return (false, "no graveyard or item service");
         }
 
-        var spells = services.GetService<SpellFeature>()?.System;
-        var spiritHealer = new SpiritHealerResurrection(() => spells, items, p => _world?.SavePlayer(p));
-        if (!spiritHealer.ResurrectAtSpiritHealer(player))
-        {
-            return (false, "resurrection refused");
-        }
-
-        // The corpse-graveyard step starts a teleport only when it differs from the ghost's; otherwise start the move here.
         if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
         {
-            return (true, "resurrected with sickness and durability loss; no teleport service, not moved");
+            return (false, "no teleport service");
         }
 
         if (teleports.IsBeingTeleported(player))
         {
-            return (true, "resurrected with sickness and durability loss, sent to the corpse's graveyard");
+            return (false, "already being teleported");
         }
 
-        return graveyards.RepopAtGraveyard(player)
-            ? (true, "resurrected with sickness and durability loss, sent to the graveyard")
-            : (true, "resurrected with sickness and durability loss; no graveyard could take the player");
+        uint team = player.Team == Team.Alliance ? ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamAlliance : ArcaneCore.Game.Graveyards.GraveyardCatalog.TeamHorde;
+        if (graveyards.ChooseNearest(player, map, team) is not { Location: var graveyard })
+        {
+            return (false, "no graveyard for this ghost; left where it is");
+        }
+
+        if (!graveyards.RepopAtGraveyard(player))
+        {
+            return (false, "the teleport to the graveyard was refused; still a ghost");
+        }
+
+        _revives[player.Guid] = new PendingRevive(ticketId, player.Name, graveyard.MapId, graveyard.X, graveyard.Y, graveyard.Z, Now + ReviveArrivalSeconds);
+        return (true, "sent to the graveyard as a ghost, resurrected on arrival");
+    }
+
+    /// <summary>
+    /// World thread, every tick: the second half of a revive. A ghost whose teleport has ended and that stands at its graveyard is resurrected by the spirit
+    /// healer's rules (<see cref="SpiritHealerResurrection"/> with the real item service, so the 25% durability loss and the sickness apply; its own step may
+    /// then take the player on to the corpse's graveyard). One that ends up anywhere else, or has not arrived by the deadline, stays a ghost.
+    /// </summary>
+    private void SettleRevives()
+    {
+        if (_revives.Count == 0 || _world is not { } world)
+        {
+            return;
+        }
+
+        long now = Now;
+        var teleports = services.GetService<TeleportFeature>()?.TeleportsIfAttached;
+        foreach ((ObjectGuid guid, PendingRevive revive) in _revives.ToArray())
+        {
+            Player? player = world.FindOnlinePlayer(guid);
+            if (player is not null && (player.Flags & PlayerFlags.Ghost) == 0)
+            {
+                _revives.Remove(guid);
+                continue;
+            }
+
+            if (now >= revive.Deadline)
+            {
+                _revives.Remove(guid);
+                RecordRevive(revive, "did not reach the graveyard in time; stayed a ghost");
+                continue;
+            }
+
+            if (player is not { Map: not null } || teleports is null || teleports.IsBeingTeleported(player))
+            {
+                continue;
+            }
+
+            _revives.Remove(guid);
+            RecordRevive(revive, !AtGraveyard(player, revive) ? "not at the graveyard after the teleport; stayed a ghost"
+                : ResurrectThere(player) ? "resurrected at the graveyard with sickness and durability loss"
+                : "resurrection refused; stayed a ghost");
+        }
+    }
+
+    private static bool AtGraveyard(Player player, PendingRevive revive)
+    {
+        float dx = player.X - revive.X, dy = player.Y - revive.Y, dz = player.Z - revive.Z;
+        const float tolerance = ArcaneCore.Game.Teleport.TeleportService.LandingToleranceYards;
+        return player.MapId == revive.MapId && (dx * dx) + (dy * dy) + (dz * dz) <= tolerance * tolerance;
+    }
+
+    private bool ResurrectThere(Player player)
+    {
+        if (services.GetService<QuestNpcFeature>()?.Services.Deps.Items is not { } items)
+        {
+            return false;
+        }
+
+        var spells = services.GetService<SpellFeature>()?.System;
+        return new SpiritHealerResurrection(() => spells, items, p => _world?.SavePlayer(p)).ResurrectAtSpiritHealer(player);
+    }
+
+    private void RecordRevive(PendingRevive revive, string result)
+    {
+        string line = FormattableString.Invariant($"ticket {revive.TicketId} from {revive.Name}: {result}");
+        services.GetRequiredService<GmAuditFeature>().RecordCommand(0, _options.AssistantName, "ticket assistant revive", line);
+        Log.LogInformation("GM ticket assistant: {Line}", line);
     }
 
     // ---- world thread: answer, close, note, audit ---------------------------------------------------
@@ -694,8 +794,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                 close = true;
                 break;
             case TicketAction.Revive:
-                text = (step.Detail.Contains("sent to", StringComparison.Ordinal) ? "I resurrected you and sent you to the graveyard. " : "I resurrected you. ")
-                    + "You have resurrection sickness for a while and your gear took damage, as at a spirit healer.";
+                text = "I sent you to the graveyard. You come back to life when you arrive, with resurrection sickness and damaged gear, as at a spirit healer. If you do not, the spirit healer there can resurrect you.";
                 close = true;
                 break;
             case TicketAction.ClearCombat:

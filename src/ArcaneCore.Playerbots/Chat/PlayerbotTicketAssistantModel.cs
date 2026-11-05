@@ -79,6 +79,6 @@ public sealed class PlayerbotTicketAssistantModel : IWorldFeature, ITicketAssist
         return reply is null || reply.Contains("NO ANSWER", StringComparison.OrdinalIgnoreCase) ? null : reply;
     }
 
-    /// <summary>The ticket text with any closing tag of the fence defanged, so player text cannot end the fenced block early.</summary>
+    /// <summary>The ticket text with the literal closing tag of the fence defanged. A prompt aid, not a boundary (<c>&lt;/ ticket&gt;</c> passes): the bound on what a steered model can do is <c>GmTicketAssistant.ScreenDraft</c> and the allowlist.</summary>
     private static string Fenced(string text) => text.Replace("</ticket", "<\\/ticket", StringComparison.OrdinalIgnoreCase);
 }

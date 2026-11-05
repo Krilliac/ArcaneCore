@@ -25,7 +25,7 @@ public enum TicketAction
     /// <summary>The <c>.unstuck</c> path; evidence: no movement for <see cref="GmTicketAssistantOptions.StuckIdleSeconds"/>.</summary>
     Unstuck,
 
-    /// <summary>Resurrect a ghost at the graveyard with the spirit healer's rules (sickness, durability loss, and a move to the graveyard).</summary>
+    /// <summary>Send a ghost to the graveyard and, once it stands there, resurrect it with the spirit healer's rules (sickness, durability loss).</summary>
     Revive,
 
     /// <summary>Clear an "in combat" state nobody is fighting.</summary>
