@@ -125,6 +125,12 @@ public static class HotCodeGuard
         return verdict;
     }
 
+    /// <summary>
+    /// Staging counts as Development here on purpose: it is the pre-production rehearsal environment, so hot reload is accepted
+    /// there without an allowlist (docs/areas/code-hot-reload.md); the dev runner configures one anyway. The allowlist is mandatory only
+    /// outside these two (<c>AllowAnyEnvironment</c> in Production refuses to start without it). Do not deploy a Staging
+    /// instance that is reachable by untrusted operators without an <c>Allowlist</c> configured.
+    /// </summary>
     private static bool IsDevelopmentLike(string environmentName)
         => environmentName.Equals("Development", StringComparison.OrdinalIgnoreCase)
             || environmentName.Equals("Staging", StringComparison.OrdinalIgnoreCase);

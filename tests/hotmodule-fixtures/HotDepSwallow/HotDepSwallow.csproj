@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The HotDepUse module with the SWALLOW symbol: its type catches the error a refused dependency throws. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <AssemblyName>HotDepSwallow</AssemblyName>
+    <RootNamespace>HotDepModule</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);SWALLOW</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\HotDepUse\*.cs" Link="%(Filename)%(Extension)" />
+    <ProjectReference Include="..\..\..\src\ArcaneCore.World\ArcaneCore.World.csproj" />
+  </ItemGroup>
+
+</Project>

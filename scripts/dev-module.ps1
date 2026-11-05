@@ -11,7 +11,10 @@
   4. Prints the in-game command to run next.
 
   The module project must be named like the module (AssemblyName = Name). tools\hotmodule-template\GmCommands is a
-  working template. A module that uses private dependencies needs those dlls copied by hand into its folder.
+  working template. A module that uses private dependencies needs those dlls copied by hand into its folder, and
+  each one must be approved too: the dev runner always uses an allowlist and this script approves <Name>.dll only, so run
+  scripts\hotmodule-hash.ps1 -Name <Name> -Dll <dependency dll> -Allowlist <run>\modules-allowlist.txt for every dependency
+  (an unapproved one rejects the load with: dependency '<x>.dll' refused by the module allowlist).
 
 .PARAMETER Project  The module's .csproj (or the folder holding it).
 .PARAMETER Name     The module name = the assembly name. Default: the project's file name.

@@ -106,7 +106,7 @@ Verdict stands: APPROVE WITH FIXES; the blocking-class fix is applied, the rest 
 | # | Finding | Disposition |
 |---|---|---|
 | 1 | `CommandTableSource` dropped `GmOptions` on add/replace | **Fixed** in this branch: both swaps carry `Current.Gm`; RED-first test `AddingAndReplacingRoots_KeepTheConfiguredGmOptions` failed before the fix, passes after. |
-| 2 | Module allowlist hashes only the entry dll, not private dependency dlls | **Follow-up** (backlog: hash every dll the module context loads). Mitigation today: modules only load via an Administrator command, behind the fail-closed guard, and the dev runner enables them only per process. Not enabled in any shipped config. |
+| 2 | Module allowlist hashes only the entry dll, not private dependency dlls | **Closed** (later change: `ModuleLoadContext` hashes and checks every private dependency dll, fail closed; see code-hot-reload.md). Original note: backlog item to hash every dll the module context loads. Mitigation today: modules only load via an Administrator command, behind the fail-closed guard, and the dev runner enables them only per process. Not enabled in any shipped config. |
 | 3 | Staging counts as development-like in `HotCodeGuard` | **Follow-up**: require the allowlist in Staging. Nothing enables hot code in shipped config, so no default exposure. |
 | 4 | Connection caps default to 0 (unlimited); queue caps are a deliberate non-retail hardening default | **Release note**: do not describe the connection limiter as active until configured. |
 | 5 | Realm `AutocreateAccounts` default changed to false | **Release note**: dev setups that relied on auto-create must opt in. |

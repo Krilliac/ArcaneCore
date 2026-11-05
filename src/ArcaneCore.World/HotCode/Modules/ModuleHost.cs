@@ -713,7 +713,7 @@ public sealed class ModuleHost
             throw new ModuleRejectedException($"refused by the module allowlist: {allowlist.Detail}");
         }
 
-        var context = new ModuleLoadContext(name, directory);
+        var context = new ModuleLoadContext(name, directory, _options.Allowlist);
         try
         {
             Assembly assembly = context.LoadFromStream(new MemoryStream(bytes));
@@ -729,6 +729,11 @@ public sealed class ModuleHost
             }
             catch (ReflectionTypeLoadException ex)
             {
+                if (context.Refusal is { } refusedDuringTypeLoad)
+                {
+                    throw new ModuleRejectedException(refusedDuringTypeLoad); // an allowlist refusal is a rejection, not a module fault
+                }
+
                 FaultLedger.Shared.Record("hotcode.modules", ex);
                 AnomalyLedger.Shared.Report("hotcode", "module-fault", name, $"type_load_error={ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message}", AnomalySeverity.Warning);
                 throw new ModuleRejectedException("the module's types could not be loaded: " + (ex.LoaderExceptions.FirstOrDefault()?.Message ?? ex.Message));
@@ -805,12 +810,23 @@ public sealed class ModuleHost
                 throw new ModuleRejectedException(rootError);
             }
 
+            if (context.Refusal is { } dependencyRefusal)
+            {
+                throw new ModuleRejectedException(dependencyRefusal); // a refused dependency fails the module even when module code swallowed the load error
+            }
+
             return new Prepared(context, fresh, fresh.Opcodes, roots, [.. roots.Select(r => r.Name)], sha, game, directory, bytes);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            string? dependencyRefusalOnFailure = context.Refusal;
             context.Unload();
             Retire(context);
+            if (dependencyRefusalOnFailure is not null && ex is not ModuleRejectedException)
+            {
+                ex = new ModuleRejectedException(dependencyRefusalOnFailure);
+            }
+
             if (ex is not ModuleRejectedException)
             {
                 // A rejection is a refusal the operator is told about. Anything else (a module constructor or static initialiser that throws, a loader failure) is unexpected and keeps its stack.
