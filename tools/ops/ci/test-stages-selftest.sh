@@ -7,6 +7,8 @@ set -u
 # GATE_WRAP="timeout ..." on Node1 (the killedjob stub's parent becomes timeout, so the job lives on to write rc 137) or a local
 # GATE_SUITE_BUDGET_MIN / GATE_TIME_BUDGETS=off (every budget case passes for the wrong reason). None of them may reach the cases.
 while read -r v; do unset "$v"; done < <(compgen -e | grep '^GATE_')
+# The sweep guard and the batching leg read these too: a host that has the client DBCs or a batching window must not change the cases.
+unset ARCANECORE_TEST_DBC_DIR ARCANECORE_TEST_SPELL_BATCH_MS
 here=$(cd "$(dirname "$0")" && pwd)
 gate=$here/test-stages.sh
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -31,11 +33,23 @@ mktrx() {
     while [ $# -gt 1 ]; do echo "<UnitTestResult executionId=\"1\" testName=\"$1\" duration=\"$2\" outcome=\"Passed\" />"; shift 2; done
     echo "</Results></TestRun>"; } > "$trx/$RANDOM.trx"
 }
+[ -n "${SIM_BATCH:-}" ] && [ "$1" = test ] && echo "${ARCANECORE_TEST_SPELL_BATCH_MS:-unset} $2 $flt" >> "$SIM_BATCH"
+# mktrx_skipped <test>: a .trx whose only result was skipped (xunit under VSTest reports it NotExecuted).
+mktrx_skipped() {
+  mkdir -p "$trx"; { echo "<TestRun><Results>"
+    echo "<UnitTestResult executionId=\"1\" testName=\"$1\" duration=\"00:00:00\" outcome=\"NotExecuted\" />"
+    echo "</Results></TestRun>"; } > "$trx/$RANDOM.trx"
+}
 [ "$1" = run ] && { echo "self-test: 59 checks passed"; exit 0; }
 block() { echo "Test Run $4."; echo "Total tests: $(( $1 + $2 + $3 ))"; echo "     Passed: $1"; [ "$2" -gt 0 ] && echo "     Failed: $2"; echo "    Skipped: $3"; }
 case "$flt" in
   *'!=Timing'*)
     case "$SIM_CASE" in
+      sweep-skipped) mktrx_skipped Ns.W.SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline; mktrx Ns.W.Other.Quick 00:00:01; block 1 0 1 Successful; exit 0 ;;
+      # the real class: 16 plain harness tests pass without DBCs, only the [RealClientDbcFact] sweep is NotExecuted
+      sweep-plain-only) mktrx_skipped Ns.W.SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline; mktrx Ns.W.SpellContractSweepTests.Harness_A 00:00:01 "Ns.W.SpellContractSweepTests.Harness_B(x: 1)" 00:00:01 Ns.W.SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaselineExtra 00:00:01; block 3 0 1 Successful; exit 0 ;;
+      sweep-ran) mktrx Ns.W.SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline 00:00:01; block 10 0 0 Successful; exit 0 ;;
+      batch-fail) if [ "${ARCANECORE_TEST_SPELL_BATCH_MS:-}" = 400 ]; then echo "  Failed Ns.G.Batchy [1 ms]"; block 9 1 0 Failed; exit 1; fi; block 10 0 0 Successful; exit 0 ;;
       main-fails) echo "  Failed Ns.A.Broken [1 ms]"; block 9 1 0 Failed; exit 1 ;;
       main-flaky|main-twice) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 1 ;;
       main-rc124) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 124 ;;   # GATE_WRAP's timeout: a kill, never a plain failure
@@ -102,7 +116,7 @@ check() {
   local name=$1 want=$2 extra=$3 must=$4 mustnot=${5:-} id=${tag:-$1}
   local out=$work/$id.out
   # shellcheck disable=SC2086
-  env SIM_CASE=$name SIM_ARGS="$work/args-$id.txt" SIM_EVENTS="$work/events-$id.txt" $envs PATH="$work/bin:$PATH" bash "$gate" --logs "$work/logs-$id" --commit selftest $extra --selftest $tgts > "$out" 2>&1
+  env SIM_CASE=$name SIM_ARGS="$work/args-$id.txt" SIM_EVENTS="$work/events-$id.txt" SIM_BATCH="$work/batch-$id.txt" $envs PATH="$work/bin:$PATH" bash "$gate" --logs "$work/logs-$id" --commit selftest $extra --selftest $tgts > "$out" 2>&1
   local got=$?
   if [ "$got" -ne "$want" ] || ! grep -qE "$must" "$out" || { [ -n "$mustnot" ] && grep -qE "$mustnot" "$out"; }; then
     echo "FAIL $id: exit $got (want $want)"; sed 's/^/    /' "$out"; bad=1
@@ -225,6 +239,55 @@ check pass 0 "" '^GATE RESULT: PASS$' 'budget'
 tag=hardstop-partial; tgts=tests/ci/X.slnf; envs=
 check hardstop 1 "" 'skipped 0 \(partial: stopped at budget\)'
 grep -q 'test run aborted' "$work/hardstop-partial.out" && grep -q 'rc=1 failed=0' "$work/hardstop-partial.out" || { echo "FAIL hardstop-partial: aborted / rc not reported beside the timeout"; bad=1; }
+# Executed-test guard: a required class whose tests were all skipped fails the gate; a run of it passes; the default needs a World target
+# and Spell.dbc in ARCANECORE_TEST_DBC_DIR; GATE_REQUIRE_EXECUTED= turns it off; a filtered run is not judged.
+tag=sweep-skipped; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline"; tgts=tests/ci/World.slnf
+check sweep-skipped 1 "--stage main" 'no SpellContractSweepTests\.Sweep_[A-Za-z_]* test executed' 'ran [1-9]'
+grep -q 'executed-test guard: SpellContractSweepTests\.Sweep_[A-Za-z_]* ran 0 test' "$work/sweep-skipped.out" || { echo "FAIL sweep-skipped: guard line missing"; bad=1; }
+# The class's plain tests pass but the DBC-dependent sweep method is NotExecuted: the guard must still fail (class-wide counting would pass).
+tag=sweep-plain-only
+check sweep-plain-only 1 "--stage main" 'no SpellContractSweepTests\.Sweep_[A-Za-z_]* test executed' 'ran [1-9]'
+grep -q 'executed-test guard: SpellContractSweepTests\.Sweep_[A-Za-z_]* ran 0 test' "$work/sweep-plain-only.out" || { echo "FAIL sweep-plain-only: guard line missing"; bad=1; }
+tag=sweep-plain-only-default; envs="ARCANECORE_TEST_DBC_DIR=$work/dbc"
+mkdir -p "$work/dbc"; : > "$work/dbc/Spell.dbc"
+check sweep-plain-only 1 "--stage main" 'no SpellContractSweepTests\.Sweep_[A-Za-z_]* test executed'
+tag=sweep-plain-only-class; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests"
+check sweep-plain-only 0 "--stage main" 'executed-test guard: SpellContractSweepTests ran 3 test'
+tag=sweep-ran; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline"
+check sweep-ran 0 "--stage main" 'executed-test guard: SpellContractSweepTests\.Sweep_[A-Za-z_]* ran 1 test' 'no SpellContractSweepTests\.Sweep'
+mkdir -p "$work/dbc"; : > "$work/dbc/Spell.dbc"
+tag=sweep-default; envs="ARCANECORE_TEST_DBC_DIR=$work/dbc"
+check sweep-skipped 1 "--stage main" 'no SpellContractSweepTests\.Sweep_[A-Za-z_]* test executed'
+tag=sweep-default-ran
+check sweep-ran 0 "--stage main" 'executed-test guard: SpellContractSweepTests\.Sweep_[A-Za-z_]* ran 1 test'
+tag=sweep-default-off; envs="ARCANECORE_TEST_DBC_DIR=$work/dbc GATE_REQUIRE_EXECUTED="
+check sweep-skipped 0 "--stage main" '^GATE RESULT: PASS$' 'executed-test guard'
+tag=sweep-nodbc; envs=
+check sweep-skipped 0 "--stage main" '^GATE RESULT: PASS$' 'executed-test guard'
+tag=sweep-notworld; envs="ARCANECORE_TEST_DBC_DIR=$work/dbc"; tgts=tests/ci/X.slnf
+check sweep-skipped 0 "--stage main" '^GATE RESULT: PASS$' 'executed-test guard'
+tag=sweep-filtered; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline"; tgts=tests/ci/World.slnf
+check sweep-skipped 0 "--filter FullyQualifiedName~X" '^GATE RESULT: PASS$' 'executed-test guard'
+# Spell-batching leg: the Game/World targets run again with ARCANECORE_TEST_SPELL_BATCH_MS=400 (the main stage without it); a failure that
+# only batching causes fails the gate and is not rerun; the leg is skipped (and says so) for unlisted targets, a caller's own window,
+# GATE_BATCH_LEG=off; --stage batch with nothing to run fails.
+tag=batch-pass; envs=; tgts=tests/ci/Game.slnf
+check batch-pass 0 "" 'batch tests/ci/Game.slnf rc=0 executed 10' 'stage batch: skipped'
+grep -q '^unset tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt" && grep -q '^400 tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt" || { echo "FAIL batch-pass: main run did not go without the window or the leg with 400"; cat "$work/batch-batch-pass.txt"; bad=1; }
+tag=batch-fail
+check batch-fail 1 "" 'batch tests/ci/Game.slnf \(spell batching 400 ms\) rc=1 failed=1' 'rerunning|FLAKY'
+grep -q '^  Failed Ns.G.Batchy' "$work/batch-fail.out" || { echo "FAIL batch-fail: Failed line missing"; bad=1; }
+tag=batch-unlisted; tgts=tests/ci/X.slnf
+check pass 0 "" 'stage batch: skipped \(no target named in GATE_BATCH_TARGETS'
+tag=batch-env-set; envs="ARCANECORE_TEST_SPELL_BATCH_MS=0"; tgts=tests/ci/Game.slnf
+check batch-pass 0 "" 'stage batch: skipped \(the caller already sets ARCANECORE_TEST_SPELL_BATCH_MS=0\)' 'batch tests/ci/Game.slnf rc'
+tag=batch-off; envs="GATE_BATCH_LEG=off"
+check batch-pass 0 "" 'stage batch: skipped \(GATE_BATCH_LEG=off\)' 'batch tests/ci/Game.slnf rc'
+tag=batch-stage-only; envs=
+check batch-pass 0 "--stage batch" 'batch tests/ci/Game.slnf rc=0 executed 10' '^main |^timing '
+tag=batch-stage-nothing; tgts=tests/ci/X.slnf
+check pass 1 "--stage batch" 'batch stage ran nothing: no target named'
+envs=; tag=; tgts=tests/ci/X.slnf
 # Usage errors (exit 2): duplicate target names, knobs that are not whole numbers.
 usage() { # <name> <env words> <targets>
   env $2 PATH="$work/bin:$PATH" bash "$gate" --logs "$work/logs-$1" $3 > "$work/$1.out" 2>&1; local got=$?
@@ -243,6 +306,8 @@ usage knob-rerun-text "GATE_MAIN_RERUN=maybe" "tests/ci/X.slnf"
 usage knob-rerun-max-text "GATE_MAIN_RERUN_MAX=five" "tests/ci/X.slnf"
 usage knob-rerun-max-cap "GATE_MAIN_RERUN_MAX=1001" "tests/ci/X.slnf"
 usage empty-label "A=1" ".csproj"
+usage knob-batch-leg "GATE_BATCH_LEG=maybe" "tests/ci/X.slnf"
+usage knob-batch-ms "GATE_BATCH_MS=0" "tests/ci/X.slnf"
 usage knob-empty-budgets "GATE_TIME_BUDGETS=maybe" "tests/ci/X.slnf"
 [ $bad = 0 ] && echo "test-stages self-test: all cases behaved" || echo "test-stages self-test: FAILED"
 exit $bad

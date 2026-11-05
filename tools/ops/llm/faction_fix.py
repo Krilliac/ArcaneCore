@@ -36,7 +36,7 @@ def main() -> int:
     ap.add_argument("--specs-glob", default=str(pathlib.Path(__file__).resolve().parent / "out" / "escorts" / "[0-9]*.json"), help="glob of escort spec JSON files")
     args = ap.parse_args()
 
-    sd2 = pathlib.Path(args.sd2) if args.sd2 else (opsenv.refs_root() / "mangos-classic")
+    sd2 = pathlib.Path(args.sd2) if args.sd2 else (opsenv.refs_root("--sd2") / "mangos-classic")
     consts = {
         m[0]: int(m[1])
         for m in re.findall(

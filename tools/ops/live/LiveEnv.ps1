@@ -43,21 +43,47 @@ function ConvertTo-LiveLogFormat {
     return $null
 }
 
+function Merge-LiveLogSection {
+    # Overlay's properties over base's, recursing into objects (so Development's File.Enabled leaves the base's File.Path alone). Either may be $null.
+    param([object]$Base, [object]$Overlay)
+    if ($null -eq $Overlay) { return $Base }
+    if ($null -eq $Base) { return $Overlay }
+    $merged = [ordered]@{}
+    foreach ($p in $Base.PSObject.Properties) { $merged[$p.Name] = $p.Value }
+    foreach ($p in $Overlay.PSObject.Properties) {
+        $isObject = $p.Value -is [System.Management.Automation.PSCustomObject]
+        if ($isObject -and $merged.Contains($p.Name) -and $merged[$p.Name] -is [System.Management.Automation.PSCustomObject]) {
+            $merged[$p.Name] = Merge-LiveLogSection -Base $merged[$p.Name] -Overlay $p.Value
+        } else {
+            $merged[$p.Name] = $p.Value
+        }
+    }
+    return [pscustomobject]$merged
+}
+
+function Read-LiveLogProfileFile {
+    # One settings file's Logging:ArcaneCore object, or $null (no file, unreadable, or no such section).
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    try {
+        $root = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+        if ($root.PSObject.Properties['Logging'] -and $root.Logging.PSObject.Properties['ArcaneCore']) { return $root.Logging.ArcaneCore }
+    } catch { return $null }
+    return $null
+}
+
 function Read-LiveLogProfileSection {
-    # The profile's appsettings.json Logging:ArcaneCore object, or $null (no profile, no file, unreadable, or no such section).
+    # The profile's Logging:ArcaneCore object, or $null (no profile, no file, unreadable, or no such section). The live daemons run as
+    # Development (launch-daemon.ps1), so appsettings.Development.json is laid over appsettings.json, as the host's configuration does.
     param([string]$LiveProfile)
     if (-not $LiveProfile) {
         $LiveProfile = Get-OpsEnv 'ARCANECORE_LIVE_PROFILE'
         if ($null -eq $LiveProfile) { $LiveProfile = Get-OpsEnv 'ARCANECORE_LIVE_ROOT' }
     }
     if (-not $LiveProfile) { return $null }
-    $settings = Join-Path $LiveProfile 'appsettings.json'
-    if (-not (Test-Path -LiteralPath $settings)) { return $null }
-    try {
-        $root = Get-Content -Raw -LiteralPath $settings | ConvertFrom-Json
-        if ($root.PSObject.Properties['Logging'] -and $root.Logging.PSObject.Properties['ArcaneCore']) { return $root.Logging.ArcaneCore }
-    } catch { return $null }
-    return $null
+    $base = Read-LiveLogProfileFile -Path (Join-Path $LiveProfile 'appsettings.json')
+    $development = Read-LiveLogProfileFile -Path (Join-Path $LiveProfile 'appsettings.Development.json')
+    return Merge-LiveLogSection -Base $base -Overlay $development
 }
 
 function Get-LiveLogFormatSetting {
@@ -66,7 +92,7 @@ function Get-LiveLogFormatSetting {
       'Json' or 'Text' only when Logging:ArcaneCore:Format is set explicitly; $null when it is unset (the legacy File/Json switches decide).
     .DESCRIPTION
       Environment Logging__ArcaneCore__Format first, else the profile's appsettings.json Logging:ArcaneCore:Format. Reads the environment and
-      appsettings.json only (not appsettings.{Environment}.json, .conf files or the command line), unlike the daemon.
+      appsettings.json and appsettings.Development.json (the daemons run as Development), not .conf files or the command line, unlike the daemon.
       -LiveProfile defaults to ARCANECORE_LIVE_PROFILE (or ARCANECORE_LIVE_ROOT).
     #>
     param([string]$LiveProfile)
@@ -86,7 +112,7 @@ function Get-LiveLogFormat {
       else the legacy inference when Format is unset (only Json enabled => Json; only File enabled => Text; both enabled => Json),
       else Json. Enabled flags come from the environment (Logging__ArcaneCore__File__Enabled / Json__Enabled) first, then the profile.
       -LiveProfile defaults to ARCANECORE_LIVE_PROFILE (or ARCANECORE_LIVE_ROOT); without a readable profile only the environment counts.
-      Unlike the daemon this reads the environment and the profile's appsettings.json only: appsettings.{Environment}.json, .conf files
+      Unlike the daemon this reads the environment and the profile's appsettings.json and appsettings.Development.json only: .conf files
       and command-line arguments are not consulted, so a Format set there is not seen here.
     #>
     param([string]$LiveProfile)
