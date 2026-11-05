@@ -48,6 +48,15 @@ public abstract class CreatureAI
     /// </summary>
     public virtual bool CombatScriptRunning => false;
 
+    /// <summary>
+    /// Whether the creature's spell list runs beside this AI. In cmangos every UnitAI runs one; here a ported script AI times its spells itself, as
+    /// the ScriptDev2 source it came from does, so the list stays off unless the AI says so (a scripted boss with a list would cast everything twice).
+    /// </summary>
+    public virtual bool RunsSpellList => false;
+
+    /// <summary>The list id a script supplies for an entry the template has none for; 0 is none. An AI that returns one also turns on <see cref="RunsSpellList"/>.</summary>
+    public virtual uint ScriptSpellList => 0;
+
     /// <summary>Whether the creature runs after its victim (cmangos EventAI combat movement).</summary>
     public bool CombatMovement { get; set; } = true;
 
@@ -343,10 +352,16 @@ public sealed class NullCreatureAI(Creature creature) : CreatureAI(creature)
 /// <summary>vmangos ReactorAI: fights back when attacked, never aggroes on sight (civilians and passive creatures).</summary>
 public class ReactorAI(Creature creature) : CreatureAI(creature)
 {
+    /// <inheritdoc/>
+    public override bool RunsSpellList => GetType() == typeof(ReactorAI);
+
 }
 
 /// <summary>vmangos AggressorAI: attacks hostile units that enter its aggro radius and fights back.</summary>
 public class AggressorAI(Creature creature) : CreatureAI(creature)
 {
+    /// <inheritdoc/>
+    public override bool RunsSpellList => GetType() == typeof(AggressorAI);
+
     public override bool AggroesOnSight => true;
 }

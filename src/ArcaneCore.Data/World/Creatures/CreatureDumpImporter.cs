@@ -51,6 +51,21 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 61).</summary>
     public int Immunities { get; init; }
 
+    /// <summary><c>creature_spell_list_entry</c> rows (world schema 68).</summary>
+    public int SpellLists { get; init; }
+
+    /// <summary><c>creature_spell_list</c> rows (world schema 68).</summary>
+    public int SpellListEntries { get; init; }
+
+    /// <summary><c>creature_spell_targeting</c> rows (world schema 68).</summary>
+    public int SpellTargeting { get; init; }
+
+    /// <summary><c>combat_condition</c> rows (world schema 68).</summary>
+    public int CombatConditions { get; init; }
+
+    /// <summary><c>unit_condition</c> rows (world schema 68).</summary>
+    public int UnitConditions { get; init; }
+
     /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
     public int SpawnEntries { get; init; }
 
@@ -115,6 +130,13 @@ public sealed class CreatureDumpImporter
     private bool _sawImmunityMaskColumns;
     private bool _sawImmunityFlagsColumn;
     private readonly Dictionary<(uint Entry, uint SetId, byte Type, uint Value), CreatureImmunityRow> _immunities = [];
+    private bool _sawSpellListTables;
+    private bool _sawSpellListColumn;
+    private readonly Dictionary<uint, CreatureSpellListHeaderRow> _spellListHeaders = [];
+    private readonly Dictionary<(uint Id, uint Position), CreatureSpellListRow> _spellListEntries = [];
+    private readonly Dictionary<uint, CreatureSpellTargetingRow> _spellTargeting = [];
+    private readonly Dictionary<int, CombatConditionRow> _combatConditions = [];
+    private readonly Dictionary<int, UnitConditionRow> _unitConditions = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
@@ -250,6 +272,70 @@ public sealed class CreatureDumpImporter
 
     /// <summary>The dump's creature_template carries a mechanic or school immunity mask column (cmangos <c>MechanicImmuneMask</c>, vmangos <c>mechanic_immune_mask</c>).</summary>
     public bool HasImmunityMaskColumns => _sawImmunityMaskColumns;
+
+    /// <summary>The dump carried at least one of the spell list tables (cmangos only; the vmangos <c>creature_spells</c> layout is not translated).</summary>
+    public bool HasSpellListTables => _sawSpellListTables;
+
+    /// <summary>The dump's creature_template carries the cmangos <c>SpellList</c> column.</summary>
+    public bool HasSpellListColumn => _sawSpellListColumn;
+
+    /// <summary>The spell list rows that would be written (for inspection and tests).</summary>
+    public (IReadOnlyCollection<CreatureSpellListHeaderRow> Headers, IReadOnlyCollection<CreatureSpellListRow> Entries, IReadOnlyCollection<CreatureSpellTargetingRow> Targeting,
+        IReadOnlyCollection<CombatConditionRow> CombatConditions, IReadOnlyCollection<UnitConditionRow> UnitConditions) SpellListSnapshot()
+        => ([.. _spellListHeaders.Values], [.. _spellListEntries.Values], [.. _spellTargeting.Values], [.. _combatConditions.Values], [.. _unitConditions.Values]);
+
+    /// <summary>
+    /// Content refresh of the spell lists (world schema 68): replace the five tables with the rows read, and set <c>creature_template.SpellList</c>
+    /// of the templates already in the world from the dump. Each half runs only when the dump carried it, so a dump without either leaves the
+    /// world as it is. Replacing the tables also removes the rows of <c>sql/content/world</c> spell list files: run those again afterwards.
+    /// Runs inside the caller's <see cref="Content.Import.ImportTransaction"/>. Returns the list rows written and the templates changed.
+    /// </summary>
+    public async Task<(int Rows, int Templates)> RefreshSpellListsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        int rows = 0;
+        if (_sawSpellListTables)
+        {
+            await DeleteSpellListsAsync(db, cancellationToken).ConfigureAwait(false);
+            await InsertSpellListsAsync(db, cancellationToken).ConfigureAwait(false);
+            rows = _spellListEntries.Count;
+        }
+
+        int changed = 0;
+        if (_sawSpellListColumn && _templates.Count > 0)
+        {
+            foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (_templates.TryGetValue(template.Entry, out var source) && template.SpellList != source.Row.SpellList)
+                {
+                    template.SpellList = source.Row.SpellList;
+                    changed++;
+                }
+            }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return (rows, changed);
+    }
+
+    private static async Task DeleteSpellListsAsync(WorldDbContext db, CancellationToken cancellationToken)
+    {
+        await db.Set<CreatureSpellListRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CreatureSpellListHeaderRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CreatureSpellTargetingRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<CombatConditionRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<UnitConditionRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task InsertSpellListsAsync(WorldDbContext db, CancellationToken cancellationToken)
+    {
+        await InsertBatchedAsync(db, _spellListHeaders.Values, cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _spellListEntries.Values, cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _spellTargeting.Values, cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _combatConditions.Values, cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _unitConditions.Values, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>The <c>creature_immunities</c> rows that would be written (for inspection and tests).</summary>
     public IReadOnlyCollection<CreatureImmunityRow> ImmunitySnapshot() => [.. _immunities.Values];
@@ -408,6 +494,21 @@ public sealed class CreatureDumpImporter
                 case "creature_immunities":
                     ReadImmunity(row);
                     break;
+                case "creature_spell_list_entry":
+                    ReadSpellListHeader(row);
+                    break;
+                case "creature_spell_list":
+                    ReadSpellListEntry(row);
+                    break;
+                case "creature_spell_targeting":
+                    ReadSpellTargeting(row);
+                    break;
+                case "combat_condition":
+                    ReadCombatCondition(row);
+                    break;
+                case "unit_condition":
+                    ReadUnitCondition(row);
+                    break;
                 case "creature_classlevelstats":
                     ReadClassLevelStats(row);
                     break;
@@ -536,6 +637,7 @@ public sealed class CreatureDumpImporter
                     await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureEquipmentRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await DeleteSpellListsAsync(db, ct).ConfigureAwait(false);
                     await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
@@ -559,6 +661,7 @@ public sealed class CreatureDumpImporter
                 await InsertBatchedAsync(db, _addons.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _equipment.Values.Select(e => e.Row), ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _immunities.Values, ct).ConfigureAwait(false);
+                await InsertSpellListsAsync(db, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiScripts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiTexts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _broadcastTexts.Values, ct).ConfigureAwait(false);
@@ -611,6 +714,11 @@ public sealed class CreatureDumpImporter
     {
         Equipment = _equipment.Count,
         Immunities = _immunities.Count,
+        SpellLists = _spellListHeaders.Count,
+        SpellListEntries = _spellListEntries.Count,
+        SpellTargeting = _spellTargeting.Count,
+        CombatConditions = _combatConditions.Count,
+        UnitConditions = _unitConditions.Count,
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
         ScriptTexts = _scriptTextEntries.Count,
@@ -830,6 +938,7 @@ public sealed class CreatureDumpImporter
     {
         _sawVendorTemplateIdColumn |= row.Has("VendorTemplateId") || row.Has("vendor_id");
         _sawEquipmentTemplateIdColumn |= row.Has("EquipmentTemplateId") || row.Has("equipment_id");
+        _sawSpellListColumn |= row.Has("SpellList");
         _sawImmunityMaskColumns |= row.Has("MechanicImmuneMask") || row.Has("mechanic_immune_mask") || row.Has("SchoolImmuneMask") || row.Has("school_immune_mask");
         _sawResistanceColumns |= row.Has("ResistanceFire") || row.Has("fire_res") || row.Has("ResistanceHoly") || row.Has("holy_res");
         bool vmangos = row.Has("level_min");
@@ -910,6 +1019,8 @@ public sealed class CreatureDumpImporter
             RangedBaseAttackTime = U32Or(row, 2000, "RangedBaseAttackTime", "ranged_attack_time"),
             DamageSchool = U32(row, "DamageSchool", "damage_school"),
             PetSpellDataId = U32(row, "PetSpellDataId", "pet_spell_list_id"),
+            // cmangos only: vmangos spell_list_id names a creature_spells row, a different table with different ids.
+            SpellList = U32(row, "SpellList"),
             MovementType = U8(row, "MovementType", "movement_type"),
             CorpseDecaySeconds = U32(row, "CorpseDecay"),
             ExtraFlags = U32(row, "ExtraFlags", "flags_extra"),
@@ -1302,6 +1413,106 @@ public sealed class CreatureDumpImporter
 
         uint value = U32(row, "Value");
         _immunities[(entry, setId, (byte)type, value)] = new CreatureImmunityRow { Entry = entry, SetId = setId, Type = (byte)type, Value = value };
+    }
+
+    /// <summary><c>creature_spell_list_entry</c> (cmangos only): Id, Name, ChanceSupportAction, ChanceRangedAttack. The catalog judges the rows when it loads them, as the reference does, so every row is kept here.</summary>
+    private void ReadSpellListHeader(DumpRow row)
+    {
+        _sawSpellListTables = true;
+        uint id = U32(row, "Id");
+        _spellListHeaders[id] = new CreatureSpellListHeaderRow
+        {
+            Id = id,
+            Name = Str(row, "Name"),
+            ChanceSupportAction = U32(row, "ChanceSupportAction"),
+            ChanceRangedAttack = U32(row, "ChanceRangedAttack"),
+        };
+    }
+
+    /// <summary><c>creature_spell_list</c> (cmangos only). A dump's comment column is not kept.</summary>
+    private void ReadSpellListEntry(DumpRow row)
+    {
+        _sawSpellListTables = true;
+        uint id = U32(row, "Id");
+        uint position = U32(row, "Position");
+        _spellListEntries[(id, position)] = new CreatureSpellListRow
+        {
+            Id = id,
+            Position = position,
+            SpellId = U32(row, "SpellId"),
+            Flags = U32(row, "Flags"),
+            CombatCondition = row.Has("CombatCondition") ? Int(Get(row, "CombatCondition")) : -1,
+            TargetId = U32(row, "TargetId"),
+            ScriptId = U32(row, "ScriptId"),
+            Availability = U32Or(row, 100, "Availability"),
+            Probability = U32(row, "Probability"),
+            InitialMin = U32(row, "InitialMin"),
+            InitialMax = U32(row, "InitialMax"),
+            RepeatMin = U32(row, "RepeatMin"),
+            RepeatMax = U32(row, "RepeatMax"),
+        };
+    }
+
+    /// <summary><c>creature_spell_targeting</c> (cmangos only).</summary>
+    private void ReadSpellTargeting(DumpRow row)
+    {
+        _sawSpellListTables = true;
+        uint id = U32(row, "Id");
+        _spellTargeting[id] = new CreatureSpellTargetingRow
+        {
+            Id = id,
+            Type = U32(row, "Type"),
+            Param1 = U32(row, "Param1"),
+            Param2 = U32(row, "Param2"),
+            Param3 = U32(row, "Param3"),
+            UnitCondition = row.Has("UnitCondition") ? Int(Get(row, "UnitCondition")) : -1,
+        };
+    }
+
+    /// <summary><c>combat_condition</c> (cmangos only).</summary>
+    private void ReadCombatCondition(DumpRow row)
+    {
+        _sawSpellListTables = true;
+        int id = Int(Get(row, "Id"));
+        _combatConditions[id] = new CombatConditionRow
+        {
+            Id = id,
+            WorldStateExpressionId = U32(row, "WorldStateExpressionID"),
+            SelfConditionId = Int(Get(row, "SelfConditionID")),
+            TargetConditionId = Int(Get(row, "TargetConditionID")),
+            FriendConditionLogic = U32(row, "FriendConditionLogic"),
+            EnemyConditionLogic = U32(row, "EnemyConditionLogic"),
+            FriendConditionId0 = Int(Get(row, "FriendConditionID_0")),
+            FriendConditionId1 = Int(Get(row, "FriendConditionID_1")),
+            FriendConditionOp0 = U32(row, "FriendConditionOp_0"),
+            FriendConditionOp1 = U32(row, "FriendConditionOp_1"),
+            FriendConditionCount0 = U32(row, "FriendConditionCount_0"),
+            FriendConditionCount1 = U32(row, "FriendConditionCount_1"),
+            EnemyConditionId0 = Int(Get(row, "EnemyConditionID_0")),
+            EnemyConditionId1 = Int(Get(row, "EnemyConditionID_1")),
+            EnemyConditionOp0 = U32(row, "EnemyConditionOp_0"),
+            EnemyConditionOp1 = U32(row, "EnemyConditionOp_1"),
+            EnemyConditionCount0 = U32(row, "EnemyConditionCount_0"),
+            EnemyConditionCount1 = U32(row, "EnemyConditionCount_1"),
+        };
+    }
+
+    /// <summary><c>unit_condition</c> (cmangos only).</summary>
+    private void ReadUnitCondition(DumpRow row)
+    {
+        _sawSpellListTables = true;
+        int id = Int(Get(row, "Id"));
+        _unitConditions[id] = new UnitConditionRow
+        {
+            Id = id,
+            Flags = U32(row, "Flags"),
+            Variable0 = U32(row, "Variable_0"), Variable1 = U32(row, "Variable_1"), Variable2 = U32(row, "Variable_2"), Variable3 = U32(row, "Variable_3"),
+            Variable4 = U32(row, "Variable_4"), Variable5 = U32(row, "Variable_5"), Variable6 = U32(row, "Variable_6"), Variable7 = U32(row, "Variable_7"),
+            Op0 = U32(row, "Op_0"), Op1 = U32(row, "Op_1"), Op2 = U32(row, "Op_2"), Op3 = U32(row, "Op_3"),
+            Op4 = U32(row, "Op_4"), Op5 = U32(row, "Op_5"), Op6 = U32(row, "Op_6"), Op7 = U32(row, "Op_7"),
+            Value0 = Int(Get(row, "Value_0")), Value1 = Int(Get(row, "Value_1")), Value2 = Int(Get(row, "Value_2")), Value3 = Int(Get(row, "Value_3")),
+            Value4 = Int(Get(row, "Value_4")), Value5 = Int(Get(row, "Value_5")), Value6 = Int(Get(row, "Value_6")), Value7 = Int(Get(row, "Value_7")),
+        };
     }
 
     // --- helpers ---------------------------------------------------------------------------

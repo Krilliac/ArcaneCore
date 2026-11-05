@@ -367,6 +367,21 @@ internal static class EventAiRandom
 }
 
 /// <summary>
+/// ACTION_T_SET_SPELL_SET (60): SetId; switches the creature's spell list (cmangos Creature::SetSpellList): 0 clears it, an unknown id keeps the
+/// current one, and in combat the new list's initial cooldowns start.
+/// </summary>
+public sealed class SetSpellSetAction : EventAiActionHandler
+{
+    public override byte ActionType => (byte)EventAiActionType.SetSpellSet;
+
+    public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
+    {
+        context.System?.SetSpellList(context.Me, (uint)Math.Max(0, action.Param1));
+        return true;
+    }
+}
+
+/// <summary>
 /// ACTION_T_SET_FOLLOW_MOVEMENT (64): State; 0 makes a follow movement hold still (UNIT_STAT_NO_FOLLOW_MOVEMENT, a following creature stops),
 /// 1 lets it follow again (UnitAI::SetFollowMovement, BaseAI/UnitAI.cpp:320-328).
 /// </summary>

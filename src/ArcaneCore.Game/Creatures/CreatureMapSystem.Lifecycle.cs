@@ -536,6 +536,10 @@ public sealed partial class CreatureMapSystem
         {
             CreateAi(creature);
         }
+        else
+        {
+            BindSpellList(creature); // cmangos Creature::Respawn -> SetSpellList: a fresh availability roll for the new life
+        }
 
         ResetGuardCall(creature); // vmangos BasicAI::JustRespawned
         creature.WaypointsPaused = false; // a respawn starts with fresh unit state (relay scripts' pause and run mode)

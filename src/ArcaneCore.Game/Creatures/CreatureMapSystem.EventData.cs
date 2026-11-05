@@ -53,6 +53,10 @@ public sealed partial class CreatureMapSystem
         }
 
         creature.ApplyEventOverride(template, display, equipment);
+        if (creature.AI is not null && creature.DeathState == CreatureDeathState.Alive)
+        {
+            BindSpellList(creature); // cmangos GameEventMgr -> Creature::UpdateEntry -> SetSpellList; a dead one binds at its respawn
+        }
     }
 
     /// <summary>

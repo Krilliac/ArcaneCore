@@ -159,6 +159,9 @@ public sealed record CreatureTemplate
     /// <summary>CreatureSpellData.dbc id sent in the query response.</summary>
     public uint PetSpellDataId { get; init; }
 
+    /// <summary>The creature spell list a spawn starts with (cmangos <c>creature_template.SpellList</c>; 0 is none). Added by world schema 68.</summary>
+    public uint SpellList { get; init; }
+
     /// <summary>Default movement generator when the spawn does not set one (0 idle, 1 random, 2 waypoint).</summary>
     public byte MovementType { get; init; }
 

@@ -260,6 +260,43 @@ public sealed class CreatureEventAiTests
         Assert.False(wolf.Combat.IsMeleeAttacking);
     }
 
+    [Fact]
+    public void Imp12922Shaped_Action57OnSpawnPlusRepeatingCombatCast_SupportedAndCasts()
+    {
+        // The Imp Minion rows of classic-db: 1292201 (spawned, action 57 with 3, 20, 0) and 1292203 (timer in combat,
+        // 1000..2000 then 2000..3000, flags 1025 = repeatable + combat action, cast 20801 on the victim, cast flags 256).
+        // The creature has no spell list; every cast comes from the EventAI path. See docs/design/creature-spell-lists.md.
+        const uint spell = 20801;
+        CreatureContent content = EventContent(
+        [
+            Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 3, 20)),
+            Row(3, EventAiEventType.TimerInCombat, 1000, 2000, 2000, 3000,
+                a1: Act(EventAiActionType.Cast, (int)spell, (int)EventAiTarget.Victim, 0x100))
+                with { Flags = (uint)EventAiFlags.Repeatable | (uint)EventAiFlags.CombatAction },
+        ]);
+        var spells = new FakeCaster();
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Spells = spells });
+        using WorldRuntime world = runtime;
+        (Player player, _) = AddPlayer(world, 1, 0, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+        Assert.Empty(ai.Unsupported); // action 57 has a handler, so no row is reported unsupported
+        Assert.Equal(2, ai.EventCount);
+        ai.OnRespawn();
+        Assert.True(ai.RangedMode);
+        Assert.Equal(3, ai.RangedModeType);
+        Assert.Equal(20f, ai.ChaseDistance);
+
+        map.Combat.DealDamage(player, wolf, 1, direct: false);
+        Assert.Empty(spells.Casts); // the initial timer has not elapsed at the pull
+        Run(world, 3000);
+        Assert.NotEmpty(spells.Casts);
+        Run(world, 9000);
+
+        Assert.True(spells.Casts.Count >= 2, "the repeat timer must cast again");
+        Assert.All(spells.Casts, c => Assert.Equal((spell, (Unit?)player, false), c));
+    }
+
     private static CreatureContent EventContent(IEnumerable<CreatureAiEvent> events, IEnumerable<CreatureAiText>? texts = null, params CreatureTemplate[] extra)
         => new(
             [Template(configure: t => t.AIName = CreatureAiFactory.EventAIName), .. extra],

@@ -269,6 +269,9 @@ memberless groups.
 `totem_spell` table. `--replace` replaces the table; without it, a duplicate target key fails the entire
 import and restores all earlier importer writes. Repeating an import with `--replace` produces the same mappings.
 
+- The cmangos spell list tables (`creature_spell_list_entry`, `creature_spell_list`, `creature_spell_targeting`, `combat_condition`, `unit_condition`) and
+  `creature_template.SpellList` import into world schema 68, and `refresh` backfills them ([creature spell lists](../design/creature-spell-lists.md)). A row the
+  reference would refuse is imported as it stands and left out, with an anomaly, when the catalog loads. The totem mapping below reads the same `creature_spell_list` rows.
 - For classic-db, candidates come from summon-totem effects 74 and 87–90 in `spell_template`, or
   `creature_template.AIName = TotemAI`. An explicit `creature_template.SpellList` (`spell_list_id`
   is accepted as an alias) takes precedence and selects the lowest-position positive spell in

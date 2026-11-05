@@ -142,6 +142,9 @@ public sealed class CreatureTemplateRow
 
     public uint PetSpellDataId { get; set; }
 
+    /// <summary>The creature spell list of the entry (cmangos <c>SpellList</c>; 0 is none). Added by <see cref="CreatureSpellListDataModule"/>.</summary>
+    public uint SpellList { get; set; }
+
     public byte MovementType { get; set; }
 
     public uint CorpseDecaySeconds { get; set; }

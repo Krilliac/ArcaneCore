@@ -336,6 +336,7 @@ public static partial class ContentImporterCli
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
         Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityRows);
+        Count(CreatureSpellListDataModule.EntryTable, relays.BuildReport().SpellListEntries, relays.HasSpellListTables);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         Count(NpcTextBroadcastDataModule.Table, gossip.BuildReport().TextBroadcasts, gossip.SawTextBroadcastTable);
         Count("points_of_interest", gossip.BuildReport().PointsOfInterest, gossip.BuildReport().PointsOfInterest > 0);
@@ -479,6 +480,17 @@ public static partial class ContentImporterCli
                     if (relays.HasImmunityMaskColumns)
                     {
                         counts["creature_template (MechanicImmuneMask, SchoolImmuneMask)"] = immunityTemplates;
+                    }
+
+                    (int spellListRows, int spellListTemplates) = await relays.RefreshSpellListsAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasSpellListTables)
+                    {
+                        counts[CreatureSpellListDataModule.EntryTable] = spellListRows;
+                    }
+
+                    if (relays.HasSpellListColumn)
+                    {
+                        counts["creature_template (SpellList)"] = spellListTemplates;
                     }
 
                     int resistChanged = await relays.RefreshResistancesAsync(db, token).ConfigureAwait(false);

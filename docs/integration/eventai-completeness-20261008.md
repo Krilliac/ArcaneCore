@@ -17,7 +17,7 @@ negative `creature_id` spawn-guid key; this is script coverage, not the number o
 | action 44 (`CHANCED_TEXT`) | 0 |
 | action 46 (`SET_THROW_MASK`) | 0 |
 | action 52 (`INTERRUPT_SPELL`) | 0 |
-| action 60 (`SET_SPELL_SET`) | 0 |
+| action 60 (`SET_SPELL_SET`, handled since: `SetSpellSetAction`) | 0 |
 | action 62 (`SET_DESPAWN_AGGREGATION`) | 0 |
 | action 63 (`SET_IMMUNITY_SET`) | 0 |
 
