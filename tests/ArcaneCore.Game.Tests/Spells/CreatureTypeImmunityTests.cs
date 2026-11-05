@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
