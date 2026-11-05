@@ -9,6 +9,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Cluster.Tooling;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +30,13 @@ public sealed class BattlegroundFeatureClusterLinkTests
     private const uint WsgMap = 489;
     private const string HolderNode = "worker:instances";
     private const string WorkerNode = "worker:ek";
+
+    /// <summary>The owned-map list of an entry of the node bridge's default endpoints, which is what the launcher and the cluster hosting give each worker.</summary>
+    private static string DefaultListOf(string nodeId) =>
+        ClusterNodeBridgeFeature.DefaultEndpointsSpec.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Single(e => e.StartsWith(nodeId + "|", StringComparison.Ordinal)).Split('|')[3];
+
+    private static string RealInstancesList => DefaultListOf("worker:instances");
 
     private sealed class DirectHub(BattlegroundHub hub) : IBattlegroundHubTransport
     {
@@ -168,10 +176,28 @@ public sealed class BattlegroundFeatureClusterLinkTests
     }
 
     [Fact]
+    public void TheShippedTopology_HasExactlyTheInstancesWorkerAsHolder_AndEveryBattlegroundMapOnIt()
+    {
+        // AllowInstanceMaps is on for every split world, as start-cluster.ps1 sets it.
+        Assert.True(MapOwnership.TryParse(DefaultListOf("worker:instances"), true, out MapOwnership instances, out string? error), error);
+        Assert.True(MapOwnership.TryParse(DefaultListOf("worker:EK"), true, out MapOwnership ek, out error), error);
+        Assert.True(MapOwnership.TryParse(DefaultListOf("worker:Kalimdor"), true, out MapOwnership kalimdor, out error), error);
+
+        Assert.True(BattlegroundFeature.CanHoldQueues(instances));
+        Assert.False(BattlegroundFeature.CanHoldQueues(ek));
+        Assert.False(BattlegroundFeature.CanHoldQueues(kalimdor));
+        // The gateway sends instance 0 for a battleground transfer: each of the three maps must be listed, not reached through instance-copy ownership.
+        foreach (BattlegroundType type in new[] { BattlegroundType.AlteracValley, BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin })
+        {
+            Assert.True(instances.ListsMap(BattlegroundManager.MapOfType(type)), type.ToString());
+        }
+    }
+
+    [Fact]
     public void InstallingTheFeature_StartsTheLink_AndOnlyTheNodeThatListsTheBattlegroundMapsOffersItself()
     {
         var hub = new BattlegroundHub();
-        using var holder = new Node(HolderNode, "30,489,529", allowInstanceMaps: false, hub);
+        using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
         using var continent = new Node(WorkerNode, "0,1", allowInstanceMaps: true, hub);
 
         Assert.True(holder.Link.CanHold);
@@ -182,7 +208,7 @@ public sealed class BattlegroundFeatureClusterLinkTests
     public async Task APlainWorkersJoin_ReachesTheHoldersQueue_AndTheHoldersNoticeComesBackToThePlayer()
     {
         var hub = new BattlegroundHub();
-        using var holder = new Node(HolderNode, "30,489,529", allowInstanceMaps: false, hub);
+        using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
         // AllowInstanceMaps on a continent worker (the option's default) must not make it a holder.
         using var worker = new Node(WorkerNode, "0,1", allowInstanceMaps: true, hub);
         (Player player, RecordingPlayerSession session) = worker.AddPlayer(1);
@@ -202,7 +228,7 @@ public sealed class BattlegroundFeatureClusterLinkTests
     public async Task TheHolderNodesOwnPlayer_LoopsThroughTheHub_AndIsQueuedWithItsStatus()
     {
         var hub = new BattlegroundHub();
-        using var holder = new Node(HolderNode, "30,489,529", allowInstanceMaps: false, hub);
+        using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
         (Player player, RecordingPlayerSession session) = holder.AddPlayer(2);
         await Eventually(() => holder.Link.IsHolder, holder);
 
