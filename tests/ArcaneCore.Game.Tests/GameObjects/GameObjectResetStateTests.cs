@@ -12,12 +12,13 @@ namespace ArcaneCore.Game.Tests.GameObjects;
 /// </summary>
 public sealed class GameObjectResetStateTests
 {
-    private static void RespawnAfterDespawn(GameObjectTypeRig rig, GameObject go)
+    private static void RespawnAfterDespawn(GameObjectTypeRig rig, GameObject go, FakeSession? clearAfterDespawn = null)
     {
         Assert.True(rig.System.DespawnForRespawn(go));
         rig.World.RunTick(10);
         rig.World.RunTick(10);
         Assert.False(go.IsSpawned);
+        clearAfterDespawn?.Clear(); // the out-of-range entry of the despawn is not the create under test
         rig.System.SetRespawnIn(go, 1);
         rig.World.RunTick(1100);
         Assert.True(go.IsSpawned);
@@ -35,6 +36,25 @@ public sealed class GameObjectResetStateTests
 
         (WorldOpcode _, byte[] payload) = Assert.Single(Packets(session, WorldOpcode.SmsgGameobjectResetState));
         Assert.Equal(GameObjectPackets.ResetState(banner.Guid), payload);
+    }
+
+    [Fact]
+    public void ASlowOpenLockedObject_SendsItsCreateToAPlayerInRangeBeforeTheResetState()
+    {
+        GameObjectTypeRig rig = Create([GoSpawn(1, Banner, 3, 0)]);
+        (_, var session) = rig.Join(1, 1, 0);
+        GameObject banner = rig.Single(Banner);
+        session.Clear();
+
+        RespawnAfterDespawn(rig, banner, session);
+
+        var sent = session.Sent.ToArray();
+        int reset = Array.FindIndex(sent, p => p.Opcode == WorldOpcode.SmsgGameobjectResetState);
+        int create = Array.FindIndex(sent, p => p.Opcode is WorldOpcode.SmsgUpdateObject or WorldOpcode.SmsgCompressedUpdateObject);
+        Assert.True(create >= 0, "the player never received the create block");
+        Assert.True(reset >= 0, "the player never received the reset state");
+        Assert.True(create < reset, "the reset state went out before the create block");
+        Assert.Single(sent, p => p.Opcode == WorldOpcode.SmsgGameobjectResetState);
     }
 
     [Fact]

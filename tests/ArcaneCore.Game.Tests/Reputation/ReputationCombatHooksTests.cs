@@ -28,10 +28,10 @@ public sealed class ReputationCombatHooksTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig(Func<Player, Player, bool>? sameRaid = null, bool track = true)
+        public Rig(Func<Player, Player, bool>? sameRaid = null, bool track = true, IReputationSink? sink = null)
         {
             (World, Map, _, _) = CombatTestKit.CreateWorld();
-            Service = new ReputationService(Factions, roll: () => 0.0);
+            Service = new ReputationService(Factions, sink: sink, roll: () => 0.0);
             Resolver = new ReputationReactionResolver(Templates, Factions, Service.For, sameRaid);
             TemplateOnly = new FactionCombatHooks(Templates);
             Hooks = new ReputationCombatHooks(TemplateOnly, Resolver);
@@ -276,6 +276,75 @@ public sealed class ReputationCombatHooksTests
         rig.Hooks.OnCreatureEnteredCombat(monster, rig.Player);
 
         Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar);
+    }
+
+    [Fact]
+    public void TemporaryWar_IsNeverSaved_NotByAReputationChangeMidFight_NorAfterTheFightEnded()
+    {
+        // This server has no logout or periodic reputation save: a row written while the temporary war is on must not carry the at-war bit, or the war
+        // would outlive the fight and the relog (vmangos writes the flag at the next save; here that save may be a later reputation change).
+        var sink = new RecordingReputationSink();
+        using var rig = new Rig(sink: sink);
+        CombatTestUnit goblin = rig.Npc(BootyBayGoblin);
+        rig.Hooks.OnCreatureEnteredCombat(goblin, rig.Player);
+        Assert.True(rig.Service.IsAtWar(rig.Player, BootyBay));
+
+        rig.Service.ModifyReputation(rig.Player, BootyBay, 1); // a kill reward or quest turn-in during the fight persists every dirty row
+        Assert.NotEmpty(sink.Rows);
+        Assert.True(rig.Service.IsAtWar(rig.Player, BootyBay)); // the war itself is still on in memory
+
+        MapCombat.ClearInCombat(rig.Player);
+        rig.Service.ModifyReputation(rig.Player, BootyBay, 1);
+
+        Assert.False(rig.Service.IsAtWar(rig.Player, BootyBay));
+        Assert.All(sink.Rows.Where(r => r.Faction == BootyBay), r => Assert.Equal(0u, r.Flags & (uint)FactionStateFlags.AtWar));
+        Assert.Equal(0u, sink.Rows.Last(r => r.Faction == BootyBay).Flags & (uint)FactionStateFlags.AtWar);
+    }
+
+    [Fact]
+    public void CreatureEnteringCombat_UsesItsSpawnTemplateFaction_NotItsCurrentFactionTemplate()
+    {
+        // vmangos fixes the reputation slot from GetCreatureInfo()->faction (Creature.cpp:639-642): a scripted or charmed faction change does not move it.
+        using var rig = new Rig();
+        Creature creature = rig.Creature(BootyBayGoblin);
+        creature.FactionTemplate = HostileMonster; // no reputation slot
+        rig.Session.Clear();
+
+        rig.Hooks.OnCreatureEnteredCombat(creature, rig.Player);
+
+        Assert.True(rig.Service.IsAtWar(rig.Player, BootyBay));
+        Assert.Single(rig.Session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar);
+    }
+
+    [Fact]
+    public void ACreatureThatStartsAttackingAPlayer_PutsItsFactionAtWar_ThroughAttackStart()
+    {
+        // The production trigger: CreatureMapSystem.AttackStart calls the hook; no direct call to it here. A forced Hostile reaction lets the creature
+        // attack a player whose faction is not at war (the reputation ladder otherwise makes a non-war reputation faction friendly).
+        CreatureContent content = CreatureTestKit.Content(
+            [CreatureTestKit.Template(CreatureTestKit.WolfEntry, t => t.Faction = BootyBayGoblin)], [CreatureTestKit.Spawn(1, CreatureTestKit.WolfEntry, 8, 0)]);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreatureAi.CreatureAiTestKit.CreateAiSystem(content);
+        using (world)
+        {
+            var service = new ReputationService(Factions, roll: () => 0.0);
+            map.Combat.Hooks = new ReputationCombatHooks(new FactionCombatHooks(Templates), new ReputationReactionResolver(Templates, Factions, service.For));
+            (Player player, FakeSession session) = CreatureAi.CreatureAiTestKit.AddPlayer(world, 1, 0, 0);
+            service.Track(player, service.Create(player, CharacterReputationData.Empty));
+            Assert.True(service.ApplyForcedReaction(player, BootyBay, ReputationRank.Hostile, apply: true));
+            Assert.False(service.IsAtWar(player, BootyBay));
+            Creature wolf = Assert.Single(system.Creatures);
+            session.Clear();
+
+            Assert.True(system.AttackStart(wolf, player));
+
+            Assert.True(service.IsAtWar(player, BootyBay));
+            Assert.Equal(
+                ReputationPackets.SetFactionAtWar(0, atWar: true),
+                Assert.Single(session.Sent, p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgSetFactionAtwar).Payload);
+
+            MapCombat.ClearInCombat(player);
+            Assert.False(service.IsAtWar(player, BootyBay));
+        }
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Reputation;
@@ -63,7 +65,10 @@ public sealed class ReputationCombatHooks(CombatHooks fallback, ReputationReacti
     {
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(player);
-        if (_resolver.TemplateOf(creature) is not { } template || _resolver.Factions.Find(template.Faction) is not { CanHaveReputation: true } faction
+        // vmangos fixes m_reputationId from the creature's spawn template faction (Creature.cpp:639-642), so a charmed or scripted faction change
+        // does not move it; a unit that is no Creature (no spawn template) has only its current faction template.
+        FactionTemplateRecord? factionTemplate = creature is Creature spawned ? _resolver.Templates.Find(spawned.Template.Faction) : _resolver.TemplateOf(creature);
+        if (factionTemplate is not { } template || _resolver.Factions.Find(template.Faction) is not { CanHaveReputation: true } faction
             || _resolver.ReputationOf(player) is not { } reputation || !reputation.StartTemporaryAtWar(faction))
         {
             return;

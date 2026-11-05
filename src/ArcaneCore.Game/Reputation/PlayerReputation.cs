@@ -63,6 +63,7 @@ public sealed partial class PlayerReputation
         }
 
         _newlyVisible.AddRange(source._newlyVisible);
+        _temporaryAtWar.UnionWith(source._temporaryAtWar); // a staged copy saves rows exactly as the live object would (TakeDirty)
     }
 
     public FactionCatalog Factions { get; }
@@ -182,7 +183,12 @@ public sealed partial class PlayerReputation
             && (state.Flags & (FactionStateFlags.InvisibleForced | FactionStateFlags.Hidden)) == 0
             && SetAtWar(state, atWar);
 
-    /// <summary>The factions put at war by a creature entering combat with the player (vmangos Player::m_temporaryAtWarFactions); world thread.</summary>
+    /// <summary>
+    /// The factions put at war by a creature entering combat with the player (vmangos Player::m_temporaryAtWarFactions); world thread. Their at-war
+    /// flag is left out of every saved row (<see cref="TakeDirty"/>), so starting or ending a temporary war never changes what is persisted, also
+    /// not while a quest settlement holds the character (the staged rows and the live rows stay equal in <c>ReputationService.Publish</c>), and a
+    /// logout in the middle of a fight leaves nothing to undo.
+    /// </summary>
     private readonly HashSet<uint> _temporaryAtWar = [];
 
     /// <summary>
@@ -303,7 +309,10 @@ public sealed partial class PlayerReputation
             if (state.NeedSave)
             {
                 state.NeedSave = false;
-                rows.Add(new CharacterReputationRow(characterId, state.Faction.Id, state.Standing, (uint)state.Flags));
+                // A temporary war (StartTemporaryAtWar) is never saved: this server has no logout or periodic reputation save, so a row written
+                // mid-fight would keep the war after the fight ends and after a relog. Load puts a Hostile faction back at war by itself.
+                FactionStateFlags saved = _temporaryAtWar.Contains(state.Faction.Id) ? state.Flags & ~FactionStateFlags.AtWar : state.Flags;
+                rows.Add(new CharacterReputationRow(characterId, state.Faction.Id, state.Standing, (uint)saved));
             }
         }
 

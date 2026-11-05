@@ -1308,7 +1308,7 @@ public sealed partial class MapCombat
         unit.Combat.CombatSetsSinceClear = 0;
         unit.UnitFlags &= ~(UnitFlags.InCombat | UnitFlags.PetInCombat);
         unit.Combat.InPvpCombat = false;
-        if (unit is Player player && player.Map?.Combat.Hooks is Reputation.ReputationCombatHooks atWar)
+        if (unit is Player player && player.Map?.FindUpdater<MapCombat>()?.Hooks is Reputation.ReputationCombatHooks atWar)
         {
             atWar.OnPlayerLeftCombat(player); // vmangos Unit::ClearInCombat (Unit.cpp:6111-6121): Player::ClearTemporaryWarWithFactions
         }

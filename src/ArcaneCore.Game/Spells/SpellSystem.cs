@@ -2123,7 +2123,10 @@ public sealed partial class SpellSystem
     /// SMSG_SPELL_UPDATE_CHAIN_TARGETS at channel start (vmangos Spell::SendChannelStart, Spell.cpp:4880-4906; mangos-classic Spell.cpp:4277, build > 1.11.2):
     /// for a channel with the IS_CHANNELED attribute whose SpellVisual has a ChannelKit, the guid list of the unit targets that are not the caster
     /// (the caster itself counts only when a cast item is used and effect 0 hit), sent to the caster's observers and the caster. Nothing is sent
-    /// for an empty list. Called on the world thread after the targets are rolled.
+    /// for an empty list. Called on the world thread after the targets are rolled. Deviation: vmangos tests the caster-as-target entry's
+    /// <c>reflectResult == SPELL_MISS_NONE</c> (Spell.cpp:4894-4895); <see cref="SpellTargetEntry"/> has no reflect field, so its <c>Miss</c> is used.
+    /// It only matters when the caster is its own target on a cast-item channel. Depends on the GM option <c>World:GmCommands:LiveFx</c> (the
+    /// ChannelKit table is read by the live-fx data feature) and on SpellVisual.dbc being present.
     /// </summary>
     private void SendChannelChainTargets(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects)
     {
