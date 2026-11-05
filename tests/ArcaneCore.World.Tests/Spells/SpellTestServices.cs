@@ -56,6 +56,18 @@ internal sealed class SpellTestServices : IWorldTestServices
     /// <summary>A Stealth-shaped self aura: permanent, Attributes COOLDOWN_ON_EVENT (0x02000000), 10 s recovery that starts when the aura ends.</summary>
     public const uint StealthLike = 9012;
 
+    /// <summary>A spell that creates item <see cref="MissingItem"/>, which no item template defines: vmangos SpellMgr::IsSpellValid refuses it.</summary>
+    public const uint BrokenCreate = 9020;
+
+    /// <summary>A spell that teaches spell <see cref="MissingSpell"/>, which does not exist: vmangos SpellMgr::IsSpellValid refuses it.</summary>
+    public const uint BrokenTeach = 9021;
+
+    public const uint MissingItem = 999_991;
+    public const uint MissingSpell = 999_992;
+
+    /// <summary>The one item template a test installs so that the item-aware validity check engages (an empty item store is no data to judge by).</summary>
+    public const uint PresentItem = 1;
+
     public void Register(IServiceCollection services)
     {
         // The shared default, not an override: IWorldTestServices run in FullName order, so a fixture in a namespace that sorts before
@@ -139,6 +151,8 @@ internal sealed class SpellTestServices : IWorldTestServices
                 s.StartRecoveryTime = 0;
                 s.SpellVisual = 1;
             }),
+            With(Spell(BrokenCreate, "Test Broken Create", effect: 24, value: 1, targetA: 1), c => c.EffectItemType1 = MissingItem),
+            With(Spell(BrokenTeach, "Test Broken Teach", effect: 36, value: 0, targetA: 1), c => c.EffectTriggerSpell1 = MissingSpell),
         ],
         [new SpellCastTimeRow { Id = 2, CastTime = 500, MinCastTime = 500 }, new SpellCastTimeRow { Id = 5, CastTime = 3000, MinCastTime = 3000 }],
         [new SpellDurationRow { Id = 3, Duration = 15000, MaxDuration = 15000 }, new SpellDurationRow { Id = 21, Duration = -1, MaxDuration = -1 }],

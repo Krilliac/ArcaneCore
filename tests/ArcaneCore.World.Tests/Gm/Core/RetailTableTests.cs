@@ -122,7 +122,7 @@ public sealed class RetailTableTests
         (string Path, int Level)[] expected =
         [
             ("saveall", 6), ("announce", 4), ("notify", 4), ("gm", 2), ("gm chat", 1), ("kick", 2), ("tele", 2), ("go xyz", 2),
-            ("learn", 5), ("unlearn", 3), ("cast", 5), ("unaura", 3), ("cooldown", 3), ("modify money", 4),
+            ("learn", 5), ("unlearn", 3), ("cast", 5), ("cast self", 5), ("cast target", 5), ("cast back", 5), ("cast dist", 5), ("unaura", 3), ("cooldown", 3), ("modify money", 4),
             ("instance listbinds", 3), ("instance unbind", 3), ("instance stats", 4),
             ("guild create", 3), ("guild delete", 4), ("guild invite", 3), ("guild uninvite", 3), ("guild rank", 3),
             ("save", 0), ("help", 0), ("commands", 0), ("gps", 1), ("server info", 0), ("server motd", 0),

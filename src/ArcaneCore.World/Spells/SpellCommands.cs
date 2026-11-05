@@ -1,8 +1,8 @@
 using System.Globalization;
+using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
@@ -11,7 +11,6 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Npc;
-using ArcaneCore.World.Items;
 using ArcaneCore.World.Talents;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -193,30 +192,53 @@ public sealed class SpellCommands : ICommandGroup
     private static void ReplyCast(CommandContext context, uint spellId, SpellCastResult result)
         => context.Reply(result == SpellCastResult.CastOk ? $"Cast spell {spellId}." : $"Spell {spellId} failed: {result}.");
 
-    /// <summary>The unit turns to the invoker before it casts (vmangos Unit::SetFacingToObject, Unit.cpp:2796-2804): only a creature that stands still turns.</summary>
+    private static int s_facingSplineId = 0x4000_0000;
+
+    /// <summary>
+    /// The unit turns to the invoker before it casts (vmangos Unit::SetFacingToObject, Unit.cpp:2796-2804, which runs on any Unit but only while it is stopped, and
+    /// Unit::SetFacingTo, Unit.cpp:2785-2794: the orientation, and a facing spline with no path that SMSG_MONSTER_MOVE carries to the observers). A creature is stopped
+    /// when it has no spline; a player when it holds no movement flag of MOVEFLAG_MASK_MOVING (a player's own client then receives the spline too, as it does for
+    /// any unit it controls under a server move).
+    /// </summary>
     private static void FaceInvoker(CommandContext context, Unit caster)
     {
-        if (caster is Creature { IsMoving: false } creature && GmNpcCommands.SystemOf(context) is { } system)
+        Player invoker = context.Player;
+        float angle = Creature.NormalizeOrientation(MathF.Atan2(invoker.Y - caster.Y, invoker.X - caster.X));
+        if (caster is Creature { IsMoving: false } creature)
         {
-            Player player = context.Player;
-            system.SetFacingTo(creature, MathF.Atan2(player.Y - creature.Y, player.X - creature.X));
+            if (GmNpcCommands.SystemOf(context) is { } system)
+            {
+                system.SetFacingTo(creature, angle);
+            }
+
+            return;
+        }
+
+        if (caster is Player { Map: { } map } player && (player.Movement.Flags & MovementFlags.MaskMoving) == 0)
+        {
+            player.Orientation = angle;
+            uint id = unchecked((uint)Interlocked.Increment(ref s_facingSplineId));
+            byte[] packet = CreatureMovePackets.BuildPath(player.Guid, new Vector3(player.X, player.Y, player.Z), id, SplineFacing.ToAngle(angle),
+                run: !player.Movement.HasFlag(MovementFlags.WalkMode), durationMs: 0, [new Vector3(player.X, player.Y, player.Z)]);
+            player.Session.Send(WorldOpcode.SmsgMonsterMove, packet);
+            map.BroadcastToObservers(player, WorldOpcode.SmsgMonsterMove, packet);
         }
     }
 
     /// <summary>
     /// vmangos SpellMgr::IsSpellValid (SpellMgr.cpp:2298), checked by cast, cast self and cast dist (LANG_COMMAND_SPELL_BROKEN, an error rather than a syntax
-    /// reply): a spell that creates, needs or teaches an item or spell that does not exist is refused with a reply. The mangos_string text is this server's own wording.
+    /// reply): a spell that creates, needs or teaches an item or spell that does not exist is refused with a reply. The text is mangos_string 483 of vmangos
+    /// (Language.h:497, LANG_COMMAND_SPELL_BROKEN, "Spell %u broken and not allowed to cast or learn!").
     /// </summary>
     private static bool SpellIsValid(CommandContext context, uint spellId)
     {
-        IItemTemplateStore? items = context.Session.Services.GetService<ItemsFeature>()?.LoadedStore is { Count: > 0 } store ? store : null;
-        if (SpellVariants.IsSpellValid(Feature(context).System, items, spellId))
+        if (SpellVariants.IsSpellValid(Feature(context).System, SpellVariants.LoadedItems(context), spellId))
         {
             return true;
         }
 
         context.Fail("spell-broken");
-        context.Reply($"Spell {spellId} is broken and cannot be cast.");
+        context.Reply($"Spell {spellId} broken and not allowed to cast or learn!");
         return false;
     }
 
@@ -326,14 +348,21 @@ public sealed class SpellCommands : ICommandGroup
     /// <summary>
     /// vmangos GetClosePoint(x, y, z, dist) (Object.h:520, Object.cpp:2742-2783): the point <paramref name="distance"/> yards in front of the unit plus the unit's own
     /// bounding radius (GetNearPoint2DAroundPosition adds it), with z moved onto the ground there plus 0.05 (UpdateGroundPositionZ, Object.cpp:2079) when a height is
-    /// known; otherwise the unit's own z. vmangos' optional position-collision search (CONFIG_BOOL_DETECT_POS_COLLISION) is not ported.
+    /// known; otherwise the unit's own z. Not ported: vmangos' optional position-collision search (CONFIG_BOOL_DETECT_POS_COLLISION) and its
+    /// MaNGOS::NormalizeMapCoord clamp (Object.cpp:2726-2733), so a huge distance gives a point off the map (the terrain lookup then knows no height).
     /// </summary>
     internal static (float X, float Y, float Z) ClosePoint(Player player, float distance)
+        => ClosePoint(player.X, player.Y, player.Z, player.Orientation, player.BoundingRadius, distance,
+            player.Map is { } map ? (px, py, pz) => map.Collision.GetHeight(px, py, pz) : null);
+
+    /// <summary>The close point from explicit values; <paramref name="height"/> is the ground lookup (null: none), whose answer is used when it is a real height.</summary>
+    internal static (float X, float Y, float Z) ClosePoint(
+        float x, float y, float z, float orientation, float radius, float distance, Func<float, float, float, float>? height)
     {
-        (float x, float y, float z) = PointInFront(player.X, player.Y, player.Z, player.Orientation, distance + player.BoundingRadius);
-        if (player.Map is { } map)
+        (x, y, z) = PointInFront(x, y, z, orientation, distance + radius);
+        if (height is not null)
         {
-            float ground = map.Collision.GetHeight(x, y, z);
+            float ground = height(x, y, z);
             if (float.IsFinite(ground) && ground > TerrainTile.InvalidHeightValue)
             {
                 z = ground + 0.05f;
