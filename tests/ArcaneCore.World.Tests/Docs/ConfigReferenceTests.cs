@@ -346,24 +346,17 @@ public sealed class ConfigReferenceTests
 
         // The ad-hoc key is the fifth key of Items, so the section gets its own page only because the key is counted.
         string items = Page("items.md");
-        Assert.Contains("
-5 options.", items, StringComparison.Ordinal);
+        Assert.Contains("\n5 options.", items, StringComparison.Ordinal);
         Assert.Contains("| `ByName` | `string` | `null` | ", items, StringComparison.Ordinal);
-        Assert.Contains(" | World | start | Read by name | with a pipe. |
-", items, StringComparison.Ordinal);
+        Assert.Contains(" | World | start | Read by name \\| with a pipe. |\n", items, StringComparison.Ordinal);
 
         string small = Page("small-sections.md");
-        Assert.Contains("
-2 options.", small, StringComparison.Ordinal);
-        Assert.Contains("## `Lone`
-
-", small, StringComparison.Ordinal);
-        Assert.Contains("| `Switch` | `bool` | `false` | true \| false | Both | start | A lone key read by name. |
-", small, StringComparison.Ordinal);
+        Assert.Contains("\n2 options.", small, StringComparison.Ordinal);
+        Assert.Contains("## `Lone`\n\n", small, StringComparison.Ordinal);
+        Assert.Contains("| `Switch` | `bool` | `false` | true \\| false | Both | start | A lone key read by name. |\n", small, StringComparison.Ordinal);
 
         Assert.Contains("7 options in 2 files.", Page("README.md"), StringComparison.Ordinal);
-        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('
-').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
+        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
         Assert.Equal(entries.Count + adHoc.Length, rows);
         Assert.Equal(ConfCatalogGenerator.Build(entries, adHoc).Keys.Count, rows);
     }
@@ -374,7 +367,7 @@ public sealed class ConfigReferenceTests
         string root = Path.Combine(Path.GetTempPath(), "arcanecore-config-pages-" + Guid.NewGuid().ToString("N"));
         try
         {
-            IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = [new("docs/reference/config/a.md", "a"), new("docs/reference/config/README.md", "r")];
+            IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = [new("pages/a.md", "a"), new("pages/README.md", "r")];
             Assert.Empty(ConfigReferenceRenderer.StrayFiles(root, pages));
 
             Directory.CreateDirectory(Path.Combine(root, "sub"));

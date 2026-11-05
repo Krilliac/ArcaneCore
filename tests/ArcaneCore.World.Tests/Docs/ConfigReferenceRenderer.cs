@@ -1,4 +1,5 @@
 using System.Text;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.Reload;
 
@@ -171,7 +172,7 @@ internal static class ConfigReferenceRenderer
     /// any other top-level section below that size joins "Small sections". Every option lands on exactly one page. The result is ordered by area name.
     /// The keys read by name (<paramref name="adHoc"/>) are options too: they count, are grouped and get a row like the options-class entries, so the
     /// pages list the same keys as the shipped catalog (<see cref="ConfCatalogGenerator.Build"/> with the same arguments). A <c>World:X</c> group and a
-    /// top-level section called <c>X</c> share the page file <c>x.md</c> (there is no per-area name override); today that is only <c>World:Items</c> and <c>Items</c>.
+    /// top-level section called <c>X</c> share the page file <c>x.md</c> (there is no per-area name override).
     /// The pages leave out the "List and map element fields" tables of configuration.md; every page links to it.
     /// </summary>
     public static IReadOnlyList<AreaPage> RenderByArea(IReadOnlyList<ConfigEntry> entries, IReadOnlyList<AdHocKey> adHoc)
@@ -241,7 +242,7 @@ internal static class ConfigReferenceRenderer
                     string option = entry.Path.StartsWith(prefix, StringComparison.Ordinal) ? entry.Path[prefix.Length..] : entry.Path;
                     sb.Append("| `").Append(option).Append("` | `").Append(entry.TypeText).Append("` | ").Append(Code(entry.Default)).Append(" | ")
                         .Append(entry.Allowed.Replace("|", "\\|", StringComparison.Ordinal)).Append(" | ").Append(entry.Daemons).Append(" | ")
-                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning).Append(" |\n");
+                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning.Replace("|", "\\|", StringComparison.Ordinal)).Append(" |\n");
                 }
 
                 sb.Append('\n');
