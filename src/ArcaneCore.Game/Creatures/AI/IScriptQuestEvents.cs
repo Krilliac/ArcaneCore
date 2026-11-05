@@ -43,4 +43,12 @@ public interface IScriptQuestEvents
     void TalkedToCreature(Player player, uint creatureEntry, ObjectGuid source)
     {
     }
+
+    /// <summary>
+    /// A script (SmartAI CLOSE_GOSSIP) closed the player's gossip window itself and sent SMSG_GOSSIP_COMPLETE: the player's menu is forgotten, so
+    /// a later gossip selection is refused (AzerothCore GossipDef.cpp:241 clears the sender). Nothing by default.
+    /// </summary>
+    void GossipClosed(Player player)
+    {
+    }
 }

@@ -705,7 +705,7 @@ public sealed class SmartScript
                 }
                 case SmartAction.SetData:
                 {
-                    // SmartScript.cpp:1469-1495 (SMART_ACTION_SET_DATA): each smart creature or game object target gets SetData(param1, param2),
+                    // SmartScript.cpp:1469-1502 (SMART_ACTION_SET_DATA): each smart creature or game object target gets SetData(param1, param2),
                     // the sender being `me`; AC passes the game object when there is no `me`, but the invoker here is a Unit, so a game object
                     // sender arrives as null (and the receiver's row then falls back to its own LastInvoker). Needs a base object, as AC's
                     // (me || go): a defence in depth, not reachable for creature or object scripts today. A target with no smart AI has no
@@ -728,8 +728,14 @@ public sealed class SmartScript
                     break;
                 }
                 case SmartAction.CloseGossip:
-                    // SmartScript.cpp:2010-2016 (SMART_ACTION_CLOSE_GOSSIP): every player target's gossip window closes (SMSG_GOSSIP_COMPLETE).
-                    foreach (Player closing in targets.OfType<Player>()) closing.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+                    // SmartScript.cpp:2010-2016 (SMART_ACTION_CLOSE_GOSSIP): every player target's gossip window closes (SMSG_GOSSIP_COMPLETE), and
+                    // the player's menu is forgotten (AzerothCore GossipDef.cpp:241 clears the sender), so a later CMSG_GOSSIP_SELECT_OPTION is refused.
+                    foreach (Player closing in targets.OfType<Player>())
+                    {
+                        closing.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+                        System?.AiServices.ScriptQuests?.GossipClosed(closing);
+                    }
+
                     break;
                 case SmartAction.CallTimedActionList:
                 case SmartAction.CallRandomTimedActionList:

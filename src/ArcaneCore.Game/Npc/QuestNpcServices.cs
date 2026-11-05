@@ -372,8 +372,15 @@ public sealed partial class QuestNpcServices : IQuestObjectiveEvents
     private NpcInfo? FindNpc(Player player, ObjectGuid guid)
         => guid.IsEmpty || Deps.Creatures?.Find(player, guid) is not { } npc || npc.MapId != player.MapId ? null : npc;
 
-    /// <summary>vmangos PlayerMenu::CloseGossip → SMSG_GOSSIP_COMPLETE (empty).</summary>
-    private static void CloseGossip(Player player) => player.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+    /// <summary>
+    /// vmangos PlayerMenu::CloseGossip → SMSG_GOSSIP_COMPLETE (empty). The menu is forgotten with the window, as AzerothCore PlayerMenu::SendCloseGossip
+    /// clears the sender (GossipDef.cpp:239-245), so a stale CMSG_GOSSIP_SELECT_OPTION after the close is refused. World thread only.
+    /// </summary>
+    private void CloseGossip(Player player)
+    {
+        player.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+        ForgetGossipMenu(player);
+    }
 
     private void LogMissing(string what, ObjectGuid npc) => _logger.LogDebug("{What}: {Npc} not found or not interactable", what, npc);
 }

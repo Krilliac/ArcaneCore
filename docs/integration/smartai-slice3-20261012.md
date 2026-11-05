@@ -125,7 +125,7 @@ this script has no logger, so it does nothing silently.
 
 ## Followups (2026-10-31)
 
-- **Runnable rows, recounted.** Same method as slice 3d (AzerothCore `smart_scripts.sql`, creature rows with `source_type` 0, positive entry, not
+- **Runnable rows, recounted.** ClassicDB ships no `smart_scripts`, so the figures below (80.1 % and the 2,471 rejected rows) measure how much of AzerothCore's dump would run, not content the live database has. Same method as slice 3d (AzerothCore `smart_scripts.sql`, creature rows with `source_type` 0, positive entry, not
   DEBUG_ONLY, entry present in `creature_template`; the entry list comes from the ClassicDB z2815 dump the live DB is built from, which reproduces
   the slice 3d figures exactly: 12,448 rows over 4,224 entries; 9,285 runnable before slice 3d). With today's creature sets (events
   `0-9, 11, 14, 17, 20, 21, 22, 25, 34, 38, 52, 59-62, 64`; actions with 34 and 50 added; same targets) **9,977 rows can run in full (80.1 % of
@@ -147,25 +147,25 @@ this script has no logger, so it does nothing silently.
 
 ## Slice 4 (branch `claude/uc2-x6-smartai-slice4`, 2026-11-05)
 
-References: AzerothCore `SmartScript.cpp:1469-1495` (SET_DATA), `:2010-2016` (CLOSE_GOSSIP), `SmartAI.cpp:1160-1173` and `:1524-1537` (SetData).
+References: AzerothCore `SmartScript.cpp:1469-1502` (SET_DATA, creature and game object branches), `:2010-2016` (CLOSE_GOSSIP), `GossipDef.cpp:239-245` (`PlayerMenu::SendCloseGossip`), `SmartAI.cpp:1160-1173` and `:1524-1537` (SetData).
 
 | Id | Name | Behaviour here |
 |---|---|---|
-| action 45 | SET_DATA | Each target that has smart AI (a smart creature, or a game object whose source type 1 rows run) gets `SetData(param1, param2)`, which raises event 38 DATA_SET on it with the sender as invoker: `me` for a creature script, null for a game object script (AC passes the object; the invoker here is a Unit). A row that then reads its invoker (for example target 7) falls back to the receiver's stale last invoker, such as an earlier player. Needs a base object, as AC's `(me \|\| go)`. Creature and game object sources and timed action lists; not area triggers. |
-| action 72 | CLOSE_GOSSIP | Every player target gets SMSG_GOSSIP_COMPLETE (an empty packet, as `PlayerMenu::CloseGossip`). Creature and game object sources and timed action lists. |
+| action 45 | SET_DATA | Each target that has smart AI (a smart creature, or a game object whose source type 1 rows run) gets `SetData(param1, param2)`, which raises event 38 DATA_SET on it with the sender as invoker: `me` for a creature script, null for a game object script (AC passes the object; the invoker here is a Unit). A row that then reads its invoker (for example target 7) falls back to the receiver's stale last invoker, such as an earlier player. Needs a base object, as AC's `(me \|\| go)`. Creature and game object sources and timed action lists; not area triggers. **A creature cannot SET_DATA a game object today:** `SmartTarget` has no game object target types (13, 14, 15 and 20 are refused) and the only target that yields a game object is SELF on a game object script, so the `me` passed to a game object target is always null and a game object's DATA_SET comes only from its own self-targeted action 45 (or a direct `SmartGameObjectAi.SetData` call). A game object script can set data on a creature (sender null). |
+| action 72 | CLOSE_GOSSIP | Every player target gets SMSG_GOSSIP_COMPLETE (an empty packet, as AzerothCore `PlayerMenu::SendCloseGossip`; vmangos names it `CloseGossip`) and the player's gossip menu is forgotten with it (`GossipDef.cpp:241` clears the sender, here `QuestNpcServices.ForgetGossipMenu`), so a later CMSG_GOSSIP_SELECT_OPTION for that menu is refused. Every close in the quest and gossip service forgets the menu the same way. This is an AzerothCore-derived difference: vmangos `PlayerMenu::CloseGossip` (`GossipDef.cpp:231-236`) only sends the packet. Creature and game object sources and timed action lists. |
 | event 38 | DATA_SET | Now also accepted for game objects (`SmartGameObjectAi.SetData`), where AC allows it; only SET_DATA raises it. |
 
 The creature action set is now `1, 2, 3, 4, 5, 8, 10, 11, 12, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28, 30, 31, 34, 37, 39, 41, 45, 49, 50, 67, 69, 72, 73, 74, 80, 87, 88`.
 
 Limits: a SET_DATA target with no smart AI (a C# AI, or EventAI) is skipped, as AC's base `CreatureAI::SetData` does nothing for it; ArcaneCore's `CreatureAI` has no SetData seam.
 
-**Not done: action 53 WP_START and event 40 ESCORT_REACHED.** They need an escort mover with a path id (waypoint paths are not tracked per creature, see the MOVEMENTINFORM limit above), which is a separate piece of work. Rows with them stay refused.
+**Not done: action 53 ESCORT_START (AzerothCore `SMART_ACTION_ESCORT_START`, SmartScriptMgr.h:595) and event 40 ESCORT_REACHED.** They need an escort mover with a path id (waypoint paths are not tracked per creature, see the MOVEMENTINFORM limit above), which is a separate piece of work. Rows with them stay refused.
 
 **Recount.** Same method as the followups below, rerun on 2026-11-05 against the AzerothCore `smart_scripts.sql` and the ClassicDB z2815 `creature_template` entry list. ClassicDB itself ships no `smart_scripts`, so these figures measure how much of the AzerothCore dump would run, not any content the live database has. It reproduces the earlier figures exactly (12,448 rows over 4,224 entries; 9,977 runnable rows; 3,225 fully runnable entries). With actions 45 and 72 added, **10,253 rows can run in full (82.4 % of 12,448; +276), and 3,288 entries are fully runnable (+63).** A row counts once however many of its parts are refused, which is why the gain is below the 229 + 137 rows those two actions had in the rejected-action groups.
 
 ## Still open (slice 3f and later)
 
-By the same count, the largest single blockers left are 40 ESCORT_REACHED (317 by the recount; needs action 53 ESCORT_START and an escort; still open after slice 4), 106 and 105
+By the same count, the largest single blockers left are 40 ESCORT_REACHED (317 by the recount; needs action 53 ESCORT_START and an escort; still open after slice 4), then target 10 (126 rows), action 134 (125), event 54 (118) and action 53 ESCORT_START (102), ahead of events 106 and 105
 (AzerothCore-only ids, 98 and 84). Events 38 DATA_SET, 52 TEXT_OVER and 34 MOVEMENTINFORM are open since slice 3f (SMART_ACTION_SET_DATA (45)
 is wired since slice 4, so DATA_SET is raised for smart creatures and game objects; MOVEMENTINFORM refuses a path id and a type above 19). Also open: the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending
 the area-trigger handler when a script ran.
