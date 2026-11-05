@@ -778,6 +778,7 @@ public static partial class ContentImporterCli
         imported[PoolDataModule.PoolPoolTable] = poolReport.PoolPools;
         imported["pet_levelstats"] = petReport.LevelStats;
         imported["petcreateinfo_spell"] = petReport.CreateSpells;
+        imported["pet_name_generation"] = petReport.NameParts;
         skipped["pet_levelstats_rows"] = petReport.SkippedRows;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
@@ -1229,6 +1230,7 @@ public static partial class ContentImporterCli
                 ("totem_spell", await db.Set<TotemSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                (PetNameGenerationWorldDataModule.Table, await db.Set<PetNameGenerationRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 (SpellEffectModDataModule.Table, await db.Set<SpellEffectModRow>().CountAsync(ct).ConfigureAwait(false)),
             };

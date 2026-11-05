@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Characters.Pets;
 
-/// <summary>Durable current hunter pet state, modelled after vmangos character_pet slot 0.</summary>
+/// <summary>Durable current pet state (a hunter pet or a warlock demon), modelled after vmangos character_pet slot 0.</summary>
 public sealed class PersistentPetRow
 {
     public int CharacterId { get; set; }
@@ -29,6 +29,15 @@ public sealed class PersistentPetRow
     public byte Loyalty { get; set; } = 1;
     public int LoyaltyPoints { get; set; } = 1000;
     public int TrainingPoints { get; set; }
+
+    /// <summary>The summoning spell of a saved warlock demon (0 for a hunter pet); characters schema 76.</summary>
+    public uint CreatedBySpell { get; set; }
+
+    /// <summary>The copper the last pet untraining cost (0 before the first); characters schema 76.</summary>
+    public uint ResetTalentsCost { get; set; }
+
+    /// <summary>Unix seconds of the last pet untraining (0 before the first); characters schema 76.</summary>
+    public long ResetTalentsTime { get; set; }
 }
 
 /// <summary>
@@ -56,6 +65,9 @@ public sealed class PersistentPetDataModule : IDataModule, ICharacterDataCleanup
             entity.Property(r => r.Loyalty).HasDefaultValue((byte)1);
             entity.Property(r => r.LoyaltyPoints).HasDefaultValue(1000);
             entity.Property(r => r.TrainingPoints).HasDefaultValue(0);
+            entity.Property(r => r.CreatedBySpell).HasDefaultValue(0u);
+            entity.Property(r => r.ResetTalentsCost).HasDefaultValue(0u);
+            entity.Property(r => r.ResetTalentsTime).HasDefaultValue(0L);
         });
     }
 
@@ -135,6 +147,9 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         row.Loyalty = snapshot.LoyaltyLevel;
         row.LoyaltyPoints = snapshot.LoyaltyPoints;
         row.TrainingPoints = snapshot.TrainingPoints;
+        row.CreatedBySpell = snapshot.CreatedBySpell;
+        row.ResetTalentsCost = snapshot.ResetTalentsCost;
+        row.ResetTalentsTime = snapshot.ResetTalentsTime;
         await db.Set<PersistentPetCooldownRow>().Where(r => r.CharacterId == snapshot.CharacterId)
             .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         if (snapshot.Cooldowns is { Count: > 0 })
@@ -192,5 +207,6 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
             JsonSerializer.Deserialize<uint[]>(row.ActionBarJson) ?? [],
             JsonSerializer.Deserialize<PersistentPetSpell[]>(row.SpellsJson) ?? [], row.IsCurrent,
             cooldowns.Select(c => new PersistentPetCooldown(c.Kind, c.SpellId, c.Category, c.EndsAtUnixMs)).ToArray(),
-            row.Name, row.NameTimestamp, row.RenameAllowed, row.Loyalty, row.LoyaltyPoints, row.TrainingPoints);
+            row.Name, row.NameTimestamp, row.RenameAllowed, row.Loyalty, row.LoyaltyPoints, row.TrainingPoints,
+            row.CreatedBySpell, row.ResetTalentsCost, row.ResetTalentsTime);
 }

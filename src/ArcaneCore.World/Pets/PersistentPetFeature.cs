@@ -126,7 +126,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             _ = ReloadAsync(world, player, pets);
             return;
         }
-        if (loaded.Snapshot is { } snapshot && player.Class == ArcaneCore.Game.Class.Hunter
+        if (loaded.Snapshot is { } snapshot && player.Class is ArcaneCore.Game.Class.Hunter or ArcaneCore.Game.Class.Warlock
             && player.PetGuid.IsEmpty && !player.IsQuestSettlementPending)
             pets.Service.RestoreCurrentPet(player, snapshot);
     }

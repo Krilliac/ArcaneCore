@@ -1,6 +1,11 @@
 namespace ArcaneCore.Kernel.Characters.Pets;
 
-/// <summary>Durable hunter-pet state. The pet number is the stable identity; a world GUID is transient.</summary>
+/// <summary>
+/// Durable current-pet state of a hunter pet or a warlock demon (a character has one or the other). The pet number is the stable identity; a world GUID is transient.
+/// <paramref name="CreatedBySpell"/> is the summoning spell of a demon (vmangos character_pet.created_by_spell, Pet.cpp:580), 0 for a hunter pet; 
+/// <paramref name="ResetTalentsCost"/> and <paramref name="ResetTalentsTime"/> are the last pet untraining price (copper) and unix seconds
+/// (vmangos reset_talents_cost and reset_talents_time, Pet.cpp:582-583).
+/// </summary>
 public sealed record PersistentPetSnapshot(
     int CharacterId,
     uint PetNumber,
@@ -20,7 +25,10 @@ public sealed record PersistentPetSnapshot(
     bool RenameAllowed = true,
     byte LoyaltyLevel = 1,
     int LoyaltyPoints = 1000,
-    int TrainingPoints = 0)
+    int TrainingPoints = 0,
+    uint CreatedBySpell = 0,
+    uint ResetTalentsCost = 0,
+    long ResetTalentsTime = 0)
 {
     public static PersistentPetSnapshot Empty(int characterId, uint petNumber, uint entry, byte level)
         => new(characterId, petNumber, entry, level, 0, 1, 0, 0, 1, [], []);

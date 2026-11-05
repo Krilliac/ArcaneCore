@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Diagnostics;
@@ -8,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Pets;
 
-/// <summary>Persistence and effect-109 bridge for hunter pets.</summary>
+/// <summary>Persistence and effect-109 bridge for hunter pets, and the save and login restore of a warlock's demon.</summary>
 public sealed partial class SummonService
 {
     // The store seams below are assigned once, while the world is wired (PersistentPetFeature.Attach), before any pet save, delete or
@@ -76,11 +77,22 @@ public sealed partial class SummonService
     private const int DeleteAttempts = 3;
     private static readonly TimeSpan DeleteRetryDelay = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>Capture only the current player controlled pet; guardians, critters and wild summons are excluded.</summary>
+    /// <summary>
+    /// Capture only the current player controlled pet: a hunter's pet or a warlock's permanent demon (vmangos Pet::IsPermanentPetFor,
+    /// <see cref="IsPermanentPetFor"/>; Pet::SavePetToDB saves both, Pet.cpp:520-600). Guardians, critters, wild summons and a warlock's other
+    /// summoned pets are excluded. World thread.
+    /// </summary>
     public PersistentPetSnapshot? CaptureCurrentPet(Player owner)
     {
-        if (owner.Class != Class.Hunter || owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: { } charm } } pet
+        if ((owner.Class != Class.Hunter && owner.Class != Class.Warlock)
+            || owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: { } charm } links } pet
             || pet.OwnerGuid != owner.Guid)
+        {
+            return null;
+        }
+
+        bool demon = owner.Class != Class.Hunter;
+        if (demon && !IsPermanentPetFor(owner, pet))
         {
             return null;
         }
@@ -97,12 +109,14 @@ public sealed partial class SummonService
                     cooldown.EndsAtUnixMs));
             }
         }
+        // A demon has no loyalty or training points (the defaults of the snapshot); it keeps the spell that summoned it (character_pet.created_by_spell).
         return new PersistentPetSnapshot((int)owner.Guid.Low, charm.PetNumber, pet.Entry, pet.Level, pet.GetUInt32(UpdateFields.UnitFieldPetexperience),
             pet.Health, pet.GetUInt32(UpdateFields.UnitFieldPower1), pet.GetUInt32(UpdateFields.UnitFieldPower5), (byte)charm.ReactState,
             charm.ActionBar.Select(button => button.Packed).ToArray(),
             charm.SpellStates.Select(s => new PersistentPetSpell(s.Key, s.Value == ActionType.Enabled, s.Value == ActionType.Passive)).ToArray(),
             Cooldowns: cooldowns, Name: charm.Name, NameTimestamp: charm.NameTimestamp, RenameAllowed: charm.RenameAllowed,
-            LoyaltyLevel: PetLoyalty.Level(pet), LoyaltyPoints: charm.LoyaltyPoints, TrainingPoints: charm.TrainingPoints);
+            LoyaltyLevel: demon ? (byte)1 : PetLoyalty.Level(pet), LoyaltyPoints: demon ? 1000 : charm.LoyaltyPoints, TrainingPoints: demon ? 0 : charm.TrainingPoints,
+            CreatedBySpell: demon ? links.SpellId : 0, ResetTalentsCost: charm.ResetTalentsCost, ResetTalentsTime: charm.ResetTalentsTime);
     }
 
     public async Task SaveCurrentPetAsync(Player owner, CancellationToken cancellationToken = default)
@@ -731,10 +745,10 @@ public sealed partial class SummonService
         }
     }
 
-    /// <summary>Load a cached current hunter pet after login. No static template is invented: the stored entry must exist.</summary>
+    /// <summary>Load a cached current hunter pet or warlock demon after login. No static template is invented: the stored entry must exist.</summary>
     public async Task<PersistentPetSnapshot?> ReadCurrentPetAsync(Player owner, CancellationToken cancellationToken = default)
     {
-        if (owner.Class != Class.Hunter)
+        if (owner.Class != Class.Hunter && owner.Class != Class.Warlock)
         {
             return null;
         }
@@ -793,6 +807,11 @@ public sealed partial class SummonService
 
     private Creature? RestoreCurrentPet(Player owner, PersistentPetSnapshot snapshot, bool current)
     {
+        if (owner.Class == Class.Warlock)
+        {
+            return RestoreCurrentDemon(owner, snapshot);
+        }
+
         if (owner.Class != Class.Hunter || !owner.PetGuid.IsEmpty || snapshot.CharacterId != (int)owner.Guid.Low
             || !snapshot.IsCurrent || snapshot.PetNumber == 0 || snapshot.Entry == 0)
         {
@@ -800,6 +819,47 @@ public sealed partial class SummonService
         }
 
         return snapshot.Health == 0 ? null : SpawnCached(owner, snapshot, revive: false, current);
+    }
+
+    /// <summary>
+    /// vmangos Pet::LoadPetFromDB for the warlock's saved demon at login (the current pet, Pet.cpp:130-420): the same pet number, entry, summoning spell,
+    /// saved name (a SUMMON_PET is only renamed when its saved <c>renamed</c> flag is 0, and SavePetToDB writes 1 for a pet without the PET_RENAME flag,
+    /// Pet.cpp:270 and :529), health, mana, experience, react state, spells, bar and cooldowns, at the owner's level and close point. A dead demon is not
+    /// brought back, the same rule as a dead hunter pet. Refuses when the owner has a pet, the snapshot is another character's or not current, or the
+    /// entry is not a demon template. World thread.
+    /// </summary>
+    private Creature? RestoreCurrentDemon(Player owner, PersistentPetSnapshot snapshot)
+    {
+        if (!owner.PetGuid.IsEmpty || snapshot.CharacterId != (int)owner.Guid.Low || !snapshot.IsCurrent || snapshot.PetNumber == 0
+            || snapshot.Entry == 0 || snapshot.Health == 0
+            || !TryGetSystems(owner, snapshot.CreatedBySpell, out _, out CreatureMapSystem? creatures)
+            || creatures.Content.FindTemplate(snapshot.Entry) is not { } template || template.CreatureType != CharmService.CreatureTypeDemon)
+        {
+            return null;
+        }
+
+        TemporarilyUnsummonedPet remembered = new(
+            snapshot.PetNumber, snapshot.Entry, snapshot.CreatedBySpell, null, snapshot.Health, snapshot.Mana,
+            (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2), snapshot.ActionBar,
+            [.. snapshot.Spells.Select(s => new KeyValuePair<uint, ActionType>(s.SpellId, s.Passive ? ActionType.Passive : s.Autocast ? ActionType.Enabled : ActionType.Disabled))],
+            snapshot.Name, snapshot.Experience);
+        Creature? pet = RestoreSummonedPet(owner, remembered);
+        if (pet is not null)
+        {
+            RestorePetCooldowns(pet, snapshot);
+        }
+
+        return pet;
+    }
+
+    private void RestorePetCooldowns(Creature pet, PersistentPetSnapshot snapshot)
+    {
+        if (_spells is { } restoreSpells && snapshot.Cooldowns is { Count: > 0 })
+        {
+            restoreSpells.RestoreCooldowns(pet, snapshot.Cooldowns.Select(c => new PersistedCooldown(
+                c.Kind == 0 ? SpellCooldownKind.Spell : SpellCooldownKind.Category,
+                c.Kind == 0 ? c.SpellId : c.Category, c.EndsAtUnixMs)), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        }
     }
 
     /// <summary>Effect 109: retained corpse first, otherwise the durable current pet; value is a percentage.</summary>
@@ -875,6 +935,9 @@ public sealed partial class SummonService
                 initCharm.Name = string.IsNullOrWhiteSpace(snapshot.Name) ? creature.Template.Name : snapshot.Name;
                 initCharm.NameTimestamp = snapshot.NameTimestamp;
                 initCharm.RenameAllowed = snapshot.RenameAllowed;
+                // Pet::LoadPetFromDB reads reset_talents_cost and reset_talents_time (Pet.cpp:132-160); the untraining price keeps climbing across a relog.
+                initCharm.ResetTalentsCost = snapshot.ResetTalentsCost;
+                initCharm.ResetTalentsTime = snapshot.ResetTalentsTime;
             }
             creature.UnitFlags |= UnitFlags.PetAbandon;
             if (snapshot.RenameAllowed)
@@ -950,12 +1013,7 @@ public sealed partial class SummonService
             // they are not in the snapshot, so they are derived again from the create spells, which skips what the owner already knows.
             InitTeachSpells(owner, pet, snapshot.Entry);
         }
-        if (_spells is { } restoreSpells && snapshot.Cooldowns is { Count: > 0 })
-        {
-            restoreSpells.RestoreCooldowns(pet, snapshot.Cooldowns.Select(c => new PersistedCooldown(
-                c.Kind == 0 ? SpellCooldownKind.Spell : SpellCooldownKind.Category,
-                c.Kind == 0 ? c.SpellId : c.Category, c.EndsAtUnixMs)), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        }
+        RestorePetCooldowns(pet, snapshot);
         for (int i = 0; i < Math.Min(snapshot.ActionBar.Count, CharmInfo.ActionBarSize); i++)
         {
             ActionButton button = new(snapshot.ActionBar[i]);

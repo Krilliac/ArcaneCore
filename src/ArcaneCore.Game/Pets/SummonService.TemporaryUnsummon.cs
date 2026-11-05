@@ -184,7 +184,7 @@ public sealed partial class SummonService
     /// vmangos Pet::IsPermanentPetFor (Pet.cpp:2192-2202) for a SUMMON_PET: a warlock's demon is permanent (a hunter pet always is, and writes its
     /// number on its own path); every other summoned pet is not. Pure; world thread.
     /// </summary>
-    private static bool IsPermanentPetFor(Player owner, Creature pet)
+    internal static bool IsPermanentPetFor(Player owner, Creature pet)
         => owner.Class == Class.Warlock && pet.Template.CreatureType == CharmService.CreatureTypeDemon;
 
     private sealed record TemporarilyUnsummonedPet(
