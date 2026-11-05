@@ -50,6 +50,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: true);
         session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
+        antiCheat?.JudgeAcknowledgedMovement(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement, MovementFlags.None);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);

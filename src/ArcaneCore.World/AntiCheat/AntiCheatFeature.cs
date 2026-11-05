@@ -145,6 +145,19 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     /// <summary>A client movement block of the player's own unit, before it is stored.</summary>
     public void BeforeMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement)
+        => Judge(session, player, opcode, movement, acknowledgement: false, MovementFlags.None);
+
+    /// <summary>
+    /// The movement block of an honoured solicited acknowledgement (speed, flag, root, knockback, turn rate), judged before it is stored
+    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating, HandleForceSpeedChangeAckOpcodes,
+    /// MovementHandler.cpp:489-494). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
+    /// so the block carrying it is not a forgery). A root order is not checked against the block: the client's own clock decides when it stops moving, so the
+    /// rooted-while-moving check applies to movement packets only.
+    /// </summary>
+    public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
+        => Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
+
+    private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
         if (IsExempt(session, player))
         {
@@ -161,8 +174,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             LatencyMs = session.LatencyMs,
             AllowedSpeed = AllowedSpeed(player),
             Alive = player.IsAlive,
-            Rooted = player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
-            GrantedFlags = GrantedFlags(player, state),
+            Rooted = !acknowledgement && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
+            GrantedFlags = GrantedFlags(player, state) | extraGrants,
             ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
             Transport = ClaimOf(player, movement),
             Terrain = _options.TerrainChecks && player.Map is { } map ? state.TerrainOf(map) : null,
