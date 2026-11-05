@@ -12,6 +12,9 @@ public sealed partial record SpellInfo
     /// <summary>vmangos SPELL_CUSTOM_POSITIVE (SpellDefines.h:1004).</summary>
     public const uint CustomPositive = 0x004;
 
+    /// <summary>vmangos SPELL_CUSTOM_IGNORE_ARMOR (SpellDefines.h:1007): physical spell damage skips armor mitigation (SpellCaster.cpp:1283).</summary>
+    public const uint CustomIgnoreArmor = 0x020;
+
     private const uint FamilyGeneric = 0;
     private const uint FamilyWarlock = 5;
     private const int WarlockHellfireBit = 6;

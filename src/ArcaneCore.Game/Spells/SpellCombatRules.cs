@@ -616,7 +616,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (damage == 0 || spell.School != SpellSchool.Normal)
+        if (damage == 0 || spell.School != SpellSchool.Normal || (spell.CustomFlags & SpellInfo.CustomIgnoreArmor) != 0)
         {
             return damage;
         }
@@ -634,7 +634,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (damage == 0 || spell.School != SpellSchool.Normal)
+        if (damage == 0 || spell.School != SpellSchool.Normal || (spell.CustomFlags & SpellInfo.CustomIgnoreArmor) != 0)
         {
             return ApplyArmor(caster, target, spell, damage);
         }

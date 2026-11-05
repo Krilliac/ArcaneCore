@@ -69,4 +69,20 @@ public sealed class SpellStoreFactoryItemFieldsTests
         Assert.All(spell.Reagents, r => Assert.False(r.IsPresent));
         Assert.Empty(spell.Totems);
     }
+
+    [Fact]
+    public void CastingTimeIndexOne_AllZeroRow_IsPresentAndTakesTheRangedSlotHalfSecond()
+    {
+        // vmangos SpellEntry.cpp:477-479 / :509-510: a missing row is instant with no surcharge, the all-zero row 1 still adds 500 ms.
+        var castTimes = new Dictionary<uint, SpellCastTimeRow> { [1] = new SpellCastTimeRow { Id = 1 } };
+        SpellInfo Build(uint index) => SpellStoreFactory.ToSpellInfo(
+            new SpellTemplateRow { Id = 2764, CastingTimeIndex = index, Attributes = (uint)(SpellAttributes.UsesRangedSlot | SpellAttributes.IsAbility) },
+            castTimes,
+            new Dictionary<uint, SpellDurationRow>(),
+            new Dictionary<uint, SpellRangeRow>(),
+            new Dictionary<uint, SpellRadiusRow>());
+
+        Assert.Equal(500, Build(1).GetCastTime(60));
+        Assert.Equal(0, Build(0).GetCastTime(60));
+    }
 }
