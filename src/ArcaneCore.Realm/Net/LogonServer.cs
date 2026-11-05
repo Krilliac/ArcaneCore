@@ -133,7 +133,7 @@ public sealed class LogonServer(
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("logon/patch-warm", ex);
+            FaultLedger.Shared.Record(LogonFaults.PatchWarmSite, ex);
             logger.LogWarning(ex, "Logon daemon could not pre-hash the client patches ({Type}); the first challenge for each will", ex.GetType().Name);
         }
     }

@@ -73,7 +73,7 @@ public sealed class PatchCatalog(Func<AutoPatchOptions> options)
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or RegexMatchTimeoutException)
             {
-                FaultLedger.Shared.Record("realm.patch-warm", ex);
+                FaultLedger.Shared.Record(LogonFaults.PatchWarmSite, ex);
             }
         }
 
@@ -91,7 +91,7 @@ public sealed class PatchCatalog(Func<AutoPatchOptions> options)
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                FaultLedger.Shared.Record("realm.patch-warm", ex);
+                FaultLedger.Shared.Record(LogonFaults.PatchWarmSite, ex);
             }
         }
 

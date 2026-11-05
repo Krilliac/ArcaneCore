@@ -10,10 +10,14 @@ using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Metrics;
+using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace ArcaneCore.Realm.Tests;
@@ -87,6 +91,142 @@ public sealed class AutoPatchTests : IDisposable
 
         options.Enabled = false;
         Assert.Equal(0, new PatchCatalog(() => options).Warm());
+    }
+
+    [Fact]
+    public async Task LogonServer_Start_WarmsThePatchCatalogOffTheAcceptLoop()
+    {
+        File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), [1, 2, 3]);
+        var options = new AutoPatchOptions { Enabled = true, Directory = _dir };
+        await using ServiceProvider provider = BuildLogonServices();
+        var server = new LogonServer(
+            provider.GetRequiredService<IServiceScopeFactory>(), Microsoft.Extensions.Options.Options.Create(ServerOptions(FreePort())),
+            NullLoggerFactory.Instance, NullLogger<LogonServer>.Instance, autoPatch: new FixedMonitor(() => options));
+
+        Assert.Equal(0, server.Patches.CachedHashes); // nothing is hashed before the daemon runs
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(() => server.Patches.CachedHashes == 1);
+            Assert.Equal(MD5.HashData(new byte[] { 1, 2, 3 }), server.Patches.Find(5464, "enUS")!.Md5);
+            Assert.Equal(1, server.Patches.CachedHashes); // the challenge-time lookup was a cache hit: the server warmed the same key
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LogonServer_FailedPatchWarm_RecordsTheSharedPatchWarmSite_AndTheDaemonKeepsListening()
+    {
+        const string message = "patch-warm-failure-probe-3f9c1d";
+        int port = FreePort();
+        await using ServiceProvider provider = BuildLogonServices();
+        var server = new LogonServer(
+            provider.GetRequiredService<IServiceScopeFactory>(), Microsoft.Extensions.Options.Options.Create(ServerOptions(port)),
+            NullLoggerFactory.Instance, NullLogger<LogonServer>.Instance,
+            autoPatch: new FixedMonitor(() => throw new InvalidOperationException(message)));
+
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            await WaitUntilAsync(() => FaultLedger.Shared.Snapshot().Any(f => f.Site == LogonFaults.PatchWarmSite && f.SampleMessage.Contains(message, StringComparison.Ordinal)));
+
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, port); // the failed warm did not take the listener down
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task LogonServer_HandOffToTheSession_LeavesTheAcceptLoop()
+    {
+        int port = FreePort();
+        await using ServiceProvider provider = BuildLogonServices();
+        using var release = new ManualResetEventSlim(false);
+        var scopes = new BlockingScopeFactory(provider.GetRequiredService<IServiceScopeFactory>(), release);
+        var server = new LogonServer(
+            scopes, Microsoft.Extensions.Options.Options.Create(ServerOptions(port)),
+            NullLoggerFactory.Instance, NullLogger<LogonServer>.Instance);
+
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            using var first = new TcpClient();
+            await first.ConnectAsync(IPAddress.Loopback, port);
+            await WaitUntilAsync(() => scopes.Entered >= 1); // session one is now parked inside CreateScope on a pool thread
+
+            // Had HandleClientAsync run inline on the accept loop (no Task.Yield hop), the loop would be stuck in that CreateScope and never admit this one.
+            using var second = new TcpClient();
+            await second.ConnectAsync(IPAddress.Loopback, port);
+            await WaitUntilAsync(() => scopes.Entered >= 2);
+            Assert.Equal(2, scopes.Entered);
+        }
+        finally
+        {
+            release.Set();
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static ServiceProvider BuildLogonServices()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IAccountStore>(new InMemoryAccountStore());
+        services.AddSingleton<IRealmStore>(new InMemoryRealmStore([]));
+        return services.BuildServiceProvider();
+    }
+
+    private static AuthOptions ServerOptions(int port) => new()
+    {
+        BindAddress = "127.0.0.1", Port = port, MaxConnections = 100, MaxConnectionsPerIp = 100, MaxSessionDurationSeconds = 0,
+    };
+
+    private static int FreePort()
+    {
+        var l = new TcpListener(IPAddress.Loopback, 0);
+        l.Start();
+        int port = ((IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        return port;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "condition not reached within 10 s");
+            await Task.Delay(20);
+        }
+    }
+
+    private sealed class FixedMonitor(Func<AutoPatchOptions> current) : IOptionsMonitor<AutoPatchOptions>
+    {
+        public AutoPatchOptions CurrentValue => current();
+
+        public AutoPatchOptions Get(string? name) => current();
+
+        public IDisposable? OnChange(Action<AutoPatchOptions, string?> listener) => null;
+    }
+
+    /// <summary>Counts CreateScope calls and parks the first caller until released; later callers pass through.</summary>
+    private sealed class BlockingScopeFactory(IServiceScopeFactory inner, ManualResetEventSlim release) : IServiceScopeFactory
+    {
+        private int _entered;
+
+        public int Entered => Volatile.Read(ref _entered);
+
+        public IServiceScope CreateScope()
+        {
+            if (Interlocked.Increment(ref _entered) == 1)
+                release.Wait(TimeSpan.FromSeconds(30));
+            return inner.CreateScope();
+        }
     }
 
     [Fact]
