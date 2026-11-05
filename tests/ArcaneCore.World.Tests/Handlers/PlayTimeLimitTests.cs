@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;

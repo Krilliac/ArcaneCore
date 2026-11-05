@@ -26,6 +26,8 @@ public sealed class ReputationCombatWorldTests
     private const uint GoblinEntry = 2587;
     private const uint GuardEntry = 68;
     private const uint GuardSpawnGuid = 7700;
+    private const uint GoblinSpawnGuid = 7701;
+    private const float GoblinX = -8944f;
 
     // Template 1 is the human player template; 11 is a Stormwind guard (faction 72) friendly to it.
     private static readonly FactionTemplateCatalog Templates = new(
@@ -35,7 +37,7 @@ public sealed class ReputationCombatWorldTests
         new FactionTemplateRecord(12, BootyBay, 0, OwnMask: 4, FriendlyMask: 0, HostileMask: 0), // a neutral Booty Bay goblin: faction 21 is reputation list 0
     ]);
 
-    private static WorldTestHost Start(bool factions, bool templates, out CreatureTestContext context)
+    private static WorldTestHost Start(bool factions, bool templates, out CreatureTestContext context, bool goblin = false)
     {
         var guard = new CreatureTemplate
         {
@@ -43,7 +45,16 @@ public sealed class ReputationCombatWorldTests
             CreatureType = 7, MinLevelHealth = 4000, MaxLevelHealth = 4000,
         };
         var spawn = new CreatureSpawn { Guid = GuardSpawnGuid, Entry = GuardEntry, MapId = 0, X = -8940f, Y = -132f, Z = 83.5f };
-        context = new CreatureTestContext(new CreatureContent([guard], [spawn], [], [], []));
+        // A civilian gets ReactorAI: it never aggroes on sight, so only the client's swing can start the fight. The health outlasts the first hits; the test lowers it for the kill.
+        var bootyBayGoblin = new CreatureTemplate
+        {
+            Entry = GoblinEntry, Name = "Booty Bay goblin", MinLevel = 1, MaxLevel = 1, DisplayIds = [3167], Faction = 12, Civilian = true,
+            CreatureType = 7, MinLevelHealth = 4000, MaxLevelHealth = 4000,
+        };
+        var goblinSpawn = new CreatureSpawn { Guid = GoblinSpawnGuid, Entry = GoblinEntry, MapId = 0, X = GoblinX, Y = -132f, Z = 83.5f };
+        context = new CreatureTestContext(goblin
+            ? new CreatureContent([bootyBayGoblin], [goblinSpawn], [], [], [])
+            : new CreatureContent([guard], [spawn], [], [], []));
         CreatureTestStore.Current.Value = context;
         if (factions)
         {
@@ -120,28 +131,34 @@ public sealed class ReputationCombatWorldTests
     [Fact]
     public async Task ACreatureEnteringCombat_PutsItsFactionAtWar_AndTheClientIsToldAtTheStartAndTheEndOfTheFight()
     {
-        // SMSG_SET_FACTION_ATWAR from the combat hooks the feature installed (vmangos Creature::OnEnterCombat, Creature.cpp:3678-3686; Player::SendFactionAtWar;
-        // the end of the fight is Unit::ClearInCombat -> Player::ClearTemporaryWarWithFactions, Player.cpp:22736-22750). The hook is called directly: starting a
-        // real aggro needs a reputation-hostile template, which this fixture does not define.
-        await using WorldTestHost host = Start(factions: true, templates: true, out _);
+        // SMSG_SET_FACTION_ATWAR end to end (vmangos Creature::OnEnterCombat, Creature.cpp:3678-3686; Player::SendFactionAtWar; the end of the fight is
+        // Unit::ClearInCombat -> Player::ClearTemporaryWarWithFactions, Player.cpp:22736-22750). The client's CMSG_ATTACKSWING starts it: the swing reaches
+        // CreatureAI.OnAttackedBy, which runs CreatureMapSystem.AttackStart and the hook the feature installed. The goblin's death ends it: the combat timer
+        // sees no threat holder left and runs MapCombat.ClearInCombat. Two steps are test setup on the world thread: the forced Hostile reaction (what a
+        // SPELL_AURA_FORCE_REACTION aura sets; without it the ladder refuses a swing at a Neutral faction not at war) and the low health for the kill.
+        // Written without a build or test run (lane rule); unproven until the integration gate.
+        await using WorldTestHost host = Start(factions: true, templates: true, out CreatureTestContext context, goblin: true);
         await using WorldTestClient client = await host.EnterWorldAsync("REPWAR", "Repwar");
-        await client.CollectAsync();
-
+        await host.PlaceAsync("Repwar", GoblinX - 0.8f, -132f, 83.5f); // inside the 1.4 yd where facing does not matter
+        ObjectGuid goblinGuid = ObjectGuid.WithEntry(HighGuid.Unit, GoblinEntry, GoblinSpawnGuid);
+        await host.WaitForWorldAsync(() => context.Feature!.FindSystem(0)?.FindCreature(goblinGuid) is not null, "the goblin spawns");
         await host.OnWorldAsync(() =>
         {
             Player player = host.World.FindOnlinePlayer("Repwar")!;
-            var template = new CreatureTemplate { Entry = GoblinEntry, Name = "Booty Bay goblin", Faction = 12, MinLevelHealth = 100, MaxLevelHealth = 100 };
-            var system = new CreatureMapSystem(player.Map!, new CreatureContent([template], [], [], [], []), random: new Random(1));
-            player.Map!.AddUpdater(system);
-            Creature goblin = system.SpawnTemporary(template, player.X + 1, player.Y, player.Z, 0);
-            var hooks = Assert.IsType<ReputationCombatHooks>(CombatHooks.For(host.World));
-            hooks.OnCreatureEnteredCombat(goblin, player);
+            ReputationService service = ((WorldSession)player.Session).Services.GetRequiredService<ReputationFeature>().Service;
+            Assert.True(service.ApplyForcedReaction(player, BootyBay, ReputationRank.Hostile, apply: true));
+            Assert.False(service.IsAtWar(player, BootyBay));
         });
+        await client.CollectAsync();
+
+        await client.SendAsync(WorldOpcode.CmsgAttackswing, BitConverter.GetBytes(goblinGuid.Value));
+        await client.ReadUntilAsync(WorldOpcode.SmsgAttackstart);
         Assert.Equal(ReputationPackets.SetFactionAtWar(0, atWar: true), await client.ReadUntilAsync(WorldOpcode.SmsgSetFactionAtwar));
         Assert.True(await host.PlayerStateAsync("Repwar", p => ((WorldSession)p.Session).Services.GetRequiredService<ReputationFeature>().Service.IsAtWar(p, BootyBay)));
 
-        await host.OnWorldAsync(() => MapCombat.ClearInCombat(host.World.FindOnlinePlayer("Repwar")!));
+        await host.OnWorldAsync(() => { context.Feature!.FindSystem(0)!.FindCreature(goblinGuid)!.Health = 1; });
         Assert.Equal(ReputationPackets.SetFactionAtWar(0, atWar: false), await client.ReadUntilAsync(WorldOpcode.SmsgSetFactionAtwar));
+        Assert.False(await host.OnWorldAsync(() => context.Feature!.FindSystem(0)!.FindCreature(goblinGuid)?.IsAlive == true));
         Assert.False(await host.PlayerStateAsync("Repwar", p => ((WorldSession)p.Session).Services.GetRequiredService<ReputationFeature>().Service.IsAtWar(p, BootyBay)));
     }
 

@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
