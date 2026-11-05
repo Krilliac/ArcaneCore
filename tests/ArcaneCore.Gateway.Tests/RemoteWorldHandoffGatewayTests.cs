@@ -551,7 +551,7 @@ public sealed class RemoteWorldHandoffGatewayTests
         public static async Task<Rig> StartAsync(CancellationToken token, Func<IWorldHandoffStore, IWorldHandoffStore>? wrap = null)
         {
             SyntheticArcaneServer a = await SyntheticArcaneServer.StartAsync(
-                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false) }, configureServices: null, token);
+                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false) }, configureServices: QuietSelfHeal, token);
             SyntheticArcaneServer? b = null;
             GatewayWorkerEndpoint? aEndpoint = null;
             GatewayWorkerEndpoint? bEndpoint = null;
@@ -559,7 +559,7 @@ public sealed class RemoteWorldHandoffGatewayTests
             try
             {
                 b = await SyntheticArcaneServer.StartAsync(
-                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true) }, configureServices: null, token);
+                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true) }, configureServices: QuietSelfHeal, token);
                 aEndpoint = a.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 bEndpoint = b.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 await aEndpoint.StartAsync(token);
@@ -682,6 +682,14 @@ public sealed class RemoteWorldHandoffGatewayTests
             // A retired source drops the writes of the characters that moved to the new owner (CharacterRetirementRegistry), so it stops cleanly: nothing is refused by the fence.
             Assert.Null(stopFailure);
         }
+
+        /// <summary>The worker's self-heal re-reads the journal every 2 s and retires its world once a handoff is committed; the crash tests of this rig assert the state the crashed coordinator left, and recovery (not a timer on the worker) is what must finish it. An hour keeps the self-heal wired but silent.</summary>
+        private static void QuietSelfHeal(IServiceCollection services)
+            => services.AddSingleton(sp =>
+            {
+                WorkerControlService control = sp.GetRequiredService<WorkerControlService>();
+                return new WorkerSelfHealService(control, control.Handoff, control.Transfers, TimeSpan.FromHours(1));
+            });
 
         private static Dictionary<string, string?> Worker(string nodeId, bool standby) => new()
         {
