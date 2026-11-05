@@ -44,6 +44,9 @@ public sealed class SilithystDataModule : IDataModule, ICharacterDataCleanup
 
 public sealed class EfSilithystStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : ISilithystStore
 {
+    /// <summary>Kalimdor, the map of the Silithus zone script (SilithusCatalog.MapId in the game layer, which the data layer cannot reference).</summary>
+    public const uint SilithusMapId = 1;
+
     public async Task<SilithystState?> LoadAsync(CancellationToken cancellationToken = default)
         => await db.Set<SilithystRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken) is { } row
             ? new SilithystState((uint)row.GatheredAlliance, (uint)row.GatheredHorde, (uint)row.MaxResources)
@@ -51,7 +54,11 @@ public sealed class EfSilithystStore(CharacterDbContext db, IRealmLeaseFenceSour
 
     public async Task SaveAsync(SilithystState state, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
+        // Durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10), except the Silithyst totals: only the owner of Kalimdor runs the Silithus zone script, so a
+        // worker that explicitly owns that map is the one writer of this row even when another node holds the lease (a split deployment loses every turn-in otherwise). A worker that owns every map is not
+        // treated as the owner here (an empty list is the Combined/default shape, and the lease still decides).
+        if (leaseFences is null || leaseFences.OwnedMaps.OwnsEverything || !leaseFences.OwnedMaps.Owns(SilithusMapId, 0))
+            LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState);
         SilithystRow? row = await db.Set<SilithystRow>().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken);
         if (row is null) db.Add(row = new SilithystRow { Id = 1 });
         row.GatheredAlliance = state.GatheredAlliance;

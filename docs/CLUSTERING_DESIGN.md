@@ -30,6 +30,9 @@ this document that names gRPC, a Login/Realm/CharServer chain, or separate socia
   worker. The Login/Realm/CharServer plan and the gRPC wording are retired; the transport is the custom TCP link.
 - **D3 Realm-wide state.** Guilds, groups, mail, auctions, friends, channels and battleground queues stay on the worker that holds
   the Social/Economy leases; other workers call it over the link. There is no dedicated social or economy process.
+  Decided 2026-11-05: the Social and Economy lease scopes get no run-time takeover for now. If their holder dies they stay ownerless until
+  that node restarts.
+  The Silithyst totals are the one world-state row written by the Kalimdor owner instead of the worldstate holder, since only that worker runs the Silithus zone script.
 - **D4 Transfers.** A player moves between processes only at far teleports and instance entry (the 1.12.1 client already shows a
   loading screen there: `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`); never mid-map.
 

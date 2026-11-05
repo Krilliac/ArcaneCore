@@ -4,6 +4,8 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Characters.Ownership;
@@ -20,7 +22,7 @@ public sealed class CharacterOwnershipRow
     /// <summary>Worker scopes only (characters schema 72): the comma-separated, ascending map ids the shard owns; null owns every map.</summary>
     public string? OwnedMaps { get; set; }
 
-    /// <summary>Worker scopes only (characters schema 72): unix milliseconds of the owner's last heartbeat; null before the first claim.</summary>
+    /// <summary>Retired by characters schema 75, which keeps the beat in <c>character_ownership_heartbeat</c>: nothing writes or reads this column any more.</summary>
     public long? HeartbeatAtMs { get; set; }
 }
 
@@ -256,15 +258,10 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             if (writeMaps)
             {
                 await db.Set<CharacterOwnershipRow>().Where(r => r.Scope == observed.Scope)
-                    .ExecuteUpdateAsync(setters => setters
-                        .SetProperty(r => r.OwnedMaps, storedMaps)
-                        .SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken).ConfigureAwait(false);
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.OwnedMaps, storedMaps), cancellationToken).ConfigureAwait(false);
             }
-            else
-            {
-                await db.Set<CharacterOwnershipRow>().Where(r => r.Scope == observed.Scope)
-                    .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken).ConfigureAwait(false);
-            }
+
+            await RecordHeartbeatAsync(db, observed.Scope, now, cancellationToken).ConfigureAwait(false);
         }
 
         CharacterOwnershipRow row = await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == observed.Scope, cancellationToken).ConfigureAwait(false);
@@ -304,8 +301,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
                 .SetProperty(r => r.OwnerIncarnation, incarnation)
                 .SetProperty(r => r.Epoch, r => r.Epoch + 1)
                 .SetProperty(r => r.WriteSequence, r => r.WriteSequence + 1)
-                .SetProperty(r => r.OwnedMaps, storedMaps)
-                .SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken)
+                .SetProperty(r => r.OwnedMaps, storedMaps), cancellationToken)
             .ConfigureAwait(false);
         if (changed == 0)
         {
@@ -313,6 +309,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             return null;
         }
 
+        await RecordHeartbeatAsync(db, observed.Scope, now, cancellationToken).ConfigureAwait(false);
         CharacterOwnershipRow row = await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == observed.Scope, cancellationToken).ConfigureAwait(false);
         await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Token(row);
@@ -334,7 +331,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == observed.Scope && r.Active && r.Epoch == observed.Epoch && r.Epoch < long.MaxValue
                 && r.WriteSequence < long.MaxValue && r.OwnerIncarnation == observed.Incarnation.ToString("D")
-                && r.HeartbeatAtMs != null && r.HeartbeatAtMs <= newestReapable)
+                && db.Set<CharacterOwnershipHeartbeatRow>().Any(h => h.Scope == r.Scope && h.HeartbeatAtMs <= newestReapable))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(r => r.OwnerNode, (string?)null)
                 .SetProperty(r => r.OwnerIncarnation, (string?)null)
@@ -356,11 +353,40 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         RequireWorkerScope(token.Scope);
         ValidateToken(token);
         using IDisposable exempt = CharacterWriteFence.Exempt();
-        int changed = await db.Set<CharacterOwnershipRow>()
-            .Where(r => r.Scope == token.Scope && r.Active && r.Epoch == token.Epoch && r.OwnerIncarnation == token.Incarnation.ToString("D"))
-            .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.HeartbeatAtMs, (long?)nowUnixMs), cancellationToken)
+        // A plain read of the fence row (no lock, no write: the beat must never contend with the FOR SHARE every fenced transaction takes on it), then an upsert of the shard's own heartbeat row.
+        // Not atomic: a shard reaped or reclaimed between the two keeps one stale beat, which the new owner's own beat overwrites; the next beat of the old owner reads the row and returns false.
+        string incarnation = token.Incarnation.ToString("D");
+        bool owns = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+            .AnyAsync(r => r.Scope == token.Scope && r.Active && r.Epoch == token.Epoch && r.OwnerIncarnation == incarnation, cancellationToken)
             .ConfigureAwait(false);
-        return changed > 0;
+        if (!owns)
+            return false;
+        await RecordHeartbeatAsync(db, token.Scope, nowUnixMs, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Upserts <paramref name="scope"/>'s heartbeat row (characters schema 75) as one statement, so concurrent first beats cannot lose a primary-key race and abort a PostgreSQL transaction.
+    /// Joins the caller's transaction when one is open. Touches nothing of the fence row.
+    /// </summary>
+    internal static async Task RecordHeartbeatAsync(CharacterDbContext db, string scope, long nowUnixMs, CancellationToken cancellationToken)
+    {
+        ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
+        string table = sql.DelimitIdentifier(CharacterOwnershipHeartbeatDataModule.Table);
+        string scopeColumn = sql.DelimitIdentifier("scope");
+        string beatColumn = sql.DelimitIdentifier("heartbeat_at_ms");
+        string conflict = db.Database.ProviderName switch
+        {
+            "Pomelo.EntityFrameworkCore.MySql" => $"ON DUPLICATE KEY UPDATE {beatColumn} = {{1}}",
+            "Npgsql.EntityFrameworkCore.PostgreSQL" or "Microsoft.EntityFrameworkCore.Sqlite" => $"ON CONFLICT ({scopeColumn}) DO UPDATE SET {beatColumn} = {{1}}",
+            _ => throw new NotSupportedException($"no ownership heartbeat upsert for provider {db.Database.ProviderName}"),
+        };
+        using IDisposable exempt = CharacterWriteFence.Exempt();
+        // The identifiers are provider-delimited constants of this module, never user input; scope and beat travel as parameters {0} and {1}.
+        string statement = $"INSERT INTO {table} ({scopeColumn}, {beatColumn}) VALUES ({{0}}, {{1}}) {conflict}";
+#pragma warning disable EF1002 // identifiers only (see above); values are parameters
+        await db.Database.ExecuteSqlRawAsync(statement, new object[] { scope, nowUnixMs }, cancellationToken).ConfigureAwait(false);
+#pragma warning restore EF1002
     }
 
     public async Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default)
@@ -430,8 +456,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
                 .SetProperty(r => r.Active, true)
                 .SetProperty(r => r.Epoch, r => r.Epoch + 1)
                 .SetProperty(r => r.WriteSequence, r => r.WriteSequence + 1)
-                .SetProperty(r => r.OwnedMaps, storedMaps)
-                .SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken)
+                .SetProperty(r => r.OwnedMaps, storedMaps), cancellationToken)
             .ConfigureAwait(false);
         if (changed == 0)
         {
@@ -439,6 +464,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             return null;
         }
 
+        await RecordHeartbeatAsync(db, scope, now, cancellationToken).ConfigureAwait(false);
         CharacterOwnershipRow row = await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == scope, cancellationToken).ConfigureAwait(false);
         await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
         return Token(row);

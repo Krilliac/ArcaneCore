@@ -48,11 +48,13 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();
 
-    private sealed class Source(Func<string, RealmLeaseFence?> fence, Func<string, bool> holds) : IRealmLeaseFenceSource
+    private sealed class Source(Func<string, RealmLeaseFence?> fence, Func<string, bool> holds, OwnedMapSet? ownedMaps = null) : IRealmLeaseFenceSource
     {
         public RealmLeaseFence? FenceFor(string scope) => fence(scope);
 
         public bool Holds(string scope) => holds(scope);
+
+        public OwnedMapSet OwnedMaps => ownedMaps ?? OwnedMapSet.All;
     }
 
     private sealed record Rig(
@@ -333,6 +335,32 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
             await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
             Assert.False(await site.Done(check), $"{site.Name}: a node that does not hold the lease must not write");
         }
+    }
+
+    /// <summary>
+    /// Silithyst is written by the explicit owner of Kalimdor even when another node holds the worldstate lease (split deployment: Kalimdor owns Silithus, the other continent holds the lease);
+    /// a non-holder that does not own map 1, or that owns every map, is still refused.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Silithyst_IsWrittenByTheKalimdorOwner_NotByAnotherNonHolder(DatabaseProvider provider)
+    {
+        Rig rig = await CreateAsync(provider);
+        var kalimdor = new Source(_ => null, _ => false, new OwnedMapSet([(1u, 1u)], allowInstanceMaps: false));
+        var otherContinent = new Source(_ => null, _ => false, new OwnedMapSet([(0u, 0u)], allowInstanceMaps: false));
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+            await Assert.ThrowsAsync<RealmLeaseNotHeldException>(() => new EfSilithystStore(db, otherContinent).SaveAsync(new SilithystState(1, 2, 3)));
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+            await Assert.ThrowsAsync<RealmLeaseNotHeldException>(() => new EfSilithystStore(db, rig.NonHolder).SaveAsync(new SilithystState(1, 2, 3)));
+        await using (CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection))
+            Assert.False(await check.Set<SilithystRow>().AnyAsync(r => r.Id == 1));
+
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+            await new EfSilithystStore(db, kalimdor).SaveAsync(new SilithystState(4, 5, 6));
+        await using CharacterDbContext saved = TestContexts.Create<CharacterDbContext>(rig.Connection);
+        SilithystRow row = await saved.Set<SilithystRow>().AsNoTracking().SingleAsync(r => r.Id == 1);
+        Assert.Equal((4L, 5L, 6L), (row.GatheredAlliance, row.GatheredHorde, row.MaxResources));
     }
 
     [Theory]
