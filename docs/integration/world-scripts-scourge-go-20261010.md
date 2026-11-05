@@ -52,13 +52,33 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   also calls `JustSpawned` at grid load, which depends on load order; the heads are dormant spawns (-21600 s) respawned by the
   quest-end dbscript command 9 (7491 -> guid 40134, 7496 -> 40135, 7782 -> 40151, 7784 -> 40150). ArcaneCore fires on the respawn
   transition only and does not fire for a head that is merely loaded dormant.
-- **Coffer `dbscripts_on_go_template_use` 122088 (command 40, despawn self) does not run, and that is not caused by the creature use.**
-  z2815 has a `dbscripts_on_go_template_use` row for 122088 (command 40). ArcaneCore has no importer, table or runner for
-  `dbscripts_on_go_template_use`: no source file under `src/` references it (the ContentImporter and `DbScriptDataModule` handle
-  relay, gossip, quest, spell and creature scripts only), and `GameObjectMapSystem.UseByUnit` / the player use path never start a
-  go-template-use script for any user. So the coffer toggles and fires its trap on creature use, and is not despawned by the row,
-  exactly as for a player. Closing this needs a go_template_use script type in the DB-script system (a schema/importer change, out of
-  this lane's no-schema policy).
+- **Coffer `dbscripts_on_go_template_use` 122088 (command 40, despawn self) now runs.** It did not when this lane landed: ArcaneCore had no
+  importer, table or runner for `dbscripts_on_go_template_use` or `dbscripts_on_go_use`. World schema 70 (`DbGameObjectScriptDataModule`)
+  adds both tables, the content importer reads them from the classic-db dump, and `GameObjectMapSystem` starts them as mangos-classic
+  `GameObject::Use` does (GameObject.cpp:1490 template script for every type; :1506, :1529, :1703 the guid script of a door, button and
+  goober), with the user as source and the object as target, on the map's DB script executor. The coffer therefore toggles, fires its trap
+  and then runs command 40 on use by a creature, as for a player.
+  Both scripts start on every use that reaches GameObject::Use, with no uniqueness check: GameObject::Use passes no execution parameter, so
+  ScriptsStart defaults to SCRIPT_EXEC_PARAM_NONE (Map.h:233-240, Map.cpp:2181).
+  A click does not reach it on an object in use: HandleGameObjectUseOpcode returns for GO_FLAG_IN_USE (SpellHandler.cpp:295-296), which a door
+  or button holds until it resets (for good if it has no auto-close time) and a goober until GameObject::Update clears it after its auto-close
+  time (GameObject.cpp:549-552, 1385-1388, 1650). The goober's flag and its data6 cooldown come before its quest gate (GameObject.cpp:1485,
+  1650-1651, 1691-1693), so a click by a player without the quest runs the template script once and also holds the goober until its auto-close
+  time; `UseGoober` follows that order. vmangos breaks out at that gate before the flag, but it has no template script. As in the reference, a
+  consumable goober despawns after such a click. `UseCore` refuses the same way, before any script, hook or aura break. So a second run while
+  a delayed step (Keystone 28 s, Shadowforge Lock 20 s, Sacred Fire 5 s) is pending needs the object to be usable again first, or a use through
+  the open-lock spell or `UseByUnit`, which skip the opcode and have no such refusal. A click on a generic object starts nothing either
+  (SpellHandler.cpp:289-293). Nor does a click on a trap, which is an ArcaneCore difference: the reference click runs the template script
+  and then the trap case (GameObject.cpp:1576-1599), whose charge and cooldown bound the repeats, but `UseCore` has no trap use and answers
+  NotUsable, so a script started there would spend nothing and every crafted repeat click would queue another run.
+  A goober or trap on cooldown refuses the use before the template script starts (GameObject.cpp:1482; GetCooldown covers TRAP and GOOBER,
+  GameObject.h:458-466). ArcaneCore also holds back the template script for a goober that `UseGoober` or `UseGooberByUnit` would refuse as not
+  ready on the spell and script paths, which GameObject::Use does not do. A door or button
+  whose instance script took the use skips the guid script (GameObject.cpp:1505, :1528; asked for a player user on the script-use path too). Known gap: a click on a trap (above) and a linked or
+  scripted trap trigger, which calls `UseTrap` directly, start no template script, where the reference goes through `GameObject::Use` and
+  starts it. Only `UseByUnit` (ACTIVATE_OBJECT, `UseTrapFor`) does. The only type 6 row is 179804 (Drakonid Bones), whose event
+  BlackwingLairInstance already raises in C#, so it is left alone to avoid a double summon.
+  The Brazier of the Herald (guid 2890009) is ported in C# by ScholomanceInstance, which takes that use, so its row does not run too.
 
 ## Tests
 

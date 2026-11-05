@@ -700,6 +700,14 @@ public sealed class CreatureAiServices
     /// <summary>Aura stacks and casting state of any unit (EventAI aura and target-casting events); null: no auras, nobody casting.</summary>
     public IUnitSpellQueries? UnitSpells { get; init; }
 
+    /// <summary>
+    /// Queue a player for a meeting stone area (vmangos LFGMgr::AddToQueue; the DB script command MEETINGSTONE, 200); null: no queue, the command
+    /// is reported and skipped. The delegate answers true when the player was queued and false when there is no queue (no meeting stone feature,
+    /// or its queue is off), which is reported and skipped the same way. Bound by the world from the meeting stone feature, resolved when the
+    /// command runs.
+    /// </summary>
+    public Func<Player, uint, bool>? JoinMeetingStone { get; init; }
+
     /// <summary>The towns' guard posts (vmangos GuardMgr), shared by every map system built with these services.</summary>
     public GuardPostTable GuardPosts { get; init; } = new();
 

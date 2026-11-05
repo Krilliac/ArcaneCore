@@ -657,7 +657,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// alive. Then by type: doors and buttons toggle (auto-closing after data2 ms); chests check
     /// their lock and quest gate and open their loot; goobers check their quest, give quest
     /// credit, show page text / custom animation; text objects show their page; quest givers go to
-    /// <see cref="QuestGiver"/>; mailboxes answer Ok (the mail area opens the UI).
+    /// <see cref="QuestGiver"/>; mailboxes answer Ok (the mail area opens the UI). An object already in use is refused before any of
+    /// that (mangos-classic SpellHandler.cpp:295-296). <see cref="OpenLock"/> and <see cref="UseByUnit"/> reach GameObject::Use without
+    /// going through this opcode, so they do not have that refusal.
     /// </summary>
     public GameObjectUseResult Use(Player player, ObjectGuid guid)
     {
@@ -679,6 +681,15 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (DirectUseRefused?.Invoke(player, go) == true)
         {
             return GameObjectUseResult.Locked;
+        }
+
+        // HandleGameObjectUseOpcode (mangos-classic SpellHandler.cpp:295-296) returns for a GO_FLAG_IN_USE object before GameObject::Use, so a
+        // repeated or crafted click on a door, button or goober still in use reaches no script, hook, aura break or dismount. For those types
+        // that flag, not script uniqueness (the use scripts have none), stops a repeat click from starting another run. A goober takes the flag
+        // on any use that passes its cooldown, also one that then fails its quest gate (UseGoober), and keeps it until its auto-close time.
+        if ((go.Flags & GameObjectFlags.InUse) != 0)
+        {
+            return GameObjectUseResult.InUse;
         }
 
         // HandleGameObjectUseOpcode (SpellHandler.cpp:241-258) strips AURA_INTERRUPT_LOOTING_CANCELS before GameObject::Use, once the
@@ -711,12 +722,22 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // cmangos GameObject::Use runs the ScriptDev2 GOUse script after the mount check; a locked object reaches it only once its lock
         // is open (the direct-use lock here, the open-lock spell in OpenLock).
-        bool scriptTookUse = CheckDirectLock(player, go) == GameObjectUseResult.Ok && InstanceScriptTookUse(player, go);
+        bool lockOpen = CheckDirectLock(player, go) == GameObjectUseResult.Ok;
+        bool scriptTookUse = lockOpen && InstanceScriptTookUse(player, go);
+        if (lockOpen && !scriptTookUse && go.Type is not (GameObjectType.Generic or GameObjectType.Trap))
+        {
+            // dbscripts_on_go_template_use (GameObject.cpp:1489-1490): skipped when the ScriptDev2 hook took the use. The opcode never hands a
+            // generic object to GameObject::Use (SpellHandler.cpp:289-293), so a click on one starts nothing. A click on a trap starts nothing
+            // because this path has no trap use (NotUsable below): the reference click goes on to the trap case (GameObject.cpp:1576-1599),
+            // whose charge and cooldown bound the repeats, while here no charge, cooldown or in-use state would stop a crafted repeat click
+            // from queueing another run. Traps run the script through UseByUnit, which does use them up.
+            StartTemplateUseScript(player, go);
+        }
 
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
         result = _useHandlers.TryGetValue(go.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
         {
-            GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go),
+            GameObjectType.Door or GameObjectType.Button => UseDoorOrButton(player, go, scriptTookUse),
             GameObjectType.Chest => UseChest(player, go),
             GameObjectType.Goober => UseGoober(player, go, scriptTookUse: scriptTookUse),
             GameObjectType.Text => UseText(player, go),
@@ -849,13 +870,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // GameObject::Use, reached through Spell::SendLoot, runs the ScriptDev2 GOUse script of the opened object.
         bool scriptTookUse = (go.Type is GameObjectType.Chest or GameObjectType.Door or GameObjectType.Button or GameObjectType.SpellFocus
             or GameObjectType.Goober) && InstanceScriptTookUse(player, go);
+        if (!scriptTookUse)
+        {
+            StartTemplateUseScript(player, go); // GameObject::Use, reached through Spell::SendLoot (GameObject.cpp:1489-1490)
+        }
 
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
             // Spell::SendLoot hands the chest to GameObject::Use too, so a key or lockpick opening starts the chest event as the click does.
             GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go, onChestOpened) : GameObjectUseResult.NeedsQuest,
-            GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
+            GameObjectType.Door or GameObjectType.Button => ActivateDoorAndStartScript(player, go, scriptTookUse),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
             _ => GameObjectUseResult.NotUsable,
@@ -1079,7 +1104,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>The display id of the Scarlet Monastery lever buttons, the only ones that need line of sight (GameObject.cpp:1441-1446).</summary>
     private const uint LeverDisplayId = 295;
 
-    private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
+    /// <param name="scriptTookUse">The ScriptDev2 GOUse hook took the use: <c>dbscripts_on_go_use</c> is skipped (GameObject.cpp:1505, :1528).</param>
+    private GameObjectUseResult UseDoorOrButton(Player player, GameObject go, bool scriptTookUse)
     {
         // GameObject::Use, button (GameObject.cpp:1441-1446): the levers inside the cathedral and armory entrances need line of sight.
         if (go.Type == GameObjectType.Button && go.Template.DisplayId == LeverDisplayId && !player.IsWithinLineOfSight(go))
@@ -1097,6 +1123,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (go.Type == GameObjectType.Button)
         {
             TriggerLinkedTrap(go, player); // GameObject::Use, button (GameObject.cpp:1441-1455)
+        }
+
+        // dbscripts_on_go_use of a door or button (GameObject.cpp:1506, :1529): started whatever the toggle answered, unless the ScriptDev2
+        // hook took the use (scriptReturnValue, asked in UseCore). UseCore has already refused an object in use, so here the toggle only
+        // refuses one that is not ready without carrying GO_FLAG_IN_USE.
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(player, go);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// A door or button opened by a spell (Spell::SendLoot hands it to GameObject::Use): the toggle, then <c>dbscripts_on_go_use</c> unless the
+    /// ScriptDev2 hook took the use (<paramref name="scriptTookUse"/>).
+    /// </summary>
+    private GameObjectUseResult ActivateDoorAndStartScript(Unit user, GameObject go, bool scriptTookUse)
+    {
+        GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(user, go);
         }
 
         return result;
@@ -1416,40 +1464,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.OnCooldown;
         }
 
-        // An object still in use (activated until its auto-close time) refuses the use before anything else, so a repeated or crafted
-        // CMSG_GAMEOBJ_USE in that window neither shows the page again nor re-fires the goober event. The client offers no use of a
-        // GO_FLAG_IN_USE object and cmangos has no server-side refusal; ArcaneCore's InUse check stands for it, as the chest path does.
+        // A click never gets here on an object in use: UseCore refuses it as the opcode does (SpellHandler.cpp:295-296). This gate is for the
+        // paths that skip the opcode, the open-lock spell and UseByUnit. It is ArcaneCore's own: GameObject::Use has no in-use check (the spell
+        // path has the cast check at Spell.cpp:5563 instead, GatheringSpells here), so a use there neither shows the page again nor re-fires
+        // the goober event while the object waits for its auto-close time.
         uint autoCloseSeconds = go.Template.AutoCloseSeconds();
         if (autoCloseSeconds > 0 && go.LootState != GameObjectLootState.Ready)
         {
             return GameObjectUseResult.InUse;
         }
 
-        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
-        ShowGooberPageOrGossip(player, go);
-        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1688): goober.eventId (data2) starts before the
-        // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
-        StartDbEvent(go.Template.GetData(2), player, go);
-        int questId = GooberQuestId(go);
-        if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
-        {
-            return GameObjectUseResult.NeedsQuest;
-        }
-
-        RewardGroupAtUse(player, go);
-        TriggerLinkedTrap(go, player); // GameObject.cpp:1593
-
-        if (go.Template.GetData(6) is var cooldown and not 0)
-        {
-            go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
-        }
-
-        go.UseCount++;
-
-        // GameObject::Use, goober (GameObject.cpp:1593-1606): in use and activated; an object with a custom animation (the display
-        // list, or goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active
-        // state. The auto-close time (data3, whole seconds) runs out in GameObject::Update (:578-585): the object is deactivated
-        // then, and a consumable one (data5) or one that may despawn goes away (ActivationExpired, Despawn).
+        // mangos-classic GameObject::Use: the cooldown is set at GameObject.cpp:1485, and in use and activated at :1650-1659, all before the
+        // questId gate at :1691-1693. A click by a player without the quest therefore puts the goober in use too, and the opcode's in-use
+        // return (SpellHandler.cpp:295-296) refuses repeats until the auto-close time. vmangos breaks out at that gate before the flag, but
+        // it has no template script, which here runs before this method. An object with a custom animation (the display list, or
+        // goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active state. The auto-close
+        // time (data3, whole seconds) runs out in GameObject::Update (:549-555): the object is deactivated then, and a consumable one (data5)
+        // or one that may despawn goes away (ActivationExpired, Despawn).
+        StartGooberCooldown(go);
         go.Flags |= GameObjectFlags.InUse;
         go.LootState = GameObjectLootState.Activated;
         if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)) || (autoCloseSeconds > 0 && go.Template.GetData(4) != 0))
@@ -1462,12 +1494,42 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
+
+        // The page text or gossip comes next; only a positive questId gates the rest.
+        ShowGooberPageOrGossip(player, go);
+        // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1688): goober.eventId (data2) starts before the
+        // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
+        StartDbEvent(go.Template.GetData(2), player, go);
+        int questId = GooberQuestId(go);
+        if (questId > 0 && Quests?.IsQuestIncomplete(player, (uint)questId) != true)
+        {
+            return GameObjectUseResult.NeedsQuest;
+        }
+
+        RewardGroupAtUse(player, go);
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(player, go); // dbscripts_on_go_use (GameObject.cpp:1701-1705): after the quest gate, before the spell
+        }
+
+        TriggerLinkedTrap(go, player); // vmangos GameObject.cpp:1593
+
+        go.UseCount++;
         if (!scriptTookUse)
         {
             CastGooberSpell(player, go);
         }
 
         return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>GameObject::Use (GameObject.cpp:1482-1486): a goober with a cooldown (data6, seconds; GetCooldown, GameObject.h:458-466) starts it on any use that gets past it.</summary>
+    private void StartGooberCooldown(GameObject go)
+    {
+        if (go.Template.GetData(6) is var cooldown and not 0)
+        {
+            go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
+        }
     }
 
     /// <summary>
@@ -1942,7 +2004,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
         if (!pending && TryRestorePersistedRespawn(spawn, out long restoredAt))
         {
-            // A restart (or an instance map recreated while its save lives on) keeps a looted chest or a mined node despawned for what is left of its time.
+            // A restart (or an instance map recreated while its save lives on) keeps a despawned spawn despawned for what is left of its time. Only
+            // a spawn with a positive spawn time that is in no pool and no spawn group qualifies (TryRestorePersistedRespawn), so a looted chest or a
+            // mined node stays gone only when it is such a standalone spawn: the pool members, which most gathering nodes and chests are, do not.
             pending = true;
             respawnAt = restoredAt;
         }
