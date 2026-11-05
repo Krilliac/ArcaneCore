@@ -1,22 +1,14 @@
-using System.Data.Common;
-using ArcaneCore.Data.Characters;
-using ArcaneCore.Data.Content;
-using ArcaneCore.Data.Schema;
-using ArcaneCore.Kernel.Characters;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// Share 6 of 8 of the interrupted-upgrade-step theory (every 8th row of <see cref="SchemaStartupResilienceTestBase.UpgradeSteps"/>): a fault at each DDL statement of an upgrade step, then a restart that must converge.
-/// Split from the former <c>SchemaStartupResilienceTests</c> so the rows run in parallel; the body is <see cref="SchemaStartupResilienceTestBase"/>'s.
+/// Share 6 of 16 of the interrupted-upgrade-step theory (every 16th row of each provider's block of <see cref="SchemaStartupResilienceTestBase.UpgradeSteps"/>, so every share carries the same mix of providers): a fault at each DDL statement of an upgrade step, then a restart that must converge.
+/// Split from the former <c>SchemaStartupResilienceTests</c> so the rows run in parallel and each class stays under the gate's class budget; the body is <see cref="SchemaStartupResilienceTestBase"/>'s.
 /// </summary>
 public sealed class SchemaStartupResilienceUpgradeSlice6Tests : SchemaStartupResilienceTestBase
 {
-    public static IEnumerable<object[]> Rows() => UpgradeStepsSlice(5, 8);
+    public static IEnumerable<object[]> Rows() => UpgradeStepsSlice(5, UpgradeSliceCount);
 
     [Theory]
     [MemberData(nameof(Rows))]

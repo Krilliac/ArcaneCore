@@ -126,13 +126,72 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
         await _databases.ReleaseAsync(probe);
     }
 
-    /// <summary>Every <paramref name="slices"/>-th row of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/>: the slices together cover each row exactly once.</summary>
-    public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices) => UpgradeSteps().Where((_, index) => index % slices == slice);
+    /// <summary>How many classes share the interrupted-upgrade-step theory (<c>SchemaStartupResilienceUpgradeSlice*Tests</c>).</summary>
+    internal const int UpgradeSliceCount = 16;
 
-    public static IEnumerable<object[]> ProviderComponentsSlice(int slice, int slices) => ProviderComponents().Where((_, index) => index % slices == slice);
+    /// <summary>How many classes share the interrupted-fresh-create theory (<c>SchemaStartupResilienceTests</c> and <c>SchemaStartupResilienceFreshCreateShare*Tests</c>).</summary>
+    internal const int FreshCreateClassCount = 6;
 
-    /// <summary>The body of the interrupted-fresh-create theory; the two share classes each run half of <see cref="ProviderComponents"/> through it, so the rows run in parallel.</summary>
-    private protected async Task RunInterruptedFreshCreateAsync(DatabaseProvider provider, string component)
+    /// <summary>
+    /// How many test cases one world fresh create is cut into. A fresh create of the world component issues one DDL statement per table and
+    /// the theory replays the whole create once per injected fault, so its cost grows with the square of the table count: as a single case it ran
+    /// 32 minutes on MariaDB. Each shard owns every <c>FaultShards</c>-th fault, so the faults still all run, in cases that the classes spread.
+    /// </summary>
+    internal const int WorldFaultShards = 12;
+
+    /// <summary>
+    /// Every <paramref name="slices"/>-th row of each provider's block of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/> of the block: the slices together
+    /// cover each row exactly once, and every slice carries the same mix of providers (a MariaDB row costs far more than a SQLite one, so slicing the whole list by position left whole shares on one engine).
+    /// </summary>
+    public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices)
+    {
+        object? provider = null;
+        int within = 0;
+        foreach (object[] row in UpgradeSteps())
+        {
+            if (!Equals(row[0], provider))
+            {
+                provider = row[0];
+                within = 0;
+            }
+
+            if (within++ % slices == slice)
+            {
+                yield return row;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every (provider, component, shard, shards) case of the interrupted-fresh-create theory: the world component is cut into <see cref="WorldFaultShards"/> shards, the others are one case.
+    /// A world case is never empty (see <see cref="RunInterruptedFreshCreateAsync"/>), and a SQLite world is sharded too, so every class gets a row even when only SQLite is configured.
+    /// </summary>
+    public static IEnumerable<object[]> FreshCreateCases()
+    {
+        foreach (object[] pc in ProviderComponents())
+        {
+            int shards = (string)pc[1] == "world" ? WorldFaultShards : 1;
+            for (int shard = 0; shard < shards; shard++)
+            {
+                yield return [pc[0], pc[1], shard, shards];
+            }
+        }
+    }
+
+    /// <summary>Every <paramref name="slices"/>-th row of <see cref="FreshCreateCases"/>, starting at row <paramref name="slice"/>: the slices together cover each row exactly once.</summary>
+    public static IEnumerable<object[]> FreshCreateSlice(int slice, int slices) => FreshCreateCases().Where((_, index) => index % slices == slice);
+
+    /// <summary>The faults shard <paramref name="shard"/> of <paramref name="shards"/> runs: every <paramref name="shards"/>-th one starting at <paramref name="shard"/>. The shards together hold each fault exactly once.</summary>
+    internal static List<T> FaultShard<T>(IReadOnlyList<T> faults, int shard, int shards)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(shards, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(shard);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(shard, shards);
+        return faults.Where((_, index) => index % shards == shard).ToList();
+    }
+
+    /// <summary>The body of the interrupted-fresh-create theory; the share classes each run a share of <see cref="FreshCreateCases"/> through it, so the rows run in parallel. Runs shard <paramref name="shard"/> of <paramref name="shards"/> of the faults.</summary>
+    private protected async Task RunInterruptedFreshCreateAsync(DatabaseProvider provider, string component, int shard, int shards)
     {
         var counter = new CommandTap();
         await SchemaProbe.EnsureCurrentAsync(component, await _databases.CreateAsync(provider), counter);
@@ -151,7 +210,9 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
 
         faults.Add(("before the version write", isVersionInsert, 1, true));
 
-        await RunFaultsAsync(faults, FaultParallelism, async fault =>
+        // A shard with nothing to run would pass without testing anything: the shard count must not exceed the fault count.
+        Assert.True(faults.Count >= shards, $"{provider} {component}: {faults.Count} faults cannot fill {shards} shards");
+        await RunFaultsAsync(FaultShard(faults, shard, shards), FaultParallelism, async fault =>
         {
             (string label, Func<string, bool> when, int on, bool before) = fault;
             DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);

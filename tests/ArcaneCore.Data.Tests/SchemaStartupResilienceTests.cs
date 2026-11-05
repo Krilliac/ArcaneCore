@@ -11,18 +11,18 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// Startup-resilience cases for a fresh create (a fault after each DDL statement of a first start, then a restart that must converge; the other half of the rows is in <see cref="SchemaStartupResilienceFreshCreateShare2Tests"/>). The databases that already exist
+/// Startup-resilience cases for a fresh create (a fault after each DDL statement of a first start, then a restart that must converge; share 1 of 6; the others are <c>SchemaStartupResilienceFreshCreateShare2Tests</c> to <c>Share6Tests</c>). The databases that already exist
 /// (empty, historic create) and the repeated, concurrent and rolled-back starts are in <see cref="SchemaStartupResilienceExistingDatabaseTests"/> and <see cref="SchemaStartupResilienceRestartTests"/>;
-/// the interrupted-upgrade-step theory, the slow one, runs in the <c>SchemaStartupResilienceUpgradeSlice*Tests</c> classes. Split from the former single class so each stays under the gate's class budget;
+/// the interrupted-upgrade-step theory runs in the 16 <c>SchemaStartupResilienceUpgradeSlice*Tests</c> classes. Split from the former single class so each stays under the gate's class budget;
 /// the setup and helpers are in <see cref="SchemaStartupResilienceTestBase"/>.
 /// </summary>
 public sealed class SchemaStartupResilienceTests : SchemaStartupResilienceTestBase
 {
-    public static IEnumerable<object[]> FreshCreateRows() => ProviderComponentsSlice(0, 2);
+    public static IEnumerable<object[]> FreshCreateRows() => FreshCreateSlice(0, FreshCreateClassCount);
 
     [Theory]
     [MemberData(nameof(FreshCreateRows))]
-    public Task InterruptedFreshCreate_ResumesOnRestart(DatabaseProvider provider, string component) => RunInterruptedFreshCreateAsync(provider, component);
+    public Task InterruptedFreshCreate_ResumesOnRestart(DatabaseProvider provider, string component, int shard, int shards) => RunInterruptedFreshCreateAsync(provider, component, shard, shards);
 
     [Fact]
     public void Shorten_TakesTheLengthAfterLineEndingsShrink()

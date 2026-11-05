@@ -84,4 +84,108 @@ public sealed class SchemaStartupResilienceRunnerTests
     {
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => SchemaStartupResilienceTests.RunFaultsAsync(new[] { 1 }, 0, _ => Task.CompletedTask));
     }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(240)]
+    public void FaultShard_GivesEveryFaultToExactlyOneShard(int count)
+    {
+        int[] faults = Enumerable.Range(0, count).ToArray();
+        const int shards = SchemaStartupResilienceTestBase.WorldFaultShards;
+        var seen = new List<int>();
+        for (int shard = 0; shard < shards; shard++)
+        {
+            List<int> mine = SchemaStartupResilienceTestBase.FaultShard(faults, shard, shards);
+            Assert.True(mine.Count >= count / shards && mine.Count <= (count + shards - 1) / shards, $"shard {shard} of {count} faults has {mine.Count}");
+            seen.AddRange(mine);
+        }
+
+        Assert.Equal(faults, seen.Order().ToArray());
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(0, -1)]
+    [InlineData(-1, 4)]
+    [InlineData(4, 4)]
+    public void FaultShard_RefusesAShardOutsideTheRange(int shard, int shards)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => SchemaStartupResilienceTestBase.FaultShard(new[] { 1, 2, 3 }, shard, shards));
+    }
+
+    [Fact]
+    public void UpgradeSlices_TogetherCoverEveryUpgradeStepOnce_AndSplitEachProviderEvenly()
+    {
+        List<string> expected = SchemaStartupResilienceTestBase.UpgradeSteps().Select(Key).Order().ToList();
+        List<Type> classes = SliceClasses("SchemaStartupResilienceUpgradeSlice");
+        Assert.Equal(SchemaStartupResilienceTestBase.UpgradeSliceCount, classes.Count);
+
+        var seen = new List<string>();
+        var perProvider = new Dictionary<object, List<int>>();
+        foreach (Type type in classes)
+        {
+            List<object[]> rows = RowsOf(type);
+            Assert.NotEmpty(rows);
+            seen.AddRange(rows.Select(Key));
+            foreach (IGrouping<object, object[]> group in rows.GroupBy(r => r[0]))
+            {
+                if (!perProvider.TryGetValue(group.Key, out List<int>? counts))
+                {
+                    perProvider[group.Key] = counts = new List<int>();
+                }
+
+                counts.Add(group.Count());
+            }
+        }
+
+        Assert.Equal(expected, seen.Order().ToList());
+        foreach ((object provider, List<int> counts) in perProvider)
+        {
+            Assert.Equal(classes.Count, counts.Count);
+            Assert.True(counts.Max() - counts.Min() <= 1, $"{provider}: rows per class {string.Join(",", counts)}");
+        }
+    }
+
+    [Fact]
+    public void FreshCreateShares_TogetherCoverEveryFreshCreateCaseOnce_AndNoneIsEmpty()
+    {
+        List<string> expected = SchemaStartupResilienceTestBase.FreshCreateCases().Select(Key).Order().ToList();
+        List<Type> classes = SliceClasses("SchemaStartupResilienceFreshCreateShare");
+        classes.Add(typeof(SchemaStartupResilienceTests));
+        Assert.Equal(SchemaStartupResilienceTestBase.FreshCreateClassCount, classes.Count);
+
+        var seen = new List<string>();
+        foreach (Type type in classes)
+        {
+            List<object[]> rows = RowsOf(type);
+            Assert.NotEmpty(rows);
+            seen.AddRange(rows.Select(Key));
+        }
+
+        Assert.Equal(expected, seen.Order().ToList());
+        Assert.Equal(expected.Count, expected.Distinct().Count());
+        // The world component is the cost of the theory: every provider's world is cut into its shards, each shard a distinct case.
+        foreach (object[] provider in TestDatabases.AvailableProviders())
+        {
+            Assert.Equal(
+                Enumerable.Range(0, SchemaStartupResilienceTestBase.WorldFaultShards),
+                SchemaStartupResilienceTestBase.FreshCreateCases().Where(r => Equals(r[0], provider[0]) && (string)r[1] == "world").Select(r => (int)r[2]).Order());
+        }
+    }
+
+    private static string Key(object[] row) => string.Join("|", row);
+
+    private static List<Type> SliceClasses(string prefix) => typeof(SchemaStartupResilienceTestBase).Assembly.GetTypes()
+        .Where(t => t.Name.StartsWith(prefix, StringComparison.Ordinal) && t.Name.EndsWith("Tests", StringComparison.Ordinal) && t.IsSubclassOf(typeof(SchemaStartupResilienceTestBase)))
+        .ToList();
+
+    private static List<object[]> RowsOf(Type type)
+    {
+        System.Reflection.MethodInfo rows = type.GetMethod("Rows", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            ?? throw new InvalidOperationException(type.Name + " has no Rows");
+        return ((IEnumerable<object[]>)rows.Invoke(null, null)!).ToList();
+    }
 }
