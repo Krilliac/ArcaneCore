@@ -97,6 +97,47 @@ public sealed class NaxxramasSpellTests
         Assert.True(kit.System.HasAura(player, SapphironSummonBlizzardScript.SummonBlizzard));
     }
 
+    /// <summary>Records the original caster of every cast that is prepared.</summary>
+    private sealed class OriginalCasterRecorder : ISpellCastObserver
+    {
+        public List<(uint SpellId, Unit Caster, Unit OriginalCaster)> Casts { get; } = [];
+
+        public void OnPrepared(SpellCast cast) => Casts.Add((cast.Spell.Id, cast.Caster, cast.OriginalCaster));
+    }
+
+    [Fact]
+    public void SummonBlizzard_TheBlizzardSummonCarriesTheBossAsItsOriginalCaster()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(SummonBlizzard, SpellImplicitTarget.Unit), Marker(SapphironSummonBlizzardScript.SummonBlizzard));
+        var recorder = new OriginalCasterRecorder();
+        kit.System.RegisterObserver(recorder);
+        (Player player, _) = kit.AddPlayer(1);
+        Creature boss = SpawnCreatures(kit, (CreatureTestKit.WolfEntry, 4))[0];
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(boss, SummonBlizzard, SpellCastTargets.ForUnit(player.Guid), triggered: true));
+        FlushSpellBatch(kit);
+
+        (uint _, Unit caster, Unit original) = Assert.Single(recorder.Casts, c => c.SpellId == SapphironSummonBlizzardScript.SummonBlizzard);
+        Assert.Same(player, caster);
+        Assert.Same(boss, original);
+    }
+
+    [Fact]
+    public void OriginalCaster_OfAPlainCastIsTheCaster_AndASelfNamedOneIsNoOverride()
+    {
+        using SpellTestKit kit = Kit(Marker(SapphironSummonBlizzardScript.SummonBlizzard));
+        var recorder = new OriginalCasterRecorder();
+        kit.System.RegisterObserver(recorder);
+        (Player player, _) = kit.AddPlayer(1);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, SapphironSummonBlizzardScript.SummonBlizzard, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, SapphironSummonBlizzardScript.SummonBlizzard, SpellCastTargets.ForSelf(),
+            triggered: true, triggeringSpell: null, originalCaster: player));
+
+        Assert.Equal(2, recorder.Casts.Count);
+        Assert.All(recorder.Casts, c => Assert.Same(player, c.OriginalCaster));
+    }
+
     [Fact]
     public void MagneticPullA_TheHitUnitCastsTheJumpAtTheCastersVictim()
     {

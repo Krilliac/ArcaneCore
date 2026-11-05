@@ -186,6 +186,8 @@ public sealed partial class SummonService
         float radius = context.Effect.Radius;
         int duration = spell.GetDuration();
         int amount = context.Value > 0 ? context.Value : 1;
+        // cmangos Spell::DoSummonWild (SpellEffects.cpp:2808-2810): a cast made for another unit hands its summons to that original caster's AI.
+        Creature? originalSummoner = context.Cast.OriginalCasterOverride as Creature;
         for (int count = 0; count < amount; count++)
         {
             float x;
@@ -218,7 +220,7 @@ public sealed partial class SummonService
                 creature.Summon = new SummonLinks(SummonKind.Wild, caster.Guid, spell.Id, TotemSlots.None, duration);
                 creature.SetUInt32(UpdateFields.UnitCreatedBySpell, spell.Id);
                 return new CreatureHome(spawnX, spawnY, spawnZ, caster.Orientation);
-            });
+            }, summoner: originalSummoner);
 
             pets.Options = _options;
             pets.Register(summon, this);

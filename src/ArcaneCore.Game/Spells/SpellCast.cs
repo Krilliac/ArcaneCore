@@ -91,6 +91,16 @@ public sealed class SpellCast
     /// </summary>
     public GameObject? CasterGameObject { get; internal init; }
 
+    /// <summary>Set only when another unit caused this cast (see <see cref="OriginalCaster"/>); null when the caster is its own original caster.</summary>
+    internal Unit? OriginalCasterOverride { get; init; }
+
+    /// <summary>
+    /// The unit that caused the cast (vmangos Spell::m_originalCaster): <see cref="Caster"/> unless a script or a trigger chain passed another unit
+    /// through <see cref="SpellSystem.CastSpell(Unit, uint, SpellCastTargets, bool, SpellInfo?, Unit?)"/>. A spell effect that triggers another cast
+    /// passes it on (SpellEffects.cpp:1574, 1594). Cast thread only.
+    /// </summary>
+    public Unit OriginalCaster => OriginalCasterOverride ?? Caster;
+
     /// <summary>The original spell/aura behind a trigger (vmangos m_triggeredBySpellInfo).</summary>
     public SpellInfo? TriggeringSpell { get; }
 

@@ -35,6 +35,19 @@ public sealed class SapphironAI : RaidBossAI
         System?.SetInCombatWithZone(Me);
     }
 
+    /// <summary>
+    /// mangos-classic boss_sapphiron.cpp JustSummoned: the Blizzard (16474) Summon Blizzard raised under a unit goes for a random player of
+    /// the threat list.
+    /// </summary>
+    public override void OnJustSummoned(Creature summoned)
+    {
+        base.OnJustSummoned(summoned);
+        if (summoned.Entry == BlizzardEntry && SelectRandomAttackingTarget(playerOnly: true) is { } enemy)
+            summoned.AI?.AttackStart(enemy);
+    }
+
+    private const uint BlizzardEntry = 16474;
+
     protected override void ResetActions()
     {
         base.ResetActions();

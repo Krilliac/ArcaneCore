@@ -232,6 +232,15 @@ public sealed partial class SpellSystem
 
     /// <summary>Cast with the originating spell/aura's reagent policy (vmangos IgnoreItemRequirements).</summary>
     public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell)
+        => CastSpell(caster, spellId, targets, triggered, triggeringSpell, originalCaster: null);
+
+    /// <summary>
+    /// Cast on behalf of <paramref name="originalCaster"/> (vmangos Unit::CastSpell's originalCaster argument, Spell::m_originalCasterGUID):
+    /// <paramref name="caster"/> is the unit that casts, the original caster the one that caused it. A summon effect hands the summoned
+    /// creature to the original caster (<see cref="SpellCast.OriginalCaster"/>). Null or <paramref name="caster"/> itself means the caster
+    /// is its own original caster. Cast thread only.
+    /// </summary>
+    public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell, Unit? originalCaster)
     {
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(targets);
@@ -243,7 +252,7 @@ public sealed partial class SpellSystem
 
         if (!triggered)
         {
-            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell, originalCaster: originalCaster);
         }
 
         // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Real data has
@@ -276,7 +285,7 @@ public sealed partial class SpellSystem
         _triggerStack.Add(spellId);
         try
         {
-            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell, originalCaster: originalCaster);
         }
         finally
         {
@@ -575,7 +584,7 @@ public sealed partial class SpellSystem
     private SpellCastResult Prepare(Unit caster, SpellInfo spell, SpellCastTargets targets, bool triggered, bool autoRepeatShot = false, Item? castItem = null,
         SpellInfo? triggeringSpell = null, byte itemSpellIndex = 0, int? itemCooldownMs = null, int? itemCategoryCooldownMs = null,
         uint? itemCategory = null, bool itemEquipCast = false, bool itemTriggeredCast = false,
-        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false)
+        IReadOnlyDictionary<int, int>? customAuraAmounts = null, bool triggeredByAura = false, Unit? originalCaster = null)
     {
         if (!StackGuard.TryEnter("spell.cast-chain"))
         {
@@ -650,7 +659,8 @@ public sealed partial class SpellSystem
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
             { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura,
-              CasterGameObject = TakeCastingObject(caster) };
+              CasterGameObject = TakeCastingObject(caster),
+              OriginalCasterOverride = ReferenceEquals(originalCaster, caster) ? null : originalCaster };
         cast.AutoRepeatShot = autoRepeatShot;
         cast.InItemUseDispatch = castItem is not null && CurrentItemUseDispatch(castItem) is not null;
         if (!triggered)
