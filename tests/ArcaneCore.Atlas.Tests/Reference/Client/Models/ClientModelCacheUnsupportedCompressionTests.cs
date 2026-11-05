@@ -25,7 +25,7 @@ public sealed class ClientModelCacheUnsupportedCompressionTests
     {
         var cache = new ClientModelCache();
 
-        ModelLoad<M2ModelFile> load = cache.GetM2(new UnsupportedFiles(), "World\Doodads\Test\A.m2");
+        ModelLoad<M2ModelFile> load = cache.GetM2(new UnsupportedFiles(), @"World\Doodads\Test\A.m2");
 
         Assert.False(load.IsOk);
         Assert.NotNull(load.Problem);
@@ -38,7 +38,7 @@ public sealed class ClientModelCacheUnsupportedCompressionTests
     {
         var cache = new ClientModelCache();
 
-        ModelLoad<WmoModel> load = cache.GetWmo(new UnsupportedFiles(), "World\Wmo\Test\A.wmo");
+        ModelLoad<WmoModel> load = cache.GetWmo(new UnsupportedFiles(), @"World\Wmo\Test\A.wmo");
 
         Assert.False(load.IsOk);
         Assert.NotNull(load.Problem);
