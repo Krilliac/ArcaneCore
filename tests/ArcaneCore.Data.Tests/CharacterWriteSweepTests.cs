@@ -99,7 +99,33 @@ public sealed class CharacterWriteSweepTests
     }
 
     /// <summary>A synchronous <c>SaveChanges(</c> or <c>Database.BeginTransaction(</c> (the async forms end in <c>Async(</c> and do not match).</summary>
-    private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\.BeginTransaction)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\s*\.\s*BeginTransaction)\s*\(", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Zero-based line numbers of the synchronous write calls in <paramref name="text"/>. Matched on the whole text, so a call split across lines
+    /// ("SaveChanges" then "(", or "Database" then ".BeginTransaction(") is found; a hit is attributed to the line its name starts on and skipped
+    /// when that line is a comment. Limit: the sweep only reads files whose text contains <c>CharacterDbContext</c>, so a file that reaches a characters
+    /// context some other way (a generic or a base type) is not scanned; the set-based sweep above is line-based as well.
+    /// </summary>
+    private static IReadOnlyList<int> FindSyncWriteLines(string text)
+    {
+        string[] lines = text.Split('\n');
+        var hitLines = new SortedSet<int>();
+        foreach (Match hit in SyncWrite.Matches(text))
+        {
+            int line = 0;
+            for (int c = 0; c < hit.Index; c++)
+            {
+                if (text[c] == '\n')
+                    line++;
+            }
+
+            if (!lines[line].TrimStart().StartsWith("//", StringComparison.Ordinal))
+                hitLines.Add(line);
+        }
+
+        return hitLines.ToList();
+    }
 
     /// <summary>"relative/path.cs::Member" -> why a synchronous transaction there is correct.</summary>
     private static readonly Dictionary<string, string> SyncExemptions = new(StringComparer.Ordinal)
@@ -124,26 +150,8 @@ public sealed class CharacterWriteSweepTests
             files++;
             string relative = Path.GetRelativePath(src, file).Replace('\\', '/');
             string[] lines = text.Split('\n');
-            // Matched on the whole text, not line by line: a call split as "SaveChanges" and "(" on two lines is still found (\s* spans the break).
-            // A hit is attributed to the line its name is on, and skipped when that line is a comment.
-            var hitLines = new SortedSet<int>();
-            foreach (Match hit in SyncWrite.Matches(text))
+            foreach (int i in FindSyncWriteLines(text))
             {
-                int line = 0;
-                for (int c = 0; c < hit.Index; c++)
-                {
-                    if (text[c] == '\n')
-                        line++;
-                }
-
-                hitLines.Add(line);
-            }
-
-            foreach (int i in hitLines)
-            {
-                string trimmed = lines[i].TrimStart();
-                if (trimmed.StartsWith("//", StringComparison.Ordinal))
-                    continue;
                 (string member, int start, int end) = EnclosingMember(lines, i);
                 string body = string.Join('\n', lines[start..end]);
                 if (SyncExemptions.ContainsKey($"{relative}::{member}"))
