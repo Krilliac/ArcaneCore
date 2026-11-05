@@ -401,7 +401,7 @@ internal sealed class PlayerbotSummons
         bool offered = target?.PendingSummon is { } pending && pending.Summoner == player.Guid && pending.ExpiresAtMs >= now;
         if (offered)
         {
-            // A refused stop leaves the channel running: the job stays (the bot holds still) and the next think tries again, until the job's own time bound ends it.
+            // A refused stop leaves the channel running: the job stays (the bot holds still) and the next think tries again. This branch returns before the time-bound check below, so what ends a job that never gets through is the offer expiring or DropStale (then Abandon), not the job's own limit.
             if (job.Kind == SummonKind.Ritual && job.Cast is not null && !StopRitual(session, player, job.Cast.SpellId)) return true;
             return End(player);
         }
@@ -588,7 +588,7 @@ internal sealed class PlayerbotSummons
     /// Ends the summoner's own ritual cast. The ritual is a channel. CMSG_CANCEL_CHANNELLING is the packet a client sends to stop one (vmangos
     /// HandleCancelChanneling, SpellHandler.cpp:446-459), so a channel still running is stopped with that, and only a cast still being prepared gets
     /// CMSG_CANCEL_CAST (which would stop a channel as well, SpellCaster.cpp:2078-2080). Left running it would keep the warlock "casting" with its portal
-    /// gone and bar it from any further summon until the channel runs out. The job ends right after this and nothing retries, so the packet is sent unbudgeted (like the stop of a walk):
+    /// gone and bar it from any further summon until the channel runs out. Fail and Abandon end the job right after this and ignore a false result (the channel then runs out by itself); only the offered branch of DriveSummoner keeps the job and retries. The packet is sent unbudgeted (like the stop of a walk):
     /// a bot visited with no action left in the tick's shared budget must not be left channelling.
     /// <para>
     /// False only when the packet was refused (the session is not in the world, a quest settlement is pending, it is being kicked): the cast is
