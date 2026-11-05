@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Chat;
 /// reload publishes a new instance. A pattern that does not compile is skipped and reported in <see cref="Rejected"/>.
 /// <para>
 /// A pattern is compiled with <see cref="RegexOptions.NonBacktracking"/> (linear time, so it runs without a timeout) whenever the engine
-/// supports it. A pattern that needs backtracking-only features (backreferences, lookarounds, atomic groups, ...) keeps a match timeout; when it
+/// supports it. A pattern that needs backtracking-only features (backreferences, lookarounds, atomic groups, ...), or is too large for it, keeps a match timeout; when it
 /// fires, that one rule is skipped for the message and counted as <c>chat.word-filter-timeout</c> in the fault ledger. A timeout is a property of
 /// the machine's load, not of the text, so it never rejects the message. (<see cref="NamePatterns"/> are still treated as a match on timeout by
 /// <see cref="ArcaneCore.Data.Content.Names.NameCatalog"/>, which fails closed for names.)

@@ -1056,12 +1056,13 @@ public sealed partial class GroupManager(SocialContext context)
 
     /// <summary>
     /// The party the invite and accept rules see (vmangos HandleGroupInviteOpcode, GroupHandler.cpp:90-96).
-    /// A battleground raid yields to the parked original group, which is null when there is none.
+    /// A battleground raid yields to the parked original group, which is null when there is none. Without a current group the original group is used too (vmangos
+    /// HandleLootMethodOpcode, GroupHandler.cpp:343-344); none is held then in practice, as an original group exists only behind a current raid.
     /// </summary>
     private Group? GroupForPartyRules(ObjectGuid guid)
     {
         Group? group = GetGroup(guid);
-        return group is { IsBattlegroundGroup: true } ? GetOriginalGroup(guid) : group;
+        return group is null or { IsBattlegroundGroup: true } ? GetOriginalGroup(guid) : group;
     }
 
     /// <summary>
