@@ -97,7 +97,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         await TestWait.UntilAsync(() => Snap(rig, Name).State == SupervisedProcessState.Faulted, "the crash loop to be given up");
         // Faulted is published under the gate but the 'crash loop' console line is routed after the gate is released, so wait for the line too.
         await TestWait.UntilAsync(() => rig.ConsoleText.Contains("crash loop", StringComparison.Ordinal), "the crash-loop console line");
-        await TestWait.UntilAsync(() => capture.Count(key) > 0, "the crash-loop report"); // reported right after Faulted is set, so do not assume it is already visible
+        await TestWait.UntilAsync(() => capture.Count(key) > 0, "the crash-loop report"); // written under the same gate hold that sets Faulted (GiveUpOnCrashLoopUnderLock), so it is always visible once Faulted is seen; the wait only guards that ordering
 
         Assert.Equal(4, rig.Launcher.Launches);
         Assert.Equal(1, capture.Count(key));

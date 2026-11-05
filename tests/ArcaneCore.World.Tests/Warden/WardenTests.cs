@@ -806,10 +806,18 @@ public sealed class WardenTests
     public async Task APacketAfterTheSessionClosed_StillReportsTheHeldCount()
     {
         // A tick interval far beyond the test keeps the world tick from removing the closed session first: the packet below is the
-        // one that raced the tick's flush.
+        // one that raced the tick's flush. The world loop still runs its first tick as soon as its thread starts, before it waits one
+        // interval (WorldRuntime.Run), and on a loaded machine that tick can land after the session closed: the host is therefore not used
+        // until that first tick has finished, and the next one is 600 s away.
         await using var host = WorldTestHost.Start(configure: o => o.TickIntervalMs = 600_000, configureServices: services => services.AddSingleton<IOptions<WardenOptions>>(
             Options.Create(new WardenOptions { Enabled = true, ProtocolAction = WardenAction.Log, LoadFromDatabase = false,
                 MaxProtocolFailures = 100, ProtocolReportIntervalSeconds = 3600 })));
+        // The first tick is not quick on a loaded node (seconds, measured on Node1), so the wait is far longer than WaitForAsync's 10 s.
+        using var firstTick = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        while (host.World.TicksStarted < 1 || host.World.CurrentPosition.Phase != ArcaneCore.Game.Maps.TickPhase.Idle)
+        {
+            await Task.Delay(10, firstTick.Token);
+        }
         WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
         var verdicts = new System.Collections.Concurrent.ConcurrentQueue<WardenVerdict>();
         feature.Verdict += (_, verdict) => verdicts.Enqueue(verdict);
