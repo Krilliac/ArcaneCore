@@ -833,6 +833,16 @@ public sealed partial class SpellSystem
     internal void AddProcCooldown(Unit unit, SpellInfo spell, uint cooldownMs)
     {
         UnitSpellState state = GetOrCreateState(unit);
+        if (cooldownMs > MaxReasonableCooldownMs)
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "cooldown-invalid",
+                FormatSpellSubject(spell.Id),
+                $"unit={FormatUnitSubject(unit)} procCooldownMs={cooldownMs}",
+                AnomalySeverity.Warning);
+        }
+
         uint until = NowMs + Math.Min(cooldownMs, MaxReasonableCooldownMs); // bounded like the cast path so IsStillRunning's signed compare cannot wrap
         if (!state.SpellCooldowns.TryGetValue(spell.Id, out uint current) || IsStillRunning(until, current))
         {

@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Diagnostics;
+
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
@@ -23,7 +25,11 @@ namespace ArcaneCore.Game.Spells;
 /// LIMITS: the elixir specifics (the <c>spell_elixir</c> table), the database <c>spell_group</c> stack rules and the generic
 /// <c>IsNoStackSpellDueToSpell</c> fallback (:3554-3572) are not modelled; the rank chain is the spell family and name
 /// (<see cref="SpellSpecifics.IsSameChain"/>), and the passive and heal over time rules also need the generic field check of
-/// IsRankSpellDueToSpell (<see cref="SpellSpecifics.IsRankOf"/>); the spell_chain table is not loaded, so a generic family heal over time is in no chain. Thread affinity: the map thread that owns the
+/// IsRankSpellDueToSpell (<see cref="SpellSpecifics.IsRankOf"/>); the spell_chain table is not loaded, so a generic family heal over time is in no chain
+/// and the name stands for the chain, which is a little wider than the real table for heals over time: against the vmangos spell_chain rows it
+/// misses no same-chain pair but matches 37 cross-chain pairs (Renew 27606 against the Renew ranks, NPC Tranquility 21791 and 25817, Consume
+/// Shadows and Blessed Recovery ranks, the last two probably gaps in spell_chain). A holder whose aura handler is running is never removed
+/// (:3515, <see cref="SpellAura.InUse"/>), and Drain Soul style holders (CHANNEL_DEATH_ITEM, :3488) are never replaced or refused. Thread affinity: the map thread that owns the
 /// target, like every holder event.
 /// </summary>
 public sealed class SpellSpecificAuraRules
@@ -85,18 +91,24 @@ public sealed class SpellSpecificAuraRules
         {
             SpellInfo otherSpell = other.Spell;
             if (ReferenceEquals(other, holder) || other.IsRemoved || otherSpell.Id == spell.Id
-                || ReferenceEquals(other.AreaParent, holder) || ReferenceEquals(holder.AreaParent, other)
-                || Triggers(otherSpell, spell.Id) || Triggers(spell, otherSpell.Id))
+                || ReferenceEquals(other.AreaParent, holder) || ReferenceEquals(holder.AreaParent, other))
             {
-                continue; // an aura never removes the aura that triggered it, nor the one it triggers (Unit.cpp:3419-3431)
+                continue;
             }
 
-            bool sameCaster = holder.CasterGuid == other.CasterGuid;
+            // The cheap test goes before the Triggers loops: every aura add scans every holder on the target, in Refuses and again in Displace.
             bool otherPassive = IsPassiveOrHidden(otherSpell);
             if (specific == SpellSpecific.Normal && !healOverTime && !otherPassive)
             {
                 continue; // nothing below applies to a plain spell against a plain holder
             }
+
+            if (Triggers(otherSpell, spell.Id) || Triggers(spell, otherSpell.Id))
+            {
+                continue; // an aura never removes the aura that triggered it, nor the one it triggers (Unit.cpp:3419-3431)
+            }
+
+            bool sameCaster = holder.CasterGuid == other.CasterGuid;
 
             if (otherPassive)
             {
@@ -118,6 +130,11 @@ public sealed class SpellSpecificAuraRules
                 }
             }
 
+            if (HasAuraType(otherSpell, AuraType.ChannelDeathItem))
+            {
+                continue; // Unit.cpp:3488: several warlocks can each have a Drain Soul on one target, so it is never replaced or refused
+            }
+
             SpellSpecific otherSpecific = SpellSpecifics.Of(otherSpell);
 
             // Unit.cpp:3498-3500: heals over time of one chain are single per target, whatever the caster.
@@ -134,7 +151,7 @@ public sealed class SpellSpecificAuraRules
                     return true; // cannot remove higher rank
                 }
 
-                AddLoser(ref losers, other, collect);
+                AddLoser(ref losers, holder, other, collect);
                 continue;
             }
 
@@ -145,7 +162,7 @@ public sealed class SpellSpecificAuraRules
                     return true;
                 }
 
-                AddLoser(ref losers, other, collect);
+                AddLoser(ref losers, holder, other, collect);
             }
         }
 
@@ -192,12 +209,59 @@ public sealed class SpellSpecificAuraRules
         return false;
     }
 
-    private static void AddLoser(ref List<SpellAuraHolder>? losers, SpellAuraHolder other, bool collect)
+    /// <summary>
+    /// Add <paramref name="other"/> to the holders <paramref name="holder"/> replaces. A holder whose aura handler is running (vmangos
+    /// Aura::IsInUse, "Its a parent aura (create this aura in ApplyModifier)", Unit.cpp:3515-3519, :3538-3542, :3564-3568) is kept: removing it
+    /// from under its own handler would corrupt that handler, so vmangos logs an error and skips it. Reported once per add, by the collecting pass.
+    /// </summary>
+    private static void AddLoser(ref List<SpellAuraHolder>? losers, SpellAuraHolder holder, SpellAuraHolder other, bool collect)
     {
+        if (IsInUse(other))
+        {
+            if (collect)
+            {
+                AnomalyLedger.Shared.Report(
+                    "spell",
+                    "stack-rule-parent-in-use",
+                    SpellSystem.FormatSpellSubject(other.Spell.Id),
+                    $"holder of spell {other.Spell.Id} is in process but spell {holder.Spell.Id} would replace it; it is kept");
+            }
+
+            return;
+        }
+
         if (collect)
         {
             (losers ??= []).Add(other);
         }
+    }
+
+    /// <summary>vmangos SpellAuraHolder::IsInUse: any of its auras has its handler running.</summary>
+    private static bool IsInUse(SpellAuraHolder holder)
+    {
+        foreach (SpellAura? aura in holder.Auras)
+        {
+            if (aura is { InUse: true })
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>vmangos SpellEntry::HasAura: an effect of <paramref name="spell"/> applies <paramref name="type"/>.</summary>
+    private static bool HasAuraType(SpellInfo spell, AuraType type)
+    {
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.AuraType == type)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Whether an effect of <paramref name="spell"/> triggers <paramref name="spellId"/> (vmangos EffectTriggerSpell).</summary>

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -209,5 +210,19 @@ public sealed class EquipCooldownTests
         Assert.False(Ready(kit, player, HugeCategorySibling));
         uint until = kit.System.GetState(player.Guid)!.CategoryCooldowns[HugeCategory];
         Assert.Equal(SpellSystem.MaxReasonableCooldownMs, until - equipAt);
+    }
+
+    [Fact]
+    public void HugeCategoryTime_IsReportedOnce_AndANormalEquipCooldownIsSilent()
+    {
+        (SpellTestKit kit, Player player, _) = Create();
+        using SpellTestKit owner = kit;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/cooldown-invalid");
+
+        Equip(player, Trinket);
+        Assert.False(capture.Any("spell/cooldown-invalid"), capture.Describe());
+
+        Equip(player, HugeCategoryTrinket);
+        Assert.Equal(1, capture.Count("spell/cooldown-invalid"));
     }
 }
