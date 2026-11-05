@@ -67,7 +67,7 @@ public sealed class SpellEffectGapTests
             new SkillLineAbilityRecord(2, 26, second, 0, 0, 0, 0, 0, 0, 0)]);
 
     [Fact]
-    public void LearningAHigherRank_SendsSupercededSpellBeforeLearnedSpell()
+    public void LearningAHigherRank_SendsSupercededSpell_AndNoLearnedSpell()
     {
         using var kit = new SpellTestKit();
         kit.System.RankChains = TwoRanks(InstantHeal, CastBolt);
@@ -152,6 +152,22 @@ public sealed class SpellEffectGapTests
 
         kit.System.CastSpell(caster, SpawnSpell, SpellCastTargets.ForUnit(caster.Guid), triggered: true);
         Assert.NotEqual(0u, (uint)(caster.UnitFlags & UnitFlags.Spawning)); // EffectSpawn returns for a non-creature
+    }
+
+    [Fact]
+    public void SpawnEffect_ForcesAStealthGroupCreatureTargetBackToVisibilityOn()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        Creature creature = AddCreature(kit, 3);
+        var registry = new ArcaneCore.Game.Stealth.StealthRegistry();
+        ArcaneCore.Game.Stealth.StealthServices.Install(
+            kit.World.GetMap(0), new ArcaneCore.Game.Stealth.StealthServices(kit.System, registry, ArcaneCore.Game.Stealth.StealthOptions.Default));
+        registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.Stealth);
+
+        kit.System.CastSpell(caster, SpawnSpell, SpellCastTargets.ForUnit(creature.Guid), triggered: true);
+
+        Assert.Equal(ArcaneCore.Game.Stealth.StealthVisibility.On, registry.VisibilityOf(creature));
     }
 
     // --- EffectTriggerSpell ------------------------------------------------------------------------------------------------------

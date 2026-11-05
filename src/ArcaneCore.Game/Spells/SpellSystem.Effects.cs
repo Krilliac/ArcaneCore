@@ -581,7 +581,9 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Spell::EffectSpawn (SpellEffects.cpp:2990-2998): a creature target leaves the spawn animation state
-    /// (UNIT_FLAG_SPAWNING is cleared; the reference also forces visibility on, which this server does not model per unit).
+    /// (UNIT_FLAG_SPAWNING is cleared and a visibility group other than ON is forced to ON through the map's
+    /// <see cref="ArcaneCore.Game.Stealth.StealthRegistry"/>). VISIBILITY_OFF, the third state the reference tests with the same
+    /// <c>!= VISIBILITY_ON</c>, has no <see cref="ArcaneCore.Game.Stealth.StealthVisibility"/> member and is not modelled.
     /// A player or other target is ignored.
     /// </summary>
     private static void EffectSpawn(SpellEffectContext context)
@@ -589,6 +591,10 @@ public sealed partial class SpellSystem
         if (context.Target is Creatures.Creature creature)
         {
             creature.UnitFlags &= ~UnitFlags.Spawning;
+            if (creature.Map is { } map)
+            {
+                ArcaneCore.Game.Stealth.StealthServices.Find(map)?.Registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.On);
+            }
         }
     }
 
