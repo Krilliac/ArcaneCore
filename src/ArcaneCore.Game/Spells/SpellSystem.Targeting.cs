@@ -72,6 +72,11 @@ public sealed partial class SpellSystem
             // Target B 48/49/50 names a caster-relative place while target A picks the unit (Blink 29209-29211: A caster, B back/left/right).
             if (selector != effect.TargetB && SpellTargetSelectors.CasterSideAngle(effect.TargetB) is { } sideAngle)
                 SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, sideAngle);
+            // Target B 46 beside a unit target A (12699, 16074: A6 or A38 / B46): vmangos runs SetTargetMap for B as well, so the nearest listed object
+            // becomes the destination while A picks the unit.
+            if (effect.TargetB == SpellImplicitTarget.LocationScriptNearCaster && effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster
+                && selector != effect.TargetB && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, SpellImplicitTarget.LocationScriptNearCaster)))
+                SelectScriptLocationTarget(cast, effect, i, unitTarget);
             // TARGET_UNIT_ENEMY updates the explicit target for later effects too, including
             // UNIT / NONE selectors. Arcane Missiles' caster-selector exception leaves it alone.
             if (cast.MagnetTarget is { } magnet && cast.Targets.Unit == magnet.Guid)

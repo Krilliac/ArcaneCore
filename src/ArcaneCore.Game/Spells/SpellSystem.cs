@@ -1631,6 +1631,12 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        // With rows but no listed object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered).
+        if (ScriptLocationTargetMissing(caster, spell, unitTarget))
+        {
+            return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
+        }
+
         if (needsUnit)
         {
             if (checkedTarget is not { } target)

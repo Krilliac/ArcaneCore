@@ -82,14 +82,15 @@ public sealed class ScriptLocationTargetTests
     }
 
     [Fact]
-    public void AListedObjectBeyondTheSpellRange_IsNotSelected()
+    public void AListedObjectBeyondTheSpellRange_FailsTheCastWithoutReporting_AndNothingIsSent()
     {
+        // vmangos Spell::CheckScriptTargeting (Spell.cpp:603-616): rows but nothing in range fails the cast (DONT_REPORT when triggered).
         using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
-        GameObject outside = rig.Spawn(Firecracker, 60);
+        rig.Spawn(Firecracker, 60);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast());
 
-        Assert.DoesNotContain(outside.Guid.Value, rig.SpellGoHits());
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
     }
 
     [Fact]

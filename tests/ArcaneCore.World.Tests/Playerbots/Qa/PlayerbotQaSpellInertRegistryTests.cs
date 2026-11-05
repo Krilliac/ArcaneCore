@@ -128,8 +128,12 @@ public sealed class PlayerbotQaSpellInertRegistryTests
     [Fact]
     public void ADeliberatelyInertSpell_IsNotATargetGap_ButTheSameSpellUnderAnotherIdIs()
     {
-        // Implicit target 63 has no selector in a bare system.
-        const SpellImplicitTarget unselectable = (SpellImplicitTarget)63;
+        // The first implicit target at or above 63 that a bare system has no selector for: found, not assumed, so a lane that registers one cannot hollow the test out.
+        SpellImplicitTarget unselectable = Enumerable.Range(63, 192).Select(id => (SpellImplicitTarget)id).First(candidate =>
+        {
+            SpellInfo probe = Spell(Unlisted, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: candidate));
+            return !System(probe).CanSelectImplicitTarget(probe, probe.Effects[0]);
+        });
         InertSpell entry = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.Marker);
         SpellInfo listed = Spell(entry.SpellId, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
         SpellInfo unlisted = Spell(Unlisted, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
@@ -144,8 +148,8 @@ public sealed class PlayerbotQaSpellInertRegistryTests
     public void AnUnusedEffect_IsCoveredOnlyByAnEntryThatNamesIt()
     {
         InertSpell stealth = DeliberatelyInertSpells.All.First(e => e.Unhandled == nameof(SpellEffectName.Stealth));
-        InertSpell evade = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.UnusedEffect && e.Unhandled != nameof(SpellEffectName.Stealth));
-        SpellInfo own = Spell(stealth.SpellId, Effect(SpellEffectName.Stealth, 0)), other = Spell(evade.SpellId, Effect(SpellEffectName.Stealth, 0));
+        InertSpell otherUnused = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.UnusedEffect && e.Unhandled != nameof(SpellEffectName.Stealth));
+        SpellInfo own = Spell(stealth.SpellId, Effect(SpellEffectName.Stealth, 0)), other = Spell(otherUnused.SpellId, Effect(SpellEffectName.Stealth, 0));
         var analyzer = new PlayerbotQaSpellGapAnalyzer(System(own, other));
 
         Assert.Empty(analyzer.Of(own));
