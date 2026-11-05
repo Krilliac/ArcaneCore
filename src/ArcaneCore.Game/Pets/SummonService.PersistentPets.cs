@@ -445,7 +445,7 @@ public sealed partial class SummonService
         {
             await tail.ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch
         {
             // Not recorded here: the write or delete that failed already recorded itself when it ran. An OutOfMemoryException
             // observed from the tail is treated like any other failed tail so the retained snapshot or owed delete still runs.
