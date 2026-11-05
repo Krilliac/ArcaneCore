@@ -13,8 +13,9 @@ namespace ArcaneCore.Game.Creatures;
 public sealed partial class CreatureMapSystem
 {
     /// <summary>
-    /// Give a creature the list its template or script names (spawn, respawn, a new AI, a content reload). The availability roll runs here, once per
-    /// assignment; combat arms the initial cooldowns later (<see cref="CreatureSpellListScheduler{TTarget}.EnterCombat"/>).
+    /// Give a creature the list its template or script names (spawn, respawn, a new AI, a new entry, a content reload). The availability roll runs here,
+    /// once per assignment; combat arms the initial cooldowns later (<see cref="CreatureSpellListScheduler{TTarget}.EnterCombat"/>), or at once for a
+    /// creature already fighting. A template without a list falls back to list <c>entry * 100</c> (cmangos Creature::UpdateEntry, "legacy compatibility").
     /// </summary>
     private void BindSpellList(Creature creature)
     {
@@ -25,8 +26,14 @@ public sealed partial class CreatureMapSystem
             listId = creature.AI?.ScriptSpellList ?? 0;
         }
 
+        bool named = listId != 0;
+        if (!named)
+        {
+            listId = creature.Template.Entry * 100;
+        }
+
         CreatureSpellList? list = creature.AI is { RunsSpellList: true } ? _content.Ai.SpellLists.Find(listId) : null;
-        if (list is null && listId != 0 && creature.AI is { RunsSpellList: true })
+        if (list is null && named && creature.AI is { RunsSpellList: true })
         {
             ReportSpellListOnce($"list:{listId}", "unknown-list", $"creature {creature.Template.Entry} names spell list {listId}, which does not exist");
         }
@@ -44,6 +51,10 @@ public sealed partial class CreatureMapSystem
         {
             creature.SpellLists ??= new CreatureSpellListScheduler<Unit>(new CreatureSpellListHost(this, creature), _random, _options.SpellListContinueAfterCast);
             creature.SpellLists.Bind(list);
+            if (creature.Combat.IsInCombat)
+            {
+                creature.SpellLists.EnterCombat(); // cmangos UnitAI::SpellListChanged
+            }
         }
 
         (creature.AI as CreatureEventAI)?.RebuildMainSpells();
@@ -74,11 +85,6 @@ public sealed partial class CreatureMapSystem
         }
 
         AssignSpellList(creature, list);
-        if (creature.Combat.IsInCombat)
-        {
-            creature.SpellLists!.EnterCombat();
-        }
-
         return true;
     }
 

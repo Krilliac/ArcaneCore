@@ -171,6 +171,16 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void ActionSetSpellSet_BecomesTheRuleActionWithItsListId()
+    {
+        EventAiConversion conversion = Convert(Row(1, action: new CreatureAiAction(60, 4242, 0, 0)));
+
+        Assert.Empty(conversion.Issues);
+        RuleActionRecord action = Assert.Single(conversion.Content.Actions, a => a.ActionType == CreatureRuleIds.ActionSetSpellList);
+        Assert.Equal(4242, action.Param1);
+    }
+
+    [Fact]
     public void UnsupportedTypes_AreReportedByIdAndReason_AndNothingIsWritten()
     {
         EventAiConversion conversion = Convert(

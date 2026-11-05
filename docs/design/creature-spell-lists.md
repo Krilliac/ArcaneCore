@@ -11,9 +11,13 @@ tree at the time it was written (the base has since gained EventAI action 57, `S
 - **Which creatures run a list.** `CreatureAI.RunsSpellList`: EventAI (with `CreatureRuleAI`) and the plain `AggressorAI`, `ReactorAI` and `GuardAI`. In cmangos every
   UnitAI runs one; a ported script AI here keeps its own timers and does not, because a boss with both would cast everything twice. classic-db has 87 templates with a
   list; the 19 with a `ScriptName` (the Zul'Gurub bosses among them) follow their script, whose spells are its own.
-- **Lifecycle.** A spawn, a respawn and a new AI bind the template's list, and the availability roll runs there. Aggro arms the initial cooldowns ahead of the script's
-  hook, the tick runs after the AI's update, and an evade, death or respawn resets. A reload rebinds at the creature's next tick out of combat.
-  EventAI action 60 and the rule action `creature.set_spell_list` go through `CreatureMapSystem.SetSpellList`.
+- **Lifecycle.** A spawn, a respawn, a new AI, a new entry (`CreatureMapSystem.UpdateEntry`: EventAI action 36, dbscript command 44, the script callers) and a game event's entry
+  bind the template's list, and the availability roll runs there; a template without a list takes list `entry * 100` when there is one (cmangos Creature::UpdateEntry; classic-db
+  has none). Aggro arms the initial cooldowns ahead of the script's hook, a bind in the middle of a fight arms them at once, the tick runs after the AI's update, and an evade,
+  death or respawn resets. A reload rebinds at the creature's next tick out of combat. EventAI action 60 and the rule action `creature.set_spell_list` go through
+  `CreatureMapSystem.SetSpellList`.
+- **Charm and pets.** Giving a creature an AI that does not run lists (`Creature.AI`: a charm's or a pet's `PetAI`) drops its scheduler, as cmangos PetAI::UpdateAI runs no lists. A charm's
+  end builds the AI again, which binds the list with a fresh availability roll.
 - **Cooldowns.** One roll of an entry's repeat time serves the scheduler and `SpellSystem.AddCooldown`, where it replaces the Spell.dbc recovery (or with flag 4 the category
   recovery) when it is not 0, as cmangos Creature::AddCooldown does.
 - **Main spells.** An EventAI creature adds the ranged entries of its list to its main spells; a main spell's failed cast ends ranged mode as an EventAI one does.
@@ -30,6 +34,8 @@ Limits:
   moving (32), is interruptible (53), spell known (60), AoE immune (62), critter and totems (68-73), string id (75), player-controlled NPC (82), path fail count (84). The one classic-db
   condition an unscripted list reaches (1221, "an enemy is casting or channeling") uses neither. The cmangos loop would treat that row as true of any enemy; see
   `CreatureSpellListDataModule.ToUnitCondition`.
+- **A charmed creature's own casts** use the Spell.dbc times. cmangos Creature::AddCooldown still reads the list then; here the list is gone with the scheduler.
+- **A new entry without a list** clears the old one. cmangos keeps it, because its SetSpellList ignores the unknown id `entry * 100`. None of classic-db's 21 action 36 rows involve a list.
 - **Targeting flags.** A row has no range parameters, so the two range select flags never pass; no classic-db row uses them.
 - **AV commanders.** EventAI stopped Sunder Armor at five stacks with a phase; the list recasts it on its timer. Ichman's Greater Invisibility on spawn is out of combat, so no list carries it.
 

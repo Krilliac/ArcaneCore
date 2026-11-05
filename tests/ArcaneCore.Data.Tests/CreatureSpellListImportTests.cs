@@ -205,6 +205,9 @@ public sealed class CreatureSpellListImportTests : IAsyncLifetime
         await RunAsync(db, script);
 
         Assert.Equal(8, await db.Set<CreatureSpellListHeaderRow>().AsNoTracking().CountAsync());
+        Assert.Equal( // entry * 100 + 1 of each commander, the ids AvEventAI.ScriptSpellList names
+            [77u, 1317901u, 1318001u, 1318101u, 1343701u, 1343801u, 1343901u, 1357701u],
+            (await db.Set<CreatureSpellListHeaderRow>().AsNoTracking().OrderBy(r => r.Id).ToListAsync()).Select(r => r.Id));
         Assert.Equal(14, await db.Set<CreatureSpellListRow>().AsNoTracking().CountAsync());
         Assert.Equal(
             [(1u, 15572u), (2u, 15580u)],

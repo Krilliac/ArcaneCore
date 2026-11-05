@@ -323,7 +323,7 @@ public sealed partial class CreatureMapSystem
 
     /// <summary>
     /// cmangos Creature::UpdateEntry(entry) with its health kept (EventAI UPDATE_TEMPLATE, CreatureEventAI.cpp:1078-1086): the creature takes
-    /// the other template (entry, model, faction, flags, level and stats) and keeps its health percent, its combat and its AI; its next respawn
+    /// the other template (entry, model, faction, flags, level, stats and spell list) and keeps its health percent, its combat and its AI; its next respawn
     /// returns to the template it had. False for the creature's own entry or a missing template.
     /// </summary>
     public bool UpdateEntry(Creature creature, uint entry)
@@ -346,6 +346,7 @@ public sealed partial class CreatureMapSystem
             creature.UnitFlags |= UnitFlags.InCombat;
         }
 
+        BindSpellList(creature); // cmangos Creature::UpdateEntry -> SetSpellList (Creature.cpp:609-612)
         return true;
     }
 
