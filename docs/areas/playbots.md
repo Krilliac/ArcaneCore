@@ -1988,26 +1988,22 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
 - **Battleground callouts** (`BattlegroundCalls`): from the match's real state, one bot of the team says each event in battleground
   chat (the same callout not again within `BattlegroundCallSeconds`): Warsong Gulch "flag taken", "EFC mid", "flag returned"; Arathi
   Basin "inc BS", "lost farm", "LM capped", "capping ST"; Alterac Valley "IB tower under attack", "TP burned", "SH GY assaulted".
-- **LFG talk** (`World:Playerbots:Chat:Lfg`: `Enabled`, `AnswerRepeatSeconds`, `MaxTrackedVolunteers`, all live): what a real player says
-  about groups is read by `PlayerbotLfgIntents` (pure, on the text `PlayerbotWorldChatter.Normalize` makes) as a group search ("any groups
-  for SFK?", "anyone doing deadmines", "LFG ZF"), an offer to join ("inv", "can i come", "i can tank", "room for a healer?"), a guild
-  request ("ginv", "can i join your guild") or a guild search ("any guild recruiting?"). A player's own LFM ("lfm sfk", "LF2M ...") is
-  the world chatter's and is never a search. A bare "me", "x", "1" or "+1" counts as an offer only in a whisper to a poster, never in a
-  channel (`PlayerbotVoiceFacts.AsksInvite` against `AsksInviteInChannel`). A stated role is "tank"/"mt", "heal"/"healer" or
-  "dps"/"dd"; a class word states none. The subject of a search is resolved against real state only: the dungeon or raid by name
-  (`PlayerbotDungeons`, which carries each instance's map id; "dm" is the Deadmines to a level 20 and Dire Maul to a level 58; the short
-  abbreviations "st", "sm", "dm", "gy" count only beside a cue word such as "any", "lf", "group" or "inv"), else a quest title a bot
-  waits for a group for or the asker holds, else a zone by exact name (`PlayerbotLfgZoneIndex`). A name nothing backs is left
-  unresolved and not guessed at. Today the voice consumes the offer to join and its stated role (a whisper to a bot's call); the search,
-  guild and channel intents are read but nothing answers them yet, so they have no options.
+- **LFG talk** (`World:Playerbots:Chat:Lfg`: `Enabled`, `AnswerRepeatSeconds`, `MaxTrackedVolunteers`, all live): the only part of
+  the group talk the server answers is a whispered offer to join a bot's LFG or LFM call ("inv", "can i come"). The offer is detected by
+  `PlayerbotVoiceFacts.AsksInvite`; `PlayerbotLfgIntents.RoleOf` then reads the role the player states in the same line ("tank"/"mt",
+  "heal"/"healer", "dps"/"dd"; a class word states none). Limit: `PlayerbotLfgIntents.Read`, `Resolve`, `HasGroupCue`, the
+  `PlayerbotLfgZoneIndex` and the other intent code (group searches such as "any groups for SFK?", guild requests and searches, an "inv" in
+  a channel) are not called by the server: no heard line reaches them, nothing answers a search, a guild or a channel line, and they have
+  no options.
 - **Volunteering** (a real player whispers "inv" to a bot's LFG or LFM call): the poster, or any bot of the same waiting group (`Enabled`),
-  answers. `PlayerbotGroupCoordinator.Volunteer` checks in this order, the first failure deciding: the same team, not in a group (or with an
-  invitation pending), a level of at least the goal's ("sorry, need 14+"), no recent decline, no ignore or rivalry between the player and
-  the waiting bots (silent: no invitation and no reply), then, when the player would take the group's last place and it is a tank's or a
+  answers. `PlayerbotGroupCoordinator.Volunteer` checks in this order, the first failure deciding: the same team, a level of at least the
+  goal's ("sorry, need 14+"), not in a group (or with an invitation pending), no recent decline, an instance goal's anchor, no ignore or
+  rivalry between the player and the waiting bots (silent: no invitation and no reply), reach (CannotPlace: a player off the meeting map
+  or beyond 1500 yards is not promised an invitation), then, when the player would take the group's last place and it is a tank's or a
   healer's, a role the player's class can fill ("sorry, we need a healer"; a stated role, "i can tank", is used for the match when the class
   can play it and dropped when it cannot; a stated damage role is never placed in a tank or healer place), then the dry-run match as before
-  (Ready, Noted or CannotPlace: a player off the meeting map or beyond 1500 yards is not promised an invitation). A repeated "inv" inside
-  `AnswerRepeatSeconds` is applied again but answered once; `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
+  (Ready, Noted or CannotPlace). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
+  (a different outcome, such as CannotPlace then Noted, is answered again; after Ready the repeat is quiet and the post stays); `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
   only the whisper to the poster itself.
 
 ## Scenario harness

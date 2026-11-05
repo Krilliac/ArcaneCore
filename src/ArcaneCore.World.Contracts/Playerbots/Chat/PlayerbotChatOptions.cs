@@ -179,8 +179,8 @@ public sealed class PlayerbotChatOptions
     public PlayerbotVoiceOptions Voice { get; set; } = new();
 
     /// <summary>
-    /// <c>Lfg</c>: how bots answer a real player's group talk ("any groups for SFK?", an "inv" in a channel) from the groups they really wait for
-    /// (docs/areas/playbots.md, Bot voice).
+    /// <c>Lfg</c>: how bots answer a real player's whispered "inv" to a bot's LFG or LFM call, from the group they really wait for
+    /// (docs/areas/playbots.md, Bot voice). Group searches and channel talk are not answered.
     /// </summary>
     public PlayerbotLfgOptions Lfg { get; set; } = new();
 

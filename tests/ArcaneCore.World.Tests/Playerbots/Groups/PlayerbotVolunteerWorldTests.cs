@@ -138,12 +138,88 @@ public sealed class PlayerbotVolunteerWorldTests
         await using (player)
         {
             await SetLevelAsync(world, 9);
+            // The coordinator itself: a warrior cannot heal, so the stated role is dropped and the healer-only place is refused as Role.
+            PlayerbotVolunteerResult result = await world.OnWorldAsync(() =>
+                world.Coordinator.Volunteer(tank.Id, world.World.Host.World.FindOnlinePlayer(PlayerName)!, PlayerbotGroupRole.Healer));
+            Assert.Equal(PlayerbotVolunteerOutcome.Role, result.Outcome);
+            Assert.Equal(PlayerbotGroupRole.Healer, result.Needed);
+
             long before = await world.OnWorldAsync(() => feature.Voice.Asked);
-            await WhisperAsync(world, chat, tank.Id, "i can heal"); // a warrior cannot: the stated role is dropped and the class decides
-            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.Asked) - before);
+            await WhisperAsync(world, chat, tank.Id, "i can heal");
+            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.Asked) - before); // the Role decline is whispered
             Assert.False(await IsVolunteerAsync(world));
             await world.RunAsync(20_000);
             Assert.False(PlayerInvited(world));
+        }
+    }
+
+    [Fact]
+    public async Task AStatedRole_DecidesWhetherThePlayerFillsATankOnlyPlace()
+    {
+        // MinTank 2: the warrior bot is one tank and the priest cannot tank, so the group's last place is a tank's.
+        var (world, tank, _, player, _, _) = await StartAsync(healer: true, o => o.Groups.MinTank = 2);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            PlayerbotVolunteerResult damage = await world.OnWorldAsync(() =>
+                world.Coordinator.Volunteer(tank.Id, world.World.Host.World.FindOnlinePlayer(PlayerName)!, PlayerbotGroupRole.Damage));
+            Assert.Equal(PlayerbotVolunteerOutcome.Role, damage.Outcome); // a warrior who says dps does not take the tank place
+            Assert.Equal(PlayerbotGroupRole.Tank, damage.Needed);
+
+            PlayerbotVolunteerResult stated = await world.OnWorldAsync(() =>
+                world.Coordinator.Volunteer(tank.Id, world.World.Host.World.FindOnlinePlayer(PlayerName)!, PlayerbotGroupRole.Tank));
+            Assert.Equal(PlayerbotVolunteerOutcome.Ready, stated.Outcome);
+            Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        }
+    }
+
+    [Fact]
+    public async Task AnInv_AfterTheGroupIsComplete_StaysQuiet_AndKeepsThePost()
+    {
+        var (world, tank, _, player, chat, feature) = await StartAsync(healer: true);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            long before = await world.OnWorldAsync(() => feature.Voice.Asked);
+            await WhisperAsync(world, chat, tank.Id, "inv"); // Ready: the group forms, the invitation is pending
+            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.Asked) - before);
+
+            Assert.True(await WhisperAsync(world, chat, tank.Id, "inv")); // the bot waits for nothing now: no "gave up" whisper
+            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.Asked) - before);
+            Assert.True(await world.OnWorldAsync(() => chat.Voice.Find(tank.Id, chat.NowMs, 600_000L) is not null)); // the post is not forgotten
+            Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        }
+    }
+
+    [Fact]
+    public async Task ACannotPlaceAnswer_ThenANotedOne_AreBothSaid()
+    {
+        var (world, tank, _, player, chat, feature) = await StartAsync(healer: true, pair: false);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            await world.OnWorldAsync(() =>
+            {
+                Player me = world.World.Host.World.FindOnlinePlayer(PlayerName)!;
+                me.Relocate(me.X, me.Y - 3_000f, me.Z, 0, world.World.Host.World.NowMs);
+                return true;
+            });
+            long before = await world.OnWorldAsync(() => feature.Voice.Asked);
+            await WhisperAsync(world, chat, tank.Id, "inv"); // too far: CannotPlace
+            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.Asked) - before);
+
+            await world.OnWorldAsync(() =>
+            {
+                Player me = world.World.Host.World.FindOnlinePlayer(PlayerName)!;
+                me.Relocate(StartX, StartY, StartZ, 0, world.World.Host.World.NowMs);
+                return true;
+            });
+            await WhisperAsync(world, chat, tank.Id, "inv"); // near now: Noted, a different outcome, said again
+            Assert.Equal(2, await world.OnWorldAsync(() => feature.Voice.Asked) - before);
+            Assert.True(await IsVolunteerAsync(world));
         }
     }
 

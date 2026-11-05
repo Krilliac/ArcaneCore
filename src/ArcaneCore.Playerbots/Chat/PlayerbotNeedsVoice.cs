@@ -71,7 +71,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Goal, Team Team), long> _holds = [];
     private int _verdictsThisPass;
     private readonly HashSet<ObjectGuid> _dings = [];
-    private readonly Dictionary<(ObjectGuid Asker, int Group), long> _answered = [];
+    private readonly Dictionary<(ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome), long> _answered = [];
     private readonly Random _random = new();
     private PlayerbotChat? _hooked;
     private int _cursor;
@@ -1066,7 +1066,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     /// Whether this player already got an answer about this waiting group within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/>; when not,
     /// records the answer now. A repeated "inv" is applied (the volunteer is refreshed) but not answered twice.
     /// </summary>
-    private bool AnsweredLately(PlayerbotChat chat, (ObjectGuid Asker, int Group) key)
+    private bool AnsweredLately(PlayerbotChat chat, (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) key)
     {
         PlayerbotLfgOptions lfg = chat.LfgOptions;
         long now = chat.NowMs;
@@ -1079,6 +1079,15 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         }
 
         _answered[key] = now;
+        return false;
+    }
+
+    /// <summary>Whether this player was told within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/> that <paramref name="bot"/>'s group is complete with them (Ready).</summary>
+    private bool AnsweredReadyLately(PlayerbotChat chat, ObjectGuid asker, Guid bot)
+    {
+        long window = chat.LfgOptions.AnswerRepeatSeconds * 1000L;
+        foreach (((ObjectGuid who, Guid from, _, PlayerbotVolunteerOutcome outcome), long at) in _answered)
+            if (who == asker && from == bot && outcome == PlayerbotVolunteerOutcome.Ready && chat.NowMs - at < window) return true;
         return false;
     }
 
@@ -1108,10 +1117,16 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                     BotChatRole.Damage => PlayerbotGroupRole.Damage,
                     _ => null,
                 };
+                int waitingGroup = coordinator.WaitingGroupIdOf(line.BotId); // before Volunteer: a group that forms leaves its bots waiting for none
                 PlayerbotVolunteerResult result = coordinator.Volunteer(line.BotId, asker, stated);
                 if (result.Outcome == PlayerbotVolunteerOutcome.Ignored) return true; // no invitation and no reply
-                if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting) chat.Voice.Forget(line.BotId);
-                else if (AnsweredLately(chat, (asker.Guid, coordinator.WaitingGroupIdOf(line.BotId)))) return true; // applied above, said once
+                if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting)
+                {
+                    // The group formed on this player's earlier inv (the invitation is pending): the repeat is quiet and the post stays.
+                    if (AnsweredReadyLately(chat, asker.Guid, line.BotId)) return true;
+                    chat.Voice.Forget(line.BotId);
+                }
+                else if (AnsweredLately(chat, (asker.Guid, line.BotId, waitingGroup, result.Outcome))) return true; // applied above, an identical answer said once
                 string roles = result.Needed == PlayerbotGroupRole.Tank ? "tank" : "healer";
                 string minLevel = Number(result.Level > 0 ? result.Level : post.MinLevel);
                 (string key, string sentence) = result.Outcome switch
