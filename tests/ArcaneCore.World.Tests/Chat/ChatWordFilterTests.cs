@@ -61,7 +61,7 @@ public sealed class ChatWordFilterTests
         var ledger = new FaultLedger();
         var logger = new CountingLogger();
         var filter = new ChatWordFilter(
-            [new ChatWordFilterRule(1, @"(a+)+$", ChatWordFilterScope.Chat, ChatWordFilterAction.Block)],
+            [new ChatWordFilterRule(1, @"(a+)+\1$", ChatWordFilterScope.Chat, ChatWordFilterAction.Block)],
             TimeSpan.FromMilliseconds(1),
             ledger,
             logger);
