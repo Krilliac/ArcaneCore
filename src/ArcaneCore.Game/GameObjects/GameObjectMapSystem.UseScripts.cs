@@ -16,7 +16,9 @@ public sealed partial class GameObjectMapSystem
     /// <c>dbscripts_on_go_template_use</c> script <c>go.Template.Entry</c> for a use by <paramref name="user"/>, at the top of GameObject::Use
     /// before the type switch (GameObject.cpp:1489-1490). Every object of the template runs it, every type. False when there was no script, or the
     /// use was refused first (<see cref="GooberRefusesUse"/>). A click on an object in use never gets here (<see cref="UseCore"/>, as
-    /// SpellHandler.cpp:295-296). A use that does get here, a click once the object is usable again or a use through the spell or script path,
+    /// SpellHandler.cpp:295-296), nor does a click on a generic object (SpellHandler.cpp:289-293) or a trap, which the click path does not use
+    /// (<see cref="UseCore"/> answers NotUsable, and with no charge or cooldown spent nothing would bound the repeats).
+    /// A use that does get here, a click once the object is usable again or a use through the spell or script path,
     /// starts another run even while a delayed step of the first is pending (ScriptsStart's default SCRIPT_EXEC_PARAM_NONE, Maps/Map.h:233-240).
     /// </summary>
     private bool StartTemplateUseScript(Unit user, GameObject go)
@@ -28,7 +30,8 @@ public sealed partial class GameObjectMapSystem
     /// <summary>
     /// A goober on cooldown refuses the use before anything fires (mangos-classic GameObject.cpp:1482 returns on the cooldown above the template
     /// script at :1490). A trap is gated by its cooldown alone: GetCooldown covers GAMEOBJECT_TYPE_TRAP and GOOBER (GameObject.h:458-466), so a
-    /// trap on cooldown also returns before the template script. The not-ready half is not GameObject::Use: it keeps the script in step with
+    /// trap on cooldown also returns before the template script (a trap gets here through <see cref="UseByUnit"/>, never through a click).
+    /// The not-ready half is not GameObject::Use: it keeps the script in step with
     /// <see cref="UseGoober"/> (a player: an object with an auto-close time that is not ready) and <see cref="UseGooberByUnit"/> (any other
     /// unit: not ready), which refuse such a use on the spell and script paths, so the script does not start for a use they turn down. A use
     /// that fails the goober's quest gate counts here too: <see cref="UseGoober"/> sets the cooldown and the in-use state before that gate. A click

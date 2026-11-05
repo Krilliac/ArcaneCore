@@ -68,13 +68,16 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   consumable goober despawns after such a click. `UseCore` refuses the same way, before any script, hook or aura break. So a second run while
   a delayed step (Keystone 28 s, Shadowforge Lock 20 s, Sacred Fire 5 s) is pending needs the object to be usable again first, or a use through
   the open-lock spell or `UseByUnit`, which skip the opcode and have no such refusal. A click on a generic object starts nothing either
-  (SpellHandler.cpp:289-293).
+  (SpellHandler.cpp:289-293). Nor does a click on a trap, which is an ArcaneCore difference: the reference click runs the template script
+  and then the trap case (GameObject.cpp:1576-1599), whose charge and cooldown bound the repeats, but `UseCore` has no trap use and answers
+  NotUsable, so a script started there would spend nothing and every crafted repeat click would queue another run.
   A goober or trap on cooldown refuses the use before the template script starts (GameObject.cpp:1482; GetCooldown covers TRAP and GOOBER,
   GameObject.h:458-466). ArcaneCore also holds back the template script for a goober that `UseGoober` or `UseGooberByUnit` would refuse as not
   ready on the spell and script paths, which GameObject::Use does not do. A door or button
-  whose instance script took the use skips the guid script (GameObject.cpp:1505, :1528; asked for a player user on the script-use path too). Known gap: a linked or scripted trap trigger
-  calls `UseTrap` directly, where the reference goes through `GameObject::Use` and so starts the template script too; the only type 6
-  row is 179804 (Drakonid Bones), whose event BlackwingLairInstance already raises in C#, so it is left alone to avoid a double summon.
+  whose instance script took the use skips the guid script (GameObject.cpp:1505, :1528; asked for a player user on the script-use path too). Known gap: a click on a trap (above) and a linked or
+  scripted trap trigger, which calls `UseTrap` directly, start no template script, where the reference goes through `GameObject::Use` and
+  starts it. Only `UseByUnit` (ACTIVATE_OBJECT, `UseTrapFor`) does. The only type 6 row is 179804 (Drakonid Bones), whose event
+  BlackwingLairInstance already raises in C#, so it is left alone to avoid a double summon.
   The Brazier of the Herald (guid 2890009) is ported in C# by ScholomanceInstance, which takes that use, so its row does not run too.
 
 ## Tests

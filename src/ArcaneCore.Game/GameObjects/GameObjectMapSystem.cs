@@ -724,10 +724,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // is open (the direct-use lock here, the open-lock spell in OpenLock).
         bool lockOpen = CheckDirectLock(player, go) == GameObjectUseResult.Ok;
         bool scriptTookUse = lockOpen && InstanceScriptTookUse(player, go);
-        if (lockOpen && !scriptTookUse && go.Type != GameObjectType.Generic)
+        if (lockOpen && !scriptTookUse && go.Type is not (GameObjectType.Generic or GameObjectType.Trap))
         {
             // dbscripts_on_go_template_use (GameObject.cpp:1489-1490): skipped when the ScriptDev2 hook took the use. The opcode never hands a
-            // generic object to GameObject::Use (SpellHandler.cpp:289-293), so a click on one starts nothing.
+            // generic object to GameObject::Use (SpellHandler.cpp:289-293), so a click on one starts nothing. A click on a trap starts nothing
+            // because this path has no trap use (NotUsable below): the reference click goes on to the trap case (GameObject.cpp:1576-1599),
+            // whose charge and cooldown bound the repeats, while here no charge, cooldown or in-use state would stop a crafted repeat click
+            // from queueing another run. Traps run the script through UseByUnit, which does use them up.
             StartTemplateUseScript(player, go);
         }
 

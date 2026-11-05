@@ -340,6 +340,30 @@ public sealed class GameObjectDbScriptTests
         }
     }
 
+    [Fact]
+    public void RepeatClicksOnATrap_QueueNoTemplateScript_AndTheScriptPathStillStartsIt()
+    {
+        // The shape of 179804 Drakonid Bones: type 6, 1 charge (data4), no cooldown (data5), no lock. The click path has no trap use, so nothing
+        // spent would bound a script started there. UseByUnit does use the trap, and is the control that the script is there to start.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Trap, (4, 1));
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            for (int click = 0; click < 3; click++)
+            {
+                Assert.Equal(GameObjectUseResult.NotUsable, objects.Use(player, go.Guid));
+                Assert.Equal(0, system.PendingDbScriptSteps);
+            }
+
+            Assert.Equal(GameObjectUseResult.Ok, objects.UseByUnit(player, go));
+            Assert.Equal(1, system.PendingDbScriptSteps); // the template script only: a trap starts no guid script
+            Assert.Equal(GameObjectLootState.JustDeactivated, go.LootState);
+        }
+    }
+
     [Theory]
     [InlineData(DbScriptKind.GameObjectTemplate)]
     [InlineData(DbScriptKind.GameObject)]
