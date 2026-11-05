@@ -52,6 +52,92 @@ public sealed class GatewayHandoffHardeningTests
         Assert.Equal(NodeB, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
     }
 
+    /// <summary>The promoted standby attaches a draining source of its own, so after a handoff both processes report a held ownership; the higher epoch (the takeover's) marks the active one.</summary>
+    [Fact]
+    public async Task AfterAHandoff_BothProcessesHoldAToken_AndARestartedGatewayFollowsTheHigherEpoch()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+
+        await rig.RestartGatewayAsync(cts.Token);
+        ControlDescribePayload a = await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token);
+        ControlDescribePayload b = await DescribeAsync(rig.Service.StandbyChannel(NodeA)!, cts.Token);
+        Assert.Equal(NodeA, a.WorkerId);
+        Assert.Equal(NodeB, b.WorkerId);
+        Assert.False(a.IsStandby);
+        Assert.False(b.IsStandby);
+        Assert.NotNull(a.HeldSourceToken);
+        Assert.NotNull(b.HeldSourceToken);
+        Assert.True(b.HeldSourceToken!.Epoch > a.HeldSourceToken!.Epoch, $"{b.HeldSourceToken.Epoch} vs {a.HeldSourceToken.Epoch}");
+
+        await rig.Service.ReconcileAsync(cts.Token);
+        Assert.Equal(new[] { NodeA, NodeB, NodeA }, rig.Service.NodeNames(NodeA).ToArray());
+        Assert.Equal(rig.BEndpoint.Host!.BoundEndPoint, rig.Gateway.WorkerEndPoint);
+    }
+
+    /// <summary>
+    /// Y10 end to end: the standby the first handoff promoted (endpoint started, so the session acceptor exists when its transfer side is built) runs a transfer through its control service, then is
+    /// the source of a second, complete gateway-driven handoff to a third world (StopAdmissions, Freeze, Flush, takeover, reroute, RetireWrites, ReleaseWriterLock, Retire).
+    /// </summary>
+    [Fact]
+    public async Task APromotedStandby_RunsATransfer_AndIsTheSourceOfACompleteGatewayDrivenHandoff()
+    {
+        const string nodeC = "world-c";
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token, transfers: true);
+        WorldHandoffRecord first = await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+        Assert.Equal(WorldHandoffStage.Retired, first.Stage);
+
+        // B is promoted, its endpoint runs (so an acceptor exists) and its control service has attached the transfer side.
+        Assert.NotNull(rig.B.Services.GetRequiredService<GatewayWorkerEndpoint>().Acceptor);
+        WorkerControlService control = rig.B.Services.GetRequiredService<WorkerControlService>();
+        Assert.True(Host(rig.B).PromotionCompleted);
+        Assert.NotNull(control.Transfers);
+        Assert.NotNull(control.Handoff!.Source);
+
+        // A transfer through it: this worker is the target of a journalled transfer and the real target participant reserves.
+        CharacterOwnershipToken held = rig.B.World.CharacterOwnership!;
+        Guid transferId = Guid.NewGuid();
+        await control.Transfers!.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), new WorkerNodeId(NodeB), 0, 0, 0, 0, held, cts.Token);
+        ControlReply reserved = await control.HandleAsync(
+            new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Reserve, new ControlReserveArguments(4242UL, 0, 0)), new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, reserved.Status);
+        Assert.True(Assert.IsType<ControlReservePayload>(reserved.Payload).Reserved);
+        ControlReply discarded = await control.HandleAsync(
+            new ControlRequest(2, ControlKind.PlayerTransfer, transferId, ControlVerb.Discard, new ControlReasonArguments("test: the transfer is abandoned before the next handoff")), new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, discarded.Status);
+
+        // A third world becomes the slot's standby; the second handoff drains B.
+        (SyntheticArcaneServer c, GatewayWorkerEndpoint cEndpoint) = await rig.StartExtraStandbyAsync(nodeC, cts.Token);
+        try
+        {
+            GatewayStandbyLink link = rig.Service.StandbyLink(NodeA)!;
+            link.Retarget(cEndpoint.Host!.BoundEndPoint);
+            LinkControlChannel standbyChannel = await link.WaitForChannelAsync(cts.Token);
+            Assert.Equal(nodeC, (await DescribeAsync(standbyChannel, cts.Token)).WorkerId);
+            Assert.Equal(NodeB, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
+
+            WorldHandoffRecord second = await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+
+            Assert.Equal(WorldHandoffStage.Retired, second.Stage);
+            Assert.Equal(NodeB, second.SourceWorkerId.Value);
+            Assert.Equal(nodeC, second.TargetWorkerId.Value);
+            Assert.False(Host(c).IsStandby);
+            Assert.True(Host(c).PromotionCompleted);
+            Assert.Equal(LocalWorldHandoffSource.RetiredReason, rig.B.Services.GetRequiredService<WorkerAdmission>().ClosedReason);
+            Assert.Equal(nodeC, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
+            Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
+        }
+        finally
+        {
+            ((LocalWorldHandoffSource)rig.B.Services.GetRequiredService<IWorldHandoffSource>()).Dispose(); // release B's parked simulation thread before its host stops
+            ((LocalWorldHandoffSource)c.Services.GetRequiredService<IWorldHandoffSource>()).Dispose();
+            await cEndpoint.StopAsync(CancellationToken.None);
+            await c.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task AGatewayRestartedAfterACrashFollowingTheReroute_FollowsTheStandbyAndRetiresTheSource()
     {
@@ -530,15 +616,15 @@ public sealed class GatewayHandoffHardeningTests
 
         public GatewayHandoffRecoveryService Recovery { get; private set; }
 
-        public static async Task<Rig> StartAsync(CancellationToken token)
+        public static async Task<Rig> StartAsync(CancellationToken token, bool transfers = false)
         {
             SyntheticArcaneServer a = await SyntheticArcaneServer.StartAsync(
-                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false) }, configureServices: QuietSelfHeal, token);
+                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false, transfers) }, configureServices: QuietSelfHeal, token);
             SyntheticArcaneServer? b = null;
             try
             {
                 b = await SyntheticArcaneServer.StartAsync(
-                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true) }, configureServices: QuietSelfHeal, token);
+                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true, transfers) }, configureServices: QuietSelfHeal, token);
                 GatewayWorkerEndpoint aEndpoint = a.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 GatewayWorkerEndpoint bEndpoint = b.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 await aEndpoint.StartAsync(token);
@@ -697,14 +783,41 @@ public sealed class GatewayHandoffHardeningTests
                 return new WorkerSelfHealService(control, control.Handoff, control.Transfers, TimeSpan.FromHours(1));
             });
 
-        private static Dictionary<string, string?> Worker(string nodeId, bool standby) => new()
+        /// <summary>Another standby world on the same databases (its endpoint started), for a second handoff whose source is the standby the first one promoted. The caller owns both and disposes them.</summary>
+        public async Task<(SyntheticArcaneServer Server, GatewayWorkerEndpoint Endpoint)> StartExtraStandbyAsync(string nodeId, CancellationToken token)
         {
-            ["Cluster:Worker:Enabled"] = "true",
-            ["Cluster:Worker:Standby"] = standby ? "true" : "false",
-            ["Cluster:Worker:NodeId"] = nodeId,
-            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["Cluster:Worker:LinkSecret"] = Secret,
-            ["Cluster:Worker:Handoff:Enabled"] = "true",
-        };
+            SyntheticArcaneServer extra = await SyntheticArcaneServer.StartAsync(
+                new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = A.DataDirectory, Configuration = Worker(nodeId, standby: true, transfers: true) }, configureServices: QuietSelfHeal, token);
+            try
+            {
+                GatewayWorkerEndpoint endpoint = extra.Services.GetRequiredService<GatewayWorkerEndpoint>();
+                await endpoint.StartAsync(token);
+                return (extra, endpoint);
+            }
+            catch
+            {
+                await extra.DisposeAsync();
+                throw;
+            }
+        }
+
+        private static Dictionary<string, string?> Worker(string nodeId, bool standby, bool transfers = false)
+        {
+            var configuration = new Dictionary<string, string?>
+            {
+                ["Cluster:Worker:Enabled"] = "true",
+                ["Cluster:Worker:Standby"] = standby ? "true" : "false",
+                ["Cluster:Worker:NodeId"] = nodeId,
+                ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Cluster:Worker:LinkSecret"] = Secret,
+                ["Cluster:Worker:Handoff:Enabled"] = "true",
+            };
+            if (transfers)
+            {
+                configuration["Cluster:Worker:Transfers:Enabled"] = "true";
+            }
+
+            return configuration;
+        }
     }
 }

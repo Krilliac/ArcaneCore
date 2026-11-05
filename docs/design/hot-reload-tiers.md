@@ -728,6 +728,8 @@ workers. It is a separate process from every world, so the coordinators it hosts
   slot's next standby (`--Cluster:Worker:Standby=true`); the supervisor persists the swapped roles, so a supervisor restart keeps them.
   `.cluster restart $worker` (Administrator, re-checked by the gateway against the auth database) starts this through the gateway; "started" is
   answered at once and the verdict reaches the same client after it has moved. `.cluster handoff status [id]` reads the journal.
+  Once its promotion has completed, a promoted standby runs player transfers and is the draining source of the next gateway-driven handoff (its control service attaches both then). It has no local
+  handoff coordinator, in-flight tracker or start-up recovery (those are registered only for a worker that started active), so it cannot coordinate or recover a handoff on its own; the gateway drives it.
   The promoted standby is the same process that was started as the standby, so the launcher gives standbys the worlds' hang timeout and hang
   capture: the supervisor's hang watch is armed by the first world-tick beat of whichever process beats (a standby that never beats is warned
   about once, never killed for silence). When a world that holds the supervisor `RealmId` (the lease-holder slot) is restarted as a standby, the

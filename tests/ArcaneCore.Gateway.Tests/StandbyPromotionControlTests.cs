@@ -82,6 +82,50 @@ public sealed class StandbyPromotionControlTests
         Assert.False(((LocalWorldHandoffSource)control.Handoff.Source!).IsFrozen);
     }
 
+    /// <summary>
+    /// A worker stops reporting Standby at the ownership takeover, but its features are attached only when the promotion completes. In between, a verb must be served by the standby's participants
+    /// (not fail inside the attach) and the promoted participants must be built once, after the promotion completed.
+    /// </summary>
+    [Fact]
+    public async Task AVerbDuringThePromotionWindow_IsServedByTheStandbyParticipants_AndTheAttachWaitsForTheCompletedPromotion()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer standby = await SyntheticArcaneServer.StartAsync(
+            new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(standby: true) }, configureServices: null, cts.Token);
+        WorkerControlHandoff waiting = standby.Services.GetRequiredService<WorkerControlService>().Handoff!;
+        int builds = 0;
+        bool completed = false;
+        Guid incarnation = Guid.NewGuid();
+        var control = new WorkerControlService(
+            handoffEnabled: true,
+            handoff: waiting,
+            transfersEnabled: false,
+            transfers: null,
+            identity: () => new WorkerControlIdentity(new WorkerNodeId("window-worker"), false, incarnation, "owner", "scope", Array.Empty<uint>()),
+            onPromoted: () =>
+            {
+                builds++;
+                return new WorkerPromotedParticipants(waiting with { Source = null }, null);
+            },
+            promotionCompleted: () => completed);
+
+        // The window: not standby by Describe, promotion not completed.
+        ControlReply describe = await Handoff(control, 1, Guid.NewGuid(), ControlVerb.Describe, cts.Token);
+        Assert.Equal(ControlStatus.Ok, describe.Status);
+        Assert.False(Assert.IsType<ControlDescribePayload>(describe.Payload).IsStandby);
+        ControlReply freeze = await Handoff(control, 2, Guid.NewGuid(), ControlVerb.Freeze, cts.Token);
+        Assert.Equal(ControlStatus.Refused, freeze.Status); // the journal has no such handoff; the verb ran against the standby's participants, it did not fail
+        Assert.Null(control.Transfers);
+        Assert.Equal(0, builds);
+
+        // The promotion completes: the next call builds the promoted participants once.
+        completed = true;
+        ControlReply after = await Handoff(control, 3, Guid.NewGuid(), ControlVerb.Describe, cts.Token);
+        Assert.Equal(ControlStatus.Ok, after.Status);
+        _ = control.Handoff;
+        Assert.Equal(1, builds);
+    }
+
     private static Task<ControlReply> Handoff(WorkerControlService control, ulong id, Guid handoff, ControlVerb verb, CancellationToken token) =>
         control.HandleAsync(new ControlRequest(id, ControlKind.WorldHandoff, handoff, verb, ControlNoArguments.Instance), new GatewayControlContext(1), token);
 

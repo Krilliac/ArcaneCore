@@ -103,7 +103,7 @@ public static class WorkerTransferHosting
             world.CharacterOwnership?.Scope ?? string.Empty,
             host.WorkerOwnedMaps is { } maps ? maps.Order().Take(ClusterControlWire.MaxOwnedMaps).ToArray() : Array.Empty<uint>());
 
-        return new WorkerControlService(handoffOn, handoff, transfersOn, transfer, Identity, loggers?.CreateLogger<WorkerControlService>(), onPromoted);
+        return new WorkerControlService(handoffOn, handoff, transfersOn, transfer, Identity, loggers?.CreateLogger<WorkerControlService>(), onPromoted, () => host.PromotionCompleted);
     }
 
     /// <summary>

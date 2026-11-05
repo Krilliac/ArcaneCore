@@ -82,7 +82,8 @@ public sealed class WorkerControlService(
     WorkerControlTransfer? transfers,
     Func<WorkerControlIdentity> identity,
     ILogger? logger = null,
-    Func<WorkerPromotedParticipants>? onPromoted = null) : IGatewayControlHandler
+    Func<WorkerPromotedParticipants>? onPromoted = null,
+    Func<bool>? promotionCompleted = null) : IGatewayControlHandler
 {
     /// <summary>How many operations' replies and tombstones are remembered. A suspend reply holds up to 16 KiB, so the bound also bounds memory.</summary>
     private const int Remembered = 512;
@@ -114,12 +115,13 @@ public sealed class WorkerControlService(
     public WorkerControlTransfer? Transfers => Current().Transfers;
 
     /// <summary>
-    /// The participants now: those the service was built with, until the worker is no longer a standby; then, once, those <c>onPromoted</c> builds. A build that throws attaches nothing and is
+    /// The participants now: those the service was built with, until the promotion has completed (<c>promotionCompleted</c>; without it, until the worker no longer reports Standby). The promotion
+    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds. A build that throws attaches nothing and is
     /// retried by the next call (the request that hit it is answered Failed). Thread-safe: callers on any thread see either the standby's participants or the promoted ones, never a mix.
     /// </summary>
     private (WorkerControlHandoff? Handoff, WorkerControlTransfer? Transfers) Current()
     {
-        if (Volatile.Read(ref _onPromoted) is { } build && !identity().IsStandby)
+        if (Volatile.Read(ref _onPromoted) is { } build && (promotionCompleted?.Invoke() ?? !identity().IsStandby))
         {
             lock (_attachGate)
             {

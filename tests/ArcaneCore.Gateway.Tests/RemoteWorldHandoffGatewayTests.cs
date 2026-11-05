@@ -386,7 +386,7 @@ public sealed class RemoteWorldHandoffGatewayTests
             }
         }
 
-        // The pre-flight describes the source first: the promoted B registered no handoff source (only a non-standby configuration does), so it answers "holds no characters ownership" before A is even looked at.
+        // The pre-flight describes the source first: the promoted B now has a handoff source of its own, so the refusal normally names the standby side ("is not a standby"); "holds no characters ownership" stays accepted for a source that reports none.
         // Either refusal is the pre-flight; what matters is that it came before any journal row.
         Assert.True(
             refusal.Message.Contains("is not a standby", StringComparison.Ordinal) || refusal.Message.Contains("holds no characters ownership", StringComparison.Ordinal),
