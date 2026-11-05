@@ -23,6 +23,6 @@ internal static partial class PlayerbotLfgIntents
         return match.Groups["heal"].Success ? BotChatRole.Healer : BotChatRole.Damage;
     }
 
-    [GeneratedRegex(@"(?<tank>tank|mt)|(?<heal>heals?|healer)|(?<dps>dps|dd|damage)")]
+    [GeneratedRegex(@"\b(?<tank>tank|mt)\b|\b(?<heal>heals?|healer)\b|\b(?<dps>dps|dd|damage)\b")]
     private static partial Regex Role();
 }

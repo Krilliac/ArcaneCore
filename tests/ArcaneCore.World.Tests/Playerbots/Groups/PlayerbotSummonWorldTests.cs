@@ -422,8 +422,22 @@ public sealed class PlayerbotSummonWorldTests
 
         // The other bots keep thinking: any of them drops the job (its summoner is gone) instead of holding still for it until the summoner thinks again.
         Assert.True(await world.RunUntilAsync(20_000, () => world.Bots.Summons.Active == 0), await world.TraceAsync());
-        Assert.False(await world.OnWorldAsync(() => world.Bots.Summons.IsHelper(helperGuid)), "the helper still holds a place of a job that is gone");
-        Assert.Equal(0, await world.OnWorldAsync(() => world.Bots.Summons.Active));
+        // Independent of the job table: the helper's own think no longer holds still for the dropped job (Drive is false), and it holds no place.
+        var helperBot = helperName == userOne.Name ? userOne : userTwo;
+        bool held = await world.OnWorldAsync(() =>
+            world.Bots.Summons.Drive(world.Session(helperBot.Id), world.Player(helperBot.Id), world.Options, null, 100));
+        Assert.False(held, "the helper still holds still for a job that is gone");
+        Assert.False(await world.OnWorldAsync(() => world.Bots.Summons.IsHelper(helperGuid)));
+    }
+
+    /// <summary>A far-since entry that was not looked at while the picks were gated starts over, so the 10 s debounce is not skipped when the gate lifts.</summary>
+    [Fact]
+    public void AFarSinceEntry_NotRefreshedForTheStaleTime_StartsOver()
+    {
+        Assert.Equal(5_000u, PlayerbotSummons.FarStart(null, 5_000));
+        Assert.Equal(1_000u, PlayerbotSummons.FarStart((1_000, 5_000), 5_000 + PlayerbotSummons.FarStaleMs - 1));
+        Assert.Equal(40_000u, PlayerbotSummons.FarStart((1_000, 5_000), 40_000));
+        Assert.Equal(5_000u + PlayerbotSummons.FarStaleMs, PlayerbotSummons.FarStart((1_000, 5_000), 5_000 + PlayerbotSummons.FarStaleMs));
     }
 
     /// <summary>The stale drop is bounded by the job's own limit plus the grace: a job exactly at the bound stays, one millisecond past it is dropped.</summary>

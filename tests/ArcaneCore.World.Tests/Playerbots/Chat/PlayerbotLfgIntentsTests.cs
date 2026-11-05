@@ -21,6 +21,10 @@ public sealed class PlayerbotLfgIntentsTests
 
     [Theory]
     [InlineData("inv, priest here")]
+    [InlineData("inv add me")]
+    [InlineData("inv buddy")]
+    [InlineData("inv smth")]
+    [InlineData("inv healthy")]
     [InlineData("inv")]
     [InlineData("")]
     [InlineData("   ")]

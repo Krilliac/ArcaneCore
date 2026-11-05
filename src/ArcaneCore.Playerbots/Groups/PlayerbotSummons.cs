@@ -81,6 +81,9 @@ internal sealed class PlayerbotSummons
     /// <summary>A member must stay far this long before it is summoned, so a bot just logged in or teleporting is not.</summary>
     internal const uint FarDebounceMs = 10_000;
 
+    /// <summary>A far-since entry not refreshed for this long (picks gated meanwhile) is restarted, not trusted.</summary>
+    internal const uint FarStaleMs = 6_000;
+
     /// <summary>How often one bot looks for a summon to start.</summary>
     internal const uint EvalGapMs = 2_000;
 
@@ -100,7 +103,7 @@ internal sealed class PlayerbotSummons
 
     private readonly Dictionary<ObjectGuid, SummonJob> _bySummoner = [];
     private readonly Dictionary<ObjectGuid, uint> _cooldownUntil = [];
-    private readonly Dictionary<ObjectGuid, uint> _farSince = [];
+    private readonly Dictionary<ObjectGuid, (uint Since, uint Seen)> _farSince = [];
     private readonly Dictionary<ObjectGuid, BotState> _bots = [];
     private readonly Dictionary<Map, StoneCache> _stones = [];
     private readonly List<ObjectGuid> _goneHelpers = [];
@@ -271,7 +274,10 @@ internal sealed class PlayerbotSummons
                 continue;
             }
 
-            if (!_farSince.TryGetValue(slot.Guid, out uint since)) _farSince[slot.Guid] = since = now;
+            // An entry not looked at for FarStaleMs (the picks were gated: a group state outside the allowed list, combat) starts over: the member may
+            // have come back and left since, so the debounce is not skipped when the gate lifts.
+            uint since = FarStart(_farSince.TryGetValue(slot.Guid, out (uint Since, uint Seen) entry) ? entry : null, now);
+            _farSince[slot.Guid] = (since, now);
             if (unchecked(now - since) < FarDebounceMs || pick is not null) continue;
             if (member.Combat.IsInCombat || member.Transport is not null || member.PendingSummon is { } pending && pending.ExpiresAtMs >= now) continue;
             if (_cooldownUntil.TryGetValue(slot.Guid, out uint until) && unchecked((int)(until - now)) > 0) continue;
@@ -282,6 +288,10 @@ internal sealed class PlayerbotSummons
 
         return pick;
     }
+
+    /// <summary>The time a member counts as far from: the entry's start while it was looked at within <see cref="FarStaleMs"/>, else <paramref name="now"/>.</summary>
+    internal static uint FarStart((uint Since, uint Seen)? entry, uint now)
+        => entry is { } e && unchecked(now - e.Seen) < FarStaleMs ? e.Since : now;
 
     private bool IsTarget(ObjectGuid guid)
     {
@@ -479,10 +489,11 @@ internal sealed class PlayerbotSummons
         if (beside < job.Needed) return true; // the partner is still on its way (the job's time bound ends the wait)
 
         if (unchecked(now - job.LastUseMs) < MinRetryGapMs && job.LastUseMs != 0) return true;
-        job.LastUseMs = now == 0 ? 1 : now;
-        if (job.UseTries++ >= 3) return Fail(session, player, job);
+        if (job.UseTries >= 3) return Fail(session, player, job);
         if (player.Selection != target.Guid) session.TryManagedAction(WorldOpcode.CmsgSetSelection, PlayerbotNavigation.GuidPayload(target.Guid.Value));
-        if (!session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(stone.Guid.Value))) return true;
+        if (!session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(stone.Guid.Value))) return true; // refused for budget: not a try
+        job.LastUseMs = now == 0 ? 1 : now;
+        job.UseTries++;
         Announce(session, player, options, group, job, target);
         if (target.PendingSummon is { } offer && offer.Summoner == player.Guid) return End(player);
         return true;
@@ -538,9 +549,11 @@ internal sealed class PlayerbotSummons
 
             if (state.ClickTries < 12 && (state.ClickLastMs == 0 || unchecked(now - state.ClickLastMs) >= MinRetryGapMs))
             {
-                state.ClickLastMs = now == 0 ? 1 : now;
-                state.ClickTries++;
-                session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(anchor.Guid.Value));
+                if (session.TryManagedAction(WorldOpcode.CmsgGameobjUse, PlayerbotNavigation.GuidPayload(anchor.Guid.Value)))
+                {
+                    state.ClickLastMs = now == 0 ? 1 : now;
+                    state.ClickTries++; // only a click that was sent counts; a tick the action budget refused is tried again
+                }
             }
         }
 
