@@ -157,7 +157,7 @@ public sealed class TravelTriggerPortalPlanTests
         await using ShipTestWorld world = await ShipTestWorld.StartAsync();
         await world.PlaceAsync(0, ShipTestWorld.Start);
         PlayerbotOptions options = TravelJourneyShipTests.Options();
-        TravelPlace low = Tp(8700f, 900f, 10f), low2 = Tp(8900f, 1000f, 30f), high = Tp(9800f, 2000f, 1320f);
+        TravelPlace low = new(0, new Vector3(8700f, 900f, 10f)), low2 = new(0, new Vector3(8900f, 1000f, 30f)), high = new(0, new Vector3(9800f, 2000f, 1320f));
         TravelRoute? route = await world.OnWorldAsync(() =>
         {
             WorldMaps maps = WorldMaps.Of(world.Host.World);
