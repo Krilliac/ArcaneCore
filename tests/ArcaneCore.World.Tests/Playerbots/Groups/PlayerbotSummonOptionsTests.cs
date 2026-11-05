@@ -11,11 +11,11 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 public sealed class PlayerbotSummonOptionsTests
 {
     [Fact]
-    public void TheDefaults_HaveTheRitualAndTheMeetingStoneOn()
+    public void TheDefaults_HaveTheRitualOn_AndTheMeetingStoneOff()
     {
         var o = new PlayerbotSummonOptions();
         Assert.True(o.Enabled);
-        Assert.True(o.MeetingStones);
+        Assert.False(o.MeetingStones);
         Assert.Equal(200f, o.FarYards);
         Assert.Equal(120, o.RetrySeconds);
         Assert.Equal(40f, o.HelperYards);
