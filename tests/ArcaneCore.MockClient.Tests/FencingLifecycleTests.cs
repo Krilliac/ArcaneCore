@@ -33,13 +33,15 @@ public sealed class FencingLifecycleTests
     [Fact]
     public async Task FencedWorld_CreateWithStartActions_Login_Move_Logout_Relog_RestoresPosition_And_StopReleasesTheClaim()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var logged = new LoggedExceptions();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(
             new SyntheticServerOptions { EnableFencing = true },
             services => services.AddLogging(logging => logging.AddProvider(logged)), token);
         await server.AddAccountAsync(Account, Password, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
         await SeedStartActionAsync(server, token);
         Assert.True(await IsClaimedAsync(server, token));
 
@@ -107,10 +109,12 @@ public sealed class FencingLifecycleTests
     [Fact]
     public async Task SecondWorldOnTheSameCharactersFile_FailsStartup_WhileTheFirstOwnsIt()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         await using SyntheticArcaneServer first = await SyntheticArcaneServer.StartAsync(
             new SyntheticServerOptions { EnableFencing = true }, configureServices: null, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
 
         // The writer file lock refuses it first, before the durable claim is even read. The durable-claim refusal is not reachable end to end here: a second
         // harness on another characters.db shares no claim row, and the same file is stopped by the lock above; WorldHostCharacterFencingTests
@@ -128,9 +132,11 @@ public sealed class FencingLifecycleTests
     [Fact]
     public async Task FencingIsOffByDefault_NoClaimIsTaken_AndCreationWithStartActionsStillWorks()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(60));
         await server.AddAccountAsync(Account, Password, token);
         await SeedStartActionAsync(server, token);
         Assert.False(await IsClaimedAsync(server, token));

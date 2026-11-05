@@ -42,11 +42,33 @@ public sealed class GatewayCrossWorkerTeleportTests
     private static readonly TeleportDestination Landing = new(1, -1196.22f, 29.0f, 176.949f, 3.1f);
 
     /// <summary>
-    /// Blocks the gateway's read-loop thread inside a test hook until <paramref name="released"/> holds (the route switch completed and nothing is staged) or the test is cancelled.
-    /// A bounded spin-then-yield wait (<see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/>), not a fixed-length sleep per poll. It still polls and holds the hook's thread while it waits (no signal exists to wait on; the router exposes only these two counters), bounded by <see cref="Deadline"/> and by the test's own token.
+    /// Blocks the gateway's read-loop thread inside a test hook until <paramref name="released"/> is set or the test is cancelled: a real kernel wait on a signal, bounded by <see cref="Deadline"/>
+    /// and by the test's own token, with no polling on the hook's thread. The router exposes only its two counters (the route switch completed and nothing is staged), so the test side watches them
+    /// with <see cref="ReleaseWhenRouteSwitchedAsync"/> (an asynchronous poll that holds no thread) and sets the signal.
     /// </summary>
-    private static void HoldUntil(Func<bool> released, CancellationToken cancellation)
-        => SpinWait.SpinUntil(() => cancellation.IsCancellationRequested || released(), Deadline);
+    private static void HoldUntil(ManualResetEventSlim released, CancellationToken cancellation)
+    {
+        try
+        {
+            released.Wait(Deadline, cancellation);
+        }
+        catch (OperationCanceledException)
+        {
+            // The test ended: let the read loop go.
+        }
+    }
+
+    /// <summary>
+    /// Sets <paramref name="release"/> once the hook has captured <paramref name="held"/> and the route switch has completed: the connection's session generation moved off
+    /// <paramref name="readUnder"/> (never 0 once the hook ran) and nothing is staged. Poll on the test's thread pool, not on the gateway's read loop.
+    /// </summary>
+    private static async Task ReleaseWhenRouteSwitchedAsync(
+        Cluster cluster, Func<GatewayClientConnection?> held, Func<long> readUnder, ManualResetEventSlim release, CancellationToken token)
+    {
+        await Cluster.WaitUntilAsync(
+            () => Task.FromResult(held() is { } connection && readUnder() != 0 && connection.SessionGeneration != readUnder() && cluster.Gateway.Transfers.StagedCount == 0), token);
+        release.Set();
+    }
 
     [Fact]
     public async Task ATeleportToKalimdor_OnTheEasternKingdomsWorker_MovesThePlayerToTheKalimdorWorker_AndTheJournalSaysCompleted()
@@ -259,7 +281,9 @@ public sealed class GatewayCrossWorkerTeleportTests
         long ackReadUnder = 0;
         long ackRoutedAfter = 0;
         bool ackReadWhileStaged = false;
+        GatewayClientConnection? ackConnection = null;
         using var ackRead = new ManualResetEventSlim();
+        using var ackRelease = new ManualResetEventSlim();
         cluster.Gateway.BeforeRouteClientPacket = (connection, opcode) =>
         {
             if (opcode != WorldOpcode.MsgMoveWorldportAck)
@@ -269,10 +293,11 @@ public sealed class GatewayCrossWorkerTeleportTests
 
             // Hold the read loop until the route switch has completed: the session moved to a new generation and nothing is staged any more.
             long read = connection.SessionGeneration;
+            Volatile.Write(ref ackConnection, connection);
             Interlocked.Exchange(ref ackReadUnder, read);
             Volatile.Write(ref ackReadWhileStaged, cluster.Gateway.Transfers.StagedCount == 1);
             ackRead.Set();
-            HoldUntil(() => connection.SessionGeneration != read && cluster.Gateway.Transfers.StagedCount == 0, cts.Token);
+            HoldUntil(ackRelease, cts.Token);
 
             Interlocked.Exchange(ref ackRoutedAfter, connection.SessionGeneration);
         };
@@ -280,6 +305,7 @@ public sealed class GatewayCrossWorkerTeleportTests
         // The Kalimdor world thread waits until the gateway has read the ack, so the activation (a command on that thread) and the route switch after it
         // cannot run before the read: the ack is read under the Eastern Kingdoms generation, while the transfer is staged, every time.
         cluster.Kalimdor.World.Post(() => ackRead.Wait(cts.Token));
+        Task releasing = ReleaseWhenRouteSwitchedAsync(cluster, () => Volatile.Read(ref ackConnection), () => Interlocked.Read(ref ackReadUnder), ackRelease, cts.Token);
         Assert.True(await cluster.TeleportAsync(guid, Landing));
         await ReadPatientlyAsync(client, WorldOpcode.SmsgTransferPending, cts.Token); // the gateway's, at the end of stage 4
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
@@ -288,6 +314,7 @@ public sealed class GatewayCrossWorkerTeleportTests
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
         cluster.Gateway.BeforeRouteClientPacket = null;
+        await releasing;
 
         // The race was the one described: the ack was read under one generation and routed after the switch to another.
         long readUnder = Interlocked.Read(ref ackReadUnder);
@@ -315,7 +342,9 @@ public sealed class GatewayCrossWorkerTeleportTests
 
         int taken = 0;
         long readUnder = 0;
+        GatewayClientConnection? passedConnection = null;
         using var passed = new ManualResetEventSlim();
+        using var passedRelease = new ManualResetEventSlim();
         cluster.Gateway.AfterInterceptClientPacket = (connection, opcode) =>
         {
             if (opcode != WorldOpcode.MsgMoveWorldportAck || Interlocked.Exchange(ref taken, 1) != 0)
@@ -324,11 +353,13 @@ public sealed class GatewayCrossWorkerTeleportTests
             }
 
             long read = connection.SessionGeneration;
+            Volatile.Write(ref passedConnection, connection);
             Interlocked.Exchange(ref readUnder, read);
             passed.Set();
-            HoldUntil(() => connection.SessionGeneration != read && cluster.Gateway.Transfers.StagedCount == 0, cts.Token);
+            HoldUntil(passedRelease, cts.Token);
         };
 
+        Task releasing = ReleaseWhenRouteSwitchedAsync(cluster, () => Volatile.Read(ref passedConnection), () => Interlocked.Read(ref readUnder), passedRelease, cts.Token);
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
         passed.Wait(cts.Token);
         Assert.True(await cluster.TeleportAsync(guid, Landing));
@@ -337,6 +368,7 @@ public sealed class GatewayCrossWorkerTeleportTests
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
         cluster.Gateway.AfterInterceptClientPacket = null;
+        await releasing;
         Assert.NotEqual(0, Interlocked.Read(ref readUnder));
     }
 

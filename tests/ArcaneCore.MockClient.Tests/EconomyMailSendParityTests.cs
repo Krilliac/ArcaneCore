@@ -177,9 +177,8 @@ public sealed class EconomyMailSendParityTests
 
         public static async Task<Rig> StartAsync(bool loginReceiver = false, Action<IServiceCollection>? configureServices = null)
         {
-            var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-            CancellationToken token = deadline.Token;
             var clock = new ManualClock(DateTimeOffset.UtcNow);
+            // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
             SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(
                 services =>
                 {
@@ -187,7 +186,9 @@ public sealed class EconomyMailSendParityTests
                     services.AddSingleton<IMailboxAccess>(new AnyMailbox());
                     services.AddSingleton<IAuctioneerAccess>(new AnyAuctioneer());
                     configureServices?.Invoke(services);
-                }, token);
+                });
+            var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            CancellationToken token = deadline.Token;
             await server.AddAccountAsync(SenderAccount, Password, token);
             await server.AddAccountAsync(ReceiverAccount, Password, token);
 

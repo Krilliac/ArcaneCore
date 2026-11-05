@@ -54,7 +54,9 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     public const uint RewardMoney = SyntheticQuestContent.RewardMoney;
     // A hang detector, not a performance assertion: it only fires when startup never completes, so it must sit far above the real cost. Startup
     // bootstraps several SQLite schemas and a real world host; 10 s was exceeded whenever the machine was busy (many agents building and testing).
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(60);
+    // The first fixture in a test process is cold (JIT, model building) and measured 27 s on an idle node; a gate runs four suites at once, and
+    // its first fixtures then took 45 s to over 60 s (gate logs 1c7134022, 59ddb6f25, 0c90a0289), so 60 s was not far above the real cost.
+    private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(180);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly object _gate = new();
     private readonly OwnedFixtureDirectory _directory;
@@ -148,7 +150,7 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
             _ = CleanupAbandonedStartupAsync(starting);
             if (!cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException("Synthetic server startup exceeded 60 seconds.");
+                throw new TimeoutException($"Synthetic server startup exceeded {StartupTimeout.TotalSeconds:0} seconds.");
             }
 
             throw;

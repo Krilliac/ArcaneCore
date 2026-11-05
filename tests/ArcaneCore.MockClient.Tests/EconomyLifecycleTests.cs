@@ -36,10 +36,12 @@ public sealed class EconomyLifecycleTests
     [Fact]
     public async Task HeldMailCommit_DisconnectAndFreshLoginWaitForEconomyBeforeReadsAndCoreSaves()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new Control(holdCommit: true);
         await using SyntheticArcaneServer server = await StartAsync(control, token, cashQuest: true);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         await using OwnedClient original = await CreateClientAsync(server, token);
         EconomyFeature economy = server.Services.GetRequiredService<EconomyFeature>();
         CharacterSaveQueue saves = server.Services.GetRequiredService<CharacterSaveQueue>();
@@ -124,10 +126,12 @@ public sealed class EconomyLifecycleTests
     [InlineData(true)]
     public async Task MoneyOnlyMailSettlement_RefreshesCashQuestOnlyAfterCommittedPublication(bool refuseCommit)
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new Control(holdCommit: false, refuseCommit);
         await using SyntheticArcaneServer server = await StartAsync(control, token, cashQuest: true);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         await using OwnedClient owned = await CreateClientAsync(server, token);
         Player player = await PlayerAsync(server, owned.Guid, token);
         QuestNpcFeature quests = server.Services.GetRequiredService<QuestNpcFeature>();

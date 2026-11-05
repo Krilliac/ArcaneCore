@@ -44,10 +44,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [InlineData(SpellEffectName.CreateItem)]
     public async Task PermanentRewardSpell_SettlesAtomicallyWithTheJournal(SpellEffectName effect)
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await InstallRewardSpellAsync(server, effect, token);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
@@ -88,10 +90,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task PermanentGrant_CommittedWhileDisconnected_ReplacementLoadsItWithoutReplay()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false, holdSuccessfulReturn: true);
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
@@ -136,10 +140,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task TeleportReward_KnownDestinationPublishedOnceToOriginalPlayer_UnknownMapRefusedBeforeHold()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         int id = checked((int)original.Guid);
@@ -170,10 +176,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [InlineData(Tamper.ReputationRow)]
     public async Task LostAcknowledgement_WithLearnedSpellAndReputation_ReconcilesAfterOnlyWhenEveryRowIsPresent(Tamper tamper)
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false, loseAcknowledgement: true) { Tamper = tamper };
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId, ReputationFaction, ReputationValue);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
@@ -218,10 +226,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task ReputationQuestReward_PersistsWithTheJournal_AndSurvivesRelog()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token, 0, ReputationFaction, ReputationValue);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         int id = checked((int)original.Guid);
@@ -260,10 +270,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task SpellbookFailedRetry_BlocksSettlementWithoutTouchingRows_ThenSettlesAfterRecovery()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await InstallRewardSpellAsync(server, SpellEffectName.LearnSpell, token);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
@@ -317,10 +329,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task RetainedReputationWrite_BlocksSettlementWithoutTouchingRows_ThenSettlesAfterRecovery()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token, 0, ReputationFaction, ReputationValue);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         ReputationFeature reputationFeature = server.Services.GetRequiredService<ReputationFeature>();
@@ -451,10 +465,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [InlineData(true)]
     public async Task TransientReward_RetainedSuccessfulCommitDoesNotReplayToAReplacementPlayer(bool disconnect)
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false, holdSuccessfulReturn: true);
         await using SyntheticArcaneServer server = await StartAsync(control, token, RewardSpellId);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await InstallRewardSpellAsync(server, SpellEffectName.Heal, token);
         var targets = new ConcurrentQueue<Unit>();
         await server.World.InvokeAsync(() =>
@@ -557,10 +573,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [InlineData(true)]
     public async Task DisconnectDuringDelayedSave_LoginWaitsForCommitOrRollbackAndOldPlayerCannotOverwriteReplacement(bool cancel)
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: true);
         await using SyntheticArcaneServer server = await StartAsync(control, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         control.ObserveOperation = feature.PendingOperationId;
@@ -649,10 +667,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task QuestFlushFailureAfterCapture_PreservesDirtyCoreSnapshotAcrossDisconnectAndRetry()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false);
         await using SyntheticArcaneServer server = await StartAsync(control, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         int id = checked((int)original.Guid);
@@ -713,10 +733,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [Fact]
     public async Task CancellationAfterRealSaveChanges_PublishesNoGrantAndLiveRetryUsesANewOperation()
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: true);
         await using SyntheticArcaneServer server = await StartAsync(control, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient owned = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         control.ObserveOperation = feature.PendingOperationId;
@@ -757,10 +779,12 @@ public sealed class QuestRewardAsyncRecoveryTests
     [InlineData(true)]
     public async Task LostAcknowledgement_ReconciledOrUnreadableAfterStateSurvivesDisconnectAndFreshRelog(bool unreadable)
     {
-        using var deadline = TestDeadline();
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var control = new RewardControl(holdAfterSave: false, loseAcknowledgement: true, unreadable: unreadable);
         await using SyntheticArcaneServer server = await StartAsync(control, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(DeadlineBudget);
         await using OwnedCharacterClient original = await CreateCompletedQuestAsync(server, token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
         CharacterSaveQueue saves = server.Services.GetRequiredService<CharacterSaveQueue>();
@@ -1316,5 +1340,5 @@ public sealed class QuestRewardAsyncRecoveryTests
     }
 
     private static TaskCompletionSource<bool> Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private static CancellationTokenSource TestDeadline() => new(TimeSpan.FromSeconds(45));
+    private static readonly TimeSpan DeadlineBudget = TimeSpan.FromSeconds(45);
 }

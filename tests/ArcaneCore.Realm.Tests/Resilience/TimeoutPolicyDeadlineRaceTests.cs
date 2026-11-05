@@ -55,7 +55,7 @@ public sealed class TimeoutPolicyDeadlineRaceTests
             if (e.Exception is ObjectDisposedException)
             {
                 string stack = Environment.StackTrace;
-                if (stack.Contains(nameof(TimeoutPolicy), StringComparison.Ordinal))
+                if (RaisedInsideTimeoutPolicy(stack))
                 {
                     firstChance.Enqueue(e.Exception.Message + Environment.NewLine + stack);
                 }
@@ -63,7 +63,7 @@ public sealed class TimeoutPolicyDeadlineRaceTests
         };
         EventHandler<UnobservedTaskExceptionEventArgs> onUnobserved = (_, e) =>
         {
-            if (e.Exception.ToString().Contains(nameof(TimeoutPolicy), StringComparison.Ordinal))
+            if (RaisedInsideTimeoutPolicy(e.Exception.ToString()))
             {
                 unobserved.Enqueue(e.Exception);
             }
@@ -128,6 +128,15 @@ public sealed class TimeoutPolicyDeadlineRaceTests
         Assert.True(firstChance.IsEmpty, "ObjectDisposedException raised inside TimeoutPolicy:" + Environment.NewLine + string.Join(Environment.NewLine, firstChance.Take(3)));
         Assert.True(unobserved.IsEmpty, "unobserved exception from TimeoutPolicy:" + Environment.NewLine + string.Join(Environment.NewLine, unobserved.Take(3)));
     }
+
+    /// <summary>
+    /// True when a stack trace has a frame inside the policy itself. Matching the bare name "TimeoutPolicy" is wrong: this
+    /// class's own frames (the first-chance handler runs on the throwing thread, so its frame is on every stack it sees)
+    /// are named TimeoutPolicyDeadlineRaceTests, which made an unrelated test's disposed provider on another thread
+    /// count as a policy fault.
+    /// </summary>
+    private static bool RaisedInsideTimeoutPolicy(string stack)
+        => stack.Contains("at " + typeof(TimeoutPolicy).FullName, StringComparison.Ordinal);
 
     /// <summary>
     /// A clock whose timers never fire on their own: the test fires a callback by hand, on a pool thread, after the

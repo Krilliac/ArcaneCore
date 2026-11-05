@@ -362,13 +362,15 @@ public sealed class QuestSettlementResponsivenessTests(ITestOutputHelper output)
     [Fact]
     public async Task Settlement_UnderADeepSaveQueueOfOtherCharacters_CompletesWithinBudget()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var slowSaves = new SlowOtherSaves();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
             services.AddScoped<ICharacterStore>(provider => new SlowOtherCharactersStore(
                 new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()), slowSaves)), token);
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(90));
         CharacterSaveQueue queue = server.Services.GetRequiredService<CharacterSaveQueue>();
         await using OwnedClient hero = await CreateClientAsync(server, "DEEPQUEUE", "Deephero", token);
         try

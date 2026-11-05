@@ -681,6 +681,127 @@ public sealed class CharacterClaimWiringTests
     /// </summary>
     private static void ChangeRace(CharacterRecord record) => record.Race = (byte)(record.Race == 1 ? 2 : 1);
 
+    /// <summary>The bind point is the one field the previous owner's save can move: these tests clear it on the record read after the claim, so the bind point has to come from the start position.</summary>
+    private static void ClearHome(CharacterRecord record) => (record.HomeMapId, record.HomeZoneId, record.HomeX, record.HomeY, record.HomeZ) = (0u, 0u, 0f, 0f, 0f);
+
+    /// <summary>Race, gender and class unchanged across the claim, so only the bind point is looked up again, and its start-position lookup throws.</summary>
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheStartPositionLookupThrowsAfterTheClaim_WithTheRaceUnchanged()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE16", "Startboom",
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimStartPositionData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)),
+            alterRecordWhenClaimed: ClearHome);
+
+    /// <summary>Race, gender and class unchanged across the claim and no bind point or start position for it: the login is refused (home.IsUnset in the same-keys branch) and gives the claim back.</summary>
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheBindPointIsUnsetAndHasNoStartPositionAfterTheClaim_WithTheRaceUnchanged()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE17", "Nostart",
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimStartPositionData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)),
+            alterRecordWhenClaimed: ClearHome);
+
+    /// <summary>
+    /// A gateway-backed login waits for the previous owner's claim (CharacterHandlers.DuplicateLoginWait) and replaces its record with a newer read while it waits. The race and class
+    /// data are compared against the keys they were read for, not against that newer record: a character whose race changed during the wait gets the data of its new race.
+    /// </summary>
+    [Fact]
+    public async Task ALoginThatWaitsForTheClaim_ReadsTheRaceDataAgain_WhenTheRaceChangedDuringTheWait()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        var counter = new CountingWorldData();
+        StaleReadStore? reads = null;
+        await using WorldTestHost host = rig.StartWorld(a, configure: services =>
+        {
+            counter.Inner = (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!;
+            services.AddSingleton<IWorldDataStore>(counter);
+            ICharacterStore inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
+            reads = StaleReadStore.Wrap(inner);
+            services.AddSingleton((ICharacterStore)(object)reads);
+        });
+        const string account = "CLAIMWIRE18";
+        await host.AddAccountAsync(account);
+        int accountId = (await host.Accounts.FindByUsernameAsync(account))!.Id;
+        CharacterRecord record = await host.Characters.CreateAsync(new CharacterRecord
+        {
+            AccountId = accountId, Name = "Racechanger", Race = 1, Class = 1, Gender = 0, Level = 10,
+            MapId = 0, ZoneId = 12, X = -8949.95f, Y = -132.493f, Z = 83.5312f,
+            HomeMapId = 0, HomeZoneId = 12, HomeX = -8949.95f, HomeY = -132.493f, HomeZ = 83.5312f,
+        });
+        int id = record.Id;
+
+        // The previous owner b holds the claim, so this login's first claim is refused and (a gateway session) it waits and reads the record again. The read that wait makes is the
+        // third of the login (the load, the one after the drain, then this); right before it the character changes race and b releases, so that read returns the new race and the
+        // next claim is admitted.
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome);
+        int readCount = 0;
+        bool fired = false;
+        reads!.BeforeRead = async () =>
+        {
+            if (Interlocked.Increment(ref readCount) != 3)
+            {
+                return;
+            }
+
+            lock (record)
+            {
+                record.Race = 2;
+            }
+
+            Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
+            fired = true;
+        };
+
+        await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
+        WorldSession session = WorldSession.CreateRemote(new ClaimWiringRemoteOutput(), "127.0.0.1:41005", scope.ServiceProvider, host.Opcodes, host.World, host.Registry,
+            new WorldSessionOptions(), NullLogger.Instance);
+        Assert.Equal(AuthResponseCode.Ok, await session.AuthenticateRemoteAsync(accountId, account, 5875, CancellationToken.None));
+        session.StartRemote();
+        Task run = Task.Run(() => session.RunRemoteAsync(CancellationToken.None));
+        counter.Reset();
+        var login = new PacketWriter(8);
+        login.WriteUInt64((ulong)id);
+        session.DeliverRemote(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+
+        await WorldTestHost.WaitForAsync(() => host.World.IsOnline(ObjectGuid.Player((uint)id)), "the waiting login enters the world");
+        Assert.True(fired, "the read made while the login waited never ran");
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
+        Assert.Equal(2, counter.RaceReads); // once for the race read before the claim, once more because the race changed while the login waited
+        session.CloseRemoteFromGateway("test over");
+        await run.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
+    private sealed class ClaimWiringRemoteOutput : IRemoteSessionOutput
+    {
+        public bool TrySend(WorldOpcode opcode, ReadOnlySpan<byte> payload) => true;
+    }
+
+    private sealed class PostClaimStartPositionData(IWorldDataStore inner, PostClaimTrip trip, bool throws) : IWorldDataStore
+    {
+        public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default) => inner.GetClassInfoAsync(cls, cancellationToken);
+
+        public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.IsValidRaceClassAsync(race, cls, cancellationToken);
+
+        public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default) => inner.GetRaceInfoAsync(race, gender, cancellationToken);
+
+        public async Task<StartPosition?> GetStartPositionAsync(byte race, byte cls, CancellationToken cancellationToken = default)
+        {
+            if (!await trip.ClaimedAsync())
+            {
+                return await inner.GetStartPositionAsync(race, cls, cancellationToken);
+            }
+
+            if (throws)
+            {
+                throw new InvalidOperationException("the start position lookup failed after the claim");
+            }
+
+            return null;
+        }
+    }
+
     /// <summary>The login reads race and class data once and not again after the claim while the character's race, gender and class are unchanged.</summary>
     [Fact]
     public async Task ALogin_DoesNotReadTheRaceDataAgainAfterTheClaim_WhenTheRaceIsUnchanged()

@@ -9,8 +9,10 @@ public sealed class AutonomousPlaybotTests
     [Fact]
     public async Task ExplicitCombatEntryProducesNormalMeleePacketsAndStopsAfterObservedDeath()
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var limit = new CancellationTokenSource();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(limit.Token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        limit.CancelAfter(TimeSpan.FromSeconds(45));
         await server.AddAccountAsync("FIGHTBOT", "FIGHTBOTPASSWORD", limit.Token);
         var options = new PlaybotRunOptions(server.RealmEndpoint, "FIGHTBOT", "FIGHTBOTPASSWORD", "Botfighter",
             Steps: 12, Seconds: 25, AttackEntry: SyntheticArcaneServer.TargetEntry, Movement: false);
@@ -26,8 +28,10 @@ public sealed class AutonomousPlaybotTests
     [Fact]
     public async Task NormalPlayerAuthenticatesCreatesExploresQueriesAndLogsOutWithinStepBudget()
     {
-        using var limit = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var limit = new CancellationTokenSource();
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(limit.Token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        limit.CancelAfter(TimeSpan.FromSeconds(45));
         await server.AddAccountAsync("AUTOBOT", "AUTOBOTPASSWORD", limit.Token);
         var options = new PlaybotRunOptions(server.RealmEndpoint, "AUTOBOT", "AUTOBOTPASSWORD", "Botwalker", Steps: 6, Seconds: 20);
         PlaybotRunReport report = await AutonomousPlaybot.RunAsync(options, new DeterministicPlaybotSelector(), limit.Token);

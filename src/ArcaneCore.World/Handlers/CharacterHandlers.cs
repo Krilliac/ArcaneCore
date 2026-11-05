@@ -396,6 +396,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         (RaceInfo? raceInfo, ClassInfo? classInfo, HomeBind home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+        // The keys raceInfo and classInfo were read for. The claim loop below may replace `character` with a newer record, so the post-claim comparison must not use the variable.
+        (byte Race, byte Gender, byte Class) worldDataKeys = (character.Race, character.Gender, character.Class);
 
         if (raceInfo is null || classInfo is null || home.IsUnset)
         {
@@ -474,8 +476,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             }
 
             // A claim was taken (Worker scope): the record read before it may predate the previous owner's final save, which was durable before that owner's claim was
-            // released (CharacterClaimService.ScheduleRelease) and so before this claim was admitted. The player is built only from a record read after the claim; the checks made
-            // on the older record are made again, and the claim is given back when the login does not go on here.
+            // released (CharacterClaimService.ScheduleRelease) and so before this claim was admitted. The player is built only from a record read after the claim. The rename
+            // gate and the bind point are read again from it; the race and class data only when its keys differ from the ones that data was read for. The claim is given back
+            // when the login does not go on here.
             if (claimTicket != 0)
             {
                 // Any failure of these reads must give the claim back: nothing else releases it for a login that has no player yet (the logout release needs a Player).
@@ -494,13 +497,14 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                         return;
                     }
 
-                    // Race, gender and class are fixed once a character exists; only when they differ from the record read before the claim (never in normal play) is the data
-                    // looked up again. Otherwise the race and class rows already read stand, and only the bind point (which the previous owner's save may have moved) is recomputed.
-                    bool sameKeys = fresh.Race == character.Race && fresh.Gender == character.Gender && fresh.Class == character.Class;
+                    // Race, gender and class are fixed once a character exists; only when they differ from the keys raceInfo and classInfo were read for (never in normal play, but
+                    // possible across the claim wait: the loop above replaces `character`) is the data looked up again. Otherwise the race and class rows already read stand, and
+                    // only the bind point (which the previous owner's save may have moved) is recomputed.
+                    bool sameKeys = (fresh.Race, fresh.Gender, fresh.Class) == worldDataKeys;
                     character = fresh;
 
-                    // The checks made on the record read before the claim are made again on this one: the rename gate, the race and class data, and the bind point (the previous
-                    // owner's final save may have moved it; the player's Home comes from here, not from the older record).
+                    // On this record the rename gate is checked again, and the bind point is read again (the previous owner's final save may have moved it; the player's Home comes
+                    // from here, not from the older record). Race and class data follow the keys, below.
                     if (!await CharacterRename.MayLogInAsync(session, character).ConfigureAwait(false))
                     {
                         session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
