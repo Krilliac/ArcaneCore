@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 410 |
-| `Administrator` | 6 | 613 |
+| `Administrator` | 6 | 617 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -34,7 +34,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.account totp set` | 6 | Administrator | stored level through the map | Syntax: .account totp set $account |
 | `.account totp clear` | 6 | Administrator | stored level through the map | Syntax: .account totp clear $account |
 | `.account iplock` | 6 | Administrator | stored level through the map | Syntax: .account iplock $account on\|off |
-| `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
+| `.cast` ... | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist. |
+| `.cast self` | 6 | Administrator | stored level through the map | Syntax: .cast self #spell [triggered] Make the selected unit cast a spell on itself. |
+| `.cast target` | 6 | Administrator | stored level through the map | Syntax: .cast target #spell [triggered] Make the selected unit cast a spell on its victim. |
+| `.cast back` | 6 | Administrator | stored level through the map | Syntax: .cast back #spell [triggered] Make the selected unit cast a spell on you. |
+| `.cast dist` | 6 | Administrator | stored level through the map | Syntax: .cast dist #spell #distance [triggered] Cast a spell at a point the given distance in front of you. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character boost` | 6 | Administrator | stored level through the map | Syntax: .character boost [$playername] #level Bring the named online player, the selected player or yourself to the level: class trainer spells, a level-appropriate equipped gear kit, filled action bars and some money. |
@@ -438,10 +442,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag\|restart] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
-| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
-| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat (damage, procs, spells, moves, anticheat). With no argument it lists what you follow and the available channels. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel [target\|near\|all] Follow $channel: damage, procs, spells, moves or anticheat (anticheat has no producer yet and stays silent). Scope target (default) shows events of you or your selected unit nearby, near shows every event nearby, all shows every event (not for moves). Running it again renews the timeout and sets the scope. |
 | `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
-| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow with scope and when each turns off, then the channels available. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. From the console, the items line reads "not loaded yet" while item content loads in the background; run the command again shortly. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |

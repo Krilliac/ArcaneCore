@@ -737,12 +737,12 @@ Gateway.BindAddress = "0.0.0.0"
 #        Description: The characters schema version this gateway advertises; defaults to the version
 #                     this build targets. Explicit override only.
 #        Type: int
-#        Default: 74
+#        Default: 75
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#gateway
 #
-Gateway.CharactersSchemaVersion = 74
+Gateway.CharactersSchemaVersion = 75
 
 #
 #    Gateway.ContentRevision

@@ -195,8 +195,10 @@ AntiCheat.Autoban.Threshold = 25
 
 #
 #    AntiCheat.BaselineGapMs
-#        Description: A gap this long (milliseconds) between two movement packets starts a new
-#                     baseline (loading screen, AFK). Default 3000.
+#        Description: Caps the time-skip credit (milliseconds): all the skips the evidence supports
+#                     in ten seconds together earn at most this much. A silence between two movement
+#                     packets is never a free baseline; the step after it is judged against the time
+#                     that passed. Default 3000.
 #        Type: int
 #        Default: 3000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -2395,12 +2397,12 @@ Cluster.Worker.BindAddress = "127.0.0.1"
 #        Description: Characters schema version both ends must agree on (an override label, used
 #                     only while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 74
+#        Default: 75
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.CharactersSchemaVersion = 74
+Cluster.Worker.CharactersSchemaVersion = 75
 
 #
 #    Cluster.Worker.ContentRevision
@@ -15147,8 +15149,9 @@ World.Playerbots.CutRegionMaxPolygons = 5000
 #    World.Playerbots.DropGreyQuests
 #        Description: Abandon an incomplete quest that has turned grey for the bot (quest level at
 #                     or below its vmangos grey level) and hunt no objective of it (on by default).
-#                     A completed grey quest is still turned in. Off: grey quests are kept until a
-#                     full log sheds one. Live: .reload config.
+#                     A completed grey quest is still turned in, and a class-restricted or
+#                     chain-step quest is kept and still offered whatever its colour. Off: grey
+#                     quests are kept until a full log sheds one. Live: .reload config.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -15417,6 +15420,22 @@ World.Playerbots.Economy.MoneyGoal = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MoneyGoalCopperPerLevel = 500
+
+#
+#    World.Playerbots.Economy.UpgradeSlotSearches
+#        Description: How many of the bot's weakest equipment slots a visit searches the auction
+#                     house for (0..8), one page each, by inventory type; the main hand, and the off
+#                     hand and ranged slots of weapon builds, share one weapon page, while a shield,
+#                     a held-in-off-hand item or a relic is searched by its own inventory type; no
+#                     off-hand search while a two-hander is worn. 0 searches the two class-wide
+#                     pages (weapons, then armor) of earlier versions.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number from 0 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.UpgradeSlotSearches = 3
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes
@@ -20362,6 +20381,83 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.StallSeconds = 120
+
+#
+#    World.Playerbots.Summon.AnnounceToPlayers
+#        Description: Whether the warlock tells the party who it is summoning and to click the
+#                     portal, when the member is a real player (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.AnnounceToPlayers = true
+
+#
+#    World.Playerbots.Summon.Enabled
+#        Description: Let bots summon far group members with Ritual of Summoning and accept summons
+#                     from their group (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.Enabled = true
+
+#
+#    World.Playerbots.Summon.FarYards
+#        Description: A member on another map, or farther than this many yards from the summoner, is
+#                     summoned (50..5000).
+#        Type: float
+#        Default: 200
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.FarYards = 200
+
+#
+#    World.Playerbots.Summon.HelperYards
+#        Description: The farthest from the portal, in yards, a group bot walks over to help with a
+#                     ritual (5..100).
+#        Type: float
+#        Default: 40
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.HelperYards = 40
+
+#
+#    World.Playerbots.Summon.MeetingStones
+#        Description: Non-vanilla: let two group members at a dungeon meeting stone summon a third
+#                     (TBC summoning-stone rules; strict 1.12 meeting stones only queue for the
+#                     dungeon). On the server it lets CMSG_GAMEOBJ_USE on a meeting stone, with a
+#                     group member selected, send that member a summon request, for a real player as
+#                     well as for a bot (no reagent, no cooldown); the bots use it when no warlock
+#                     can summon. Off by default (retail: the use of a stone is refused); on is a
+#                     deliberate deviation.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.MeetingStones = false
+
+#
+#    World.Playerbots.Summon.RetrySeconds
+#        Description: Seconds before the same member is summoned again after an attempt that was
+#                     declined, ignored or failed (10..3600).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number from 10 to 3600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.RetrySeconds = 120
 
 #
 #    World.Playerbots.SyncPathQueryMaxMs

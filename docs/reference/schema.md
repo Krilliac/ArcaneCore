@@ -10,7 +10,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 7 | `account`, `realmlist` |
-| `characters` | 74 | `characters` |
+| `characters` | 75 | `characters` |
 | `world` | 67 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
@@ -101,6 +101,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 72 | `Characters.Ownership.CharacterOwnershipShardDataModule` | adds columns `character_ownership.owned_maps`, `character_ownership.heartbeat_at_ms` | yes |
 | 73 | `Characters.Transfers.ClusterHandoffScopeDataModule` | adds columns `cluster_world_handoff.open_scope`; repairs the model's indexes of `cluster_world_handoff` | yes |
 | 74 | `Characters.Transfers.ClusterTransferTargetScopeDataModule` | adds columns `cluster_transfer_decision.target_scope` | yes |
+| 75 | `Characters.Ownership.CharacterOwnershipHeartbeatDataModule` | creates `character_ownership_heartbeat` | yes |
 
 ## `world`
 
