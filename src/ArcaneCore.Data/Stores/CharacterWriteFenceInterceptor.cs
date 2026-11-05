@@ -25,11 +25,16 @@ namespace ArcaneCore.Data.Stores;
 /// every context; thread-safe. In Worker fencing scope (the verifying token's scope is <c>worker:&lt;shard&gt;</c>) and under a <see cref="CharacterWriteClaim"/>
 /// scope it also proves, in the same transaction, that this worker still holds the per-character claim of each named character
 /// (<see cref="CharacterClaimGuard"/>); a refused claim throws <see cref="CharacterClaimRejectedException"/>. In Realm scope, or with no claim scope in force, it issues no claim SQL.
+/// A synchronous transaction (<c>SaveChanges</c>, <c>Database.BeginTransaction</c>) cannot be verified, because the guard and the claim check have no synchronous form: <see cref="TransactionStarted"/> rolls it back and throws <see cref="NotSupportedException"/> (fail closed) unless the work is <see cref="CharacterWriteFence.Exempt"/>.
 /// Registered only when <c>Cluster:Fencing:Enabled</c> is true, so a fence-off context has no interceptor and issues the same SQL as before. A store save that carries a snapshot token (only a fenced world mints one) pays one scope object per transaction.
 /// </para>
 /// </summary>
 public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ownership) : DbTransactionInterceptor, ISaveChangesInterceptor
 {
+    /// <summary>
+    /// Asynchronous transaction start: runs the ownership guard (and, in Worker scope under a claim scope, the per-character claim check) inside the new transaction before the
+    /// caller's first statement. A refusal or failure is reported, the transaction is rolled back and the exception rethrown. Exempt work passes through unchecked.
+    /// </summary>
     public override async ValueTask<DbTransaction> TransactionStartedAsync(
         DbConnection connection, TransactionEndEventData eventData, DbTransaction result, CancellationToken cancellationToken = default)
     {
@@ -51,6 +56,10 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
         return result;
     }
 
+    /// <summary>
+    /// Synchronous transaction start on a characters context: refused. It is rolled back and a <see cref="NotSupportedException"/> is thrown, because the ownership guard and the claim
+    /// check have no synchronous form and blocking a pool thread on them risks a deadlock. Exempt work (<see cref="CharacterWriteFence.IsExempt"/>) passes through unchecked.
+    /// </summary>
     public override DbTransaction TransactionStarted(DbConnection connection, TransactionEndEventData eventData, DbTransaction result)
     {
         if (CharacterWriteFence.IsExempt)

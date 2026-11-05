@@ -124,10 +124,25 @@ public sealed class CharacterWriteSweepTests
             files++;
             string relative = Path.GetRelativePath(src, file).Replace('\\', '/');
             string[] lines = text.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            // Matched on the whole text, not line by line: a call split as "SaveChanges" and "(" on two lines is still found (\s* spans the break).
+            // A hit is attributed to the line its name is on, and skipped when that line is a comment.
+            var hitLines = new SortedSet<int>();
+            foreach (Match hit in SyncWrite.Matches(text))
+            {
+                int line = 0;
+                for (int c = 0; c < hit.Index; c++)
+                {
+                    if (text[c] == '\n')
+                        line++;
+                }
+
+                hitLines.Add(line);
+            }
+
+            foreach (int i in hitLines)
             {
                 string trimmed = lines[i].TrimStart();
-                if (!SyncWrite.IsMatch(lines[i]) || trimmed.StartsWith("//", StringComparison.Ordinal))
+                if (trimmed.StartsWith("//", StringComparison.Ordinal))
                     continue;
                 (string member, int start, int end) = EnclosingMember(lines, i);
                 string body = string.Join('\n', lines[start..end]);
@@ -156,10 +171,28 @@ public sealed class CharacterWriteSweepTests
     }
 
     [Fact]
+    public void TheSynchronousWritePattern_FindsACallSplitAcrossTwoLines()
+    {
+        Assert.Matches(SyncWrite, "        db.SaveChanges\n            ();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database.BeginTransaction\r\n            ();");
+    }
+
+    [Fact]
     public void EveryExemption_NamesAFileThatStillExists()
     {
         string root = RepositorySource.FindRoot() ?? throw new InvalidOperationException("repository root not found");
         string src = Path.Combine(root, "src");
+        foreach (string key in SyncExemptions.Keys)
+        {
+            int cut = key.IndexOf("::", StringComparison.Ordinal);
+            Assert.True(cut > 0, $"synchronous exemption {key} must be file::Member");
+            string file = Path.Combine(src, key[..cut]);
+            Assert.True(File.Exists(file), $"stale synchronous exemption {key}: the file is gone");
+            string member = key[(cut + 2)..];
+            Assert.True(Regex.IsMatch(File.ReadAllText(file), $@"\b{Regex.Escape(member)}\s*\("),
+                $"stale synchronous exemption {key}: the member is gone from the file");
+        }
+
         foreach (string key in Exemptions.Keys)
         {
             int cut = key.IndexOf("::", StringComparison.Ordinal);
