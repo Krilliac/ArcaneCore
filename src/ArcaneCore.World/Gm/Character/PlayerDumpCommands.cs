@@ -137,6 +137,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             CharacterCreationOptions options = context.Session.Services.GetService<CharacterCreationFeature>()?.Options ?? new();
             if (!PlayerNames.TryNormalize(rawName, out name) || CharacterNameRules.Check(name, NameRuleSettings.From(options, create: true)) is not null)
             {
+                context.Fail("invalid-name");
                 context.Reply(InvalidName);
                 return true;
             }
@@ -150,12 +151,14 @@ public sealed class PlayerDumpCommands : ICommandGroup
 
                 if (guid == 0 || guid > int.MaxValue)
                 {
+                    context.Fail("invalid-guid");
                     context.Reply(InvalidGuid);
                     return true;
                 }
 
                 if (context.Session.Services.GetRequiredService<CharacterDirectory>().Find((int)guid) is not null)
                 {
+                    context.Fail("guid-in-use");
                     context.Reply(string.Format(CultureInfo.InvariantCulture, GuidInUse, guid));
                     return true;
                 }

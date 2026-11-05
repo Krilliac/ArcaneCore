@@ -362,7 +362,7 @@ internal static class SpellVariants
         return !checkReagents || spell.Reagents.All(r => !r.IsPresent || items.Find(r.ItemId) is not null);
     }
 
-    private static IItemTemplateStore? LoadedItems(CommandContext context)
+    internal static IItemTemplateStore? LoadedItems(CommandContext context)
         => context.Session.Services.GetService<ItemsFeature>()?.LoadedStore is { Count: > 0 } store ? store : null;
 
     private static void LearnMySpells(CommandContext context, Player player)

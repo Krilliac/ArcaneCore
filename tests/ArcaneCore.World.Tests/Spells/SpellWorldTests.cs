@@ -1,12 +1,18 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Items;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -256,9 +262,178 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task CastDist_CastsAtThePointInFront_AndReplies()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CDOKGM", "Cdokgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+
+        Assert.Equal($"Cast spell {Heal}.", await RunCommandAsync(gm, $".cast dist {Heal} 5 triggered"));
+        Assert.Equal($"Cast spell {Heal}.", await RunCommandAsync(gm, $".cast dist |cff71d5ff|Hspell:{Heal}|h[Test Heal]|h|r 5 triggered")); // the shift-click link form
+    }
+
+    [Fact]
+    public async Task CastDist_SendsTheSpellGoDestination_AtTheClosePoint_NotAtThePlainPointInFront()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CDDGM", "Cddgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        (float px, float py, float o, float radius, float expectedZ) = await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Cddgm")!;
+            return (p.X, p.Y, p.Orientation, p.BoundingRadius, SpellCommands.ClosePoint(p, 5f).Z);
+        });
+        Assert.True(radius > 0f);
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast dist {Heal} 5 triggered");
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await gm.CollectAsync(TimeSpan.FromMilliseconds(400));
+
+        byte[] go = Assert.Single(packets, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload;
+        (SpellCastTargetFlags mask, float x, float y, float z) = ParseSpellGoDestination(go);
+        Assert.Equal(SpellCastTargetFlags.DestLocation, mask);
+        Assert.Equal(px + (MathF.Cos(o) * (5f + radius)), x, 0.001); // distance plus the caster's bounding radius (GetClosePoint), not PointInFront's plain 5
+        Assert.Equal(py + (MathF.Sin(o) * (5f + radius)), y, 0.001);
+        Assert.Equal(expectedZ, z, 0.001); // the ground z of ClosePoint (the caster's own z where the map knows no height there)
+        Assert.NotEqual(px + (MathF.Cos(o) * 5f), x, 3);
+    }
+
+    // SMSG_SPELL_GO (SpellPackets.BuildSpellGo): packed item-or-caster guid, packed caster guid, u32 spell, u16 flags, u8 hits + u64 each, u8 misses + (u64, u8) each, then the targets.
+    private static (SpellCastTargetFlags Mask, float X, float Y, float Z) ParseSpellGoDestination(byte[] payload)
+    {
+        int offset = 0;
+        for (int i = 0; i < 2; i++)
+        {
+            offset += 1 + System.Numerics.BitOperations.PopCount(payload[offset]);
+        }
+
+        offset += 4 + 2;
+        offset += 1 + (payload[offset] * 8);
+        int misses = payload[offset++];
+        for (int i = 0; i < misses; i++)
+        {
+            offset += 9;
+            if (payload[offset - 1] == (byte)SpellMissInfo.Reflect)
+            {
+                offset++;
+            }
+        }
+
+        var mask = (SpellCastTargetFlags)BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(offset));
+        offset += 2;
+        Assert.Equal(SpellCastTargetFlags.DestLocation, mask); // no guid precedes the destination
+        return (mask, BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset)), BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset + 4)),
+            BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(offset + 8)));
+    }
+
+    [Fact]
+    public async Task TheCastSubcommands_AcceptASpellShiftClickLink()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("LNKGM", "Lnkgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        await SelectAsync(host, "Lnkgm", "Lnkgm");
+
+        Assert.Equal($"Cast spell {Renew}.", await RunCommandAsync(gm, $".cast self |cff71d5ff|Hspell:{Renew}|h[Test Renew]|h|r triggered"));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Lnkgm")!.GetUInt32(UpdateFields.UnitFieldAura) == Renew, "aura from a linked .cast self");
+        Assert.Equal($"Cast spell {Renew}.", await RunCommandAsync(gm, $".cast |cff71d5ff|Hspell:{Renew}|h[Test Renew]|h|r"));
+    }
+
+    [Fact]
+    public async Task ClosePoint_AddsTheCastersBoundingRadius_ToTheDistanceAheadOfIt()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CPGM", "Cpgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+
+        (float px, float py, float o, float radius, float x, float y) = await host.OnWorldAsync(() =>
+        {
+            Player p = host.World.FindOnlinePlayer("Cpgm")!;
+            (float cx, float cy, _) = SpellCommands.ClosePoint(p, 4f);
+            return (p.X, p.Y, p.Orientation, p.BoundingRadius, cx, cy);
+        });
+
+        Assert.True(radius > 0f);
+        Assert.Equal(px + (MathF.Cos(o) * (4f + radius)), x, 0.001);
+        Assert.Equal(py + (MathF.Sin(o) * (4f + radius)), y, 0.001);
+    }
+
+    [Fact]
+    public void ClosePoint_PutsZOnTheGroundPlusFiveHundredths_WhenAHeightIsKnown_AndKeepsTheCastersZOtherwise()
+    {
+        var asked = new List<(float X, float Y, float Z)>();
+        (float x, float y, float z) = SpellCommands.ClosePoint(10f, 20f, 50f, 0f, 0.5f, 4f, (px, py, pz) =>
+        {
+            asked.Add((px, py, pz));
+            return 33f;
+        });
+
+        Assert.Equal(14.5, x, 0.001); // 4 yards plus the 0.5 radius, east
+        Assert.Equal(20.0, y, 0.001);
+        Assert.Equal(33.05, z, 0.0001); // ground + 0.05, not the caster's own 50
+        (float askedX, float askedY, float askedZ) = Assert.Single(asked); // the ground is looked up at the point itself, from the caster's height
+        Assert.Equal((x, y, 50f), (askedX, askedY, askedZ));
+
+        Assert.Equal(50f, SpellCommands.ClosePoint(10f, 20f, 50f, 0f, 0.5f, 4f, (_, _, _) => TerrainTile.InvalidHeightValue).Z);
+        Assert.Equal(50f, SpellCommands.ClosePoint(10f, 20f, 50f, 0f, 0.5f, 4f, (_, _, _) => float.NaN).Z);
+        Assert.Equal(50f, SpellCommands.ClosePoint(10f, 20f, 50f, 0f, 0.5f, 4f, null).Z);
+    }
+
+    private static Task<string?> RunDirectAsync(WorldTestHost host, string character, string path, string args) => host.OnWorldAsync(() =>
+    {
+        Player player = host.World.FindOnlinePlayer(character)!;
+        CommandTable table = ChatCommands.CreateTable();
+        var context = new CommandContext((WorldSession)player.Session, player, table);
+        ChatCommand command = table.Resolve(path, AccountSecurity.Administrator)!;
+        context.Bind(command, path); // what CommandTable.Execute does
+        Assert.True(command.Handler!(context, args));
+        context.Complete();
+        return context.Failure;
+    });
+
+    [Fact]
+    public async Task ABrokenSpell_IsRefusedByCast_CastSelf_AndCastDist_ButNotByCastTargetOrCastBack()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("BRKGM", "Brkgm", AccountSecurity.Administrator);
+        await using WorldTestClient other = await host.EnterWorldAsync("BRKOTH", "Brkoth");
+        await gm.CollectAsync();
+        // The validity check judges items by the loaded item store: with no item data it passes everything, so install one template.
+        await host.OnWorldAsync(() =>
+            ((WorldSession)host.World.FindOnlinePlayer("Brkgm")!.Session).Services.GetRequiredService<ItemsFeature>()
+                .ReplaceTemplates(new ItemTemplateStore([new ItemTemplate { Entry = PresentItem }])));
+        await SelectAsync(host, "Brkgm", "Brkgm");
+        string refusal(uint spell) => $"Spell {spell} broken and not allowed to cast or learn!"; // vmangos mangos_string 483, LANG_COMMAND_SPELL_BROKEN
+
+        foreach (uint spell in new[] { BrokenCreate, BrokenTeach })
+        {
+            foreach ((string path, string args) in new[] { ("cast", $"{spell}"), ("cast self", $"{spell} triggered"), ("cast dist", $"{spell} 5 triggered") })
+            {
+                await gm.CollectAsync();
+                string? failure = await RunDirectAsync(host, "Brkgm", path, args);
+
+                Assert.True("spell-broken" == failure, $"{path} {spell}: failure was {failure ?? "none"}");
+                Assert.Equal(refusal(spell), (await gm.ReadSystemChatAsync()).Text);
+                Assert.DoesNotContain((await gm.CollectAsync()).Select(p => p.Opcode), op => op is WorldOpcode.SmsgSpellStart or WorldOpcode.SmsgSpellGo);
+            }
+        }
+
+        // The control: vmangos checks IsSpellValid in .cast, .cast self and .cast dist only, so .cast back and .cast target let the same spell through to the cast.
+        await SelectAsync(host, "Brkgm", "Brkoth");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Brkoth")!.Combat.Victim = host.World.FindOnlinePlayer("Brkgm"));
+        foreach (string path in new[] { "cast back", "cast target" })
+        {
+            await gm.CollectAsync();
+            string? failure = await RunDirectAsync(host, "Brkgm", path, $"{BrokenTeach} triggered");
+
+            Assert.Null(failure);
+            Assert.NotEqual(refusal(BrokenTeach), (await gm.ReadSystemChatAsync()).Text);
+        }
+    }
+
+    [Fact]
     public async Task TheCastSubcommands_RefuseAHigherSecurityPlayer_AsTheSelectionAndAsTheVictim()
     {
-        // .cast needs level 6; mapping GameMaster to it lets a lower-security GM run the command so the target check is what is under test.
+        // .cast and its subcommands need retail level 5; mapping GameMaster to 6 lets a lower-security GM run them so the target check is what is under test.
         await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?>
             {
