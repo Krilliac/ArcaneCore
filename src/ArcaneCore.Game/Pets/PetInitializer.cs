@@ -78,16 +78,16 @@ internal static class PetInitializer
         }
     }
 
-    /// <summary>The creature id vmangos looks hunter pet stats up by (<c>creatureId = HUNTER_PET ? 1 : cinfo->entry</c>, Pet.cpp:1288).</summary>
+    /// <summary>The creature id vmangos looks hunter pet stats up by (<c>creatureId = HUNTER_PET ? 1 : cinfo->entry</c>, Pet.cpp:1289).</summary>
     public const uint HunterPetStatsEntry = 1;
 
     /// <summary>
-    /// The <c>pet_levelstats</c> row of <paramref name="pet"/>: a hunter's pet reads the shared creature id 1 rows (Pet.cpp:1288-1291); when the
+    /// The <c>pet_levelstats</c> row of <paramref name="pet"/>: a hunter's pet reads the shared creature id 1 rows (Pet.cpp:1289-1291); when the
     /// database has none, or the pet is not a hunter pet, the pet's own entry is used, as before.
     /// </summary>
     private static PetLevelStats? FindStats(Creature pet, Unit owner, PetContent content, int level)
     {
-        if (owner is Player { Class: Class.Hunter } && pet.Summon is { Kind: SummonKind.Pet } && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
+        if (PetPower.IsHunterPet(pet, owner) && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
         {
             return shared;
         }

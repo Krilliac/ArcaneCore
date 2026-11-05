@@ -42,14 +42,11 @@ public sealed partial class SummonService
             {
                 await prior.ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            catch (Exception ex)
             {
-                if (ex is not OperationCanceledException)
-                {
-                    FaultLedger.Shared.Record("pet.stable", ex);
-                    AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
-                    _logger.LogFault(LogLevel.Warning, "pet-stable", ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
-                }
+                // Observe only, an OutOfMemoryException included: the failed predecessor recorded itself, and its failure must not
+                // stop this write or pass down the queue.
+                _logger.LogDebug(ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
             }
 
             // The tail slot above fixed the order; the store call itself runs on the thread pool, never on the caller (a world/map thread).

@@ -196,6 +196,14 @@ public sealed class PersistentPetOffThreadTests
             kit.Service.QueueDeletePet(player);
 
             await Assert.ThrowsAsync<OutOfMemoryException>(() => kit.Service.FlushCharacterAsync(1)).WaitAsync(WedgeDeadline);
+
+            // A later delete runs although its predecessor completed with the out-of-memory failure, and a stop drain still finishes.
+            int deleted = 0;
+            kit.Service.DeletePersistence = (_, _) => { Interlocked.Increment(ref deleted); return Task.CompletedTask; };
+            kit.Service.QueueDeletePet(player);
+            await kit.Service.FlushCharacterAsync(1).WaitAsync(WedgeDeadline);
+            Assert.True(Volatile.Read(ref deleted) >= 1);
+            await kit.Service.StopAsync().WaitAsync(WedgeDeadline);
         }
     }
 
