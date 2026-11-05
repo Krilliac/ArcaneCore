@@ -21,7 +21,7 @@ public sealed partial class CreatureMapSystem
     /// <c>Map::Add</c>). <paramref name="prepare"/> returns the position (it needs the creature's
     /// own bounding radius). <paramref name="guidEntry"/> replaces the template entry in the GUID
     /// (a pet's pet number). The creature does not respawn and is announced like a runtime spawn.
-    /// <paramref name="summoner"/> is the creature whose AI hears of the summon (cmangos Spell::DoSummonWild: the original caster when it
+    /// <paramref name="summoner"/> is the creature whose AI hears of the summon (cmangos Spell::EffectSummonWild: the original caster when it
     /// is not the casting unit); null means the owner of the summon links.
     /// </summary>
     internal Creature SpawnSummoned(CreatureTemplate template, HighGuid highGuid, Func<Creature, CreatureHome> prepare, uint guidEntry = 0,
@@ -36,7 +36,7 @@ public sealed partial class CreatureMapSystem
         CreatureHome home = prepare(creature);
         if (summoner is not null)
         {
-            RecordSummoner(summoner, creature); // the original caster of the spell (cmangos Spell::DoSummonWild: JustSummoned)
+            RecordSummoner(summoner, creature); // the original caster of the spell (cmangos Spell::EffectSummonWild: JustSummoned)
         }
         else if (creature.Summon is { } links && FindCreature(links.Owner) is { } owner)
         {

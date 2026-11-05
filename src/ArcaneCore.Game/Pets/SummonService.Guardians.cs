@@ -186,7 +186,7 @@ public sealed partial class SummonService
         float radius = context.Effect.Radius;
         int duration = spell.GetDuration();
         int amount = context.Value > 0 ? context.Value : 1;
-        // cmangos Spell::DoSummonWild (SpellEffects.cpp:2808-2810): a cast made for another unit hands its summons to that original caster's AI.
+        // cmangos Spell::EffectSummonWild (SpellEffects.cpp:2808-2810): a cast made for another unit hands its summons to that original caster's AI.
         Creature? originalSummoner = context.Cast.OriginalCasterOverride as Creature;
         for (int count = 0; count < amount; count++)
         {

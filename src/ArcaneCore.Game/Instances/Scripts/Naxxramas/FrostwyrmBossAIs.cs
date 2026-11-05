@@ -17,6 +17,7 @@ public sealed class SapphironAI : RaidBossAI
     private uint _airDelay = 46000;
     private int _icebolts;
     private readonly HashSet<ObjectGuid> _iceTargets = [];
+    private const uint BlizzardEntry = 16474;
 
     public SapphironAI(Creature creature) : base(creature, NaxxramasInstance.Sapphiron)
     {
@@ -45,8 +46,6 @@ public sealed class SapphironAI : RaidBossAI
         if (summoned.Entry == BlizzardEntry && SelectRandomAttackingTarget(playerOnly: true) is { } enemy)
             summoned.AI?.AttackStart(enemy);
     }
-
-    private const uint BlizzardEntry = 16474;
 
     protected override void ResetActions()
     {

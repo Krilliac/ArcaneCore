@@ -236,9 +236,10 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// Cast on behalf of <paramref name="originalCaster"/> (vmangos Unit::CastSpell's originalCaster argument, Spell::m_originalCasterGUID):
-    /// <paramref name="caster"/> is the unit that casts, the original caster the one that caused it. A summon effect hands the summoned
-    /// creature to the original caster (<see cref="SpellCast.OriginalCaster"/>). Null or <paramref name="caster"/> itself means the caster
-    /// is its own original caster. Cast thread only.
+    /// <paramref name="caster"/> is the unit that casts, the original caster the one that caused it. A wild-summon effect (SPELL_EFFECT_SUMMON_WILD) hands
+    /// the summoned creature to the original caster (<see cref="SpellCast.OriginalCaster"/>); the guardian, critter and demon summons do not. Limit: a
+    /// non-triggered cast queued as a next-swing or auto-repeat spell builds its own cast and drops the original caster. Null or <paramref name="caster"/>
+    /// itself means the caster is its own original caster. Cast thread only.
     /// </summary>
     public SpellCastResult CastSpell(Unit caster, uint spellId, SpellCastTargets targets, bool triggered, SpellInfo? triggeringSpell, Unit? originalCaster)
     {
