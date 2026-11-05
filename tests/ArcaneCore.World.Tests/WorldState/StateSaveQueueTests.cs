@@ -78,6 +78,88 @@ public sealed class StateSaveQueueTests
         Assert.Equal([2], saved);
     }
 
+    [Fact]
+    public async Task AFailedWriteIsRetained_AndRetryRetainedAsyncFaultsNamingTheKeyUntilItLands()
+    {
+        bool down = true;
+        var saved = new List<int>();
+        var queue = new StateSaveQueue<int, int>(value =>
+        {
+            if (Volatile.Read(ref down)) throw new InvalidOperationException("database is locked");
+            lock (saved) saved.Add(value);
+            return Task.CompletedTask;
+        }, NullLogger.Instance, "test");
+        queue.Save(7, 70);
+        await queue.FlushAsync();
+        Assert.Equal([7], queue.RetainedKeys);
+
+        InvalidOperationException fault = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.RetryRetainedAsync());
+        Assert.Contains("7", fault.Message);
+        Assert.Equal([7], queue.RetainedKeys);
+
+        Volatile.Write(ref down, false);
+        await queue.RetryRetainedAsync();
+        Assert.Empty(queue.RetainedKeys);
+        Assert.Equal([70], saved);
+    }
+
+    [Fact]
+    public async Task ANewerSaveOfARetainedKeySupersedesIt_AndTheRetryWritesOnlyTheNewestValue()
+    {
+        bool down = true;
+        var saved = new List<int>();
+        var queue = new StateSaveQueue<int, int>(value =>
+        {
+            if (Volatile.Read(ref down)) throw new InvalidOperationException("database is locked");
+            lock (saved) saved.Add(value);
+            return Task.CompletedTask;
+        }, NullLogger.Instance, "test");
+        queue.Save(1, 10);
+        await queue.FlushAsync();
+        Assert.Equal([1], queue.RetainedKeys);
+
+        Volatile.Write(ref down, false);
+        queue.Save(1, 11);
+        await queue.RetryRetainedAsync();
+
+        Assert.Empty(queue.RetainedKeys);
+        Assert.Equal([11], saved);
+    }
+
+    private sealed class FailableFishingStore : IFishingExtravaganzaStore
+    {
+        public volatile bool Down = true;
+        public FishingExtravaganzaState? Saved;
+        public Task<FishingExtravaganzaState?> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Saved);
+        public Task SaveAsync(FishingExtravaganzaState state, CancellationToken cancellationToken = default)
+        {
+            if (Down) throw new InvalidOperationException("database is locked");
+            Saved = state;
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task TheHandoffsSharedFlushFaultsWhileAStateWriteIsNotDurable_AndPassesOnceItLands()
+    {
+        var store = new FailableFishingStore();
+        ServiceProvider provider = new ServiceCollection().AddSingleton<IFishingExtravaganzaStore>(store).BuildServiceProvider();
+        var feature = new FishingExtravaganzaFeature(provider.GetRequiredService<IServiceScopeFactory>(),
+            new GameEventFeature(provider, NullLogger<GameEventFeature>.Instance));
+        feature.PreviousWinTime = feature.NowUnix() - (2 * 86400);
+        feature.ResetIfStale();
+        await feature.StopAsync(); // the drain has attempted (and failed) the write
+        Assert.Null(store.Saved);
+
+        ServiceProvider barrierServices = new ServiceCollection().AddSingleton(feature).BuildServiceProvider();
+        var barrier = new ArcaneCore.World.Persistence.CharacterPersistenceBarrier(barrierServices);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => barrier.FlushSharedWritesAsync());
+
+        store.Down = false;
+        await barrier.FlushSharedWritesAsync();
+        Assert.Equal(feature.State, store.Saved);
+    }
+
     private sealed class BlockingFishingStore : IFishingExtravaganzaStore
     {
         public readonly ManualResetEventSlim Gate = new(false);

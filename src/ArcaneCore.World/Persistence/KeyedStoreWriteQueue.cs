@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -158,7 +159,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         return _channel.Writer.TryWrite(new Work(string.Empty, Kind.Barrier, done)) ? done.Task : Task.CompletedTask;
     }
 
-    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable.</summary>
+    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable, except a key whose failure is <see cref="RealmLeaseNotHeldException"/>: that refusal is not checked here. For a group the lease holder owns the data; a GM ticket taken on a non-holder is not durable, is not seen by another node, and is only named at stop.</summary>
     public Task RetryRetainedAsync()
     {
         if (_consumer is null || _stopped)
@@ -230,9 +231,21 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         }
     }
 
+    /// <summary>
+    /// The retained keys a retry can still owe: those a store refused because this node does not hold the realm lease for them (<see cref="RealmLeaseNotHeldException"/>) are left out. The
+    /// key stays retained (the periodic retry lands it if the lease comes back, and stop still names it), but a handoff flush must not be refused by it. This is not a durability promise: for a group the holder owns the data, but a GM ticket saved on a non-holder reaches no holder, so it is not durable and the flush does not report it.
+    /// </summary>
+    private string[] OwedKeys()
+    {
+        lock (_gate)
+        {
+            return [.. _keys.Where(k => k.Value.Failure is not null and not RealmLeaseNotHeldException).Select(k => k.Key).Order(StringComparer.Ordinal)];
+        }
+    }
+
     private Task RetainedFailureTask()
     {
-        string[] failed = [.. RetainedKeys];
+        string[] failed = OwedKeys();
         Exception? first;
         lock (_gate)
         {
@@ -304,7 +317,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
                             await ExecuteAsync(key, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
 
-                        string[] failed = [.. RetainedKeys];
+                        string[] failed = OwedKeys();
                         if (failed.Length == 0)
                         {
                             work.Done?.TrySetResult();

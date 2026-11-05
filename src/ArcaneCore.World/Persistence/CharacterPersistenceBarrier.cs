@@ -341,17 +341,61 @@ public sealed class CharacterPersistenceBarrier
 
     /// <summary>
     /// The writes a handoff must have durable that belong to no one character, so <see cref="OpenCharacterIdsAsync"/> cannot name them: instance rows, script data, deletions and raid reset times,
-    /// guilds, petitions and character purges. Each queue retries what it retains and faults, under <see cref="DefaultTimeout"/>, while one is still not durable. The last time this process can
-    /// write them: B reads the characters database, and the fence refuses A after the takeover. Group, GM audit, account and respawn writes are not covered (a known limit of the handoff).
+    /// guilds, petitions and character purges, then the group, GM audit, account data and account address queues, both respawn queues and the world-state save queues (Silithyst, Fishing
+    /// Extravaganza, Elemental Invasion, Nightmare Dragons). Each queue retries what it retains and faults while one is still not durable. Every queue is attempted even when an earlier one
+    /// faults, so a refused handoff has written all it could: one failure is thrown as it is, several as one <see cref="InvalidOperationException"/> whose inner exception is the
+    /// <see cref="AggregateException"/> of them. All under one <see cref="DefaultTimeout"/> (a timeout or a cancellation stops the rest). The last time this process can write them: B reads the
+    /// characters database, and the fence refuses A after the takeover. A lease refusal (<see cref="ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"/>) of a keyed queue's write is not checked here: for a group the holder has the data, but a GM ticket taken on a non-holder is not durable, is not on B, and is only named at stop. Pet saves are flushed per character (<see cref="FlushCharacterAsync(int, TimeSpan?, CancellationToken)"/>), not here. Not covered, for example: the running game-event set, which a separate sink writes to the characters database, and the war effort and Scourge invasion state, which their own stores write to it.
     /// </summary>
     public async Task FlushSharedWritesAsync(CancellationToken cancellationToken = default)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(DefaultTimeout);
+        var failures = new List<Exception>();
+
+        async Task RunAsync(Task flush)
+        {
+            try
+            {
+                await flush.WaitAsync(budget.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("persist.barrier", ex);
+                _logger?.LogWarning(ex, "Handoff shared write flush failed");
+                failures.Add(ex);
+            }
+        }
+
         if ((_services.GetService<InstanceWriteQueue>() ?? _services.GetService<InstanceFeature>()?.Writes) is { } instanceWrites)
-            await instanceWrites.FlushSharedAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+            await RunAsync(instanceWrites.FlushSharedAsync()).ConfigureAwait(false);
         if ((_services.GetService<SocialWriteQueue>() ?? _services.GetService<SocialFeature>()?.Writes) is { } socialWrites)
-            await socialWrites.FlushSharedAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+            await RunAsync(socialWrites.FlushSharedAsync()).ConfigureAwait(false);
+        if (_services.GetService<SocialGroupPersistenceFeature>()?.Writes is { } groupWrites)
+            await RunAsync(groupWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Gm.Audit.GmAuditFeature>()?.Writes is { } auditWrites)
+            await RunAsync(auditWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Handlers.AccountDataFeature>()?.Writes is { } accountDataWrites)
+            await RunAsync(accountDataWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Bans.AccountAddressFeature>()?.Writes is { } accountAddressWrites)
+            await RunAsync(accountAddressWrites.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<Creatures.CreatureRespawnFeature>()?.Persistence is Creatures.CreatureRespawnQueue creatureRespawns)
+            await RunAsync(creatureRespawns.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<GameObjects.GameObjectRespawnFeature>()?.Persistence is GameObjects.GameObjectRespawnQueue objectRespawns)
+            await RunAsync(objectRespawns.RetryRetainedAsync()).ConfigureAwait(false);
+        if (_services.GetService<OutdoorPvP.OutdoorPvPFeature>() is { } outdoorPvP)
+            await RunAsync(outdoorPvP.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<FishingExtravaganzaFeature>() is { } fishing)
+            await RunAsync(fishing.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<HolidayObjectsFeature>() is { } holiday)
+            await RunAsync(holiday.FlushStateWritesAsync()).ConfigureAwait(false);
+        if (_services.GetService<NightmareDragonsFeature>() is { } dragons)
+            await RunAsync(dragons.FlushStateWritesAsync()).ConfigureAwait(false);
+
+        if (failures.Count == 1)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1)
+            throw new InvalidOperationException($"{failures.Count} shared write queues are not durable", new AggregateException(failures));
     }
 
     /// <summary>

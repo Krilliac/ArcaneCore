@@ -321,6 +321,36 @@ public sealed class CreatureRespawnQueueTests
     }
 
     [Fact]
+    public async Task RetryRetainedAsync_LandsRetainedWritesWhenTheStoreIsHealthy_AndFaultsNamingTheKeysWhileItIsNot()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        CreatureRespawnQueue queue = await RetainedQueueAsync(store, sp, 2);
+        store.Down = true;
+
+        InvalidOperationException fault = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.RetryRetainedAsync().WaitAsync(HangGuard));
+        Assert.Contains("spawn:0/1", fault.Message);
+        Assert.Contains("spawn:0/2", fault.Message);
+        Assert.Equal(2, queue.RetainedCount);
+
+        store.Down = false;
+        await queue.RetryRetainedAsync().WaitAsync(HangGuard);
+        Assert.Equal(0, queue.RetainedCount);
+        Assert.Equal(2, store.Rows.Count);
+        await queue.StopAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
+    public async Task RetryRetainedAsync_OnAQueueThatNeverStarted_CompletesWithNothingRetained()
+    {
+        var store = new FakeStore();
+        await using ServiceProvider sp = Build(store);
+        var queue = new CreatureRespawnQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CreatureRespawnQueue>.Instance);
+
+        await queue.RetryRetainedAsync().WaitAsync(HangGuard);
+    }
+
+    [Fact]
     public async Task ASweep_RetriesHealthyRetainedKeys_AsOneStoreCall()
     {
         var store = new FakeStore();
