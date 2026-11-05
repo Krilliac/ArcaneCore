@@ -1748,7 +1748,7 @@ public sealed class CharacterSaveQueueTests
         kit.Queue.Enqueue(State(1, 1));
 
         InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)));
-        Assert.Contains("1", refused.Message, StringComparison.Ordinal); // the retained character is named
+        Assert.Contains("for characters 1", refused.Message, StringComparison.Ordinal); // the retained character is named
 
         Assert.Empty(kit.Store.Attempts); // a pause is never lifted by the stop: nothing is written into a database whose lock is lost
         Assert.True(drain.Saves.Refused >= 1, drain.Saves.Describe());

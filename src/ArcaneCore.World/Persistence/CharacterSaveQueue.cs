@@ -608,7 +608,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 if (!_stopped && _drain.IsPaused)
                 {
                     // The characters database writer lock is lost and nobody knows yet whether another world took it (WorldWriterGuard): nothing is picked, snapshots keep waiting (the newest wins)
-                    // and are written once the lane resumes. Shutdown ignores the pause: its writes are refused by the lane and retained.
+                    // and are written once the lane resumes. Shutdown ignores the pause: its writes are refused by the lane, retained, and named by the stop's final report (TakeRetained skips them once stopped, so the consumer ends).
                     pauseTicks = Stopwatch.Frequency;
                 }
                 else if (!_stopped && _busyUntil > now)
@@ -924,7 +924,6 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("writequeue.character-settled", ex);
                 _logger.LogFault("writequeue.character-settled", ex, "a character save settle callback failed");
             }
         }
@@ -1320,6 +1319,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         foreach ((int id, FailedSave failed) in _failed)
         {
             if (!failed.Deferred || failed.Terminal || IsClosedLocked(id))
+            {
+                continue;
+            }
+
+            // Once stopped, a retry the lane refuses again (a pause-refused snapshot) or that can never change (terminal failure) would be picked forever: the stop's final pass names it instead.
+            if (_stopped && (_terminalFailure is not null || failed.Failure is StopDrainExhaustedException))
             {
                 continue;
             }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Kernel.Characters;
 
 namespace ArcaneCore.Game.Maps;
 

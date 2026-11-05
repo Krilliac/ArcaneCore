@@ -123,7 +123,7 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
         }
     }
 
-    /// <summary>A held server lock was found lost. Logged only: the lock keeps trying to take itself back, and a take-over is <see cref="OnLockConflict"/>.</summary>
+    /// <summary>A held server lock was found lost. Pauses the save and feature lanes (the lock keeps trying to take itself back and a re-take resumes them), and a take-over is <see cref="OnLockConflict"/>.</summary>
     internal void OnLockLost(string reason)
     {
         const string Why = "the characters database writer lock is lost";
@@ -137,7 +137,7 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
     {
         drain?.Saves.Resume();
         drain?.Features.Resume();
-        logger?.LogWarning("The characters database writer lock was RE-TAKEN: {LockPath}. This world excludes a second world writer again; its write queues resume (writes were paused during the gap, so nothing new was written unguarded).", DatabaseStartup.Scrub(description, null));
+        logger?.LogWarning("The characters database writer lock was RE-TAKEN: {LockPath}. This world excludes a second world writer again; its write queues resume (queued writes were paused during the gap; writers with no lane and retries of a write already under way were not gated).", DatabaseStartup.Scrub(description, null));
     }
 
     /// <summary>A retake of the lost lock could not complete (server unreachable, or this process's own dead session still holds it). Throttled by the lock.</summary>
