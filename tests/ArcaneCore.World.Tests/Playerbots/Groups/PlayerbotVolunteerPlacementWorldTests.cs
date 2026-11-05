@@ -103,4 +103,32 @@ public sealed class PlayerbotVolunteerPlacementWorldTests : PlayerbotVolunteerWo
         Assert.Null(await world.OnWorldAsync(() => world.GroupManager.GetInvite(Online(world, "Volnope").Guid)));
         Assert.DoesNotContain(world.Coordinator.Groups, g => g.Members.Any(m => m.Real));
     }
+
+    /// <summary>A player more than the level range above every waiting bot gets LevelHigh with the highest level the bots take, is not kept and is never invited.</summary>
+    [Fact]
+    public async Task AVolunteerAboveTheLevelRangeOfEveryWaitingBot_IsLevelHigh_AndNotKept()
+    {
+        const int range = 5;
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options =>
+        {
+            Quiet(options);
+            options.Groups.LevelRange = range;
+        });
+        await world.World.PrepareCharacterAsync("VOLHIGH", "Volhigh", AccountSecurity.Player);
+        var bot = await WaitingBotAsync(world, "Volhighbot", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLHIGH", "Volhigh", AccountSecurity.Player);
+        await world.OnWorldAsync(() =>
+        {
+            Online(world, "Volhigh").Level = (byte)(1 + range + 1);
+            return true;
+        });
+
+        PlayerbotVolunteerResult result = await VolunteerAsync(world, bot.Id, "Volhigh");
+
+        Assert.Equal(PlayerbotVolunteerOutcome.LevelHigh, result.Outcome);
+        Assert.Equal(1 + range, result.Level);
+        Assert.False(world.Coordinator.IsVolunteer(Online(world, "Volhigh").Guid, (PlayerbotGroupGoalKind.Quest, OgreEntry)), "a volunteer above the level range was kept");
+        await world.RunAsync(30_000);
+        Assert.False(PlayerInvited(world), "a volunteer above the level range was invited");
+    }
 }

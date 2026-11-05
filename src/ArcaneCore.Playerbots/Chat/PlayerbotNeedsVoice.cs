@@ -1135,6 +1135,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                     PlayerbotVolunteerOutcome.Noted => ("voice.reply.lfg.noted", $"{asker.Name} wants to join your group for {post.What}; you still need {Number(result.Missing)} more."),
                     PlayerbotVolunteerOutcome.CannotPlace => ("voice.reply.lfg.cant", $"You cannot fit {asker.Name} into your group for {post.What} right now."),
                     PlayerbotVolunteerOutcome.Level => ("voice.reply.lfg.level", $"{asker.Name} is below level {minLevel} for {post.What}."),
+                    PlayerbotVolunteerOutcome.LevelHigh => ("voice.reply.lfg.levelhigh", $"{asker.Name} is above level {Number(result.Level)}, the highest your group takes."),
                     PlayerbotVolunteerOutcome.Role => ("voice.reply.lfg.role", $"{asker.Name} cannot fill the last place, which needs a {roles}."),
                     PlayerbotVolunteerOutcome.Declined => ("voice.reply.lfg.declined", $"{asker.Name} turned your invitation down a moment ago."),
                     PlayerbotVolunteerOutcome.Grouped => ("voice.reply.lfg.grouped", $"{asker.Name} is already in a group."),
@@ -1143,7 +1144,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 };
                 if (key.Length == 0) return false;
                 return Say(chat, line.BotId, player, party, reply, key, sentence, $"Answer {asker.Name} by whisper: {sentence}", null,
-                    ("count", Number(result.Missing)), ("minlevel", minLevel), ("dungeon", post.What ?? string.Empty), ("roles", roles));
+                    ("count", Number(result.Missing)), ("minlevel", minLevel), ("maxlevel", Number(result.Level)), ("dungeon", post.What ?? string.Empty), ("roles", roles));
             }
 
             case PlayerbotVoicePostKind.Selling when post.What is { } item && PlayerbotVoiceFacts.AsksAbout(line.Text, item):

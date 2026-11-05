@@ -407,6 +407,11 @@ public sealed class PlayerbotSummonWorldTests
         Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
         string summonerName = await world.OnWorldAsync(() =>
             world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) is not null ? userOne.Name : userTwo.Name);
+        string helperName = summonerName == userOne.Name ? userTwo.Name : userOne.Name;
+
+        // The other bot takes the helper place at the stone before the summoner goes: that is the hold the drop has to release.
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Bots.Summons.IsHelper(world.World.Host.World.FindOnlinePlayer(helperName)!.Guid)), await world.TraceAsync());
+        ObjectGuid helperGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(helperName)!.Guid);
 
         await world.OnWorldAsync(() =>
         {
@@ -417,5 +422,89 @@ public sealed class PlayerbotSummonWorldTests
 
         // The other bots keep thinking: any of them drops the job (its summoner is gone) instead of holding still for it until the summoner thinks again.
         Assert.True(await world.RunUntilAsync(20_000, () => world.Bots.Summons.Active == 0), await world.TraceAsync());
+        // Independent of the job table: the helper's own think no longer holds still for the dropped job (Drive is false), and it holds no place.
+        var helperBot = helperName == userOne.Name ? userOne : userTwo;
+        bool held = await world.OnWorldAsync(() =>
+            world.Bots.Summons.Drive(world.Session(helperBot.Id), world.Player(helperBot.Id), world.Options, null, 100));
+        Assert.False(held, "the helper still holds still for a job that is gone");
+        Assert.False(await world.OnWorldAsync(() => world.Bots.Summons.IsHelper(helperGuid)));
+    }
+
+    /// <summary>A far-since entry that was not looked at while the picks were gated starts over, so the 10 s debounce is not skipped when the gate lifts.</summary>
+    [Fact]
+    public void AFarSinceEntry_NotRefreshedForTheStaleTime_StartsOver()
+    {
+        Assert.Equal(5_000u, PlayerbotSummons.FarStart(null, 5_000));
+        Assert.Equal(1_000u, PlayerbotSummons.FarStart((1_000, 5_000), 5_000 + PlayerbotSummons.FarStaleMs - 1));
+        Assert.Equal(40_000u, PlayerbotSummons.FarStart((1_000, 5_000), 40_000));
+        Assert.Equal(5_000u + PlayerbotSummons.FarStaleMs, PlayerbotSummons.FarStart((1_000, 5_000), 5_000 + PlayerbotSummons.FarStaleMs));
+    }
+
+    /// <summary>The stale drop is bounded by the job's own limit plus the grace: a job exactly at the bound stays, one millisecond past it is dropped.</summary>
+    [Fact]
+    public async Task AStoneJob_IsDroppedByAnyThink_OnlyOnceItsLimitAndGraceHavePassed()
+    {
+        await using GroupTestWorld world = await StartAsync(stone: true);
+        var userOne = await BotAsync(world, "Stonebounda", Warrior, Camp + new Vector3(6f, 3f, 0f));
+        var userTwo = await BotAsync(world, "Stoneboundb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        var far = await BotAsync(world, "Stoneboundc", Warrior, FarCamp);
+        await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
+        await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
+
+        (bool keptAtTheBound, bool droppedPastIt) = await world.OnWorldAsync(() =>
+        {
+            SummonJob job = world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) ?? world.Bots.Summons.JobOf(world.Player(userTwo.Id).Guid)!;
+            WorldSession session = world.Session(userOne.Id);
+            uint bound = job.StartMs + PlayerbotSummons.StoneMaxMs + PlayerbotSummons.StaleGraceMs;
+            world.Bots.Summons.DropStale(session, bound);
+            bool kept = world.Bots.Summons.Active == 1;
+            world.Bots.Summons.DropStale(session, bound + 1);
+            return (kept, world.Bots.Summons.Active == 0);
+        });
+
+        Assert.True(keptAtTheBound, "a job exactly at its limit plus the grace was dropped");
+        Assert.True(droppedPastIt, "a job past its limit plus the grace was kept");
+    }
+
+    /// <summary>
+    /// The meeting stone's summon is not vanilla: with <c>MeetingStones</c> off a real player's CMSG_GAMEOBJ_USE on the stone, with a group member selected and
+    /// another beside it, summons nobody. The same packets summon the member with the option on, so the refusal is the option's and not the setup's.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task APlayersUseOfTheStone_SummonsTheSelectedMember_OnlyWithTheMeetingStonesOptionOn(bool stones)
+    {
+        await using GroupTestWorld world = await StartAsync(options =>
+        {
+            options.Summon.MeetingStones = stones;
+            options.Summon.RetrySeconds = 600; // the bots' own summon logic stays out of the way of the packet under test
+        }, stone: true);
+        var partner = await BotAsync(world, stones ? "Stonepartya" : "Stonepartyb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        var far = await BotAsync(world, stones ? "Stoneselecta" : "Stoneselectb", Warrior, FarCamp);
+        string real = stones ? "Stoneclkon" : "Stoneclkoff";
+        await using WorldTestClient player = await world.World.EnterWorldAsync(real.ToUpperInvariant(), real, AccountSecurity.Player);
+        await GroupAsync(world, real, partner, far);
+        await PlaceRealAsync(world, real, Camp + new Vector3(6f, 1f, 0f));
+        ulong farGuid = await world.OnWorldAsync(() => world.Player(far.Id).Guid.Value);
+        ulong stoneGuid = await world.OnWorldAsync(() => world.World.Services.GetRequiredService<GameObjectLootFeature>().FindSystem(0)!.GameObjects
+            .Single(g => g.Type == GameObjectType.MeetingStone).Guid.Value);
+
+        await player.SendAsync(WorldOpcode.CmsgSetSelection, BitConverter.GetBytes(farGuid));
+        await world.RunAsync(1_000);
+        int acceptedBefore = world.Bots.Summons.Accepted;
+        await player.SendAsync(WorldOpcode.CmsgGameobjUse, BitConverter.GetBytes(stoneGuid));
+
+        if (stones)
+        {
+            Assert.True(await world.RunUntilAsync(30_000, () => world.Bots.Summons.Accepted > acceptedBefore), "the stone use did not summon the selected member" + Environment.NewLine + await world.TraceAsync());
+            return;
+        }
+
+        await world.RunAsync(30_000);
+        Assert.Equal(acceptedBefore, world.Bots.Summons.Accepted);
+        Assert.Null(await world.OnWorldAsync(() => world.Player(far.Id).PendingSummon));
+        Assert.True(await world.OnWorldAsync(() => Distance(world.Player(far.Id), Real(world, real))) > 100f, "the member was brought to the stone with the option off");
     }
 }

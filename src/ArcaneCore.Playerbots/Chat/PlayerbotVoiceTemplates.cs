@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Playerbots.Chat;
 /// the values come from the bot's real state, never invented. Besides the chat placeholders (<c>{name}</c>, <c>{level}</c>, <c>{class}</c>,
 /// <c>{zone}</c>, ...) a voice topic fills <c>{dungeon}</c> (an instance, as players named it), <c>{roles}</c> ("tank and heals"),
 /// <c>{count}</c>, <c>{task}</c> (a quest title), <c>{item}</c>, <c>{price}</c> ("1g 20s"), <c>{place}</c>, <c>{mob}</c>, <c>{boss}</c>,
-/// <c>{who}</c>, <c>{newlevel}</c>, <c>{newzone}</c>, <c>{node}</c> (a battleground base or tower), <c>{where}</c> and <c>{minlevel}</c>.
+/// <c>{who}</c>, <c>{newlevel}</c>, <c>{newzone}</c>, <c>{node}</c> (a battleground base or tower), <c>{where}</c>, <c>{minlevel}</c> and <c>{maxlevel}</c>.
 /// Keys may have the chat's race, class and level variants (<c>voice.oom.class.Mage</c>).
 /// </summary>
 internal static class PlayerbotVoiceTemplates
@@ -68,6 +68,7 @@ internal static class PlayerbotVoiceTemplates
             "added you, {count} more to go", "nice, need {count} more, will inv",
         ],
         ["voice.reply.lfg.level"] = ["sorry, need {minlevel}+ for this", "need lvl {minlevel} for it, sorry", "its {minlevel}+ sorry"],
+        ["voice.reply.lfg.levelhigh"] = ["sorry, this group tops out at {maxlevel}", "too high for us, {maxlevel} is the cap here", "sorry, nobody here is close to your level, max {maxlevel}"],
         ["voice.reply.lfg.grouped"] = ["leave your group and whisper me again", "you're in a group, drop it and pst", "need you out of your group first"],
         ["voice.reply.lfg.gone"] = ["sorry, not looking anymore", "nvm, gave up on it", "sorry, got it done already", "not anymore, sorry"],
         ["voice.reply.lfg.cant"] = ["sorry, cant fit you in right now", "cant take you right now, sorry", "sorry, it wont work out for you this time", "sorry, cant get you in"],

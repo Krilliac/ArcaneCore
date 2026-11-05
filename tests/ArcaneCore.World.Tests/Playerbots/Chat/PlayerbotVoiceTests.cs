@@ -252,7 +252,7 @@ public sealed class PlayerbotVoiceTests
         [
             ("dungeon", "SFK"), ("roles", "tank and heals"), ("count", "2"), ("task", "The Defias Brotherhood"), ("item", "Copper Ore"),
             ("price", "5s"), ("place", "Ironforge"), ("mob", "Defias Pillager"), ("boss", "Van Cleef"), ("who", "Testplayer"), ("newlevel", "25"),
-            ("newzone", "Duskwood"), ("node", "BS"), ("where", "mid"), ("minlevel", "18"),
+            ("newzone", "Duskwood"), ("node", "BS"), ("where", "mid"), ("minlevel", "18"), ("maxlevel", "30"),
         ];
         foreach ((string key, string[] lines) in PlayerbotVoiceTemplates.Lines)
             foreach (string line in lines)
