@@ -327,6 +327,10 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Chat:Voice:QuestHelpRepeatSeconds", o => o.Chat.Voice.QuestHelpRepeatSeconds, (o, v) => o.Chat.Voice.QuestHelpRepeatSeconds = v, v => v is >= 60 and <= 86400 ? null : "must be 60..86400"),
         LivePlayerbots("Chat:Voice:AnswerPosts", o => o.Chat.Voice.AnswerPosts, (o, v) => o.Chat.Voice.AnswerPosts = v),
         LivePlayerbotsValue("Chat:Voice:PostLifeSeconds", o => o.Chat.Voice.PostLifeSeconds, (o, v) => o.Chat.Voice.PostLifeSeconds = v, v => v is >= 60 and <= 3600 ? null : "must be 60..3600"),
+        // Not vmangos keys: the bot LFG talk (docs/areas/playbots.md, Bot voice). PlayerbotNeedsVoice reads the shared PlayerbotOptions.Chat.Lfg at every heard line.
+        LivePlayerbots("Chat:Lfg:Enabled", o => o.Chat.Lfg.Enabled, (o, v) => o.Chat.Lfg.Enabled = v),
+        LivePlayerbotsValue("Chat:Lfg:AnswerRepeatSeconds", o => o.Chat.Lfg.AnswerRepeatSeconds, (o, v) => o.Chat.Lfg.AnswerRepeatSeconds = v, v => v is >= 10 and <= 600 ? null : "must be 10..600"),
+        LivePlayerbotsValue("Chat:Lfg:MaxTrackedVolunteers", o => o.Chat.Lfg.MaxTrackedVolunteers, (o, v) => o.Chat.Lfg.MaxTrackedVolunteers = v, v => v is >= 8 and <= 512 ? null : "must be 8..512"),
         // Not vmangos keys: bots grouping up for group content (docs/areas/playbots-groups.md). PlayerbotGroupCoordinator reads the
         // shared PlayerbotOptions.Groups at every decision.
         LivePlayerbots("Groups:Enabled", o => o.Groups.Enabled, (o, v) => o.Groups.Enabled = v),

@@ -71,6 +71,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Goal, Team Team), long> _holds = [];
     private int _verdictsThisPass;
     private readonly HashSet<ObjectGuid> _dings = [];
+    private readonly Dictionary<(ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome), long> _answered = [];
     private readonly Random _random = new();
     private PlayerbotChat? _hooked;
     private int _cursor;
@@ -1048,9 +1049,55 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         }
     }
 
+    /// <summary>The LFG call of another bot in the same waiting group as <paramref name="botId"/> (the group's poster), or null.</summary>
+    private PlayerbotVoicePost? GroupPost(PlayerbotChat chat, Guid botId, long lifeMs)
+    {
+        if (services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return null;
+        int group = coordinator.WaitingGroupIdOf(botId);
+        if (group == 0) return null;
+        foreach ((Guid other, _, _, _) in coordinator.WaitingBots)
+            if (other != botId && coordinator.WaitingGroupIdOf(other) == group
+                && chat.Voice.Find(other, chat.NowMs, lifeMs) is { Kind: PlayerbotVoicePostKind.LookingForGroup } post)
+                return post;
+        return null;
+    }
+
+    /// <summary>
+    /// Whether this player already got an answer about this waiting group within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/>; when not,
+    /// records the answer now. A repeated "inv" is applied (the volunteer is refreshed) but not answered twice.
+    /// </summary>
+    private bool AnsweredLately(PlayerbotChat chat, (ObjectGuid Asker, Guid Bot, int Group, PlayerbotVolunteerOutcome Outcome) key)
+    {
+        PlayerbotLfgOptions lfg = chat.LfgOptions;
+        long now = chat.NowMs;
+        if (_answered.TryGetValue(key, out long at) && now - at < lfg.AnswerRepeatSeconds * 1000L) return true;
+        if (_answered.Count >= lfg.MaxTrackedVolunteers)
+        {
+            foreach ((var other, long when) in _answered.ToArray())
+                if (now - when >= lfg.AnswerRepeatSeconds * 1000L) _answered.Remove(other);
+            if (_answered.Count >= lfg.MaxTrackedVolunteers) _answered.Clear();
+        }
+
+        _answered[key] = now;
+        return false;
+    }
+
+    /// <summary>Whether this player was told within <see cref="PlayerbotLfgOptions.AnswerRepeatSeconds"/> that <paramref name="bot"/>'s group is complete with them (Ready).</summary>
+    private bool AnsweredReadyLately(PlayerbotChat chat, ObjectGuid asker, Guid bot)
+    {
+        long window = chat.LfgOptions.AnswerRepeatSeconds * 1000L;
+        foreach (((ObjectGuid who, Guid from, _, PlayerbotVolunteerOutcome outcome), long at) in _answered)
+            if (who == asker && from == bot && outcome == PlayerbotVolunteerOutcome.Ready && chat.NowMs - at < window) return true;
+        return false;
+    }
+
     private bool Answer(PlayerbotChat chat, PlayerbotVoiceOptions options, BotHeardLine line, Player player, PlayerbotPartyAI party)
     {
-        PlayerbotVoicePost? found = chat.Voice.Find(line.BotId, chat.NowMs, options.PostLifeSeconds * 1000L);
+        long lifeMs = options.PostLifeSeconds * 1000L;
+        bool asksInvite = PlayerbotVoiceFacts.AsksInvite(line.Text);
+        PlayerbotVoicePost? found = chat.Voice.Find(line.BotId, chat.NowMs, lifeMs);
+        // Any bot of a waiting group answers for it: a whisper to a member that did not post is taken for the group's call.
+        if (found is null && asksInvite && chat.LfgOptions.Enabled) found = GroupPost(chat, line.BotId, lifeMs);
         PlayerbotTradeDesk? desk = services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is { Enabled: true } running ? running : null;
         bool quoted = desk?.StateOf(line.BotId, line.SenderGuid) == PlayerbotDealState.Quoted; // a deal quoted to this asker outlives the board call
         if (found is null && !quoted) return false;
@@ -1060,24 +1107,43 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (found is not { } post) return false;
         switch (post.Kind)
         {
-            case PlayerbotVoicePostKind.LookingForGroup when PlayerbotVoiceFacts.AsksInvite(line.Text):
+            case PlayerbotVoicePostKind.LookingForGroup when asksInvite:
             {
                 if (services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return false;
-                PlayerbotVolunteerResult result = coordinator.Volunteer(line.BotId, asker);
+                PlayerbotGroupRole? stated = PlayerbotLfgIntents.RoleOf(line.Text) switch
+                {
+                    BotChatRole.Tank => PlayerbotGroupRole.Tank,
+                    BotChatRole.Healer => PlayerbotGroupRole.Healer,
+                    BotChatRole.Damage => PlayerbotGroupRole.Damage,
+                    _ => null,
+                };
+                int waitingGroup = coordinator.WaitingGroupIdOf(line.BotId); // before Volunteer: a group that forms leaves its bots waiting for none
+                PlayerbotVolunteerResult result = coordinator.Volunteer(line.BotId, asker, stated);
+                if (result.Outcome == PlayerbotVolunteerOutcome.Ignored) return true; // no invitation and no reply
+                if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting)
+                {
+                    // The group formed on this player's earlier inv (the invitation is pending): the repeat is quiet and the post stays.
+                    if (AnsweredReadyLately(chat, asker.Guid, line.BotId)) return true;
+                    chat.Voice.Forget(line.BotId);
+                }
+                else if (AnsweredLately(chat, (asker.Guid, line.BotId, waitingGroup, result.Outcome))) return true; // applied above, an identical answer said once
+                string roles = result.Needed == PlayerbotGroupRole.Tank ? "tank" : "healer";
+                string minLevel = Number(result.Level > 0 ? result.Level : post.MinLevel);
                 (string key, string sentence) = result.Outcome switch
                 {
                     PlayerbotVolunteerOutcome.Ready => ("voice.reply.lfg.ready", $"{asker.Name} wants to join your group for {post.What}; the group is complete with them."),
                     PlayerbotVolunteerOutcome.Noted => ("voice.reply.lfg.noted", $"{asker.Name} wants to join your group for {post.What}; you still need {Number(result.Missing)} more."),
                     PlayerbotVolunteerOutcome.CannotPlace => ("voice.reply.lfg.cant", $"You cannot fit {asker.Name} into your group for {post.What} right now."),
-                    PlayerbotVolunteerOutcome.Level => ("voice.reply.lfg.level", $"{asker.Name} is below level {Number(post.MinLevel)} for {post.What}."),
+                    PlayerbotVolunteerOutcome.Level => ("voice.reply.lfg.level", $"{asker.Name} is below level {minLevel} for {post.What}."),
+                    PlayerbotVolunteerOutcome.Role => ("voice.reply.lfg.role", $"{asker.Name} cannot fill the last place, which needs a {roles}."),
+                    PlayerbotVolunteerOutcome.Declined => ("voice.reply.lfg.declined", $"{asker.Name} turned your invitation down a moment ago."),
                     PlayerbotVolunteerOutcome.Grouped => ("voice.reply.lfg.grouped", $"{asker.Name} is already in a group."),
                     PlayerbotVolunteerOutcome.NotWaiting => ("voice.reply.lfg.gone", $"You are no longer looking for a group for {post.What}."),
                     _ => (string.Empty, string.Empty),
                 };
                 if (key.Length == 0) return false;
-                if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting) chat.Voice.Forget(line.BotId);
                 return Say(chat, line.BotId, player, party, reply, key, sentence, $"Answer {asker.Name} by whisper: {sentence}", null,
-                    ("count", Number(result.Missing)), ("minlevel", Number(post.MinLevel)), ("dungeon", post.What ?? string.Empty));
+                    ("count", Number(result.Missing)), ("minlevel", minLevel), ("dungeon", post.What ?? string.Empty), ("roles", roles));
             }
 
             case PlayerbotVoicePostKind.Selling when post.What is { } item && PlayerbotVoiceFacts.AsksAbout(line.Text, item):

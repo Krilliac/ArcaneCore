@@ -488,6 +488,9 @@ internal static partial class PlayerbotBuiltinChat
         return null;
     }
 
+    /// <summary>Whether a line (already plain: lower case, letters, digits and spaces) is a severe threat or an insult, the lines no bot answers.</summary>
+    internal static bool IsAbusive(string plainLine) => Severe().IsMatch(plainLine) || Insult().IsMatch(plainLine);
+
     /// <summary>Lower case, the bot's own name and punctuation out, single spaces ("Bob, follow me!" is "follow me").</summary>
     private static string Normalize(string text, string botName)
     {

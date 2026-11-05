@@ -138,6 +138,9 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
     /// <summary>The bot voice options (<c>World:Playerbots:Chat:Voice</c>, live).</summary>
     internal PlayerbotVoiceOptions VoiceOptions => Options.Voice;
 
+    /// <summary>The bot LFG talk options (<c>World:Playerbots:Chat:Lfg</c>, live).</summary>
+    internal PlayerbotLfgOptions LfgOptions => Options.Lfg;
+
     /// <summary>The central rate limiter of bot speech (world thread; tests).</summary>
     internal PlayerbotSpeechLimiter Limiter => _limiter;
 

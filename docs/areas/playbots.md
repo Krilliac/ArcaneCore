@@ -1988,6 +1988,23 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
 - **Battleground callouts** (`BattlegroundCalls`): from the match's real state, one bot of the team says each event in battleground
   chat (the same callout not again within `BattlegroundCallSeconds`): Warsong Gulch "flag taken", "EFC mid", "flag returned"; Arathi
   Basin "inc BS", "lost farm", "LM capped", "capping ST"; Alterac Valley "IB tower under attack", "TP burned", "SH GY assaulted".
+- **LFG talk** (`World:Playerbots:Chat:Lfg`: `Enabled`, `AnswerRepeatSeconds`, `MaxTrackedVolunteers`, all live): the only part of
+  the group talk the server answers is a whispered offer to join a bot's LFG or LFM call ("inv", "can i come"). The offer is detected by
+  `PlayerbotVoiceFacts.AsksInvite`; `PlayerbotLfgIntents.RoleOf` then reads the role the player states in the same line ("tank"/"mt",
+  "heal"/"healer", "dps"/"dd"; a class word states none). Limit: `PlayerbotLfgIntents.Read`, `Resolve`, `HasGroupCue`, the
+  `PlayerbotLfgZoneIndex` and the other intent code (group searches such as "any groups for SFK?", guild requests and searches, an "inv" in
+  a channel) are not called by the server: no heard line reaches them, nothing answers a search, a guild or a channel line, and they have
+  no options.
+- **Volunteering** (a real player whispers "inv" to a bot's LFG or LFM call): the poster, or any bot of the same waiting group (`Enabled`),
+  answers. `PlayerbotGroupCoordinator.Volunteer` checks in this order, the first failure deciding: the same team, a level of at least the
+  goal's ("sorry, need 14+"), not in a group (or with an invitation pending), no recent decline, an instance goal's anchor, no ignore or
+  rivalry between the player and the waiting bots (silent: no invitation and no reply), reach (CannotPlace: a player off the meeting map
+  or beyond 1500 yards is not promised an invitation), then, when the player would take the group's last place and it is a tank's or a
+  healer's, a role the player's class can fill ("sorry, we need a healer"; a stated role, "i can tank", is used for the match when the class
+  can play it and dropped when it cannot; a stated damage role is never placed in a tank or healer place), then the dry-run match as before
+  (Ready, Noted or CannotPlace). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
+  (a different outcome, such as CannotPlace then Noted, is answered again; after Ready the repeat is quiet and the post stays); `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
+  only the whisper to the poster itself.
 
 ## Scenario harness
 
