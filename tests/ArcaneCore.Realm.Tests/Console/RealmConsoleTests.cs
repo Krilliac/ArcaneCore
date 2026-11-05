@@ -354,8 +354,8 @@ public sealed class RealmConsoleTests
     public async Task RealmConsole_AccountDelete_ConfirmWithoutArming_ForAnotherName_OrAfterTheWindow_DeletesNothing()
     {
         var rig = new Rig();
-        await SeedAccountAsync(rig, "ALICE", 5, (1, 0));
-        await SeedAccountAsync(rig, "BOB", 6, (1, 0));
+        await SeedAccountAsync(rig, "ALICE", 5, (1, 0), (2, 0));
+        await SeedAccountAsync(rig, "BOB", 6, (1, 0), (2, 0));
 
         Assert.Contains("no pending deletion of 'ALICE'", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
 
@@ -371,8 +371,8 @@ public sealed class RealmConsoleTests
 
         Assert.NotNull(await rig.Accounts.FindByUsernameAsync("ALICE"));
         Assert.NotNull(await rig.Accounts.FindByUsernameAsync("BOB"));
-        Assert.Equal(1, rig.Counts.RowsOf(5));
-        Assert.Equal(1, rig.Counts.RowsOf(6));
+        Assert.Equal(2, rig.Counts.RowsOf(5));
+        Assert.Equal(2, rig.Counts.RowsOf(6));
     }
 
     [Fact]
