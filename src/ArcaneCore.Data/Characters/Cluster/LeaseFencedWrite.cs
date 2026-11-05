@@ -133,6 +133,9 @@ public sealed class RealmLeaseNotHeldException(string scope)
 /// <see cref="RequireHeld"/>, which also refuses after a local loss. Known residual, accepted: a WAL stall that loses renewals (they commit with synchronous_commit off, see <see cref="EfRealmAuthorityLeaseStore"/>),
 /// plus a PostgreSQL crash can let another node (any live map worker: its renewal tick takes a lapsed instances, maintenance or worldstate lease, not only a node at start) take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
 /// <see cref="RequireHeld"/> (no commit check) can still write briefly after the takeover. Stores behind <see cref="RequireFence"/> are refused at commit.</para>
+/// <para>Clock skew: a lease's expiry is written from its holder's clock and judged by the next acquirer's clock, so nodes whose clocks differ by more than roughly TTL minus the renewal interval (20 s with the 30 s and 10 s defaults,
+/// less the jitter of a renewal round) can see a healthy holder's lease as lapsed and take it over. The fencing token moves on and a deposed holder's writes behind <see cref="RequireFence"/> are refused at commit, then the keeper stops it. A store behind <see cref="RequireHeld"/> (worldstate, playerbot ledgers, honor first-start state: the scopes taken over at run time)
+/// has no commit check and keeps writing until its next renewal is refused, up to one renewal interval, alongside the new holder: a further window on top of the WAL-stall route. So a skew takeover is an outage of the holder and, for those stores, a brief double-writer window, so cluster nodes must run NTP (see docs/ops/realm-liveness.md, section 8).</para>
 /// <para>Stateless; every call works on the caller's context, which stays on the caller's logical call (a context is single-threaded).</para>
 /// </summary>
 public static class LeaseFencedWrite
@@ -197,7 +200,7 @@ public static class LeaseFencedWrite
 
     /// <summary>
     /// Whether this process may make the realm-singleton writes of <paramref name="scope"/>: always with no <paramref name="source"/> (nothing is clustered), otherwise only while the source
-    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder or a node that lost the lease (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/> (or <see cref="RequireFence"/> when they verify the lease row at commit).
+    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). <see cref="RequireHeld"/> asks this for writes with no commit check; boot sweeps use <see cref="TryBeginSweep"/> (which also reads the fence once), and writes that verify the lease row at commit use <see cref="RequireFence"/>.
     /// </summary>
     public static bool IsHolder(IRealmLeaseFenceSource? source, string scope)
     {
@@ -206,28 +209,23 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a node that is not the holder is refused before anything is written, and the holder's write is verified against the lease row
-    /// in the transaction that makes it. The one call a realm-singleton store write makes.
+    /// The entry of a boot sweep (an orphan delete or a bind cleanup that only the scope's holder may run): true when this process may sweep, with the <paramref name="fence"/> to verify at commit.
+    /// With no <paramref name="source"/> (nothing is clustered) it is true and the fence is null (no check, as <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/> does
+    /// for a null fence). With a source it is true only while the source holds the scope AND gave a fence: the fence is read first and once, so a release between the holder check and the write can no longer leave
+    /// the sweep with a null fence and unchecked (the gap <see cref="IsHolder"/> followed by a second <see cref="IRealmLeaseFenceSource.FenceFor"/> read left); a node that is not the holder, or that
+    /// has no fence, skips quietly (false). The caller passes the returned fence to <see cref="EnsureHeldAsync"/> or the fence overloads of <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/>.
     /// </summary>
-    public static Task<T> HeldWriteAsync<T>(
-        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
+    public static bool TryBeginSweep(IRealmLeaseFenceSource? source, string scope, out RealmLeaseFence? fence)
     {
-        RealmLeaseFence? fence = source?.FenceFor(scope); // read before the holder check, so a release between the two cannot leave the write unchecked
-        RequireHeld(source, scope);
-        return InTransactionAsync(db, fence, write, cancellationToken);
-    }
-
-    /// <summary>The same as the generic overload, for a write with no result.</summary>
-    public static Task HeldWriteAsync(
-        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task> write, CancellationToken cancellationToken)
-    {
-        RealmLeaseFence? fence = source?.FenceFor(scope);
-        RequireHeld(source, scope);
-        return InTransactionAsync<bool>(db, fence, async () =>
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        if (source is null)
         {
-            await write().ConfigureAwait(false);
+            fence = null;
             return true;
-        }, cancellationToken);
+        }
+
+        fence = source.FenceFor(scope); // read before the holder check, and only once
+        return fence is not null && source.Holds(scope);
     }
 
     /// <summary>

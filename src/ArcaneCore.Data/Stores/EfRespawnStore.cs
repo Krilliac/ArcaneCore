@@ -50,9 +50,10 @@ public abstract class EfRespawnStore<TRow, TRecord, TKey>(CharacterDbContext db,
         // A dungeon instance that no longer exists must not hand its timers to a later instance that reuses the id (the same guard
         // EfLootStateStore applies to chest loot). In a cluster only the Instances lease holder deletes orphans (writer-lock design section 4, row 3): another
         // worker may have committed an instance row this node has not seen. A non-holder loads read-only; the holder's delete is verified against the lease row.
-        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
+        // TryBeginSweep reads the fence once, before the holder check, so a release in between cannot leave the delete without a fence (unchecked).
+        if (LeaseFencedWrite.TryBeginSweep(leaseFences, RealmAuthorityScopes.Instances, out RealmLeaseFence? sweepFence))
         {
-            if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+            if (sweepFence is { } fence)
             {
                 await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
             }
