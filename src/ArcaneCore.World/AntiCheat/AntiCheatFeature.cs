@@ -161,6 +161,9 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
         => Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
 
+    /// <summary>The yards the distance budget of this player's own unit has judged since its checks were built (diagnostics, world thread).</summary>
+    internal float BudgetedYardsOf(Player player) => _players.TryGetValue(player.Guid, out PlayerState? state) ? state.Checks.BudgetedYards : 0f;
+
     private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
         if (IsExempt(session, player))

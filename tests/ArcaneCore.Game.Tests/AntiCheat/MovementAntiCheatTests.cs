@@ -331,6 +331,22 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
+    public void BudgetedYards_CountsTheStepsTheDistanceBudgetJudged_NotABaselineNorARideOnATransport()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        Assert.Equal(0f, client.Checks.BudgetedYards);
+
+        client.RunFor(4, Run);
+        Assert.Equal(14f, client.Checks.BudgetedYards, 3);
+
+        client.Flags = MovementFlags.OnTransport;
+        client.Transport = TransportClaim.Known;
+        client.Step(500, 20f);
+        Assert.Equal(14f, client.Checks.BudgetedYards, 3);
+    }
+
+    [Fact]
     public void AStreamOfStampsAlternatingFiveHundredAheadAndBehind_ScoresSpeed_WhateverTheStampsClaim()
     {
         var client = new Client();

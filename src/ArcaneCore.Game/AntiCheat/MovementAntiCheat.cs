@@ -117,6 +117,9 @@ public sealed class MovementAntiCheat
     /// <summary>Whether a baseline exists (diagnostics).</summary>
     public bool HasBaseline => _hasLast;
 
+    /// <summary>The yards every step so far has spent from the distance budget (diagnostics: a clean run with none was never judged by it).</summary>
+    public float BudgetedYards { get; private set; }
+
     /// <summary>
     /// The server moved the player (teleport, map change, a spell, the end of a taxi or charge): trust the next packet and
     /// forget the clock window, so the move is never scored as a blink.
@@ -674,6 +677,7 @@ public sealed class MovementAntiCheat
             _bucketYards = ceiling;
         }
 
+        BudgetedYards += horizontal;
         _bucketYards = Math.Min(Math.Max(ceiling, _bucketYards), _bucketYards + refill) - horizontal;
         if (_bucketYards < 0f)
         {

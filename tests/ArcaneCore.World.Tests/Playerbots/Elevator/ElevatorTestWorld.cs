@@ -25,7 +25,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Elevator;
 /// A world with the Great Lift (<see cref="ElevatorTestData"/>: its two cars, spawns 16874 and 16876, and their real paths), the manual
 /// clock, straight-line paths that stop at the cliff (<see cref="CliffPathfinder"/>) and a fixture cliff: east of <see cref="Cliff"/> the plateau of The Barrens at <see cref="TopFloor"/>, west of
 /// it the floor of Thousand Needles at <see cref="BottomFloor"/>; the zones follow the cliff (<see cref="PlayerbotElevator.UseSurvey"/>). One
-/// managed bot. Time moves only through <see cref="AdvanceAsync"/>.
+/// managed bot. Time moves only through <see cref="AdvanceAsync"/>, for the bot's packets too (<see cref="WorldSession.ManagedReceiveClock"/>): the anticheat
+/// judges them on the clock the bot walks by.
 /// </summary>
 internal sealed class ElevatorTestWorld : IAsyncDisposable
 {
@@ -47,6 +48,7 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
     {
         Host = host;
         Session = session;
+        session.ManagedReceiveClock = () => host.World.NowMs;
     }
 
     public WorldTestHost Host { get; }
