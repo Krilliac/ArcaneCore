@@ -44,9 +44,14 @@ public sealed partial class SpellSystem
             return dx * dx + dy * dy + dz * dz;
         }
 
+        // Only the nearest-object choice (target 40) reads the row's condition (vmangos NearestGameObjectEntryFitConditionInObjectRangeCheck,
+        // Spell.cpp:480); the area targets 51 and 52 use GameObjectEntryInPosRangeCheck, which has none (Spell.cpp:2498-2503). Entry first, then
+        // range, the condition last.
+        bool checkCondition = selector == (SpellImplicitTarget)40;
         GameObject[] candidates = [.. objects.GameObjects.Where(go => go.IsSpawned
+            && rows.Any(row => row.TargetEntry == go.Entry)
             && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius)
-            && rows.Any(row => row.TargetEntry == go.Entry && ScriptTargetConditionHolds(row, caster, go)))
+            && (!checkCondition || rows.Any(row => row.TargetEntry == go.Entry && ScriptTargetConditionHolds(row, caster, go))))
             .OrderBy(DistanceSquared).ThenBy(go => go.Guid.Value)];
         if (candidates.Length == 0)
             return [];

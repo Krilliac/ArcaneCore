@@ -8,6 +8,9 @@ public sealed class SpellScriptTargetRow
     public uint TargetEntry { get; set; }
     public uint InverseEffectMask { get; set; }
 
-    /// <summary>The <c>conditions</c> row the target must satisfy (vmangos <c>conditionId</c>); 0 is none. Added by <see cref="SpellScriptTargetConditionDataModule"/>.</summary>
-    public uint ConditionId { get; set; }
+    /// <summary>
+    /// The condition the target must satisfy, translated from the vmangos <c>conditionId</c> at import (the term list of <see cref="SpellScriptTargetConditionTranslator"/>);
+    /// empty is none. Condition ids are per database, so the id itself is never stored. Added by <see cref="SpellScriptTargetConditionDataModule"/>.
+    /// </summary>
+    public string TargetCondition { get; set; } = string.Empty;
 }

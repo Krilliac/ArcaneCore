@@ -4,7 +4,7 @@
 -- from: 68
 -- to: 69
 -- owner: World.Creatures.SpellScriptTargetConditionDataModule
--- body-sha256: 53cb5d1a1336bc2fdde4e3f36e5d15d992943fd93086b17cb9ad758e0aec2ea2
+-- body-sha256: 311193661d3c94e2661b8b45c58cb4dec7d3f7aab3c1008f925a6551f8108c97
 -- apply: mysql <database> < this-file.sql   (the mysql/mariadb client; stops at the first error)
 
 -- guard: refuse any database that is not recorded at schema version 68
@@ -16,7 +16,7 @@ BEGIN NOT ATOMIC
 END//
 DELIMITER ;
 
-ALTER TABLE `spell_script_target` ADD `ConditionId` int unsigned NOT NULL DEFAULT 0;
+ALTER TABLE `spell_script_target` ADD `TargetCondition` varchar(255) CHARACTER SET utf8mb4 NOT NULL DEFAULT '';
 
 -- the version row is written last
 UPDATE `world_schema` SET `Version` = 69 WHERE `Id` = 1 AND `Version` = 68;

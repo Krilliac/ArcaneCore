@@ -4,7 +4,7 @@
 -- from: 68
 -- to: 69
 -- owner: World.Creatures.SpellScriptTargetConditionDataModule
--- body-sha256: ed9e7028b0a6913472ab629f3e414c2d1267d59a07ccd247704101bc803af8c3
+-- body-sha256: bac0e1cc4b63191d321dfa60b8e7e4fbb6695f35267e7d5b3aa07000a5eb355c
 -- apply: psql -v ON_ERROR_STOP=1 -d <database> -f this-file.sql
 
 BEGIN;
@@ -18,7 +18,7 @@ BEGIN
 END
 $$;
 
-ALTER TABLE spell_script_target ADD "ConditionId" bigint NOT NULL DEFAULT 0;
+ALTER TABLE spell_script_target ADD "TargetCondition" character varying(255) NOT NULL DEFAULT '';
 
 -- the version row is written last
 UPDATE world_schema SET "Version" = 69 WHERE "Id" = 1 AND "Version" = 68;

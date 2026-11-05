@@ -4,7 +4,7 @@
 -- from: 68
 -- to: 69
 -- owner: World.Creatures.SpellScriptTargetConditionDataModule
--- body-sha256: 92ced3a0eaf51e9fefad71cf0dd044e2c6e7b6e366d65f3ab2eda3d2a91e8172
+-- body-sha256: e121c3405f3d8f77cc83894b83962866cc155b974375fdfa474c76bd1383a901
 -- apply: sqlite3 -bail <database-file> < this-file.sql
 
 BEGIN;
@@ -14,7 +14,7 @@ CREATE TEMP TABLE "arcane_update_guard" ("requires_world_schema_version_68" INTE
 INSERT INTO "arcane_update_guard" SELECT CASE WHEN (SELECT "Version" FROM "world_schema" WHERE "Id" = 1) = 68 THEN 1 ELSE 0 END;
 DROP TABLE "arcane_update_guard";
 
-ALTER TABLE "spell_script_target" ADD "ConditionId" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "spell_script_target" ADD "TargetCondition" TEXT NOT NULL DEFAULT '';
 
 -- the version row is written last
 UPDATE "world_schema" SET "Version" = 69 WHERE "Id" = 1 AND "Version" = 68;

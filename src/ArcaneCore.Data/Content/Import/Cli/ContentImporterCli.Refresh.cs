@@ -502,6 +502,7 @@ public static partial class ContentImporterCli
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
+                    warnings.AddRange(relays.SpellScriptTargetWarnings);
                     await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     warnings.AddRange(dbScripts.Warnings);

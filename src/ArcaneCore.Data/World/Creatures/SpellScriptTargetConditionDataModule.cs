@@ -5,10 +5,11 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.World.Creatures;
 
 /// <summary>
-/// World schema 69: <c>spell_script_target.ConditionId</c>, the <c>conditions</c> row (vmangos <c>conditionId</c>, SpellMgr.cpp:2068) a listed
-/// unit or game object must satisfy to be selected; 0 means none. The column is a property of <see cref="SpellScriptTargetRow"/> (its table is
-/// configured by <see cref="MovementScriptDataModule"/>); the step only adds it to a database created at world version 45-68. A database
-/// upgraded to 69 holds 0 in every row until <c>arcane-db refresh</c> re-reads the dump
+/// World schema 69: <c>spell_script_target.TargetCondition</c>, the condition (vmangos <c>conditionId</c>, SpellMgr.cpp:2068) a listed
+/// unit or game object must satisfy to be selected, translated at import into the term list of <see cref="SpellScriptTargetConditionTranslator"/>
+/// (condition ids are per database, so the id is not stored); empty means none. The column is a property of <see cref="SpellScriptTargetRow"/> (its
+/// table is configured by <see cref="MovementScriptDataModule"/>); the step only adds it to a database created at world version 45-68. A database
+/// upgraded to 69 holds an empty condition in every row until <c>arcane-db refresh</c> re-reads the dump
 /// (<see cref="CreatureDumpImporter.RefreshSpellScriptTargetsAsync"/>).
 /// </summary>
 public sealed class SpellScriptTargetConditionDataModule : IDataModule
@@ -22,7 +23,7 @@ public sealed class SpellScriptTargetConditionDataModule : IDataModule
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [
-        new AddColumnChange("spell_script_target", nameof(SpellScriptTargetRow.ConditionId)),
+        new AddColumnChange("spell_script_target", nameof(SpellScriptTargetRow.TargetCondition)),
     ];
 
     public void ConfigureModel(ModelBuilder modelBuilder)

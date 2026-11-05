@@ -161,9 +161,7 @@ public sealed class DespawnCreatureScript : ISpellScript
     {
         foreach (SpellStore.ScriptTarget row in context.System.Store.GetScriptTargets(context.Spell.Id))
         {
-            if (row.TargetEntry == creature.Entry && row.Type is 1 or 2
-                && (row.ConditionId == 0
-                    || context.Caster.Map?.FindUpdater<CreatureMapSystem>()?.ScriptTargetConditionHolds(row.ConditionId, creature, context.Caster) == true))
+            if (row.TargetEntry == creature.Entry && row.Type is 1 or 2)
             {
                 return true;
             }

@@ -1,12 +1,9 @@
-using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
-using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Pets;
-using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -15,29 +12,26 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 namespace ArcaneCore.Game.Tests.Spells.Targeting;
 
 /// <summary>
-/// spell_script_target.conditionId (vmangos SpellMgr.cpp:2068, GridNotifiers.h:672 and :1210): a row whose conditionId is set selects a unit or
-/// game object only when <c>IsConditionSatisfied(conditionId, candidate, map, caster)</c> holds. The condition is a CREATURE_IN_RANGE row
-/// (Conditions.cpp:484-489, decided from the map): a beacon creature within 10 yards of the candidate. Beside the unconditioned control, the
-/// nearer candidate has no beacon and the farther one has, so only the condition tells them apart. Written for the integration gate; not run in the lane.
+/// spell_script_target.conditionId in the shapes of the real vmangos rows (vmangos world database conditions: 6492 HEALTH_PERCENT at most 5,
+/// 122 OBJECT_IS_SPAWNED, 124 AND(122, 123 OBJECT_LOOT_STATE 1), 15958 AND(122, 192 OBJECT_GO_STATE 2), 1111 SOURCE_ENTRY 15882 reversed;
+/// Conditions.h:101, 195, 217, 219, 248), translated at import into <see cref="ScriptTargetCondition"/> text. vmangos reads the row's condition only in
+/// the nearest-unit and nearest-object searches of Spell::CheckScriptTargeting (targets 38, 46, 40; GridNotifiers.h:672 and :1210, Spell.cpp:480,
+/// :539): a valid explicit target (Spell.cpp:511-533), the area targets 7 and 8 and the cone (:2356-2442, :2731-2738) and the object area targets
+/// 51 and 52 (GameObjectEntryInPosRangeCheck, :2498-2503) ignore it. Written for the integration gate; not run in the lane.
 /// </summary>
 public sealed class ScriptTargetConditionTests
 {
     private const uint NearestSpell = 990801;
     private const uint AreaSpell = 990802;
     private const uint LocationSpell = 990803;
+    private const uint ObjectNearestSpell = 990804;
+    private const uint ObjectSourceAreaSpell = 990805;
     private const uint Listed = 990811;
-    private const uint Beacon = 990812;
     private const uint Firecracker = 990821;
-    private const uint BeaconCondition = 100;
-    private const uint MissingCondition = 999;
+    private const uint Door = 990822;
     private const int Target46 = 46;
-
-    private sealed class Forwarding(ConditionEvaluator inner) : IConditionEvaluator, IConditionTableEvaluator
-    {
-        public ConditionEvaluator Current => inner;
-
-        public bool IsSatisfied(uint conditionId, Player player, NpcInfo? source) => inner.IsSatisfied(conditionId, player, source);
-    }
+    private const string AtMost5Percent = "health:5:2";
+    private const string GoState2 = "gostate:2";
 
     private static SpellInfo Aura(uint id, SpellImplicitTarget targetA, SpellImplicitTarget targetB = SpellImplicitTarget.None, float radius = 0)
         => Spell(id, Effect(SpellEffectName.ApplyAura, 1, targetA, AuraType.Dummy, targetB: targetB) with { Radius = radius }) with
@@ -51,21 +45,25 @@ public sealed class ScriptTargetConditionTests
     private static SpellInfo Location() => Spell(LocationSpell, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46))
         with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
 
+    private static SpellInfo ObjectSpell(uint id, int action, SpellImplicitTarget targetA, SpellImplicitTarget targetB = SpellImplicitTarget.None, float radius = 0)
+        => Spell(id, Effect(SpellEffectName.ActivateObject, 0, targetA, misc: action, targetB: targetB) with { Radius = radius })
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+
     private sealed class Rig : IDisposable
     {
         public Rig(params SpellStore.ScriptTarget[] rows)
         {
             SpellInfo[] spells = [Aura(NearestSpell, SpellImplicitTarget.UnitScriptNearCaster),
-                Aura(AreaSpell, SpellImplicitTarget.LocationCasterSrc, SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc, radius: 20), Location()];
+                Aura(AreaSpell, SpellImplicitTarget.LocationCasterSrc, SpellImplicitTarget.EnumUnitsScriptAoeAtSrcLoc, radius: 20), Location(),
+                ObjectSpell(ObjectNearestSpell, 6, (SpellImplicitTarget)40),
+                ObjectSpell(ObjectSourceAreaSpell, 7, SpellImplicitTarget.LocationCasterSrc, (SpellImplicitTarget)51, 10)];
             Kit = new SpellTestKit(spells);
             var map = Kit.World.GetMap(0);
-            Objects = new GameObjectMapSystem(map, new GameObjectContent([GameObjectTestKit.GoTemplate(Firecracker, GameObjectType.Goober)], [], [], [], []));
+            Objects = new GameObjectMapSystem(map, new GameObjectContent(
+                [GameObjectTestKit.GoTemplate(Firecracker, GameObjectType.Goober), GameObjectTestKit.GoTemplate(Door, GameObjectType.Door)], [], [], [], []));
             map.AddUpdater(Objects);
-            var conditions = new Forwarding(new ConditionEvaluator(
-                ConditionTable.Build([new ConditionRecord(BeaconCondition, 37, Beacon, 10, 0, 0, 0)]), new ConditionContext()));
-            Templates = [CreatureTestKit.Template(Listed, b => b.Faction = 35), CreatureTestKit.Template(Beacon, b => b.Faction = 35)];
-            Creatures = new CreatureMapSystem(map, CreatureTestKit.Content(Templates, []), random: new Random(1),
-                aiServices: new CreatureAiServices { Conditions = conditions });
+            Templates = [CreatureTestKit.Template(Listed, b => b.Faction = 35)];
+            Creatures = new CreatureMapSystem(map, CreatureTestKit.Content(Templates, []), random: new Random(1));
             map.AddUpdater(Creatures);
             (Caster, Session) = Kit.AddPlayer(1);
             Kit.System.Units = new MapObjectResolver();
@@ -79,11 +77,24 @@ public sealed class ScriptTargetConditionTests
         public Player Caster { get; }
         public FakeSession Session { get; }
 
-        public Creature Spawn(uint entry, float x) => Creatures.SpawnTemporary(Templates.Single(t => t.Entry == entry), x, 0, Caster.Z, 0);
+        /// <summary>A listed creature at <paramref name="x"/> with the given health percent.</summary>
+        public Creature Spawn(float x, uint healthPercent = 100)
+        {
+            Creature creature = Creatures.SpawnTemporary(Templates.Single(t => t.Entry == Listed), x, 0, Caster.Z, 0);
+            creature.MaxHealth = 1000;
+            creature.Health = healthPercent * 10;
+            return creature;
+        }
 
-        public GameObject SpawnObject(float x) => Objects.Summon(Firecracker, x, 0, Caster.Z, 0)!;
+        public GameObject SpawnObject(uint entry, float x, GameObjectState state = GameObjectState.Ready)
+        {
+            GameObject go = Objects.Summon(entry, x, 0, Caster.Z, 0)!;
+            go.State = state;
+            return go;
+        }
 
-        public SpellCastResult Cast(uint spell) => Kit.System.CastSpell(Caster, spell, SpellCastTargets.ForSelf(), triggered: true);
+        public SpellCastResult Cast(uint spell, SpellCastTargets? targets = null)
+            => Kit.System.CastSpell(Caster, spell, targets ?? SpellCastTargets.ForSelf(), triggered: true);
 
         public bool Has(Creature creature, uint spell) => Kit.System.HasAura(creature, spell);
 
@@ -107,9 +118,8 @@ public sealed class ScriptTargetConditionTests
     public void Target38_WithNoCondition_TakesTheNearestListedUnit()
     {
         using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0));
-        Creature near = rig.Spawn(Listed, 5);
-        Creature far = rig.Spawn(Listed, 25);
-        rig.Spawn(Beacon, 30);
+        Creature near = rig.Spawn(5);
+        Creature far = rig.Spawn(25);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearestSpell));
 
@@ -118,12 +128,12 @@ public sealed class ScriptTargetConditionTests
     }
 
     [Fact]
-    public void Target38_WithACondition_SkipsTheNearerUnitThatFailsIt()
+    public void Target38_WithAHealthCondition_SkipsTheNearerUnitThatFailsIt()
     {
-        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, BeaconCondition));
-        Creature near = rig.Spawn(Listed, 5);   // the beacon is 25 yards away: the condition fails
-        Creature far = rig.Spawn(Listed, 25);   // the beacon is 5 yards away: the condition holds
-        rig.Spawn(Beacon, 30);
+        // Spells 9082 and 9012: the unit must be at 5 percent health or less (condition 6492).
+        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, AtMost5Percent));
+        Creature near = rig.Spawn(5);        // full health: the condition fails
+        Creature far = rig.Spawn(25, 1);     // 1 percent: the condition holds
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearestSpell));
 
@@ -134,9 +144,9 @@ public sealed class ScriptTargetConditionTests
     [Fact]
     public void Target38_WhenNoListedUnitMeetsTheCondition_FailsTheCast()
     {
-        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, BeaconCondition));
-        Creature near = rig.Spawn(Listed, 5);
-        Creature far = rig.Spawn(Listed, 25);
+        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, AtMost5Percent));
+        Creature near = rig.Spawn(5);
+        Creature far = rig.Spawn(25, 50);
 
         Assert.Equal(SpellCastResult.DontReport, rig.Cast(NearestSpell));
 
@@ -145,12 +155,10 @@ public sealed class ScriptTargetConditionTests
     }
 
     [Fact]
-    public void Target38_WithAConditionThatIsNotLoaded_SelectsNobody()
+    public void Target38_WithAConditionTextThatCannotBeRead_SelectsNobody()
     {
-        // vmangos IsConditionSatisfied: a condition id that is not loaded is not satisfied (Conditions.cpp:1023-1028).
-        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, MissingCondition));
-        Creature near = rig.Spawn(Listed, 5);
-        rig.Spawn(Beacon, 8);
+        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, "not-a-condition:1"));
+        Creature near = rig.Spawn(5, 1);
 
         Assert.Equal(SpellCastResult.DontReport, rig.Cast(NearestSpell));
 
@@ -158,26 +166,40 @@ public sealed class ScriptTargetConditionTests
     }
 
     [Fact]
-    public void TheAreaTarget_KeepsOnlyTheListedUnitsThatMeetTheCondition()
+    public void Target38_KeepsAValidExplicitTarget_EvenWhenItFailsTheCondition()
     {
-        using var rig = new Rig(new SpellStore.ScriptTarget(AreaSpell, 1, Listed, 0, BeaconCondition));
-        Creature without = rig.Spawn(Listed, 2);
-        Creature with = rig.Spawn(Listed, 18);
-        rig.Spawn(Beacon, 24);
+        // vmangos Spell.cpp:511-533 keeps a listed explicit target without reading conditionId; only the nearest search (:539) does.
+        using var rig = new Rig(new SpellStore.ScriptTarget(NearestSpell, 1, Listed, 0, AtMost5Percent));
+        Creature explicitTarget = rig.Spawn(10);   // full health
+        Creature meeting = rig.Spawn(3, 1);        // nearer and meets the condition, but the explicit target wins
 
-        Assert.Equal(SpellCastResult.CastOk, rig.Cast(AreaSpell));
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearestSpell, SpellCastTargets.ForUnit(explicitTarget.Guid)));
 
-        Assert.False(rig.Has(without, AreaSpell));
-        Assert.True(rig.Has(with, AreaSpell));
+        Assert.True(rig.Has(explicitTarget, NearestSpell));
+        Assert.False(rig.Has(meeting, NearestSpell));
     }
 
     [Fact]
-    public void Target46_WithACondition_SetsTheDestinationToTheNearestObjectThatMeetsIt()
+    public void TheAreaTarget_IgnoresTheCondition()
     {
-        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, BeaconCondition));
-        rig.SpawnObject(5);                     // no beacon within 10 yards
-        GameObject meeting = rig.SpawnObject(20);
-        rig.Spawn(Beacon, 24);
+        // vmangos target 7 (Spell.cpp:2356-2398) has no condition test: both units are hit though neither is at 5 percent.
+        using var rig = new Rig(new SpellStore.ScriptTarget(AreaSpell, 1, Listed, 0, AtMost5Percent));
+        Creature first = rig.Spawn(2);
+        Creature second = rig.Spawn(18);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(AreaSpell));
+
+        Assert.True(rig.Has(first, AreaSpell));
+        Assert.True(rig.Has(second, AreaSpell));
+    }
+
+    [Fact]
+    public void Target46_WithAGoStateCondition_SetsTheDestinationToTheNearestObjectThatMeetsIt()
+    {
+        // Spell 15958: the object must be spawned and in go state 2 (condition 15958, AND of 122 and 192).
+        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, "spawned;" + GoState2));
+        rig.SpawnObject(Firecracker, 5);
+        GameObject meeting = rig.SpawnObject(Firecracker, 20, GameObjectState.ActiveAlternative);
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationSpell));
 
@@ -189,12 +211,102 @@ public sealed class ScriptTargetConditionTests
     [Fact]
     public void Target46_WhenNoObjectMeetsTheCondition_FailsTheCast()
     {
-        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, BeaconCondition));
-        rig.SpawnObject(5);
-        rig.SpawnObject(20);
+        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, GoState2));
+        rig.SpawnObject(Firecracker, 5);
+        rig.SpawnObject(Firecracker, 20);
 
         Assert.Equal(SpellCastResult.DontReport, rig.Cast(LocationSpell));
 
         Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void Target46_WithALootStateCondition_ChoosesTheObjectInThatState()
+    {
+        // Spell 10731 uses condition 124, AND(spawned, loot state 1); the state is 2 here so the nearer object in state 1 is passed over.
+        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, "spawned;loot:2"));
+        rig.SpawnObject(Firecracker, 5);
+        GameObject activated = rig.SpawnObject(Firecracker, 20);
+        activated.LootState = GameObjectLootState.Activated;
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationSpell));
+
+        Assert.Equal(activated.X, rig.SpellGoTargets().Dest.X, 0.01f);
+    }
+
+    [Fact]
+    public void Target46_WithAReversedSourceEntryCondition_HoldsForACasterWithAnotherEntry()
+    {
+        // Spell 26347: the launcher is found only when the caster's entry is not 15882 (condition 1111). The caster here is a player (entry 0).
+        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, "!entry:15882"));
+        GameObject launcher = rig.SpawnObject(Firecracker, 7);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationSpell));
+
+        Assert.Equal(launcher.X, rig.SpellGoTargets().Dest.X, 0.01f);
+    }
+
+    [Fact]
+    public void Target46_WithASourceEntryCondition_FailsForACasterWithAnotherEntry()
+    {
+        using var rig = new Rig(new SpellStore.ScriptTarget(LocationSpell, 0, Firecracker, 0, "entry:15882"));
+        rig.SpawnObject(Firecracker, 7);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast(LocationSpell));
+    }
+
+    [Fact]
+    public void Target40_ChoosesTheNearestObjectThatMeetsTheCondition()
+    {
+        using var rig = new Rig(new SpellStore.ScriptTarget(ObjectNearestSpell, 0, Door, 0, GoState2));
+        GameObject near = rig.SpawnObject(Door, 3);
+        GameObject far = rig.SpawnObject(Door, 12, GameObjectState.ActiveAlternative);
+        near.Flags |= GameObjectFlags.Locked;
+        far.Flags |= GameObjectFlags.Locked;
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(ObjectNearestSpell));
+
+        Assert.True(near.Flags.HasFlag(GameObjectFlags.Locked));
+        Assert.False(far.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Fact]
+    public void Target51_IgnoresTheCondition()
+    {
+        // vmangos GameObjectEntryInPosRangeCheck (Spell.cpp:2498-2503) has no condition: both objects are locked though neither is in state 2.
+        using var rig = new Rig(new SpellStore.ScriptTarget(ObjectSourceAreaSpell, 0, Firecracker, 0, GoState2));
+        GameObject first = rig.SpawnObject(Firecracker, 3);
+        GameObject second = rig.SpawnObject(Firecracker, 7);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(ObjectSourceAreaSpell));
+
+        Assert.True(first.Flags.HasFlag(GameObjectFlags.Locked));
+        Assert.True(second.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Fact]
+    public void TheConditionTerms_FollowVmangos()
+    {
+        using var rig = new Rig();
+        Creature unit = rig.Spawn(5, 4);
+        GameObject go = rig.SpawnObject(Firecracker, 6);
+
+        Assert.True(ScriptTargetCondition.Parse("health:5:2")!.Holds(unit, rig.Caster));
+        Assert.False(ScriptTargetCondition.Parse("health:3:2")!.Holds(unit, rig.Caster));
+        Assert.True(ScriptTargetCondition.Parse("health:4:0")!.Holds(unit, rig.Caster));
+        Assert.True(ScriptTargetCondition.Parse("health:4:1")!.Holds(unit, rig.Caster));
+        Assert.True(ScriptTargetCondition.Parse("spawned")!.Holds(go, rig.Caster));
+        Assert.False(ScriptTargetCondition.Parse("!spawned")!.Holds(go, rig.Caster));
+        Assert.True(ScriptTargetCondition.Parse("loot:1")!.Holds(go, rig.Caster));
+        Assert.True(ScriptTargetCondition.Parse("!loot:2")!.Holds(go, rig.Caster));
+        // A term whose candidate has the wrong kind is false, and the reverse flag does not make it true (Conditions.cpp:109-130).
+        Assert.False(ScriptTargetCondition.Parse("spawned")!.Holds(unit, rig.Caster));
+        Assert.False(ScriptTargetCondition.Parse("!spawned")!.Holds(unit, rig.Caster));
+        Assert.False(ScriptTargetCondition.Parse("health:5:2")!.Holds(go, rig.Caster));
+        // The caster is the source: its entry is the one compared.
+        Assert.True(ScriptTargetCondition.Parse($"entry:1:{Listed}")!.Holds(go, unit));
+        Assert.False(ScriptTargetCondition.Parse($"entry:{Listed}")!.Holds(go, rig.Caster));
+        Assert.Null(ScriptTargetCondition.Parse(""));
+        Assert.False(ScriptTargetCondition.Parse("health:5")!.Holds(unit, rig.Caster));
     }
 }
