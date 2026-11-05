@@ -21,8 +21,11 @@ public sealed partial class CreatureMapSystem
     /// <c>Map::Add</c>). <paramref name="prepare"/> returns the position (it needs the creature's
     /// own bounding radius). <paramref name="guidEntry"/> replaces the template entry in the GUID
     /// (a pet's pet number). The creature does not respawn and is announced like a runtime spawn.
+    /// <paramref name="summoner"/> is the creature whose AI hears of the summon (cmangos Spell::EffectSummonWild: the original caster when it
+    /// is not the casting unit); null means the owner of the summon links.
     /// </summary>
-    internal Creature SpawnSummoned(CreatureTemplate template, HighGuid highGuid, Func<Creature, CreatureHome> prepare, uint guidEntry = 0)
+    internal Creature SpawnSummoned(CreatureTemplate template, HighGuid highGuid, Func<Creature, CreatureHome> prepare, uint guidEntry = 0,
+        Creature? summoner = null)
     {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(prepare);
@@ -31,9 +34,13 @@ public sealed partial class CreatureMapSystem
             statRates: highGuid == HighGuid.Pet ? null : _options.Rates, itemResolver: highGuid == HighGuid.Pet ? null : EquipmentItemResolver);
         creature.MapId = Map.MapId;
         CreatureHome home = prepare(creature);
-        if (creature.Summon is { } links && FindCreature(links.Owner) is { } summoner)
+        if (summoner is not null)
         {
-            RecordSummoner(summoner, creature); // a spell summon of a creature caster (cmangos Spell::EffectSummon*: JustSummoned)
+            RecordSummoner(summoner, creature); // the original caster of the spell (cmangos Spell::EffectSummonWild: JustSummoned)
+        }
+        else if (creature.Summon is { } links && FindCreature(links.Owner) is { } owner)
+        {
+            RecordSummoner(owner, creature); // a spell summon of a creature caster (cmangos Spell::EffectSummon*: JustSummoned)
         }
 
         creature.SetHome(home);
