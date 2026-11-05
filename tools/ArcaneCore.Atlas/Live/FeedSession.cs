@@ -91,7 +91,7 @@ internal sealed class FeedSession : IDisposable
 
     /// <summary>
     /// The client end of the pipe, so a test can watch <see cref="SafePipeHandle.IsClosed"/>. <see cref="IsOpen"/> cannot show that the handle closed: it is
-    /// already false once the reader ends. Read it while the session is open; the getter throws after disposal.
+    /// already false once the reader ends.
     /// </summary>
     internal SafePipeHandle PipeHandle => _pipe.SafePipeHandle;
 
