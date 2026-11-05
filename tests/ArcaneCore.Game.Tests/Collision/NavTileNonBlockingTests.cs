@@ -153,7 +153,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
 
             Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
             Task read = nav.PendingTileRead(0, 31, 31)!;
-            Assert.True(read.Wait(HangGuard), "the read did not finish while the shared pool was held busy");
+            Assert.True(SpinWait.SpinUntil(() => read.IsCompleted, HangGuard), "the read did not finish while the shared pool was held busy");
         }
         finally
         {
