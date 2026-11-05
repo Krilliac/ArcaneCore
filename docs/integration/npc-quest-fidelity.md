@@ -104,10 +104,12 @@ superseded by the adapter gate.
    at startup (`ConditionFeature`), not configurable. Closed as a decision: these stay fail-closed by design (the safe direction), and no
    switch is planned. The script, world-state, encounter, waypoint and spawn types are evaluated and are not part of this item.
 2. **`AcceptableQuest` refusals** (`QuestNpcServices.Support.cs`): superseded. The fixed list of refusals became the adapter gate
-   (`QuestNeeds.Of`, `IQuestAdapterModule`): a quest is withheld only when its template needs a behaviour (source spell, source counters,
-   party accept, auto reward, a reputation or exploration objective, a mail reward, the PvP type) that no registered adapter provides, and
-   the withheld counts per reason are logged at startup (`Quests:LogWithheld`). Quest types and the stay-alive flag are no longer refusals
-   (vmangos does not use them, `QuestDef.h:150-152`). What remains is the adapters themselves, which are separate features.
+   (`QuestNeeds.Of`, `IQuestAdapterModule`): a quest is withheld only when its template needs a behaviour that nothing provides
+   (`MissingAdapters`), and the withheld counts per reason are logged at startup (`Quests:LogWithheld`). Auto reward and a mail reward have
+   no provider, so those quests are always withheld. A source spell, party accept or reputation objective is withheld only when the host
+   lacks the collaborator its provider needs, and an exploration or event quest only without an area trigger row or a covering module.
+   Source counters, autocomplete and the PvP type are always provided. Quest types and the stay-alive flag are no longer refusals
+   (vmangos does not use them, `QuestDef.h:150-152`). What remains is the missing adapters themselves, which are separate features.
 
 ### Config
 
@@ -193,10 +195,9 @@ Needs the real client: the Llane Beshere (Northshire) class-variant gossip.
 
 * The quest list greeting and emote from `questgiver_greeting` (design NQ3) need the content import (NQ0);
   `SMSG_QUESTGIVER_QUEST_LIST` still carries an empty greeting.
-* The unsupported-objective gate (`AcceptableQuest`: source spells, party accept, auto-rewarded, stay-alive,
-  reqsource items, exploration without a trigger row) still refuses silently at accept. That is a temporary
-  fail-closed deviation from retail, not a switch yet; NQ5 removes the cases it implements. Quests refused
-  that way never send the invalid packet.
+* The fixed unsupported-objective list this slice shipped with is superseded by the adapter gate: see item 2 of
+  "Known deviations without a switch" for what is withheld now. A quest the gate withholds still fails at accept
+  without `SMSG_QUESTGIVER_QUEST_INVALID` (`QuestNpcServices.Interaction.cs`; only bot QA is told).
 * `GameObject` quest givers are not covered (slice NQ7).
 
 ## Slice NQ7: quest-giving game objects (GAMEOBJECT_TYPE_QUESTGIVER)
@@ -323,8 +324,10 @@ shared reader without a count, so un-applied classic-db `Updates` are visible on
 
 * Battlegrounds exempt raid hiding in vmangos (`!InBattleGround()`): a battleground raid member still sees non-raid quest
   items (`QuestJournalAdapter.InRaidGroup` treats a battleground group as not raid). Kill credit has no exemption, as in vmangos.
-* The rest of design NQ5 (quest-slot item counters with 63-batched `SMSG_QUESTUPDATE_ADD_ITEM`, `ReqSource` / `SrcSpell`
-  accept support and removing those `AcceptableQuest` refusals) is not delivered; such quests are still refused at accept.
+* The rest of design NQ5 landed outside this slice. `ReqSource` is provided natively and `SrcSpell` by `SrcSpellAdapter`, so
+  the adapter gate (item 2 of "Known deviations without a switch") no longer refuses them for that reason when the host has a
+  spell caster. Item counters and `SMSG_QUESTUPDATE_ADD_ITEM` are in `QuestNpcServices.Objectives.cs`, which sends one packet per
+  counter change; the 63-count batching the design names is not there.
 
 ## Deviations
 

@@ -135,10 +135,9 @@ No GPL text was copied.
 - Source items (`SrcItemId`/`SrcItemCount`) are given on accept. A full inventory
   refuses the accept with the equip error. They are taken back on abandon (bank
   included) unless the quest also requires that item.
-- `AcceptableQuest` widens the old journal-only gate to quest types 0/1/21/62/81.
-  These stay denied: `SrcSpell`, `ReqSource*`, PartyAccept, AutoRewarded, StayAlive,
-  reputation objectives without a reputation owner, and exploration quests without a
-  relation.
+- `AcceptableQuest` is now the adapter gate: quest types and StayAlive are no longer
+  refusals, and a quest is withheld only when a behaviour it needs has no provider
+  (the table in [quests-advanced.md](quests-advanced.md)).
 
 ## Allowlist (superseded by wave 4: see quests-advanced.md)
 Since the advanced-quests lane the allowlist is only the Quests:RewardMode = AllowlistOnly fallback; by default every quest
