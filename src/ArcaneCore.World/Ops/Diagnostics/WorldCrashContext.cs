@@ -18,7 +18,9 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 /// Uptime and world clock are the game clock's tick-start snapshot, so a crash during a hung tick reports the uptime at which that
 /// tick began, not the wall-clock time of the crash (before the first tick, on the real clock, the world clock is a live stopwatch
 /// read, so a startup crash reports live time). The "tick position" line gives the live time spent in the current phase or work item
-/// since it began, not since the tick began: each phase, map, handler and command restamps the position.
+/// since it began, not since the tick began: each phase, handler and command restamps the position, and so does each map, but only in the serial map loop,
+/// where the position names the map the world thread is updating. With <c>World:Parallel:MapUpdateThreads</c> above 1 the maps run on scheduler threads that do not restamp,
+/// so the position stays at the Maps phase stamp with no map named and the elapsed time covers the whole Maps phase.
 /// </para>
 /// <para>
 /// Ownership: a singleton created by DI; <see cref="OnTick"/> runs on the world thread (the only
