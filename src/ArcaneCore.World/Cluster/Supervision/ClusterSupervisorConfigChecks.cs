@@ -200,7 +200,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     /// value of another key is not a setting of its own and is refused as unreadable, and so is a mention that follows a <c>--Key</c> with no <c>=</c>
     /// (the configuration command-line provider takes that next word as the key's value, not as a key). With several mentions the message names the offending
     /// value (the first that is not 0), not the last one. A bare <c>/Key</c> counts like a bare <c>--Key</c> (the command-line provider reads both the same way), and a line holding a
-    /// backslash before a double quote is refused outright (the operating system's escape rules are not modelled here). The check is deliberately over-strict: <c>--A --B --World:Realm:Id=0</c>
+    /// line break (the child's argv splits only at space and tab) or a backslash before a double quote is refused outright (the operating system's escape rules are not modelled here). The check is deliberately over-strict: <c>--A --B --World:Realm:Id=0</c>
     /// is refused although the provider gives <c>--A</c> the value <c>--B</c> and does read the id; that fails closed.
     /// </summary>
     internal static string ResolveChildRealmId(string arguments, out bool writesRow)
@@ -214,7 +214,8 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
 
         // The Arguments string reaches the child raw and the operating system's argument parsing treats a backslash before a double quote as an escape, which this
         // splitter does not model; a line holding one cannot be read reliably here, so it is refused rather than guessed at.
-        if (arguments.Contains("\\\"", StringComparison.Ordinal))
+        // A line break is refused too: the child's argv splits only at space and tab, so a CR or LF keeps "--A=x<LF>--World:Realm:Id=0" one argument (a mention inside another key's value).
+        if (arguments.Contains("\\\"", StringComparison.Ordinal) || arguments.AsSpan().IndexOfAny('\r', '\n') >= 0)
         {
             writesRow = true;
             return "an argument form the supervisor cannot read";
@@ -231,7 +232,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 }
                 else
                 {
-                    string value = text[prefix.Length..].Trim('"');
+                    string value = text[prefix.Length..];
                     last = value;
                     if (offending is null
                         && (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0))
@@ -261,7 +262,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 inQuote = !inQuote;
                 started = true;
             }
-            else if (!inQuote && Array.IndexOf(WhitespaceSeparators, c) >= 0)
+            else if (!inQuote && (c == ' ' || c == '\t'))
             {
                 if (started)
                 {

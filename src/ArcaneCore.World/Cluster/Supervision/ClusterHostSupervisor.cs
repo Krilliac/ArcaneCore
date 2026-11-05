@@ -1413,7 +1413,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// One line a child wrote. Heartbeats, the stop announcement and cross-world lifecycle requests are the supervisor's own protocol: consumed here
-    /// (stdout only) and never routed to the console. Everything else, including a line that only looks like the protocol, is ordinary output.
+    /// (stdout only) and never routed to the console. Everything else, including a line that only looks like the protocol, is ordinary output; the supervisor's own protocol token is replaced in every line before it is shown.
     /// </summary>
     private void OnChildLine(ManagedEntry entry, ISupervisedProcess process, string line, bool isStdErr)
     {
@@ -1421,8 +1421,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             // A heartbeat is authenticated like the stop announcement: logged text a player or GM influences can land on a line of its own and match the
             // shape, so a token-less (or wrong-token) heartbeat is ordinary output and never counts as liveness or arms the hang watch.
-            bool parsedAsProtocol = SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken);
-            if (parsedAsProtocol && TokenMatches(beatToken))
+            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken) && TokenMatches(beatToken))
             {
                 RecordBeat(entry, process, beat);
                 return;
@@ -1430,9 +1429,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // The dumping announcement is authenticated like the stop announcement: an unauthenticated one could be forged from logged text to keep
             // a hung child from being drained for the whole dump grace, so a token-less or wrong-token line is ordinary output.
-            bool parsedDumping = SupervisorProtocol.TryParseDumping(line, out int dumpingMaxSeconds, out string dumpingToken);
-            parsedAsProtocol |= parsedDumping;
-            if (parsedDumping && TokenMatches(dumpingToken))
+            if (SupervisorProtocol.TryParseDumping(line, out int dumpingMaxSeconds, out string dumpingToken) && TokenMatches(dumpingToken))
             {
                 RecordDumping(entry, process, dumpingMaxSeconds);
                 return;
@@ -1440,9 +1437,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
             // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
-            bool parsedStopping = SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _);
-            parsedAsProtocol |= parsedStopping;
-            if (parsedStopping && TokenMatches(stoppingToken))
+            if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
             {
                 RecordStopping(entry, process, intent);
                 return;

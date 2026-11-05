@@ -82,6 +82,8 @@ public sealed class ClusterSupervisorConfigChecksTests
     [InlineData("coordinator", "--Some:Key=\"a --World:Realm:Id=0\" --Other:Key=1", "0")]
     [InlineData("social", "--Some:Key \"--World:Realm:Id=0\"", "0")] // a bare key takes the quoted word as its value
     [InlineData("Coordinator", "--World:Realm:Id=2", null)]
+    [InlineData("social", "--Cluster:Fencing:OwnerNode=world-b\n--World:Realm:Id=0", "0")] // a line break does not split the child's argv
+    [InlineData("coordinator", "--Cluster:Fencing:OwnerNode=world-b\r\n--World:Realm:Id=0", "0")]
     public void ASocialOrCoordinatorLabelledChild_ThatCouldWriteTheRealmRow_IsRefused(string role, string arguments, string? sharedRealmId)
     {
         Dictionary<string, string?> values = Base();
@@ -165,6 +167,9 @@ public sealed class ClusterSupervisorConfigChecksTests
     [InlineData("/Some:Key=1 --World:Realm:Id=0", false, "")]
     [InlineData("--A=\"b\\\" --World:Realm:Id=0 c\"", true, "an argument form the supervisor cannot read")]
     [InlineData("--World:Realm:Id=0 --A=\"b\\\"", true, "an argument form the supervisor cannot read")]
+    [InlineData("--Cluster:Fencing:OwnerNode=world-b\n--World:Realm:Id=0", true, "an argument form the supervisor cannot read")]
+    [InlineData("--Cluster:Fencing:OwnerNode=world-b\r\n--World:Realm:Id=0", true, "an argument form the supervisor cannot read")]
+    [InlineData("--World:Realm:Id=0\r--Some:Key=1", true, "an argument form the supervisor cannot read")]
     public void ResolveChildRealmId_ReadsTheCommandLineLikeTheChildDoes(string arguments, bool writesRow, string message)
     {
         string resolved = ClusterSupervisorConfigChecks.ResolveChildRealmId(arguments, out bool writes);
