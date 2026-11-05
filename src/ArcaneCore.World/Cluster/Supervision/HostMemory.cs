@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.World.Cluster.Supervision;
 
@@ -13,6 +14,7 @@ namespace ArcaneCore.World.Cluster.Supervision;
 /// admission check can admit a child the cgroup then kills. This class does not read the cgroup files; size <c>RequiredMemoryMb</c> for the limit or
 /// run the supervisor without one.
 /// </remarks>
+[AuditedUnsafe("Marshal.SizeOf<MemoryStatusEx>() reads the size of the blittable struct this class passes by ref to kernel32 GlobalMemoryStatusEx (a source-generated LibraryImport); Windows only behind OperatingSystem.IsWindows, the result is checked and no unmanaged memory is allocated")]
 public static partial class HostMemory
 {
     /// <summary>Available physical memory in bytes, or null when this platform has no source here or the call failed.</summary>

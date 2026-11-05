@@ -1067,7 +1067,7 @@ public sealed class GatewayWorkerLink
 
             if (_transfers is { } transfers)
             {
-                // The worker's coordinator drives staged transfers over this link; each frame is answered with an ack on the same link.
+                // A coordinator on a worker would drive staged transfers over this link (no worker builds one: production's runs on the gateway); each frame is answered with an ack on the same link.
                 link.TransferControlReceived = control => _ = transfers.HandleControlAsync(control, link.SendTransferAck, stoppingToken);
             }
 

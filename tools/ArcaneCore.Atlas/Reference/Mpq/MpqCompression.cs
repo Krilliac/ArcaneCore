@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Atlas.Reference.Mpq;
 
@@ -129,6 +130,7 @@ public static class MpqCompression
         }
     }
 
+    [AuditedUnsafe("MemoryMarshal.TryGetArray only recovers the array segment behind the input memory so a MemoryStream can read it without a copy; the stream is read-only and disposed inside the call, and a non-array memory falls back to a copy")]
     private static int Inflate(ReadOnlyMemory<byte> input, Span<byte> target)
     {
         // ref: StormLib src/SCompression.cpp:155-180 (Decompress_ZLIB: inflateInit = a zlib-wrapped deflate stream)

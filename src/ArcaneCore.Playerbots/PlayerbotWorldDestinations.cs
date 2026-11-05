@@ -2175,7 +2175,9 @@ internal sealed class PlayerbotWorldDestinations(WorldSession session, Playerbot
             return true;
         }
         if (!job.Completion.IsCompleted) return true;
+#pragma warning disable ARC0006 // Completion.IsCompleted was checked above and the method returned otherwise, so GetResult does not block
         PlayerbotNavigationResult result = job.Completion.GetAwaiter().GetResult();
+#pragma warning restore ARC0006
         job.Dispose();
         _pendingNavigation = null;
         if (result.Status != PlayerbotNavigationResultStatus.Completed || result.Path is null

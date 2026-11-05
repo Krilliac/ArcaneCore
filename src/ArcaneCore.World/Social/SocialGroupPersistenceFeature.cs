@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster.Social;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Cluster.Social;
@@ -35,6 +36,9 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private GroupAuthority? _authority;
     private ArcaneCore.Game.Social.ICharacterLookup? _characters;
     private bool _holding;
+    private bool _reloading;
+    private bool _stopped;
+    private int _holdGeneration;
     private WorldRuntime? _world;
     private TimeProvider _clock = TimeProvider.System;
     private long _lastSweep = long.MinValue;
@@ -119,6 +123,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             return;
         }
 
+        _stopped = true; // no reload starts from here on: the final Sync below only writes
         if (_world is not null)
         {
             _world.Updated -= OnUpdated;
@@ -160,13 +165,16 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             if (!HoldsSocial())
             {
                 _holding = false; // another node owns the table now; it writes
+                _holdGeneration++; // a reload still in flight belongs to the lease that is gone
+                _reloading = false;
                 return;
             }
 
             if (!_holding)
             {
-                ReloadAuthority(authority);
-                _holding = true;
+                // The groups-table read runs off the tick; _holding stays false (nothing is written) until ApplyReload runs on a later world tick. Limit: a group command that reaches the local authority between the gain and the apply (LeaseRoutedPresence routes locally as soon as the lease is held) is wiped by the apply's Reset; the window is the read time plus one tick, the old synchronous reload had up to one sweep.
+                BeginReloadAuthority(authority);
+                return;
             }
 
             // The offline-leader handover of the whole realm runs here, at the holder, about once a second (the workers' mirrors never do it).
@@ -205,19 +213,59 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
     /// <summary>
     /// The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover
-    /// continues from storage. Runs on the world thread once per gain.
+    /// continues from storage. World thread: the groups-table read runs on the thread pool (the SQLite provider runs its async calls synchronously, so it must not run on the
+    /// tick) and <see cref="ApplyReload"/> applies it on a later world tick; <c>_holding</c> stays false until then. Once per gain; a read that fails is retried on the next sweep.
     /// </summary>
-    private void ReloadAuthority(GroupAuthority authority)
+    private void BeginReloadAuthority(GroupAuthority authority)
     {
-        IReadOnlyList<GroupRecord> stored;
-        using (IServiceScope scope = scopes.CreateScope())
+        WorldRuntime? world = _world;
+        if (_reloading || _stopped || world is null)
         {
-            if (scope.ServiceProvider.GetService<IGroupStore>() is not { } store)
+            return;
+        }
+
+        _reloading = true;
+        int generation = _holdGeneration;
+        _ = Task.Run(async () =>
+        {
+            IReadOnlyList<GroupRecord>? stored = null;
+            try
             {
-                return;
+                using IServiceScope scope = scopes.CreateScope();
+                if (scope.ServiceProvider.GetService<IGroupStore>() is { } store)
+                {
+                    stored = await store.LoadGroupsAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("social.group-reload-read", ex, "Social lease gained but the stored groups could not be read; retrying");
             }
 
-            stored = store.LoadGroupsAsync().GetAwaiter().GetResult();
+            try
+            {
+                world.Post(() => ApplyReload(authority, stored, generation));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // world.Post can throw once the world has shut down; the reload is dropped, but not silently.
+                _logger.LogFault("social.group-reload-post", ex, "Social group reload could not be applied");
+            }
+        });
+    }
+
+    /// <summary>World thread: apply the groups read for a lease gain. Dropped when the lease was lost since (<paramref name="generation"/> moved); a null read (failed or no store) leaves <c>_holding</c> false so the next sweep reads again.</summary>
+    private void ApplyReload(GroupAuthority authority, IReadOnlyList<GroupRecord>? stored, int generation)
+    {
+        if (generation != _holdGeneration || _stopped)
+        {
+            return;
+        }
+
+        _reloading = false;
+        if (stored is null || !HoldsSocial())
+        {
+            return;
         }
 
         authority.Reset();
@@ -235,6 +283,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             Writes?.Save(Key(id), store => store.DeleteGroupAsync(id));
         }
 
+        _holding = true;
         _logger.LogInformation("Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped)", result.Restored.Count, result.Dropped.Count);
     }
 

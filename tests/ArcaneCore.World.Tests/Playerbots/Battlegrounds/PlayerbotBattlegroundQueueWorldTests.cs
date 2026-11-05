@@ -117,6 +117,47 @@ public sealed class PlayerbotBattlegroundQueueWorldTests : PlayerbotBattleground
         });
     }
 
+    /// <summary>
+    /// PlayerbotBattlegroundCoordinator.MayQueue refuses while the node does not hold the queue state: a plain cluster worker's local manager is empty, so a join would land in the
+    /// holder's queue and the coordinator would never see its slot. The same bot queues at once on a node that holds it (the flow test above); here the feature is turned into a worker
+    /// whose holder link is absent, and the bot must not walk to a battlemaster, queue, or ask the holder to join or port (logins are still reported).
+    /// </summary>
+    [Fact]
+    public async Task APlainClusterWorker_DoesNotQueueItsBots_BecauseItHoldsNoQueueState()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-queue-worker", async context =>
+        {
+            BattlegroundFeature feature = context.Services.GetRequiredService<BattlegroundFeature>();
+            var holder = new CountingHolder();
+            await context.ReadAsync(() =>
+            {
+                feature.ConfigureWorker("test-worker", holder);
+                return true;
+            });
+            ScenarioContext.Expect(!feature.HoldsQueueState, "a worker with no elected holder reports that it holds the queue state");
+
+            ScenarioBot ally = await AutonomousAsync(context, "Bgworkerally", race: 1);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await context.IdleAsync(TimeSpan.FromSeconds(30));
+
+            ScenarioContext.ExpectEqual(0, coordinator.Totals.Queued, "queues joined on a node that holds no queue state");
+            ScenarioContext.Expect(!coordinator.Holds(ally.BotId), "the bot was taken on for a queue on a node that holds no queue state");
+            // A worker still tells the holder about logins and logouts; it must not ask to join or port.
+            ScenarioContext.ExpectEqual(0, holder.Count<BattlegroundJoinCommand>() + holder.Count<BattlegroundPortCommand>(), "join or port commands the bot sent to the holder");
+            ScenarioContext.Expect(!await context.ReadAsync(() => Manager(context).StateOf(ally.Guid).InAnyQueue), "the bot is queued");
+        });
+    }
+
+    private sealed class CountingHolder : IBattlegroundHolderLink
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<BattlegroundCommand> _submitted = new();
+
+        public int Count<T>() where T : BattlegroundCommand => _submitted.OfType<T>().Count();
+
+        public void Submit(string workerId, BattlegroundCommand command) => _submitted.Enqueue(command);
+    }
+
     // --- caps and invitations ------------------------------------------------------------------------------------------
 
     [Fact]

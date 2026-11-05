@@ -12,7 +12,8 @@ allowlist 0, section 4.6) is **built** on `claude/hr-2b`; 2c and 2d are planned.
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision store, standby mode, the drain protocol
 in process) is **built and tested** on `claude/hr3-standby` (section 5.6); the seamless reroute and the operator trigger
-are not.
+(`.cluster restart`) were built later. Both run only under the opt-in keys, and a World handoff also needs a standby for the slot; they are tested with a mock client over real gateway and
+world processes (opt-in, PostgreSQL-gated: `CrossWorkerTransferTests`, `ClusterControlChannelScenarioTests`), never with a real 5875 client ([gateway.md](../areas/gateway.md)).
 All three lanes are merged on `claude/hr2-integrate`.
 "Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
@@ -337,7 +338,7 @@ operation queued on the lock just as the quiesce released it is refused the same
 Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests` reads the World assembly's IL
 (`System.Reflection.Metadata`: signatures, attributes, constraints, locals, catch types, every IL token) and fails if a
 core type (outermost type outside `ArcaneCore.World.Playerbots`) references a pack type and is not on the allowlist,
-or if an allowlist entry no longer references the pack (the list only shrinks). A positive control
+or if an allowlist entry no longer references the pack (a stale entry fails; a new use fails until a reasoned entry is added). A positive control
 (`ScannerFindsKnownReferences`) proves the scanner sees references at all. Before this lane it listed 17 core types.
 **Allowlist left (4)** at the end of 2a; **0** after 2b (section 4.6):
 
@@ -431,7 +432,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    lines changed there, because those files belong to another lane.
 5. **The 2a seam types are now public**: `PlayerbotExploreAtlas`, `PlayerbotItemScore`, `PlayerbotStatWeights`,
    `PlayerbotWeaponStyle` and `PlayerbotTalentBuild(s)`. They are core API that the pack calls.
-6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack still uses 44 internal core members:
+6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack uses 49 internal core members (it was 44 when 2b landed; later features added five, each a reasoned list entry such as `IManagedPacketTap` and `BattlegroundFeature.HoldsQueueState`):
    - managed-session `WorldSession` members
    - battleground internals
    - GM boost and death helpers
@@ -442,7 +443,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    `InternalsVisibleTo` across a version skew is not safe for a collectible pack. The list is pinned by
    `PlayerbotCoreBoundaryTests.PackUsesOnlyTheAllowlistedCoreInternals`. That test resolves every type and member token
    in the pack and fails on any non-public core or contracts member that is not on the list. It also fails on a list
-   entry that is no longer used, so the list can only shrink.
+   entry that is no longer used. A new use is refused until someone adds a reasoned entry, so the list does not grow unnoticed, and 2c is meant to shrink it.
 7. **The executable cycle.** World is both the core library and the daemon executable: deploy, Docker, the dev runner
    and the cluster supervisor all run `ArcaneCore.World.dll`. So the host cannot reference its own pack. Instead:
    - The pack's build target `CopyPackBesideWorldHost` copies `ArcaneCore.Playerbots.dll` and `.pdb` next to World's
@@ -471,7 +472,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
 What remains for 2c:
 
 - Load the pack collectibly through `ModuleHost`, and remove it from the startup set.
-- Turn the 44 internals into public seams or contracts.
+- Turn the 49 internals into public seams or contracts.
 - Move the handover values that are still World or pack types (`PlayerbotSetAside`, `PlayerbotHome`, the private
   `Quarantine`) into contracts.
 - Check the contracts version when the pack loads.
@@ -563,21 +564,21 @@ create, enter-world and ping through the gateway against the synthetic realm and
 
 Differences from 5.2 and what is left of 3a:
 
-- **Warden runs on the worker**, not the gateway: its opcodes are forwarded unchanged. Moving it to the gateway is needed
-  before 3b (a handoff must not restart the Warden exchange).
+- **Warden runs on the gateway** (`GatewayWarden`): it answers `CMSG_WARDEN_DATA` itself and sends a failing verdict to the worker over the link. It runs `Warden:Checks`
+  and the timing scan, not the `warden_checks` table, because the gateway has no world database.
 - **No real-client acceptance yet** (the 3a exit criterion in section 9).
-- Manifest schema and content versions are operator labels, not read from the databases.
-- The link protocol lives in `ArcaneCore.World`; the gateway references the whole World assembly until a shared protocol
-  assembly is split out.
-- The gateway's `Gateway:*` keys are not in the configuration catalog (no `ConfigDaemon` value, no `.conf.dist`, no
-  `--check-config`) and it exports no metrics.
+- Manifest schema and content versions are read from the databases by default (`Cluster:Worker:VersionsFromDatabase`), with operator labels as an explicit override.
+- The link protocol lives in `ArcaneCore.Cluster.Protocol`; the gateway still references `ArcaneCore.World` for the
+  `WorldSession` constants, the build protocols, the session link client and the handoff router seam.
+- The gateway records metrics but exports none (no Prometheus or OTLP exporter). Its `Gateway:*` keys are in the configuration catalog
+  ([reference](../reference/config/gateway.md), `gateway.conf.dist`, `--check-config`).
 - The gateway's session generation and `SessionRegistry`'s own generation are independent counters.
-- The worker is not authenticated to the gateway, and the link has neither encryption nor a per-frame MAC (gateway.md).
+- Both ends of the link prove the secret and every frame carries a MAC, but the link is not encrypted (gateway.md).
   Also open from the tier 3 review: no timeout on the gateway's wait for the worker's open reply, an owner-epoch change
-  drops packets without closing the session, unauthenticated connections to the worker port are not capped, one link
-  queue is shared by every client, and Warden timing includes link jitter.
-- The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
-  coordinator is still test-only.
+  drops packets without closing the session, unauthenticated connections to the worker port are not capped, and one link
+  queue is shared by every client.
+- The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, and the transfer
+  coordinator now runs on the gateway under `Gateway:Transfers:Enabled` (section 5.6).
 
 ### 5.5 Same-map world-port spike (`.worldport`; real-client run done 2026-10-17: the client accepts it)
 
@@ -682,7 +683,8 @@ reviewed (the one about a crashed B after the takeover and the one-coordinator a
 - **The worker retarget retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
   then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
 
-Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
+Not built when this groundwork landed (from 5.3; the per-player production transfer workers, the operator command and Warden on the gateway came later: see the next heading and
+[gateway.md](../areas/gateway.md)): the per-player production transfer workers (the handoff moves ownership and saved state, not live
 entities), gateway PING answering during the freeze (input is held, up to 256 packets per client), a real-client run of the
 seamless reroute (the world port ACK ordering and a passenger's transport form are unverified), the
 operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes

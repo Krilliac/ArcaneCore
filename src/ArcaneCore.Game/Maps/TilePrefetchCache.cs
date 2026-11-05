@@ -89,6 +89,7 @@ internal sealed class TilePrefetchCache<T>
     /// <summary>The prefetched tile if it finished; the entry is dropped either way (an unfinished one is not waited for).</summary>
     internal bool TryTake(uint mapId, int tileX, int tileY, out T value)
     {
+#pragma warning disable ARC0006 // IsCompletedSuccessfully is checked in the same condition, so Result does not block
         if (_entries.Remove((mapId, tileX, tileY), out (Task<T?> Load, long RequestedMs, bool Arrival, Turn Turn) entry)
             && entry.Load.IsCompletedSuccessfully && entry.Load.Result is { } loaded)
         {
@@ -96,6 +97,7 @@ internal sealed class TilePrefetchCache<T>
             value = loaded;
             return true;
         }
+#pragma warning restore ARC0006
 
         value = null!;
         return false;

@@ -349,15 +349,21 @@ scenarios (a cross-worker teleport, `.cluster restart`) are `ClusterControlChann
 
 ## Cross-worker player transfer, gateway side (S5c)
 
-`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. The source worker's coordinator host
-(`PlayerTransferCoordinatorHost` with `LinkTransferGatewayRouter`) sends `TransferStage`, `TransferCancel` and `TransferCommit` control
-frames on the worker's own gateway link (`GatewayTransferWire`; each is answered with a `TransferAck`). Stage buffers the session's client
+`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. With `Gateway:Transfers:Enabled` the coordinator runs on the gateway, not on a worker: a worker submits the
+request (`ControlSubmit`), and `GatewayTransferService` runs `PlayerTransferCoordinator` through a `PlayerTransferCoordinatorHost` of its own. That coordinator reaches each slot through
+`RemoteTransferSourceWorker` and `RemoteTransferTargetWorker` on the slot's control channel (`GatewayTransferWiring.ForServer`) and calls `GatewayTransferRouter` in process (through
+`GatewayCommitTolerantRouter`). Stage buffers the session's client
 packets (at most 256 packets and 256 KiB), opens a session on the target worker and sends a synthesized `SMSG_TRANSFER_PENDING`. Cancel
 replays the buffer to the source and closes the target session. Commit replays the buffer to the target in order, re-points the connection
 (link and generation) and retires the old generation, so packets still stamped with it are dropped. A buffer overflow frees the buffer, closes
-the target session and disconnects the client; the later commit is then a no-op. Node ids in the frames are the `Gateway:Workers:N:NodeId` values.
-Not built: the worker-side peer-link participant for the target, and the session of the target being resolvable by the shadow loader before
-stage 4 (the target session opens at stage 4, after the passive shadow install).
+the target session and disconnects the client; the later commit is then a no-op. Node ids in these calls are the `Gateway:Workers:N:NodeId` values.
+The S5c path with the coordinator on the source worker is unused: `PlayerTransferCoordinatorHost.Create` and `LinkTransferGatewayRouter` (`TransferStage`, `TransferCancel` and
+`TransferCommit` frames on the worker's gateway link, `GatewayTransferWire`, each answered with a `TransferAck`) have no caller in `src` or `tests`, and no worker builds them. The gateway
+still answers those frames (`GatewayTransferRouter.HandleControlAsync`), but nothing sends them.
+The worker side is built: with `Cluster:Worker:Transfers:Enabled` the worker's production `WorkerTransferTarget` (`TransferHosting`) loads the character through
+`CharacterHooksShadowLoader` and answers the gateway coordinator's transfer verbs. The target session opens at stage 4,
+after the passive shadow install, so the shadow load starts when the acceptor reports that session opening (`WorkerTransferTarget.OnSessionOpened`); if the acceptor was
+restarted without that hook, the install after the commit re-probes and loads at once. The probe and the loader match the session by account only.
 
 ## Not done yet (rest of 3a and beyond)
 
@@ -365,7 +371,7 @@ stage 4 (the target session opens at stage 4, after the passive shadow install).
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
 - Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process, and over real gateway and world processes under the opt-in keys with a mock client (`CrossWorkerTransferTests`, `ClusterControlChannelScenarioTests`, skipped without `ARCANECORE_TEST_POSTGRES`), but never on a real client.
 - The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
-- A gateway restart still drops every client: `.cluster restart` takes only a worker. A World restart drops its clients too, unless it goes through that handoff, which needs the opt-in handoff keys and a standby for the slot; without them a `.cluster restart` starts nothing.
+- A gateway restart still drops every client: `.cluster restart` takes only a worker. A World restart drops its clients too, unless it goes through that handoff, which needs the opt-in handoff keys and a standby for the slot; without them a `.cluster restart` starts nothing. That path has run only with a mock client over real gateway and world processes (`ClusterControlChannelScenarioTests`, opt-in and skipped without `ARCANECORE_TEST_POSTGRES`), never with a real 5875 client.
 - The gateway's Warden runs `Warden:Checks` and the timing scan, not the `warden_checks` table the design gives it: the gateway has no world database.
 - The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
   gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session

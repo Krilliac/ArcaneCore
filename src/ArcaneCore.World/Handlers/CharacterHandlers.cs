@@ -545,11 +545,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         try
         {
             IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
+#pragma warning disable ARC0002 // the player is built by this statement and not yet published (no session, map or world holds it), so no world thread owns Home or CharacterOwnership
             player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
             {
                 Home = home,
                 CharacterOwnership = session.World.CharacterOwnership,
             };
+#pragma warning restore ARC0002
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
