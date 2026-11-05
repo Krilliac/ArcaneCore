@@ -757,7 +757,7 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
                 progress.Succeeded();
                 return;
             }
-            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
             {
                 return; // refused because the character moved to another world: counted, neither logged nor terminal
             }

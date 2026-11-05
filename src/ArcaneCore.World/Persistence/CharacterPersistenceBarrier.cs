@@ -293,6 +293,53 @@ public sealed class CharacterPersistenceBarrier
     }
 
     /// <summary>
+    /// The characters any feature queue still has a write open for, whoever they are: a handoff flushes these too, or an offline character's retained write would never be named and would
+    /// miss the commit. Each queue first runs its ordered barrier (which never retries), so a write still queued has landed or is retained by the time it is read; a queue with no such barrier
+    /// reports what it has waiting as well. The save queue is not included (<see cref="CharacterSaveQueue.UnsettledCharacterIds"/>). Faults, under <see cref="DefaultTimeout"/>, when a queue does not
+    /// answer. Ascending.
+    /// </summary>
+    public async Task<IReadOnlyList<int>> OpenCharacterIdsAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(DefaultTimeout);
+        var open = new SortedSet<int>();
+
+        async Task AddAsync(Func<Task> drain, Func<IEnumerable<int>> retained)
+        {
+            await drain().WaitAsync(budget.Token).ConfigureAwait(false);
+            open.UnionWith(retained());
+        }
+
+        if ((_services.GetService<QuestNpcPersistence>() ?? _services.GetService<QuestNpcFeature>()?.Persistence) is { } questPersistence)
+            open.UnionWith(questPersistence.OpenCharacters);
+        if ((_services.GetService<TaxiFlightWriteQueue>() ?? _services.GetService<NpcServicesFeature>()?.RouteWrites) is { } taxiWrites)
+            await AddAsync(taxiWrites.FlushAsync, () => taxiWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SpellbookCache>() ?? _services.GetService<SpellFeature>()?.Spellbook) is { } spellbook)
+            await AddAsync(spellbook.FlushAsync, () => spellbook.FailedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SpellStatePersistence>() ?? _services.GetService<SpellFeature>()?.State) is { } spellState)
+            await AddAsync(spellState.FlushAsync, () => spellState.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<TalentPersistence>() ?? _services.GetService<TalentFeature>()?.Persistence) is { } talentPersistence)
+            await AddAsync(talentPersistence.FlushAsync, () => talentPersistence.FailedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SkillSaveCoordinator>() ?? _services.GetService<SkillsFeature>()?.Saves) is { } skillSaves)
+            open.UnionWith(skillSaves.PendingCharacters);
+        if ((_services.GetService<ReputationWriteQueue>() ?? _services.GetService<ReputationFeature>()?.Writes) is { } reputationWrites)
+            await AddAsync(reputationWrites.FlushAsync, () => reputationWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SocialWriteQueue>() ?? _services.GetService<SocialFeature>()?.Writes) is { } socialWrites)
+            await AddAsync(socialWrites.FlushAsync, () => socialWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<HonorWriteQueue>() ?? _services.GetService<HonorFeature>()?.Writes) is { } honorWrites)
+            await AddAsync(honorWrites.FlushAsync, () => honorWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<RestWriteQueue>() ?? _services.GetService<RestFeature>()?.Writes) is { } restWrites)
+            await AddAsync(restWrites.FlushAsync, () => restWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<ExploredZonesWriteQueue>() ?? _services.GetService<ExploredZonesPersistence>()?.Writes) is { } exploredWrites)
+            await AddAsync(exploredWrites.FlushAsync, () => exploredWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<InstanceWriteQueue>() ?? _services.GetService<InstanceFeature>()?.Writes) is { } instanceWrites)
+            await AddAsync(instanceWrites.FlushAsync, () => instanceWrites.RetainedCharacters).ConfigureAwait(false);
+        if ((_services.GetService<SummonService>() ?? _services.GetService<PetsFeature>()?.Service) is { } petService)
+            open.UnionWith(petService.OpenPersistenceCharacters);
+        return [.. open];
+    }
+
+    /// <summary>
     /// Flush all settlement barriers and per-character persistence queues for <paramref name="characterId"/>,
     /// throwing <see cref="InvalidOperationException"/> when any queue remains dirty, retained, or faulted.
     /// </summary>

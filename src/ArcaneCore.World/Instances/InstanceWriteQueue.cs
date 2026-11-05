@@ -1008,7 +1008,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 progress.Succeeded();
                 return null;
             }
-            catch (CharacterOwnershipRejectedException) when (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+            catch (CharacterOwnershipRejectedException) when (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, key.A))
             {
                 return null; // refused because the character moved to another world: counted, neither logged nor terminal
             }

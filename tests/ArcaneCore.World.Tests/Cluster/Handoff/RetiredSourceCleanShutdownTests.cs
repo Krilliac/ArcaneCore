@@ -3,9 +3,11 @@ using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.Honor;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Persistence;
 using Microsoft.Data.Sqlite;
@@ -16,7 +18,10 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Handoff;
 
-/// <summary>A retired handoff source drops the pending writes of the characters that moved to the new owner (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly; a character it still owns keeps its write. Offline characters with a retained (failed) snapshot are retired with them.</summary>
+/// <summary>
+/// A retired handoff source drops every pending write (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly. Its flush writes what it can of offline
+/// characters too, through the real barrier, and aborts the handoff when it cannot. Between the flush and the retirement the source is sealed: a write the fence refuses there is dropped, not terminal.
+/// </summary>
 public sealed class RetiredSourceCleanShutdownTests
 {
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
@@ -149,18 +154,127 @@ public sealed class RetiredSourceCleanShutdownTests
     }
 
     /// <summary>
-    /// The coordinator's real order against the real source and queue. A snapshot of an offline character turns up after the flush (the flush itself would have written it) and is retained
-    /// as locked. The store keeps answering "locked" until the target's promotion starts, where the takeover has long fenced A out; from there the fence refuses it. So the retry cannot race the
-    /// commit, and the promotion holds the window open until the consumer, past its busy pause, has either written the retry into the fence or looked and found nothing it may retry. With the
-    /// step run anywhere after the promotion the retry is refused and the queue goes terminal.
+    /// The real window. The fence moves inside the commit, as the takeover does, and the commit does not return until a retained retry has been refused there: the retirement has not run and
+    /// nobody named the character, so only the flush's seal keeps the queue from going terminal. Without it the refusal stops the world.
     /// </summary>
     [Fact]
-    public async Task ARetainedRetryInsideTheRollForwardWindow_IsNotAttempted_BecauseTheWritesRetireRightAfterTheCommit()
+    public async Task ARetainedRetry_RefusedBetweenTheCommitAndTheRetirement_IsDropped_AndTheQueueStopsCleanly()
     {
         await using var rig = new HandoffRig();
         using WorldRuntime world = rig.StartWorld();
         using var source = rig.Source(world);
         rig.Queue.Start();
+        rig.WhileCommitted = () => rig.WaitForRefusalsAsync(1);
+        bool retiredBeforeTheStep = true;
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.Queue.Enqueue(State(5, 55)); // a late write: the flush is over, so it is not flushed
+                await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained after the flush");
+            }
+            else if (stage == WorldHandoffStage.EpochTakeover)
+            {
+                retiredBeforeTheStep = rig.Queue.IsQuarantined(5);
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        Assert.False(retiredBeforeTheStep); // the refusal really came before the retirement step
+        Assert.Equal(1, rig.Refusals);
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>
+    /// The window that lasts: the coordinator dies right after the commit, so the step does not run until a recovery. A retained retry and a brand-new write of a character nobody ever named are
+    /// both refused in the gap; the recovery then finishes the handoff.
+    /// </summary>
+    [Fact]
+    public async Task WritesRefusedWhileACommittedHandoffWaitsForItsRecovery_AreDropped_AndTheRecoveryFinishesCleanly()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.WhileCommitted = () => rig.WaitForRefusalsAsync(1);
+        Guid id = Guid.NewGuid();
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.Queue.Enqueue(State(5, 55));
+                await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained after the flush");
+            }
+            else if (stage == WorldHandoffStage.EpochTakeover)
+            {
+                rig.Queue.Enqueue(State(6, 66));
+                await rig.WaitForRefusalsAsync(2);
+                throw new InvalidOperationException("the coordinator died after the commit");
+            }
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(id, AfterStage));
+        Assert.False(rig.Queue.IsQuarantined(6)); // the retirement step never ran
+        Assert.Equal(2, rig.Refusals);
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RecoverAsync(id);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>
+    /// A keyed queue in the same window: a late write is retained, and the sweep the 30 s timer would post reaches the moved fence before the retirement. Dropped and counted; the queue stops
+    /// cleanly. Without the seal this is the keyed queue's terminal failure, and the registry's per-character check cannot help: nobody named the character.
+    /// </summary>
+    [Fact]
+    public async Task AKeyedRetry_RefusedBetweenTheCommitAndTheRetirement_IsDropped_AndTheQueueStopsCleanly()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.WhileCommitted = async () =>
+        {
+            Assert.True(rig.RestWrites.PostRetainedSweepForTest());
+            await rig.WaitForRefusalsAsync(1);
+        };
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.RestWrites.Save(5, Rest(1f));
+                await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(5), "the busy rest write of character 5 to be retained after the flush");
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        Assert.Equal(1, rig.Refusals);
+        Assert.Equal(1, rig.Retirement.DroppedCount("RestWriteQueue"));
+        Assert.Null(rig.RestWrites.TerminalFailure);
+        Assert.Empty(rig.RestWrites.RetainedCharacters);
+        await rig.RestWrites.StopAsync(); // must not throw
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>From the retirement on nothing is attempted any more, of any character: a retained retry is skipped, and so is a write of a character nobody named, in the save queue and the keyed queues.</summary>
+    [Fact]
+    public async Task AfterTheRetirement_NoWriteOfAnyCharacter_IsAttempted_EvenOfOneNobodyNamed()
+    {
+        await using var rig = new HandoffRig(TimeSpan.FromHours(1)); // the retained retry cannot fire in the commit window: this test is about the skip after it
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.HonorWrites.Start();
 
         async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
         {
@@ -171,31 +285,157 @@ public sealed class RetiredSourceCleanShutdownTests
             }
         }
 
-        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, rig.HoldingTarget, new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+        var target = new CallbackTarget(() =>
+        {
+            rig.Queue.Enqueue(State(6, 66));
+            rig.RestWrites.Save(7, Rest(1f));
+            rig.HonorWrites.SaveState(8, CharacterHonorState.Empty);
+        });
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, target, new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
 
-        Assert.True(rig.HoldingTarget.Promoted);
+        Assert.True(target.Promoted);
         Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        await rig.RestWrites.StopAsync();
+        await rig.HonorWrites.StopAsync();
+        Assert.Equal(0, rig.Refusals);
+        Assert.Single(rig.Store.Attempts, s => s.Id == 5); // only the first, busy attempt
+        Assert.DoesNotContain(rig.Store.Attempts, s => s.Id == 6);
+        Assert.Empty(rig.RestStore.Attempts);
+        Assert.Empty(rig.HonorStore.Attempts);
+        Assert.Equal(1, rig.Retirement.DroppedCount("RestWriteQueue"));
+        Assert.Equal(1, rig.Retirement.DroppedCount("HonorWriteQueue"));
         await rig.AssertCleanStopAsync();
     }
 
-    /// <summary>The same window on a recovery: the handoff is journalled as committed and a coordinator of this process finishes it; the retained snapshot was never flushed by this run.</summary>
+    /// <summary>The seal is not a mask: a handoff that aborts after its flush resumes A, and a fence refusal then is a lost ownership again.</summary>
     [Fact]
-    public async Task ARetainedRetryInsideTheWindow_IsNotAttempted_OnARecoveredRollForward()
+    public async Task AResumedSource_TreatsAFenceRefusalAsALostOwnershipAgain()
     {
         await using var rig = new HandoffRig();
-        using WorldRuntime world = rig.UnstartedWorld();
+        using WorldRuntime world = rig.StartWorld();
         using var source = rig.Source(world);
-        rig.Queue.Enqueue(State(5, 55));
         rig.Queue.Start();
-        await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained");
-        Guid id = Guid.NewGuid();
-        rig.Journal.SeedCommitted(id);
 
-        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, rig.HoldingTarget, new NoRouter()).RecoverAsync(id);
+        static Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+            => stage == WorldHandoffStage.Flushed ? throw new InvalidOperationException("the target went away") : Task.CompletedTask;
 
-        Assert.True(rig.HoldingTarget.Promoted);
-        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
-        await rig.AssertCleanStopAsync();
+        await Assert.ThrowsAsync<WorldHandoffAbortedException>(() => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage));
+
+        rig.MoveTheFence();
+        rig.Queue.Enqueue(State(5, 55));
+        await WorldTestHost.WaitForAsync(() => rig.Queue.TerminalFailure is not null, "the refused write of character 5 to stop the queue");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync());
+        Assert.Equal(1, rig.Refusals);
+    }
+
+    /// <summary>The worker heartbeat reports the moved ownership row through <see cref="CharacterSaveQueue.FailTerminal"/>: while a handoff decides, and after it retired the world, that is no reason to stop.</summary>
+    [Fact]
+    public async Task AnOwnershipLossReported_WhileSealedOrRetired_IsNotTerminal_AndIsAfterTheSealLifts()
+    {
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(new FencedStore(moved: 1)).BuildServiceProvider();
+        var sealedQueue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger());
+        var retiredQueue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger());
+        var lost = new InvalidOperationException("the worker scope no longer belongs to this world");
+
+        sealedQueue.SealWrites();
+        sealedQueue.FailTerminal(lost);
+        Assert.Null(sealedQueue.TerminalFailure);
+        sealedQueue.UnsealWrites();
+        sealedQueue.FailTerminal(lost);
+        Assert.Same(lost, sealedQueue.TerminalFailure);
+
+        retiredQueue.RetireEveryCharacter();
+        retiredQueue.FailTerminal(lost);
+        Assert.Null(retiredQueue.TerminalFailure);
+    }
+
+    /// <summary>An offline character with nothing in the save queue and a retained rest write: only the keyed queue knows it. The real barrier writes it before the commit, so B reads it.</summary>
+    [Fact]
+    public async Task AnOfflineCharactersRetainedRestWrite_IsWrittenThroughTheBarrier_BeforeTheCommit()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.RestAnswer = _ => new InvalidOperationException("the disk said no");
+        rig.RestWrites.Save(9, Rest(4f));
+        await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(9), "the rest write of character 9 to be retained");
+        rig.RestAnswer = _ => null;
+        bool durableAtFlushed = false;
+
+        Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                durableAtFlushed = rig.RestStore.Saved.Any(s => s.Id == 9);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.True(durableAtFlushed);
+        Assert.Empty(rig.RestWrites.RetainedCharacters);
+        Assert.Equal(0, rig.Retirement.DroppedCount("RestWriteQueue"));
+        await rig.RestWrites.StopAsync();
+    }
+
+    /// <summary>The same for honor, whose queue is not the shared keyed engine.</summary>
+    [Fact]
+    public async Task AnOfflineCharactersRetainedHonorWrite_IsWrittenThroughTheBarrier_BeforeTheCommit()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.HonorWrites.Start();
+        rig.HonorAnswer = _ => new InvalidOperationException("the disk said no");
+        rig.HonorWrites.SaveState(9, CharacterHonorState.Empty);
+        await WorldTestHost.WaitForAsync(() => rig.HonorWrites.RetainedCharacters.Contains(9), "the honor write of character 9 to be retained");
+        rig.HonorAnswer = _ => null;
+        bool durableAtFlushed = false;
+
+        Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                durableAtFlushed = rig.HonorStore.Saved.Contains(9);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.True(durableAtFlushed);
+        Assert.Empty(rig.HonorWrites.RetainedCharacters);
+        await rig.HonorWrites.StopAsync();
+    }
+
+    /// <summary>A keyed write the flush cannot write fails the handoff before the commit: A resumes, still owns the character and writes it once the store recovers.</summary>
+    [Fact]
+    public async Task AnOfflineCharactersKeyedWriteTheFlushCannotWrite_AbortsTheHandoff_AndStaysAWriteOfTheSource()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.RestAnswer = _ => new InvalidOperationException("the disk said no");
+        rig.RestWrites.Save(9, Rest(4f));
+        await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(9), "the rest write of character 9 to be retained");
+
+        WorldHandoffAbortedException aborted = await Assert.ThrowsAsync<WorldHandoffAbortedException>(
+            () => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid()));
+
+        Assert.Equal(PlayerTransferDecisionState.Aborted, aborted.Record.DecisionState);
+        Assert.Null(aborted.Record.TargetOwnershipToken);
+        Assert.Equal(9, Assert.Single(rig.RestWrites.RetainedCharacters));
+        rig.RestAnswer = _ => null;
+        await rig.RestWrites.StopAsync();
+        Assert.Contains(rig.RestStore.Saved, s => s.Id == 9);
     }
 
     /// <summary>A failure that is not a locked database is retained and never retried by the idle consumer: only the flush can write it, and it does, while A still owns the character.</summary>
@@ -398,6 +638,25 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.False(CharacterRetirementRegistry.Retired(null, 1));
     }
 
+    [Fact]
+    public void Registry_Sealed_DropsOnlyARefusal_AndRetireAll_CoversEveryCharacter()
+    {
+        var registry = new CharacterRetirementRegistry();
+        registry.Seal();
+        Assert.False(registry.TryDrop("A", 1)); // a write is still attempted: the takeover may not have landed
+        Assert.False(registry.IsRetired(1));
+        Assert.True(registry.TryDropRefused("A", 1));
+        registry.Unseal();
+        Assert.False(registry.TryDropRefused("A", 1));
+        Assert.Equal(1, registry.DroppedCount("A"));
+
+        registry.RetireAll();
+        Assert.True(registry.IsRetired(99));
+        Assert.True(registry.TryDrop("A", 99));
+        Assert.True(registry.TryDropRefused("A", 99));
+        Assert.False(CharacterRetirementRegistry.DropsRefused(null, "A", 99));
+    }
+
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>
     private sealed class FencedRestStore(int moved) : ICharacterRestStore
     {
@@ -406,11 +665,16 @@ public sealed class RetiredSourceCleanShutdownTests
         public CharacterRetirementRegistry? Registry { get; set; }
         public bool RetireWhenWriting { get; set; }
 
+        /// <summary>The failure of this write, scripted by the test; null lets the rules below decide.</summary>
+        public Func<int, Exception?>? Answer { get; init; }
+
         public Task<CharacterRestState?> LoadAsync(int characterId, CancellationToken cancellationToken = default) => Task.FromResult<CharacterRestState?>(null);
 
         public Task SaveAsync(int characterId, CharacterRestState state, CancellationToken cancellationToken = default)
         {
             Attempts.Enqueue((characterId, state));
+            if (Answer?.Invoke(characterId) is { } scripted)
+                return Task.FromException(scripted);
             if (characterId == moved)
             {
                 if (RetireWhenWriting)
@@ -426,44 +690,76 @@ public sealed class RetiredSourceCleanShutdownTests
     }
 
     /// <summary>
-    /// A real queue and a real source around a store whose answers the test scripts. By default character 5's writes find the database locked until the holding target's promotion starts,
-    /// and are refused by the fence from then on.
+    /// The production wiring around stores whose answers the test scripts: a real source, a real barrier and real queues over one registry. By default a write of character 5 or above finds the
+    /// database locked until the fence moves, and is refused from then on. The fence moves inside the journal's commit, as the epoch takeover moves it.
     /// </summary>
     private sealed class HandoffRig : IAsyncDisposable
     {
         private readonly ServiceProvider _services;
-        private readonly TaskCompletionSource _nothingToRetry = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _fenceMoved;
-        private int _promoting;
         private int _refusals;
         private Exception? _fatal;
 
-        public HandoffRig()
+        public HandoffRig(TimeSpan? busyBackoff = null)
         {
             Store = new FencedStore(moved: 0) { Answer = state => Write(state) };
-            Write = state => state.Id != 5 ? null : LockedOrRefused();
-            _services = new ServiceCollection().AddSingleton<ICharacterStore>(Store).BuildServiceProvider();
-            Queue = new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger()) { BusyBackoff = [TimeSpan.FromMilliseconds(10)] };
-            Queue.FatalFailure += ex => _fatal = ex;
-            Queue.AfterIdleRetainedScanForTesting = picked =>
-            {
-                if (picked is null && Volatile.Read(ref _promoting) == 1)
+            RestStore = new FencedRestStore(moved: 0) { Answer = id => RestAnswer(id) };
+            HonorStore = new ScriptedHonorStore { Answer = id => HonorAnswer(id) };
+            Write = state => state.Id >= 5 ? LockedOrRefused() : null;
+            RestAnswer = id => id >= 5 ? LockedOrRefused() : null;
+            HonorAnswer = id => id >= 5 ? LockedOrRefused() : null;
+            Journal = new HandoffJournal(OnCommitAsync);
+            _services = new ServiceCollection()
+                .AddSingleton<ICharacterStore>(Store)
+                .AddSingleton<ICharacterRestStore>(RestStore)
+                .AddSingleton<IHonorStore>(HonorStore)
+                .AddSingleton(Retirement)
+                .AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger()) { BusyBackoff = [busyBackoff ?? TimeSpan.FromMilliseconds(10)] })
+                .AddSingleton(sp => new RestWriteQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
                 {
-                    _nothingToRetry.TrySetResult();
-                }
-            };
-            HoldingTarget = new HoldingTarget(HoldTheWindowOpenAsync);
+                    RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+                    RetryDelay = TimeSpan.FromMilliseconds(1),
+                    Retirement = Retirement,
+                })
+                .AddSingleton(sp => new HonorWriteQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+                {
+                    RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+                    Retirement = Retirement,
+                })
+                .AddSingleton<CharacterPersistenceBarrier>()
+                .BuildServiceProvider();
+            Queue = _services.GetRequiredService<CharacterSaveQueue>();
+            RestWrites = _services.GetRequiredService<RestWriteQueue>();
+            HonorWrites = _services.GetRequiredService<HonorWriteQueue>();
+            Queue.FatalFailure += ex => _fatal = ex;
         }
 
         public FencedStore Store { get; }
 
+        public FencedRestStore RestStore { get; }
+
+        public ScriptedHonorStore HonorStore { get; }
+
         public Func<CharacterState, Exception?> Write { get; set; }
+
+        public Func<int, Exception?> RestAnswer { get; set; }
+
+        public Func<int, Exception?> HonorAnswer { get; set; }
+
+        public CharacterRetirementRegistry Retirement { get; } = new();
 
         public CharacterSaveQueue Queue { get; }
 
-        public HandoffJournal Journal { get; } = new();
+        public RestWriteQueue RestWrites { get; }
 
-        public HoldingTarget HoldingTarget { get; }
+        public HonorWriteQueue HonorWrites { get; }
+
+        public HandoffJournal Journal { get; }
+
+        /// <summary>Runs inside the journal's commit, with the fence already moved: the test holds the window between the commit and the retirement step open here.</summary>
+        public Func<Task>? WhileCommitted { get; set; }
+
+        public int Refusals => Volatile.Read(ref _refusals);
 
         public WorldRuntime UnstartedWorld() => new(new WorldRuntimeOptions(), NullSaveQueue.Instance, NullLogger<WorldRuntime>.Instance)
         {
@@ -477,20 +773,37 @@ public sealed class RetiredSourceCleanShutdownTests
             return world;
         }
 
-        public LocalWorldHandoffSource Source(WorldRuntime world) => new(new WorkerNodeId("w1"), world, Queue, new WorkerAdmission(), new WorldWriterGuard());
+        /// <summary>The source as WorldHandoffHosting builds it: with the real barrier and the shared registry.</summary>
+        public LocalWorldHandoffSource Source(WorldRuntime world) => new(
+            new WorkerNodeId("w1"), world, Queue, new WorkerAdmission(), new WorldWriterGuard(), _services.GetRequiredService<CharacterPersistenceBarrier>(), Retirement);
+
+        public void MoveTheFence() => Volatile.Write(ref _fenceMoved, 1);
+
+        /// <summary>Ends when the fence has refused that many writes, or when a queue went terminal (the test's assertions then fail).</summary>
+        public Task WaitForRefusalsAsync(int refusals) => WorldTestHost.WaitForAsync(
+            () => Refusals >= refusals || Queue.TerminalFailure is not null || RestWrites.TerminalFailure is not null,
+            $"the fence to refuse {refusals} write(s)");
 
         public async Task AssertCleanStopAsync()
         {
             Assert.Null(_fatal);
             Assert.Null(Queue.TerminalFailure);
-            Assert.Equal(0, Volatile.Read(ref _refusals));
             Assert.Empty(Queue.RetainedCharacterIds());
             await Queue.StopAsync(); // must not throw
             Assert.Null(Queue.TerminalFailure);
-            Assert.DoesNotContain(Store.Saved, s => s.Id == 5);
+            Assert.DoesNotContain(Store.Saved, s => s.Id >= 5);
         }
 
         public async ValueTask DisposeAsync() => await _services.DisposeAsync();
+
+        private async Task OnCommitAsync()
+        {
+            MoveTheFence();
+            if (WhileCommitted is { } window)
+            {
+                await window().ConfigureAwait(false);
+            }
+        }
 
         private Exception LockedOrRefused()
         {
@@ -502,25 +815,20 @@ public sealed class RetiredSourceCleanShutdownTests
             Interlocked.Increment(ref _refusals);
             return new CharacterOwnershipRejectedException("world", 7);
         }
-
-        private async Task HoldTheWindowOpenAsync()
-        {
-            Volatile.Write(ref _fenceMoved, 1);
-            Volatile.Write(ref _promoting, 1);
-            await WorldTestHost.WaitForAsync(() => _nothingToRetry.Task.IsCompleted || Queue.TerminalFailure is not null, "the consumer to retry character 5 or to find nothing to retry");
-        }
     }
 
-    private sealed class HoldingTarget(Func<Task> whilePromoting) : PlainTarget
+    /// <summary>Runs its action as the promotion starts: by then the retirement step has run.</summary>
+    private sealed class CallbackTarget(Action whilePromoting) : PlainTarget
     {
         private int _promoted;
 
         public bool Promoted => Volatile.Read(ref _promoted) == 1;
 
-        public override async Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
+        public override Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
         {
-            await whilePromoting().ConfigureAwait(false);
+            whilePromoting();
             Volatile.Write(ref _promoted, 1);
+            return Task.CompletedTask;
         }
     }
 
@@ -542,17 +850,10 @@ public sealed class RetiredSourceCleanShutdownTests
         public Task RerouteAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
-    private sealed class HandoffJournal : IWorldHandoffStore
+    private sealed class HandoffJournal(Func<Task> onCommit) : IWorldHandoffStore
     {
         private readonly Lock _gate = new();
         private readonly Dictionary<Guid, WorldHandoffRecord> _records = [];
-
-        public void SeedCommitted(Guid id)
-        {
-            var source = new CharacterOwnershipToken("world", 3, Guid.NewGuid());
-            Put(new WorldHandoffRecord(id, new WorkerNodeId("w1"), new WorkerNodeId("w2"), WorldHandoffStage.EpochTakeover, PlayerTransferDecisionState.Committed, source,
-                source with { Epoch = 4 }, "w2", null, 0, 0));
-        }
 
         private WorldHandoffRecord Current(Guid id)
         {
@@ -578,17 +879,19 @@ public sealed class RetiredSourceCleanShutdownTests
         public Task<WorldHandoffRecord> AdvancePreCommitAsync(Guid handoffId, WorldHandoffStage nextStage, CancellationToken cancellationToken = default)
             => Task.FromResult(Put(Current(handoffId) with { Stage = nextStage }));
 
-        public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
+        public async Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
         {
             WorldHandoffRecord before = Current(handoffId);
             var taken = new CharacterOwnershipToken(before.SourceOwnershipToken.Scope, before.SourceOwnershipToken.Epoch + 1, targetIncarnation);
-            return Task.FromResult<WorldHandoffRecord?>(Put(before with
+            WorldHandoffRecord committed = Put(before with
             {
                 Stage = WorldHandoffStage.EpochTakeover,
                 DecisionState = PlayerTransferDecisionState.Committed,
                 TargetOwnershipToken = taken,
                 TargetOwnerNode = targetOwnerNode,
-            }));
+            });
+            await onCommit().ConfigureAwait(false);
+            return committed;
         }
 
         public Task<WorldHandoffRecord> MarkReroutedAsync(Guid handoffId, CancellationToken cancellationToken = default)
@@ -620,6 +923,33 @@ public sealed class RetiredSourceCleanShutdownTests
             => Task.FromResult<IReadOnlyList<Guid>>([]);
 
         public ITransferDecisionStore ForHandoff(Guid handoffId) => throw new NotSupportedException();
+    }
+
+    /// <summary>Honor rows whose answers the test scripts; only the state write is used.</summary>
+    private sealed class ScriptedHonorStore : IHonorStore
+    {
+        public ConcurrentQueue<int> Attempts { get; } = new();
+        public ConcurrentQueue<int> Saved { get; } = new();
+        public Func<int, Exception?>? Answer { get; init; }
+
+        public Task SaveStateAsync(int characterId, CharacterHonorState state, CancellationToken cancellationToken = default)
+        {
+            Attempts.Enqueue(characterId);
+            if (Answer?.Invoke(characterId) is { } scripted)
+                return Task.FromException(scripted);
+            Saved.Enqueue(characterId);
+            return Task.CompletedTask;
+        }
+
+        public Task<CharacterHonorData> LoadAsync(int characterId, CancellationToken cancellationToken = default) => Task.FromResult(CharacterHonorData.Empty);
+        public Task AppendCpAsync(int characterId, IReadOnlyList<HonorCpRecord> rows, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ResetAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteDeletedCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<HonorMaintenanceState?> GetMaintenanceAsync(CancellationToken cancellationToken = default) => Task.FromResult<HonorMaintenanceState?>(null);
+        public Task SaveMaintenanceAsync(HonorMaintenanceState state, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<HonorWeeklyScore>> ListWeeklyScoresAsync(uint weekBeginDay, uint weekEndDay, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<HonorWeeklyScore>>([]);
+        public Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>

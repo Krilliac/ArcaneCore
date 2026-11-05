@@ -617,7 +617,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                     FaultLedger.Shared.Record($"{SitePrefix}-claim", ex);
                     break;
                 }
-                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
                 {
                     failure = null; // refused because the character moved to another world: counted, neither logged nor terminal
                     break;

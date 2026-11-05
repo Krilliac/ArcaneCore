@@ -20,7 +20,11 @@ public interface IWorldHandoffSource
     /// <summary>Freeze the simulation at a tick boundary, capturing every online player's save as at logout. Idempotent.</summary>
     Task FreezeAsync(CancellationToken cancellationToken);
 
-    /// <summary>Wait until every save captured by the freeze, and every other save A still has open, is durable; throws, before the commit, when one cannot be.</summary>
+    /// <summary>
+    /// Wait until every save captured by the freeze, and every other write A has open in any queue at that point, offline characters included, is durable; throws, before the commit, when one
+    /// cannot be. On success A's writes are sealed until <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected.
+    /// A write made after this returns has no durability promise: it lands only if the takeover has not.
+    /// </summary>
     Task FlushAsync(CancellationToken cancellationToken);
 
     /// <summary>Abort before the point of no return: unfreeze and admit sessions again, under the unchanged ownership. Idempotent.</summary>
@@ -30,9 +34,10 @@ public interface IWorldHandoffSource
     Task RetireAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write A could still attempt for the characters that moved, so a retry that fires while B is being
-    /// promoted is skipped instead of being refused by the fence, which A would take for a lost ownership and stop on. Runs only after the commit (A still owned them before it) and on every
-    /// roll-forward, a recovery included. Idempotent. <see cref="RetireAsync"/> includes it, for a world that retires without a coordinator. A source with no such queue (the default) does nothing.
+    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write A could still attempt, of any character, because the takeover moved them all. A retry that fires
+    /// while B is being promoted is skipped. Between the commit and this step the seal of <see cref="FlushAsync"/> covers the same retry: there it is refused and dropped, not terminal. Runs only
+    /// after the commit (A still owned them before it) and on every roll-forward, a recovery included. Idempotent. <see cref="RetireAsync"/> includes it, for a world that retires without a
+    /// coordinator. A source with no such queue (the default) does nothing.
     /// </summary>
     Task RetireWritesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -225,7 +230,7 @@ public sealed class WorldHandoffCoordinator(
     {
         CharacterOwnershipToken takenOver = record.TargetOwnershipToken
             ?? throw new InvalidOperationException($"committed world handoff {record.HandoffId} has no target ownership token");
-        // First of all, and on every path here (a recovery too): from the commit on, A's save retries are refused by the fence, and only this step makes that refusal expected.
+        // First of all, and on every path here (a recovery too): from the commit on, A's retries are refused by the fence. The flush's seal keeps a refusal from stopping A until this step ends them.
         // The journal does not record it: every roll-forward repeats it, and the repeat changes nothing.
         if (record.Stage < WorldHandoffStage.Retired)
             await source.RetireWritesAsync(cancellationToken).ConfigureAwait(false);

@@ -8,13 +8,17 @@ namespace ArcaneCore.World.Persistence;
 /// world could still attempt for them would be refused by the characters fence. Each character write path (the save queue, the keyed and feature write
 /// queues) asks <see cref="IsRetired"/> before it enqueues and again before it executes; a retired character's write is dropped silently and counted per
 /// queue (<see cref="TryDrop"/>), and the queue logs one informational line with its count at stop (<see cref="LogStopSummary"/>). A character that was
-/// never retired is never affected. Retirement has no way back. One instance per process (a singleton in the world's services); thread-safe, any thread.
+/// never retired is never affected. Retirement has no way back. A handoff retires the whole process (<see cref="RetireAll"/>): the takeover moved the one ownership scope every write of
+/// this process runs under, so no character is left that it could still write, named or not. Between its flush and that step the source is <see cref="Seal">sealed</see>: the takeover can
+/// land at any moment, so a fence refusal is the expected end of a write, not a lost ownership. One instance per process (a singleton in the world's services); thread-safe, any thread.
 /// </summary>
 public sealed class CharacterRetirementRegistry
 {
     private readonly Lock _gate = new();
     private readonly HashSet<int> _retired = [];
     private readonly Dictionary<string, long> _dropped = new(StringComparer.Ordinal);
+    private bool _allRetired;
+    private bool _sealed;
 
     /// <summary>Mark these characters as owned by another world from now on. Idempotent. Returns how many were newly retired.</summary>
     public int Retire(IEnumerable<int> characterIds)
@@ -35,12 +39,43 @@ public sealed class CharacterRetirementRegistry
         return added;
     }
 
+    /// <summary>The process owns no character any more, whichever it is: every later write of any character is dropped. Idempotent; no way back.</summary>
+    public void RetireAll()
+    {
+        lock (_gate)
+        {
+            _allRetired = true;
+        }
+    }
+
+    /// <summary>
+    /// From now on, until <see cref="Unseal"/> or <see cref="RetireAll"/> decides, a fence refusal of any character is dropped and counted instead of stopping the process
+    /// (<see cref="TryDropRefused"/>). Writes are still attempted: before the takeover they land. A write that is refused here cannot be lost by the drop: A's token is stale, so it could never
+    /// have been written, and on the abort path (A lost the ownership some other way) the next write after <see cref="Unseal"/> is refused and goes terminal as ever. Idempotent.
+    /// </summary>
+    public void Seal()
+    {
+        lock (_gate)
+        {
+            _sealed = true;
+        }
+    }
+
+    /// <summary>The handoff aborted and A resumed: a fence refusal means a lost ownership again. Idempotent.</summary>
+    public void Unseal()
+    {
+        lock (_gate)
+        {
+            _sealed = false;
+        }
+    }
+
     /// <summary>True when the process no longer owns the character.</summary>
     public bool IsRetired(int characterId)
     {
         lock (_gate)
         {
-            return _retired.Count > 0 && _retired.Contains(characterId);
+            return IsRetiredLocked(characterId);
         }
     }
 
@@ -49,7 +84,22 @@ public sealed class CharacterRetirementRegistry
     {
         lock (_gate)
         {
-            if (_retired.Count == 0 || !_retired.Contains(characterId))
+            if (!IsRetiredLocked(characterId))
+            {
+                return false;
+            }
+
+            _dropped[queue] = _dropped.GetValueOrDefault(queue) + 1;
+            return true;
+        }
+    }
+
+    /// <summary>For a write the fence just refused: as <see cref="TryDrop"/>, and also while the process is sealed. False is a real loss of ownership.</summary>
+    public bool TryDropRefused(string queue, int characterId)
+    {
+        lock (_gate)
+        {
+            if (!_sealed && !IsRetiredLocked(characterId))
             {
                 return false;
             }
@@ -85,7 +135,13 @@ public sealed class CharacterRetirementRegistry
     public static bool Drops([NotNullWhen(true)] CharacterRetirementRegistry? registry, string queue, int characterId)
         => registry is not null && registry.TryDrop(queue, characterId);
 
+    /// <summary>Null-tolerant <see cref="TryDropRefused"/>: false when there is no registry.</summary>
+    public static bool DropsRefused([NotNullWhen(true)] CharacterRetirementRegistry? registry, string queue, int characterId)
+        => registry is not null && registry.TryDropRefused(queue, characterId);
+
     /// <summary>Null-tolerant <see cref="IsRetired"/>: false when there is no registry.</summary>
     public static bool Retired([NotNullWhen(true)] CharacterRetirementRegistry? registry, int characterId)
         => registry is not null && registry.IsRetired(characterId);
+
+    private bool IsRetiredLocked(int characterId) => _allRetired || _retired.Contains(characterId);
 }

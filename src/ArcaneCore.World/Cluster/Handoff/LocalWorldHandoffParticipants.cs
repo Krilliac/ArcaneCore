@@ -13,7 +13,8 @@ namespace ArcaneCore.World.Cluster.Handoff;
 /// online player's save as at logout (the settlement path, which bypasses and then sets a save hold, so no later ordinary snapshot of that player is
 /// written by A), then keeps the simulation thread parked until the handoff resumes A (abort) or A is disposed. A retired A stays frozen: after the
 /// epoch takeover any write it still attempted would be refused by the characters fence anyway. A player with a quest settlement in flight is not
-/// quiescent, so the freeze refuses (the handoff aborts and A resumes). After the epoch takeover the source also gives up A's characters database
+/// quiescent, so the freeze refuses (the handoff aborts and A resumes). A flush that succeeds seals A's writes: from then on the takeover can land at any moment, so a fence refusal is
+/// expected until the handoff decides (a resume unseals, the retirement closes every write of this world). After the epoch takeover the source also gives up A's characters database
 /// writer lock (<paramref name="writerGuard"/>, A's own guard, required) so B's promotion can take it; see <see cref="ReleaseWriterLockAsync"/>.
 /// The handoff moves the ownership scope A holds: <c>world</c> for a Combined world, or A's <c>worker:&lt;shard&gt;</c> row in Cluster:Fencing:Scope=Worker (then the lock released is A's shard
 /// lock, and handoffs of two different shards are independent; design _wf/writer-lock-DESIGN.md step C7).
@@ -33,7 +34,7 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>The admission closed reason of a retired A.</summary>
     public const string RetiredReason = "retired";
 
-    /// <summary>Times the flush goes over the save queue's open characters before it gives up: nothing should open after the first pass, because the simulation is parked.</summary>
+    /// <summary>Times the flush goes over the open characters of every queue before it gives up: nothing should open after the first pass, because the simulation is parked.</summary>
     private const int OpenSavePasses = 3;
 
     private readonly Lock _gate = new();
@@ -109,19 +110,35 @@ public sealed class LocalWorldHandoffSource(
                 await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
         }
 
-        // Then what the save queue still has open for characters the freeze did not capture: an offline character's retained, waiting or in-flight save. A still owns them here and can
-        // write them; after the commit the fence would refuse them. One that cannot be written fails the flush, and the handoff aborts with nothing lost. A quarantined character has none
-        // open: its retained snapshot is superseded by design and never retried. The simulation is parked, so a pass adds nothing new; the repeat catches a late settlement's write.
+        // Then what any queue still has open for characters the freeze did not capture: an offline character's retained, waiting or in-flight write, in the save queue or a keyed queue. A still
+        // owns them here and can write them; after the commit the fence would refuse them and B would read without them. One that cannot be written fails the flush, and the handoff aborts with
+        // nothing lost. A quarantined character has none open: its retained snapshot is superseded by design and never retried. The simulation is parked, so a pass adds nothing new; the repeat
+        // catches a late settlement's write.
         for (int pass = 0; ; pass++)
         {
-            int[] open = saveQueue.UnsettledCharacterIds();
+            int[] open = await OpenCharacterIdsAsync(cancellationToken).ConfigureAwait(false);
             if (open.Length == 0)
+            {
+                // Clean: seal. A write that still turns up lands if the takeover has not, and is an expected refusal if it has, until the resume or the retirement decides.
+                retirement?.Seal();
+                saveQueue.SealWrites();
                 return;
+            }
+
             if (pass == OpenSavePasses)
                 throw new InvalidOperationException($"characters {string.Join(", ", open)} still have saves open after the flush; the handoff cannot commit");
             foreach (int id in open)
                 await FlushCharacterAsync(id, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task<int[]> OpenCharacterIdsAsync(CancellationToken cancellationToken)
+    {
+        int[] saves = saveQueue.UnsettledCharacterIds();
+        if (barrier is null)
+            return saves;
+        IReadOnlyList<int> others = await barrier.OpenCharacterIdsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. saves.Union(others).Order()];
     }
 
     // Every queue of the character through the barrier; without one, the save queue alone, under the barrier's time limit: a locked database must fail the handoff, not hold it open.
@@ -151,6 +168,8 @@ public sealed class LocalWorldHandoffSource(
             _heldHere.Clear();
             _frozenCharacters.Clear();
             _frozen = null;
+            retirement?.Unseal();
+            saveQueue.UnsealWrites();
             _release.Set();
             admission.Open();
         }
@@ -166,23 +185,17 @@ public sealed class LocalWorldHandoffSource(
             admission.Close(RetiredReason);
     }
 
-    /// <summary>The save-queue part of the retirement. Only after the commit: before it, these are writes A still owns. From here on A does not resume either.</summary>
+    /// <summary>The write part of the retirement. Only after the commit: before it, these are writes A still owns. From here on A does not resume either.</summary>
     public Task RetireWritesAsync(CancellationToken cancellationToken)
     {
-        int[] moved;
         lock (_gate)
-        {
             _retired = true;
-            moved = [.. _frozenCharacters];
-        }
 
-        // The characters this world froze now belong to the new owner: every write queue of this process drops their writes silently and counts them
-        // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
-        // (one informational line), instead of attempting writes the fence must refuse. The frozen characters are named, and so is every offline character the save queue still holds
-        // anything for: retained, waiting or in flight (the flush normally leaves none; each would be refused too). Any other character keeps its writes.
-        int[] retiring = [.. moved, .. saveQueue.RetainedCharacterIds(), .. saveQueue.UnsettledCharacterIds()];
-        retirement?.Retire(retiring);
-        saveQueue.RetireCharacters(retiring);
+        // The takeover moved the one ownership scope every write of this process runs under, so it holds no character any more, frozen, offline or never heard of. Every write queue drops
+        // their writes silently and counts them (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops its waiting and retained
+        // snapshots and skips later ones (one informational line), instead of attempting writes the fence must refuse. The flush left nothing open, so a drop here is a write that came after it.
+        retirement?.RetireAll();
+        saveQueue.RetireEveryCharacter();
         return Task.CompletedTask;
     }
 
