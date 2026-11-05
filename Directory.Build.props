@@ -11,6 +11,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Exhaustiveness: a switch expression must handle every value of its input type (CS8509: whatever the input type is, not only enums) and, for enums, undefined values (CS8524). C# cannot prove a class hierarchy exhaustive, so a switch over one needs a discard arm.
+         Both are warnings by default; naming them keeps them errors even if a project ever relaxes TreatWarningsAsErrors. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CS8509;CS8524</WarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <InvariantGlobalization>true</InvariantGlobalization>
     <Deterministic>true</Deterministic>
@@ -39,6 +42,14 @@
        Servers and tools never get this switch, so a build that still holds a placeholder refuses to create or upgrade a real database. -->
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <RuntimeHostConfigurationOption Include="ArcaneCore.Data.AllowReservedSchemaGaps" Value="true" />
+  </ItemGroup>
+
+  <!-- The safety analyzer (src/ArcaneCore.Analyzers, docs/ops/memory-safety.md) runs in every shipping project: world-thread ownership, unsafe APIs,
+       pooled buffers, blocking waits. Test projects, the analyzer itself and vendored third-party code are not analysed. The allow-list of findings that predate a rule is
+       analyzers/safety-baseline.txt; scripts/safety-baseline.ps1 rewrites it. -->
+  <ItemGroup Condition="'$(IsTestProject)' != 'true' and '$(MSBuildProjectName)' != 'ArcaneCore.Analyzers' and !$(MSBuildProjectDirectory.Contains('ThirdParty'))">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)src\ArcaneCore.Analyzers\ArcaneCore.Analyzers.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)analyzers\safety-baseline.txt" />
   </ItemGroup>
 
 </Project>
