@@ -181,13 +181,15 @@ public sealed class WorldHost(
                 directory.Load(identities);
 
                 // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get (before the item load below, whose orphaned-loot sweep runs only for the maintenance holder), then attaches
-                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
+                // only the features its role runs (the auction bot and AutoBroadcast run only while it holds their lease: a map worker attaches them dormant and they wake on a takeover). Combined attaches everything, as always.
                 Func<IWorldFeature, bool>? admit = null;
                 Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
                 if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
                 {
                     await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
-                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
+                    // The realm singletons are attached on every map worker, dormant until the node holds their lease (at start or by a run-time takeover).
+                    admit = feature => Cluster.Social.ClusterRoleFeatureFilter.AttachesDormant(feature.GetType(), role)
+                        || roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
                 // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
@@ -280,7 +282,7 @@ public sealed class WorldHost(
         string Describe(Type feature)
         {
             string scope = Cluster.Social.ClusterRoleFeatureFilter.LeaseScopeFor(feature)!;
-            return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} not attached (lease held by another node)";
+            return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} dormant (lease held by another node; it starts here if that node's lease lapses)";
         }
 
         string instances = keeper.TokenFor(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Instances) is { } instancesToken

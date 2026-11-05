@@ -40,7 +40,7 @@ public sealed class MapWorkerSingletonLeaseTests
         [new MapTemplate(RaidMap, 0, MapType.Raid, 0, 40, 7, 0, -7510f, -1036f, "Molten Core", "")], [], [], [], []);
 
     [Fact]
-    public async Task MapWorker_WithEconomyLeaseHeldByAnotherNode_DoesNotAttachAuctionBot_ButAttachesWorldFeatures()
+    public async Task MapWorker_WithEconomyLeaseHeldByAnotherNode_AttachesTheAuctionBotDormant_AndWorldFeatures()
     {
         using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
@@ -55,7 +55,9 @@ public sealed class MapWorkerSingletonLeaseTests
         string[] attached = [.. kit.Features.List().Select(f => f.Name)];
         Assert.Contains(nameof(OrdinaryFeature), attached);
         Assert.Contains(nameof(AutoBroadcastFeature), attached);
-        Assert.DoesNotContain(nameof(AuctionBotFeature), attached);
+        Assert.Contains(nameof(AuctionBotFeature), attached); // attached on every map worker, but dormant: it runs only once this node holds the economy lease
+        Assert.Null(kit.Keeper!.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.False(kit.Keeper.Holds(RealmAuthorityScopes.Economy));
         Assert.True(kit.Ordinary.Attached);
 
         RealmAuthorityLeaseRow social = await ReadAsync(database, RealmAuthorityScopes.Social);
@@ -355,9 +357,10 @@ public sealed class MapWorkerSingletonLeaseTests
         private readonly ServiceProvider _provider;
         private readonly WorldRuntime _world;
 
-        private Kit(ServiceProvider provider, WorldRuntime world, WorldHost host, EfRealmAuthorityLeaseStore store, FeatureHost features, OrdinaryFeature ordinary, InstanceFeature? instances)
+        private Kit(ServiceProvider provider, WorldRuntime world, WorldHost host, EfRealmAuthorityLeaseStore store, FeatureHost features, OrdinaryFeature ordinary, InstanceFeature? instances, RealmAuthorityLeaseKeeper? keeper)
         {
             Instances = instances;
+            Keeper = keeper;
             _provider = provider;
             _world = world;
             Host = host;
@@ -371,6 +374,9 @@ public sealed class MapWorkerSingletonLeaseTests
         public FeatureHost Features { get; }
         public OrdinaryFeature Ordinary { get; }
         public InstanceFeature? Instances { get; }
+
+        /// <summary>The node's lease keeper (null for Combined).</summary>
+        public RealmAuthorityLeaseKeeper? Keeper { get; }
 
         /// <summary>Wait until the world thread ran the commands queued so far (the instance feature loads its state there).</summary>
         public Task LoadedAsync() => _world.InvokeAsync(() => true);
@@ -433,7 +439,7 @@ public sealed class MapWorkerSingletonLeaseTests
             var host = new WorldHost(runtime, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance,
                 Options.Create(new CharacterFencingOptions { Enabled = false, OwnerNode = node }),
                 roleFilter: filter, leaseKeeper: keeper, nodeOptions: nodeOptions) { ListenerExpected = false, StartupWorkForTesting = startupWork };
-            return new Kit(provider, runtime, host, store, provider.GetRequiredService<FeatureHost>(), ordinary, withInstances ? provider.GetRequiredService<InstanceFeature>() : null);
+            return new Kit(provider, runtime, host, store, provider.GetRequiredService<FeatureHost>(), ordinary, withInstances ? provider.GetRequiredService<InstanceFeature>() : null, keeper);
         }
 
         public async ValueTask DisposeAsync()

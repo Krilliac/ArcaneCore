@@ -42,6 +42,240 @@ public sealed class AuctionBotFeatureTests
         Assert.Equal(1, await fixture.CountAsync<AuctionRow>());
     }
 
+    private const string EconomyScope = ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy;
+
+    /// <summary>A map worker (worker-a) whose economy scope is held by worker-b, which never renews it.</summary>
+    private static async Task<(ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper Keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider Time)> DormantWorkerKeeperAsync()
+    {
+        var time = new ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero));
+        var store = new ArcaneCore.Kernel.Cluster.Social.InMemoryRealmAuthorityLeaseStore();
+        store.TryAcquire(EconomyScope, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), time.GetUtcNow());
+        var keeper = new ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper(store,
+            Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Social.ClusterNodeOptions
+            {
+                Role = ArcaneCore.World.Cluster.Social.ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10,
+            }),
+            Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Gateway.GatewayWorkerOptions { Enabled = true, NodeId = "worker-a" }),
+            NullLogger<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>.Instance, null, time, _ => { });
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        Assert.False(keeper.Holds(EconomyScope));
+        return (keeper, time);
+    }
+
+    [Fact]
+    public async Task Bot_on_a_node_without_the_economy_lease_stays_dormant_then_reads_what_the_dead_holder_wrote_and_buys_and_bids()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        Assert.False(fixture.Bot.StateLoaded); // nothing read while another node holds the lease
+        Assert.True(fixture.Bot.IsDormant);
+        Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
+        Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
+        Assert.Empty(fixture.Bot.Ledger.Rows);
+        Assert.Equal(1, await fixture.OnWorld(() => fixture.Economy.Auctions.Count)); // the cache read at attach: the player auction of the fixture
+
+        // After this node attached, the holder (worker-b) wrote: a player auction open for bids, a bot bid that stands (auction 3, bidder 0), and its custody rows.
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using (CharacterDbContext db = fixture.NewContext())
+        {
+            foreach ((uint id, uint guid, uint bid) in new[] { (2u, 501u, 0u), (3u, 502u, 700u) })
+            {
+                var item = new ItemInstanceRow { Guid = guid };
+                item.CopyFrom(0, new ItemInstanceData { Guid = guid, Entry = Fixture.Entry, Count = 1 });
+                db.Add(item);
+                var auction = new AuctionRow();
+                auction.CopyFrom(new AuctionRecord
+                {
+                    Id = id, HouseId = House, ItemGuid = guid, ItemEntry = Fixture.Entry, ItemCount = 1, SellerId = fixture.SellerId,
+                    StartBid = 500, Buyout = 100_000, ExpireTime = now + (48 * 3600), BidderId = 0, Bid = bid, Deposit = 0,
+                });
+                db.Add(auction);
+            }
+
+            await db.SaveChangesAsync();
+            await new EfAuctionBotCustodyStore(db).SaveAsync(
+            [
+                new AuctionBotCustodyRecord("ahbot:list:7", (byte)AuctionBotCustodyKind.Item, (byte)AuctionBotCustodyRole.Listing, (byte)AuctionBotCustodyState.TerminalOk,
+                    House, 7, 900, Fixture.Entry, 1, 0, now, now),
+                new AuctionBotCustodyRecord("ahbot:bid:3:1", (byte)AuctionBotCustodyKind.Gold, (byte)AuctionBotCustodyRole.Bid, (byte)AuctionBotCustodyState.TerminalOk,
+                    House, 3, 502, Fixture.Entry, 1, 700, now, now),
+            ], []);
+        }
+
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10)); // worker-b's lease lapses at 30 s, and the keeper's renewal tick takes it over
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        using var timeout = new CancellationTokenSource(Fixture.Budget);
+        while (!await fixture.OnWorld(() =>
+               {
+                   fixture.Bot.Tick(); // the first tick that finds the lease held starts the state read and the auction cache read
+                   return fixture.Bot.StateLoaded && fixture.Economy.EnsureAuctionCacheCurrent();
+               }).WaitAsync(timeout.Token))
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+
+        Assert.True(fixture.Bot.Persistent);
+        Assert.False(fixture.Bot.IsDormant);
+        // The custody rows the dead holder wrote are in this node's ledger.
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.IdemKey == "ahbot:list:7" && r.State == AuctionBotCustodyState.TerminalOk);
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.IdemKey == "ahbot:bid:3:1" && r.State == AuctionBotCustodyState.TerminalOk);
+        // The auction cache holds the rows written after attach, so the standing bid was not released (a stale cache lacks auction 3) and the new auction is seen.
+        Assert.Equal(3, await fixture.OnWorld(() => fixture.Economy.Auctions.Count));
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(2)));
+        Assert.Equal(700u, await fixture.OnWorld(() => fixture.Economy.FindAuction(3)!.Bid));
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, await fixture.OnWorld(() => fixture.Bot.Ledger.StandingBid(3)!.State));
+
+        // It buys out the player auction the bot values above its buyout and bids on auction 2; auction 3 already carries the bot's bid.
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
+        await fixture.TickUntilAsync(() => fixture.Bot.Ledger.Rows.Count(r => r.Role != AuctionBotCustodyRole.Listing && r.State == AuctionBotCustodyState.TerminalOk) == 3);
+        AuctionBotCustodyRow botBid = fixture.Bot.Ledger.Rows.Single(r => r.Role == AuctionBotCustodyRole.Bid && r.AuctionId == 2);
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, botBid.State);
+        Assert.Contains(fixture.Bot.Ledger.Rows, r => r.Role == AuctionBotCustodyRole.Buyout && r.AuctionId == 1);
+        Assert.True(await fixture.OnWorld(() => fixture.Economy.FindAuction(2)!.Bid > 0));
+    }
+
+    [Fact]
+    public async Task Takeover_refreshes_the_character_directory_before_the_sweeps_may_treat_a_stored_seller_as_gone()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+
+        // This worker never heard of the seller, who was created elsewhere: to the expiry sweep the seller would be gone, and the unsold item would be destroyed.
+        var directory = new ArcaneCore.World.Characters.CharacterDirectory();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, directory: directory,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        Assert.Null(directory.Find(fixture.SellerId));
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
+
+        Assert.NotNull(directory.Find(fixture.SellerId));
+    }
+
+    [Fact]
+    public async Task Auction_listed_on_this_node_after_the_takeover_snapshot_was_read_stays_listed_when_the_snapshot_is_applied()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        var gate = new HeldAuctionSnapshot();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        gate.HoldNextFullRead();
+        Assert.False(await fixture.OnWorld(fixture.Economy.EnsureAuctionCacheCurrent));
+        AuctionSnapshot read = await gate.Taken.WaitAsync(Fixture.Budget);
+        Assert.DoesNotContain(read.Auctions, a => a.Id == 90); // the snapshot is taken and misses the listing, which does not exist yet
+
+        // The listing commits and completes while the snapshot waits to be handed back, so the snapshot is applied after the listing's completion.
+        var listed = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        long expire = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (48 * 3600);
+        await fixture.OnWorld(() =>
+        {
+            fixture.Economy.StartBotListing(House, 90, new ItemInstanceData { Guid = 900, Entry = Fixture.Entry, Count = 1 }, 500, 1000, expire,
+                Guid.NewGuid(), outcome => listed.TrySetResult(outcome));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.After, await listed.Task.WaitAsync(Fixture.Budget));
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(90)));
+
+        gate.ReleaseRead();
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
+
+        Assert.Equal(1, gate.FullReads); // that snapshot is the one applied: a failed read and a retry would prove nothing
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(90)));
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Economy.Auctions.Count)); // the fixture's player auction and the listing
+    }
+
+    [Fact]
+    public async Task Auction_busy_when_the_takeover_snapshot_read_starts_keeps_the_commit_that_finishes_during_the_read()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        var gate = new HeldAuctionSnapshot();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, wrapStore: gate.Wrap,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        gate.HoldNextFullRead();
+        gate.HoldNextCommit();
+
+        // One world-thread turn: the bid starts first, so the auction is busy when the read starts and the bid's change is not noted as made during the read.
+        var bid = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await fixture.OnWorld(() =>
+        {
+            fixture.Economy.StartBotBid(1, 600, Guid.NewGuid(), outcome => bid.TrySetResult(outcome));
+            Assert.True(fixture.Economy.IsAuctionBusy(1));
+            Assert.False(fixture.Economy.EnsureAuctionCacheCurrent());
+            return true;
+        });
+
+        // The commit is held until the snapshot is taken, so the snapshot has the row from before the bid.
+        AuctionSnapshot read = await gate.Taken.WaitAsync(Fixture.Budget);
+        Assert.Equal(0u, read.Auctions.Single(a => a.Id == 1).Bid);
+
+        gate.ReleaseCommit();
+        Assert.Equal(EconomyOutcome.After, await bid.Task.WaitAsync(Fixture.Budget));
+        Assert.Equal(600u, await fixture.OnWorld(() => fixture.Economy.FindAuction(1)!.Bid));
+
+        gate.ReleaseRead();
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
+
+        Assert.Equal(1, gate.FullReads);
+        Assert.Equal(600u, await fixture.OnWorld(() => fixture.Economy.FindAuction(1)!.Bid)); // not rolled back to the snapshot's row
+    }
+
+    [Fact]
+    public async Task Ahbot_commands_refuse_on_a_node_that_does_not_hold_the_economy_lease_and_run_once_it_does()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper);
+
+        string? refused = AuctionBotCommands.Unavailable(fixture.Bot, null);
+        Assert.NotNull(refused);
+        Assert.Contains("economy lease is held by another node", refused);
+
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        Assert.NotNull(AuctionBotCommands.Unavailable(fixture.Bot, null)); // lease held, state not read yet
+
+        using var timeout = new CancellationTokenSource(Fixture.Budget);
+        while (!await fixture.OnWorld(() =>
+               {
+                   fixture.Bot.Tick(); // the first tick that finds the lease held reads the ledger and overrides
+                   return fixture.Bot.StateLoaded;
+               }).WaitAsync(timeout.Token))
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+
+        Assert.Null(AuctionBotCommands.Unavailable(fixture.Bot, null));
+        Assert.Contains("disabled", AuctionBotCommands.Unavailable(null, null));
+    }
+
     [Fact]
     public async Task Tick_before_the_items_are_loaded_does_not_run_the_item_load_on_the_calling_thread()
     {
@@ -706,6 +940,95 @@ public sealed class AuctionBotFeatureTests
         }
     }
 
+    /// <summary>
+    /// Orders a takeover snapshot against a local commit, so the order is the test's and not the scheduler's: the next full auction read takes its snapshot, reports it through <see cref="Taken"/> and then keeps it until
+    /// <see cref="ReleaseRead"/> (for at most the fixture budget, ignoring the read's own cancellation; <see cref="FullReads"/> shows a retry if a held read ever failed). The next commit waits for <see cref="ReleaseCommit"/> before it reaches the store.
+    /// </summary>
+    private sealed class HeldAuctionSnapshot
+    {
+        private readonly TaskCompletionSource<AuctionSnapshot> _taken = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _readRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _commitRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _holdRead;
+        private int _holdCommit;
+        private int _fullReads;
+
+        public Task<AuctionSnapshot> Taken => _taken.Task;
+
+        /// <summary>Full auction reads from the held one on.</summary>
+        public int FullReads => Volatile.Read(ref _fullReads);
+
+        public void HoldNextFullRead() => Volatile.Write(ref _holdRead, 1);
+
+        public void HoldNextCommit() => Volatile.Write(ref _holdCommit, 1);
+
+        public void ReleaseRead() => _readRelease.TrySetResult();
+
+        public void ReleaseCommit() => _commitRelease.TrySetResult();
+
+        public IEconomyStore Wrap(IEconomyStore inner) => new Store(inner, this);
+
+        private sealed class Store(IEconomyStore inner, HeldAuctionSnapshot owner) : IEconomyStore
+        {
+            public async Task<AuctionSnapshot> GetAuctionSnapshotAsync(AuctionSnapshotFilter filter, CancellationToken cancellationToken = default)
+            {
+                AuctionSnapshot snapshot = await inner.GetAuctionSnapshotAsync(filter, cancellationToken);
+                if (filter.AuctionId is not null)
+                {
+                    return snapshot;
+                }
+
+                if (Interlocked.Exchange(ref owner._holdRead, 0) == 1)
+                {
+                    Interlocked.Increment(ref owner._fullReads);
+                    owner._taken.TrySetResult(snapshot);
+                    await owner._readRelease.Task.WaitAsync(Fixture.Budget); // bounded, so a failed assertion cannot hang the fixture's disposal on this read
+                }
+                else if (owner._taken.Task.IsCompleted)
+                {
+                    Interlocked.Increment(ref owner._fullReads);
+                }
+
+                return snapshot;
+            }
+
+            public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
+            {
+                if (Interlocked.Exchange(ref owner._holdCommit, 0) == 1)
+                {
+                    await owner._commitRelease.Task.WaitAsync(cancellationToken);
+                }
+
+                return await inner.CommitAsync(request, cancellationToken);
+            }
+
+            public Task<bool> IsCommittedAsync(Guid operationId, CancellationToken cancellationToken = default)
+                => inner.IsCommittedAsync(operationId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsAsync(int receiverId, CancellationToken cancellationToken = default)
+                => inner.GetMailsAsync(receiverId, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetExpiredMailsAsync(long now, int max, CancellationToken cancellationToken = default)
+                => inner.GetExpiredMailsAsync(now, max, cancellationToken);
+
+            public Task<IReadOnlyList<MailRecord>> GetMailsInvolvingAsync(int characterId, CancellationToken cancellationToken = default)
+                => inner.GetMailsInvolvingAsync(characterId, cancellationToken);
+
+            public Task<string?> GetItemTextAsync(uint itemTextId, CancellationToken cancellationToken = default)
+                => inner.GetItemTextAsync(itemTextId, cancellationToken);
+
+            public Task<IReadOnlyList<AuctionRecord>> GetAuctionsAsync(CancellationToken cancellationToken = default)
+                => inner.GetAuctionsAsync(cancellationToken);
+
+            public Task<IReadOnlyDictionary<uint, ItemInstanceData>> GetEscrowItemsAsync(IReadOnlyCollection<uint> itemGuids,
+                CancellationToken cancellationToken = default)
+                => inner.GetEscrowItemsAsync(itemGuids, cancellationToken);
+
+            public Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default)
+                => inner.GetIdSeedAsync(cancellationToken);
+        }
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
@@ -836,7 +1159,8 @@ public sealed class AuctionBotFeatureTests
 
         public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
             Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null,
-            IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null)
+            IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null,
+            ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? keeper = null, ArcaneCore.World.Characters.CharacterDirectory? directory = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -890,7 +1214,18 @@ public sealed class AuctionBotFeatureTests
             var services = new ServiceCollection();
             services.AddSingleton(configuration);
             services.AddLogging();
+            if (keeper is not null)
+            {
+                services.AddSingleton(keeper); // a clustered map worker: the bot follows the economy lease this keeper holds
+            }
+
             services.AddScoped(_ => new CharacterDbContext(options));
+            if (directory is not null)
+            {
+                services.AddSingleton(directory);
+                services.AddScoped<ICharacterStore>(provider => new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()));
+            }
+
             services.AddScoped<IEconomyStore>(provider =>
             {
                 IEconomyStore store = new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>());

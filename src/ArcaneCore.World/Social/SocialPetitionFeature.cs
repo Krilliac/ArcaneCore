@@ -27,8 +27,9 @@ namespace ArcaneCore.World.Social;
 /// and this one waits for the guild preload that <see cref="SocialFeature.Attach"/> starts
 /// (docs/integration/seams.md).
 /// </para>
+/// <para>A worker that gains the Social lease at run time rereads both before it stores any of them (<see cref="EnsureGuildsCurrent"/>).</para>
 /// </summary>
-public sealed class SocialPetitionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
+public sealed partial class SocialPetitionFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
     : IWorldFeature, ICharacterDeleteHook, IAsyncDisposable
 {
     /// <summary>Upper bound for one world-thread round trip during a character deletion.</summary>
@@ -60,6 +61,11 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
             if (link is ArcaneCore.World.Cluster.Social.PeerGuildHolderLink peer)
             {
                 peer.Bind(world, Social.Context.Guilds, Social.Context.Petitions);
+                if (peer.ReloadPending)
+                {
+                    _reloadLink = peer;
+                    world.Updated += ReloadOnLeaseGain;
+                }
             }
         }
 
@@ -76,6 +82,7 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
         {
             world.PlayerLoggedIn -= OnLoggedIn;
             world.PlayerLoggingOut -= OnLoggingOut;
+            world.Updated -= ReloadOnLeaseGain;
         }
 
         try
@@ -85,6 +92,11 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
         catch (OperationCanceledException)
         {
             // stopping
+        }
+
+        if (_reload is { } reload)
+        {
+            await reload.ConfigureAwait(false); // never faults: ReadAuthorityStateAsync handles every failure it can meet
         }
     }
 

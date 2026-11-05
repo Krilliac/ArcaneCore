@@ -35,14 +35,15 @@ public static class ClusterPresenceHosting
         services.TryAddSingleton(sp => new InMemoryClusterSocialRouter(sp.GetRequiredService<InMemoryRealmPresenceDirectory>()));
         services.TryAddSingleton(sp => new PresenceHolderService(
             sp.GetRequiredService<InMemoryRealmPresenceDirectory>(),
-            sp.GetRequiredService<InMemoryClusterSocialRouter>()));
+            sp.GetRequiredService<InMemoryClusterSocialRouter>(),
+            sp.GetService<RealmAuthorityLeaseKeeper>() is { } keeper ? () => keeper.Holds(RealmAuthorityScopes.Social) : null)); // not TokenFor: a lost lease keeps its token
         services.TryAddSingleton(sp =>
         {
             RealmAuthorityLeaseKeeper? keeper = sp.GetService<RealmAuthorityLeaseKeeper>();
             PeerLinkRuntime? runtime = sp.GetService<PeerLinkRuntime>();
             PeerLinkClient? link = sp.GetService<PeerLinkClient>();
             PeerPresenceClient? fixedRemote = link is null ? null : new PeerPresenceClient(link);
-            Func<bool> holdsSocial = keeper is null ? static () => true : () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
+            Func<bool> holdsSocial = keeper is null ? static () => true : () => keeper.Holds(RealmAuthorityScopes.Social);
             return new LeaseRoutedPresence(sp.GetRequiredService<PresenceHolderService>(), holdsSocial, () => runtime?.Presence ?? fixedRemote);
         });
         services.TryAddSingleton<IRealmPresenceDirectory>(sp => sp.GetRequiredService<LeaseRoutedPresence>());

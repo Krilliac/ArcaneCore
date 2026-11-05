@@ -150,7 +150,11 @@ public sealed partial class GuildManager(SocialContext context)
 
             if (guild.MemberCount == 0)
             {
-                context.Persistence.DeleteGuild(guild.Id);
+                if (IsAuthority)
+                {
+                    context.Persistence.DeleteGuild(guild.Id); // a repair like the saves below: a replica reads, only the holder writes
+                }
+
                 continue;
             }
 
@@ -1544,6 +1548,47 @@ public sealed partial class GuildManager(SocialContext context)
             {
                 SetFields(online, updated.Id, member.Rank);
             }
+        }
+    }
+
+    /// <summary>
+    /// This worker became the holder at run time: what storage holds replaces the replica, because the previous holder may have stored changes it never published, and the next <see cref="Save"/> writes a whole guild.
+    /// Runs <see cref="Load"/> on the stored rows (its repairs are written, this manager being the authority by now, so the caller must have brought the character lookup up to date since it read them: an unknown character is
+    /// dropped from its guild, and a guild of unknown characters is deleted), gives this worker's players the guild fields of what was read, and publishes the result, so a guild
+    /// another worker's replica missed, or still has after the previous holder disbanded it, is put right. Raises neither <see cref="MemberJoined"/> nor <see cref="MemberLeft"/>, as <see cref="ApplyReplica"/>. World thread.
+    /// </summary>
+    public void ReloadFromStorage(IReadOnlyCollection<GuildData> stored)
+    {
+        ArgumentNullException.ThrowIfNull(stored);
+        int[] known = [.. _guilds.Keys, .. stored.Select(g => g.Id)];
+        uint[] replicaMembers = [.. _memberOf.Keys];
+        _guilds.Clear();
+        _memberOf.Clear();
+        Load(stored);
+        foreach (uint characterId in replicaMembers)
+        {
+            if (!_memberOf.ContainsKey(characterId) && context.World.FindOnlinePlayer(ObjectGuid.Player(characterId)) is { } gone)
+            {
+                SetFields(gone, 0, 0);
+            }
+        }
+
+        foreach (Guild guild in _guilds.Values)
+        {
+            foreach (GuildMember member in guild.Members)
+            {
+                if (context.World.FindOnlinePlayer(member.Guid) is { } online)
+                {
+                    SetFields(online, guild.Id, member.Rank);
+                }
+            }
+
+            Link?.ReplicateGuild(guild.Id, guild.ToData());
+        }
+
+        foreach (int guildId in known.Distinct().Where(id => !_guilds.ContainsKey(id)))
+        {
+            Link?.ReplicateGuild(guildId, null);
         }
     }
 

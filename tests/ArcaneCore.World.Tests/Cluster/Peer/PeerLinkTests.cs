@@ -265,7 +265,7 @@ public sealed class PeerLinkTests : IAsyncLifetime
     }
 
     [Fact]
-    public void Locator_FindsTheSocialHolder_ElseTheEconomyHolder()
+    public void Locator_FindsOnlyTheSocialHolder_NeverAnEconomyHolderWhileSocialHasLapsed()
     {
         var options = new PeerLinkOptions();
         options.Nodes["node-a"] = "10.0.0.1:8097";
@@ -274,15 +274,13 @@ public sealed class PeerLinkTests : IAsyncLifetime
         Assert.Null(locator.Locate());
 
         _store.TryAcquire(RealmAuthorityScopes.Economy, "node-b", Guid.NewGuid(), Hour, DateTimeOffset.UtcNow);
-        PeerHolder economy = Assert.IsType<PeerHolder>(locator.Locate());
-        Assert.Equal("node-b", economy.NodeId);
-        Assert.Equal("10.0.0.2", economy.Host);
-        Assert.Equal(8097, economy.Port);
-        Assert.Equal(RealmAuthorityScopes.Economy, economy.Scope);
+        Assert.Null(locator.Locate()); // it runs a listener, but a group command acked there would be lost
 
         _store.TryAcquire(RealmAuthorityScopes.Social, "node-a", Guid.NewGuid(), Hour, DateTimeOffset.UtcNow);
         PeerHolder social = Assert.IsType<PeerHolder>(locator.Locate());
         Assert.Equal("node-a", social.NodeId);
+        Assert.Equal("10.0.0.1", social.Host);
+        Assert.Equal(8097, social.Port);
         Assert.Equal(RealmAuthorityScopes.Social, social.Scope);
     }
 
