@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Spells;
 /// <summary>
 /// The condition of one <c>spell_script_target</c> row (vmangos <c>conditionId</c>, SpellMgr.cpp:2068), in the self-contained form the content
 /// importer writes to <c>spell_script_target.TargetCondition</c>. Condition ids are per database, and the vmangos condition types that rows use
-/// (HEALTH_PERCENT 41, SOURCE_ENTRY 16, OBJECT_IS_SPAWNED 48, OBJECT_LOOT_STATE 49, OBJECT_GO_STATE 55; vmangos Conditions.h:101, 195, 217,
+/// (SOURCE_ENTRY 16, HEALTH_PERCENT 41, OBJECT_IS_SPAWNED 48, OBJECT_LOOT_STATE 49, OBJECT_GO_STATE 55; vmangos Conditions.h:101, 195, 217,
 /// 219, 248) are not the cmangos numbers of <c>ConditionType</c> (cmangos marks 16 and 41 unused), so the importer translates the vmangos
 /// condition tree into this text and no condition id is stored. The text is a list of terms joined by <c>;</c>, all of which must hold (the
 /// vmangos CONDITION_AND of the rows, flattened). A term is <c>[!]name[:value]...</c>, <c>!</c> being CONDITION_FLAG_REVERSE_RESULT:
@@ -19,7 +19,7 @@ namespace ArcaneCore.Game.Spells;
 /// <item><c>loot:state</c> - the candidate game object's <see cref="GameObjectLootState"/> (Conditions.cpp:558-561).</item>
 /// <item><c>gostate:state</c> - the candidate game object's <see cref="GameObjectState"/> (Conditions.cpp:615-618).</item>
 /// </list>
-/// As in vmangos (ConditionEntry::Meets, Conditions.cpp:109-130) a term whose candidate has the wrong kind (a unit check on a game object, or the
+/// As in vmangos (ConditionEntry::Meets, Conditions.cpp:119-141) a term whose candidate has the wrong kind (a unit check on a game object, or the
 /// reverse) is false, and the reverse flag does not turn that into true. A text this class cannot read holds for no candidate. Immutable; safe from any thread.
 /// </summary>
 public sealed class ScriptTargetCondition
