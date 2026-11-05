@@ -224,7 +224,7 @@ database file (`SqliteWriteGate`, an async FIFO semaphore keyed on the full path
 The gate does not shorten a slow holder: a transaction held for 3 s by the application still makes everyone wait 3 s
 (`SlowTransactionInterceptor` names those holders). It removes the failures that came from unfair polling, and the wasted sleeps.
 The two worst holders on live, `EfManagedPlayerbotStore.UpdateManyAsync` (a LINQ `ExecuteUpdate` per row) and
-`EfCreatureRespawnStore.SaveAsync` (tracked read, then `SaveChanges`), now run one raw statement per row on SQLite (`SqliteRowCommand`: SQL
+`EfRespawnStore.SaveAsync` (the shared body of the creature and game object respawn stores; tracked read, then `SaveChanges`), now run one raw statement per row on SQLite (`SqliteRowCommand`: SQL
 built once from the EF model, values bound through EF's type mappings, still on the EF pipeline so every interceptor sees it), so the lock
 covers the statements rather than EF's per-row query work.
 Another process on the same file (the realm daemon on a shared auth file, a DB tool) still meets SQLite's lock as before.

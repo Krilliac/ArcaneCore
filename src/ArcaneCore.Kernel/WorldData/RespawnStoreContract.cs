@@ -30,7 +30,7 @@ public interface IRespawnKey<TSelf> where TSelf : struct, IRespawnKey<TSelf>
 }
 
 /// <summary>
-/// Durable respawn times (the characters database). Used by one writer at a time (the world's respawn queue); callers never await it from the
+/// Durable respawn times (the characters database). Used by one writer at a time (the world's respawn queue, <c>RespawnWriteQueue</c> in the World project: the place to edit queueing, batching and retries; <c>EfRespawnStore</c> in the Data project is the place to edit the SQL); callers never await it from the
 /// world thread. The creature and game object stores add nothing to this contract.
 /// </summary>
 public interface IRespawnStore<TRecord, TKey>
@@ -44,8 +44,10 @@ public interface IRespawnStore<TRecord, TKey>
     Task<IReadOnlyList<TRecord>> LoadAsync(long nowUnixSeconds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Apply <paramref name="upserts"/> (insert or replace by key) and <paramref name="deletes"/> in one transaction. A key in both is
-    /// deleted. The replace semantics are the store's own upsert, not provider SQL (<c>REPLACE INTO</c> does not exist on PostgreSQL).
+    /// Apply <paramref name="upserts"/> (insert or replace by key) and <paramref name="deletes"/>. A key in both is deleted. The call is NOT one
+    /// transaction: <c>EfRespawnStore</c> commits per chunk (500 keys of one instance; the deletes first, then the upserts), so a failure part-way leaves the
+    /// earlier chunks committed. That is safe because every entry is an absolute value or a delete: the caller retries the whole call and the repeat changes
+    /// nothing already written. The replace semantics are the store's own upsert, not provider SQL (<c>REPLACE INTO</c> does not exist on PostgreSQL).
     /// </summary>
     Task SaveAsync(IReadOnlyCollection<TRecord> upserts, IReadOnlyCollection<TKey> deletes, CancellationToken cancellationToken = default);
 

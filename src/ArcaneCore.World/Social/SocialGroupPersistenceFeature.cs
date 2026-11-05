@@ -129,7 +129,10 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         await Writes.StopAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Compare and write now (tests; the world tick does it once per second).</summary>
+    /// <summary>
+    /// Compare and write now: the world tick does it once per second, and a handoff's freeze (<see cref="Cluster.Handoff.LocalWorldHandoffSource"/>) does it on the simulation thread as it parks, so a group change
+    /// made in the last second before the freeze is queued, and then drained by the flush, instead of being in no queue at all. World thread only (tests use it through the world thread too).
+    /// </summary>
     public void SyncNow() => Sync();
 
     private void OnUpdated(uint diffMs)

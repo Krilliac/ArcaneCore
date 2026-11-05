@@ -5,6 +5,8 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Social;
+using ArcaneCore.World.WorldState;
 
 namespace ArcaneCore.World.Cluster.Handoff;
 
@@ -27,7 +29,10 @@ public sealed class LocalWorldHandoffSource(
     WorkerAdmission admission,
     WorldWriterGuard writerGuard,
     CharacterPersistenceBarrier? barrier = null,
-    CharacterRetirementRegistry? retirement = null) : IWorldHandoffSource, IDisposable
+    CharacterRetirementRegistry? retirement = null,
+    SocialGroupPersistenceFeature? groups = null,
+    WarEffortFeature? warEffort = null,
+    ScourgeInvasionFeature? scourgeInvasion = null) : IWorldHandoffSource, IDisposable
 {
     /// <summary>The admission closed reason while A drains.</summary>
     public const string DrainingReason = "draining";
@@ -103,6 +108,17 @@ public sealed class LocalWorldHandoffSource(
             frozen = _frozen ?? throw new InvalidOperationException("the source world is not frozen; nothing to flush");
         IReadOnlyList<Task> saves = await frozen.WaitAsync(cancellationToken).ConfigureAwait(false);
         await Task.WhenAll(saves).WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // The groups were compared with what the feature last wrote when the simulation parked (Park), so a change of the last second before the freeze is queued by now. The barrier's shared flush
+        // drains that queue; without a barrier nothing else asks it, so it is asked here. A lease refusal (a non-holder of the Social lease) is not checked.
+        if (barrier is null && groups?.Writes is { } groupWrites)
+            await groupWrites.RetryRetainedAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        // The same for the war effort and Scourge invasion stores, which the barrier's shared flush covers when there is one.
+        if (barrier is null && warEffort is not null)
+            await warEffort.FlushStateWritesAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (barrier is null && scourgeInvasion is not null)
+            await scourgeInvasion.FlushStateWritesAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
 
         // Then every other per-character queue and settlement (explored zones, rest, quests, taxi, honor, ...): what B will read must be durable.
         if (barrier is not null)
@@ -208,7 +224,7 @@ public sealed class LocalWorldHandoffSource(
         // The takeover moved the one ownership scope every write of this process runs under, so it holds no character any more, frozen, offline or never heard of. Every character, instance
         // and social write queue drops its writes silently and counts them, keys of no character included (the shared registry, consulted before a write is enqueued and again before it runs),
         // and the save queue drops its waiting and retained snapshots and skips later ones (one informational line), instead of attempting writes the fence must refuse. The flush left nothing
-        // open there, so a drop here is a write that came after it. Queues with no fence handling (pets, groups, GM audit, accounts, respawns) keep what the fence refuses and name it at stop.
+        // open there, so a drop here is a write that came after it. Queues with no fence handling (pets, groups, GM audit, accounts, respawns, and the state-save queues of Silithyst, Fishing Extravaganza, Elemental Invasion and Nightmare Dragons) keep what the fence refuses; the keyed and respawn queues name it at stop, the state-save queues only log it. The war effort and Scourge invasion stores have no fence handling either.
         retirement?.RetireAll();
         saveQueue.RetireEveryCharacter();
         return Task.CompletedTask;
@@ -255,6 +271,13 @@ public sealed class LocalWorldHandoffSource(
                         _heldHere.Add(state.Id);
                 }
             }
+
+            // Groups are written from a once-a-second comparison on this thread, so a change made since the last one is in no queue; queue it now, while the group table is quiet, for the flush to drain.
+            groups?.SyncNow();
+
+            // The war effort and Scourge invasion queue their writes in memory on this thread; copy them while it is quiet, for the flush (through the barrier's shared flush) to write.
+            warEffort?.CaptureForHandoff();
+            scourgeInvasion?.CaptureForHandoff();
         }
         catch (Exception ex)
         {

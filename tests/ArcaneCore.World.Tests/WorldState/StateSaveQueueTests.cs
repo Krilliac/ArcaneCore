@@ -126,6 +126,52 @@ public sealed class StateSaveQueueTests
         Assert.Equal([11], saved);
     }
 
+    /// <summary>
+    /// Save of a key drops that key's retained (failed) older value at once, not only when the newer value lands: while the newer value is still being written, the key is not reported as retained,
+    /// and a retry started then must not write the older failed value over it. Without the removal in Save the key stays in RetainedKeys for as long as the write is stuck.
+    /// </summary>
+    [Fact]
+    public async Task SaveOfARetainedKey_DropsTheRetainedValueAtOnce_WhileTheNewerWriteIsStillInFlight()
+    {
+        using var gate = new ManualResetEventSlim(false);
+        using var entered = new ManualResetEventSlim(false);
+        bool down = true;
+        bool blocking = false;
+        var saved = new List<int>();
+        var queue = new StateSaveQueue<int, int>(value =>
+        {
+            if (Volatile.Read(ref down)) throw new InvalidOperationException("database is locked");
+            if (Volatile.Read(ref blocking))
+            {
+                entered.Set();
+                gate.Wait();
+            }
+
+            lock (saved) saved.Add(value);
+            return Task.CompletedTask;
+        }, NullLogger.Instance, "test");
+        queue.Save(1, 10);
+        await queue.FlushAsync();
+        Assert.Equal([1], queue.RetainedKeys);
+
+        Volatile.Write(ref down, false);
+        Volatile.Write(ref blocking, true);
+        queue.Save(1, 11);
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(30)), "the newer write never reached the store");
+            Assert.Empty(queue.RetainedKeys); // the newer value is owed now; the failed older one is gone while this write is still stuck
+        }
+        finally
+        {
+            gate.Set(); // release the stuck store whatever the assertions said, so the drain cannot leak
+        }
+
+        await queue.RetryRetainedAsync();
+        Assert.Empty(queue.RetainedKeys);
+        Assert.Equal([11], saved);
+    }
+
     private sealed class FailableFishingStore : IFishingExtravaganzaStore
     {
         public volatile bool Down = true;
