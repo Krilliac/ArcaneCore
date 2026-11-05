@@ -15,6 +15,9 @@ public sealed class PlayerbotCityOptions
     /// <summary>The longest <see cref="MaxTripYards"/> accepted.</summary>
     public const float MaxTripYardsCeiling = 100_000f;
 
+    /// <summary>The highest <see cref="MinGoldForAuctionTrip"/> accepted (copper).</summary>
+    public const int MaxMinGoldForAuctionTrip = 2_000_000_000;
+
     /// <summary>The highest <see cref="MinLevel"/> accepted (the 1.12 level cap).</summary>
     public const int MaxMinLevel = 60;
 
@@ -56,20 +59,13 @@ public sealed class PlayerbotCityOptions
     /// <summary>The most trips that start for one capital in a minute (1..600), so a restart or a level-up wave does not send the whole population at once.</summary>
     public int MaxStartsPerMinute { get; set; } = 4;
 
-    /// <summary>
-    /// Path of the client's WMOAreaTable.dbc (build 5875), which tells which city a position inside a big city model is in: the terrain files say
-    /// Dun Morogh for Ironforge and Tirisfal Glades for Undercity. Needs the vmaps (World:Collision). Empty: ClientData:DbcDirectory supplies it; without
-    /// it those two cities are not found and bots make no trips to them. Read once when the catalog is built; a change needs a restart.
-    /// </summary>
-    public string WmoAreaTableDbcPath { get; set; } = string.Empty;
-
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":City";
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
-        if (MinGoldForAuctionTrip is < 0)
-            throw new InvalidOperationException($"{section}: MinGoldForAuctionTrip must be 0 or more.");
+        if (MinGoldForAuctionTrip is < 0 or > MaxMinGoldForAuctionTrip)
+            throw new InvalidOperationException($"{section}: MinGoldForAuctionTrip must be 0..{MaxMinGoldForAuctionTrip}.");
         if (!float.IsFinite(MaxTripYards) || MaxTripYards <= 0f || MaxTripYards > MaxTripYardsCeiling)
             throw new InvalidOperationException($"{section}: MaxTripYards must be above 0 and at most {MaxTripYardsCeiling}.");
         if (MinLevel is < 1 or > MaxMinLevel)

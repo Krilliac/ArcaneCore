@@ -57,7 +57,6 @@ public static class ClientDbcConsumers
         new("World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath", "GameObjectDisplayInfo.dbc", ".debug vis marker model check", "marker models are not checked against the client"),
         new("World:Chat:ChatChannelsDbcPath", "ChatChannels.dbc", "built-in chat channels", "the six transcribed 1.12.1 channels (English names only)"),
         new("World:Chat:EmotesDbcPath", "Emotes.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
-        new("World:Playerbots:City:WmoAreaTableDbcPath", "WMOAreaTable.dbc", "bot trips to Ironforge and Undercity (also needs the vmaps)", "those two cities are not found"),
         new("World:Chat:EmotesTextDbcPath", "EmotesText.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
         new("World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath", "WorldMapArea.dbc", "bot defense call coordinates", "calls name the place without map coordinates"),
     ];

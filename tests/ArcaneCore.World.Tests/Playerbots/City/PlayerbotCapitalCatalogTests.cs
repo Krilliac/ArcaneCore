@@ -1,7 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
-using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Npc;
@@ -14,9 +13,9 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.City;
 
 /// <summary>
-/// The capital catalog derived from content (<see cref="PlayerbotCapitalCatalog"/>), the WMO area rows of the locator
-/// (<see cref="WmoAreaMap"/>), the city options and the trip limiter (<see cref="PlayerbotCityLimiter"/>). The trip goals, bank and
-/// hearthstone arrive with the capital goals lane. Unproven until the integration gate.
+/// The capital catalog derived from content (<see cref="PlayerbotCapitalCatalog"/>), the city options and the trip limiter
+/// (<see cref="PlayerbotCityLimiter"/>). The locator is in <c>PlayerbotCapitalLocatorTests</c>, the holder in <c>PlayerbotCapitalsTests</c>. The
+/// trip goals, bank and hearthstone arrive with the capital goals lane. Unproven until the integration gate.
 /// </summary>
 public sealed class PlayerbotCapitalCatalogTests
 {
@@ -152,21 +151,6 @@ public sealed class PlayerbotCapitalCatalogTests
         Assert.Throws<OperationCanceledException>(() => PlayerbotCapitalCatalog.Build(areas, content, objects, Factions(), locate, cancel.Token));
     }
 
-    // --- the WMO area rows -------------------------------------------------------------------------------------------
-
-    [Fact]
-    public void WmoAreaMap_FindsTheExactTriple_ElseTheSameRootAndGroupUnderAnyNameSet_ElseZero()
-    {
-        WmoAreaMap map = WmoAreaMap.Of([(100, 0, 5, 1537u), (100, 2, 5, 1538u), (200, 0, 1, 0u)]);
-        Assert.Equal(2, map.Count);
-        Assert.Equal(1537u, map.AreaOf(new ModelAreaInfo(0, 0, 100, 5, 0f)));
-        Assert.Equal(1538u, map.AreaOf(new ModelAreaInfo(0, 2, 100, 5, 0f)));
-        Assert.Equal(1537u, map.AreaOf(new ModelAreaInfo(0, 9, 100, 5, 0f)));   // loose: the first name set seen for the root and group
-        Assert.Equal(0u, map.AreaOf(new ModelAreaInfo(0, 0, 100, 6, 0f)));
-        Assert.Equal(0u, map.AreaOf(new ModelAreaInfo(0, 0, 200, 1, 0f)));      // a row without an area is not kept
-        Assert.Equal(0, WmoAreaMap.Empty.Count);
-    }
-
     // --- options ---------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -182,6 +166,7 @@ public sealed class PlayerbotCapitalCatalogTests
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MaxTripYards = 0 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MaxTripYards = float.NaN }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MinGoldForAuctionTrip = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MinGoldForAuctionTrip = int.MaxValue }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MinLevel = 61 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MaxTripsPerCapital = 0 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotCityOptions { MaxStartsPerMinute = 601 }.Validate());
@@ -215,6 +200,47 @@ public sealed class PlayerbotCapitalCatalogTests
         Assert.True(limiter.TryAcquire(a, 1519, 0, city));
         Assert.True(limiter.TryAcquire(a, 1519, 10, city));
         Assert.Equal(1, limiter.ActiveTrips(1519));
+    }
+
+    [Fact]
+    public void Limiter_AHolderAskingAgain_KeepsItsSlot_AndConsumesNoStart_EvenAtTheStartCap()
+    {
+        var limiter = new PlayerbotCityLimiter();
+        var city = new PlayerbotCityOptions { MaxTripsPerCapital = 1, MaxStartsPerMinute = 1 };
+        object a = new(), b = new();
+        Assert.True(limiter.TryAcquire(a, 1519, 0, city));
+        Assert.True(limiter.TryAcquire(a, 1519, 10, city));   // already held: true, nothing taken
+        Assert.Equal(1, limiter.ActiveTrips(1519));
+        Assert.False(limiter.TryAcquire(b, 1519, 20, city));  // the slot is still a's
+        limiter.Release(a);
+        Assert.False(limiter.TryAcquire(b, 1519, 30, city));  // the re-ask used no start: the one start of the minute is the first
+        Assert.True(limiter.TryAcquire(b, 1519, 60_000, city));
+    }
+
+    [Fact]
+    public void Limiter_ARefusedMoveToAnotherCapital_LeavesTheSlotHeldInTheFirst()
+    {
+        var limiter = new PlayerbotCityLimiter();
+        var city = new PlayerbotCityOptions { MaxTripsPerCapital = 1, MaxStartsPerMinute = 600 };
+        object a = new(), b = new();
+        Assert.True(limiter.TryAcquire(a, 1519, 0, city));
+        Assert.True(limiter.TryAcquire(b, 1637, 1, city));
+        Assert.False(limiter.TryAcquire(a, 1637, 2, city));   // 1637 is full
+        Assert.Equal(1, limiter.ActiveTrips(1519));            // a still holds its slot in 1519
+        Assert.Equal(1, limiter.ActiveTrips(1637));
+        Assert.True(limiter.TryAcquire(a, 1519, 3, city));
+    }
+
+    [Fact]
+    public void Limiter_AMoveToAnotherCapital_MovesTheSlot()
+    {
+        var limiter = new PlayerbotCityLimiter();
+        var city = new PlayerbotCityOptions { MaxTripsPerCapital = 1, MaxStartsPerMinute = 600 };
+        object a = new();
+        Assert.True(limiter.TryAcquire(a, 1519, 0, city));
+        Assert.True(limiter.TryAcquire(a, 1637, 1, city));
+        Assert.Equal(0, limiter.ActiveTrips(1519));
+        Assert.Equal(1, limiter.ActiveTrips(1637));
     }
 
     [Fact]

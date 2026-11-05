@@ -235,9 +235,17 @@ public sealed class TerrainInfo
             return false;
         }
 
-        float terrain = GetTile(x, y).GetHeight(x, y);
-        return !(z + 2.0f > terrain && terrain > group.GroundZ);
+        return WmoGroupCounts(z, GetTile(x, y).GetHeight(x, y), group.GroundZ);
     }
+
+    /// <summary>
+    /// The terrain test of <see cref="TryGetWmoGroup"/> (vmangos <c>TerrainInfo::GetAreaInfo</c>, GridMap.cpp:892-912), shared with the
+    /// background capital locator that has no world-thread tile cache: whether a group found from <paramref name="raisedZ"/> (the position's
+    /// height plus 1 yard) counts, false when terrain rises to the point (above the group's floor and no more than 2 yards over the raised point).
+    /// Pure; any thread.
+    /// </summary>
+    public static bool WmoGroupCounts(float raisedZ, float terrainHeight, float groupGroundZ)
+        => !(raisedZ + 2.0f > terrainHeight && terrainHeight > groupGroundZ);
 
     /// <summary>The zone and area at a position (vmangos <c>TerrainInfo::GetZoneAndAreaId</c>).</summary>
     public (uint ZoneId, uint AreaId) GetZoneAndAreaId(float x, float y, float z)

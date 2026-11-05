@@ -37,7 +37,9 @@ internal sealed class PlayerbotCityLimiter
             if (unchecked(now - at) > TripCapMs) _expired.Add(key);
         foreach (object key in _expired) _active.Remove(key);
 
-        _active.Remove(holder);
+        // A holder asking again for the capital it already holds keeps its slot: no second slot, no start consumed, expiry unchanged.
+        if (_active.TryGetValue(holder, out (uint Zone, uint At) held) && held.Zone == zoneId) return true;
+        // State changes only once both caps pass, so a refused move to another capital leaves the slot held in the first one.
         if (ActiveTrips(zoneId) >= city.MaxTripsPerCapital) return false;
         if (!_starts.TryGetValue(zoneId, out Queue<uint>? starts)) _starts[zoneId] = starts = new Queue<uint>();
         while (starts.Count > 0 && unchecked(now - starts.Peek()) >= WindowMs) starts.Dequeue();

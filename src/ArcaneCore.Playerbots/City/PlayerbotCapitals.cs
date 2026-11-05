@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -31,7 +32,7 @@ internal sealed class PlayerbotCapitals
 {
     private static readonly ConditionalWeakTable<WorldRuntime, PlayerbotCapitals> Attached = new();
 
-    private sealed record Sources(CreatureContent Creatures, int Version, AreaTable Areas, GameObjectContent? Objects, FactionTemplateCatalog? Factions)
+    internal sealed record Sources(CreatureContent Creatures, int Version, AreaTable Areas, GameObjectContent? Objects, FactionTemplateCatalog? Factions)
     {
         internal bool Same(CreatureContent creatures, AreaTable areas, GameObjectContent? objects, FactionTemplateCatalog? factions)
             => ReferenceEquals(Creatures, creatures) && Version == creatures.DefinitionsVersion && ReferenceEquals(Areas, areas)
@@ -54,6 +55,9 @@ internal sealed class PlayerbotCapitals
     /// (the WMO group the position is inside, else the terrain's area flag; (0, 0) without terrain data). Called on the building thread.
     /// </summary>
     internal Func<uint, float, float, float, (uint ZoneId, uint AreaId)>? Locator { get; set; }
+
+    /// <summary>The catalog taken from the last finished build, or null (tests).</summary>
+    internal PlayerbotCapitalCatalog? Built => _catalog;
 
     /// <summary>Whether a build is running (tests).</summary>
     internal bool Building => _building is not null;
@@ -78,16 +82,18 @@ internal sealed class PlayerbotCapitals
         _sources = sources;
         if (Locator is null && !maps.Terrain.Enabled) return _catalog;
         string? vmaps = session.Services.GetService<CollisionFeature>()?.Options.ResolveVMapDirectory(session.World.Options.Maps.DataDirectory);
-        Start(session, sources, maps.Terrain, vmaps, city.WmoAreaTableDbcPath);
+        Start(session.World, session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotCapitals>(), sources, maps.Terrain, vmaps);
         return _catalog;
     }
 
-    private void Start(WorldSession session, Sources sources, TerrainManager terrain, string? vmapDirectory, string wmoAreaTablePath)
+    /// <summary>
+    /// Start a build on a pool thread and post its result to <paramref name="world"/>; a build started later supersedes this one (its result is
+    /// discarded when it arrives). World thread (the seam tests call too).
+    /// </summary>
+    internal void Start(WorldRuntime world, ILogger? logger, Sources sources, TerrainManager terrain, string? vmapDirectory)
     {
         var token = new object();
         _building = token;
-        WorldRuntime world = session.World;
-        ILogger? logger = session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotCapitals>();
         Func<uint, float, float, float, (uint ZoneId, uint AreaId)>? custom = Locator;
         _ = Task.Run(() =>
         {
@@ -99,7 +105,7 @@ internal sealed class PlayerbotCapitals
                 if (custom is not null) locate = custom;
                 else
                 {
-                    var locator = PlayerbotCapitalLocator.Create(terrain, sources.Areas, vmapDirectory, wmoAreaTablePath, logger);
+                    var locator = PlayerbotCapitalLocator.Create(terrain, sources.Areas, vmapDirectory, logger);
                     wmoAreas = locator.HasWmoAreas;
                     locate = locator.Locate;
                 }
@@ -108,7 +114,7 @@ internal sealed class PlayerbotCapitals
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger?.LogWarning(ex, "Playerbot capital catalog: the build failed; bots make no capital city trips until the content changes");
+                logger?.LogFault("playerbot.capital-catalog", ex, "Playerbot capital catalog: the build failed; bots make no capital city trips until the content changes");
             }
 
             world.Post(() =>
@@ -120,7 +126,7 @@ internal sealed class PlayerbotCapitals
                 logger?.LogInformation("Playerbot capital catalog: {Capitals} capital cities ({Names}), {Spawns} service spawns",
                     built.Capitals.Count, string.Join(", ", built.Capitals.Select(c => c.Name)), built.Capitals.Sum(c => c.Spawns.Count));
                 if (!wmoAreas)
-                    logger?.LogWarning("Playerbot capital catalog: no WMO area data (vmaps with World:Collision and World:Playerbots:City:WmoAreaTableDbcPath, or ClientData:DbcDirectory), so cities built as one model (Ironforge, Undercity) are not found; "
+                    logger?.LogWarning("Playerbot capital catalog: no WMO area data (vmaps with World:Collision, and wmo_area_template rows in the world database), so cities built as one model (Ironforge, Undercity) are not found; "
                         + "found: {Names}", string.Join(", ", built.Capitals.Select(c => c.Name)));
             });
         });

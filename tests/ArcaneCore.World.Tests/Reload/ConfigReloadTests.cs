@@ -1289,8 +1289,8 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Economy)}:{property.Name}");
         }
 
-        // The capital city trips section is live key by key (docs/areas/playbots-city.md); the WMOAreaTable path is read once at the catalog build.
-        foreach (PropertyInfo property in typeof(PlayerbotCityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true } && !p.Name.EndsWith("DbcPath", StringComparison.Ordinal)))
+        // The capital city trips section is live key by key (docs/areas/playbots-city.md).
+        foreach (PropertyInfo property in typeof(PlayerbotCityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.City)}:{property.Name}");
         }

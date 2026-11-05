@@ -8,7 +8,7 @@ Code: `src/ArcaneCore.Playerbots/City/`, options in `src/ArcaneCore.World.Contra
 **State of this change.** This page covers the foundation that has landed: the capital catalog, the locator it is built with, the trip
 limiter and the options. The trip goal, the itinerary stages (vendor, auction house, bank, innkeeper), the hearthstone leg and the brain
 wiring land with the capital goals lane; the bank and hearthstone code that already exists on the base (`PlayerbotBank`,
-`PlayerbotHearthstone`, `Economy:BankDeposit`, `Economy:BuyBankSlots`) is reused there, so `City` has no bank keys of its own.
+`PlayerbotHearthstone`, `World:Playerbots:Economy:BankDeposit`, `World:Playerbots:Economy:BuyBankSlots`) is reused there, so `City` has no bank keys of its own.
 
 ## The capital catalog (`PlayerbotCapitalCatalog`, `PlayerbotCapitals`)
 
@@ -27,17 +27,19 @@ game objects or faction templates change. Until it is in, and when the world has
 start. No think scans spawns: the catalog is immutable and shared by every bot. Which individual NPC a bot may use is still decided by
 the live reaction rules and the interaction checks of the handlers.
 
-## The locator (`PlayerbotCapitalLocator`, `WmoAreaMap`)
+## The locator (`PlayerbotCapitalLocator`)
 
 Ironforge and Undercity are built as one big model: the terrain's area flags there say Dun Morogh and Tirisfal Glades, and only the WMO
 group a position stands in says which city it is (vmangos `TerrainInfo::GetZoneAndAreaId` with vmaps). The locator therefore asks, for
-a position, first the vmaps (`VMapManager.TryGetAreaInfo`, through a private manager, never the world's) for the WMO group, maps
-(root id, name set, group id) to an AreaTable id with the client's `WMOAreaTable.dbc` (20 four-byte fields; the same root and group under
-any name set is the fallback), and otherwise falls back to the terrain's area flag. Terrain tiles are read once each through
-`TerrainManager.ReadTileDetached` (pooled read, no tile cache) and kept in a 24 tile cache; vmap tiles in a window of 6. Without vmaps or
-the DBC the answer is terrain only and a warning is logged: those two cities are not found. The DBC path is
-`World:Playerbots:City:WmoAreaTableDbcPath`, or `ClientData:DbcDirectory` supplies it; it is read once at the build (a change needs a
-restart).
+a position, first the vmaps (`ILineOfSight.TryGetAreaInfo`, through a private `VMapManager`, never the world's) for the WMO group,
+found from 1 yard above the position and rejected when terrain rises to the point (`TerrainInfo.WmoGroupCounts`, the predicate
+`TerrainInfo.TryGetWmoGroup` uses: a spawn on the ground over a building is not in it), maps (root id, name set, group id) to an AreaTable
+id with the world's `TerrainManager.WmoAreas` (`wmo_area_template`, the client's `WMOAreaTable.dbc`; the retail rules: exact key, no
+fallback, the first row of a triple wins and a row with area 0 still shadows the second), and otherwise falls back to the terrain's area
+flag. A tile without terrain data answers (0, 0) unless a WMO group is found. Terrain tiles are read once each through
+`TerrainManager.ReadTileDetached` (pooled read, no tile cache; a missing tile is `TerrainTile.Empty`, unknown) and kept in a 24 tile
+cache; vmap tiles in a window of 6. Without vmaps or `wmo_area_template` rows the answer is terrain only and a warning is logged: those
+two cities are not found. It has no key of its own: the rows come from the world database (`docs/areas/content-import.md`).
 
 ## The limiter (`PlayerbotCityLimiter`)
 
@@ -49,24 +51,26 @@ wrap-safe.
 
 ## Configuration (`World:Playerbots:City`)
 
-Every key except `WmoAreaTableDbcPath` is live through `.reload config`.
+Every key is live through `.reload config`.
 
 | Key | Default | |
 |---|---|---|
 | `Enabled` | true | off: no trip starts |
 | `VisitIntervalMinutes` | 90 | 1..10080; the periodic trip |
-| `MinGoldForAuctionTrip` | 50000 | copper |
+| `MinGoldForAuctionTrip` | 50000 | copper, 0..2000000000 |
 | `BindInCapital` | **false** | make the capital's inn the bot's home on a trip |
 | `MaxTripYards` | 6000 | straight line on the bot's map |
 | `MinLevel` | 10 | 1..60 |
 | `MaxTripsPerCapital` | 6 | 1..1000, trips under way to one capital |
 | `MaxStartsPerMinute` | 4 | 1..600, starts for one capital per minute |
-| `WmoAreaTableDbcPath` | empty | not live; see the locator |
 
 **Why `BindInCapital` is off.** Players bind where they quest. A bot bound in a capital that stalls or is stranded is teleported to its
 bind point where nothing of its level lives. Turn it on when you want the hearthstone to lead to the services.
 
 ## Tests
 
-`tests/ArcaneCore.World.Tests/Playerbots/City/PlayerbotCapitalCatalogTests.cs`: catalog derivation, friendly teams, the locator
-signature and cancellation, the WMO area rows, option validation and the limiter (caps, release, expiry, per-minute window, clock wrap).
+`tests/ArcaneCore.World.Tests/Playerbots/City/PlayerbotCapitalCatalogTests.cs`: catalog derivation, friendly teams, cancellation, option
+validation and the limiter (caps, release, expiry, per-minute window, clock wrap, a holder asking again). `PlayerbotCapitalLocatorTests.cs`:
+`Locate` over a synthetic terrain tile and a fake model service (terrain only, a missing tile, a WMO group over terrain, the terrain
+rejection, no area row, window eviction). `PlayerbotCapitalsTests.cs`: the background build, the post back, and a stale build's discard.
+All unproven until the integration gate.

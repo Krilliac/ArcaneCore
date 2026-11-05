@@ -203,31 +203,18 @@ public sealed class TerrainManager
     public (uint ZoneId, uint AreaId) ReadZoneAndAreaIdDetached(uint mapId, float x, float y, AreaTable areas)
     {
         ArgumentNullException.ThrowIfNull(areas);
-        if (TerrainTile.TileOf(x, y) is not { } tile || ReadTileDetached(mapId, tile.X, tile.Y) is not { } read)
+        if (_mapsDirectory is null || TerrainTile.TileOf(x, y) is not { } tile)
         {
             return (0, 0);
         }
 
-        return areas.GetZoneAndAreaId(read.GetAreaFlag(x, y), mapId);
-    }
-
-    /// <summary>
-    /// A tile's <c>.map</c> file parsed without the tile cache, so a background reader that asks many positions of one tile (a capital
-    /// catalog build) reads the file once: null without terrain data, for a missing file or an unreadable one. Thread affinity: any thread
-    /// (it reads only the data directory, fixed at construction); one pooled file read per call.
-    /// </summary>
-    public TerrainTile? ReadTileDetached(uint mapId, int tileX, int tileY)
-    {
-        if (_mapsDirectory is null)
-        {
-            return null;
-        }
-
-        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tile.X, tile.Y));
         try
         {
             // Pooled read (a float-height tile is over 85 KB, so a fresh array per call was a large object heap allocation, issue #1491).
-            return PooledFileReader.TryParse<TerrainTile>(path, ParseTile, out TerrainTile? read) ? read : null;
+            return PooledFileReader.TryParse<TerrainTile>(path, ParseTile, out TerrainTile? read)
+                ? areas.GetZoneAndAreaId(read.GetAreaFlag(x, y), mapId)
+                : (0, 0);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -237,7 +224,7 @@ public sealed class TerrainManager
                 AnomalyLedger.Shared.Report("terrain", "tile-corrupt", $"map {mapId}", ex.Message);
             }
             _logger.LogFault("terrain-area-lookup", ex, "Terrain: could not read {Path}", path);
-            return null;
+            return (0, 0);
         }
     }
 
