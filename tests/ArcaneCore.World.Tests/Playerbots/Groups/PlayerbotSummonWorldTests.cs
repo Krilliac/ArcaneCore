@@ -5,11 +5,13 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Groups;
 using ArcaneCore.World.Spells;
@@ -24,7 +26,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 /// <summary>
 /// Bots summon far group members (docs/areas/playbots-groups.md, Summons): a warlock bot casts Ritual of Summoning, group bots click the portal, the
 /// member accepts (a bot with CMSG_SUMMON_RESPONSE, a real player on his own client); with no warlock, two bots at a dungeon meeting stone summon
-/// through it (non-vanilla). Runs on the manual clock of <see cref="GroupTestWorld"/>; the bots hold their ground with a scenario stay.
+/// through it (non-vanilla). Runs on the manual clock of <see cref="GroupTestWorld"/>; the bots hold their ground with a scenario stay and the party leash in stay mode.
 /// </summary>
 public sealed class PlayerbotSummonWorldTests
 {
@@ -269,6 +271,34 @@ public sealed class PlayerbotSummonWorldTests
 
         // After the gap it may try again.
         Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync());
+    }
+
+    [Fact]
+    public async Task StoppingARitual_EndsTheChannel_EvenWhenTheTicksActionBudgetIsSpent()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Summonlocke", Warlock, Camp, ritual: true, shards: 3);
+        var helperOne = await BotAsync(world, "Summonhelpk", Warrior, Camp + new Vector3(4f, 4f, 0f));
+        var helperTwo = await BotAsync(world, "Summonhelpl", Warrior, Camp + new Vector3(-4f, 4f, 0f));
+        await using WorldTestClient player = await world.World.EnterWorldAsync("SUMMONBUDGET", "Summonbudget", AccountSecurity.Player);
+        await GroupAsync(world, "Summonbudget", warlock, helperOne, helperTwo);
+        await PlaceRealAsync(world, "Summonbudget", FarCamp);
+
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+        Func<SpellCastState?> state = () => spells.GetState(world.Player(warlock.Id).Guid)?.CurrentCast is { } cast && cast.Spell.Id == RitualSpell ? cast.State : null;
+        Assert.True(await world.RunUntilAsync(180_000, () => state() == SpellCastState.Casting), await world.TraceAsync());
+
+        // The think that ends a summon may have nothing left of the tick's shared budget; the channel must still end, or the warlock stays "casting" and cannot summon again.
+        SpellCastState? after = await world.OnWorldAsync(() =>
+        {
+            WorldSession session = world.Session(warlock.Id);
+            ManagedActionBudget? saved = session.ManagedBudget;
+            session.ManagedBudget = new ManagedActionBudget(0);
+            try { PlayerbotSummons.StopRitual(session, world.Player(warlock.Id), RitualSpell); }
+            finally { session.ManagedBudget = saved; }
+            return state();
+        });
+        Assert.NotEqual(SpellCastState.Casting, after);
     }
 
     [Fact]
