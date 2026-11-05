@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots.Progression;
@@ -6,7 +7,8 @@ using ArcaneCore.World.Bots.Progression;
 namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
-/// How the economy bot values an item for its own slots: what wearing a new item of a template would gain over the worse slot it fits (null
+/// How the economy bot values its own slots: what is worn in a slot now (<see cref="WornScore"/>, which ranks the slots the house is searched
+/// for), and what wearing a new item of a template would gain over the worse slot it fits (null
 /// when the bot cannot use it). The default is the progression scorer (<c>PlayerbotItemScore.UpgradeGain</c> under the bot's talent build
 /// weights, the same score <see cref="PlayerbotEquipment"/> equips by, so a bought item is worn once collected).
 /// <para>
@@ -27,6 +29,55 @@ internal static class PlayerbotGearScoreSeam
         ArgumentNullException.ThrowIfNull(template);
         PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
         return PlayerbotItemScore.UpgradeGain(player, template, weights);
+    }
+
+    /// <summary>The worn-slot scorer in use (world thread; tests replace it and restore it).</summary>
+    internal static Func<Player, byte, float> WornScore { get; set; } = DefaultWornScore;
+
+    /// <summary>The progression score of what is worn in <paramref name="slot"/> (0 when empty) under the bot's own talent build weights.</summary>
+    internal static float DefaultWornScore(Player player, byte slot)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return PlayerbotItemScore.WornScore(player, slot, PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights, null);
+    }
+
+    /// <summary>The profile reader in use: how the bot holds its weapons, whether it wears a two-hander and its class (world thread; tests replace it and restore it).</summary>
+    internal static Func<Player, PlayerbotUpgradeProfile> UpgradeProfile { get; set; } = DefaultUpgradeProfile;
+
+    /// <summary>The bot's weapon style under its talent build, whether a two-hander is worn, and its class.</summary>
+    internal static PlayerbotUpgradeProfile DefaultUpgradeProfile(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return new PlayerbotUpgradeProfile(PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights.Style, player.Inventory.IsTwoHandUsed, player.Class);
+    }
+
+    /// <summary>The seam's answer for the slot search profile; a faulty reader reads as a one-hander that wears no two-hander (the weapon page for the hands).</summary>
+    internal static PlayerbotUpgradeProfile Profile(Player player)
+    {
+        try
+        {
+            return UpgradeProfile(player);
+        }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.gearscore", e);
+            return new PlayerbotUpgradeProfile(PlayerbotWeaponStyle.DualWield, false, Class.Warrior);
+        }
+    }
+
+    /// <summary>The seam's answer for what is worn in one slot, with a non-finite value or a faulty scorer read as 0.</summary>
+    internal static float Worn(Player player, byte slot)
+    {
+        try
+        {
+            float value = WornScore(player, slot);
+            return float.IsFinite(value) ? value : 0f;
+        }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.gearscore", e);
+            return 0f;
+        }
     }
 
     /// <summary>The seam's answer for one item, with a faulty scorer read as "no gain".</summary>

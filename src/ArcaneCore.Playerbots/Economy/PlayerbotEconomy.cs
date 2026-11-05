@@ -122,6 +122,11 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     private int _buyAttempts;
     private int _scanStep;
     private readonly List<PlayerbotAuctionRow> _scan = [];
+    private IReadOnlyList<PlayerbotUpgradeSearch>? _upgradeSearches;
+    private readonly List<PlayerbotUpgradeSearch> _searchesMade = [];
+
+    /// <summary>The upgrade searches sent this visit, in order (empty before the first).</summary>
+    internal IReadOnlyList<PlayerbotUpgradeSearch> UpgradeSearchesMade => _searchesMade;
 
     // The reagent buying: what the bot still lacks, the entries to search in turn, the rows found, and the bid in flight.
     private static readonly IReadOnlyDictionary<uint, uint> NoReagents = new Dictionary<uint, uint>();
@@ -361,6 +366,8 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         _purchases = 0;
         _buyAttempts = 0;
         _scanStep = 0;
+        _upgradeSearches = null;
+        _searchesMade.Clear();
         _scan.Clear();
         _queue.Clear();
         _letters.Clear();
@@ -602,14 +609,17 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             return true;
         }
 
-        if (_scanStep < 2)
+        // The searches of the visit, fixed on its first step: one page per weakest equipment slot (or the two class-wide pages).
+        _upgradeSearches ??= PlayerbotEconomyPlanner.UpgradeSearches(slot => PlayerbotGearScoreSeam.Worn(player, slot), config.UpgradeSlotSearches, PlayerbotGearScoreSeam.Profile(player));
+        if (_scanStep < _upgradeSearches.Count)
         {
-            // The cheapest page of usable green-or-better weapons, then of armor (the house lists by buyout, 50 a page).
-            uint itemClass = (uint)(_scanStep == 0 ? ItemClass.Weapon : ItemClass.Armor);
+            // The cheapest page of usable green-or-better items of one search (the house lists by buyout, 50 a page).
+            PlayerbotUpgradeSearch upgradeSearch = _upgradeSearches[_scanStep];
             session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
-            byte[] search = PlayerbotEconomyWire.ListItems(_auctioneer.Value, 0, string.Empty, 0, 0, PlayerbotEconomyWire.Any, itemClass,
+            byte[] search = PlayerbotEconomyWire.ListItems(_auctioneer.Value, 0, string.Empty, 0, 0, upgradeSearch.InventoryType, upgradeSearch.ItemClass,
                 PlayerbotEconomyWire.Any, 2, usable: true);
             if (!session.TryManagedAction(WorldOpcode.CmsgAuctionListItems, search)) return Failed();
+            _searchesMade.Add(upgradeSearch);
             IReadOnlyList<ManagedSessionPacket> replies = session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
             if (replies.Count > 0 && TryDecode(() => PlayerbotEconomyWire.DecodeAuctionList(replies[^1].Payload), out PlayerbotAuctionPage? page) && page is not null)
             {
@@ -1257,6 +1267,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         _destinations.Clear();
         _queue.Clear();
         _scan.Clear();
+        _upgradeSearches = null;
         _reagentScan.Clear();
         _reagentMissing.Clear();
         _reagentOrder.Clear();

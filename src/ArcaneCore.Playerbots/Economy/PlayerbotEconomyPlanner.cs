@@ -19,6 +19,12 @@ internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Dep
 /// <summary>The auction the bot buys out and the gain its slot sees.</summary>
 internal sealed record PlayerbotUpgradeChoice(PlayerbotAuctionRow Row, float Gain);
 
+/// <summary>One upgrade search of the house: an inventory type and an item class (either may be <see cref="PlayerbotEconomyWire.Any"/>).</summary>
+internal sealed record PlayerbotUpgradeSearch(uint InventoryType, uint ItemClass);
+
+/// <summary>What the slot search needs to know about the bot besides the worn scores: how it holds its weapons, whether a two-hander is worn, and its class.</summary>
+internal sealed record PlayerbotUpgradeProfile(PlayerbotWeaponStyle Style, bool TwoHandWorn, Class PlayerClass);
+
 /// <summary>The reagent auction the bot buys out.</summary>
 internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row);
 
@@ -89,6 +95,98 @@ internal static class PlayerbotEconomyPlanner
     internal static bool IsCarried(byte bagSlot, byte slot)
         => bagSlot == InventorySlots.Bag0 ? slot >= InventorySlots.ItemStart && slot < InventorySlots.ItemEnd
             : bagSlot >= InventorySlots.BagStart && bagSlot < InventorySlots.BagEnd;
+
+    /// <summary>The most upgrade searches a visit may make (the upper bound of <see cref="PlayerbotEconomyOptions.UpgradeSlotSearches"/>).</summary>
+    internal const int MaxUpgradeSearches = PlayerbotEconomyOptions.MaxUpgradeSearches;
+
+    // The equipment slots in the order that breaks a tie between equal worn scores (the larger stat budgets first). Body (shirt) and
+    // Tabard carry no stats and are never searched.
+    private static readonly byte[] UpgradeSlotOrder =
+    [
+        InventorySlots.Chest, InventorySlots.Legs, InventorySlots.Head, InventorySlots.Shoulders, InventorySlots.MainHand, InventorySlots.Hands,
+        InventorySlots.Feet, InventorySlots.Waist, InventorySlots.Wrists, InventorySlots.Back, InventorySlots.OffHand, InventorySlots.Ranged,
+        InventorySlots.Neck, InventorySlots.Finger1, InventorySlots.Finger2, InventorySlots.Trinket1, InventorySlots.Trinket2,
+    ];
+
+    private static readonly PlayerbotUpgradeSearch WeaponPage = new(PlayerbotEconomyWire.Any, (uint)ItemClass.Weapon);
+
+    // The search of one slot, or null when nothing the bot could buy fits it now. Shields, held-in-off-hand items and relics are class Armor
+    // (ItemEnums ArmorShield; ItemTemplateRules sends Shield and Holdable to the off hand and a Relic to the ranged slot), so a class-wide
+    // weapon page can never return them: those slots search by their own inventory type.
+    private static PlayerbotUpgradeSearch? UpgradeSearchOf(byte slot, PlayerbotUpgradeProfile profile) => slot switch
+    {
+        InventorySlots.Head => new((uint)InventoryType.Head, PlayerbotEconomyWire.Any),
+        InventorySlots.Neck => new((uint)InventoryType.Neck, PlayerbotEconomyWire.Any),
+        InventorySlots.Shoulders => new((uint)InventoryType.Shoulders, PlayerbotEconomyWire.Any),
+        InventorySlots.Chest => new((uint)InventoryType.Chest, PlayerbotEconomyWire.Any),
+        InventorySlots.Waist => new((uint)InventoryType.Waist, PlayerbotEconomyWire.Any),
+        InventorySlots.Legs => new((uint)InventoryType.Legs, PlayerbotEconomyWire.Any),
+        InventorySlots.Feet => new((uint)InventoryType.Feet, PlayerbotEconomyWire.Any),
+        InventorySlots.Wrists => new((uint)InventoryType.Wrists, PlayerbotEconomyWire.Any),
+        InventorySlots.Hands => new((uint)InventoryType.Hands, PlayerbotEconomyWire.Any),
+        InventorySlots.Finger1 or InventorySlots.Finger2 => new((uint)InventoryType.Finger, PlayerbotEconomyWire.Any),
+        InventorySlots.Trinket1 or InventorySlots.Trinket2 => new((uint)InventoryType.Trinket, PlayerbotEconomyWire.Any),
+        InventorySlots.Back => new((uint)InventoryType.Cloak, PlayerbotEconomyWire.Any),
+        InventorySlots.OffHand => OffHandSearch(profile),
+        InventorySlots.Ranged => RangedSearch(profile),
+        _ => WeaponPage, // MainHand: weapons of every hand and inventory type
+    };
+
+    // Nothing goes in the off hand next to a two-hander. Otherwise a shield for a shield tank (and for a shield caster: paladin, shaman),
+    // a held-in-off-hand item for the other casters, and the weapon page for builds that fill the hand with a weapon.
+    private static PlayerbotUpgradeSearch? OffHandSearch(PlayerbotUpgradeProfile profile)
+    {
+        if (profile.TwoHandWorn) return null;
+        return profile.Style switch
+        {
+            PlayerbotWeaponStyle.OneHandShield => new((uint)InventoryType.Shield, PlayerbotEconomyWire.Any),
+            PlayerbotWeaponStyle.Caster => profile.PlayerClass is Class.Paladin or Class.Shaman
+                ? new((uint)InventoryType.Shield, PlayerbotEconomyWire.Any)
+                : new((uint)InventoryType.Holdable, PlayerbotEconomyWire.Any),
+            _ => WeaponPage,
+        };
+    }
+
+    // Paladin, druid and shaman wear a relic there (ItemTemplateRules.RelicSlot); every other class uses a ranged weapon, wand or thrown weapon.
+    private static PlayerbotUpgradeSearch RangedSearch(PlayerbotUpgradeProfile profile)
+        => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman
+            ? new((uint)InventoryType.Relic, PlayerbotEconomyWire.Any)
+            : WeaponPage;
+
+    /// <summary>
+    /// The house searches of a visit. <paramref name="max"/> of 0 or less: the two class-wide pages of earlier versions (weapons, then armor).
+    /// Otherwise the equipment slots ranked by <paramref name="worn"/> (what is worn there, an empty slot 0; a NaN or infinite score counts as 0)
+    /// from the weakest, equal scores in a fixed order (the larger stat budgets first), each slot mapped to its inventory type (the main hand
+    /// and, for weapon builds, the off hand and a ranged weapon to the class-wide weapon page; a shield, a held-in-off-hand item or a relic to
+    /// its own inventory type, since those are armor class), a search already taken skipped, until <paramref name="max"/> distinct searches
+    /// (at most <see cref="MaxUpgradeSearches"/>). The off hand is not searched while a two-hander is worn.
+    /// </summary>
+    internal static IReadOnlyList<PlayerbotUpgradeSearch> UpgradeSearches(Func<byte, float> worn, int max, PlayerbotUpgradeProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(worn);
+        ArgumentNullException.ThrowIfNull(profile);
+        if (max <= 0)
+            return [WeaponPage, new(PlayerbotEconomyWire.Any, (uint)ItemClass.Armor)];
+        max = Math.Min(max, MaxUpgradeSearches);
+
+        (byte Slot, float Score)[] ranked = new (byte, float)[UpgradeSlotOrder.Length];
+        for (int i = 0; i < ranked.Length; i++)
+        {
+            float score = worn(UpgradeSlotOrder[i]);
+            ranked[i] = (UpgradeSlotOrder[i], float.IsFinite(score) ? score : 0f);
+        }
+
+        // OrderBy is stable, so equal scores keep the fixed order above.
+        List<PlayerbotUpgradeSearch> searches = new(max);
+        foreach ((byte slot, _) in ranked.OrderBy(entry => entry.Score))
+        {
+            if (searches.Count >= max) break;
+            if (UpgradeSearchOf(slot, profile) is not { } search) continue;
+            if (!searches.Contains(search)) searches.Add(search);
+        }
+
+        return searches;
+    }
 
     /// <summary>The listing slots a bot short of money gets on top of <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/>.</summary>
     internal const int MoneyGoalExtraListings = 3;
