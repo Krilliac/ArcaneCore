@@ -27,9 +27,13 @@ public sealed class SpellEffectModDumpImporter
     /// <item>16468 Mother's Milk: effect 2 (counted from 1: <c>EffectIndex</c> 1 in the dump and the row) a periodic trigger of 15474 Web
     /// Explosion every 11999 ms. classic-db has only the DUMMY aura of effect 1; neither cmangos nor vmangos code names the spell (grep of both trees) and ArcaneCore has no handler, so without the row the
     /// debuff does nothing.</item>
+    /// <item>8892 Goblin Rocket Boots and 13141 Gnomish Rocket Boots: effect 2 (<c>EffectIndex</c> 1) a periodic trigger every 1000 ms of 8897 / 13158
+    /// (the boots' explosion). Spell.dbc has only the speed aura. ArcaneCore scripts the 1 in 100 roll per tick (PeriodicTriggerAuraModule, vmangos
+    /// SpellAuras.cpp:1480-1487) and Destroy Rocket Boots 8897 (RaidDummyScripts), and no other code implements the explosion, so the row does not
+    /// run it twice.</item>
     /// </list>
     /// </summary>
-    public static IReadOnlySet<uint> ReviewedSpells { get; } = new HashSet<uint> { 16468 };
+    public static IReadOnlySet<uint> ReviewedSpells { get; } = new HashSet<uint> { 16468, 8892, 13141 };
 
     private readonly SortedDictionary<(uint Spell, byte Effect), SpellEffectModRow> _rows = [];
     private readonly SortedSet<uint> _notReviewed = [];

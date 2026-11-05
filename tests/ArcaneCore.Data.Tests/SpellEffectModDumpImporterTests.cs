@@ -46,8 +46,8 @@ public sealed class SpellEffectModDumpImporterTests
     }
 
     [Fact]
-    public void ReviewedSpells_IsMothersMilkOnly()
-        => Assert.Equal([16468u], SpellEffectModDumpImporter.ReviewedSpells.Order());
+    public void ReviewedSpells_AreMothersMilkAndTheTwoRocketBoots()
+        => Assert.Equal([8892u, 13141u, 16468u], SpellEffectModDumpImporter.ReviewedSpells.Order());
 
     [Fact]
     public async Task ReplaceAsync_WritesTheRows_AndTheSpellStoreLoadsThem()

@@ -13,10 +13,10 @@ namespace ArcaneCore.Game.Tests.Spells;
 
 /// <summary>
 /// <see cref="PeriodicTriggerAuraModule"/>: the Aura::TriggerSpell cases of vmangos (SpellAuras.cpp:1291-1301 Nitrous Boost, :1246-1248 and
-/// :4243-4255 Cannon Prep) and the expiry case of Tranquilizing Poison (:7210-7217). Each test fails without its registration: the aura ticks or
+/// :4243-4255 Cannon Prep) and the expiry case of Tranquilizing Poison (:7215-7222). Each test fails without its registration: the aura ticks or
 /// ends and nothing of what retail does happens. The Cannon Prep spell is shaped like its 5875 Spell.dbc row (24743: two other aura effects and a
-/// 5000 ms PERIODIC_TRIGGER effect with no trigger spell).
-
+/// 5000 ms PERIODIC_TRIGGER effect with no trigger spell). The rocket boots are shaped like their vmangos spell_effect_mod rows (effect 2 a 1000 ms
+/// periodic trigger of the explosion).
 /// </summary>
 public sealed class PeriodicTriggerAuraCasesTests
 {
@@ -98,13 +98,46 @@ public sealed class PeriodicTriggerAuraCasesTests
     [InlineData(17945u)]
     [InlineData(17947u)]
     [InlineData(17949u)]
-    [InlineData(8892u)]
-    [InlineData(13141u)]
-    public void FirestoneAndRocketBoots_HaveNoTickScript_TheirDbcEffectRunsAsShipped(uint spell)
+    public void Firestone_HasNoTickScript_TheDbcTriggerSpellCastsTheEnchant(uint spell)
     {
-        // Firestone: the DBC trigger spell casts the held-item enchant; rocket boots: a lone speed aura that never ticks (5875 Spell.dbc).
         using SpellTestKit kit = MakeKit();
         Assert.False(kit.System.HasPeriodicTriggerScript(spell));
+    }
+
+    /// <summary><see cref="Random.Next(int)"/> that answers one value, so the 1 in 100 roll of rocket boots is decided by the test.</summary>
+    private sealed class FixedRandom(int value) : Random(1)
+    {
+        public override int Next(int maxValue) => Math.Min(value, maxValue - 1);
+    }
+
+    private static SpellInfo RocketBoots(uint id, uint explosion) =>
+        Instant(Spell(id,
+            Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModIncreaseSpeed),
+            Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.PeriodicTriggerSpell, amplitude: 1000, trigger: explosion)) with
+        {
+            Duration = new SpellDuration(20_000, 0, 20_000),
+        });
+
+    [Theory]
+    [InlineData(PeriodicTriggerAuraModule.GoblinRocketBoots, 8897u, 0, true)]
+    [InlineData(PeriodicTriggerAuraModule.GoblinRocketBoots, 8897u, 1, false)]
+    [InlineData(PeriodicTriggerAuraModule.GoblinRocketBoots, 8897u, 99, false)]
+    [InlineData(PeriodicTriggerAuraModule.GnomishRocketBoots, 13158u, 0, true)]
+    [InlineData(PeriodicTriggerAuraModule.GnomishRocketBoots, 13158u, 50, false)]
+    public void RocketBoots_ExplodeOnlyOnTheOneInHundredRoll_OtherwiseTheTickDoesNothing(uint boots, uint explosion, int roll, bool exploded)
+    {
+        using SpellTestKit kit = MakeKit(RocketBoots(boots, explosion), MarkerAura(explosion));
+        kit.System.Random = new FixedRandom(roll);
+        (Player player, _) = kit.AddPlayer(1);
+
+        kit.System.CastSpell(player, boots, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(500);
+        Assert.False(kit.System.HasAura(player, explosion)); // the first tick is due after 1000 ms
+
+        kit.Advance(600);
+
+        Assert.True(kit.System.HasAura(player, boots));
+        Assert.Equal(exploded, kit.System.HasAura(player, explosion));
     }
 
     private const uint CannonEntry = 951301, CannonEntryB = 951302;
@@ -115,13 +148,13 @@ public sealed class PeriodicTriggerAuraCasesTests
             Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.Dummy),
             Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.PeriodicTriggerSpell, amplitude: 5000, trigger: 0)) with
         {
-            Duration = new SpellDuration(60_000, 0, 60_000),
+            Duration = new SpellDuration(5_000, 0, 5_000),
         });
 
     [Theory]
     [InlineData(PeriodicTriggerAuraModule.CannonPrep, CannonEntry)]
     [InlineData(PeriodicTriggerAuraModule.CannonPrepB, CannonEntryB)]
-    public void CannonPrep_FiresTheCannonEveryFiveSeconds_AndTheCannonAnimatesThreePointSixSecondsAfterTheAuraLands(uint spell, uint entry)
+    public void CannonPrep_FiresTheCannonOnTheTickThatEndsTheFiveSecondAura_AndTheCannonAnimatesThreePointSixSecondsAfterTheAuraLands(uint spell, uint entry)
     {
         using SpellTestKit kit = MakeKit(CannonPrep(spell), MarkerAura(PeriodicTriggerAuraModule.FireCannon));
         var objects = new GameObjectMapSystem(kit.World.GetMap(0), new GameObjectContent(
@@ -152,7 +185,7 @@ public sealed class PeriodicTriggerAuraCasesTests
         Assert.Contains(session.Sent, p => p.Opcode == WorldOpcode.SmsgGameobjectCustomAnim && p.Payload.SequenceEqual(expectedAnim));
         Assert.False(kit.System.HasAura(player, PeriodicTriggerAuraModule.FireCannon));
 
-        for (int i = 0; i < 14; i++) // 5.2 s: the first tick has passed
+        for (int i = 0; i < 14; i++) // 5.2 s: the aura ended at 5 s and its only tick fired on that update
         {
             kit.Advance(100);
             kit.World.RunTick(100);

@@ -13,8 +13,8 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// <summary>
 /// The periodic DUMMY auras of <c>GenericDummyAuraCases.cs</c> that name a tick period: Melodious Rapture Visual 21051 (2 s), Frostwolf Aura 21827
 /// and Alterac Ram Aura 21863 (2 s each), Intoxicating Venom 24596 (1 s). Each test pins the tick (nothing before the period, the effect once it
-/// has passed), so a registration that lost its period or its tick fails. vmangos Aura::PeriodicDummyTick, SpellAuras.cpp:6446-6457 (21051),
-/// :6475-6512 (21827, 21863) and :6513-6523 (24596).
+/// has passed), so a registration that lost its period or its tick fails. vmangos Aura::PeriodicDummyTick, SpellAuras.cpp:6443 (21051),
+/// :6466 (21827, 21863) and :6495 (24596) in vmangos 9b7fb4dfd.
 /// </summary>
 public sealed class GenericDummyAuraTickTests
 {
@@ -111,7 +111,7 @@ public sealed class GenericDummyAuraTickTests
             Map map = Kit.World.GetMap(0);
             CreatureTemplate[] templates = [CreatureTestKit.Template(13016, b =>
             {
-                b.Faction = 14;
+                b.Faction = 35; // friendly: no relocation-driven aggro can replace the Follow movement
                 b.MinLevelHealth = 100;
                 b.MaxLevelHealth = 100;
             })];
