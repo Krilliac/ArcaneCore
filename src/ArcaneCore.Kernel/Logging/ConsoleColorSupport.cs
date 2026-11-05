@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Kernel.Logging;
 
@@ -10,6 +11,7 @@ namespace ArcaneCore.Kernel.Logging;
 /// The two halves are separate: <see cref="TerminalAllowsColor()"/> is the environment's verdict, fixed for the process, and the
 /// mode is the configuration's, which reloads. Pure where it can be: the overloads taking explicit facts are the tested core.
 /// </summary>
+[AuditedUnsafe("kernel32 console-mode calls on the process's own std handle; Windows only behind OperatingSystem.IsWindows, results checked")]
 public static class ConsoleColorSupport
 {
     private const int StdOutputHandle = -11;

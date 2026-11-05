@@ -3,6 +3,7 @@ using System.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.Extensions.Logging;
@@ -257,6 +258,7 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>Queue work for the start of the next tick. Thread-safe.</summary>
+    [RunsOnWorldThread]
     public void Post(Action command)
     {
         _commands.Enqueue(command);
@@ -280,6 +282,7 @@ public sealed partial class WorldRuntime : IDisposable
     /// is (a command not yet run is then skipped) and when the world is stopped before the command ran, so a caller never waits on a
     /// world thread that is gone.
     /// </summary>
+    [RunsOnWorldThread]
     public Task<T> InvokeAsync<T>(Func<T> func, CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)

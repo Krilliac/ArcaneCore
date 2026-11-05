@@ -278,6 +278,7 @@ public sealed class FaultLedgerTests
         {
             Assert.True(gauges["arcanecore.faults.distinct"] >= 1);
             Assert.True(gauges.ContainsKey("arcanecore.invariant.failures"));
+            Assert.True(gauges.ContainsKey("arcanecore.thread_affinity.violations"));
         }
     }
 

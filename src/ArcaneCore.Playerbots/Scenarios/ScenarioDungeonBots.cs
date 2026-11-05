@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -154,7 +155,7 @@ public static class ScenarioDungeonBots
     }
 
     /// <summary>A wait that shows in the report as a step of its own.</summary>
-    internal static Task WaitStepAsync(ScenarioContext context, string what, Func<bool> condition, TimeSpan timeout)
+    internal static Task WaitStepAsync(ScenarioContext context, string what, [RunsOnWorldThread] Func<bool> condition, TimeSpan timeout)
         => context.StepAsync(what, () => context.WaitUntilAsync(what, condition, timeout));
 
     /// <summary>Walk the bot in through the entrance trigger the scripted way (CMSG_AREATRIGGER) and wait until it is inside.</summary>

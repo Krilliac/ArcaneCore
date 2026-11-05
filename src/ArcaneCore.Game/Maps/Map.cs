@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,7 @@ namespace ArcaneCore.Game.Maps;
 /// (docs/areas/grid-terrain.md).
 /// </para>
 /// </summary>
+[WorldThreadOnly]
 public sealed partial class Map
 {
     /// <summary>
@@ -245,6 +247,16 @@ public sealed partial class Map
         => _terrain.GetLiquidStatus(x, y, z, requiredType, out data);
 
     internal ILogger Logger => _logger;
+
+    /// <summary>Record, without throwing, that <paramref name="site"/> ran off the world thread (<see cref="ThreadAffinity"/>).</summary>
+    [System.Diagnostics.StackTraceHidden]
+    internal void CheckWorldThread(string site)
+    {
+        if (!_world.IsWorldThread)
+        {
+            ThreadAffinity.Violated(site);
+        }
+    }
 
     internal void EnsureWorldThread()
     {
