@@ -276,21 +276,15 @@ public sealed class GmGoBattlegroundBindingTests : GmGoBattlegroundAndInstanceTe
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
         await RunAsync(world, "gm-move-in-progress-stale", async context =>
         {
-            (ScenarioBot ally, _, Battleground match) = await context.EnterMatchAsync(
+            (ScenarioBot ally, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
                 BattlegroundType.WarsongGulch, "Scngpally", "Scngphorde", TimeSpan.FromMinutes(3));
             await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOPROG", "Gmgoprog", AccountSecurity.Administrator);
             await using ClientTap victim = await ClientTap.EnterAsync(world, "GMGOPROGV", "Gmgoprogv", AccountSecurity.Player);
+            await AppearAtAsync(context, gm, horde.Name, match);
 
-            // 1. A move record exists for the victim.
-            await context.ReadAsync(() =>
-            {
-                BattlegroundFeature feature = Battlegrounds(context);
-                Player gmPlayer = context.World.FindOnlinePlayer(gm.Name)!;
-                Player vic = context.World.FindOnlinePlayer(victim.Name)!;
-                ScenarioContext.ExpectEqual(GmBattlegroundGo.Bound, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "first begin outcome");
-                ScenarioContext.Expect(feature.HasGmMove(vic.Guid), "no move record");
-                return true;
-            });
+            // 1. A move record with a real far teleport behind it: the victim's client holds its loading screen, so the sweep keeps the record.
+            await NamegoHeldAsync(context, gm, victim);
+            ScenarioContext.Expect(await context.ReadAsync(() => Battlegrounds(context).HasGmMove(GuidOf(context, victim.Name))), "no move record");
 
             // 2. The victim is then bound to a match that is deleted before it arrives: a stale binding.
             uint ghostId = await context.ReadAsync(() =>
@@ -311,9 +305,13 @@ public sealed class GmGoBattlegroundBindingTests : GmGoBattlegroundAndInstanceTe
                 Player vic = context.World.FindOnlinePlayer(victim.Name)!;
                 ScenarioContext.ExpectEqual(GmBattlegroundGo.MoveInProgress, feature.BeginGmMove(vic, gmPlayer, leaveOtherMatch: true), "second begin outcome");
                 ScenarioContext.Expect(feature.Manager.StateOf(vic.Guid).InBattleground, "a refused move cleared the stale binding");
-                feature.CancelGmMove(vic);
+                ScenarioContext.Expect(feature.HasGmMove(vic.Guid), "the refused move dropped the record of the teleport in flight");
                 return true;
             });
+
+            // 4. Release the held acknowledgement so the teleport in flight completes and the record is consumed.
+            await victim.ReleaseWorldportAckAsync();
+            await context.WaitUntilAsync("the move record is consumed", () => !Battlegrounds(context).HasGmMove(GuidOf(context, victim.Name)));
         });
     }
 
