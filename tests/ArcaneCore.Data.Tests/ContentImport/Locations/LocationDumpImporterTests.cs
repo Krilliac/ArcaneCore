@@ -27,6 +27,13 @@ public sealed class LocationDumpImporterTests : IAsyncLifetime
         INSERT INTO `areatrigger_teleport` VALUES (45,0,'Old',20,0,'old',189,1,2,3,4),(45,4,'Patched',25,0,'Reach level 25.',189,5,6,7,8),(45,11,'TBC',30,0,'tbc',189,9,9,9,9);
         """;
 
+    // A dump whose portal table has no required_item, required_item2 or required_quest_done and a NULL condition: refreshing from it must leave
+    // those requirements as the world has them.
+    private const string Sparse = """
+        CREATE TABLE `areatrigger_teleport` (`id` mediumint unsigned NOT NULL, `name` text, `required_level` tinyint unsigned NOT NULL DEFAULT '0', `target_map` smallint unsigned NOT NULL, `target_position_x` float NOT NULL, `target_position_y` float NOT NULL, `target_position_z` float NOT NULL, `target_orientation` float NOT NULL, `condition_id` int, PRIMARY KEY (`id`));
+        INSERT INTO `areatrigger_teleport` VALUES (45,'Sparse',33,189,1,2,3,4,NULL);
+        """;
+
     private readonly TestDatabases _databases = new();
 
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
@@ -121,6 +128,77 @@ public sealed class LocationDumpImporterTests : IAsyncLifetime
         Assert.Equal("existing", (await verify.Set<GameTeleRow>().AsNoTracking().SingleAsync()).Name);
         Assert.Equal(0, await verify.Set<AreaTriggerTeleportRow>().CountAsync());
     }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RefreshPortalRequirements_VMangosDump_WritesOnlyTheColumnsItCarries(DatabaseProvider provider)
+    {
+        // The vmangos portal table has required_level and required_condition but no required_item, required_item2 or required_quest_done.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Add(ExistingPortal());
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+
+            Assert.Equal(1, await Import(VMangos).RefreshPortalRequirementsAsync(db));
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(connection);
+        AreaTriggerTeleportRow portal = await verify.Set<AreaTriggerTeleportRow>().AsNoTracking().SingleAsync();
+        Assert.Equal((25, 0u), ((int)portal.RequiredLevel, portal.RequiredCondition)); // carried: refreshed (the patch 4 row wins)
+        Assert.Equal((5u, 6u, 7u), (portal.RequiredItem, portal.RequiredItem2, portal.RequiredQuestDone)); // not in the dump: kept
+        Assert.Equal(("Kept", 1u, 100f), (portal.Name, portal.TargetMap, portal.TargetPositionX)); // destinations are never touched
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RefreshPortalRequirements_ANullOrMissingColumn_IsNotAZeroToWrite(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Add(ExistingPortal());
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+
+            await Import(Sparse).RefreshPortalRequirementsAsync(db);
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(connection);
+        AreaTriggerTeleportRow portal = await verify.Set<AreaTriggerTeleportRow>().AsNoTracking().SingleAsync();
+        Assert.Equal(33, (int)portal.RequiredLevel);
+        Assert.Equal((5u, 6u, 7u, 9u), (portal.RequiredItem, portal.RequiredItem2, portal.RequiredQuestDone, portal.RequiredCondition));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task RefreshPortalRequirements_CMangosDump_WritesEveryRequirementIncludingZeros(DatabaseProvider provider)
+    {
+        // The classic-db table carries all five, so a requirement the dump clears is cleared here too.
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            db.Add(ExistingPortal());
+            await db.SaveChangesAsync();
+            db.ChangeTracker.Clear();
+
+            await Import(CMangos).RefreshPortalRequirementsAsync(db);
+        }
+
+        await using WorldDbContext verify = TestContexts.Create<WorldDbContext>(connection);
+        AreaTriggerTeleportRow portal = await verify.Set<AreaTriggerTeleportRow>().AsNoTracking().SingleAsync();
+        Assert.Equal((20, 0u, 0u, 0u, 0u), ((int)portal.RequiredLevel, portal.RequiredItem, portal.RequiredItem2, portal.RequiredQuestDone, portal.RequiredCondition));
+    }
+
+    private static AreaTriggerTeleportRow ExistingPortal() => new()
+    {
+        Id = 45, Name = "Kept", Message = "m", RequiredLevel = 20, TargetMap = 1, TargetPositionX = 100f,
+        RequiredItem = 5, RequiredItem2 = 6, RequiredQuestDone = 7, RequiredCondition = 9,
+    };
 
     private static LocationDumpImporter Import(string dump)
     {

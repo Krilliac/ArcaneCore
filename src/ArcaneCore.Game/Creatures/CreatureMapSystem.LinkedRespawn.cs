@@ -47,6 +47,19 @@ public sealed partial class CreatureMapSystem
         return null;
     }
 
+    /// <summary>
+    /// A copy of the map's creatures in a pooled array (the first <paramref name="count"/> slots; the caller returns the array to
+    /// <see cref="System.Buffers.ArrayPool{T}.Shared"/> with <c>clearArray: true</c>). A linked event can respawn, despawn or summon creatures
+    /// while it walks them, so it walks a copy; a pooled copy keeps the walk allocation-free, and each nested event rents its own array.
+    /// </summary>
+    private int SnapshotCreatures(out Creature[] buffer)
+    {
+        int count = _creatures.Count;
+        buffer = System.Buffers.ArrayPool<Creature>.Shared.Rent(count);
+        _creatures.Values.CopyTo(buffer, 0);
+        return count;
+    }
+
     /// <summary>cmangos DoCreatureLinkingEvent for the evade, death, respawn and despawn events (CreatureLinkingMgr.cpp:401-510).</summary>
     private void DoLinkedEvent(Creature source, LinkEvent e)
     {
@@ -56,11 +69,13 @@ public sealed partial class CreatureMapSystem
 
         if (isMaster && _linkEventsInUse.Add(source.Guid))
         {
+            int count = SnapshotCreatures(out Creature[] snapshot);
             try
             {
                 uint mask = EventMask(e);
-                foreach (Creature slave in _creatures.Values.ToArray())
+                for (int i = 0; i < count; i++)
                 {
+                    Creature slave = snapshot[i];
                     if (ReferenceEquals(slave, source) || slave.Summon is { Kind: SummonKind.Pet }) continue;
                     if (LinkOf(slave) is not { } info || (info.Flags & mask) == 0) continue;
                     bool linked = info.Template is { } t
@@ -71,6 +86,7 @@ public sealed partial class CreatureMapSystem
             }
             finally
             {
+                System.Buffers.ArrayPool<Creature>.Shared.Return(snapshot, clearArray: true);
                 _linkEventsInUse.Remove(source.Guid);
             }
         }
@@ -198,10 +214,12 @@ public sealed partial class CreatureMapSystem
         bool isMaster = _linkMasterGuids!.Contains(sourceSpawn.Guid) || _linkMasterEntries!.Contains(source.Entry);
         if (isMaster && instance?.CarriesAggroLinking(source.Entry) != true && _linkEventsInUse.Add(source.Guid))
         {
+            int count = SnapshotCreatures(out Creature[] snapshot);
             try
             {
-                foreach (Creature slave in _creatures.Values.ToArray())
+                for (int i = 0; i < count; i++)
                 {
+                    Creature slave = snapshot[i];
                     if (ReferenceEquals(slave, source) || slave.Summon is { Kind: SummonKind.Pet }) continue;
                     if (LinkOf(slave) is not { } info || (info.Flags & LinkAggroOnAggro) == 0) continue;
                     bool linked = info.Template is { } t
@@ -212,6 +230,7 @@ public sealed partial class CreatureMapSystem
             }
             finally
             {
+                System.Buffers.ArrayPool<Creature>.Shared.Return(snapshot, clearArray: true);
                 _linkEventsInUse.Remove(source.Guid);
             }
         }

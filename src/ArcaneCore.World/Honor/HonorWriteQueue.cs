@@ -129,7 +129,8 @@ public sealed class HonorWriteQueue(IServiceScopeFactory scopes, ILogger logger,
         lock (_gate)
         {
             Unsaved unsaved = Entry(characterId);
-            unsaved.Cp.Add(row);
+            // Stamped once, here: every retry of the retained row writes the same id, which the store deduplicates on.
+            unsaved.Cp.Add(row.OperationId == Guid.Empty ? row with { OperationId = Guid.NewGuid() } : row);
             dropped = Changed(characterId, unsaved);
         }
 

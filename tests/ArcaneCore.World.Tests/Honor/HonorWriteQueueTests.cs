@@ -48,6 +48,42 @@ public sealed class HonorWriteQueueTests
     }
 
     [Fact]
+    public async Task ARowWhoseCommitWasAcknowledgedLate_IsRetriedWithTheSameIdAndStoredOnce()
+    {
+        (HonorWriteQueue queue, MemoryHonorStore store, ServiceProvider provider) = Create();
+        await using ServiceProvider _ = provider;
+        store.AckLostAppends = 2; // the first two attempts commit the row and then report a failure
+        queue.AppendCp(1, Row(1));
+        queue.AppendCp(1, Row(2));
+        await queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.Equal([1u, 2u], store.Rows(1).Select(r => r.VictimId)); // each contribution once, not once per attempt
+        Assert.False(queue.HasRetainedFailure(1));
+        Assert.True(store.WriteAttempts >= 2);
+        await queue.StopAsync();
+    }
+
+    [Fact]
+    public async Task EveryQueuedRowIsStampedWithADistinctOperationId_AndAnExistingIdIsKept()
+    {
+        (HonorWriteQueue queue, MemoryHonorStore store, ServiceProvider provider) = Create(start: false);
+        await using ServiceProvider _ = provider;
+        Guid chosen = Guid.NewGuid();
+        queue.AppendCp(1, Row(1));
+        queue.AppendCp(1, Row(2));
+        queue.AppendCp(1, Row(3) with { OperationId = chosen });
+        queue.Start();
+        await queue.FlushAsync().WaitAsync(Budget);
+
+        IReadOnlyList<HonorCpRecord> rows = store.Rows(1);
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, r => Assert.NotEqual(Guid.Empty, r.OperationId));
+        Assert.Equal(3, rows.Select(r => r.OperationId).Distinct().Count());
+        Assert.Equal(chosen, rows[2].OperationId);
+        await queue.StopAsync();
+    }
+
+    [Fact]
     public async Task A_reset_runs_before_the_state_and_rows_queued_after_it()
     {
         (HonorWriteQueue queue, MemoryHonorStore store, ServiceProvider provider) = Create(start: false);

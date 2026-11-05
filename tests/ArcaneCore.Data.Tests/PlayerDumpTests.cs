@@ -61,6 +61,8 @@ public sealed class PlayerDumpTests : IAsyncLifetime
 
             Assert.Equal([78u, 6603u], await db.Set<CharacterSpellRow>().Where(r => r.CharacterId == clone).OrderBy(r => r.Spell).Select(r => r.Spell).ToListAsync());
             Assert.Equal(1, await db.Set<HonorCpRow>().CountAsync(r => r.CharacterId == clone));
+            // The stamped row is unique per character, so the clone carries the same operation id as its source without tripping the index.
+            Assert.Equal(2, await db.Set<HonorCpRow>().CountAsync(r => r.OperationId == "0b9d6f4e-6a3c-4c53-9a43-3f1f6a2d7c11"));
 
             // Inventory: new guids, the bag's content points at the new bag, and every item belongs to the clone.
             List<CharacterInventoryRow> inv = await db.Set<CharacterInventoryRow>().Where(r => r.Guid == clone).ToListAsync();
@@ -307,7 +309,7 @@ public sealed class PlayerDumpTests : IAsyncLifetime
         db.Add(new PersistentPetCooldownRow { CharacterId = alice, PetNumber = 900, SpellId = 17253, EndsAtUnixMs = 1 });
         db.Add(new PetStableRow { CharacterId = alice, Slot = 1, PetNumber = 901, Entry = 3126, Level = 9, Name = "Crab" });
         db.Add(new PetStableSlotsRow { CharacterId = alice, Slots = 2 });
-        db.Add(new HonorCpRow { CharacterId = alice, VictimId = 1, Cp = 10, Date = 1, Type = 1 });
+        db.Add(new HonorCpRow { CharacterId = alice, VictimId = 1, Cp = 10, Date = 1, Type = 1, OperationId = "0b9d6f4e-6a3c-4c53-9a43-3f1f6a2d7c11" });
         await db.SaveChangesAsync();
         return (cs, alice);
     }
