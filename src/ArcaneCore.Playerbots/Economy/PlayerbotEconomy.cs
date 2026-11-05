@@ -610,7 +610,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         // The searches of the visit, fixed on its first step: one page per weakest equipment slot (or the two class-wide pages).
-        _upgradeSearches ??= PlayerbotEconomyPlanner.UpgradeSearches(slot => PlayerbotGearScoreSeam.Worn(player, slot), config.UpgradeSlotSearches);
+        _upgradeSearches ??= PlayerbotEconomyPlanner.UpgradeSearches(slot => PlayerbotGearScoreSeam.Worn(player, slot), config.UpgradeSlotSearches, PlayerbotGearScoreSeam.Profile(player));
         if (_scanStep < _upgradeSearches.Count)
         {
             // The cheapest page of usable green-or-better items of one search (the house lists by buyout, 50 a page).

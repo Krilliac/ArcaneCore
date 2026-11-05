@@ -1139,6 +1139,9 @@ public sealed class PlayerbotEconomyPlannerTests
     private const uint WeaponKey = (uint)ItemClass.Weapon;
     private const uint ArmorKey = (uint)ItemClass.Armor;
 
+    /// <summary>A dual wielding warrior without a two-hander: its off hand and ranged slots both take the class-wide weapon page.</summary>
+    private static readonly PlayerbotUpgradeProfile Melee = new(PlayerbotWeaponStyle.DualWield, false, Class.Warrior);
+
     /// <summary>A worn-score function: <paramref name="baseline"/> everywhere, except the listed slots.</summary>
     private static Func<byte, float> WornExcept(float baseline, params (byte Slot, float Score)[] exceptions)
         => slot =>
@@ -1160,14 +1163,14 @@ public sealed class PlayerbotEconomyPlannerTests
     [InlineData(int.MinValue)]
     public void UpgradeSearches_NoSlotSearches_ReturnsTheLegacyWeaponThenArmorPair(int max)
     {
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0f), max);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0f), max, Melee);
         Assert.Equal(new[] { (AnyKey, WeaponKey), (AnyKey, ArmorKey) }, Keys(searches));
     }
 
     [Fact]
     public void UpgradeSearches_AllSlotsEmpty_TakesTheLargestStatBudgetsFirst_ChestLegsHead()
     {
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(_ => 0f, 3);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(_ => 0f, 3, Melee);
         Assert.Equal(new[] { ((uint)InventoryType.Chest, AnyKey), ((uint)InventoryType.Legs, AnyKey), ((uint)InventoryType.Head, AnyKey) }, Keys(searches));
         Assert.Equal(5u, (uint)InventoryType.Chest);
         Assert.Equal(7u, (uint)InventoryType.Legs);
@@ -1177,7 +1180,7 @@ public sealed class PlayerbotEconomyPlannerTests
     [Fact]
     public void UpgradeSearches_TheLowestWornScoreBeatsTheTieOrder()
     {
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(10f, (InventorySlots.Feet, 2f)), 2);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(10f, (InventorySlots.Feet, 2f)), 2, Melee);
         Assert.Equal(new[] { ((uint)InventoryType.Feet, AnyKey), ((uint)InventoryType.Chest, AnyKey) }, Keys(searches));
     }
 
@@ -1185,7 +1188,7 @@ public sealed class PlayerbotEconomyPlannerTests
     public void UpgradeSearches_AnEmptySlotScoresZero_AndOutranksAWornOneAtAnyPositiveScore()
     {
         // The empty slot is reported as 0 by the scorer; a slot worn at a tiny positive score ranks behind it.
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0.5f, (InventorySlots.Hands, 0f)), 1);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0.5f, (InventorySlots.Hands, 0f)), 1, Melee);
         Assert.Equal(new[] { ((uint)InventoryType.Hands, AnyKey) }, Keys(searches));
     }
 
@@ -1193,7 +1196,7 @@ public sealed class PlayerbotEconomyPlannerTests
     public void UpgradeSearches_BothFingersAndBothTrinkets_GiveOneKeyEach()
     {
         var weak = WornExcept(100f, (InventorySlots.Finger1, 0f), (InventorySlots.Finger2, 0f), (InventorySlots.Trinket1, 0f), (InventorySlots.Trinket2, 0f));
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 2);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 2, Melee);
         Assert.Equal(new[] { ((uint)InventoryType.Finger, AnyKey), ((uint)InventoryType.Trinket, AnyKey) }, Keys(searches));
     }
 
@@ -1201,7 +1204,7 @@ public sealed class PlayerbotEconomyPlannerTests
     public void UpgradeSearches_TheWeaponSlotsShareOneClassWideWeaponKey()
     {
         var weak = WornExcept(100f, (InventorySlots.MainHand, 0f), (InventorySlots.OffHand, 0f), (InventorySlots.Ranged, 0f));
-        var searches = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 2));
+        var searches = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 2, Melee));
         Assert.Equal(2, searches.Length);
         Assert.Equal((AnyKey, WeaponKey), searches[0]);
         Assert.Single(searches, k => k == (AnyKey, WeaponKey));
@@ -1214,7 +1217,7 @@ public sealed class PlayerbotEconomyPlannerTests
         // Tie order among the zero slots: MainHand, OffHand, Ranged, Finger1, Finger2, Trinket1, Trinket2.
         var weak = WornExcept(100f, (InventorySlots.MainHand, 0f), (InventorySlots.OffHand, 0f), (InventorySlots.Ranged, 0f),
             (InventorySlots.Finger1, 0f), (InventorySlots.Finger2, 0f), (InventorySlots.Trinket1, 0f), (InventorySlots.Trinket2, 0f));
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 3);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 3, Melee);
         Assert.Equal(new[] { (AnyKey, WeaponKey), ((uint)InventoryType.Finger, AnyKey), ((uint)InventoryType.Trinket, AnyKey) }, Keys(searches));
     }
 
@@ -1222,13 +1225,13 @@ public sealed class PlayerbotEconomyPlannerTests
     public void UpgradeSearches_BodyAndTabardAreNeverSearched_EvenAsTheOnlyWeakSlots()
     {
         var weak = WornExcept(100f, (InventorySlots.Body, 0f), (InventorySlots.Tabard, 0f));
-        var first = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 1));
+        var first = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 1, Melee));
         Assert.Equal(new[] { ((uint)InventoryType.Chest, AnyKey) }, first);
 
-        var all = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, PlayerbotEconomyPlanner.MaxUpgradeSearches + 100));
+        var all = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, PlayerbotEconomyPlanner.MaxUpgradeSearches + 100, Melee));
         Assert.DoesNotContain(((uint)InventoryType.Body, AnyKey), all);
         Assert.DoesNotContain(((uint)InventoryType.Tabard, AnyKey), all);
-        Assert.Equal(13, all.Length);
+        Assert.Equal(PlayerbotEconomyPlanner.MaxUpgradeSearches, all.Length);
     }
 
     [Theory]
@@ -1238,19 +1241,103 @@ public sealed class PlayerbotEconomyPlannerTests
     public void UpgradeSearches_ANonFiniteWornScoreCountsAsZero(float bad)
     {
         // Everything else is worn at 5, so a slot read as 0 is the weakest; Feet is late in the tie order, so only the score puts it first.
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(5f, (InventorySlots.Feet, bad)), 1);
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(5f, (InventorySlots.Feet, bad)), 1, Melee);
         Assert.Equal(new[] { ((uint)InventoryType.Feet, AnyKey) }, Keys(searches));
     }
 
     [Fact]
-    public void UpgradeSearches_MoreThanTheDistinctKeys_ReturnsEveryDistinctKeyOnce()
+    public void UpgradeSearches_NeverMoreThanTheMaximum_AndEveryKeyOnce()
     {
-        var searches = PlayerbotEconomyPlanner.UpgradeSearches(slot => slot, 1000);
-        var keys = Keys(searches);
-        Assert.Equal(13, keys.Length);
+        var keys = Keys(PlayerbotEconomyPlanner.UpgradeSearches(slot => slot, 1000, Melee));
+        Assert.Equal(PlayerbotEconomyPlanner.MaxUpgradeSearches, keys.Length);
         Assert.Equal(keys.Length, keys.Distinct().Count());
-        Assert.Equal(1, keys.Count(k => k == (AnyKey, WeaponKey)));
-        Assert.Equal(12, keys.Count(k => k.Item2 == AnyKey && k.Item1 != AnyKey));
+        Assert.True(keys.Count(k => k == (AnyKey, WeaponKey)) <= 1);
+    }
+
+    private static PlayerbotUpgradeProfile ProfileOf(PlayerbotWeaponStyle style, Class playerClass, bool twoHandWorn = false) => new(style, twoHandWorn, playerClass);
+
+    private static (uint InventoryType, uint ItemClass)[] OnlyWeak(PlayerbotUpgradeProfile profile, params byte[] weakSlots)
+        => Keys(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, weakSlots.Select(slot => (slot, 0f)).ToArray()), 1, profile));
+
+    [Fact]
+    public void UpgradeSearches_AShieldTankWithAnEmptyOffHand_SearchesForShields()
+    {
+        var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.OneHandShield, Class.Warrior), InventorySlots.OffHand);
+        Assert.Equal(new[] { ((uint)InventoryType.Shield, AnyKey) }, keys);
+    }
+
+    [Theory]
+    [InlineData(Class.Paladin, InventoryType.Shield)]
+    [InlineData(Class.Shaman, InventoryType.Shield)]
+    [InlineData(Class.Mage, InventoryType.Holdable)]
+    [InlineData(Class.Priest, InventoryType.Holdable)]
+    [InlineData(Class.Warlock, InventoryType.Holdable)]
+    [InlineData(Class.Druid, InventoryType.Holdable)]
+    public void UpgradeSearches_ACasterOffHand_SearchesForAShieldOrAHoldable(Class playerClass, InventoryType expected)
+    {
+        var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.Caster, playerClass), InventorySlots.OffHand);
+        Assert.Equal(new[] { ((uint)expected, AnyKey) }, keys);
+    }
+
+    [Theory]
+    [InlineData(PlayerbotWeaponStyle.DualWield)]
+    [InlineData(PlayerbotWeaponStyle.TwoHand)]
+    public void UpgradeSearches_AWeaponBuildOffHand_SearchesTheWeaponPage(PlayerbotWeaponStyle style)
+    {
+        var keys = OnlyWeak(ProfileOf(style, Class.Warrior), InventorySlots.OffHand);
+        Assert.Equal(new[] { (AnyKey, WeaponKey) }, keys);
+    }
+
+    [Theory]
+    [InlineData(PlayerbotWeaponStyle.OneHandShield, Class.Paladin)]
+    [InlineData(PlayerbotWeaponStyle.Caster, Class.Mage)]
+    [InlineData(PlayerbotWeaponStyle.DualWield, Class.Warrior)]
+    public void UpgradeSearches_WhileATwoHanderIsWorn_TheOffHandIsNotSearched(PlayerbotWeaponStyle style, Class playerClass)
+    {
+        // The off hand is the weakest slot (empty, 0) but nothing fits it; the next weakest slot in the tie order (the chest) is searched instead.
+        var keys = OnlyWeak(ProfileOf(style, playerClass, twoHandWorn: true), InventorySlots.OffHand);
+        Assert.Equal(new[] { ((uint)InventoryType.Chest, AnyKey) }, keys);
+
+        var all = Keys(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, (InventorySlots.OffHand, 0f)), 8, ProfileOf(style, playerClass, twoHandWorn: true)));
+        Assert.DoesNotContain(((uint)InventoryType.Shield, AnyKey), all);
+        Assert.DoesNotContain(((uint)InventoryType.Holdable, AnyKey), all);
+    }
+
+    [Theory]
+    [InlineData(Class.Paladin)]
+    [InlineData(Class.Druid)]
+    [InlineData(Class.Shaman)]
+    public void UpgradeSearches_ARelicClassRangedSlot_SearchesForRelics(Class playerClass)
+    {
+        var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.Caster, playerClass), InventorySlots.Ranged);
+        Assert.Equal(new[] { ((uint)InventoryType.Relic, AnyKey) }, keys);
+    }
+
+    [Theory]
+    [InlineData(Class.Hunter)]
+    [InlineData(Class.Warrior)]
+    [InlineData(Class.Rogue)]
+    [InlineData(Class.Mage)]
+    [InlineData(Class.Priest)]
+    [InlineData(Class.Warlock)]
+    public void UpgradeSearches_OtherClassesRangedSlot_SearchesTheWeaponPage(Class playerClass)
+    {
+        var keys = OnlyWeak(ProfileOf(PlayerbotWeaponStyle.Caster, playerClass), InventorySlots.Ranged);
+        Assert.Equal(new[] { (AnyKey, WeaponKey) }, keys);
+    }
+
+    [Theory]
+    [InlineData(InventoryType.Shield, ItemSubClasses.ArmorShield)]
+    [InlineData(InventoryType.Holdable, ItemSubClasses.ArmorMisc)]
+    [InlineData(InventoryType.Relic, ItemSubClasses.ArmorLibram)]
+    public void UpgradeSearches_TheOffHandAndRangedKeys_CanReachTheArmorClassItemsThatFitThem(InventoryType type, uint subClass)
+    {
+        var item = new ItemTemplate { Entry = 1, Class = (uint)ItemClass.Armor, SubClass = subClass, InventoryType = (uint)type, Quality = 2 };
+        var profile = ProfileOf(type == InventoryType.Shield ? PlayerbotWeaponStyle.OneHandShield : PlayerbotWeaponStyle.Caster, type == InventoryType.Relic ? Class.Paladin : Class.Mage);
+        byte slot = type == InventoryType.Relic ? InventorySlots.Ranged : InventorySlots.OffHand;
+        PlayerbotUpgradeSearch search = Assert.Single(PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(100f, (slot, 0f)), 1, profile));
+        var query = new AuctionQuery(0, string.Empty, 0, 0, search.InventoryType, search.ItemClass, AuctionSearch.Any, 2, false);
+        Assert.True(AuctionSearch.Matches(item, query), "the search finds the armor-class item");
     }
 
     [Fact]

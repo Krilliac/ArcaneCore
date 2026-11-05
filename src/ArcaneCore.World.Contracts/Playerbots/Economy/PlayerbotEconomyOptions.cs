@@ -38,7 +38,7 @@ public sealed class PlayerbotEconomyOptions
 
     /// <summary>
     /// How many of the bot's weakest equipment slots a visit searches the auction house for (0..8), one page each, by inventory type;
-    /// the weapon slots share one weapon page. 0 searches the two class-wide pages (weapons, then armor) of earlier versions.
+    /// the main hand, and the off hand and ranged slots of weapon builds, share one weapon page, while a shield, a held-in-off-hand item or a relic is searched by its own inventory type; no off-hand search while a two-hander is worn. 0 searches the two class-wide pages (weapons, then armor) of earlier versions.
     /// </summary>
     public int UpgradeSlotSearches { get; set; } = 3;
 

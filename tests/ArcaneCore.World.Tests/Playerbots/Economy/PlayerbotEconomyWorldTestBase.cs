@@ -46,6 +46,7 @@ public abstract class PlayerbotEconomyWorldTestBase
     private protected const uint Elixir = 990340;
     private protected const uint SmallRing = 990310;
     private protected const uint BigRing = 990311;
+    private protected const uint ScenarioShield = 990312;
     private protected const uint Filler = 990320;
     private protected const uint LevelFiftyCloth = 990350;
 
@@ -152,6 +153,8 @@ public abstract class PlayerbotEconomyWorldTestBase
             new ItemTemplate { Entry = Elixir, Name = "Scenario Elixir", Class = (uint)ItemClass.Consumable, Quality = 1, Stackable = 5, SellPrice = 100, BuyPrice = 1000 },
             PlayerbotEquipmentTests.Ring(SmallRing, 5) with { Name = "Scenario Ring", Quality = 2, SellPrice = 40, BuyPrice = 200 },
             PlayerbotEquipmentTests.Ring(BigRing, 20) with { Name = "Scenario Great Ring", Quality = 2, SellPrice = 40, BuyPrice = 200 },
+            // Armor class, inventory type Shield. Sub-class 0 (misc) so the usable filter does not depend on the scenario bot's armor skills.
+            PlayerbotEquipmentTests.Template(ScenarioShield, InventoryType.Shield, 50) with { Name = "Scenario Shield", Quality = 2, SellPrice = 40, BuyPrice = 200 },
             new ItemTemplate { Entry = Filler, Name = "Scenario Pebble", Class = 15, Quality = 0, Stackable = 1, SellPrice = 1 },
             new ItemTemplate { Entry = LevelFiftyCloth, Name = "Scenario Level 50 Cloth", Class = (uint)ItemClass.TradeGoods, Quality = 1, ItemLevel = 50, SellPrice = 400, BuyPrice = 1600, Stackable = 20 },
         ]);

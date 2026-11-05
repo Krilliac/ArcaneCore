@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots.Progression;
@@ -38,6 +39,30 @@ internal static class PlayerbotGearScoreSeam
     {
         ArgumentNullException.ThrowIfNull(player);
         return PlayerbotItemScore.WornScore(player, slot, PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights, null);
+    }
+
+    /// <summary>The profile reader in use: how the bot holds its weapons, whether it wears a two-hander and its class (world thread; tests replace it and restore it).</summary>
+    internal static Func<Player, PlayerbotUpgradeProfile> UpgradeProfile { get; set; } = DefaultUpgradeProfile;
+
+    /// <summary>The bot's weapon style under its talent build, whether a two-hander is worn, and its class.</summary>
+    internal static PlayerbotUpgradeProfile DefaultUpgradeProfile(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        return new PlayerbotUpgradeProfile(PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights.Style, player.Inventory.IsTwoHandUsed, player.Class);
+    }
+
+    /// <summary>The seam's answer for the slot search profile; a faulty reader reads as a one-hander that wears no two-hander (the weapon page for the hands).</summary>
+    internal static PlayerbotUpgradeProfile Profile(Player player)
+    {
+        try
+        {
+            return UpgradeProfile(player);
+        }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
+        {
+            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("playerbot.gearscore", e);
+            return new PlayerbotUpgradeProfile(PlayerbotWeaponStyle.DualWield, false, Class.Warrior);
+        }
     }
 
     /// <summary>The seam's answer for what is worn in one slot, with a non-finite value or a faulty scorer read as 0.</summary>
