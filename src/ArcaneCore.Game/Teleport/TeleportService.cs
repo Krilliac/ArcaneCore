@@ -816,6 +816,7 @@ public sealed partial class TeleportService
         }
 
         TeleportDestination dest = pending.Destination;
+        bool homeRefused = false; // the bind point replacing an invalid destination was refused by the instance rules
         uint loadedMapId = dest.MapId; // the map the client was told to load (dest may be replaced by the bind point below)
         WorldMaps maps = WorldMaps.Of(_world);
         if (pending.ArrivalMap is { } arrivalMap)
@@ -846,13 +847,13 @@ public sealed partial class TeleportService
                     return;
                 }
 
-                _logger.LogError("{Player} could not be sent to the bind point on map {HomeMapId}; disconnecting", player.Name, dest.MapId);
-                player.Session.Kick();
-                return;
+                // The instance rules refuse the bind point (a dungeon or battleground): fall into the origin-then-bind chain below, which
+                // reports map-entry-failed and return-failed and kicks only once the origin was tried too.
+                homeRefused = true;
             }
         }
 
-        if (TryEnterMap(player, dest))
+        if (!homeRefused && TryEnterMap(player, dest))
         {
             // ArcaneCore behaviour, not vmangos parity: vmangos never clears PLAYER_CHEAT_FLY / PLAYER_CHEAT_FIXED_Z on a teleport (see
             // MovementCheats.cs). A far transfer makes the client enter the world afresh (the point after Map::Add in vmangos

@@ -43,7 +43,7 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
 - **PvP flag completion** (the `overriding` form of `UpdatePvP`, propagation to pets/totems, group status, the contested flag and its 30 s timer, assist
   pulses, `ForcePvp` for PvP-type quests) and **taxi and Honorless Target rules** (flight start clears the flag, landing in an enforced area casts spell
   2479): not done. They edit `MapCombat.Death.cs`/`Melee.cs` regions other wave-4 lanes (threat, aura engine, graveyards) also touch. The existing flag logic
-  is unchanged; only its two persisted bits are new. The teleport-arrival Honorless cast additionally needs an arrival hook `TeleportService` does not have.
+  is unchanged; only its two persisted bits are new. The teleport-arrival Honorless cast is raised by `TeleportService` through `HonorlessTargetDue` on a far-teleport arrival.
 - **Hall of Legends / Champions' Hall rank gate** (areatriggers 2527, 2532, visual rank 6): present in mangos-classic, absent in vmangos, and there is no
   area-trigger requirement framework on the base. A later lane can read `IPlayerHonor.VisualRank`.
 - **Creature honor follows the tap, with a simplified tap.** `HonorKillRewards` taps a non-pet creature on the first damage from a player (or a player's pet
@@ -107,7 +107,7 @@ Every default is the retail 1.12 value; a different value is a deliberate deviat
   Reachable only through GM commands.
 - Standing ties are broken by character id (vmangos `std::sort` is unstable).
 - WorldDefense: vmangos needs internal rank 15, mangos-classic visual rank 11; these are the same rank under two numberings, so there is no difference to choose.
-- A far teleport that cannot enter its map returns to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded; the arrival Honorless Target cast is due on whichever entry succeeds (vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
+- A far teleport that cannot enter its map returns to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded; the arrival Honorless Target cast is due only when the fallback arrives through such a new far teleport (its worldport ack, vmangos `MovementHandler.cpp:193-195`); a direct entry on the loaded map id has no cast (return order: vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
 
 ## Hosted CI
 
