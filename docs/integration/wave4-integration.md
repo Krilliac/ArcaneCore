@@ -122,14 +122,15 @@ At integration, setting the `MaxListedEntries` default to 0 did **not** fail the
 
 Config-gated and default-off or retail: `Forms:ResetFistAttackTimeOnFormLoss` (off), `Creatures:Movement:EvadeRestoresFullHealth` (off),
 `Combat:CastingConsumesSwing` (off), `Combat:CastResetsMeleeSwing` (retail on), honor `MaintenanceMode` Startup (Live is opt-in),
-`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off), `Auras:ProcEngineBreaksDamageAuras` (off: no proc engine exists; the damage break skips auras that carry proc flags, which spares Wyvern Sting; no spell is special-cased by id).
+`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off).
+
+`Auras:ProcEngineBreaksDamageAuras` is not a deviation and not default-off: its default is true, the vmangos `checkProcFlags` rule, and the proc engine is present (`src/ArcaneCore.Game/Spells/Procs/`, docs/areas/procs.md). The damage break skips auras whose spell has proc flags, which spares Wyvern Sting; false removes those auras on the damage break too. No spell is special-cased by id.
 
 Not switchable (flagged for a decision; none is default-on non-retail by intent, but these are unswitched deviations):
 
 * Pet and totem casts never spend the owner's spell-mod charges (retail leaves a stuck -1 mod); `PassiveReapply` depth cap of 2.
 * `EffectHealthLeech` treats an unset multiple value as 1.0 (vmangos heals 0, `SpellEffects.cpp:1863`). The periodic leech tick matches vmangos (`SpellAuras.cpp:5979`).
 * `SpellInfo.GetCastTime` ignores the all-zero cast time row, so Throw and Multi-Shot miss the +500 ms ranged slot time.
-* With `Auras:ProcEngineBreaksDamageAuras=false` (no proc engine exists) the damage break still removes auras that carry proc flags so Polymorph, Sap, Gouge and Freezing Trap stay breakable; Wyvern Sting (19386, 24132, 24133) is spared only because it carries proc flags (vmangos `checkProcFlags`), and Prowl breaks through the damage flag like Polymorph. No spell is special-cased by id. Set the key once a proc engine exists.
 * Enchant spells fail closed with no `SpellItemEnchantment.dbc` or `Enchanting:Enabled=false` (no retail counterpart; safe direction).
 * Reputation: hardened packet length checks, kill credit by killer's group (no loot-tap primitive), forced reactions not sent by default.
 * Honor: tap model simplified, Live mode limits (documented in docs/areas/honor.md).
@@ -185,7 +186,7 @@ Each item was re-checked against the code at the uc2 integration branch (Y96). R
   each allocated schema version 21 for their own tables; the integrated numbers are Characters 21-25 and World 21-28 (table above). A database that
   applied one of those lane branches records 21 for a different step and will not line up. Recreate it, or run the upgrader against a copy and review
   the drift report. A release database upgraded from main (Characters 20, World 20) is not affected.
-* **New switch:** `Auras:ProcEngineBreaksDamageAuras` (default false). **New GM-visible default:** `Bans:MaxListedEntries` = 200 (0 restores the
+* **New switch:** `Auras:ProcEngineBreaksDamageAuras` (default true, the vmangos rule; false also removes auras with proc flags on the damage break). **New GM-visible default:** `Bans:MaxListedEntries` = 200 (0 restores the
   unbounded retail listing).
 
 ## Verification (local, Release, through the throttle `dn.ps1`)
