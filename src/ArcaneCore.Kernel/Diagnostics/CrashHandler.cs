@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
@@ -40,6 +41,7 @@ public sealed class CrashHandler : IDisposable
     private volatile IReadOnlyList<ICrashContextProvider> _providers;
     private volatile bool _firstChanceHooked;
     private volatile bool _logFirstChance;
+    private readonly FirstChanceThrottle _firstChance = new();
     private volatile CrashDumpService _dumpService = new();
     private readonly object _dumpGate = new();
     private string? _dumpDoneNote;
@@ -366,16 +368,55 @@ public sealed class CrashHandler : IDisposable
             return;
         }
 
-        // Every throw in the process lands here, including throws inside the sink: the thread-static
-        // guard in Report makes a nested one a no-op. Expected cancellation signals, controlled
-        // malformed-packet layout rejections, and internal BCL expression-interpreter probes are skipped
-        // so FirstChanceExceptions remains signal-rich and avoids expensive stack-trace rendering on the world thread.
-        if (_reporting || ShouldIgnoreFirstChance(e.Exception))
+        _ = ReportFirstChance(e.Exception);
+    }
+
+    /// <summary>
+    /// The first-chance report's body (public so tests drive it in any build; the hook itself is attached only in a Debug Kernel). Every throw in the
+    /// process lands here, including throws inside the sink: the thread-static guard makes a nested one a no-op. Expected cancellation signals,
+    /// controlled malformed-packet layout rejections and internal BCL probes are skipped (<see cref="ShouldIgnoreFirstChance"/>). Of the rest,
+    /// <see cref="FirstChanceThrottle"/> keeps one report per exception object (rethrows are not reported again) and per type and origin per window,
+    /// and the report carries the throwing thread's stack, so an exception whose own stack is only the rethrow frame still names where it came from.
+    /// Returns whether a report was written.
+    /// </summary>
+    public bool ReportFirstChance(Exception? exception)
+    {
+        if (_reporting || exception is null || ShouldIgnoreFirstChance(exception))
         {
-            return;
+            return false;
         }
 
-        _ = Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false, dumpPlan: null);
+        string throwSite;
+        _reporting = true;
+        try
+        {
+            if (!_firstChance.TryMarkNew(exception))
+            {
+                return false;
+            }
+
+            // Skip this frame; the hook's own frames are skipped by FirstChanceSite as well. No file info for the signature (cheap); the report reads it.
+            string origin = FirstChanceSite.Origin(new StackTrace(1, fNeedFileInfo: false));
+            FirstChanceDecision decision = _firstChance.Decide(exception.GetType().FullName + " @ " + origin);
+            if (!decision.Report)
+            {
+                return false;
+            }
+
+            throwSite = FirstChanceSite.Render(origin, new StackTrace(1, fNeedFileInfo: true), decision);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"first-chance report failed: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            _reporting = false;
+        }
+
+        // The report already holds the exception and its stack; the sink gets no exception object, so the logger does not append the same stack again.
+        return Report(CrashKind.FirstChance, exception, LogLevel.Debug, terminating: false, dumpPlan: null, throwSite, attachException: false) is not null;
     }
 
     /// <summary>
@@ -497,7 +538,7 @@ public sealed class CrashHandler : IDisposable
     }
 
     /// <summary>Write the report through the sink; returns its text (null when nested on this thread or rendering failed).</summary>
-    private string? Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating, string? dumpPlan)
+    private string? Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating, string? dumpPlan, string? throwSite = null, bool attachException = true)
     {
         if (_reporting)
         {
@@ -512,11 +553,11 @@ public sealed class CrashHandler : IDisposable
                 CrashAlert.TryBeep(checkErrorStream: true);
             }
 
-            string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow, dumpPlan);
+            string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow, dumpPlan, throwSite);
             ICrashSink sink = _sink;
             try
             {
-                sink.Write(level, report, exception);
+                sink.Write(level, report, attachException ? exception : null);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

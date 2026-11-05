@@ -33,7 +33,11 @@ public sealed class DiagnosticsWiringTests
             ("Diagnostics:BeepOnException", "false"),
             ("Diagnostics:CrashDialog", "true"),
             ("Diagnostics:FaultDialog", "False"),
-            ("Diagnostics:InvariantLogLimit", "0"))));
+            ("Diagnostics:InvariantLogLimit", "0"),
+            ("Diagnostics:CrashDump:Mode", "heap"),
+            ("Diagnostics:CrashDump:MaxFiles", "0"),
+            ("Diagnostics:CrashDump:FullMinFreeGB", "0"),
+            ("Diagnostics:CrashDump:TimeoutSeconds", "3600"))));
     }
 
     [Theory]
@@ -48,6 +52,13 @@ public sealed class DiagnosticsWiringTests
     [InlineData("Diagnostics:FaultDialog", "1")]
     [InlineData("Diagnostics:InvariantLogLimit", "-1")]
     [InlineData("Diagnostics:InvariantLogLimit", "ten")]
+    [InlineData("Diagnostics:CrashDump:Mode", "Everything")]
+    [InlineData("Diagnostics:CrashDump:MaxFiles", "-1")]
+    [InlineData("Diagnostics:CrashDump:FullMinFreeGB", "-5")]
+    [InlineData("Diagnostics:CrashDump:FullMinFreeGB", "lots")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "0")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "3601")]
+    [InlineData("Diagnostics:CrashDump:TimeoutSeconds", "2000000000")]
     public void DiagnosticsCheck_RejectsAnUnknownValue_NamingTheKey_AndTheDaemonValidationSeesIt(string key, string value)
     {
         ConfigIssue issue = Assert.Single(new DiagnosticsConfigChecks().Check(Config((key, value))));

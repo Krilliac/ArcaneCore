@@ -325,6 +325,7 @@ public sealed class ClusterSupervisorOptions
     /// The exemption is <c>min(announced max + 60, this)</c>: the child's own <c>max=</c> from its authenticated line, bounded by this value. Keep it
     /// above three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c> plus a minute, or the cap cuts a long dump short.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number of seconds, 1 to 3600")]
     public int DumpGraceSeconds { get; set; } = 420;
 
     /// <summary>The dotnet-stack executable for <c>HangCapture=Stacks</c> (default empty: none; required when any child uses Stacks).</summary>

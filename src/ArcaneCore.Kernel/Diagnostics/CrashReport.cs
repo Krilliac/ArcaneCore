@@ -70,13 +70,25 @@ public static class CrashReport
         "Release";
 #endif
 
-    public static string Render(CrashKind kind, Exception? exception, IReadOnlyList<ICrashContextProvider> providers, DateTime nowUtc, string? dumpPlan = null)
+    public static string Render(CrashKind kind, Exception? exception, IReadOnlyList<ICrashContextProvider> providers, DateTime nowUtc, string? dumpPlan = null, string? throwSite = null)
     {
         var sb = new StringBuilder(4096);
         sb.Append("==== ArcaneCore crash report: ").Append(Title(kind)).Append(" at ")
             .Append(nowUtc.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)).Append(" UTC ====\n");
 
         AppendException(sb, exception);
+        if (throwSite is not null)
+        {
+            sb.Append("[throw site]
+").Append(throwSite);
+            if (throwSite.Length > 0 && throwSite[^1] != '
+')
+            {
+                sb.Append('
+');
+            }
+        }
+
         AppendProcess(sb, nowUtc);
         AppendThread(sb);
         AppendMemory(sb);

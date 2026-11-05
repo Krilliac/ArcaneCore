@@ -47,7 +47,7 @@ binds or touches a database.
 | `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error (exit 78); a hot-path check that fails per packet cannot flood the log |
 | `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match. Either way the daemon writes a dump of itself first (`Diagnostics:CrashDump`, [below](#the-crash-dump)) |
 | `Diagnostics:OnUnobservedTask` | `Log` | `Log`, `Exit`, `FailFast` | `Log` is the runtime's own behaviour (the exception is marked observed) made visible at Error level. `Exit`/`FailFast` as above. Default stays `Log` so a fire-and-forget task that faulted silently before this lane does not start killing production servers |
-| `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Logs every throw, caught or not, at Debug level; the hook is re-entrancy guarded |
+| `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Reports throws, caught or not, at Debug level; the hook is re-entrancy guarded. Each exception object is reported once (a rethrow through the next awaiting frame is not reported again), one exception type and origin frame at most once a minute, and at most 20 reports a minute in all; a report says what it suppressed and carries a `[throw site]` section with the throwing thread's stack, so an exception whose own stack is only the rethrow frame (a `Task.WaitAsync` timeout) still names the method that awaited it (`FirstChanceThrottle`, `FirstChanceSite`) |
 | `Diagnostics:CrashDialog` | `false` | `true`, `false` | a Windows message box for a crash that ends the process, after the report and the fault record and before the exit policy, which it never changes ([the crash dialog](#the-crash-dialog)). Only an interactive Windows console session opens one; anywhere else the key does nothing |
 | `Diagnostics:FaultDialog` | `false` | `true`, `false` | also a message box for the first occurrence of each new fault-ledger signature, on a background thread, one box at a time ([the crash dialog](#the-crash-dialog)) |
 
@@ -99,7 +99,7 @@ ends. The dump is requested from the process's own diagnostics endpoint, the mec
 | `Diagnostics:CrashDump:Directory` | empty | empty: `dumps` beside the log file (`logs/dumps`), the directory `.debug dump` uses; without file logging, `dumps` in the daemon's directory |
 | `Diagnostics:CrashDump:MaxFiles` | `5` | the newest N files of the pattern are kept; 0 keeps all. Other files in the directory are never touched |
 | `Diagnostics:CrashDump:FullMinFreeGB` | `16` | below this much free space on the volume Full starts at Heap (the launcher's threshold) |
-| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. 1 to 3600, checked at start. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
 
 The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names the path that writes the dump in a `[crash dump]` section
 ("written in-process by ArcaneCore", "written by the runtime", or "none"), and the log carries one line per attempt, failure and prune. When
@@ -319,8 +319,11 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   lanes this one may not edit.
 - `Invariant.Check` under `Continue` cannot force a caller to refuse; each site above states its own refusal. New sites must do the
   same (return false, throw, drop) or they are decoration.
-- The first-chance hook exists only in a Debug Kernel build; CI builds Release, so it is covered by the Debug run of
-  `CrashReportTests.FirstChanceHook_FollowsTheKernelBuild` only.
+- The first-chance hook exists only in a Debug Kernel build; CI builds Release, so its attachment is covered by the Debug run of
+  `CrashReportTests.FirstChanceHook_FollowsTheKernelBuild` only. Its body (`CrashHandler.ReportFirstChance`: deduplication, throttle,
+  throw site) is public and driven directly by `FirstChanceThrottleTests` in either build.
+- The report's `uptime` is measured from the process start (`Process.StartTime`); it used to be measured from the first use of
+  `CrashReport`, so it ran short and the first report's could be negative (`CrashReportUptimeTests`).
 - `Environment.FailFast` exit statuses are the runtime's; the process tests assert "not 0 and not 70" rather than 134, because
   Windows reports a different code.
 - The in-process crash dump cannot cover a native crash, a stack overflow or a fatal runtime error: those never reach a managed handler,
