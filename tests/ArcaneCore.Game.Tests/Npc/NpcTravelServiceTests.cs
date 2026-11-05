@@ -289,6 +289,35 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void AThreatChangeDuringAFlight_LeavesThePlayerOffline_UntilItLands()
+    {
+        // HostileReference::addThreat re-derives an offline entry through updateOnlineStatus, which requires !IsTaxiFlying (ThreatManager.cpp:142-146).
+        using var rig = new TaxiRig();
+        NpcServiceTestKit kit = rig.Kit;
+        var holder = new ArcaneCore.Game.Tests.CombatCore.CombatTestUnit();
+        ArcaneCore.Game.Combat.ThreatList threat = holder.Combat.Threat;
+        threat.AddThreat(kit.Player, 100);
+        kit.Player.Money = 150;
+
+        kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
+        Assert.True(rig.Flights.IsFlying(kit.Player));
+
+        threat.AddThreat(kit.Player, 25);
+        threat.AddThreat(kit.Player, 0f); // the owner entry a pet's threat adds (ThreatList.ApplyChange)
+        ArcaneCore.Game.Combat.Threat.HostileRefs.UpdateThreatTables(kit.Player);
+
+        Assert.Same(kit.Player, Assert.Single(threat.OfflineEntries).Target);
+        Assert.DoesNotContain(threat.Entries, e => ReferenceEquals(e.Target, kit.Player));
+        Assert.Equal(125f, threat.GetThreat(kit.Player));
+
+        rig.Flights.Update(rig.Map, 1000);
+        rig.Flights.Update(rig.Map, 1100);
+        Assert.False(rig.Flights.IsFlying(kit.Player));
+        Assert.Empty(threat.OfflineEntries);
+        Assert.Equal(125f, threat.GetThreat(kit.Player));
+    }
+
+    [Fact]
     public void ActivateTaxiExpress_RoundsEachLegHalfUp_NotTheCeilOfTheSum()
     {
         // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f), paid when its path starts (taxi lane).

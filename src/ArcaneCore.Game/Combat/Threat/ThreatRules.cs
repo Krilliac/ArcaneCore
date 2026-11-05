@@ -93,12 +93,12 @@ public static class ThreatRules
     }
 
     /// <summary>
-    /// vmangos HostileReference::updateOnlineStatus (Threat/ThreatManager.cpp:142-146): a game master target is offline. The
-    /// "taxi flying" clause waits for a taxi primitive on <see cref="Player"/> (documented limit).
+    /// vmangos HostileReference::updateOnlineStatus (Threat/ThreatManager.cpp:142-146): a game master target is offline, and so is a
+    /// target on a taxi flight (<see cref="UnitFlags.TaxiFlight"/>, vmangos IsTaxiFlying), so a threat change cannot bring a passenger back mid-flight.
     /// </summary>
     public static bool IsTargetUnreachable(Unit target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        return target is Player { IsGameMaster: true };
+        return target is Player { IsGameMaster: true } || (target.UnitFlags & UnitFlags.TaxiFlight) != 0;
     }
 }

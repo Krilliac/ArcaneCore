@@ -47,16 +47,23 @@ not reversed (115-122); a missing condition id is false (`IsConditionSatisfied`,
 
 | Evaluated | Types (cmangos id) |
 |---|---|
-| Always | NOT -3, OR -2, AND -1, NONE 0, ITEM_EQUIPPED 3, TEAM 6, RACE_CLASS 14, LEVEL 15, GENDER 35 |
-| Needs a collaborator that the daemon supplies | AURA 1, ITEM 2, ITEM_WITH_BANK 23, AREAID 4, AREA_FLAG 13, REPUTATION_RANK_MIN 5 / MAX 30, QUESTREWARDED 8, QUESTTAKEN 9, QUESTAVAILABLE 19, QUEST_NONE 22, SPELL 17, ACTIVE_GAME_EVENT 12, ACTIVE_HOLIDAY 26, AD_COMMISSION_AURA 10 |
+| Always | NOT -3, OR -2, AND -1, NONE 0, ITEM_EQUIPPED 3, TEAM 6, RACE_CLASS 14, LEVEL 15, GENDER 35, DEAD_OR_AWAY 36 modes 0 and 3 |
+| Needs a collaborator that the daemon always supplies (`ConditionFeature.BuildContext`) | AURA 1, ITEM 2, ITEM_WITH_BANK 23, AREAID 4, AREA_FLAG 13, QUESTREWARDED 8, QUESTTAKEN 9, QUESTAVAILABLE 19, QUEST_NONE 22, SPELL 17, ACTIVE_GAME_EVENT 12, ACTIVE_HOLIDAY 26, AD_COMMISSION_AURA 10, INSTANCE_SCRIPT 18, COMPLETED_ENCOUNTER 31, LAST_WAYPOINT 33, CREATURE_IN_RANGE 37, SPAWN_COUNT 39, WORLD_SCRIPT 40, WORLDSTATE 42 |
 | Needs the skills feature to be active | SKILL 7 and SKILL_BELOW 29: decided from `Player.Skills.GetValueBase` (Player::GetSkillValueBase) once `SkillsFeature.IsActive` (it attaches after `ConditionFeature` and then calls `RefreshCollaborators`); with skills in Legacy mode or without skill content they fail closed |
-| Collaborator missing in the daemon: fail closed | PVP_RANK 11 (no honor system) |
-| Not decidable from an NPC interaction: fail closed | INSTANCE_SCRIPT 18, LEARNABLE_ABILITY 28, COMPLETED_ENCOUNTER 31, LAST_WAYPOINT 33, DEAD_OR_AWAY 36, CREATURE_IN_RANGE 37, PVP_SCRIPT 38, SPAWN_COUNT 39, WORLD_SCRIPT 40, WORLDSTATE 42, IS_IN_COMBAT 43 |
+| Needs the honor feature to be active | PVP_RANK 11: decided from `HonorFeature.ActiveService`; with `World:Honor:Enabled=false` (default true) it fails closed |
+| Needs reputation content | REPUTATION_RANK_MIN 5 / MAX 30: decided once `ReputationFeature` has faction content; without factions they fail closed |
+| No case in `ConditionEvaluator.Evaluate`: fail closed | LEARNABLE_ABILITY 28, PVP_SCRIPT 38, IS_IN_COMBAT 43 |
+| No collaborator in the daemon: fail closed | DEAD_OR_AWAY 36 modes 1 and 2 (all group or all instance players dead or away): the evaluator asks `ConditionContext.DeadOrAwayGroup`, which `BuildContext` does not set |
+
+A supplied collaborator can still have no answer for one evaluation, and that leaf is then unknown too: INSTANCE_SCRIPT on a map with no
+instance script, WORLD_SCRIPT for an id and state no owner reports, LAST_WAYPOINT when the source creature is not on the player's map,
+COMPLETED_ENCOUNTER, CREATURE_IN_RANGE, SPAWN_COUNT and WORLDSTATE for a player with no map (or, for the two creature types, a map without
+creatures), and the quest types while the quest feature is absent. `ConditionEvaluator.Unavailable` counts these; `Summarize` cannot see them.
 
 Counts of classic-db rows by type (sizing only, from the z2815 dump's `conditions` INSERT; never a
 test constant): 1x33, 2x45, 4x11, 5x26, 6x4, 7x57, 8x150, 9x96, 10x1, 11x3, 12x24, 13x1, 14x35,
 15x30, 17x33, 18x7, 19x2, 22x63, 23x47, 26x2, 29x2, 30x3, 31x2, 33x11, 35x2, 36x2, 37x6, 39x2, 40x37,
-42x16, AND 269, OR 66, NOT 45.
+42x16, AND 269, OR 66, NOT 45. Types 28, 38 and 43 have no row, and the two type 36 rows are mode 0 (317) and mode 3 (318).
 
 ### Fail closed means unknown, not false
 
@@ -69,20 +76,19 @@ decidable and which leaf types are dead; `ConditionFeature` logs it at startup.
 
 ### Limits (documented, not hidden)
 
-* No `IConditionContentStore` implementation exists yet. Importing the `conditions` table is slice NQ0
-  (not delivered in this lane run); until then the daemon runs with an empty table, which is what a
-  missing row means in cmangos.
+* The table comes from `EfConditionContentStore` (`ConditionsWorldModule`). A world with no stored rows runs with an
+  empty table, which is what a missing row means in cmangos.
 * Existence validation that needs other content (the item, spell, quest, faction, skill or game event
   must exist, `IsValid` in `Conditions.cpp`) is not applied. A reference to missing content evaluates
   as that content's absence (an unknown faction is false, like cmangos).
 * A creature as the *target* (only via the swap flag) has no race, class, level, gender or auras in the
   `NpcInfo` contract, so those types are unknown there.
 * Corpse targets (`..._OR_CORPSE` requirements, PVP_RANK on a corpse) do not exist.
-* `Conditions:ActiveGameEvents` and `Conditions:ActiveHolidays` default to empty: retail game events are
-  date driven and there is no scheduler. This is a placeholder, not retail behaviour.
-* Loot conditions are not wired (`LootService.Conditions` belongs to the durable-loot lane).
+* `Conditions:ActiveGameEvents` and `Conditions:ActiveHolidays` default to empty: the running events and holidays come from
+  `GameEventFeature` (docs/areas/game-events-weather.md) and these two keys are an operator override added to them.
+* Loot conditions are wired (`GameObjectLootFeature`, docs/areas/loot-conditions-chest-gold.md).
 
-### Known deviations without a switch (accepted temporary)
+### Known deviations without a switch
 
 Item 1 fails closed and has no configuration option, which the standing rule (every deliberate deviation behind a switch that defaults to
 retail) calls for. It is accepted and listed in `claude-handoff-20261003.md`. What a switch would choose between (fail closed or a
@@ -90,13 +96,13 @@ documented pass per undecidable type, with neither being retail) is not a choice
 fail-closed behaviour as the documented default and no switch. Item 2 was
 superseded by the adapter gate.
 
-1. **Condition types that cannot be resolved here** (the "fail closed" rows of the Types table: PVP_RANK, the
-   script and world-state types, the types undecidable from an NPC interaction, and SKILL/SKILL_BELOW while the
-   skills feature is inactive). An undecidable leaf is *unknown* and the row is "not satisfied", so a gossip
-   option, vendor row or quest guarded by it stays hidden; retail would evaluate it. Counted and logged at
-   startup (`ConditionFeature`), not configurable. Closed as a decision: the unresolvable types stay fail-closed by design (the safe direction,
-   and no retail-equivalent pass exists for a type whose data this base lacks); each type becomes evaluable when its owning system lands, and no
-   switch is planned.
+1. **Condition leaves that still fail closed** (the fail-closed cases of the Types table). A collaborator absent because its feature is
+   inactive: SKILL and SKILL_BELOW without active skills, PVP_RANK with honor off, the reputation ranks without faction content. A server
+   in that state has no data to answer with. Types with no evaluator case or no daemon collaborator: LEARNABLE_ABILITY, PVP_SCRIPT,
+   IS_IN_COMBAT and DEAD_OR_AWAY modes 1 and 2, none of which any classic-db row uses. An undecidable leaf is *unknown* and the row is
+   "not satisfied", so a gossip option, vendor row or quest guarded by it stays hidden, where retail would evaluate it. Counted and logged
+   at startup (`ConditionFeature`), not configurable. Closed as a decision: these stay fail-closed by design (the safe direction), and no
+   switch is planned. The script, world-state, encounter, waypoint and spawn types are evaluated and are not part of this item.
 2. **`AcceptableQuest` refusals** (`QuestNpcServices.Support.cs`): superseded. The fixed list of refusals became the adapter gate
    (`QuestNeeds.Of`, `IQuestAdapterModule`): a quest is withheld only when its template needs a behaviour (source spell, source counters,
    party accept, auto reward, a reputation or exploration objective, a mail reward, the PvP type) that no registered adapter provides, and
@@ -107,15 +113,15 @@ superseded by the adapter gate.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `Conditions:ActiveGameEvents` | `[]` | event ids reported active to type 12 |
-| `Conditions:ActiveHolidays` | `[]` | holiday ids reported active to type 26 |
+| `Conditions:ActiveGameEvents` | `[]` | event ids reported active to type 12, in addition to the running events |
+| `Conditions:ActiveHolidays` | `[]` | holiday ids reported active to type 26, in addition to the running events' holidays |
 
 ### Tests
 
 `tests/ArcaneCore.Game.Tests/Conditions/*` (truth tables, table validation, gossip/text/vendor through
 the real services, quest facts through the real quest log) and
 `tests/ArcaneCore.World.Tests/Npc/ConditionFeatureTests.cs` (daemon wiring, config, rebuild order).
-Needs the real client: the Llane Beshere (Northshire) class-variant gossip once NQ0 imports the table.
+Needs the real client: the Llane Beshere (Northshire) class-variant gossip.
 
 ## Slice NQ11a: CMSG_BUY_ITEM_IN_SLOT
 

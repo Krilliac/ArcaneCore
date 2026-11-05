@@ -40,6 +40,7 @@ The list re-sorts lazily (only after a change), with a stable insertion sort, as
 - Assist threat zeroing for a stunned owner whose stun breaks on damage and for UNIT_STATE_ISOLATED needs aura-holder data
   that the spell lane does not publish; only confused and fleeing are applied.
 - "Taxi flying" targets go offline in every threat list while a flight runs and come back on landing (`TaxiFlightSystem`; the GM case uses the same path).
+  A threat change during the flight leaves them offline (`ThreatRules.IsTargetUnreachable`, vmangos `updateOnlineStatus`).
 - The second-choice selector predicate (`isLowPriority`) is supported by `SelectVictim`; the creature host passes feared and
   confused targets only (damage-immune, breakable-CC and totem second choices need aura-holder data and a spell catalog).
 
