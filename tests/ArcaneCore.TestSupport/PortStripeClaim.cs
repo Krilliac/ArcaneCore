@@ -13,10 +13,10 @@ public sealed class PortStripeClaim : IDisposable
     public const int RangeStart = 20000;
 
     /// <summary>The number of stripes; the range is <see cref="StripeCount"/> x <see cref="StripeSize"/> = 12000 ports (20000-31999).</summary>
-    public const int StripeCount = 16;
+    public const int StripeCount = 8;
 
-    /// <summary>Ports per stripe. The largest test process (see LoopbackPorts) consumes well below this.</summary>
-    public const int StripeSize = 750;
+    /// <summary>Ports per stripe. Only four test assemblies call LoopbackPorts. Gateway.Tests consumed 342 ports in a full run, but World.Tests binds one per host start (WorldTestHost) from about 1700 call sites, so a process can use more ports than its stripe holds and wrap around inside it. After a wrap a port is handed out a second time: a bind that fails (the earlier user still has it) is retried on the next port, but a port that Next() probed and released can be taken in-process by a later caller before the first caller binds it, and a recently closed port can still be in TIME_WAIT. Another process cannot take it, which is what the stripe is for.</summary>
+    public const int StripeSize = 1500;
 
     private readonly FileStream _lock;
 
