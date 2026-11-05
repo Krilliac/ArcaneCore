@@ -282,13 +282,14 @@ public sealed class EventAiRangedTests
     public void AnIdleCreatureWithAFleeingOrConfusedGeneratorOnTop_AndNoFlag_IsPutInCombatByAnAttacker_ButDoesNotRetaliate(bool fear)
     {
         // The motion-type clause of the retaliation guard (CreatureMapSystem.Combat.cs): the generator can be on top while the unit flag is not
-        // (MotionMaster.MoveFleeing pushes without writing the flag), so the flag test alone would let the creature retaliate.
-        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0), Spawn(2, WolfEntry, 3, 0)]);
+        // (SyncCrowdControl pushes a crowd-control generator that restores the Fleeing flag to its prior, clear state; a plain MoveFleeing would
+        // set the flag in Initialize), so the flag test alone would let the creature retaliate. 'calm' is the positive control.
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 0, 0), Spawn(2, WolfEntry, 3, 0), Spawn(3, WolfEntry, 6, 0)]);
         (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
         using WorldRuntime world = runtime;
         (Player player, _) = AddPlayer(world, 1, 45, 0);
         Creature[] wolves = [.. system.Creatures];
-        Assert.Equal(2, wolves.Length);
+        Assert.Equal(3, wolves.Length);
         foreach (Creature w in wolves)
         {
             w.AI!.CombatMovement = false;
@@ -296,11 +297,12 @@ public sealed class EventAiRangedTests
 
         Creature attacker = wolves[0];
         Creature impaired = wolves[1];
+        Creature calm = wolves[2];
         attacker.AI!.AttackStart(player);
         Assert.Same(player, attacker.Combat.Victim);
         if (fear)
         {
-            impaired.Motion.MoveFleeing(null, 0);
+            impaired.Motion.SyncCrowdControl(CrowdControlMovement.Fear, null);
         }
         else
         {
@@ -311,9 +313,11 @@ public sealed class EventAiRangedTests
         Assert.Equal((UnitFlags)0, impaired.UnitFlags & (UnitFlags.Fleeing | UnitFlags.Confused));
 
         system.EnterCombatWithTarget(attacker, impaired);
+        system.EnterCombatWithTarget(attacker, calm);
 
         Assert.True(impaired.Combat.IsInCombat);
         Assert.Null(impaired.Combat.Victim);
+        Assert.Same(attacker, calm.Combat.Victim);
     }
 
     [Fact]
