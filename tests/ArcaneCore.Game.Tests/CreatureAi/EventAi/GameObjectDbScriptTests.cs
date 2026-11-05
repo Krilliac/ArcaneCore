@@ -166,6 +166,41 @@ public sealed class GameObjectDbScriptTests
     }
 
     [Theory]
+    [InlineData(DbScriptKind.GameObjectTemplate)]
+    [InlineData(DbScriptKind.GameObject)]
+    public void ARepeatUseWhileADelayedStepIsPending_QueuesASecondRun(DbScriptKind kind)
+    {
+        // GameObject::Use starts the script with the default SCRIPT_EXEC_PARAM_NONE (GameObject.cpp:1490, :1506, :1703; Map.h:233-240), so a
+        // second use by the same player while the 500 ms step of the first is pending is not dropped.
+        var ai = new CreatureAiContent([], [])
+        {
+            DbScripts = new DbScriptCatalog(
+            [
+                (kind, new RelayScriptStep(kind == DbScriptKind.GameObject ? ObjectGuid : ObjectEntry, 500, 0, 53, 0, 0, 0, 0, 0, 0,
+                    (int)TemplateVariable, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+            ]),
+        };
+        (WorldRuntime world, Map map, _) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            var objects = new GameObjectMapSystem(map, new GameObjectContent(
+                [GameObjectTestKit.GoTemplate(ObjectEntry, GameObjectType.Goober)], [GameObjectTestKit.GoSpawn(ObjectGuid, ObjectEntry, 0, 10)], [], [], []));
+            map.AddUpdater(objects);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid));
+            Run(world, 300);
+            Assert.Equal(GameObjectUseResult.Ok, objects.Use(player, go.Guid)); // the second run is due 500 ms after this use
+            Run(world, 300); // the first run's step fires at 500 ms
+            Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
+
+            ConditionRuntimeState.For(world).SetMapVariable(map, TemplateVariable, 0);
+            Run(world, 400); // the second run's step fires at 800 ms
+            Assert.Equal(1, ConditionRuntimeState.For(world).GetMapVariable(map, TemplateVariable));
+        }
+    }
+
+    [Theory]
     [InlineData(GameObjectType.Goober)]
     [InlineData(GameObjectType.Door)]
     public void PlayerUse_StartsTheTemplateAndTheGuidScript(GameObjectType type)
@@ -304,7 +339,12 @@ public sealed class GameObjectDbScriptTests
         List<(Player Player, uint Area)> joins = [];
         (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(
             new CreatureContent([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai),
-            new CreatureAiServices { JoinMeetingStone = withQueue ? (player, area) => joins.Add((player, area)) : null });
+            new CreatureAiServices { JoinMeetingStone = withQueue ? (player, area) =>
+            {
+                joins.Add((player, area));
+                return true;
+            }
+            : null });
         using (world)
         {
             (Player player, _) = AddPlayer(world, 1, 0, 10);

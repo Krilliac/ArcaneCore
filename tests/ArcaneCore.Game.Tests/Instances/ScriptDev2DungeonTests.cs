@@ -315,7 +315,13 @@ public sealed partial class ScriptDev2DungeonTests
 
         Assert.Equal(GameObjectUseResult.Ok, run.Objects.Use(run.Player, run.Object(ScholomanceInstance.GoBrazierOfTheHerald).Guid));
         run.Data.Update(5_000);
-        run.Fixture.Tick(); // the script runner's own steps run on the map tick
+        // The script runner's 5000 ms step is due at the map system clock, which advances on map ticks only (RelayScriptRunner.Start/Update),
+        // so tick the map past the delay: without the C# port taking the use, the DB step would add a second Kirtonos here.
+        for (int i = 0; i < 110; i++)
+        {
+            run.Fixture.Tick(50);
+        }
+
         Assert.Single(run.Creatures.Creatures, c => c.Template.Entry == ScholomanceInstance.NpcKirtonos);
     }
 

@@ -34,16 +34,28 @@ public sealed partial class GameObjectMapSystem
         {
             case GameObjectType.Door:
             {
+                // A player user asks the instance script first, as GameObject::Use does for any player (scriptReturnValue); it then skips the
+                // guid script (GameObject.cpp:1505).
+                bool tookUse = user is Player doorUser && InstanceScriptTookUse(doorUser, go);
                 GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
-                StartGuidUseScript(user, go); // GameObject.cpp:1506
+                if (!tookUse)
+                {
+                    StartGuidUseScript(user, go); // GameObject.cpp:1506
+                }
+
                 return result;
             }
 
             case GameObjectType.Button:
             {
+                bool tookUse = user is Player buttonUser && InstanceScriptTookUse(buttonUser, go); // GameObject.cpp:1528
                 GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
                 TriggerLinkedTrap(go, user);
-                StartGuidUseScript(user, go); // GameObject.cpp:1529
+                if (!tookUse)
+                {
+                    StartGuidUseScript(user, go); // GameObject.cpp:1529
+                }
+
                 return result;
             }
 

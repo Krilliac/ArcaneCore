@@ -96,7 +96,10 @@ public sealed partial class CreatureMapSystem
         // TYPEMASK_UNIT too, so a player-started event is unique by its player, not by the object it used.
         // A spell script starts on every hit (cmangos Spell::EffectDummy / EffectScriptEffect call ScriptsStart with the default
         // SCRIPT_EXEC_PARAM_NONE, Spells/SpellEffects.cpp:1529-1531 and :4188-4190).
-        DbScriptUniqueness unique = kind == DbScriptKind.Spell ? DbScriptUniqueness.None
+        // A game object use script starts on every use: GameObject::Use calls ScriptsStart with no execution parameter (GameObject.cpp:1490,
+        // :1506, :1529, :1703), the default SCRIPT_EXEC_PARAM_NONE, and Map::ScriptsStart checks uniqueness only for a non-zero parameter
+        // (Maps/Map.h:233-240, Maps/Map.cpp:2181).
+        DbScriptUniqueness unique = kind is DbScriptKind.Spell or DbScriptKind.GameObject or DbScriptKind.GameObjectTemplate ? DbScriptUniqueness.None
             : kind != DbScriptKind.Event ? DbScriptUniqueness.SourceAndTarget
             : source is Unit or GameObjects.GameObject ? DbScriptUniqueness.Source
             : target is Unit or GameObjects.GameObject ? DbScriptUniqueness.Target
@@ -896,7 +899,9 @@ public sealed partial class CreatureMapSystem
 
             case 200: // SCRIPT_COMMAND_MEETINGSTONE (mangos-classic ScriptMgr.cpp:3322-3345, vanilla only): the player joins the queue of area datalong
             {
-                // The reference takes the target when it is a player, else the source (ScriptMgr.cpp:3331-3335).
+                // The reference first refuses a non-player target (LogIfNotPlayer(pTarget), ScriptMgr.cpp:3324), so it has no source fallback; for a
+                // game object gossip the reference passes the player as source and the object as target (Player.cpp:11959) and would skip the
+                // step. This port deliberately differs: it takes the target when it is a player, else the source (the :3331-3335 selection).
                 Player? queued = target as Player ?? source as Player;
                 if (queued is null)
                 {
@@ -904,13 +909,12 @@ public sealed partial class CreatureMapSystem
                     return false;
                 }
 
-                if (_ai.JoinMeetingStone is not { } join)
+                // sLFGMgr.AddToQueue(player, areaId); the hook answers false when there is no queue to join.
+                if (_ai.JoinMeetingStone is not { } join || !join(queued, step.DataLong))
                 {
                     ReportRelay(step, "MEETINGSTONE without a meeting stone queue");
-                    return false;
                 }
 
-                join(queued, step.DataLong); // sLFGMgr.AddToQueue(player, areaId)
                 return false;
             }
 

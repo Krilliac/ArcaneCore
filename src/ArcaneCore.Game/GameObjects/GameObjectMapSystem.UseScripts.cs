@@ -14,8 +14,9 @@ public sealed partial class GameObjectMapSystem
 {
     /// <summary>
     /// <c>dbscripts_on_go_template_use</c> script <c>go.Template.Entry</c> for a use by <paramref name="user"/>, at the top of GameObject::Use
-    /// before the type switch (GameObject.cpp:1489-1490). Every object of the template runs it, every type. False when there was no script, or
-    /// it already runs for this user and object.
+    /// before the type switch (GameObject.cpp:1489-1490). Every object of the template runs it, every type. False when there was no script, or the
+    /// use was refused first (<see cref="GooberRefusesUse"/>). A repeat use while a delayed step is pending starts another run (ScriptsStart's
+    /// default SCRIPT_EXEC_PARAM_NONE, Maps/Map.h:233-240).
     /// </summary>
     private bool StartTemplateUseScript(Unit user, GameObject go)
         => !GooberRefusesUse(user, go)
@@ -27,11 +28,13 @@ public sealed partial class GameObjectMapSystem
     /// A goober on cooldown, or one still in use, refuses the click before anything fires (mangos-classic GameObject.cpp:1482 returns on the
     /// cooldown above the template script at :1490), so a repeated or crafted use must not start the template script again. The same gate as
     /// <see cref="UseGoober"/> (a player: the cooldown, and an object with an auto-close time that is not ready) and
-    /// <see cref="UseGooberByUnit"/> (any other unit: the cooldown, or not ready). Other types have no such gate.
+    /// <see cref="UseGooberByUnit"/> (any other unit: the cooldown, or not ready). A trap is gated by its cooldown alone: GetCooldown covers
+    /// GAMEOBJECT_TYPE_TRAP and GOOBER (GameObject.h:458-466), so a trap on cooldown also returns before the template script. Other types
+    /// have no such gate.
     /// </summary>
     private bool GooberRefusesUse(Unit user, GameObject go)
     {
-        if (go.Type != GameObjectType.Goober)
+        if (go.Type is not (GameObjectType.Goober or GameObjectType.Trap))
         {
             return false;
         }
@@ -41,13 +44,13 @@ public sealed partial class GameObjectMapSystem
             return true;
         }
 
-        return go.LootState != GameObjectLootState.Ready && (user is not Player || go.Template.AutoCloseSeconds() > 0);
+        return go.Type == GameObjectType.Goober && go.LootState != GameObjectLootState.Ready && (user is not Player || go.Template.AutoCloseSeconds() > 0);
     }
 
     /// <summary>
     /// <c>dbscripts_on_go_use</c> script <c>go.Spawn.Guid</c>, which only a door, a button and a goober start (GameObject.cpp:1506, :1529,
-    /// :1703). An object without a spawn row (a summon) has no database guid (GetDbGuid 0) and no script. False when there was none, or it
-    /// already runs for this user and object.
+    /// :1703). An object without a spawn row (a summon) has no database guid (GetDbGuid 0) and no script. False when there was none. A repeat
+    /// use while a delayed step is pending starts another run, as for the template script.
     /// </summary>
     private bool StartGuidUseScript(Unit user, GameObject go)
         => go.Spawn is { Guid: var guid and not 0 }
