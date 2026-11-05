@@ -888,10 +888,12 @@ public sealed partial class SpellSystem
         {
             // Spell::AddUnitTarget removes immune effects before WriteSpellGoTargets. A target
             // with no surviving effects is listed as IMMUNE2 rather than a successful hit.
+            // A game object carrier (target A 46) is no unit target: vmangos runs HandleEffects(nullptr, nullptr, go) with no immunity test.
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
             {
                 if ((entry.EffectMask & (1 << i)) != 0
                     && spell.Effects[i].Effect != SpellEffectName.ActivateObject
+                    && !IsObjectCarriedEffect(cast, i, target)
                     && ImmunityRules.IsImmuneToSpellEffect(this, target, spell, i, ReferenceEquals(target, caster)))
                 {
                     entry.EffectMask &= ~(1 << i);
@@ -929,9 +931,12 @@ public sealed partial class SpellSystem
         }
 
         // Spell::WriteSpellGoTargets includes selected game objects alongside unit hits.
-        foreach (ObjectGuid guid in cast.ObjectTargetsByEffect.Values.SelectMany(guids => guids).Distinct())
+        if (cast.ObjectTargetsOrNull is { } selectedObjects)
         {
-            if (!hits.Contains(guid)) hits.Add(guid);
+            foreach (ObjectGuid guid in selectedObjects.Values.SelectMany(guids => guids).Distinct())
+            {
+                if (!hits.Contains(guid)) hits.Add(guid);
+            }
         }
     }
 
@@ -957,6 +962,14 @@ public sealed partial class SpellSystem
                 }
 
                 entry.EffectMask = unitMask;
+            }
+
+            if (IsCarrierOnlyEntry(cast, target, entry.EffectMask))
+            {
+                // vmangos DoAllEffectOnTarget for a GOTargetInfo (Spell.cpp:1841-1843) runs HandleEffects(nullptr, nullptr, go, i) and nothing else: no hit
+                // roll, no immunity, no threat, no item procs, no damage shields, no outcome notice. The caster only stands in for the missing unit.
+                ApplyEffects(cast, target, entry.EffectMask, entry.Multipliers, carrier: true);
+                continue;
             }
 
             if (entry.Miss == SpellMissInfo.Reflect)
@@ -1614,7 +1627,9 @@ public sealed partial class SpellSystem
             // explicit selector inside the per-effect loop, CanTargetAliveState, BAD_TARGETS; SpellEntry.h:273-287 lists explicit selectors
             // only). A spell with TARGET_UNIT_CASTER, an area or cone selector, or none is not covered: a creature cast aimed with ForUnit
             // at a victim who dies during the cast bar must still land.
-            if (!unitTarget.IsAlive && !spell.CanTargetDead
+            // CanTargetAliveState refuses both ways: a dead unit unless the spell can target the dead, and a living one for a death-only spell.
+            bool aliveStateRefused = unitTarget.IsAlive ? spell.IsDeathOnly : !spell.CanTargetDead;
+            if (aliveStateRefused
                 && spell.Effects.Any(effect => !effect.IsEmpty && effect.TargetA == SpellImplicitTarget.LocationCasterTargetPosition))
             {
                 return SpellCastResult.BadTargets;
@@ -1644,20 +1659,6 @@ public sealed partial class SpellSystem
         if (objectRange != SpellCastResult.CastOk)
         {
             return objectRange;
-        }
-
-        // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers
-        // SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). Runs after the Items phase (spell focus, Spell.cpp:7243): vmangos reaches CheckScriptTargeting only from SetTargetMap at cast time (:2848-2860). A spell-specific selector for the target owns its own targeting.
-        // Not at prepare (strict): vmangos refuses only when the cast goes off, from SetTargetMap, so the target may still come into range while the cast bar runs.
-        if (!strict && HasScriptLocationTargetWithoutRows(spell))
-        {
-            return SpellCastResult.BadTargets;
-        }
-
-        // With rows but no listed unit or object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered), targets 38 and 46.
-        if (!strict && ScriptLocationTargetMissing(caster, spell, unitTarget))
-        {
-            return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
         }
 
         if (needsUnit)
@@ -1701,6 +1702,21 @@ public sealed partial class SpellSystem
             {
                 return sight;
             }
+        }
+
+        // TARGET_UNIT_SCRIPT_NEAR_CASTER (38) and TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos
+        // Spell::CheckScriptTargeting answers SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). It is reached only from SetTargetMap when the cast goes off
+        // (:2848-2860), after CheckCast's spell focus (:7243), range and line of sight checks, so it runs here, after them. A spell-specific selector for the
+        // target owns its own targeting. Not at prepare (strict): the target may still come into range while the cast bar runs.
+        if (!strict && HasScriptTargetWithoutRows(spell))
+        {
+            return SpellCastResult.BadTargets;
+        }
+
+        // With rows but no listed unit or object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered), targets 38 and 46.
+        if (!strict && ScriptLocationTargetMissing(caster, spell, unitTarget))
+        {
+            return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
         }
 
         SpellCastResult targetRules = CheckTargetRules(caster, spell, targets, unitTarget, strict, castItem);
