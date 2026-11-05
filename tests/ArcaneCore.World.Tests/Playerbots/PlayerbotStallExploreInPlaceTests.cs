@@ -44,8 +44,8 @@ public sealed class PlayerbotStallExploreInPlaceTests
         finally { brain.Stop(); }
     }
 
-    private static PlayerbotBrain NewBrain(WorldSession session)
-        => new(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, Risk = { Enabled = false } });
+    private static PlayerbotBrain NewBrain(WorldSession session, float moveSpeed = 7f)
+        => new(session, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500, MoveSpeed = moveSpeed, Risk = { Enabled = false } });
 
     private static async Task InstallOpenFloorAsync(MageTravelRig rig)
         => await rig.OnWorld(() =>
@@ -157,7 +157,10 @@ public sealed class PlayerbotStallExploreInPlaceTests
         await using MageTravelRig rig = await MageTravelRig.StartAsync();
         WorldSession session = await rig.EnterAsync("Stallproject");
         Player player = session.Player!;
-        PlayerbotBrain brain = NewBrain(session);
+        // At the walk speed (a MoveSpeed cap below the run speed): the 24 thinks (12 s) cover about 30 yards, under the 48 yard wander leg, so the route
+        // never arrives (an arrival is a real displacement of the stored position and rightly restarts the stand-still clock), while the projection
+        // still runs ahead of the frozen stored position by more than the 2 yard bound within two thinks.
+        PlayerbotBrain brain = NewBrain(session, moveSpeed: 1f);
         try
         {
             await InstallOpenFloorAsync(rig);
