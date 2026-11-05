@@ -142,7 +142,7 @@ services:
   # Optional monitoring (docs/ops/metrics.md): docker compose -f docker-compose.prod.yml --profile monitoring up -d, with
   # ARCANE_METRICS_ENABLED=true. Both listen on 127.0.0.1 of the VPS: reach them through an SSH tunnel, never a public port.
   prometheus:
-    image: prom/prometheus:v3.1.0@sha256:6559acbd5d770b15bb3c954629ce190ac3cbbdb2b7f1c30f0385c4e05104e218
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     profiles: [monitoring]
     networks: [arcane-network]
     restart: unless-stopped
