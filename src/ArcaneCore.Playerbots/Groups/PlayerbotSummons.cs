@@ -526,9 +526,9 @@ internal sealed class PlayerbotSummons
     }
 
     /// <summary>
-    /// Ends the summoner's own ritual cast. The ritual is a channel, and CMSG_CANCEL_CAST never interrupts one (vmangos HandleCancelCastOpcode keeps the channel
-    /// slot; <see cref="SpellSystem.CancelCast"/>), so a channel still running is stopped with CMSG_CANCEL_CHANNELLING, the packet a client sends, and only a
-    /// cast still being prepared gets CMSG_CANCEL_CAST. Left running it would keep the warlock "casting" with its portal gone and bar it from any further
+    /// Ends the summoner's own ritual cast. The ritual is a channel. This repo's <see cref="SpellSystem.CancelCast"/> leaves a channel alone (pinned by
+    /// SpellSeamTests), and CMSG_CANCEL_CHANNELLING is the packet a client sends to stop one (vmangos HandleCancelChanneling, SpellHandler.cpp:446-459), so a
+    /// channel still running is stopped with that, and only a cast still being prepared gets CMSG_CANCEL_CAST. Left running it would keep the warlock "casting" with its portal gone and bar it from any further
     /// summon until the channel runs out. The job ends right after this and nothing retries, so the packet is sent unbudgeted (like the stop of a walk):
     /// a bot visited with no action left in the tick's shared budget must not be left channelling.
     /// </summary>
