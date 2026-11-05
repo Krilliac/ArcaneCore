@@ -2,17 +2,24 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Gm;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Teleport;
 using ArcaneCore.World.Gm.TicketAssistant;
+using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Docs;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Playerbots.Chat;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,7 +57,42 @@ public sealed class GmTicketAssistantTests
             => Task.FromResult(Draft(ticketText));
     }
 
-    private static WorldTestHost Start(Dictionary<string, string?>? config = null, ITicketAssistantModel? model = null, bool enabled = true)
+    // Map 0 links to zone 12 (area 12), so every position of the test world is zone 12 (as in GraveyardWorldTests).
+    private sealed class MapStore : IMapDataStore
+    {
+        public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
+            [
+                new MapTemplate(0, 0, MapType.Common, 12, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
+            ],
+            [new AreaTemplate(12, 0, 0, 41, 0, 1, "Elwynn Forest", 2, 0)],
+            [], [], []));
+    }
+
+    private sealed class GraveyardStore(GraveyardContent content) : IGraveyardDataStore
+    {
+        public Task<GraveyardContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(content);
+    }
+
+    private const float GraveyardX = -8800f;
+
+    private static GraveyardContent OneGraveyard()
+        => new([new WorldSafeLoc(1, 0, GraveyardX, -100f, 90f, 1.5f, "Goldshire")], [new GraveyardLink(1, 12, 0)]);
+
+    private static ItemTestContent WornSword()
+    {
+        var content = new ItemTestContent();
+        content.Templates.Templates.Add(new ItemTemplate
+        {
+            Entry = 25, Class = 2, SubClass = 7, Name = "Worn Shortsword", DisplayId = 1542,
+            InventoryType = 21, MaxDurability = 20, Stackable = 1,
+        });
+        content.Templates.StartingItems.Add(new StartingItem(1, 1, 25, 2));
+        return content;
+    }
+
+    private static WorldTestHost Start(Dictionary<string, string?>? config = null, ITicketAssistantModel? model = null, bool enabled = true,
+        ItemTestContent? items = null, GraveyardContent? graveyards = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -67,14 +109,23 @@ public sealed class GmTicketAssistantTests
             values[pair.Key] = pair.Value;
         }
 
-        return WorldTestHost.Start(configureServices: services =>
+        using (items?.Use())
         {
-            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
-            if (model is not null)
+            return WorldTestHost.Start(configureServices: services =>
             {
-                services.AddSingleton(model);
-            }
-        });
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
+                if (model is not null)
+                {
+                    services.AddSingleton(model);
+                }
+
+                if (graveyards is not null)
+                {
+                    services.AddSingleton<IMapDataStore, MapStore>();
+                    services.AddSingleton<IGraveyardDataStore>(new GraveyardStore(graveyards));
+                }
+            });
+        }
     }
 
     private static GmTicketAssistant AssistantOf(WorldTestHost host) => host.WorldServices.GetRequiredService<GmTicketAssistant>();
@@ -84,8 +135,38 @@ public sealed class GmTicketAssistantTests
     private static GmTicketRecord File(WorldTestHost host, string name, string text)
         => AuditOf(host).CreateTicket(CharacterId(host, name), text, 1, 0, 0, 0, 0)!;
 
-    private static void Signal(WorldTestHost host, string name, string code = "under-map")
-        => AnomalyLedger.Shared.Report("move", code, $"player {name} (guid {CharacterId(host, name)})", "reason=below-terrain", AnomalySeverity.Error);
+    // The ledger's real subject is "player (guid N)" and the real under-map detail names the reason and the position (UndermapObserver).
+    private static void Signal(WorldTestHost host, string name, string code = "under-map", string detail = "reason=below-terrain map=0 pos=(-8800.00,-100.00,90.00) floor=95.00")
+        => AnomalyLedger.Shared.Report("move", code, $"player (guid {CharacterId(host, name)})", detail, AnomalySeverity.Error);
+
+    private static string BelowTerrainAt(float x, float y) => FormattableString.Invariant($"reason=below-terrain map=0 pos=({x:F2},{y:F2},90.00) floor=95.00");
+
+    // A ghost whose body lies at its own position (vmangos LoadCorpse path, no graveyard trip).
+    private static Task GhostAtItsBodyAsync(WorldTestHost host, string name) => host.OnWorldAsync(() =>
+    {
+        Player player = host.World.FindOnlinePlayer(name)!;
+        player.Map!.Combat.RestoreGhost(player, new CorpseSnapshot(0, player.X, player.Y, player.Z, 0f, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), (byte)CorpseType.ResurrectablePve));
+        Assert.False(player.IsAlive);
+        Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+    });
+
+    // The client answering the near teleport the server started (the position only changes once it has).
+    private static async Task AckTeleportAsync(WorldTestHost host, WorldTestClient client, string name, float expectedX)
+    {
+        byte[] ack = await client.ReadUntilAsync(WorldOpcode.MsgMoveTeleportAck);
+        var reader = new PacketReader(ack);
+        ulong guid = reader.ReadPackedGuid();
+        uint counter = reader.ReadUInt32();
+        var reply = new PacketWriter(16);
+        reply.WriteUInt64(guid);
+        reply.WriteUInt32(counter);
+        reply.WriteUInt32(0);
+        await client.SendAsync(WorldOpcode.MsgMoveTeleportAck, reply.ToArray());
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(name)!.X == expectedX, "the teleport ack to be handled");
+    }
+
+    private static Task<uint> SwordDurabilityAsync(WorldTestHost host, string name)
+        => host.PlayerStateAsync(name, p => p.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand)!.Durability);
 
     private static GmAuditEntry[] AssistantAudit(WorldTestHost host) => [.. AuditOf(host).Tail(200).Where(e => e.Player == Bot)];
 
@@ -134,16 +215,27 @@ public sealed class GmTicketAssistantTests
     [Fact]
     public async Task WithUseModelOff_AModelIsNeverAskedToClassify_AndAQuestionIsLeftToAGm()
     {
-        var model = new FakeModel { Classify = _ => "{\"category\":\"Question\"}", Draft = _ => "Type .unstuck." };
+        int drafts = 0;
+        var model = new FakeModel
+        {
+            Classify = _ => "{\"category\":\"Question\"}",
+            Draft = _ =>
+            {
+                drafts++;
+                return "Type .unstuck.";
+            },
+        };
         await using WorldTestHost host = Start(new Dictionary<string, string?> { ["World:GmTicketAssistant:UseModel"] = "false" }, model);
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        GmTicketRecord ticket = File(host, "Plainone", "how do I get unstuck?");
+        GmTicketRecord ticket = File(host, "Plainone", "how do I fly?");
 
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         Assert.NotNull(outcome);
+        Assert.Equal(TicketCategory.Question, outcome.Category);
         Assert.Equal(TicketAction.Escalate, outcome.Action);
         Assert.Empty(model.Seen);
+        Assert.Equal(0, drafts);
         Assert.NotNull(AuditOf(host).OpenTicket(ticket.Id));
     }
 
@@ -339,22 +431,99 @@ public sealed class GmTicketAssistantTests
     private static string DeadModel(string _) => "{\"category\":\"DeadCantRes\",\"summary\":\"dead\"}";
 
     [Fact]
-    public async Task DeadCantRes_ADeadAuthor_IsResurrected_AndTheTicketClosed()
+    public async Task DeadCantRes_AGhostAtItsBody_IsResurrectedAtTheGraveyard_WithDurabilityLoss()
     {
-        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel }, items: WornSword(), graveyards: OneGraveyard());
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await KillAsync(host, "Plainone");
-        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
-        GmTicketRecord ticket = File(host, "Plainone", "I am dead and cannot resurrect");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await GhostAtItsBodyAsync(host, "Plainone");
+        uint before = await SwordDurabilityAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", "I am a ghost at my corpse and cannot resurrect");
+        await player.CollectAsync();
 
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         Assert.NotNull(outcome);
         Assert.Equal(TicketAction.Revive, outcome.Action);
         Assert.True(outcome.Performed);
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
         Assert.True(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.Equal((GraveyardX, -100f), await host.PlayerStateAsync("Plainone", p => (p.X, p.Y)));
+        Assert.True(await SwordDurabilityAsync(host, "Plainone") < before);
         Assert.Null(AuditOf(host).OpenTicket(ticket.Id));
         Assert.Contains(TicketPolicy.EvidenceDeadLong, Assert.Single(AssistantAudit(host)).Line, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeadCantRes_AGhostWithAnUndermapSignal_IsStillSentToTheGraveyard_NotRaisedWhereItStands()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel }, items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        Signal(host, "Plainone", detail: BelowTerrainAt(-8900f, -100f));
+        await GhostAtItsBodyAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", "I fell through the world and cannot resurrect");
+        await player.CollectAsync();
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Revive, outcome.Action);
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
+        Assert.Equal(GraveyardX, await host.PlayerStateAsync("Plainone", p => p.X));
+    }
+
+    [Fact]
+    public async Task DeadCantRes_AnUnreleasedDeadAuthor_IsNotResurrected_TheyCanReleaseTheirSpirit()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await KillAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", "I am dead and cannot resurrect");
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Performed);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.NotNull(AuditOf(host).OpenTicket(ticket.Id));
+    }
+
+    [Fact]
+    public async Task NonContinentMaps_AreNeverAutoFixed_ForStuck()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        Signal(host, "Plainone");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Plainone")!.MapId = 36);
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Performed);
+        Assert.Equal((36u, -8800f), await host.PlayerStateAsync("Plainone", p => (p.MapId, p.X)));
+    }
+
+    [Fact]
+    public async Task NonContinentMaps_AreNeverAutoFixed_ForDeadCantRes()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Plainone")!.MapId = 36);
+        GmTicketRecord ticket = File(host, "Plainone", "I am a ghost and cannot resurrect");
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Performed);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
     }
 
     [Fact]
@@ -390,12 +559,13 @@ public sealed class GmTicketAssistantTests
     }
 
     [Fact]
-    public async Task DeadCantRes_AfterAnUndermapSignal_ResurrectsInPlace()
+    public async Task DeadCantRes_AfterAnUndermapSignalAtTheBody_ResurrectsInPlace()
     {
         await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        Signal(host, "Plainone", detail: BelowTerrainAt(-8800f, -100f));
         await KillAsync(host, "Plainone");
-        Signal(host, "Plainone");
         GmTicketRecord ticket = File(host, "Plainone", "I fell through the world and died");
 
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
@@ -403,6 +573,102 @@ public sealed class GmTicketAssistantTests
         Assert.NotNull(outcome);
         Assert.Equal(TicketAction.ReviveInPlace, outcome.Action);
         Assert.True(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.Equal((-8800f, -100f), await host.PlayerStateAsync("Plainone", p => (p.X, p.Y)));
+    }
+
+    [Fact]
+    public async Task DeadCantRes_AnUndermapSignalFarFromTheBody_DoesNotResurrect()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        Signal(host, "Plainone", detail: BelowTerrainAt(-5000f, 300f));
+        await KillAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", "I fell through the world and died");
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+    }
+
+    [Fact]
+    public async Task DeadCantRes_ASignalHeardAfterTheDeathWasSeen_DoesNotResurrect()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        await KillAsync(host, "Plainone");
+        GmTicketRecord first = File(host, "Plainone", "I fell through the world and died");
+        Assert.Equal(TicketAction.Escalate, (await AssistantOf(host).ProcessTicketAsync(first.Id))!.Action);
+
+        await Task.Delay(1500);
+        Signal(host, "Plainone", detail: BelowTerrainAt(-8800f, -100f));
+        GmTicketRecord second = File(host, "Plainone", "I fell through the world and died again");
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(second.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+    }
+
+    [Theory]
+    [InlineData("fall-without-landing", "durationMs=9000 fallTime=9000 pos=(-8800.00,-100.00,90.00)")]
+    [InlineData("under-map", "reason=below-void-height map=0 pos=(-8800.00,-100.00,-5000.00) voidHeight=-5000")]
+    public async Task Stuck_ASignalTheClientCanProduce_IsNotEvidence(string code, string detail)
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        Signal(host, "Plainone", code, detail);
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.Equal(-8800f, await host.PlayerStateAsync("Plainone", p => p.X));
+    }
+
+    [Fact]
+    public async Task Stuck_AuthorInCombat_WithASignal_IsNotTeleported()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        await host.OnWorldAsync(() =>
+        {
+            Player author = host.World.FindOnlinePlayer("Plainone")!;
+            author.Map!.Combat.SetInCombatState(author, 600_000);
+            Assert.True(author.Combat.IsInCombat);
+        });
+        Signal(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.NotEqual(TicketAction.Tele, outcome.Action);
+        Assert.False(outcome.Performed);
+        Assert.Equal((0u, -8800f), await host.PlayerStateAsync("Plainone", p => (p.MapId, p.X)));
+    }
+
+    [Fact]
+    public async Task Stuck_AnUnreleasedDeadAuthor_WithASignal_IsNotMoved()
+    {
+        await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        Signal(host, "Plainone");
+        await KillAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
     }
 
     // ---- everything else escalates ----

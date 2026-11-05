@@ -73,8 +73,8 @@ public sealed class TicketClassifierTests
 
     private static TicketFacts Facts(
         bool online = true, bool alive = true, bool ghost = false, long dead = 0, long idle = 0, bool stale = false, bool blocked = false,
-        TicketSignal? signal = null)
-        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale, stale, blocked, signal, null);
+        TicketSignal? signal = null, bool combat = false, bool atDeath = false)
+        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale || combat, stale, blocked, signal, null, atDeath);
 
     private static readonly TicketSignal Undermap = new("under-map", 0, "x");
 
@@ -116,9 +116,43 @@ public sealed class TicketClassifierTests
     }
 
     [Fact]
-    public void DeadCantRes_AfterAPositionSignal_RevivesInPlace()
+    public void DeadCantRes_AfterASignalAtTheBody_RevivesInPlace()
         => Assert.Equal(new TicketDecision(TicketAction.ReviveInPlace, TicketPolicy.EvidenceServerCausedDeath),
-            TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 500, signal: Undermap), Options));
+            TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 500, signal: Undermap, atDeath: true), Options));
+
+    [Fact]
+    public void DeadCantRes_ASignalNotTiedToTheDeath_OrAGhost_NeverRevivesInPlace()
+    {
+        // An unreleased body with a signal that is not at its death: nothing is done.
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 500, signal: Undermap), Options).Action);
+        // A ghost is never raised where it stands, whatever the flag says: it goes the graveyard way.
+        Assert.Equal(TicketAction.Revive, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 500, signal: Undermap, atDeath: true), Options).Action);
+        // An unreleased body with no signal at all is left to release its spirit.
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 999), Options).Action);
+    }
+
+    [Fact]
+    public void Stuck_InCombatOrADuel_WithASignal_IsNeverTeleported()
+        => Assert.NotEqual(TicketAction.Tele, TicketPolicy.Decide(TicketCategory.Stuck, Facts(signal: Undermap, combat: true), Options).Action);
+
+    [Fact]
+    public void Stuck_ADeadUnreleasedAuthor_WithASignal_IsNeverTeleported_AGhostIs()
+    {
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(alive: false, signal: Undermap), Options).Action);
+        Assert.Equal(TicketAction.Tele, TicketPolicy.Decide(TicketCategory.Stuck, Facts(alive: false, ghost: true, signal: Undermap), Options).Action);
+    }
+
+    [Theory]
+    [InlineData("reason=below-terrain map=0 pos=(-8800.00,-100.50,90.00) floor=95.00", true, -8800f, -100.5f)]
+    [InlineData("map=0 pos=(1,2)", true, 1f, 2f)]
+    [InlineData("reason=below-terrain map=0", false, 0f, 0f)]
+    [InlineData("pos=(x,2,3)", false, 0f, 0f)]
+    [InlineData("pos=(1,2", false, 0f, 0f)]
+    public void EvidenceLog_ReadsThePositionOfASignal(string detail, bool found, float x, float y)
+    {
+        Assert.Equal(found, TicketEvidenceLog.TryPositionOf(detail, out float px, out float py));
+        Assert.Equal((x, y), (px, py));
+    }
 
     [Theory]
     [InlineData(TicketCategory.QuestBroken)]
@@ -147,15 +181,15 @@ public sealed class TicketClassifierTests
             Enum.GetNames<TicketAction>());
 
     [Theory]
-    [InlineData("player Nathan (guid 42)", 42u)]
+    [InlineData("player Someone (guid 42)", 42u)]
     [InlineData("player A (guid 7) (guid 9)", 9u)]
     public void EvidenceLog_ReadsTheGuidFromTheLedgerSubject(string subject, uint guid)
         => Assert.Equal(guid, TicketEvidenceLog.GuidOf(subject));
 
     [Theory]
-    [InlineData("player Nathan")]
-    [InlineData("player Nathan (guid x)")]
-    [InlineData("player Nathan (guid 99999999999)")]
+    [InlineData("player Someone")]
+    [InlineData("player Someone (guid x)")]
+    [InlineData("player Someone (guid 99999999999)")]
     public void EvidenceLog_IgnoresASubjectWithoutAGuid(string subject)
         => Assert.Null(TicketEvidenceLog.GuidOf(subject));
 
@@ -171,7 +205,7 @@ public sealed class TicketClassifierTests
         Assert.Null(log.Recent(5, 50));
         Assert.Null(log.Recent(6, 200));
         Assert.True(TicketEvidenceLog.IsPositionSignal("move", "under-map"));
-        Assert.True(TicketEvidenceLog.IsPositionSignal("move", "fall-without-landing"));
+        Assert.False(TicketEvidenceLog.IsPositionSignal("move", "fall-without-landing"));
         Assert.False(TicketEvidenceLog.IsPositionSignal("move", "speed-violation"));
         Assert.False(TicketEvidenceLog.IsPositionSignal("loot", "under-map"));
     }

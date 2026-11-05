@@ -4,9 +4,12 @@ using ArcaneCore.Kernel.Diagnostics;
 namespace ArcaneCore.World.Gm.TicketAssistant;
 
 /// <summary>
-/// The recent position anomalies the server's movement observers reported for each character: <c>move/under-map</c>
-/// (<c>UndermapObserver</c>) and <c>move/fall-without-landing</c> (<c>FallObserver</c>), heard from <see cref="AnomalyLedger.Reported"/>
-/// (every report, not only the logged ones). The ledger's subject is "player NAME (guid N)"; the guid is read from it. Memory is
+/// The recent position anomalies the server's movement observers reported for each character: <c>move/under-map</c> with
+/// <c>reason=below-terrain</c> (<c>UndermapObserver</c>: the server's own terrain floor against the reported position), heard from
+/// <see cref="AnomalyLedger.Reported"/> (every report, not only the logged ones). <c>move/fall-without-landing</c> is not accepted: its
+/// duration is the larger of the server's clock and the fall time the client reports, so one crafted packet produces it; and an under-map
+/// report of <c>reason=below-void-height</c> is not accepted either, because a stock client that jumps into the void causes it. The ledger's
+/// subject is "player (guid N)" (a name before the guid is tolerated); the guid is read from it. Memory is
 /// bounded: at most <see cref="MaxCharacters"/> characters with <see cref="MaxPerCharacter"/> signals each. Thread-safe (the ledger
 /// reports from the world and map threads).
 /// </summary>
@@ -61,11 +64,16 @@ public sealed class TicketEvidenceLog
 
     /// <summary>Whether a ledger report is a position signal (the codes the assistant accepts as evidence).</summary>
     public static bool IsPositionSignal(string subsystem, string code)
-        => subsystem == "move" && code is "under-map" or "fall-without-landing";
+        => subsystem == "move" && code == "under-map";
+
+    /// <summary>The detail <c>UndermapObserver</c> gives for a position under the terrain floor (not the void-height report).</summary>
+    public const string BelowTerrainReason = "reason=below-terrain";
 
     private void OnReported(AnomalyNotice notice)
     {
-        if (!IsPositionSignal(notice.Subsystem, notice.Code) || GuidOf(notice.Subject) is not { } guid)
+        if (!IsPositionSignal(notice.Subsystem, notice.Code)
+            || !notice.Detail.Contains(BelowTerrainReason, StringComparison.Ordinal)
+            || GuidOf(notice.Subject) is not { } guid)
         {
             return;
         }
@@ -107,6 +115,31 @@ public sealed class TicketEvidenceLog
         {
             return _signals.TryGetValue(guid, out List<TicketSignal>? list) && list[^1].AtUnix >= cutoff ? list[^1] : null;
         }
+    }
+
+    /// <summary>The horizontal position a signal's detail names (<c>pos=(x,y,z)</c>), or false when it names none.</summary>
+    public static bool TryPositionOf(string detail, out float x, out float y)
+    {
+        x = y = 0f;
+        const string marker = "pos=(";
+        int start = detail.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return false;
+        }
+
+        start += marker.Length;
+        int end = detail.IndexOf(')', start);
+        if (end < 0)
+        {
+            return false;
+        }
+
+        string[] parts = detail[start..end].Split(',');
+        return parts.Length >= 2
+            && float.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out x)
+            && float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out y)
+            && float.IsFinite(x) && float.IsFinite(y);
     }
 
     internal static uint? GuidOf(string subject)

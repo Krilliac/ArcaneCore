@@ -9,16 +9,16 @@ namespace ArcaneCore.World.Gm.TicketAssistant;
 /// </summary>
 public static class TicketPolicy
 {
-    /// <summary>Evidence of <see cref="TicketAction.Tele"/>: the server itself saw the author under the map or falling without landing, recently.</summary>
+    /// <summary>Evidence of <see cref="TicketAction.Tele"/>: the server itself saw the author under the terrain floor, recently. (Not a fall: its duration includes the time the client reports.)</summary>
     public const string EvidencePositionSignal = "position-signal";
 
     /// <summary>Evidence of <see cref="TicketAction.Unstuck"/>: the author has not moved for the configured time.</summary>
     public const string EvidenceIdle = "idle";
 
-    /// <summary>Evidence of <see cref="TicketAction.Revive"/>: dead or a ghost for the configured time.</summary>
+    /// <summary>Evidence of <see cref="TicketAction.Revive"/>: a ghost for the configured time.</summary>
     public const string EvidenceDeadLong = "dead-long";
 
-    /// <summary>Evidence of <see cref="TicketAction.ReviveInPlace"/>: dead for the configured time after a position signal (a death the server caused).</summary>
+    /// <summary>Evidence of <see cref="TicketAction.ReviveInPlace"/>: dead and unreleased for the configured time, after a position signal at the body (a death under the map).</summary>
     public const string EvidenceServerCausedDeath = "server-caused-death";
 
     /// <summary>Evidence of <see cref="TicketAction.ClearCombat"/>: in combat, with no attacker, victim or threat, for the configured time.</summary>
@@ -45,7 +45,8 @@ public static class TicketPolicy
                     return new TicketDecision(TicketAction.ClearCombat, EvidenceStaleCombat);
                 }
 
-                if (facts.PositionSignal is not null)
+                // Teleporting is an escape: never in a fight or a duel; the dead are only moved once they are ghosts.
+                if (facts.PositionSignal is not null && !facts.InCombat && (facts.Alive || facts.Ghost))
                 {
                     return new TicketDecision(TicketAction.Tele, EvidencePositionSignal);
                 }
@@ -64,9 +65,12 @@ public static class TicketPolicy
                     return none;
                 }
 
-                return facts.PositionSignal is not null
-                    ? new TicketDecision(TicketAction.ReviveInPlace, EvidenceServerCausedDeath)
-                    : new TicketDecision(TicketAction.Revive, EvidenceDeadLong);
+                if (facts.SignalAtDeath && !facts.Ghost)
+                {
+                    return new TicketDecision(TicketAction.ReviveInPlace, EvidenceServerCausedDeath);
+                }
+
+                return facts.Ghost ? new TicketDecision(TicketAction.Revive, EvidenceDeadLong) : none;
             default:
                 return none;
         }

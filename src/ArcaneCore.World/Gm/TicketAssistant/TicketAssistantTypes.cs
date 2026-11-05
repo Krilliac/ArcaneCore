@@ -22,16 +22,16 @@ public enum TicketAction
     /// <summary>An answer drafted from the FAQ; the ticket is closed.</summary>
     Answer,
 
-    /// <summary>Teleport the author to the bind point (alive) or the nearest graveyard (ghost); evidence: an under-map or fall signal.</summary>
+    /// <summary>Teleport the author to the bind point (alive) or the nearest graveyard (ghost), never in combat or a duel; evidence: an under-map signal.</summary>
     Tele,
 
     /// <summary>The <c>.unstuck</c> path; evidence: no movement for <see cref="GmTicketAssistantOptions.StuckIdleSeconds"/>.</summary>
     Unstuck,
 
-    /// <summary>Resurrect a dead author at the graveyard with resurrection sickness (the spirit healer's rules).</summary>
+    /// <summary>Resurrect a ghost at the graveyard with the spirit healer's rules (sickness, durability loss, and a move to the graveyard).</summary>
     Revive,
 
-    /// <summary>Resurrect without sickness where the author lies; evidence: the death followed an under-map or fall signal.</summary>
+    /// <summary>Resurrect an unreleased dead author without sickness where the body lies; evidence: an under-map signal before the death, at the body.</summary>
     ReviveInPlace,
 
     /// <summary>Clear an "in combat" state nobody is fighting.</summary>
@@ -46,7 +46,9 @@ public sealed record TicketSignal(string Code, long AtUnix, string Detail);
 
 /// <summary>
 /// What the server knows about a ticket's author when it decides, read on the world thread. <see cref="DeadSeconds"/> and
-/// <see cref="IdleSeconds"/> are 0 when the state was first seen just now.
+/// <see cref="IdleSeconds"/> are 0 when the state was first seen just now. <see cref="InCombat"/> is true for a fight and for a duel.
+/// <see cref="SignalAtDeath"/> is true only for a dead, unreleased author whose <see cref="PositionSignal"/> was heard no later than the
+/// first sight of the death and names a place within <see cref="GmTicketAssistant.SignalBodyRadius"/> yards of the body.
 /// </summary>
 public sealed record TicketFacts(
     bool Online,
@@ -65,7 +67,8 @@ public sealed record TicketFacts(
     bool StaleCombat,
     bool Blocked,
     TicketSignal? PositionSignal,
-    string? QuestNote)
+    string? QuestNote,
+    bool SignalAtDeath = false)
 {
     /// <summary>A line for the GM note.</summary>
     public string Describe()

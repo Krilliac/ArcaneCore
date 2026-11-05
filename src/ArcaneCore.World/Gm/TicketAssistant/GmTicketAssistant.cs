@@ -469,11 +469,19 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             || BattlegroundManager.TypeOfMap(player.MapId) != BattlegroundType.None;
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
         bool stale = watch.StaleSince != 0 && now - watch.StaleSince >= _options.StaleCombatSeconds;
+        TicketSignal? signal = Evidence.Recent(player.Guid.Low, _options.SignalWindowSeconds);
+        // A death under the map: the body is unreleased, the signal came no later than the first sight of the death, and it names the body's place.
+        bool atDeath = signal is not null && !player.IsAlive && !ghost && watch.DeadSince != 0 && signal.AtUnix <= watch.DeadSince
+            && TicketEvidenceLog.TryPositionOf(signal.Detail, out float sx, out float sy)
+            && ((sx - player.X) * (sx - player.X)) + ((sy - player.Y) * (sy - player.Y)) <= SignalBodyRadius * SignalBodyRadius;
         return new TicketFacts(
             true, player.AccountId, player.Name, player.MapId, player.X, player.Y, player.Z, player.IsAlive, ghost, player.Level,
-            watch.DeadSince == 0 ? 0 : now - watch.DeadSince, now - watch.MovedAt, player.Combat.IsInCombat, stale, blocked,
-            Evidence.Recent(player.Guid.Low, _options.SignalWindowSeconds), QuestNote(ticket.Text, player));
+            watch.DeadSince == 0 ? 0 : now - watch.DeadSince, now - watch.MovedAt, player.Combat.IsInCombat || player.Duel is not null, stale, blocked,
+            signal, QuestNote(ticket.Text, player), atDeath);
     }
+
+    /// <summary>How far, in yards, a position signal may be from the body for a resurrection in place.</summary>
+    public const float SignalBodyRadius = 30f;
 
     private static readonly Regex QuestIdPattern = new(@"\b\d{1,6}\b", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
@@ -603,9 +611,19 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             {
                 if (!player.IsAlive)
                 {
+                    if ((player.Flags & PlayerFlags.Ghost) == 0)
+                    {
+                        return (false, "dead and not released; no teleport");
+                    }
+
                     return services.GetService<GraveyardFeature>()?.Service is { } graveyards && graveyards.RepopAtGraveyard(player)
                         ? (true, "sent to the nearest graveyard")
                         : (false, "no graveyard");
+                }
+
+                if (player.Combat.IsInCombat || player.Duel is not null)
+                {
+                    return (false, "in combat or a duel; no teleport");
                 }
 
                 return services.GetService<TeleportFeature>()?.TeleportsIfAttached is { } teleports && teleports.TeleportToHomebind(player)
@@ -619,7 +637,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                     : (false, "unstuck refused: " + reply);
 
             case TicketAction.Revive:
-                return Revive(player, map);
+                return Revive(player);
 
             case TicketAction.ReviveInPlace:
                 return map.Combat.ResurrectBySpiritGuide(player) ? (true, "resurrected in place, no sickness") : (false, "resurrection refused");
@@ -633,26 +651,46 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         }
     }
 
-    private (bool Done, string Detail) Revive(Player player, Map map)
+    /// <summary>
+    /// A ghost is resurrected by the spirit healer's rules (<see cref="SpiritHealerResurrection"/> with the real item service, so the 25% durability
+    /// loss and the sickness apply), and is then at a graveyard: the corpse's graveyard when it differs from the ghost's (the resurrection's own
+    /// step), otherwise the ghost's nearest one, so a ghost that walked back to its body does not come back on the spot.
+    /// </summary>
+    private (bool Done, string Detail) Revive(Player player)
     {
+        if ((player.Flags & PlayerFlags.Ghost) == 0)
+        {
+            return (false, "not a ghost; release the spirit first");
+        }
+
+        var graveyards = services.GetService<GraveyardFeature>()?.Service;
+        IItemService? items = services.GetService<QuestNpcFeature>()?.Services.Deps.Items;
+        if (graveyards is null || items is null)
+        {
+            return (false, "no graveyard or item service");
+        }
+
         var spells = services.GetService<SpellFeature>()?.System;
-        if ((player.Flags & PlayerFlags.Ghost) != 0)
+        var spiritHealer = new SpiritHealerResurrection(() => spells, items, p => _world?.SavePlayer(p));
+        if (!spiritHealer.ResurrectAtSpiritHealer(player))
         {
-            var spiritHealer = new SpiritHealerResurrection(() => spells, null, p => _world?.SavePlayer(p));
-            return spiritHealer.ResurrectAtSpiritHealer(player)
-                ? (true, "resurrected at the graveyard with sickness")
-                : (false, "resurrection refused");
+            return (false, "resurrection refused");
         }
 
-        // Dead but not released: raise them at half health and send them to the graveyard, with the sickness a spirit healer gives.
-        map.Combat.ResurrectPlayer(player, 0.5f, applySickness: false);
-        if (spells is not null && player.Level >= SpiritHealerResurrection.SicknessStartLevel)
+        // The corpse-graveyard step starts a teleport only when it differs from the ghost's; otherwise start the move here.
+        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
         {
-            UnstuckFeature.ApplySickness(spells, player);
+            return (true, "resurrected with sickness and durability loss; no teleport service, not moved");
         }
 
-        services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
-        return (true, "resurrected and sent to the graveyard with sickness");
+        if (teleports.IsBeingTeleported(player))
+        {
+            return (true, "resurrected with sickness and durability loss, sent to the corpse's graveyard");
+        }
+
+        return graveyards.RepopAtGraveyard(player)
+            ? (true, "resurrected with sickness and durability loss, sent to the graveyard")
+            : (true, "resurrected with sickness and durability loss; no graveyard could take the player");
     }
 
     // ---- world thread: answer, close, note, audit ---------------------------------------------------
@@ -684,11 +722,11 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                 close = true;
                 break;
             case TicketAction.Revive:
-                text = "I resurrected you at the graveyard. You have resurrection sickness for a while, as at a spirit healer.";
+                text = "I resurrected you and sent you to the graveyard. You have resurrection sickness for a while and your gear took damage, as at a spirit healer.";
                 close = true;
                 break;
             case TicketAction.ReviveInPlace:
-                text = "The server caused your death, so I resurrected you where you are, without sickness.";
+                text = "The server saw you under the map before you died, so I resurrected you where your body lies, without sickness.";
                 close = true;
                 break;
             case TicketAction.ClearCombat:
