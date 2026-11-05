@@ -74,6 +74,18 @@ public sealed class CharacterRetirementRegistry
         }
     }
 
+    /// <summary>True between <see cref="Seal"/> and <see cref="Unseal"/>: a handoff flushed and its takeover is undecided.</summary>
+    public bool IsSealed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _sealed;
+            }
+        }
+    }
+
     /// <summary>True when the process no longer owns the character.</summary>
     public bool IsRetired(int characterId)
     {

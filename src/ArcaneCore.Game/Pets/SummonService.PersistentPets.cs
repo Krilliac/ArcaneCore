@@ -21,6 +21,37 @@ public sealed partial class SummonService
     public Func<int, CancellationToken, Task>? DeletePersistence { get; set; }
     public bool DetachedPersistenceConfigured { get; set; }
     public bool DetachedPersistenceSupported { get; set; }
+
+    /// <summary>
+    /// Fence seam, assigned once while the world is wired (before any write runs, like the store seams). True when the process no longer owns the character (a handoff retired it): the pet write
+    /// or delete is skipped silently and counted by the seam, and a retained snapshot or owed delete is dropped, because the characters fence would refuse it. Null: nothing is ever retired.
+    /// </summary>
+    public Func<int, bool>? WritesRetired { get; set; }
+
+    /// <summary>
+    /// Fence seam, assigned once while the world is wired. True while a handoff is sealed (flushed, takeover undecided): a fence refusal of a pet write is expected, logged as information, and the
+    /// snapshot (or owed delete) stays retained so an aborted handoff, which resumes this world, writes it at the next barrier. Null: never sealed.
+    /// </summary>
+    public Func<bool>? WritesSealed { get; set; }
+
+    private static bool IsOwnershipRefusal(Exception? failure)
+    {
+        int depth = 0;
+        for (Exception? e = failure; e is not null && depth < 16; e = e.InnerException, depth++)
+        {
+            if (e is ArcaneCore.Kernel.Characters.CharacterOwnershipRejectedException)
+            {
+                return true;
+            }
+
+            if (e is AggregateException aggregate && aggregate.InnerExceptions.Any(IsOwnershipRefusal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
     private readonly Lock _cacheGate = new();
     private readonly Dictionary<int, PersistentPetSnapshot> _cached = [];
     private readonly Dictionary<int, Task> _saveTails = [];
@@ -195,6 +226,13 @@ public sealed partial class SummonService
                 }
             }
 
+            if (WritesRetired?.Invoke(characterId) == true)
+            {
+                lock (_cacheGate) _failedDeletes.Remove(characterId); // the target world owns the row now: this delete must not touch it
+                done.SetResult();
+                return;
+            }
+
             for (int attempt = 1; ; attempt++)
             {
                 try
@@ -202,7 +240,7 @@ public sealed partial class SummonService
                     await DeleteOnceAsync(characterId).ConfigureAwait(false);
                     break;
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException && attempt < DeleteAttempts)
+                catch (Exception ex) when (ex is not OutOfMemoryException && attempt < DeleteAttempts && !IsOwnershipRefusal(ex)) // a fence refusal is final, not transient
                 {
                     _logger.LogFault(LogLevel.Warning, "pet.persistence", ex, "persistent hunter pet delete attempt {Attempt} failed for character {CharacterId}; retrying", attempt, characterId);
                     await Task.Delay(DeleteRetryDelay * attempt).ConfigureAwait(false);
@@ -216,7 +254,26 @@ public sealed partial class SummonService
         {
             // Unfiltered: the queue slot must complete for every exception, or every later write and barrier of this character waits forever.
             // Only the fault recording skips OutOfMemoryException.
-            if (ex is not OutOfMemoryException)
+            if (ex is not OutOfMemoryException && IsOwnershipRefusal(ex))
+            {
+                if (WritesRetired?.Invoke(characterId) == true)
+                {
+                    lock (_cacheGate) _failedDeletes.Remove(characterId); // refused because the character moved to another world: counted, neither logged nor retained
+                    done.SetResult();
+                    return;
+                }
+
+                if (WritesSealed?.Invoke() == true)
+                {
+                    _logger.LogInformation("persistent hunter pet delete of character {CharacterId} refused while the handoff is undecided; kept in case it aborts", characterId);
+                }
+                else
+                {
+                    AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
+                    _logger.LogFault("pet.persistence", ex, "persistent hunter pet delete failed for character {CharacterId}; kept for retry at the next barrier", characterId);
+                }
+            }
+            else if (ex is not OutOfMemoryException)
             {
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {characterId}", ex.Message);
                 _logger.LogFault("pet.persistence", ex, "persistent hunter pet delete failed for character {CharacterId}; kept for retry at the next barrier", characterId);
@@ -276,6 +333,13 @@ public sealed partial class SummonService
 
     private async Task PersistSerializedAsync(PersistentPetSnapshot snapshot, bool retainedRetry, CancellationToken cancellationToken)
     {
+        if (WritesRetired?.Invoke(snapshot.CharacterId) == true)
+        {
+            // The takeover moved the character to another world: the fence would refuse this write, so it is dropped (and counted) with anything retained for the character.
+            lock (_cacheGate) _retained.Remove(snapshot.CharacterId);
+            return;
+        }
+
         Task prior = Task.CompletedTask;
         TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         bool superseded;
@@ -331,7 +395,34 @@ public sealed partial class SummonService
         {
             // Unfiltered: the queue slot must complete for every exception, or every later write and barrier of this character waits forever.
             // This is the one place a save failure is recorded and logged; the callers below only observe or propagate it.
-            if (ex is not OutOfMemoryException and not OperationCanceledException)
+            if (ex is not OutOfMemoryException and not OperationCanceledException && IsOwnershipRefusal(ex))
+            {
+                if (WritesRetired?.Invoke(snapshot.CharacterId) == true)
+                {
+                    // Refused because the character moved to another world: counted, neither logged nor retained, and the write counts as drained.
+                    lock (_cacheGate)
+                    {
+                        if (ReferenceEquals(_retained.GetValueOrDefault(snapshot.CharacterId), snapshot))
+                        {
+                            _retained.Remove(snapshot.CharacterId);
+                        }
+                    }
+
+                    done.SetResult();
+                    return;
+                }
+
+                if (WritesSealed?.Invoke() == true)
+                {
+                    _logger.LogInformation("persistent pet save of character {CharacterId} refused while the handoff is undecided; retained in case it aborts", snapshot.CharacterId);
+                }
+                else
+                {
+                    AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
+                    _logger.LogFault("pet.persistence", ex, "persistent pet save failed for character {CharacterId}", snapshot.CharacterId);
+                }
+            }
+            else if (ex is not OutOfMemoryException and not OperationCanceledException)
             {
                 // LogFault records the fault ledger entry once; no separate Record.
                 AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {snapshot.CharacterId}", ex.Message);
@@ -408,6 +499,12 @@ public sealed partial class SummonService
             try
             {
                 await FlushCharacterAsync(characterId).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (WritesSealed?.Invoke() == true && IsOwnershipRefusal(ex))
+            {
+                // The handoff never decided (its retirement did not reach this process, for example with the gateway link down) and the fence refuses the write: after the takeover it can never
+                // be written, so the stop names it in a warning instead of failing on a write the new owner has superseded.
+                _logger.LogWarning("persistent pet state of character {CharacterId} was refused by the fence while a handoff was undecided at stop and is dropped", characterId);
             }
             catch (Exception ex)
             {
