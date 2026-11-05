@@ -15,18 +15,18 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// Gulch content of <see cref="WarsongGulchTestContent"/> with a small template). The retail rules they pin, all from vmangos:
 /// <list type="bullet">
 /// <item>A queue run fills the running matches that have free slots first (<c>CheckFreeSlots</c> / <c>FillPlayersToBg</c>,
-/// BattleGroundMgr.cpp:704-740, 456-529) and then creates a new match of the same type and bracket as soon as each side has the minimum
+/// BattleGroundMgr.cpp:691-741, 456-529) and then creates a new match of the same type and bracket as soon as each side has the minimum
 /// queued, however many matches already run (<c>CheckCreateNewBg</c> / <c>CheckNormalMatch</c>, BattleGroundMgr.cpp:742-868, 587-628;
 /// <c>Update</c> :870-891). A running match's free slots are offered while it prepares (STATUS_WAIT_JOIN) and while it is in progress
-/// (<c>GetFreeSlotsForTeam</c>, BattleGround.cpp:1185-1189).</item>
+/// (<c>GetFreeSlotsForTeam</c>, BattleGround.cpp:1185-1188).</item>
 /// <item>Each match gets the lowest unused client instance id of its type and bracket (<c>CreateClientVisibleInstanceId</c>,
 /// BattleGroundMgr.cpp:1217-1236), and SMSG_BATTLEFIELD_LIST lists those ids for the asker's bracket (<c>BuildBattleGroundListPacket</c>,
 /// BattleGroundMgr.cpp:1432-1448; layout Server/Packets/Battleground.cpp:203-214 and wow_messages smsg_battlefield_list.wowm 1.12:
 /// u64 battlemaster, u32 map, u8 bracket, u32 count, u32 ids).</item>
-/// <item>CMSG_BATTLEMASTER_JOIN's instance id (0 = first available) is the group's <c>desiredInstanceId</c> (BattleGroundHandler.cpp:153-156,
+/// <item>CMSG_BATTLEMASTER_JOIN's instance id (0 = first available) is the group's <c>desiredInstanceId</c> (BattleGroundHandler.cpp:155-156,
 /// 189); a queued group with one is only invited to that match (<c>SelectionPool::AddGroup</c>, BattleGroundMgr.cpp:125-138).</item>
 /// <item>A participant who leaves frees an invitation, puts the match back in the free-slot list and schedules a queue run
-/// (<c>RemovePlayerAtLeave</c>, BattleGround.cpp:966-980), so the slot is refilled from the queue.</item>
+/// (<c>RemovePlayerAtLeave</c>, BattleGround.cpp:966-977), so the slot is refilled from the queue.</item>
 /// </list>
 /// </summary>
 public sealed class BattlegroundInstancesWorldTests
@@ -219,12 +219,17 @@ public sealed class BattlegroundInstancesWorldTests
     {
         ScenarioBot a1 = await context.StepAsync("login a1", () => AllianceAsync(context, "Bgfillallya"));
         ScenarioBot h1 = await context.StepAsync("login h1", () => HordeAsync(context, "Bgfillhordea"));
+
+        // Log in the later joiners before the first queue, so login catch-up on a loaded host does not eat the invite window or the preparation timer.
+        ScenarioBot a2 = await context.StepAsync("login a2", () => AllianceAsync(context, "Bgfillallyb"));
+        ScenarioBot h2 = await context.StepAsync("login h2", () => HordeAsync(context, "Bgfillhordeb"));
         await QueueAsync(context, a1);
         await context.StepAsync("one side alone makes no match", async () =>
         {
             await context.IdleAsync(TimeSpan.FromSeconds(2));   // the scheduled queue runs
             ScenarioContext.ExpectEqual(0u, await InvitedToAsync(context, a1), "a1 invited without a Horde player");
-            ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => Manager(context).ClientInstanceIds(BattlegroundType.WarsongGulch, 0).Count), "matches");
+            // Every bracket, so a match made in a bracket other than the bots' own is also caught.
+            ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => Enumerable.Range(0, BattlegroundConstants.BracketCount).Sum(bracket => Manager(context).ClientInstanceIds(BattlegroundType.WarsongGulch, bracket).Count)), "matches");
         });
 
         await QueueAsync(context, h1);
@@ -233,7 +238,6 @@ public sealed class BattlegroundInstancesWorldTests
         Battleground match = await PortInAsync(context, a1);
         ScenarioContext.ExpectEqual(BattlegroundStatus.WaitJoin, await context.ReadAsync(() => match.Status), "status after the minimum met");
 
-        ScenarioBot a2 = await context.StepAsync("login a2", () => AllianceAsync(context, "Bgfillallyb"));
         await QueueAsync(context, a2);
         await context.StepAsync("a player queued during the preparation is invited into the match", async () =>
         {
@@ -248,7 +252,6 @@ public sealed class BattlegroundInstancesWorldTests
         await context.StepAsync("the gates open", () => context.WaitUntilAsync("the match is in progress",
             () => match.Status == BattlegroundStatus.InProgress, TimeSpan.FromMinutes(3)));
 
-        ScenarioBot h2 = await context.StepAsync("login h2", () => HordeAsync(context, "Bgfillhordeb"));
         await QueueAsync(context, h2);
         await context.StepAsync("a player queued while the match runs is invited into it", async () =>
         {

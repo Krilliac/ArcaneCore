@@ -169,14 +169,14 @@ public sealed class PlayerbotAnnounceTests
         Assert.Equal(1, drop.Chat.Status().Safety.OutputFlagged);
     }
 
+    // A pattern timeout other than the default gives the rig a filter of its own: the test hook never reaches the shared default one.
+    private static void OwnFilter(PlayerbotChatOptions chat) => chat.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
+
     /// <summary>
     /// Output screening that runs out of time has not judged the line: the announcement path fails closed like the answer path
     /// (PlayerbotChat.cs answer screening, guild MOTD), so the model's line is never said and nothing is flagged for a
     /// personal-data guess made by a timeout.
     /// </summary>
-    // A pattern timeout other than the default gives the rig a filter of its own: the test hook never reaches the shared default one.
-    private static void OwnFilter(PlayerbotChatOptions chat) => chat.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
-
     [Fact]
     public async Task AModelLine_ThatTheOutputScreeningCouldNotJudge_IsNotSaid_AndLeavesNoFlag()
     {
