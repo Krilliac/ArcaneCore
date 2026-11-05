@@ -53,6 +53,10 @@ public sealed class SocialWriteQueueOptions
 /// failing row cannot stall a character deletion. Retention is in process only: a crash, or a
 /// store that is still down at exit, loses what is retained (loudly).
 /// </para>
+/// <para>
+/// A handoff writes what no character's barrier reaches (guilds, petitions, purges) through <see cref="FlushSharedAsync"/>. While it has sealed or retired the process a fence refusal of any key
+/// is dropped, not terminal (<see cref="CharacterRetirementRegistry"/>), and after the retirement nothing is attempted.
+/// </para>
 /// </summary>
 public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 {
@@ -105,6 +109,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         Write,
         Barrier,
         FlushCharacter,
+        FlushShared,
         Retry,
         DrainAll,
         Sweep,
@@ -137,6 +142,18 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         }
     }
 
+    /// <summary>The retained writes outside <see cref="RetainedCharacters"/> (guilds, petitions and character purges); described, in order.</summary>
+    public IReadOnlyList<string> RetainedSharedWrites
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _retained.Keys.Where(k => k.Kind != KeyKind.Row).OrderBy(k => k.Kind).ThenBy(k => k.A).Select(DescribeKey).Distinct()];
+            }
+        }
+    }
+
     /// <summary>Terminal failure that halted the queue (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
     public Exception? TerminalFailure
     {
@@ -162,6 +179,25 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
     /// <summary>True for the writes keyed by a character id (the key's first part): a friend or ignore row, and the character purges. Guild and petition writes belong to no one character.</summary>
     private static bool IsCharacterKind(KeyKind kind) => kind is KeyKind.Row or KeyKind.Purge or KeyKind.PetitionPurge;
+
+    /// <summary>True when the handoff took this write away from the process: its character is retired, or, for a guild or petition, the whole process is.</summary>
+    private bool Drops(Key key) => IsCharacterKind(key.Kind)
+        ? CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A)
+        : CharacterRetirementRegistry.DropsShared(Retirement, QueueName);
+
+    /// <summary>As <see cref="Drops"/> for a write the fence just refused, which is also an expected end while the process is sealed.</summary>
+    private bool DropsRefused(Key key) => IsCharacterKind(key.Kind)
+        ? CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, key.A)
+        : CharacterRetirementRegistry.DropsSharedRefused(Retirement, QueueName);
+
+    private static string DescribeKey(Key key) => key.Kind switch
+    {
+        KeyKind.Row => $"character {key.A}",
+        KeyKind.Guild => $"guild {key.A}",
+        KeyKind.Petition => $"petition {key.A}",
+        KeyKind.PetitionPurge => $"petition purge of character {key.A}",
+        _ => $"purge of character {key.A}",
+    };
 
     /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
@@ -433,6 +469,21 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             : RetainedFailureTask(characterId);
     }
 
+    /// <summary>
+    /// The handoff barrier for what no character's barrier reaches: after every earlier write, retries the retained guild, petition and purge writes once more and faults with
+    /// <see cref="InvalidOperationException"/> while one is still not durable, or the queue is terminal.
+    /// </summary>
+    public Task FlushSharedAsync()
+    {
+        if (_consumer is null || _stopped)
+        {
+            return SharedFailureTask();
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _channel.Writer.TryWrite(new Work(WorkKind.FlushShared, default, default, 0, 0, done)) ? done.Task : SharedFailureTask();
+    }
+
     /// <summary>Queue a fire-and-forget retry of the character's retained rows (logout).</summary>
     public void RequestRetry(int characterId)
     {
@@ -483,17 +534,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             terminal = _terminalFailure;
             KeyValuePair<Key, Retained>[] failures = [.. _retained.OrderBy(r => r.Key.Kind).ThenBy(r => r.Key.A).ThenBy(r => r.Key.B)];
-            left =
-            [
-                .. failures.Select(f => f.Key.Kind switch
-                {
-                    KeyKind.Row => $"character {f.Key.A}",
-                    KeyKind.Guild => $"guild {f.Key.A}",
-                    KeyKind.Petition => $"petition {f.Key.A}",
-                    KeyKind.PetitionPurge => $"petition purge of character {f.Key.A}",
-                    _ => $"purge of character {f.Key.A}",
-                }).Distinct(),
-            ];
+            left = [.. failures.Select(f => DescribeKey(f.Key)).Distinct()];
             first = failures.Length > 0 ? failures[0].Value.Failure : terminal;
         }
 
@@ -550,6 +591,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>Merge into the key's waiting write, or queue a new one. False (nothing queued) when the channel is closed.</summary>
     private bool EnqueueWrite(Key key, Payload value)
     {
+        if (!IsCharacterKind(key.Kind) && Drops(key))
+        {
+            return true; // another world owns this now: nothing is queued (the callers of a character's write ask first)
+        }
+
         if (_queued.TryGetValue(key, out Work? waiting) && !waiting.Started && waiting.Epoch == _epoch)
         {
             waiting.Value = value;
@@ -670,6 +716,22 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     private static InvalidOperationException NotDurable(int characterId, Exception failure)
         => new($"social writes for character {characterId} are not durable", failure);
 
+    private InvalidOperationException? SharedFailure()
+    {
+        lock (_gate)
+        {
+            KeyValuePair<Key, Retained>[] left = [.. _retained.Where(r => r.Key.Kind != KeyKind.Row).OrderBy(r => r.Key.Kind).ThenBy(r => r.Key.A)];
+            if (left.Length > 0)
+            {
+                return new InvalidOperationException($"social writes for {string.Join(", ", left.Select(r => DescribeKey(r.Key)).Distinct())} are not durable", left[0].Value.Failure);
+            }
+
+            return _terminalFailure is { } terminal ? new InvalidOperationException("the social write queue stopped after terminal ownership rejection", terminal) : null;
+        }
+    }
+
+    private Task SharedFailureTask() => SharedFailure() is { } failure ? Task.FromException(failure) : Task.CompletedTask;
+
     private void FailTerminal(CharacterOwnershipRejectedException ex, IServiceProvider? scopedServices)
     {
         bool first = false;
@@ -740,6 +802,18 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                         if (RetainedFailureOf(work.CharacterId) is { } failure)
                         {
                             work.Done?.TrySetException(NotDurable(work.CharacterId, failure));
+                        }
+                        else
+                        {
+                            work.Done?.TrySetResult();
+                        }
+
+                        break;
+                    case WorkKind.FlushShared:
+                        await RetryOpaqueAsync(null, MaxAttempts).ConfigureAwait(false);
+                        if (SharedFailure() is { } sharedFailure)
+                        {
+                            work.Done?.TrySetException(sharedFailure);
                         }
                         else
                         {
@@ -976,7 +1050,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>Apply one key's value to the store. Null on success; otherwise the last failure.</summary>
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
-        if (IsCharacterKind(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        if (Drops(key))
         {
             return null; // retired since it was queued (or retained): dropped, which the caller records as drained
         }
@@ -1058,9 +1132,9 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 progress.Succeeded();
                 return null;
             }
-            catch (CharacterOwnershipRejectedException) when (IsCharacterKind(key.Kind) && CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, key.A))
+            catch (CharacterOwnershipRejectedException) when (DropsRefused(key))
             {
-                return null; // refused because the character moved to another world: counted, neither logged nor terminal
+                return null; // refused because this write moved to another world with the handoff: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {

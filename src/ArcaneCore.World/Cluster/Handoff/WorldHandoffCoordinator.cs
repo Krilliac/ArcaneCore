@@ -21,9 +21,10 @@ public interface IWorldHandoffSource
     Task FreezeAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Wait until every save captured by the freeze, and every other write A has open in any queue at that point, offline characters included, is durable; throws, before the commit, when one
-    /// cannot be. On success A's writes are sealed until <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected.
-    /// A write made after this returns has no durability promise: it lands only if the takeover has not.
+    /// Wait until every save captured by the freeze, and every other write A has open at that point in a character, instance or social queue, offline characters and writes of no one character
+    /// included, is durable; throws, before the commit, when one cannot be. Group, GM audit, account and respawn writes are not waited for. On success A's writes are sealed until
+    /// <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected. A flush that outlives its freeze (A resumed
+    /// meanwhile) throws and seals nothing. A write made after this returns has no durability promise: it lands only if the takeover has not.
     /// </summary>
     Task FlushAsync(CancellationToken cancellationToken);
 

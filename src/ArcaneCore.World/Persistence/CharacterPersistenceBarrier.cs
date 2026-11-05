@@ -340,6 +340,21 @@ public sealed class CharacterPersistenceBarrier
     }
 
     /// <summary>
+    /// The writes a handoff must have durable that belong to no one character, so <see cref="OpenCharacterIdsAsync"/> cannot name them: instance rows, script data, deletions and raid reset times,
+    /// guilds, petitions and character purges. Each queue retries what it retains and faults, under <see cref="DefaultTimeout"/>, while one is still not durable. The last time this process can
+    /// write them: B reads the characters database, and the fence refuses A after the takeover. Group, GM audit, account and respawn writes are not covered (a known limit of the handoff).
+    /// </summary>
+    public async Task FlushSharedWritesAsync(CancellationToken cancellationToken = default)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(DefaultTimeout);
+        if ((_services.GetService<InstanceWriteQueue>() ?? _services.GetService<InstanceFeature>()?.Writes) is { } instanceWrites)
+            await instanceWrites.FlushSharedAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+        if ((_services.GetService<SocialWriteQueue>() ?? _services.GetService<SocialFeature>()?.Writes) is { } socialWrites)
+            await socialWrites.FlushSharedAsync().WaitAsync(budget.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Flush all settlement barriers and per-character persistence queues for <paramref name="characterId"/>,
     /// throwing <see cref="InvalidOperationException"/> when any queue remains dirty, retained, or faulted.
     /// </summary>

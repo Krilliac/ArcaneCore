@@ -10,7 +10,9 @@ namespace ArcaneCore.World.Persistence;
 /// queue (<see cref="TryDrop"/>), and the queue logs one informational line with its count at stop (<see cref="LogStopSummary"/>). A character that was
 /// never retired is never affected. Retirement has no way back. A handoff retires the whole process (<see cref="RetireAll"/>): the takeover moved the one ownership scope every write of
 /// this process runs under, so no character is left that it could still write, named or not. Between its flush and that step the source is <see cref="Seal">sealed</see>: the takeover can
-/// land at any moment, so a fence refusal is the expected end of a write, not a lost ownership. One instance per process (a singleton in the world's services); thread-safe, any thread.
+/// land at any moment, so a fence refusal is the expected end of a write, not a lost ownership. A write that belongs to no one character (an instance row, a guild) is covered by the
+/// whole-process steps only (<see cref="TryDropShared"/>, <see cref="TryDropSharedRefused"/>): retiring named characters leaves it a write of this process. One instance per process (a singleton
+/// in the world's services); thread-safe, any thread.
 /// </summary>
 public sealed class CharacterRetirementRegistry
 {
@@ -109,6 +111,36 @@ public sealed class CharacterRetirementRegistry
         }
     }
 
+    /// <summary>For a write of no one character: true, counted, once the whole process is retired (<see cref="RetireAll"/>). Retiring named characters does not touch it.</summary>
+    public bool TryDropShared(string queue)
+    {
+        lock (_gate)
+        {
+            if (!_allRetired)
+            {
+                return false;
+            }
+
+            _dropped[queue] = _dropped.GetValueOrDefault(queue) + 1;
+            return true;
+        }
+    }
+
+    /// <summary>For a write of no one character that the fence just refused: as <see cref="TryDropShared"/>, and also while the process is sealed. False is a real loss of ownership.</summary>
+    public bool TryDropSharedRefused(string queue)
+    {
+        lock (_gate)
+        {
+            if (!_sealed && !_allRetired)
+            {
+                return false;
+            }
+
+            _dropped[queue] = _dropped.GetValueOrDefault(queue) + 1;
+            return true;
+        }
+    }
+
     /// <summary>The writes dropped so far for <paramref name="queue"/>.</summary>
     public long DroppedCount(string queue)
     {
@@ -138,6 +170,14 @@ public sealed class CharacterRetirementRegistry
     /// <summary>Null-tolerant <see cref="TryDropRefused"/>: false when there is no registry.</summary>
     public static bool DropsRefused([NotNullWhen(true)] CharacterRetirementRegistry? registry, string queue, int characterId)
         => registry is not null && registry.TryDropRefused(queue, characterId);
+
+    /// <summary>Null-tolerant <see cref="TryDropShared"/>: false when there is no registry.</summary>
+    public static bool DropsShared([NotNullWhen(true)] CharacterRetirementRegistry? registry, string queue)
+        => registry is not null && registry.TryDropShared(queue);
+
+    /// <summary>Null-tolerant <see cref="TryDropSharedRefused"/>: false when there is no registry.</summary>
+    public static bool DropsSharedRefused([NotNullWhen(true)] CharacterRetirementRegistry? registry, string queue)
+        => registry is not null && registry.TryDropSharedRefused(queue);
 
     /// <summary>Null-tolerant <see cref="IsRetired"/>: false when there is no registry.</summary>
     public static bool Retired([NotNullWhen(true)] CharacterRetirementRegistry? registry, int characterId)

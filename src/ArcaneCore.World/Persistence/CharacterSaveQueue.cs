@@ -1136,12 +1136,18 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             throw new InvalidOperationException("character save queue has a terminal ownership failure", failure);
     }
 
-    /// <summary>Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and <see cref="FatalFailure"/> is raised once. Safe from any thread.</summary>
-    public void FailTerminal(Exception failure)
+    /// <summary>
+    /// Stops the queue for good because the durable owner of the characters database is not this world (the unfenced world found a claim): every queued snapshot is parked and
+    /// <see cref="FatalFailure"/> is raised once. Safe from any thread. False while a handoff is undecided (sealed): nothing stopped, and a watcher must keep watching, because after a resume the
+    /// same loss is terminal again. True when the caller is done: the queue stopped, or the world retired.
+    /// </summary>
+    public bool FailTerminal(Exception failure)
     {
+        bool retired;
         bool handingOff;
         lock (_gate)
         {
+            retired = _allRetired;
             handingOff = _sealed || _allRetired;
         }
 
@@ -1149,10 +1155,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             // The takeover moved the ownership on purpose: a watcher of the ownership row (the worker heartbeat) sees that as lost, and a retiring world must not stop for it.
             _logger.LogInformation("The ownership of the characters moved during a handoff; not a terminal failure ({Reason})", failure.Message);
-            return;
+            return retired;
         }
 
         EnterTerminalFailure(null, failure);
+        return true;
     }
 
     private void EnterTerminalFailure(CharacterState? current, Exception failure)

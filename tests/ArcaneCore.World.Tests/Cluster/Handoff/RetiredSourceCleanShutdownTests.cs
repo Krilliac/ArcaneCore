@@ -4,12 +4,16 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Honor;
+using ArcaneCore.Kernel.Instances;
+using ArcaneCore.Kernel.Social;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Honor;
+using ArcaneCore.World.Instances;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Social;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,9 +25,18 @@ namespace ArcaneCore.World.Tests.Cluster.Handoff;
 /// <summary>
 /// A retired handoff source drops every pending write (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly. Its flush writes what it can of offline
 /// characters too, through the real barrier, and aborts the handoff when it cannot. Between the flush and the retirement the source is sealed: a write the fence refuses there is dropped, not terminal.
+/// The same holds for writes of no one character (instance rows, guilds, purges), which no character barrier reaches. A flush that outlives its freeze seals nothing.
 /// </summary>
 public sealed class RetiredSourceCleanShutdownTests
 {
+    /// <summary>The writes outside the per-character protections: an instance row and a guild, keyed by no character, and a purge, keyed by one but not listed among the retained characters.</summary>
+    public enum SharedWrite
+    {
+        InstanceRow,
+        Guild,
+        CharacterPurge,
+    }
+
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
 
     [Fact]
@@ -328,6 +341,297 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.Equal(1, rig.Refusals);
     }
 
+    /// <summary>
+    /// The flush outlives its freeze: the gateway's timeout does not cancel it, and the resume does not wait for it. It is held behind the rest queue's write, as a locked database would hold it,
+    /// until the world has moved on. It must fail and leave the seal alone, or a resumed world would drop every refusal for the rest of its life.
+    /// </summary>
+    private static async Task HoldTheFlushWhileAsync(HandoffRig rig, LocalWorldHandoffSource source, Func<Task> whileHeld)
+    {
+        using var entered = new ManualResetEventSlim(false);
+        using var hold = new ManualResetEventSlim(false);
+        rig.RestWrites.Start();
+        rig.RestAnswer = _ =>
+        {
+            entered.Set();
+            hold.Wait();
+            return null;
+        };
+
+        try
+        {
+            rig.RestWrites.Save(1, Rest(1f));
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the rest write to reach the store");
+            await source.FreezeAsync(CancellationToken.None);
+            Task flush = source.FlushAsync(CancellationToken.None);
+            Assert.False(flush.IsCompleted); // waiting behind the held write, in the queue's ordered barrier
+            await whileHeld();
+            hold.Set();
+            InvalidOperationException late = await Assert.ThrowsAsync<InvalidOperationException>(() => flush);
+            Assert.Contains("nothing was sealed", late.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            hold.Set();
+        }
+    }
+
+    /// <summary>A refusal after a late flush is a lost ownership: in the save queue and in a queue that asks the registry, also when a new freeze has begun meanwhile (that freeze has not flushed).</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFlushThatFinishesAfterTheResume_SealsNothing_AndAFenceRefusalIsStillTerminal(bool freezeAgain)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+
+        await HoldTheFlushWhileAsync(rig, source, async () =>
+        {
+            await source.ResumeAsync(CancellationToken.None);
+            if (freezeAgain)
+            {
+                await world.InvokeAsync(() => true, CancellationToken.None); // the first park has ended
+                await source.FreezeAsync(CancellationToken.None);
+            }
+        });
+
+        rig.RestAnswer = _ => new CharacterOwnershipRejectedException("world", 7);
+        rig.RestWrites.Save(9, Rest(2f));
+        await WorldTestHost.WaitForAsync(() => rig.RestWrites.TerminalFailure is not null, "the refused rest write to stop its queue");
+        rig.MoveTheFence();
+        rig.Queue.Enqueue(State(5, 55));
+        await WorldTestHost.WaitForAsync(() => rig.Queue.TerminalFailure is not null, "the refused write of character 5 to stop the queue");
+
+        Assert.Equal(0, rig.Retirement.DroppedCount("RestWriteQueue"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.RestWrites.StopAsync());
+    }
+
+    /// <summary>The ownership loss the worker heartbeat reports is the other thing the seal silences: after a late flush it stops the queue, and the watcher is told it is done.</summary>
+    [Fact]
+    public async Task AFlushThatFinishesAfterTheResume_LeavesFailTerminalStoppingTheQueue()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        var lost = new InvalidOperationException("the worker scope no longer belongs to this world");
+
+        await HoldTheFlushWhileAsync(rig, source, () => source.ResumeAsync(CancellationToken.None));
+
+        Assert.True(rig.Queue.FailTerminal(lost));
+        Assert.Same(lost, rig.Queue.TerminalFailure);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync());
+        await rig.RestWrites.StopAsync();
+    }
+
+    /// <summary>A flush that finds the world retired has nothing left to promise either.</summary>
+    [Fact]
+    public async Task AFlushThatFinishesAfterTheRetirement_Fails()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+
+        await HoldTheFlushWhileAsync(rig, source, () => source.RetireWritesAsync(CancellationToken.None));
+
+        await rig.AssertCleanStopAsync();
+        await rig.RestWrites.StopAsync();
+    }
+
+    /// <summary>Only the flush can write it in time: no character barrier names it, and the queue's own ordered barrier never retries (the 30 s sweep does not run in this rig).</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AWriteOfNoOneCharacter_RetainedBeforeTheHandoff_IsWrittenByTheFlush_BeforeTheCommit(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        rig.SharedAnswer = _ => new InvalidOperationException("the disk said no");
+        rig.WriteShared(kind, 9);
+        await WorldTestHost.WaitForAsync(() => rig.RetainedShared(kind).Count > 0, "the write to be retained");
+        rig.SharedAnswer = _ => null;
+        bool durableAtFlushed = false;
+
+        Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                durableAtFlushed = rig.SharedStore.Saved.Contains(9);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.True(durableAtFlushed);
+        Assert.Empty(rig.RetainedShared(kind));
+        Assert.Equal(0, rig.SharedDrops(kind));
+        await rig.StopSharedAsync(kind);
+    }
+
+    /// <summary>One the flush cannot write fails the handoff before the commit: A resumes, still owns it and writes it once the store recovers.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AWriteOfNoOneCharacterTheFlushCannotWrite_AbortsTheHandoff_AndStaysAWriteOfTheSource(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        rig.SharedAnswer = _ => new InvalidOperationException("the disk said no");
+        rig.WriteShared(kind, 9);
+        await WorldTestHost.WaitForAsync(() => rig.RetainedShared(kind).Count > 0, "the write to be retained");
+
+        WorldHandoffAbortedException aborted = await Assert.ThrowsAsync<WorldHandoffAbortedException>(
+            () => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid()));
+
+        Assert.Equal(PlayerTransferDecisionState.Aborted, aborted.Record.DecisionState);
+        Assert.Null(aborted.Record.TargetOwnershipToken);
+        Assert.NotEmpty(rig.RetainedShared(kind));
+        rig.SharedAnswer = _ => null;
+        await rig.StopSharedAsync(kind);
+        Assert.Contains(9, rig.SharedStore.Saved);
+    }
+
+    /// <summary>
+    /// The window of the review: a write of no one character retained after the flush, and the sweep the 30 s timer would post reaches the moved fence before the retirement. Dropped and counted.
+    /// Without the seal covering these keys this is the queue's terminal failure and StopApplication.
+    /// </summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AWriteOfNoOneCharacter_RefusedBetweenTheCommitAndTheRetirement_IsDropped_AndTheQueueStopsCleanly(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        rig.WhileCommitted = async () =>
+        {
+            Assert.True(rig.PostSharedSweep(kind));
+            await rig.WaitForRefusalsAsync(1);
+        };
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.WriteShared(kind, 5);
+                await WorldTestHost.WaitForAsync(() => rig.SharedWriteSettled(kind), "the busy write to be retained after the flush, and its queue to be idle");
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        Assert.Equal(1, rig.Refusals);
+        Assert.Equal(1, rig.SharedDrops(kind));
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.Empty(rig.RetainedShared(kind));
+        await rig.StopSharedAsync(kind); // must not throw
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>A stop that comes while the source is sealed (the fence moved, nobody retired it yet: the coordinator died after the commit) reaches the fence in its final drain. Not terminal, nothing left.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AWriteOfNoOneCharacter_RefusedAtAStopWhileSealed_IsDropped_AndTheQueueStopsCleanly(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        await source.FreezeAsync(CancellationToken.None);
+        await source.FlushAsync(CancellationToken.None);
+        rig.WriteShared(kind, 5);
+        await WorldTestHost.WaitForAsync(() => rig.SharedWriteSettled(kind), "the busy write to be retained after the flush, and its queue to be idle");
+        rig.MoveTheFence();
+
+        await rig.StopSharedAsync(kind); // must not throw
+
+        Assert.Equal(1, rig.Refusals);
+        Assert.Equal(1, rig.SharedDrops(kind));
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.Empty(rig.RetainedShared(kind));
+    }
+
+    /// <summary>After the retirement neither the retained write nor a new one is attempted, at the stop drain included: they could only be refused.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AfterTheRetirement_NoWriteOfNoOneCharacter_IsAttempted_AtTheStopIncluded(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        int attemptsBefore = 0;
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.WriteShared(kind, 5);
+                await WorldTestHost.WaitForAsync(() => rig.SharedWriteSettled(kind), "the busy write to be retained after the flush, and its queue to be idle");
+                attemptsBefore = rig.SharedStore.Attempts.Count;
+            }
+        }
+
+        var target = new CallbackTarget(() => rig.WriteShared(kind, 6));
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, target, new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        await rig.StopSharedAsync(kind); // must not throw
+        Assert.Equal(0, rig.Refusals);
+        Assert.Equal(attemptsBefore, rig.SharedStore.Attempts.Count);
+        Assert.Equal(2, rig.SharedDrops(kind)); // the retained one and the new one
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.Empty(rig.RetainedShared(kind));
+    }
+
+    /// <summary>The seal is no mask for these keys either: after a resume a refusal is a lost ownership.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task AResumedSource_TreatsARefusalOfAWriteOfNoOneCharacterAsALostOwnershipAgain(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+
+        static Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+            => stage == WorldHandoffStage.Flushed ? throw new InvalidOperationException("the target went away") : Task.CompletedTask;
+
+        await Assert.ThrowsAsync<WorldHandoffAbortedException>(() => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage));
+
+        rig.MoveTheFence();
+        rig.WriteShared(kind, 5);
+        await WorldTestHost.WaitForAsync(() => rig.SharedTerminal(kind) is not null, "the refused write to stop its queue");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.StopSharedAsync(kind));
+        Assert.Equal(0, rig.SharedDrops(kind));
+    }
+
     /// <summary>The worker heartbeat reports the moved ownership row through <see cref="CharacterSaveQueue.FailTerminal"/>: while a handoff decides, and after it retired the world, that is no reason to stop.</summary>
     [Fact]
     public async Task AnOwnershipLossReported_WhileSealedOrRetired_IsNotTerminal_AndIsAfterTheSealLifts()
@@ -338,14 +642,14 @@ public sealed class RetiredSourceCleanShutdownTests
         var lost = new InvalidOperationException("the worker scope no longer belongs to this world");
 
         sealedQueue.SealWrites();
-        sealedQueue.FailTerminal(lost);
+        Assert.False(sealedQueue.FailTerminal(lost)); // undecided: the watcher keeps watching, a resume can make this terminal
         Assert.Null(sealedQueue.TerminalFailure);
         sealedQueue.UnsealWrites();
-        sealedQueue.FailTerminal(lost);
+        Assert.True(sealedQueue.FailTerminal(lost));
         Assert.Same(lost, sealedQueue.TerminalFailure);
 
         retiredQueue.RetireEveryCharacter();
-        retiredQueue.FailTerminal(lost);
+        Assert.True(retiredQueue.FailTerminal(lost)); // decided: nothing left to watch
         Assert.Null(retiredQueue.TerminalFailure);
     }
 
@@ -657,6 +961,29 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.False(CharacterRetirementRegistry.DropsRefused(null, "A", 99));
     }
 
+    [Fact]
+    public void Registry_AWriteOfNoOneCharacter_FollowsOnlyTheWholeProcess()
+    {
+        var registry = new CharacterRetirementRegistry();
+        registry.Retire([1, 2]);
+        Assert.False(registry.TryDropShared("A")); // a transfer retires a character; the instance rows and guilds stay here
+        Assert.False(registry.TryDropSharedRefused("A"));
+
+        registry.Seal();
+        Assert.False(registry.TryDropShared("A")); // still attempted: the takeover may not have landed
+        Assert.True(registry.TryDropSharedRefused("A"));
+        registry.Unseal();
+        Assert.False(registry.TryDropSharedRefused("A"));
+        Assert.Equal(1, registry.DroppedCount("A"));
+
+        registry.RetireAll();
+        Assert.True(registry.TryDropShared("A"));
+        Assert.True(registry.TryDropSharedRefused("A"));
+        Assert.Equal(3, registry.DroppedCount("A"));
+        Assert.False(CharacterRetirementRegistry.DropsShared(null, "A"));
+        Assert.False(CharacterRetirementRegistry.DropsSharedRefused(null, "A"));
+    }
+
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>
     private sealed class FencedRestStore(int moved) : ICharacterRestStore
     {
@@ -705,14 +1032,18 @@ public sealed class RetiredSourceCleanShutdownTests
             Store = new FencedStore(moved: 0) { Answer = state => Write(state) };
             RestStore = new FencedRestStore(moved: 0) { Answer = id => RestAnswer(id) };
             HonorStore = new ScriptedHonorStore { Answer = id => HonorAnswer(id) };
+            SharedStore = new ScriptedSharedStore { Answer = id => SharedAnswer(id) };
             Write = state => state.Id >= 5 ? LockedOrRefused() : null;
             RestAnswer = id => id >= 5 ? LockedOrRefused() : null;
             HonorAnswer = id => id >= 5 ? LockedOrRefused() : null;
+            SharedAnswer = id => id >= 5 ? LockedOrRefused() : null;
             Journal = new HandoffJournal(OnCommitAsync);
             _services = new ServiceCollection()
                 .AddSingleton<ICharacterStore>(Store)
                 .AddSingleton<ICharacterRestStore>(RestStore)
                 .AddSingleton<IHonorStore>(HonorStore)
+                .AddSingleton<IInstanceStore>(SharedStore)
+                .AddSingleton<ISocialStore>(SharedStore)
                 .AddSingleton(Retirement)
                 .AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), new CaptureLogger()) { BusyBackoff = [busyBackoff ?? TimeSpan.FromMilliseconds(10)] })
                 .AddSingleton(sp => new RestWriteQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
@@ -726,11 +1057,24 @@ public sealed class RetiredSourceCleanShutdownTests
                     RetainedRetryInterval = Timeout.InfiniteTimeSpan,
                     Retirement = Retirement,
                 })
+                .AddSingleton(sp => new InstanceWriteQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance)
+                {
+                    RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+                    RetryDelay = TimeSpan.FromMilliseconds(1),
+                    Retirement = Retirement,
+                })
+                .AddSingleton(sp => new SocialWriteQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger.Instance, new SocialWriteQueueOptions { RetryDelayMs = 1 })
+                {
+                    RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+                    Retirement = Retirement,
+                })
                 .AddSingleton<CharacterPersistenceBarrier>()
                 .BuildServiceProvider();
             Queue = _services.GetRequiredService<CharacterSaveQueue>();
             RestWrites = _services.GetRequiredService<RestWriteQueue>();
             HonorWrites = _services.GetRequiredService<HonorWriteQueue>();
+            InstanceWrites = _services.GetRequiredService<InstanceWriteQueue>();
+            SocialWrites = _services.GetRequiredService<SocialWriteQueue>();
             Queue.FatalFailure += ex => _fatal = ex;
         }
 
@@ -740,11 +1084,15 @@ public sealed class RetiredSourceCleanShutdownTests
 
         public ScriptedHonorStore HonorStore { get; }
 
+        public ScriptedSharedStore SharedStore { get; }
+
         public Func<CharacterState, Exception?> Write { get; set; }
 
         public Func<int, Exception?> RestAnswer { get; set; }
 
         public Func<int, Exception?> HonorAnswer { get; set; }
+
+        public Func<int, Exception?> SharedAnswer { get; set; }
 
         public CharacterRetirementRegistry Retirement { get; } = new();
 
@@ -753,6 +1101,10 @@ public sealed class RetiredSourceCleanShutdownTests
         public RestWriteQueue RestWrites { get; }
 
         public HonorWriteQueue HonorWrites { get; }
+
+        public InstanceWriteQueue InstanceWrites { get; }
+
+        public SocialWriteQueue SocialWrites { get; }
 
         public HandoffJournal Journal { get; }
 
@@ -781,7 +1133,8 @@ public sealed class RetiredSourceCleanShutdownTests
 
         /// <summary>Ends when the fence has refused that many writes, or when a queue went terminal (the test's assertions then fail).</summary>
         public Task WaitForRefusalsAsync(int refusals) => WorldTestHost.WaitForAsync(
-            () => Refusals >= refusals || Queue.TerminalFailure is not null || RestWrites.TerminalFailure is not null,
+            () => Refusals >= refusals || Queue.TerminalFailure is not null || RestWrites.TerminalFailure is not null
+                || InstanceWrites.TerminalFailure is not null || SocialWrites.TerminalFailure is not null,
             $"the fence to refuse {refusals} write(s)");
 
         public async Task AssertCleanStopAsync()
@@ -794,7 +1147,47 @@ public sealed class RetiredSourceCleanShutdownTests
             Assert.DoesNotContain(Store.Saved, s => s.Id >= 5);
         }
 
-        public async ValueTask DisposeAsync() => await _services.DisposeAsync();
+        public void StartSharedQueues()
+        {
+            InstanceWrites.Start();
+            SocialWrites.Start();
+        }
+
+        public void WriteShared(SharedWrite kind, int id)
+        {
+            switch (kind)
+            {
+                case SharedWrite.InstanceRow:
+                    InstanceWrites.EnqueueInstanceSaveForTest((uint)id, 409, 1_700_000_000);
+                    break;
+                case SharedWrite.Guild:
+                    SocialWrites.SaveGuild(new GuildData(id, "Guild", 1, "", "", 0, 0, 0, 0, 0, 0, [], []));
+                    break;
+                default:
+                    SocialWrites.PurgeCharacter(id);
+                    break;
+            }
+        }
+
+        public IReadOnlyList<string> RetainedShared(SharedWrite kind) => kind == SharedWrite.InstanceRow ? InstanceWrites.RetainedSharedWrites : SocialWrites.RetainedSharedWrites;
+
+        /// <summary>Retained, and the queue idle: a purge is two writes, and the second retries the first once more.</summary>
+        public bool SharedWriteSettled(SharedWrite kind) => RetainedShared(kind).Count > 0 && (kind == SharedWrite.InstanceRow ? InstanceWrites.Pending : SocialWrites.Pending) == 0;
+
+        public bool PostSharedSweep(SharedWrite kind) => kind == SharedWrite.InstanceRow ? InstanceWrites.PostRetainedSweepForTest() : SocialWrites.PostRetainedSweepForTest();
+
+        public Exception? SharedTerminal(SharedWrite kind) => kind == SharedWrite.InstanceRow ? InstanceWrites.TerminalFailure : SocialWrites.TerminalFailure;
+
+        public long SharedDrops(SharedWrite kind) => Retirement.DroppedCount(kind == SharedWrite.InstanceRow ? "InstanceWriteQueue" : "SocialWriteQueue");
+
+        public Task StopSharedAsync(SharedWrite kind) => kind == SharedWrite.InstanceRow ? InstanceWrites.StopAsync() : SocialWrites.StopAsync();
+
+        public async ValueTask DisposeAsync()
+        {
+            // A test that cares has already stopped these and asserted how; this only ends the consumers of the rest.
+            await Task.WhenAll(InstanceWrites.StopAsync(), SocialWrites.StopAsync()).ContinueWith(static _ => { }, TaskScheduler.Default);
+            await _services.DisposeAsync();
+        }
 
         private async Task OnCommitAsync()
         {
@@ -950,6 +1343,40 @@ public sealed class RetiredSourceCleanShutdownTests
         public Task SaveMaintenanceAsync(HonorMaintenanceState state, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<HonorWeeklyScore>> ListWeeklyScoresAsync(uint weekBeginDay, uint weekEndDay, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<HonorWeeklyScore>>([]);
         public Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    /// <summary>The instance and social stores with a scripted answer per id: an instance, a guild or a purged character.</summary>
+    private sealed class ScriptedSharedStore : IInstanceStore, ISocialStore
+    {
+        public ConcurrentQueue<int> Attempts { get; } = new();
+        public ConcurrentQueue<int> Saved { get; } = new();
+        public required Func<int, Exception?> Answer { get; init; }
+
+        private Task WriteAsync(int id)
+        {
+            Attempts.Enqueue(id);
+            if (Answer(id) is { } scripted)
+                return Task.FromException(scripted);
+            Saved.Enqueue(id);
+            return Task.CompletedTask;
+        }
+
+        public Task SaveInstanceAsync(InstanceRecord instance, CancellationToken cancellationToken = default) => WriteAsync((int)instance.Id);
+        public Task SaveGuildAsync(GuildData guild, CancellationToken cancellationToken = default) => WriteAsync(guild.Id);
+        public Task PurgeCharacterAsync(int characterId, CancellationToken cancellationToken = default) => WriteAsync(characterId);
+
+        public Task<InstanceStoreSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(InstanceStoreSnapshot.Empty);
+        public Task SaveInstanceDataAsync(uint instanceId, string data, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteInstanceAsync(uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveBindAsync(CharacterInstanceBindRecord bind, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteBindAsync(int characterId, uint instanceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveResetTimeAsync(InstanceResetRecord reset, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveLastInstanceAsync(CharacterLastInstanceRecord last, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<SocialEntry>> GetSocialAsync(int characterId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<SocialEntry>>([]);
+        public Task SetSocialAsync(int characterId, int otherId, SocialFlags flags, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<IReadOnlyList<GuildData>> GetGuildsAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<GuildData>>([]);
+        public Task DeleteGuildAsync(int guildId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>
