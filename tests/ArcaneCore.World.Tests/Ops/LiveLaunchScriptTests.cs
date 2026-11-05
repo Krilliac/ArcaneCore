@@ -187,6 +187,29 @@ public sealed class LiveLaunchScriptTests : IDisposable
 
     // ---- start-cluster --------------------------------------------------------------------------------------------------------------
 
+    /// <summary>
+    /// A plan of a fresh home (no image deployed yet) prints, with a warning per missing image, instead of refusing; a real start with the same
+    /// home still refuses before it starts anything.
+    /// </summary>
+    [PwshFact]
+    public void StartCluster_MissingImage_PlanWarnsAndPrints_RealStartRefuses()
+    {
+        File.Delete(Path.Combine(_home, "bin", "ArcaneCore.Realm.exe"));
+        (int planCode, string plan, bool planStarted) = RunLauncher("start-cluster.ps1", ["-Plan"]);
+
+        Assert.Equal(0, planCode);
+        Assert.False(planStarted, "the plan started a process");
+        Assert.StartsWith("PLAN start-cluster (nothing was started)", plan, StringComparison.Ordinal);
+        Assert.Contains("ArcaneCore.Realm.exe not found: deploy a build to the live home first", plan, StringComparison.Ordinal);
+        Assert.Contains("A real start would refuse.", plan, StringComparison.Ordinal);
+
+        (int startCode, string start, bool started) = RunLauncher("start-cluster.ps1", []);
+        Assert.Equal(1, startCode);
+        Assert.False(started, "a refused start started a process");
+        Assert.Contains("ERROR: ", start, StringComparison.Ordinal);
+        Assert.Contains("ArcaneCore.Realm.exe not found: deploy a build to the live home first", start, StringComparison.Ordinal);
+    }
+
     [PwshFact]
     public void StartCluster_Plan_Default_IsRealmPlusCombinedWorld_WithEnvironmentBuiltFromParameters()
     {
@@ -1021,6 +1044,36 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("threw: child w is not up and the process that launches it", output, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A supervisor that refuses a child (host memory under its reserve) exits with only that reason in its log: the wait's error quotes the
+    /// last refusal line of -LogPath, and says nothing extra when the log has no such line or does not exist.
+    /// </summary>
+    [PwshFact]
+    public void WaitLiveDaemonUp_SupervisorGone_QuotesTheRefusalFromTheSupervisorLog()
+    {
+        string log = Path.Combine(_root, "supervisor.debug.jsonl");
+        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n{\"level\":\"Error\",\"msg\":\"admission refused gateway: 495 MiB free is under the 1024 MiB reserve\"}\n");
+        string quiet = Path.Combine(_root, "quiet.debug.jsonl");
+        File.WriteAllText(quiet, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n");
+        string output = RunPwsh($$"""
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+            $gone = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 0' -PassThru @hide
+            $gone.WaitForExit()
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
+            foreach ($path in '{{Q(log)}}', '{{Q(quiet)}}', '{{Q(Path.Combine(_root, "missing.jsonl"))}}') {
+                try { Wait-LiveDaemonUp -Label 'child w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0 -WatchPid $gone.Id -FollowRelaunch -LogPath $path; 'returned' }
+                catch { "threw[$([IO.Path]::GetFileName($path))]: $($_.Exception.Message)" }
+            }
+            """);
+        Assert.Contains("threw[supervisor.debug.jsonl]: child w is not up and the process that launches it", output, StringComparison.Ordinal);
+        Assert.Contains("admission refused gateway: 495 MiB free is under the 1024 MiB reserve", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("supervisor started", output, StringComparison.Ordinal);
+        string quietLine = output.Split('\n').Single(l => l.StartsWith("threw[quiet.debug.jsonl]", StringComparison.Ordinal));
+        Assert.DoesNotContain("Last relevant log lines", quietLine, StringComparison.Ordinal);
+        string missingLine = output.Split('\n').Single(l => l.StartsWith("threw[missing.jsonl]", StringComparison.Ordinal));
+        Assert.DoesNotContain("Last relevant log lines", missingLine, StringComparison.Ordinal);
+    }
+
     // ---- the debugger script ------------------------------------------------------------------------------------------------------------
 
     [PwshFact]
@@ -1056,6 +1109,23 @@ public sealed class LiveLaunchScriptTests : IDisposable
         string otherText = File.ReadAllText(other);
         Assert.Contains("Successfully attached", otherText, StringComparison.Ordinal);
         Assert.Contains("EXIT_PROCESS_DEBUG_EVENT", otherText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// -SupervisorPid together with -RealmPid/-WorldPid attaches each pid once: the pids attached up front seed the watch loop's attached map, so
+    /// the supervisor's child of the same pid is "known and alive" and skipped (it used to be attached a second time, giving three failure lines).
+    /// </summary>
+    [Fact]
+    public void AttachDebugger_WatchMode_StartsFromThePidsAttachedUpFront()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        int realm = source.IndexOf("$preAttached[[int]$RealmPid] = $realmThread", StringComparison.Ordinal);
+        int world = source.IndexOf("$preAttached[[int]$WorldPid] = $worldThread", StringComparison.Ordinal);
+        int watch = source.IndexOf("if ($SupervisorPid) {\n        # Watch mode", StringComparison.Ordinal);
+        int seed = source.IndexOf("$attached = $preAttached", StringComparison.Ordinal);
+        Assert.True(realm >= 0 && world > realm, "the up-front attaches must record their threads by pid");
+        Assert.True(watch > world && seed > watch, "watch mode must start from the up-front threads, not an empty map");
+        Assert.DoesNotContain("$attached = @{}", source, StringComparison.Ordinal);
     }
 
     [PwshFact]

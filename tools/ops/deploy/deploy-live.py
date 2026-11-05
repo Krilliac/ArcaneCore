@@ -107,12 +107,12 @@ def main() -> int:
     ap.add_argument("--operator-character", default="Claudeop")
     args = ap.parse_args()
 
-    profile = Path(args.profile) if args.profile else opsenv.live_profile()
-    out = Path(args.out) if args.out else (opsenv.deploy_root() / args.label)
+    profile = Path(args.profile) if args.profile else opsenv.live_profile("--profile")
+    out = Path(args.out) if args.out else (opsenv.deploy_root("--out") / args.label)
     art = Path(args.artifacts)
-    terrain_arg = str(opsenv.data_root() / "terrain-5875") if args.terrain is None else args.terrain
-    dbc_dir = Path(args.dbc_dir) if args.dbc_dir else (opsenv.data_root() / "client-dbc-5875")
-    dump_path = Path(args.dump) if args.dump else (opsenv.refs_root() / "classic-db" / "Full_DB" / "ClassicDB_1_12_1_z2815.sql.gz")
+    terrain_arg = str(opsenv.data_root("--terrain") / "terrain-5875") if args.terrain is None else args.terrain
+    dbc_dir = Path(args.dbc_dir) if args.dbc_dir else (opsenv.data_root("--dbc-dir") / "client-dbc-5875")
+    dump_path = Path(args.dump) if args.dump else (opsenv.refs_root("--dump") / "classic-db" / "Full_DB" / "ClassicDB_1_12_1_z2815.sql.gz")
 
     for item in args.set or []:
         require(item.partition("=")[0] and "=" in item, f"--set expects Section:Key=value, got {item!r}")

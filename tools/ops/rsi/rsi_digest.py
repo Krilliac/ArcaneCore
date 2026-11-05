@@ -103,8 +103,8 @@ def main() -> int:
     ap.add_argument("--no-github", action="store_true", help="do not query GitHub issues via gh")
     args = ap.parse_args()
 
-    profile = pathlib.Path(args.profile) if args.profile else opsenv.live_profile()
-    out_dir = pathlib.Path(args.out) if args.out else (opsenv.lanes_root() / "_wf" / "rsi")
+    profile = pathlib.Path(args.profile) if args.profile else opsenv.live_profile("--profile")
+    out_dir = pathlib.Path(args.out) if args.out else (opsenv.lanes_root("--out") / "_wf" / "rsi")
     repo_dir = pathlib.Path(args.repo)
 
     report = json.loads((profile / "qa" / "report.json").read_text(encoding="utf-8"))

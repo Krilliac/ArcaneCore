@@ -77,7 +77,7 @@ def main() -> int:
     ap.add_argument("--no-elevators", action="store_true")
     args = ap.parse_args()
 
-    deploy_dir = Path(args.deploy_dir) if args.deploy_dir else opsenv.deploy_root()
+    deploy_dir = Path(args.deploy_dir) if args.deploy_dir else opsenv.deploy_root("--deploy-dir")
     out = deploy_dir / args.label
     report_path = out / "report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))

@@ -40,6 +40,25 @@ public sealed partial class DeployScriptSafetyTests
         Assert.Equal("[]", output.Trim());
     }
 
+    /// <summary>
+    /// opsenv's accessors name the command-line option that supplies a missing value: a deploy run without ARCANECORE_DATA_ROOT and without
+    /// --terrain says "pass --terrain", not only "Set it" (the option argument of require used to have no caller).
+    /// </summary>
+    [PythonFact]
+    public void OpsEnv_MissingValue_NamesTheOptionThatSuppliesIt()
+    {
+        string opsDir = Path.Combine(Root, "tools", "ops");
+        (int code, string output) = Python(["-c",
+            "import sys; sys.path.insert(0, sys.argv[1]); import opsenv; opsenv.data_root('--terrain')", opsDir]);
+        Assert.NotEqual(0, code);
+        Assert.Contains("ARCANECORE_DATA_ROOT is not set", output, StringComparison.Ordinal);
+        Assert.Contains("Set it, or pass --terrain", output, StringComparison.Ordinal);
+
+        (int plain, string plainOutput) = Python(["-c", "import sys; sys.path.insert(0, sys.argv[1]); import opsenv; opsenv.data_root()", opsDir]);
+        Assert.NotEqual(0, plain);
+        Assert.DoesNotContain("or pass", plainOutput, StringComparison.Ordinal);
+    }
+
     [PythonFact]
     public void PostChecks_StatusConsole_IsOpenedSupervising_SoItCannotReplaceTheSupervisorWithAReadOnlyConsole()
     {

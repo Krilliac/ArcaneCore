@@ -44,28 +44,28 @@ def require(name: str, purpose: str, option: str | None = None) -> str:
     return value
 
 
-def lanes_root() -> pathlib.Path:
-    return pathlib.Path(require(LANES_ROOT, "the directory that holds the lane worktrees and _deploy/_diag/_wf"))
+def lanes_root(option: str | None = None) -> pathlib.Path:
+    return pathlib.Path(require(LANES_ROOT, "the directory that holds the lane worktrees and _deploy/_diag/_wf", option))
 
 
-def data_root() -> pathlib.Path:
-    return pathlib.Path(require(DATA_ROOT, "the directory that holds terrain-5875 and client-dbc-5875"))
+def data_root(option: str | None = None) -> pathlib.Path:
+    return pathlib.Path(require(DATA_ROOT, "the directory that holds terrain-5875 and client-dbc-5875", option))
 
 
-def refs_root() -> pathlib.Path:
-    return pathlib.Path(require(REFS_ROOT, "the directory that holds mangos-classic, vmangos and classic-db"))
+def refs_root(option: str | None = None) -> pathlib.Path:
+    return pathlib.Path(require(REFS_ROOT, "the directory that holds mangos-classic, vmangos and classic-db", option))
 
 
-def live_profile() -> pathlib.Path:
+def live_profile(option: str | None = None) -> pathlib.Path:
     explicit = optional(LIVE_PROFILE) or optional(LIVE_ROOT)
     if explicit:
         return pathlib.Path(explicit)
-    return pathlib.Path(require(LIVE_PROFILE, "the live server profile directory that holds appsettings.json"))
+    return pathlib.Path(require(LIVE_PROFILE, "the live server profile directory that holds appsettings.json", option))
 
 
-def deploy_root() -> pathlib.Path:
+def deploy_root(option: str | None = None) -> pathlib.Path:
     explicit = optional(DEPLOY_ROOT)
-    return pathlib.Path(explicit) if explicit else lanes_root() / "_deploy"
+    return pathlib.Path(explicit) if explicit else lanes_root(option) / "_deploy"
 
 
 def repo_root() -> pathlib.Path:

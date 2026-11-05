@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Two-stage test gate shared by .github/workflows/ci.yml and tools/ops/ci/node-ci.ps1 (which ships this file to Node1 with each run).
 #
-#   bash tools/ops/ci/test-stages.sh [--stage main|timing|all] [--logs DIR] [--results DIR] [--filter EXPR] [--commit SHA]
+#   bash tools/ops/ci/test-stages.sh [--stage main|timing|batch|all] [--logs DIR] [--results DIR] [--filter EXPR] [--commit SHA]
 #                                    [--selftest] TARGET...
 #
 # TARGET is a solution, solution filter or test project, already built (dotnet test --no-build).
@@ -15,7 +15,12 @@
 #                  isolated rerun: passing it prints "FLAKY (passed on rerun): <test>" and appends it to <logs>/flake-ledger.txt
 #                  (the gate still passes); failing it again fails the gate. Only a plain failure (rc 1, no setup error, attributable
 #                  Failed lines) is rerun; any other rc fails the gate even if the rerun passes.
-#   all          : main, then the MockClient self-test (--selftest), then timing.
+#   all          : main, then the MockClient self-test (--selftest), then timing, then batch.
+#   stage batch  : the spell-batching leg of ci.yml (ARCANECORE_TEST_SPELL_BATCH_MS=GATE_BATCH_MS, default 400, retail-like batching on):
+#                  every target whose name is in GATE_BATCH_TARGETS (default "Game World"), Category!=Timing, all at once. A failure fails
+#                  the gate (no rerun: a batching-only failure is a real divergence, not timing). Part of "all"; skipped, with a line in
+#                  the summary, when --filter is given, when no target is listed, or when the caller already sets
+#                  ARCANECORE_TEST_SPELL_BATCH_MS (the main stage then already runs with that window). GATE_BATCH_LEG=off skips it.
 # A run without --filter whose timing stage executes 0 tests FAILS: an empty filter must never read green. With --filter EXPR
 # (ANDed with each stage's category) the rule is instead that the stages together executed at least one test.
 # Exit 0 = pass, 1 = fail, 2 = usage. Env: GATE_WRAP prefixes every dotnet test (e.g. "timeout -k 60 3600"), GATE_WRAP_DATA
@@ -36,6 +41,10 @@
 # GATE_MAIN_RERUN (on|off|1|0, default on) and GATE_MAIN_RERUN_MAX (whole number 0..1000, default 5) are the main-stage rerun knobs.
 # GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
 # The summary lists the slowest classes and tests of a target that hit a budget.
+# Executed-test guard: a skipped test is not a passed one. With GATE_REQUIRE_EXECUTED (space separated test class names) a run without
+# --filter FAILS when no test of such a class has a Passed or Failed result in the main-stage .trx files. Unset, it defaults to
+# SpellContractSweepTests when a target is named World and ARCANECORE_TEST_DBC_DIR holds Spell.dbc (the sweep skips without the client
+# DBCs, e.g. on Node1, and then nothing enforces its ratchet); GATE_REQUIRE_EXECUTED="" turns the guard off.
 set -u
 
 stage=all logs=gate-logs results= filter= commit= selftest=0
@@ -48,12 +57,12 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,/^set -u/{/^set -u/!p}' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
 done
-case "$stage" in main|timing|all) ;; *) echo "test-stages: --stage must be main, timing or all" >&2; exit 2 ;; esac
+case "$stage" in main|timing|batch|all) ;; *) echo "test-stages: --stage must be main, timing, batch or all" >&2; exit 2 ;; esac
 [ ${#targets[@]} -gt 0 ] || { echo "test-stages: no test target given" >&2; exit 2; }
 if [ -z "$commit" ]; then commit=${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}; fi
 mkdir -p "$logs" || exit 2
@@ -77,6 +86,11 @@ done
 [ "$long_test_sec" -ge 1 ] && [ "$long_test_sec" -le 3600 ] || { echo "test-stages: GATE_LONG_TEST_SEC must be 1..3600" >&2; exit 2; }
 [ "$minute_sec" -ge 1 ] && [ "$minute_sec" -le 60 ] || { echo "test-stages: GATE_BUDGET_MINUTE_SEC must be 1..60" >&2; exit 2; }
 [ "$main_rerun_max" -le 1000 ] || { echo "test-stages: GATE_MAIN_RERUN_MAX must be at most 1000" >&2; exit 2; }
+batch_leg=${GATE_BATCH_LEG:-on}
+case "$batch_leg" in on|off) ;; *) echo "test-stages: GATE_BATCH_LEG must be on or off, not '$batch_leg'" >&2; exit 2 ;; esac
+batch_ms=${GATE_BATCH_MS:-400}
+[[ "$batch_ms" =~ ^[1-9][0-9]{0,4}$ ]] || { echo "test-stages: GATE_BATCH_MS must be a whole number 1..99999, not '$batch_ms'" >&2; exit 2; }
+batch_targets=${GATE_BATCH_TARGETS-Game World}
 [ "$suite_budget_min" -le 1440 ] || { echo "test-stages: GATE_SUITE_BUDGET_MIN must be at most 1440" >&2; exit 2; }
 [ "$class_budget_sec" -le 86400 ] || { echo "test-stages: GATE_CLASS_BUDGET_SEC must be at most 86400" >&2; exit 2; }
 if [ "$time_budgets" = off ]; then suite_budget_min=0 class_budget_sec=0; fi
@@ -141,6 +155,18 @@ class_times() {
     END { for (c in t) printf "%d %s\n", t[c], c }' | sort -rn
 }
 
+# executed_count <trx dir> <test class name> -> how many results of tests in that class (".Class." in the test name) are Passed or Failed.
+# A skipped test is NotExecuted and does not count.
+executed_count() {
+  find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk -v cls=".$2." '
+    { while (match($0, /<UnitTestResult [^>]*>/)) {
+        tag = substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH)
+        if (!match(tag, /testName="[^"]*"/)) continue; n = substr(tag, RSTART + 10, RLENGTH - 11)
+        if (!match(tag, /outcome="[^"]*"/)) continue; o = substr(tag, RSTART + 9, RLENGTH - 10)
+        if (index(n, cls) > 0 && (o == "Passed" || o == "Failed")) c++ } }
+    END { print c + 0 }'
+}
+
 # test_times <trx dir> -> "<seconds> <test>" for every result, slowest first.
 test_times() {
   find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk '
@@ -179,6 +205,14 @@ label() { basename "$1" | sed -E 's/\.(slnf|slnx|sln|csproj)$//'; }
 dups=$(for t in "${targets[@]}"; do label "$t"; done | sort | uniq -d)
 for t in "${targets[@]}"; do [ -n "$(label "$t")" ] || { echo "test-stages: target '$t' has an empty name" >&2; exit 2; }; done
 [ -z "$dups" ] || { echo "test-stages: targets share the name(s): $(echo $dups) (their logs and results would collide)" >&2; exit 2; }
+# The executed-test guard (see the header): explicit list, else the sweep when the host has the client DBCs and a World target is run.
+if [ -n "${GATE_REQUIRE_EXECUTED+x}" ]; then require_executed=$GATE_REQUIRE_EXECUTED
+else
+  require_executed=
+  for t in "${targets[@]}"; do
+    [ "$(label "$t")" = World ] && [ -f "${ARCANECORE_TEST_DBC_DIR:-/nonexistent}/Spell.dbc" ] && require_executed=SpellContractSweepTests
+  done
+fi
 
 a_exec=0 a_pass=0 a_fail=0 a_skip=0 b_exec=0 b_pass=0 b_fail=0 b_skip=0
 selftest_line="not run"
@@ -187,7 +221,7 @@ m_rerun_n=0 m_rerun_pass=0 m_rerun_fail=0
 flaky=()
 serial_seen=0
 
-if [ "$stage" != timing ]; then
+if [ "$stage" = main ] || [ "$stage" = all ]; then
   flt='Category!=Timing'; [ -n "$filter" ] && flt="($filter)&Category!=Timing"
   summary+=("stage main (parallel, $flt):")
   [ "$time_budgets" = off ] && summary+=("  time budgets: OFF (GATE_TIME_BUDGETS=off): timings are info only, no hard stop")
@@ -280,11 +314,19 @@ if [ "$stage" != timing ]; then
     fi
     [ -z "$filter" ] && [ "$e" -eq 0 ] && fail "main $t executed 0 tests"
   done
+  # Executed-test guard: a class that is required to run and only skipped (no client DBCs on this host) must not read as a pass.
+  if [ -z "$filter" ] && [ -n "$require_executed" ]; then
+    for c in $require_executed; do
+      n=$(executed_count "$results" "$c")
+      summary+=("executed-test guard: $c ran $n test(s) in the main stage")
+      [ "$n" -ge 1 ] || fail "main stage: no $c test executed (all skipped or absent); set the data it needs, or GATE_REQUIRE_EXECUTED= to turn the guard off"
+    done
+  fi
   summary[0]="stage main (parallel, $flt): executed $a_exec (passed $a_pass, failed $a_fail), skipped $a_skip"
   summary+=("main reruns: $m_rerun_n (passed on rerun $m_rerun_pass, failed twice $m_rerun_fail)")
 fi
 
-if [ "$selftest" = 1 ] && [ "$stage" != timing ]; then
+if [ "$selftest" = 1 ] && { [ "$stage" = main ] || [ "$stage" = all ]; }; then
   "${wrap[@]}" dotnet run --project tools/ArcaneCore.MockClient -c "$config" --no-build -- self-test > "$logs/selftest.log" 2>&1 < /dev/null; rc=$?
   echo "selftest rc=$rc"; tail -3 "$logs/selftest.log"
   selftest_line="rc=$rc"
@@ -292,7 +334,7 @@ if [ "$selftest" = 1 ] && [ "$stage" != timing ]; then
 fi
 summary+=("self-test: $selftest_line")
 
-if [ "$stage" != main ]; then
+if [ "$stage" = timing ] || [ "$stage" = all ]; then
   flt='Category=Timing'; [ -n "$filter" ] && flt="($filter)&Category=Timing"
   bhead=${#summary[@]}; summary+=("")
   for t in "${targets[@]}"; do
@@ -337,6 +379,49 @@ if [ "$stage" != main ]; then
   summary[$bhead]="stage timing (serial, $flt): executed $b_exec (passed $b_pass, failed $b_fail), skipped $b_skip; serial: $sline"
   summary+=("timing reruns: $rerun_n (passed on rerun $rerun_pass, failed twice $rerun_fail)")
   [ -z "$filter" ] && [ $b_exec -eq 0 ] && fail "timing stage matched 0 tests"
+fi
+# Spell-batching leg (ci.yml's "Game/World, spell batching" lanes): the same non-timing tests with ARCANECORE_TEST_SPELL_BATCH_MS=$batch_ms.
+# No rerun and no flake ledger: a test that fails only with batching on is a divergence to fix, not timing noise.
+if [ "$stage" = batch ] || [ "$stage" = all ]; then
+  btargets=()
+  for t in "${targets[@]}"; do for w in $batch_targets; do [ "$(label "$t")" = "$w" ] && btargets+=("$t"); done; done
+  why=
+  if [ "$batch_leg" = off ]; then why="GATE_BATCH_LEG=off"
+  elif [ -n "$filter" ]; then why="--filter given"
+  elif [ -n "${ARCANECORE_TEST_SPELL_BATCH_MS+x}" ]; then why="the caller already sets ARCANECORE_TEST_SPELL_BATCH_MS=$ARCANECORE_TEST_SPELL_BATCH_MS"
+  elif [ ${#btargets[@]} -eq 0 ]; then why="no target named in GATE_BATCH_TARGETS ($batch_targets)"
+  fi
+  if [ -n "$why" ]; then
+    echo "batch: skipped ($why)"
+    summary+=("stage batch: skipped ($why)")
+    [ "$stage" = batch ] && fail "batch stage ran nothing: $why"
+  else
+    bflt='Category!=Timing'
+    bhard_ms=$((suite_budget_min * minute_sec * 1000))
+    summary+=("stage batch (parallel, $bflt, ARCANECORE_TEST_SPELL_BATCH_MS=$batch_ms):")
+    bpids=()
+    for t in "${btargets[@]}"; do
+      l=$(label "$t")
+      rm -f "$logs/batch-$l.rc" "$logs/batch-$l.log.start"; rm -rf "${results:?}/batch-$l"
+      ( export ARCANECORE_TEST_SPELL_BATCH_MS=$batch_ms; run_test "$logs/batch-$l.log" "$results/batch-$l" "$bflt" 0 "$t" "$bhard_ms"; echo $? > "$logs/batch-$l.rc.tmp"; mv "$logs/batch-$l.rc.tmp" "$logs/batch-$l.rc" ) &
+      bpids+=($!)
+    done
+    for pid in "${bpids[@]}"; do wait "$pid"; done
+    for t in "${btargets[@]}"; do
+      l=$(label "$t"); log=$logs/batch-$l.log
+      rc=$(cat "$logs/batch-$l.rc" 2>/dev/null || echo 255)
+      read -r p f s < <(counts "$log"); e=$((p + f))
+      echo "batch $t rc=$rc executed $e (passed $p, failed $f), skipped $s"
+      summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
+      if grep -q 'test run timeout of [0-9]* milliseconds exceeded' "$log"; then fail "batch $t was stopped at its ${suite_budget_min}m time budget (GATE_SUITE_BUDGET_MIN)"; fi
+      grep -q 'Test Run Aborted' "$log" && fail "batch $t: test run aborted"
+      if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then
+        failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'
+        fail "batch $t (spell batching ${batch_ms} ms) rc=$rc failed=$f"
+      fi
+      [ "$e" -eq 0 ] && fail "batch $t executed 0 tests"
+    done
+  fi
 fi
 # Flaky tests of both stages (main first, then timing).
 if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky tests (passed their rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky tests (passed their rerun): none"); fi

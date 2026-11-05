@@ -68,6 +68,8 @@ $self = $PID
 $ssh = 'C:\Windows\System32\OpenSSH\ssh.exe'
 $scp = 'C:\Windows\System32\OpenSSH\scp.exe'
 $opts = @('-i', $Key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=4')
+# -n keeps ssh off the parent's stdin: a queued node-ci started from a remote shell otherwise dies with that session. scp has no -n.
+$sshOpts = $opts + '-n'
 # A filtered run (one build plus a few tests) queues separately from full gates, or every RED/GREEN proof waits hours behind them.
 # It still has its own cap: 2026-10-27, with no cap, 20+ concurrent filtered runs drove Node1 to load 124 with 1 GB free, and
 # starved testhosts fail on timing, not bugs.
@@ -92,7 +94,7 @@ if ($queuedAt) { Write-Output "slot free after $([math]::Round(((Get-Date) - $qu
 # Then wait for headroom on the node itself (runs from other hosts or shells share it): 1-min load under 3x its 14 cores and
 # 6 GB available. A failed probe does not block; the run's own ssh will fail loudly instead.
 while ($true) {
-    $probe = & $ssh @opts $NodeHost 'wsl -d Ubuntu-24.04 -u root -e cat /proc/loadavg /proc/meminfo' 2>$null
+    $probe = & $ssh @sshOpts $NodeHost 'wsl -d Ubuntu-24.04 -u root -e cat /proc/loadavg /proc/meminfo' 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $probe) { break }
     $load = [double](($probe | Select-Object -First 1) -split ' ')[0]
     $mem = @(($probe | Where-Object { $_ -match '^MemAvailable:' } | Select-Object -First 1) -split '\s+')
@@ -130,7 +132,7 @@ if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
 
 # Node1's OpenSSH DefaultShell is cmd (found 2026-10-22): cmd acts on | < > & even inside quoted strings, so no remote
 # command may contain shell metacharacters. mkdir works under cmd and PowerShell alike; "already exists" is expected.
-& $ssh @opts $NodeHost 'mkdir C:\NewBuild\arcanecore-ci' 2>$null
+& $ssh @sshOpts $NodeHost 'mkdir C:\NewBuild\arcanecore-ci' 2>$null
 & $scp @opts $tar "${NodeHost}:C:/NewBuild/arcanecore-ci/$runId.tar"
 if ($LASTEXITCODE -ne 0) { throw 'scp failed' }
 Remove-Item $tar
@@ -213,7 +215,7 @@ if ($LASTEXITCODE -ne 0) { throw 'scp of the CI script failed' }
 if ($LASTEXITCODE -ne 0) { throw 'scp of test-stages.sh failed' }
 Remove-Item $sh, $stagesTmp
 $flaky = [Collections.Generic.List[string]]::new()
-& $ssh @opts $NodeHost "wsl -d Ubuntu-24.04 -u root -e bash /mnt/c/NewBuild/arcanecore-ci/$runId.sh" 2>&1 | ForEach-Object {
+& $ssh @sshOpts $NodeHost "wsl -d Ubuntu-24.04 -u root -e bash /mnt/c/NewBuild/arcanecore-ci/$runId.sh" 2>&1 | ForEach-Object {
     $line = "$_" -replace "`0", ''
     if ($line -cmatch '^FLAKY \(passed on rerun\): (.+)$') { $flaky.Add($Matches[1].Trim()) }
     $line
