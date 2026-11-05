@@ -7,7 +7,7 @@ namespace ArcaneCore.World.Playerbots.Chat;
 /// the values come from the bot's real state, never invented. Besides the chat placeholders (<c>{name}</c>, <c>{level}</c>, <c>{class}</c>,
 /// <c>{zone}</c>, ...) a voice topic fills <c>{dungeon}</c> (an instance, as players named it), <c>{roles}</c> ("tank and heals"),
 /// <c>{count}</c>, <c>{task}</c> (a quest title), <c>{item}</c>, <c>{price}</c> ("1g 20s"), <c>{place}</c>, <c>{mob}</c>, <c>{boss}</c>,
-/// <c>{who}</c>, <c>{newlevel}</c>, <c>{newzone}</c>, <c>{node}</c> (a battleground base or tower), <c>{where}</c> and <c>{minlevel}</c>.
+/// <c>{who}</c>, <c>{newlevel}</c>, <c>{newzone}</c>, <c>{node}</c> (a battleground base or tower), <c>{where}</c>, <c>{minlevel}</c> and <c>{maxlevel}</c>.
 /// Keys may have the chat's race, class and level variants (<c>voice.oom.class.Mage</c>).
 /// </summary>
 internal static class PlayerbotVoiceTemplates

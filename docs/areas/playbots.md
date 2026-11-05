@@ -2028,7 +2028,7 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   or beyond 1500 yards is not promised an invitation), then, when the player would take the group's last place and it is a tank's or a
   healer's, a role the player's class can fill ("sorry, we need a healer"; a stated role, "i can tank", is used for the match when the class
   can play it and dropped when it cannot; a stated damage role is never placed in a tank or healer place), then the dry-run match as before
-  (Ready, Noted or CannotPlace; LevelHigh, "sorry, this group tops out at 12", when the player is more than `Groups:LevelRange` above the
+  (Ready, Noted or CannotPlace; LevelHigh, "sorry, this group tops out at 12", when the player is more than `World:Playerbots:Groups:LevelRange` above the
   highest waiting bot, checked once placing has failed). A repeated "inv" inside `AnswerRepeatSeconds` is applied again, but an identical outcome is answered once
   (a different outcome, such as CannotPlace then Noted, is answered again; after Ready the repeat is quiet and the post stays); `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
   only the whisper to the poster itself.
