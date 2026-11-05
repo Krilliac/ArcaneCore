@@ -304,7 +304,8 @@ public sealed class WorkerTransferSource(
     /// Retire of a character this process holds no suspension of. The suspension is memory-only, so a source that restarted after the capture has none, and its frozen player died with
     /// the old process: there is nothing to tear down, and the step is done once this world can no longer write the character. Refusing here would stop the committed roll-forward at
     /// its first step and leave <c>active_transfer</c> set for good. Callers reach this only for a transfer the journal says is committed (the capture was durable before the commit),
-    /// and while that row's <c>active_transfer</c> is set the login claim refuses the character, so nothing on this worker can bring it online before the roll-forward ends.
+    /// and in Worker fencing scope the login claim refuses the character while that row's <c>active_transfer</c> is set, so nothing on this worker can bring it online before the roll-forward
+    /// ends. Realm scope has no claim; there a second world is refused at startup, so this restarted world is the only one that could hold the character.
     /// The check and the refusal are one step on the world thread, where a login enters the world: an online character is not the player the transfer froze, so that is an error.
     /// </summary>
     private async Task RetireWithoutSuspensionAsync(Guid transferId, ulong characterGuid, CancellationToken cancellationToken)

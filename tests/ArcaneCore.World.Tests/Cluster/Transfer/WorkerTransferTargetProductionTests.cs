@@ -11,6 +11,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -86,7 +87,7 @@ public sealed class WorkerTransferTargetProductionTests
         await using var host = WorldTestHost.Start();
         (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERSHADOW", "Shadowone", BattlegroundMapId, 1f);
         await using AsyncServiceScope ownedScope = scope;
-        var loader = new CharacterHooksShadowLoader(_ => session);
+        var loader = new CharacterHooksShadowLoader(_ => session, host.WorldServices);
         var bundle = NewBundle(Guid.NewGuid(), accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
 
         Player shadow = await loader.LoadAsync(bundle, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(30));
@@ -126,7 +127,7 @@ public sealed class WorkerTransferTargetProductionTests
         (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERARRIVE", "Arriveone", 0, 100f);
         await using AsyncServiceScope ownedScope = scope;
         TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session), new WorldSessionTransferEntry(host.WorldServices));
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices));
         Guid id = Guid.NewGuid();
         var at = new TransferPosition(-8949f, -132f, 83f, 0f);
         PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, at);
@@ -165,7 +166,7 @@ public sealed class WorkerTransferTargetProductionTests
         (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERCLOSED", "Closedone", 0, 100f);
         await using AsyncServiceScope ownedScope = scope;
         TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session), new WorldSessionTransferEntry(host.WorldServices));
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices));
         Guid id = Guid.NewGuid();
         PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
         ObjectGuid guid = new(bundle.CharacterGuid);
@@ -188,6 +189,102 @@ public sealed class WorkerTransferTargetProductionTests
 
         Assert.False(host.SaveQueue.IsQuarantined(character.Id));
         await WorldTestHost.WaitForAsync(() => host.Characters.SaveCount > 0, "the logout snapshot to be written");
+    }
+
+    [Fact]
+    public async Task AClientThatLeavesJustBeforeTheActivationStep_ArrivesOffline_AndTheRetryIsANoOp()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERLEFT", "Leftone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        bool sessionHere = true;
+        var offline = new RecordingOfflineArrival();
+        var target = new WorkerTransferTarget(
+            Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices),
+            sessionReady: _ => sessionHere, offlineArrival: offline, claims: host.WorldServices.GetService<CharacterClaimService>())
+        {
+            SessionOpenGrace = TimeSpan.FromMilliseconds(50),
+        };
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+
+        // The session probe still saw the client, and then it closed: its scope ends before the activation reaches the world thread.
+        session.Kick();
+        await scope.DisposeAsync();
+        Exception? first = await Record.ExceptionAsync(() => target.ActivateTargetPlayerAsync(id, bundle, TargetToken));
+
+        // The retry of a committed transfer finds the session gone.
+        sessionHere = false;
+        Exception? second = await Record.ExceptionAsync(() => target.ActivateTargetPlayerAsync(id, bundle, TargetToken));
+
+        Assert.True(first is null && second is null, $"first: {first?.Message ?? "ok"}; retry: {second?.Message ?? "ok"}");
+        Assert.Equal(1, offline.Completions); // the character is written to its target: nobody else will, and a login is routed by the stored map
+        Assert.False(host.World.IsOnline(new ObjectGuid(bundle.CharacterGuid)));
+    }
+
+    [Fact]
+    public async Task AnActivationThatThrowsInItsWorldThreadStep_LeavesTheSlotOpenForTheRetry()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERTHROW", "Throwone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        bool sessionHere = true;
+        var offline = new RecordingOfflineArrival();
+        var target = new WorkerTransferTarget(
+            Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new ThrowingEntry(), sessionReady: _ => sessionHere, offlineArrival: offline)
+        {
+            SessionOpenGrace = TimeSpan.FromMilliseconds(50),
+        };
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.ThrowsAsync<ArithmeticException>(() => target.ActivateTargetPlayerAsync(id, bundle, TargetToken));
+
+        sessionHere = false;
+        Exception? retry = await Record.ExceptionAsync(() => target.ActivateTargetPlayerAsync(id, bundle, TargetToken));
+        Assert.True(retry is null, retry?.Message);
+        Assert.Equal(1, offline.Completions);
+    }
+
+    [Fact]
+    public async Task ReleasingAShadow_AfterItsSessionClosed_StillWorks()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERREL", "Relone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        var loader = new CharacterHooksShadowLoader(_ => session, host.WorldServices);
+        Player shadow = await loader.LoadAsync(NewBundle(Guid.NewGuid(), accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f)), CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+
+        await scope.DisposeAsync();
+
+        loader.Release(shadow); // the honor service is shared: a shadow it keeps tracking is a leak
+    }
+
+    private sealed class RecordingOfflineArrival : ITransferOfflineArrival
+    {
+        private int _completions;
+
+        public int Completions => Volatile.Read(ref _completions);
+
+        public Task CompleteAsync(PlayerTransferBundle bundle, CharacterOwnershipToken ownershipToken, uint zoneId, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _completions);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class ThrowingEntry : ITransferSessionEntry
+    {
+        public bool TryAttach(Player player) => throw new ArithmeticException("attach failed");
+
+        public void ResumeSaves(Player player)
+        {
+        }
     }
 
     private sealed class RecordingOutput : IRemoteSessionOutput
