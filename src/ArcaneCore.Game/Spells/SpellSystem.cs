@@ -769,9 +769,16 @@ public sealed partial class SpellSystem
             unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
             RollTargetOutcomes(cast, targetEffects, out List<ObjectGuid> hits, out List<(ObjectGuid Guid, SpellMissInfo Reason)> misses);
 
-            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-                cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
-                RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
+            // vmangos Spell::SendSpellGo returns before the packet when !IsNeedSendToClient (Spell.cpp:4532-4537): an invisible triggered cast
+            // (a passive or proc trigger with no visual, no speed and no channel) tells the client nothing. Misses of such a cast still go out
+            // one SMSG_SPELLLOGMISS per missed target from ApplyMissedTarget, so the SendAllTargetsMiss branch (Spell.cpp:4692) needs no packet here.
+            // SendLogExecute (m_needSpellLog, Spell.cpp:3945) has no counterpart in this server: SMSG_SPELLLOGEXECUTE is not built anywhere.
+            if (IsNeedSendToClient(cast))
+            {
+                SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
+                    cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+                    RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
+            }
 
             // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
             // as soon as the targets are known (Spell.cpp:3682-3683).
@@ -1020,6 +1027,16 @@ public sealed partial class SpellSystem
                 NotifyOutcome(cast, outcome);
             }
         }
+    }
+
+    /// <summary>
+    /// vmangos Spell::IsNeedSendToClient (Spell.cpp:7705-7709): a cast is shown to the client when it has a spell visual, is channeled, has a
+    /// missile speed, or is not triggered. The channeling-visual and in-world clauses have no counterpart here.
+    /// </summary>
+    private static bool IsNeedSendToClient(SpellCast cast)
+    {
+        SpellInfo spell = cast.Spell;
+        return spell.SpellVisual != 0 || spell.IsChanneled || spell.Speed > 0.0f || (!cast.IsTriggeredByAura && !cast.IsTriggered);
     }
 
     /// <summary>A target the hit roll missed (or was immune): the miss procs, the miss packets, the zero-damage combat start and the observers.</summary>
