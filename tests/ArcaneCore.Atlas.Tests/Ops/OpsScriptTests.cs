@@ -382,8 +382,7 @@ public sealed class OpsScriptTests : IDisposable
         string sidecar = Path.Combine(root, "slot-logs", "t-1.log.err");
         string marker = Path.Combine(_temp, "holder-ready");
         string holder = Path.Combine(_temp, "holder.ps1");
-        File.WriteAllText(holder, $"$ErrorActionPreference = 'Stop'
-$s = [IO.File]::Open('{sidecar.Replace("'", "''", StringComparison.Ordinal)}', 'Open', 'ReadWrite', 'ReadWrite')\nSet-Content -LiteralPath '{marker.Replace("'", "''", StringComparison.Ordinal)}' -Value ready\nStart-Sleep -Seconds 40\n");
+        File.WriteAllText(holder, $"$ErrorActionPreference = 'Stop'\n$s = [IO.File]::Open('{sidecar.Replace("'", "''", StringComparison.Ordinal)}', 'Open', 'ReadWrite', 'ReadWrite')\nSet-Content -LiteralPath '{marker.Replace("'", "''", StringComparison.Ordinal)}' -Value ready\nStart-Sleep -Seconds 40\n");
         string command = $"Start-Process pwsh -ArgumentList '-NoProfile','-NonInteractive','-File','{holder.Replace("'", "''", StringComparison.Ordinal)}' -WindowStyle Hidden | Out-Null; "
             + $"$deadline = [DateTime]::UtcNow.AddSeconds(30); while (-not (Test-Path -LiteralPath '{marker.Replace("'", "''", StringComparison.Ordinal)}') -and [DateTime]::UtcNow -lt $deadline) {{ Start-Sleep -Milliseconds 200 }}; "
             + "exit 7";

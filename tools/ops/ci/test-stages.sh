@@ -328,6 +328,10 @@ if [ "$stage" = main ] || [ "$stage" = all ]; then
       summary+=("executed-test guard: $c ran $n test(s) in the main stage")
       [ "$n" -ge 1 ] || fail "main stage: no $c test executed (skipped or absent); set the data it needs, or GATE_REQUIRE_EXECUTED= to turn the guard off"
     done
+  elif [ -z "$filter" ]; then
+    for t in "${targets[@]}"; do
+      [ "$(label "$t")" = World ] && summary+=("sweep NOT enforced on this host: SpellContractSweepTests.$sweep_method needs the client DBCs (ARCANECORE_TEST_DBC_DIR with Spell.dbc) and may have been skipped; a green gate does not cover it")
+    done
   fi
   summary[0]="stage main (parallel, $flt): executed $a_exec (passed $a_pass, failed $a_fail), skipped $a_skip"
   summary+=("main reruns: $m_rerun_n (passed on rerun $m_rerun_pass, failed twice $m_rerun_fail)")

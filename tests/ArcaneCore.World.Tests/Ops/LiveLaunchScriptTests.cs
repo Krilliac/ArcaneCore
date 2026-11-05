@@ -1083,9 +1083,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
     public void WaitLiveDaemonUp_SupervisorExitsDuringSettleOrIsGone_QuotesTheRefusalFromTheSupervisorLog()
     {
         string log = Path.Combine(_root, "settle.debug.jsonl");
-        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}
-{\"level\":\"Error\",\"msg\":\"admission refused world: 311 MiB free is under the 1024 MiB reserve\"}
-");
+        File.WriteAllText(log, "{\"level\":\"Info\",\"msg\":\"supervisor started\"}\n{\"level\":\"Error\",\"msg\":\"admission refused world: 311 MiB free is under the 1024 MiB reserve\"}\n");
         string output = RunPwsh($$"""
             $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
             $log = '{{Q(log)}}'
@@ -1112,8 +1110,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
             """);
         foreach (string path in new[] { "settle", "seen", "console" })
         {
-            string line = output.Split('
-').Single(l => l.StartsWith($"threw[{path}]", StringComparison.Ordinal));
+            string line = output.Split('\n').Single(l => l.StartsWith($"threw[{path}]", StringComparison.Ordinal));
             Assert.Contains("admission refused world: 311 MiB free is under the 1024 MiB reserve", line, StringComparison.Ordinal);
             Assert.DoesNotContain("supervisor started", line, StringComparison.Ordinal);
         }

@@ -253,7 +253,7 @@ mkdir -p "$work/dbc"; : > "$work/dbc/Spell.dbc"
 check sweep-plain-only 1 "--stage main" 'no SpellContractSweepTests\.Sweep_[A-Za-z_]* test executed'
 tag=sweep-plain-only-class; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests"
 check sweep-plain-only 0 "--stage main" 'executed-test guard: SpellContractSweepTests ran 3 test'
-tag=sweep-ran
+tag=sweep-ran; envs="GATE_REQUIRE_EXECUTED=SpellContractSweepTests.Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline"
 check sweep-ran 0 "--stage main" 'executed-test guard: SpellContractSweepTests\.Sweep_[A-Za-z_]* ran 1 test' 'no SpellContractSweepTests\.Sweep'
 mkdir -p "$work/dbc"; : > "$work/dbc/Spell.dbc"
 tag=sweep-default; envs="ARCANECORE_TEST_DBC_DIR=$work/dbc"
