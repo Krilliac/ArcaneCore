@@ -16,6 +16,13 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// </summary>
 public sealed class CreatureTypeImmunityTests
 {
+    /// <summary>The production resolver (WorldSpellUnitResolver): any unit of the caster's map by GUID.</summary>
+    private sealed class MapObjectResolver : ISpellUnitResolver
+    {
+        public Unit? Find(Unit reference, ObjectGuid guid)
+            => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
+    }
+
     private const uint Beast = 1;
     private const uint Elemental = 4;
     private const uint Mechanical = 9;
@@ -119,5 +126,42 @@ public sealed class CreatureTypeImmunityTests
             Assert.False(EffectImmune(kit, c, HotSpell));
             Assert.False(EffectImmune(kit, c, LeechSpell));
         }
+    }
+
+    [Fact]
+    public void APassiveSpellOfAnImmuneDispelType_IsNotRefusedByTheCreatureTypeImmunity()
+    {
+        using SpellTestKit kit = Kit();
+        Creature elemental = Make(Elemental);
+        SpellInfo passive = kit.Store.Get(PoisonSpell)! with { Attributes = SpellAttributes.Passive };
+
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, elemental, passive, castOnSelf: false));
+        Assert.True(SpellImmune(kit, elemental, PoisonSpell)); // the same spell without the attribute is still refused
+    }
+
+    [Theory]
+    [InlineData(Mechanical, 30u)]
+    [InlineData(Beast, 130u)]
+    public void AHealCastOnACreature_LandsExceptOnAMechanical(uint type, uint expectedHealth)
+    {
+        const uint entry = 932_001;
+        const uint friendlyHeal = 932_110;
+        using SpellTestKit kit = new(Hostile(friendlyHeal, Effect(SpellEffectName.Heal, 100, SpellImplicitTarget.UnitFriend)));
+        kit.System.ApplicationRules.Add(new ImmunityApplicationRule());
+        kit.System.Units = new MapObjectResolver(); // the default resolver only finds players; this lets the creature resolve as an explicit target
+        (Player healer, _) = kit.AddPlayer(1);
+        CreatureTemplate template = Template(entry, t =>
+        {
+            t.MinLevelHealth = 500;
+            t.MaxLevelHealth = 500;
+        }) with { CreatureType = type };
+        (_, _, CreatureMapSystem creatures) = ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit.CreateAiSystem(Content([template], []), world: kit.World);
+        Creature target = creatures.SpawnTemporary(template, healer.X + 3, healer.Y, healer.Z, 0);
+        target.Health = 30;
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, friendlyHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+        kit.Advance(kit.System.SpellBatchWindowMs);
+
+        Assert.Equal(expectedHealth, target.Health);
     }
 }

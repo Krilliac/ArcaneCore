@@ -90,7 +90,7 @@ public sealed class PlayerbotHostileImmunityCastTests
         Effects = effects,
     };
 
-    private static async Task RunAgainstAsync(bool asTotem, Action<SpellFeature, Player, RotationState> body, uint? mechanicMask = null)
+    private static async Task RunAgainstAsync(bool asTotem, Action<SpellFeature, Player, RotationState> body, uint? mechanicMask = null, uint creatureType = 1)
     {
         await using WorldTestHost host = WorldTestHost.Start();
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -100,7 +100,7 @@ public sealed class PlayerbotHostileImmunityCastTests
             await host.World.InvokeAsync(() =>
             {
                 Player player = session.Player!;
-                target = Spawn(host, player, 8, 900041);
+                target = Spawn(host, player, 8, 900041, creatureType);
                 if (asTotem) TotemQuery.Add(new TotemInfo(target, player, TotemSlot.Earth, 0, 0, -1));
                 return true;
             });
@@ -134,6 +134,16 @@ public sealed class PlayerbotHostileImmunityCastTests
         }, SpellMechanics.Mask(SpellMechanic.Bleed));
     }
 
+    [Theory]
+    [InlineData(1u, true)]
+    [InlineData(4u, false)]
+    [InlineData(9u, false)]
+    public async Task ABot_CastsSerpentSting_OnlyWhereTheCreatureTypeAllowsAPoisonDispel(uint creatureType, bool expected)
+    {
+        SpellInfo sting = DamageOverTime(900_851, "Serpent Sting") with { Dispel = (uint)DispelType.Poison };
+        await RunAgainstAsync(false, (_, _, state) => Assert.Equal(expected, state.CanCast(sting, state.Victim!)), creatureType: creatureType);
+    }
+
     [Fact]
     public async Task ABot_CastsASpellOnATotem_WhenOneEffectLands()
     {
@@ -152,13 +162,13 @@ public sealed class PlayerbotHostileImmunityCastTests
         await RunAgainstAsync(true, (_, _, state) => Assert.True(state.CanCast(drawback, state.Victim!)));
     }
 
-    private static Creature Spawn(WorldTestHost host, Player player, float xOffset, uint low)
+    private static Creature Spawn(WorldTestHost host, Player player, float xOffset, uint low, uint creatureType = 1)
     {
         var creature = new Creature(low, new CreatureTemplate
         {
             Entry = 900_000 + low % 1000,
             Name = "immunity target",
-            CreatureType = 1,
+            CreatureType = creatureType,
             MinLevelHealth = 20,
             MaxLevelHealth = 20,
         }, null, new CreatureContent([], [], [], [], []), new Random(1));
