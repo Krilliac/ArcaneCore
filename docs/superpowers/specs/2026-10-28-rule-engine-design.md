@@ -295,7 +295,8 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
 
 ### Cutover checklist (creature host)
 
-- Before `CreatureRuleAI` is assigned to any creature: `CreatureRuleRunner.ProcessEvents` is guarded by `StackGuard` (`creature-rules.process`), as `EventAiEngine` is; done.
+- Before `CreatureRuleAI` is assigned to any creature, still unmet: `TryFire` and the invoker resolver (see P2a above): `CreatureRuleRunner` sets no `Subjects` and calls `Update` and `Fire` directly (no fault-ledger wrapping, no invoker re-resolution).
+- `CreatureRuleRunner.ProcessEvents` is guarded by `StackGuard` (`creature-rules.process`), as `EventAiEngine` is; done.
 - `RuleEvaluator.MaxFireNesting` (8) caps the firings nested at once for one evaluator. cmangos and the old EventAI executor have no such cap, so a same-creature chain of 9 or more rows differs; the cut firing counts as a failed chance roll and in `Reentrant`. Accept or raise the cap before cutover.
 - A nested `Update` for the same subject is refused under `AllowSameEventNesting` (tested in `RuleHardeningTests`).
 

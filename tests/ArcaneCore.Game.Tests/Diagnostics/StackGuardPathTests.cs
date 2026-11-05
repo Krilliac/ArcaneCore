@@ -22,7 +22,7 @@ namespace ArcaneCore.Game.Tests.Diagnostics;
 
 /// <summary>
 /// The stack guards (<see cref="StackGuard"/>) on the real recursive paths: spell.proc, spell.cast-chain, spell.aura-apply, spell.aura-remove,
-/// dbscript.relay, eventai.process and smartai.action. A real stack overflow ends the process, so every scenario runs on a thread with a small
+/// dbscript.relay, eventai.process, creature-rules.process and smartai.action. A real stack overflow ends the process, so every scenario runs on a thread with a small
 /// stack. Two kinds of fixture, both through the production entry points:
 /// <list type="bullet">
 /// <item>Margin fixtures (one per site): the stack is used up until the runtime's safety margin is all that is left, then the real entry point is

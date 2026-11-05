@@ -47,7 +47,7 @@ public sealed class RuleEvaluator(Random random)
 
     /// <summary>
     /// True when an action may fire the event that is already running for the same subject (the creature host: cmangos delivers an AI event
-    /// to the sender synchronously and blocks only the row that is running). The nesting limit (<see cref="MaxFireNesting"/>) still applies.
+    /// to the sender synchronously and blocks only the row that is running). An Update for a subject that is already inside an Update is still refused. The nesting limit (<see cref="MaxFireNesting"/>) still applies.
     /// </summary>
     public bool AllowSameEventNesting { get; init; }
 

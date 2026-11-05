@@ -230,10 +230,10 @@ public sealed class WorldEventHostTests
     }
 
     [Fact]
-    public void AnEntryReplacedByItsOwnUpdateRule_GetsNoDelayedRunInThatTick_AndTheReplacementKeepsItsOwn()
+    public void AnEntryReplacedByItsOwnUpdateRule_GetsNoDelayedRunInThatTick()
     {
         // Event 7's Update rule restarts event 7 itself. The old entry holds a delayed "bye" that is due; it is replaced before its own update step,
-        // so it must be dropped (the second IsCurrent check of the tick), and only the replacement's "bye" is pending.
+        // so its "bye" must not run in that tick. The replacement's own pending bye is not asserted: the fresh state re-fires rule 1 on the next tick and replaces the entry again.
         var h = new Harness(Content(
             [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 7)],
             [Act(1, WorldEventRuleIds.StartEvent, 7), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
@@ -256,7 +256,8 @@ public sealed class WorldEventHostTests
     public void AnEntryRemovedByItsOwnUpdateRule_IsNotUpdatedOrRemovedAgain()
     {
         // Event 7's Update rule stops event 7: the stop has no delayed action left, so the entry is removed inside the rule. The tick must not
-        // touch it afterwards (the second IsCurrent check), and later ticks find nothing.
+        // touch it afterwards, and later ticks find nothing. A removed entry has Running false and no due run, so this guards double update and
+        // double removal only; it cannot tell the two IsCurrent checks apart.
         var h = new Harness(Content(
             [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 7)],
             [Act(1, WorldEventRuleIds.StopEvent, 7), Act(2, SayAction, 1)]));
@@ -277,6 +278,34 @@ public sealed class WorldEventHostTests
         h.Runner.Update();
 
         Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+    }
+
+    [Fact]
+    public void AnUpdateRuleThatStopsItsEvent_StillRunsItsLaterDelayedAction()
+    {
+        // Event 7's Update rule stops event 7 with its first action and has a delayed second action. The stop must not remove the entry while the
+        // rule is still running, or the delayed action would park into an orphaned state and never run.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StopEvent, 7), Act(1, SayAction, 1, seq: 1, delayMs: 100)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 250;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
     }
 
     [Fact]
