@@ -155,7 +155,7 @@ public sealed class PlayerbotStallExploreInPlaceTests
     public async Task AWalkWhoseProjectedPositionRunsAhead_ButWhoseStoredPositionIsFrozen_IsRefused()
     {
         await using MageTravelRig rig = await MageTravelRig.StartAsync();
-        WorldSession session = await rig.EnterAsync("Stallprojected");
+        WorldSession session = await rig.EnterAsync("Stallproject");
         Player player = session.Player!;
         PlayerbotBrain brain = NewBrain(session);
         try
