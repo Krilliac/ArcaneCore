@@ -46,6 +46,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         if (options.Enabled)
         {
             issues.AddRange(CheckFencing(options, configuration));
+            issues.AddRange(CheckRealmRowLabels(options, configuration));
         }
 
         return issues;
@@ -162,6 +163,34 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 yield return new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Processes:{standbyKey}:Arguments",
                     $"standby child '{standbyKey}' names the shard '{standbyShard}', but no active world child uses that shard, so it has no world to stand behind.",
                     "set the standby's --Cluster:Fencing:Shard to the shard (--Cluster:Fencing:Shard, else --Cluster:Worker:NodeId) of the active world it is to take over from");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fail closed on the realm-list row: a child labelled social or coordinator is a whole World executable (see <see cref="CheckFencing"/>), so with
+    /// <c>World:Realm:Id</c> above 0 (the default is 1) it would flip the realm's row Online and Offline beside the world that really serves it. Such a child
+    /// must set <c>--World:Realm:Id=0</c> in its Arguments (or the shared configuration must). A value that is missing is the default 1 and one that is not a
+    /// whole number is refused too, so nothing unreadable is taken for 0.
+    /// </summary>
+    private static IEnumerable<ConfigIssue> CheckRealmRowLabels(ClusterSupervisorOptions options, IConfiguration configuration)
+    {
+        foreach ((string key, SupervisedProcessConfig process) in options.Processes.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(process.Role, SupervisedRoles.Social, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(process.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            IReadOnlyDictionary<string, string> args = ParseArguments(process.Arguments);
+            string? idText = args.GetValueOrDefault("World:Realm:Id") ?? configuration["World:Realm:Id"];
+            bool writesRow = idText is null || !int.TryParse(idText, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0;
+            if (writesRow)
+            {
+                yield return new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Processes:{key}:Arguments",
+                    $"world child '{key}' is labelled {process.Role} but does not set World:Realm:Id=0, so it would write realm 1's realm-list row (Online, Offline, population) beside the world that serves the realm.",
+                    "pass --World:Realm:Id=0 in the child's Arguments, so only the combined world or the gateway writes the realm row");
             }
         }
     }
