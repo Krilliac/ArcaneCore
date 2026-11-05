@@ -11,15 +11,12 @@
 a.error-log	8324	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.unhandled-other	16378	dummy:Dummy
 a.unhandled-other	17619	no-consumer:Dummy
-a.unhandled-other	18350	dummy:Dummy
 a.unhandled-other	18800	no-consumer:Dummy
-a.unhandled-other	19502	no-consumer:Dummy
 a.unhandled-other	21914	dummy:Dummy
 a.unhandled-other	21917	dummy:Dummy
 a.unhandled-other	22690	no-consumer:Dummy
 a.unhandled-other	23852	dummy:Dummy
 a.unhandled-other	24746	no-consumer:Dummy
-a.unhandled-other	28349	dummy:Dummy
 a.unhandled-other	30012	dummy:Dummy
 a.unhandled-other	5302	no-consumer:Dummy
 a.unhandled-other	6277	no-consumer:Dummy
