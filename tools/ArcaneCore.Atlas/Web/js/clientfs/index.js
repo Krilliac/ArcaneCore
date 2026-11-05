@@ -52,6 +52,7 @@ let banner = null;
 let settings = null;
 let waiters = [];
 let declined = false; // Skip / Not now / closing the dialog this session: later cache misses resolve false without any UI
+let persisting = Promise.resolve(); // the running store of a validated pick, awaited by Forget folder before it deletes
 let generation = 0; // bumped by Forget folder so a pick that is still validating cannot store its folder afterwards
 
 const spawn = () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -150,12 +151,22 @@ async function finishPick(scan, handle, started) {
         }
         const archives = scan.archives.map(({ name, size, lastModified }) => ({ name, size, lastModified }));
         const meta = { choice: 'folder', kind: scan.kind, folderName: scan.name, build: result.build, version: result.version, warnings: result.warnings, archives };
-        if (handle) {
-            await dbPut('handles', HANDLE_KEY, handle);
-        } else {
-            await dbDelete('handles', HANDLE_KEY);
+        // The writes are tracked in `persisting`: a Forget folder that lands while they run waits for them before it deletes, so the
+        // folder it forgets can never be stored after the delete. The generation is re-checked once they are done, because Forget
+        // has already reset the model and a late pick must not turn it back to ready.
+        const write = (async () => {
+            if (handle) {
+                await dbPut('handles', HANDLE_KEY, handle);
+            } else {
+                await dbDelete('handles', HANDLE_KEY);
+            }
+            await dbPut('meta', META_KEY, meta);
+        })();
+        persisting = write.then(() => undefined, () => undefined);
+        await write;
+        if (started !== generation) {
+            return;
         }
-        await dbPut('meta', META_KEY, meta);
         Object.assign(model, { state: 'ready', error: null, kind: scan.kind, handle: handle ?? null, folder: scan, folderName: scan.name, build: result.build, version: result.version, warnings: result.warnings, archives });
         declined = false;
         closeDialog();
@@ -314,6 +325,7 @@ async function forgetNow() {
     pool = null;
     inflight.clear();
     Object.assign(model, { state: 'none', folderName: '', build: null, version: null, warnings: [], error: null, kind: null, handle: null, folder: null, archives: [], cacheHits: 0 });
+    await persisting;
     await dbDelete('handles', HANDLE_KEY);
     await dbDelete('meta', META_KEY);
     lru.clear();

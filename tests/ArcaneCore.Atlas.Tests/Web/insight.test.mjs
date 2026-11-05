@@ -376,14 +376,16 @@ test('the Insight tab and the perf HUD in a real browser', { skip }, async (t) =
         assert.deepEqual(call.args, { guid: '1234ABCD' });
     });
 
-    await t.test('the HUD hides rows the renderer does not report and shows them when it does', async () => {
+    await t.test('the HUD shows the counters the renderer reports (zero included) and hides the ones it does not', async () => {
         await page.press('p');
         await page.waitFor("!document.querySelector('.perfhud').hidden", 'the HUD to open');
         await page.waitFor("document.querySelectorAll('.perfhud dt').length > 0", 'HUD rows');
         const stats = () => ev("[...document.querySelectorAll('.perfhud dd')].map((d) => d.dataset.stat).join(',')");
-        assert.ok(!(await stats()).includes('textureBytes'), await stats());
-        await ev('window.__atlas.viewport.renderer.stats.textureBytes = 5 * 1048576; window.__atlas.hud.refresh()');
+        // The renderer pins its texture counters as numbers, 0 before any texture work, so the row exists with a zero; a counter it does not report has no row.
         assert.ok((await stats()).includes('textureBytes'), await stats());
+        assert.ok(!(await stats()).includes('modelGroups'), await stats());
+        await ev('window.__atlas.viewport.renderer.stats.textureBytes = 5 * 1048576; window.__atlas.hud.refresh()');
+        assert.match(await ev("document.querySelector('.perfhud dd[data-stat=\"textureBytes\"]').textContent"), /5/);
         await ev('delete window.__atlas.viewport.renderer.stats.textureBytes; window.__atlas.hud.refresh()');
         assert.ok(!(await stats()).includes('textureBytes'), await stats());
     });
@@ -398,7 +400,7 @@ test('the Insight tab and the perf HUD in a real browser', { skip }, async (t) =
         assert.ok(report, 'no perf.report arrived');
         assert.ok(Object.keys(report.args.stats).length > 0);
         assert.ok(Object.keys(report.args.stats).every((k) => REPORT_KEYS.includes(k)), JSON.stringify(report.args));
-        assert.ok(!('textureMb' in report.args.stats), 'the renderer has no texture bytes, so none is reported');
+        assert.ok(!('modelGroups' in report.args.stats) && !('instances' in report.args.stats), 'only the pinned report keys are sent');
         await page.press('p');
         await page.waitFor('document.querySelector(".perfhud").hidden', 'the HUD to close');
     });

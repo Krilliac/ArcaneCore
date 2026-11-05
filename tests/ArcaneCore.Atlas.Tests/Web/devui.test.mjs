@@ -14,7 +14,8 @@ import { DEVUI_KEYS, comboOf, hotkeyCombos, matchKey } from '../../../tools/Arca
 import { buildMenu, groupItems } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-menu.js';
 import { DebugOverlays, MIN_INTERVAL_MS } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-overlays.js';
 import { filterEntries, paletteEntries } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-palette.js';
-import { CLICK_MAX_MOVE, CLICK_MAX_MS, DevSelection, MAX_SELECTION, entitiesInRect, isContextClick, rectOf } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui.js';
+import { FeedReconnect, RETRY_DELAYS_MS, shouldReconnect } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui-reconnect.js';
+import { CLICK_MAX_MOVE, CLICK_MAX_MS, DevSelection, DevUi, MAX_SELECTION, entitiesInRect, isContextClick, rectOf } from '../../../tools/ArcaneCore.Atlas/Web/js/ui/devui.js';
 import { Browser, browserFromEnvironment } from './support/browser.mjs';
 import { MOCK_COMMANDS } from './support/mockhost.mjs';
 import { INN, startScenario } from './support/scenario.mjs';
@@ -316,6 +317,115 @@ test('stopping abandons a hung run so watching again works, and the abandoned ru
     assert.equal(app.calls.length, 2);
     hung[1]({ ok: true, data: { ok: true } });
     assert.equal(await second, true);
+});
+
+test('an overlay answer that arrives after the watch was stopped is removed again, one for another creature is left to its own run', async () => {
+    const app = fakeApp([]);
+    const hung = [];
+    app.runCommand = async () => new Promise((resolve) => hung.push(resolve));
+    const overlays = new DebugOverlays({ app, setTimer: () => 1, clearTimer: () => {} });
+    const first = overlays.watch('A');
+    overlays.stop();
+    app.removed.length = 0;
+    hung[0]({ ok: true, data: { ok: true, overlay: { points: [] } } });
+    assert.equal(await first, false);
+    assert.deepEqual(app.removed, ['action.on'], 'the drawing the late answer left behind is taken down');
+
+    const second = overlays.watch('B');
+    overlays.stop();
+    const third = overlays.watch('C');
+    app.removed.length = 0;
+    hung[1]({ ok: true, data: { ok: true } });
+    assert.equal(await second, false);
+    assert.deepEqual(app.removed, [], 'C is watched now, so its overlay key is not removed');
+    hung[2]({ ok: true, data: { ok: true } });
+    assert.equal(await third, true);
+});
+
+function fakeLive(connected = false) {
+    const handlers = new Set();
+    return {
+        status: { connected, detail: '' },
+        on(type, handler) {
+            assert.equal(type, 'status');
+            handlers.add(handler);
+            return () => handlers.delete(handler);
+        },
+        set(status) {
+            this.status = status;
+            for (const handler of [...handlers]) {
+                handler(status);
+            }
+        },
+        get listeners() {
+            return handlers.size;
+        },
+    };
+}
+
+test('a feed the daemon closed is reconnected with growing waits; a disconnect the operator asked for and a swap are not', async () => {
+    const timers = [];
+    const calls = [];
+    const live = fakeLive(true);
+    const app = {
+        live,
+        hasCommand: (name) => name === 'live.connect',
+        runCommand: async (name) => { calls.push(name); return { ok: false, error: { message: 'no feed' } }; },
+    };
+    const reconnect = new FeedReconnect({ app, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {} });
+    reconnect.start();
+
+    live.set({ connected: false, detail: 'disconnected' });
+    assert.equal(timers.length, 0, 'the operator disconnected');
+    live.set({ connected: true, detail: 'connected to process 1' });
+    live.set({ connected: false, detail: 'reconnecting' });
+    assert.equal(timers.length, 0, 'a swap of connections is followed by the connected status');
+
+    live.set({ connected: true, detail: 'connected to process 1' });
+    live.set({ connected: false, detail: 'the server closed the connection (idle)' });
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].ms, RETRY_DELAYS_MS[0]);
+    for (let i = 0; i < RETRY_DELAYS_MS.length; i++) {
+        timers[i].fn();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(calls.filter((c) => c === 'live.connect').length, i + 1);
+        if (i + 1 < RETRY_DELAYS_MS.length) {
+            assert.equal(timers[i + 1].ms, RETRY_DELAYS_MS[i + 1], 'the wait grows');
+        }
+    }
+    assert.equal(timers.length, RETRY_DELAYS_MS.length, 'it gives up after the last wait');
+
+    reconnect.stop();
+    assert.equal(live.listeners, 0);
+});
+
+test('a reconnect that works resets the attempts, and the pure rule never reconnects a feed that was not connected before', () => {
+    assert.equal(shouldReconnect({ wasConnected: false, status: { connected: false, detail: 'x' } }), false);
+    assert.equal(shouldReconnect({ wasConnected: true, status: { connected: false, detail: 'x' } }), true);
+    assert.equal(shouldReconnect({ wasConnected: true, status: { connected: true, detail: 'x' } }), false);
+    assert.equal(shouldReconnect({ wasConnected: true, status: { connected: false, detail: 'disconnected' } }), false);
+    const live = fakeLive(true);
+    const timers = [];
+    const app = { live, hasCommand: () => true, runCommand: async () => ({ ok: true, data: {} }) };
+    const reconnect = new FeedReconnect({ app, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {} });
+    reconnect.start();
+    live.set({ connected: false, detail: 'ended' });
+    timers[0].fn();
+    live.set({ connected: true, detail: 'connected' });
+    assert.equal(reconnect.attempts, 0);
+    reconnect.stop();
+});
+
+test('a failed action.catalog lookup is cached for the cache window, and force asks again', async () => {
+    let asked = 0;
+    const app = { runCommand: async () => { asked++; return asked === 1 ? { ok: false, error: { message: 'refused' } } : { ok: true, data: { items: [] } }; } };
+    const self = { app, catalogCache: null };
+    const catalog = (force) => DevUi.prototype.catalog.call(self, force);
+    await assert.rejects(catalog(false), /refused/);
+    await assert.rejects(catalog(false), /refused/);
+    assert.equal(asked, 1, 'the second lookup inside the window did not ask the daemon');
+    assert.deepEqual(await catalog(true), { items: [] });
+    assert.equal(asked, 2);
 });
 
 // ---- in a real browser ------------------------------------------------------------------------------------------------------

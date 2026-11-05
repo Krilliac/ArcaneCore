@@ -53,6 +53,12 @@ export class DebugOverlays {
         try {
             const result = await this.app.runCommand('action.on', { template: 'debug', guid }, { quiet: true, noRefresh: true });
             if (this.#run !== run || this.#guid !== guid) {
+                // app.runCommand drew this answer before it got here. When the watch was stopped meanwhile nothing owns the overlay any
+                // more, so the late drawing is removed; when another creature is watched now, its own run replaces the key.
+                if (this.#guid === null) {
+                    this.app.overlays.remove(OVERLAY_KEY);
+                    this.app.events.emit('overlays');
+                }
                 return false;
             }
             const data = result.ok ? result.data : null;

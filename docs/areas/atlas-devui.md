@@ -67,6 +67,15 @@ prints the count). The typed line is always the last choice.
 "AI debug" runs `.atlas debug` on a creature and draws the aggro and leash rings, home point, route and threat lines through the existing
 overlay layer. It refreshes on its own timer at no more than 2 Hz and stops when the daemon refuses or the creature is gone.
 
+## Feed reconnect and failed lookups
+
+`devui-reconnect.js` brings the map feed back when the daemon closed it (an idle timeout, an error, a restart): it retries `live.connect`
+after 1, 2, 4, 8, 15 and 30 s and then stops. A `live.disconnect` the operator asked for and the swap of one connection for another are
+not retried. `api.js` reconnects only the WebSocket to the Atlas host. A failed `action.catalog` lookup is kept for the two seconds a good
+one is kept, and the host side keeps a refused `caps` answer for `LiveActions.CapsRefusalSeconds` (a missing connection is never kept). A
+debug overlay answer that arrives after the watch was stopped is removed again. The palette's target chip is read again on every
+keystroke and at submit, so it shows the target the typed line is sent with.
+
 ## Not done
 
 * (The transport is bound.) `LiveActions` sends through `IFeedRequester`; `LiveModule` registers `LiveFeedRequester`, which calls

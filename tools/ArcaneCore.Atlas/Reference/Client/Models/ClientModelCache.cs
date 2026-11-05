@@ -192,7 +192,7 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
                 {
                     groups.Add(WmoGroupFile.Parse(groupBytes));
                 }
-                catch (InvalidDataException e)
+                catch (Exception e) when (e is InvalidDataException or NotSupportedException)
                 {
                     throw new InvalidDataException($"group file {groupPath}: {e.Message}", e);
                 }
@@ -201,8 +201,9 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
             var model = new WmoModel(clientPath, root, groups);
             return new Entry(model, null, model.EstimatedBytes);
         }
-        catch (InvalidDataException e)
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException)
         {
+            // NotSupportedException: an archive stores the file with a compression method the MPQ reader has no code for.
             return Problem(ModelProblemKind.Rejected, clientPath, e.Message);
         }
     }
@@ -220,8 +221,9 @@ public sealed class ClientModelCache(long maxBytes = ClientModelCache.DefaultMax
             M2ModelFile model = M2ModelFile.Parse(bytes);
             return new Entry(model, null, model.EstimatedBytes);
         }
-        catch (InvalidDataException e)
+        catch (Exception e) when (e is InvalidDataException or NotSupportedException)
         {
+            // NotSupportedException: an archive stores the file with a compression method the MPQ reader has no code for.
             return Problem(ModelProblemKind.Rejected, clientPath, e.Message);
         }
     }

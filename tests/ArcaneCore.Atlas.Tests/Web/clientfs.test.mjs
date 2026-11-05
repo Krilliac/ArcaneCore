@@ -1764,7 +1764,9 @@ test('settings show folder, build and cache size; Forget folder deletes the hand
 
         // Change folder reopens the picker and re-validates.
         await clickText(page, 'Change folder');
-        await page.waitFor('window.__pickerCalls.length === 2 && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again', 60_000);
+        // The state stays "ready" from the first pick while the second validates, so the state alone does not say the re-pick is done: the
+        // dialog that Change folder opens closes only when the new folder is stored. Forgetting earlier raced the store of the re-pick.
+        await page.waitFor('window.__pickerCalls.length === 2 && !document.querySelector('[data-clientfs="dialog"]') && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again and its folder to be stored', 60_000);
 
         // Forget folder.
         await page.evaluate('cf.openClientFilesSettings()');
@@ -1774,6 +1776,25 @@ test('settings show folder, build and cache size; Forget folder deletes the hand
         assert.deepEqual(await page.evaluate('window.__t.opfsNames()'), [], 'the OPFS cache is deleted');
         assert.equal((await status(page)).cacheBytes, 0);
         assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true, 'a forgotten folder means a first visit again');
+        assert.deepEqual(problems(page), []);
+    });
+});
+
+test('Forget folder while Change folder is still validating ends with no folder, no handle and no cache', async () => {
+    await withBrowser(async ({ fx, page }) => {
+        await stageTree(page, fx);
+        await pickAndWait(page);
+        await page.evaluate('cf.openClientFilesSettings()');
+        await clickText(page, 'Change folder');
+        await page.waitFor('window.__pickerCalls.length === 2', 'the picker to run again');
+        // The re-pick is validating or storing now: forget it from the settings panel (the state is still "ready" from the first pick).
+        await page.evaluate('cf.openClientFilesSettings()');
+        await clickText(page, 'Forget folder');
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "none")()', 'the folder to be forgotten');
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        assert.equal((await status(page)).state, 'none', 'a pick that finished after Forget must not bring the folder back');
+        assert.equal((await page.evaluate('window.__t.handleRecords()')).count, 0, 'no handle may be stored after Forget');
+        assert.deepEqual(await page.evaluate('window.__t.opfsNames()'), []);
         assert.deepEqual(problems(page), []);
     });
 });
