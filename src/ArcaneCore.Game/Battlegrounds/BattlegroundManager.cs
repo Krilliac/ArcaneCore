@@ -375,7 +375,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
         if (!Host.CanCreateMatch(template.MapId))
         {
-            // Split stopgap: another worker owns this map, so a match built here could never get its map. The queue keeps retrying every update, so say it once per map.
+            // Split stopgap: another worker owns this map, so a match built here could never get its map. The queue keeps retrying every update, so say it once per map. With the cluster link wired the joins run on the holder, which owns the map; this is reached only when no link is registered or on a node that still gets local joins.
             if (_refusedMaps.Add(template.MapId))
             {
                 AnomalyLedger.Shared.Report("battleground", "match-refused", $"map={template.MapId}", $"type={type} bracket={bracket} reason=this node does not own the battleground map");

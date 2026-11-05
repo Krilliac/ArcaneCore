@@ -1025,11 +1025,9 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             return;
         }
 
-        bool canHold = true;
-        foreach (BattlegroundType type in new[] { BattlegroundType.AlteracValley, BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin })
-        {
-            canHold &= World.Owns(BattlegroundManager.MapOfType(type), InstanceManager.FirstInstanceId);
-        }
+        // The gateway's rule for where a far transfer to a battleground map lands (GatewayRouteTable.Resolve): a worker whose list names the map wins, otherwise the first worker that owns
+        // everything. Instance-copy ownership (AllowInstanceMaps, on by default) is not enough: the transfer names instance 0, so such a node would run matches the players never reach.
+        bool canHold = CanHoldQueues(World.Ownership);
 
         ConfigureWorker(link.NodeId, link);
         if (canHold)
@@ -1041,6 +1039,22 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         link.Start(ArcaneCore.World.Cluster.Social.ClusterPresenceHosting.ChatPumpInterval);
         _logger.LogInformation("battlegrounds: cluster queue link started as {Node} ({Role})", link.NodeId, canHold ? "eligible to be the holder" : "worker only");
     }
+
+    /// <summary>Whether a node with this ownership is where the gateway sends players for all three battleground maps: it owns everything or its list names each map.</summary>
+    internal static bool CanHoldQueues(MapOwnership ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.OwnsEverything
+            || (ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.AlteracValley))
+                && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch))
+                && ownership.ListsMap(BattlegroundManager.MapOfType(BattlegroundType.ArathiBasin)));
+    }
+
+    /// <summary>
+    /// True when this node's <see cref="Manager"/> holds the queue state of its players: always outside the cluster, in cluster mode only while this node is the elected holder.
+    /// A plain worker keeps no queue state (the holder does), so anything that reads the local manager to learn whether a player is queued or invited (the playerbots) must not queue there.
+    /// </summary>
+    internal bool HoldsQueueState => _worker is null || _link is { IsHolder: true };
 
     /// <summary>The holder's notice arrived at this worker (any thread); it is applied on the world thread.</summary>
     internal void ReceiveNotice(BattlegroundNotice notice)
