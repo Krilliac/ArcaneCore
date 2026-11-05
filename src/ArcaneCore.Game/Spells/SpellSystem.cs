@@ -902,7 +902,7 @@ public sealed partial class SpellSystem
             bool objectOnly = entry.EffectMask != 0;
             for (int i = 0; i < SpellConstants.MaxEffects && objectOnly; i++)
             {
-                if ((entry.EffectMask & (1 << i)) != 0 && spell.Effects[i].Effect != SpellEffectName.ActivateObject)
+                if ((entry.EffectMask & (1 << i)) != 0 && spell.Effects[i].Effect != SpellEffectName.ActivateObject && !IsObjectCarriedEffect(cast, i))
                     objectOnly = false;
             }
             entry.Miss = objectOnly ? SpellMissInfo.None

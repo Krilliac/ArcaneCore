@@ -144,11 +144,20 @@ public sealed partial class SpellSystem
         if (effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster || effect.Effect == SpellEffectName.PersistentAreaAura) return [];
         if (chosenUnit is not null) return [(chosenUnit, 1f)];
         cast.ObjectTargetsByEffect[effectIndex] = [chosenObject!.Guid];
-        // vmangos only calls AddGOTarget here (Spell.cpp:590-591): the object is the effect's target and no unit is. Only the effects that read an
-        // object target (ActivateObject, DespawnObject) are carried by the caster through the unit-effect pipeline; a Dummy or aura effect must
-        // not see the caster as its unit target.
-        return effect.Effect is SpellEffectName.ActivateObject or SpellEffectName.DespawnObject ? [(caster, 1f)] : [];
+        // vmangos calls AddGOTarget here (Spell.cpp:590-591) and DoAllEffectOnTarget(GOTargetInfo) then runs HandleEffects(nullptr, nullptr, go, i)
+        // (Spell.cpp:1841-1843), so a summon (SummonWild, SummonObjectWild), Dummy or activate effect still runs and reads the destination. The unit pipeline
+        // needs a unit, so the caster carries the effect (the carrier is no hit, see IsObjectCarriedEffect); an aura effect would apply to the carrier, so it is skipped.
+        return IsAuraApplyingEffect(effect.Effect) ? [] : [(caster, 1f)];
     }
+
+    /// <summary>An effect that puts an aura on its unit target, which a game object carrier must not receive.</summary>
+    private static bool IsAuraApplyingEffect(SpellEffectName effect) => effect is SpellEffectName.ApplyAura or SpellEffectName.ApplyAreaAuraParty
+        or SpellEffectName.ApplyAreaAuraPet or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy
+        or SpellEffectName.ApplyAreaAuraRaid or SpellEffectName.ApplyAreaAuraOwner or SpellEffectName.PersistentAreaAura;
+
+    /// <summary>Whether effect <paramref name="effectIndex"/> runs on a game object found by target A 46, carried by the caster (no unit hit).</summary>
+    private static bool IsObjectCarriedEffect(SpellCast cast, int effectIndex)
+        => cast.ObjectTargetsByEffect.ContainsKey(effectIndex) && cast.Spell.Effects[effectIndex].TargetA == SpellImplicitTarget.LocationScriptNearCaster;
 
     /// <summary>Extra yards the grid pre-filter of the 46 unit search adds beyond the caster's reach, so a large target combat reach is still a candidate (the exact check follows).</summary>
     private const float MaxCombatReachMargin = 20f;

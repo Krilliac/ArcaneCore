@@ -321,12 +321,23 @@ public sealed class ScriptLocationTargetTests
         // vmangos only calls AddGOTarget for a found object (Spell.cpp:590-591); the caster is no unit target of a Dummy effect.
         using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
         GameObject listed = rig.Spawn(Firecracker, 4);
+        int runs = 0;
+        (float X, float Y, float Z)? destSeen = null;
+        rig.Kit.System.RegisterEffect(SpellEffectName.Dummy, context =>
+        {
+            runs++;
+            destSeen = context.Cast.Targets.Dest;
+        });
 
         Assert.Equal(SpellCastResult.CastOk, rig.Cast());
 
         ulong[] hits = rig.SpellGoHits();
         Assert.Contains(listed.Guid.Value, hits);
         Assert.DoesNotContain(rig.Caster.Guid.Value, hits);
+        // The effect still runs for the found object (vmangos HandleEffects(nullptr, nullptr, go, i), Spell.cpp:1841-1843) and sees the object as its destination.
+        Assert.Equal(1, runs);
+        Assert.Equal(listed.X, destSeen!.Value.X, 0.01f);
+        Assert.Equal(listed.Y, destSeen.Value.Y, 0.01f);
     }
 
     [Fact]
