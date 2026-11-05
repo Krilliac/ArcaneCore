@@ -58,6 +58,9 @@ public sealed class SolicitedAckJudgementTests
             Assert.Empty(Seen);
         }
 
+        /// <summary>The counter of the order the server sent last (every counter already sent is below Player.MovementCounter).</summary>
+        public Task<uint> LastCounterAsync() => Host.OnWorldAsync(() => Player.MovementCounter - 1);
+
         public byte[] Ack(uint counter, MovementFlags flags, float dx, Action<PacketWriter> tail)
         {
             var writer = new PacketWriter(64);
@@ -102,7 +105,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(0, MovementFlags.Forward, 80.7f, w => w.WriteSingle(target)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(counter, MovementFlags.Forward, 80.7f, w => w.WriteSingle(target)));
         await scene.Client.CollectThroughBarrierAsync();
 
         // The order was real and the ack matched it; the block 80 yards away is still a teleport. Without the judgement nothing is recorded.
@@ -122,7 +126,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(ackOpcode, scene.Ack(0, MovementFlags.Forward | FlagOf(type), 80.7f, w => w.WriteUInt32(1)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(ackOpcode, scene.Ack(counter, MovementFlags.Forward | FlagOf(type), 80.7f, w => w.WriteUInt32(1)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Teleport);
@@ -143,7 +148,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(ackOpcode, scene.Ack(0, MovementFlags.Forward | FlagOf(type), 1.4f, w => w.WriteUInt32(1)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(ackOpcode, scene.Ack(counter, MovementFlags.Forward | FlagOf(type), 1.4f, w => w.WriteUInt32(1)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Empty(scene.Seen);
@@ -159,7 +165,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(0, MovementFlags.Root, 80.7f, _ => { }));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Root, 80.7f, _ => { }));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Teleport);
@@ -194,14 +201,16 @@ public sealed class SolicitedAckJudgementTests
     /// <summary>Roots the player through a real order and an honest ack, so the server holds the Root flag when the next block arrives.</summary>
     private static async Task RootAsync(Scene scene)
     {
-        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+        await scene.Host.OnWorldAsync(() => scene.Player.SetRooted(true));
         await scene.Client.CollectThroughBarrierAsync();
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(0, MovementFlags.Root, 0.7f, _ => { }));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Root, 0.7f, _ => { }));
         await scene.Client.CollectThroughBarrierAsync();
         Assert.Empty(scene.Seen);
-        Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.Movement.HasFlag(MovementFlags.Root)));
+        // IsRooted is what the rooted-while-moving check reads (AntiCheatFeature.cs:175); only Player.SetRooted sets it.
+        Assert.True(await scene.Host.OnWorldAsync(() => scene.Player.IsRooted && scene.Player.Movement.HasFlag(MovementFlags.Root)));
     }
 
     [Fact]
@@ -218,7 +227,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, scene.Ack(0, MovementFlags.Forward, 80.7f, w => w.WriteSingle(rate)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, scene.Ack(counter, MovementFlags.Forward, 80.7f, w => w.WriteSingle(rate)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Teleport);
@@ -235,7 +245,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(0, MovementFlags.Forward, 1.4f, w => w.WriteSingle(target)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(counter, MovementFlags.Forward, 1.4f, w => w.WriteSingle(target)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Empty(scene.Seen);
@@ -255,16 +266,23 @@ public sealed class SolicitedAckJudgementTests
         await using Scene scene = await StartAsync("UNROOTHONEST", "Unroothonest");
         await scene.BaselineAsync();
         await RootAsync(scene);
+        // Request, not SetRooted(false): IsRooted stays true, the state in which the unroot exemption decides the result.
         await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: false));
         await scene.Client.CollectThroughBarrierAsync();
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveUnrootAck, scene.Ack(0, MovementFlags.Forward, 1.4f, _ => { }));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveUnrootAck, scene.Ack(counter, MovementFlags.Forward, 1.4f, _ => { }));
         await scene.Client.CollectThroughBarrierAsync();
 
-        // The only ack the rooted-while-moving check exempts (vmangos MovementAnticheat.cpp:777-780).
+        // The only ack the rooted-while-moving check exempts (vmangos MovementAnticheat.cpp:777-780). Without the exemption this block scores Physics.
         Assert.Empty(scene.Seen);
+        // The ack was matched and judged, not dropped: its block was stored and the order applied.
+        (float x, bool root, bool stillRooted) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Movement.HasFlag(MovementFlags.Root), scene.Player.IsRooted));
+        Assert.Equal(scene.X + 1.4f, x, 0.01f);
+        Assert.False(root);
+        Assert.True(stillRooted);
     }
 
     [Fact]
@@ -278,7 +296,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(WorldOpcode.CmsgMoveHoverAck, scene.Ack(0, MovementFlags.Forward | MovementFlags.Root | MovementFlags.Hover, 0.7f, w => w.WriteUInt32(1)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgMoveHoverAck, scene.Ack(counter, MovementFlags.Forward | MovementFlags.Root | MovementFlags.Hover, 0.7f, w => w.WriteUInt32(1)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
@@ -296,7 +315,8 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
-        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(0, MovementFlags.Forward | MovementFlags.Root, 0.7f, w => w.WriteSingle(target)));
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(SpeedPackets.AckOpcode(MoveType.Run), scene.Ack(counter, MovementFlags.Forward | MovementFlags.Root, 0.7f, w => w.WriteSingle(target)));
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
