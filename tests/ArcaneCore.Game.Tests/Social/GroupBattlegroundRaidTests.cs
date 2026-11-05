@@ -143,4 +143,65 @@ public sealed class GroupBattlegroundRaidTests
         Assert.Equal(LootMethod.FreeForAll, party.LootMethod);
         Assert.Equal(LootMethod.GroupLoot, raid.LootMethod);
     }
+
+    [Fact]
+    public void Invite_FromARaidMemberWithNoOriginalParty_NeverFillsTheRaid()
+    {
+        using var f = new SocialFixture();
+        Player c = f.AddPlayer(3);
+        Player d = f.AddPlayer(4);
+        GroupManager groups = f.Context.Groups;
+        Group raid = groups.AddToBattlegroundRaid(c, null)!;
+
+        groups.Invite(c, d.Name);
+
+        Assert.Equal(1, raid.MemberCount); // the raid is filled by the battleground, never by an invite
+        Assert.NotNull(groups.GetInvite(d.Guid));
+        Assert.NotSame(raid, groups.GetInvite(d.Guid));
+    }
+
+    [Fact]
+    public void OnCharacterDeleted_InARaid_RestoresTheSurvivorsParkedParty_AndLeaksNoOriginalLink()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Player c = f.AddPlayer(3);
+        GroupManager groups = f.Context.Groups;
+        groups.Invite(a, b.Name);
+        groups.Accept(b);
+        groups.Invite(a, c.Name);
+        groups.Accept(c);
+        Group party = groups.GetGroup(a.Guid)!;
+        Group raid = groups.AddToBattlegroundRaid(a, null)!;
+        groups.AddToBattlegroundRaid(b, raid);
+
+        Assert.True(groups.OnCharacterDeleted(a.Guid));
+
+        Assert.Null(groups.GetOriginalGroup(a.Guid));
+        Assert.Null(groups.GetGroup(a.Guid));
+        Assert.False(party.IsMember(a.Guid)); // gone from the parked party too
+        Assert.False(raid.IsMember(a.Guid));
+        Assert.Same(raid, groups.GetGroup(b.Guid)); // the survivor stays in the raid
+        Assert.Same(party, groups.GetOriginalGroup(b.Guid)); // and its parked party is untouched
+        Assert.Same(party, groups.GetGroup(c.Guid));
+
+        groups.RemoveFromBattlegroundRaid(b.Guid);
+        Assert.Same(party, groups.GetGroup(b.Guid)); // restored: not left ungrouped
+        Assert.Null(groups.GetOriginalGroup(b.Guid));
+    }
+
+    [Fact]
+    public void OnCharacterDeleted_OfTheOnlyRaidMember_ReturnsTrue_AndClearsTheRaid()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        GroupManager groups = f.Context.Groups;
+        Group raid = groups.AddToBattlegroundRaid(a, null)!;
+
+        Assert.True(groups.OnCharacterDeleted(a.Guid));
+        Assert.Equal(0, raid.MemberCount);
+        Assert.Null(groups.GetGroup(a.Guid));
+        Assert.False(groups.OnCharacterDeleted(a.Guid));
+    }
 }
