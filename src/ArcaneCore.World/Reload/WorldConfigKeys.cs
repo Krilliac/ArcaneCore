@@ -448,6 +448,14 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Groups:WorldBosses:ExcludedEntries", o => o.Groups.WorldBosses.ExcludedEntries,
             (o, v) => o.Groups.WorldBosses.ExcludedEntries = v, PlayerbotWorldBossOptions.CheckExcluded),
 
+        // Summons (docs/areas/playbots-groups.md): the bots' Ritual of Summoning, the meeting-stone summon and the acceptance, read at each decision.
+        LivePlayerbots("Summon:Enabled", o => o.Summon.Enabled, (o, v) => o.Summon.Enabled = v),
+        LivePlayerbots("Summon:MeetingStones", o => o.Summon.MeetingStones, (o, v) => o.Summon.MeetingStones = v),
+        LivePlayerbotsValue("Summon:FarYards", o => o.Summon.FarYards, (o, v) => o.Summon.FarYards = v, PlayerbotSummonOptions.CheckFarYards),
+        LivePlayerbotsValue("Summon:RetrySeconds", o => o.Summon.RetrySeconds, (o, v) => o.Summon.RetrySeconds = v, PlayerbotSummonOptions.CheckRetrySeconds),
+        LivePlayerbotsValue("Summon:HelperYards", o => o.Summon.HelperYards, (o, v) => o.Summon.HelperYards = v, PlayerbotSummonOptions.CheckHelperYards),
+        LivePlayerbots("Summon:AnnounceToPlayers", o => o.Summon.AnnounceToPlayers, (o, v) => o.Summon.AnnounceToPlayers = v),
+
         // Following and catch-up (docs/areas/playbots.md): a follower reads the shared object at each decision.
         LivePlayerbotsValue("Follow:CatchUpMode", o => o.Follow.CatchUpMode, (o, v) => o.Follow.CatchUpMode = v, PlayerbotFollowOptions.CheckMode),
         LivePlayerbotsValue("Follow:TeleportDistanceYards", o => o.Follow.TeleportDistanceYards, (o, v) => o.Follow.TeleportDistanceYards = v,

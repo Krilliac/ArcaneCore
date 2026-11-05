@@ -300,6 +300,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>Bots summon far group members with Ritual of Summoning (and meeting stones) and accept summons (<c>World:Playerbots:Summon</c>; live).</summary>
+    public PlayerbotSummonOptions Summon { get; set; } = new();
+
     /// <summary>How a following bot keeps up with its leader and catches up when it cannot walk (<c>World:Playerbots:Follow</c>; live).</summary>
     public PlayerbotFollowOptions Follow { get; set; } = new();
 
@@ -428,6 +431,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Summon is null) throw new InvalidOperationException($"{SectionName}:Summon is missing.");
+        Summon.Validate();
         if (Follow is null) throw new InvalidOperationException($"{SectionName}:Follow is missing.");
         Follow.Validate();
         if (Home is null) throw new InvalidOperationException($"{SectionName}:Home is missing.");

@@ -1143,6 +1143,12 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Groups)}:{nameof(PlayerbotGroupOptions.WorldBosses)}:{property.Name}");
         }
 
+        // Summons (Ritual of Summoning, meeting stones) are live key by key (docs/areas/playbots-groups.md, Summons).
+        foreach (PropertyInfo property in typeof(PlayerbotSummonOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Summon)}:{property.Name}");
+        }
+
         // Following and catch-up is live key by key (docs/areas/playbots.md, Following and catch-up).
         foreach (PropertyInfo property in typeof(PlayerbotFollowOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {

@@ -3116,9 +3116,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 else if (active.Session.Player is { } driven)
                 {
                     active.Session.ManagedBudget = budget;
+                    // A bot with a part in a summon (the warlock's ritual, a helper at the portal, a meeting-stone use) holds still for it first.
+                    if (SummonHolds(active, driven, sinceLast)) driver = "summon";
                     // A bot the battlegrounds coordinator drives (to a battlemaster, into, through and out of a match) follows it, even
                     // inside a battleground raid with a real player in it (the party AI never takes it there); the brain resumes after.
-                    if (battlegrounds?.Drives(active.Record.BotId) == true)
+                    else if (battlegrounds?.Drives(active.Record.BotId) == true)
                     {
                         if (active.PartyDriven)
                         {
