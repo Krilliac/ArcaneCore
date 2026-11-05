@@ -141,6 +141,28 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task Takeover_refreshes_the_character_directory_before_the_sweeps_may_treat_a_stored_seller_as_gone()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+
+        // This worker never heard of the seller, who was created elsewhere: to the expiry sweep the seller would be gone, and the unsold item would be destroyed.
+        var directory = new ArcaneCore.World.Characters.CharacterDirectory();
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, directory: directory,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        Assert.Null(directory.Find(fixture.SellerId));
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent);
+
+        Assert.NotNull(directory.Find(fixture.SellerId));
+    }
+
+    [Fact]
     public async Task Auction_listed_on_this_node_after_the_takeover_snapshot_was_read_stays_listed_when_the_snapshot_is_applied()
     {
         (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
@@ -1138,7 +1160,7 @@ public sealed class AuctionBotFeatureTests
         public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
             Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null,
             IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null,
-            ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? keeper = null)
+            ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? keeper = null, ArcaneCore.World.Characters.CharacterDirectory? directory = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -1198,6 +1220,12 @@ public sealed class AuctionBotFeatureTests
             }
 
             services.AddScoped(_ => new CharacterDbContext(options));
+            if (directory is not null)
+            {
+                services.AddSingleton(directory);
+                services.AddScoped<ICharacterStore>(provider => new EfCharacterStore(provider.GetRequiredService<CharacterDbContext>()));
+            }
+
             services.AddScoped<IEconomyStore>(provider =>
             {
                 IEconomyStore store = new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>());

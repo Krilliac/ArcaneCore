@@ -48,6 +48,9 @@ public sealed class SocialFeature(
     private const int SocialReadAttempts = 3;
     private const int SocialReadRetryDelayMs = 250;
 
+    /// <summary>The character directory behind <see cref="SocialContext.Characters"/>; a worker gaining the Social lease refreshes it before its load repairs run on what it read.</summary>
+    internal CharacterDirectory Characters => directory;
+
     private readonly ILogger _logger = loggers.CreateLogger<SocialFeature>();
     private readonly HashSet<ObjectGuid> _ready = [];
     private readonly Dictionary<Player, List<Action<SocialContext>>> _pendingCommands = new(ReferenceEqualityComparer.Instance);

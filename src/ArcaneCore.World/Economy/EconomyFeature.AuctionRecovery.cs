@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Economy;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Economy;
@@ -100,6 +102,15 @@ public sealed partial class EconomyFeature
             // Rows and escrow from one snapshot, the id seed read after it (as Attach does), so every row seen is at or below the seed.
             AuctionSnapshot snapshot = await store.GetAuctionSnapshotAsync(new AuctionSnapshotFilter(), ct).ConfigureAwait(false);
             EconomyIdSeed seed = await store.GetIdSeedAsync(ct).ConfigureAwait(false);
+
+            // The sweeps treat a character the directory does not know as gone (an unknown seller's unsold item is destroyed, an unknown sender's letter is not returned), and this node's directory has none of what other
+            // workers created since it started. So it is brought up to date before the cache counts as current, and after the rows, which can only name characters stored before them. A failed read leaves the cache stale.
+            if (_directory is { } directory)
+            {
+                await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+                await directory.RefreshAsync(scope.ServiceProvider.GetRequiredService<ICharacterStore>(), ct).ConfigureAwait(false);
+            }
+
             return (Snapshot: snapshot, Seed: seed);
         }, result =>
         {

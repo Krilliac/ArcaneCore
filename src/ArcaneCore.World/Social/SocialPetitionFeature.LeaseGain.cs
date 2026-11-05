@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.World.Cluster.Social;
@@ -64,6 +65,13 @@ public sealed partial class SocialPetitionFeature
                 petitions = await petitionStore.GetPetitionsAsync(budget.Token).ConfigureAwait(false);
             }
 
+            // The load repairs below delete and trim on any character the directory does not know, and this worker's directory has none of what other workers created since it started. So it is brought up to date first, and
+            // after the rows, which can only name characters stored before them. If it cannot be read nothing is installed: the catch below keeps the saves held.
+            if (guilds is not null || petitions is not null)
+            {
+                await Social.Characters.RefreshAsync(scope.ServiceProvider.GetRequiredService<ICharacterStore>(), budget.Token).ConfigureAwait(false);
+            }
+
             world.Post(() => ApplyAuthorityState(link, guilds, petitions));
         }
         catch (OperationCanceledException) when (_stopping)
@@ -84,8 +92,8 @@ public sealed partial class SocialPetitionFeature
     }
 
     /// <summary>
-    /// World thread: the link says holder, then storage replaces the replicas, guilds first (a petition's owner must not be guilded). In that order the repairs of the load are written and the result is published. With no
-    /// store the replica is all there is, and it stays. If installing the rows fails this worker goes back to holding its saves and reads again, so a half-installed state is never stored.
+    /// World thread: the link says holder, then storage replaces the replicas, guilds first (a petition's owner must not be guilded). In that order the repairs of the load are written and the result is published; the
+    /// character directory was refreshed after the rows were read, so a repair only drops a character that is really gone. With no store the replica is all there is, and it stays. If installing the rows fails this worker goes back to holding its saves and reads again, so a half-installed state is never stored.
     /// </summary>
     private void ApplyAuthorityState(PeerGuildHolderLink link, IReadOnlyList<GuildData>? guilds, IReadOnlyList<PetitionData>? petitions)
     {

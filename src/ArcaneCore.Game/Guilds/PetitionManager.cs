@@ -809,7 +809,8 @@ public sealed class PetitionManager
 
     /// <summary>
     /// This worker became the holder at run time: what storage holds replaces the replica, as <see cref="GuildManager.ReloadFromStorage"/>, which runs first (a petition's owner must not be guilded). A save stores a whole
-    /// petition, so a signature the previous holder stored but never published would otherwise be lost. The result is published to the other workers. World thread.
+    /// petition, so a signature the previous holder stored but never published would otherwise be lost. The result is published to the other workers. <see cref="Load"/> writes its repairs here, so the caller must have brought
+    /// the character lookup up to date since it read the rows, as for the guilds. World thread.
     /// </summary>
     public void ReloadFromStorage(IReadOnlyCollection<PetitionData> stored)
     {

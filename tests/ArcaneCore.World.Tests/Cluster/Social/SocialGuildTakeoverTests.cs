@@ -13,6 +13,7 @@ using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Social;
+using ArcaneCore.World.Tests.Characters;
 using ArcaneCore.World.Tests.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -155,6 +156,109 @@ public sealed class SocialGuildTakeoverTests
         PetitionData trimmed = Assert.Single(rig.Charters.Snapshot());
         Assert.Equal(6, trimmed.Id);
         Assert.Equal(6, Assert.Single(trimmed.Signatures).PlayerId);
+    }
+
+    [Fact]
+    public async Task Characters_this_worker_never_heard_of_are_not_repaired_away()
+    {
+        await using Rig rig = await Rig.CreateAsync([], []);
+
+        // Created on the dead holder or a peer after this worker started: stored, but not in its directory.
+        Assert.Null(rig.Directory.Find(20));
+        rig.StoreCharacters(20, 21, 22, 23, 24, 25);
+        await rig.Rows.SaveGuildAsync(Guild(1, "All New", "old", 20, 21)); // every member unknown: the guild would be deleted
+        await rig.Rows.SaveGuildAsync(Guild(2, "New Leader", "old", 22, 1)); // the leader would be replaced and saved
+        await rig.Rows.SaveGuildAsync(Guild(3, "New Member", "old", 2, 23)); // the member would go, and the next save would remove the row
+        await rig.Charters.SavePetitionAsync(Charter(5, 24, "New Owner")); // the charter would be deleted
+        await rig.Charters.SavePetitionAsync(Charter(6, 3, "New Signer", 25)); // the signature would be trimmed and saved
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+
+        await rig.OnWorld(() =>
+        {
+            Assert.Equal(1, rig.Guilds.GetGuildOf(20)!.Id);
+            Assert.Equal(1, rig.Guilds.GetGuildOf(21)!.Id);
+            Assert.Equal(22u, rig.Guilds.GetByName("New Leader")!.LeaderId);
+            Assert.Equal(3, rig.Guilds.GetGuildOf(23)!.Id);
+            Assert.Equal(24u, rig.Petitions.Get(5)!.OwnerId);
+            Assert.Equal(25u, Assert.Single(rig.Petitions.Get(6)!.Signatures).PlayerId);
+
+            // The whole-guild save that would remove the row of a member it no longer had.
+            Assert.Equal(GuildAdminResult.Ok, rig.Guilds.AdminInvite(9, "New Member"));
+            return true;
+        });
+
+        await rig.Social.Writes!.FlushAsync();
+        Assert.Equal(1, rig.Store.Writes);
+        IReadOnlyList<GuildData> stored = await rig.Rows.GetGuildsAsync();
+        Assert.Equal([20, 21], stored.Single(g => g.Id == 1).Members.Select(m => m.CharacterId).Order());
+        Assert.Equal(22, stored.Single(g => g.Id == 2).LeaderId);
+        Assert.Equal([2, 9, 23], stored.Single(g => g.Id == 3).Members.Select(m => m.CharacterId).Order());
+        Assert.Equal([5, 6], rig.Charters.Snapshot().Select(p => p.Id).Order());
+    }
+
+    [Fact]
+    public async Task The_directory_is_read_after_the_rows()
+    {
+        await using Rig rig = await Rig.CreateAsync([], []);
+
+        // The rows are read while the character and its guild are stored: whatever the rows name, the directory read that follows has.
+        rig.Store.HoldLoads();
+        rig.TakeOver();
+        Assert.False(await rig.OnWorld(rig.Feature.EnsureGuildsCurrent));
+        await rig.Store.LoadEntered.WaitAsync(Budget);
+        rig.StoreCharacters(30);
+        await rig.Rows.SaveGuildAsync(Guild(1, "Late", "old", 30));
+        rig.Store.ReleaseLoads();
+        await rig.WaitUntilCurrentAsync();
+
+        Assert.Equal(1, await rig.OnWorld(() => rig.Guilds.GetGuildOf(30)!.Id));
+        await rig.Social.Writes!.FlushAsync();
+        Assert.Equal(0, rig.Store.Writes);
+    }
+
+    [Fact]
+    public async Task A_failed_directory_read_installs_nothing_and_is_tried_again()
+    {
+        await using Rig rig = await Rig.CreateAsync([], []);
+        rig.StoreCharacters(20);
+        await rig.Rows.SaveGuildAsync(Guild(1, "All New", "old", 20));
+
+        // The first read fails; the retry is held, so the node stays in this state however fast the retry comes.
+        rig.Characters.FailNextRead();
+        rig.Characters.HoldReads();
+        rig.TakeOver();
+        Assert.False(await rig.OnWorld(rig.Feature.EnsureGuildsCurrent));
+        await rig.Characters.ReadFailed.WaitAsync(Budget);
+        await rig.Characters.ReadHeld.WaitAsync(Budget); // the world tick retries by itself
+
+        Assert.False(rig.Link.IsHolder);
+        await rig.Social.Writes!.FlushAsync();
+        Assert.Equal(0, rig.Store.Writes);
+
+        rig.Characters.ReleaseReads();
+        await rig.WaitUntilCurrentAsync();
+        Assert.Equal(1, await rig.OnWorld(() => rig.Guilds.GetGuildOf(20)!.Id));
+        Assert.Single(await rig.Rows.GetGuildsAsync());
+    }
+
+    [Fact]
+    public async Task A_character_deleted_on_another_worker_is_still_repaired_away()
+    {
+        await using Rig rig = await Rig.CreateAsync([Guild(1, "Stays", "old", 1, 3)], []);
+        rig.Characters.Delete(3); // this worker's directory still has it
+
+        rig.TakeOver();
+        await rig.WaitUntilCurrentAsync();
+
+        Assert.Null(rig.Directory.Find(3));
+        await rig.OnWorld(() =>
+        {
+            Assert.Null(rig.Guilds.GetGuildOf(3));
+            Assert.Equal(1, rig.Guilds.GetGuildOf(1)!.Id);
+            return true;
+        });
     }
 
     [Fact]
@@ -371,8 +475,10 @@ public sealed class SocialGuildTakeoverTests
         private readonly ManualTimeProvider _time;
         private readonly ServiceProvider _services;
 
-        private Rig(ManualTimeProvider time, RealmAuthorityLeaseKeeper keeper, InMemorySocialStore rows, InMemoryPetitionStore charters, FencedSocialStore store, GuildHolderService local, CountingTransport transport, PeerGuildHolderLink link, ServiceProvider services)
+        private Rig(ManualTimeProvider time, RealmAuthorityLeaseKeeper keeper, InMemorySocialStore rows, InMemoryPetitionStore charters, FencedSocialStore store, IdentityRows characters, CharacterDirectory directory, GuildHolderService local, CountingTransport transport, PeerGuildHolderLink link, ServiceProvider services)
         {
+            Characters = characters;
+            Directory = directory;
             _time = time;
             _services = services;
             Keeper = keeper;
@@ -398,6 +504,12 @@ public sealed class SocialGuildTakeoverTests
         public InMemoryPetitionStore Charters { get; }
 
         public FencedSocialStore Store { get; }
+
+        /// <summary>The character table, shared by every worker.</summary>
+        public IdentityRows Characters { get; }
+
+        /// <summary>This worker's own copy of it, which knows characters 1 to 9.</summary>
+        public CharacterDirectory Directory { get; }
 
         public GuildHolderService Local { get; }
 
@@ -446,9 +558,11 @@ public sealed class SocialGuildTakeoverTests
             }
 
             var directory = new CharacterDirectory();
+            var characters = new IdentityRows();
             for (int id = 1; id <= 9; id++)
             {
-                directory.Add(new CharacterIdentity(id, 100 + id, "Char" + (char)('a' + id), (byte)Race.Human, 0, (byte)Class.Warrior, 10, 12));
+                directory.Add(IdentityOf(id));
+                characters.Put(IdentityOf(id));
             }
 
             var store = new FencedSocialStore(rows, keeper);
@@ -458,14 +572,26 @@ public sealed class SocialGuildTakeoverTests
             ServiceProvider services = new ServiceCollection()
                 .AddSingleton<ISocialStore>(store)
                 .AddSingleton<IPetitionStore>(new FencedPetitionStore(charters, store))
+                .AddSingleton<ICharacterStore>(characters)
                 .AddSingleton<IGuildHolderLink>(link)
                 .AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance))
                 .AddSingleton(provider => new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance, services: provider))
                 .BuildServiceProvider();
-            var rig = new Rig(time, keeper, rows, charters, store, local, transport, link, services);
+            var rig = new Rig(time, keeper, rows, charters, store, characters, directory, local, transport, link, services);
             await rig.Social.GuildsLoaded.WaitAsync(Budget);
             await rig.Feature.PetitionsLoaded.WaitAsync(Budget);
             return rig;
+        }
+
+        private static CharacterIdentity IdentityOf(int id) => new(id, 100 + id, "Char" + (char)('a' + id), (byte)Race.Human, 0, (byte)Class.Warrior, 10, 12);
+
+        /// <summary>Another worker stored these characters: this worker's directory does not hear of it.</summary>
+        public void StoreCharacters(params int[] ids)
+        {
+            foreach (int id in ids)
+            {
+                Characters.Put(IdentityOf(id));
+            }
         }
 
         /// <summary>worker-b's lease lapses at 30 s, and the keeper's renewal tick takes it over.</summary>

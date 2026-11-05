@@ -1553,7 +1553,8 @@ public sealed partial class GuildManager(SocialContext context)
 
     /// <summary>
     /// This worker became the holder at run time: what storage holds replaces the replica, because the previous holder may have stored changes it never published, and the next <see cref="Save"/> writes a whole guild.
-    /// Runs <see cref="Load"/> on the stored rows (its repairs are written, this manager being the authority by now), gives this worker's players the guild fields of what was read, and publishes the result, so a guild
+    /// Runs <see cref="Load"/> on the stored rows (its repairs are written, this manager being the authority by now, so the caller must have brought the character lookup up to date since it read them: an unknown character is
+    /// dropped from its guild, and a guild of unknown characters is deleted), gives this worker's players the guild fields of what was read, and publishes the result, so a guild
     /// another worker's replica missed, or still has after the previous holder disbanded it, is put right. Raises neither <see cref="MemberJoined"/> nor <see cref="MemberLeft"/>, as <see cref="ApplyReplica"/>. World thread.
     /// </summary>
     public void ReloadFromStorage(IReadOnlyCollection<GuildData> stored)

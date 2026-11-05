@@ -1,7 +1,10 @@
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Social;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Persistence;
@@ -29,18 +32,32 @@ namespace ArcaneCore.World.Social;
 public sealed class SocialGroupPersistenceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
     : IWorldFeature
 {
+    /// <summary>How long one reread after a lease gain may take before it counts as failed and is tried again.</summary>
+    private static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(30);
+
+    private const int ReloadRetryDelayMs = 1000;
+
     private readonly ILogger _logger = loggers.CreateLogger<SocialGroupPersistenceFeature>();
     private readonly Dictionary<uint, GroupRecord> _written = [];
+    private readonly CancellationTokenSource _stop = new();
     private GroupManager? _groups;
     private GroupAuthority? _authority;
     private ArcaneCore.Game.Social.ICharacterLookup? _characters;
+    private CharacterDirectory? _directory;
     private bool _holding;
+    private Task? _reload;
+    private bool _reloading; // world thread
+    private long _reloadNotBeforeMs; // world thread: a failed read is tried again from then on
+    private volatile bool _stopping;
     private WorldRuntime? _world;
     private TimeProvider _clock = TimeProvider.System;
     private long _lastSweep = long.MinValue;
 
     /// <summary>The write queue (exposed for health reporting and tests); null without a store.</summary>
     public KeyedStoreWriteQueue<IGroupStore>? Writes { get; private set; }
+
+    /// <summary>World thread: whether the authority table here is the one read from storage for this holding of the Social lease.</summary>
+    internal bool AuthorityLoaded => _holding;
 
     /// <summary>What the start restored and dropped; null before attach or without a store.</summary>
     public GroupRestoreResult? Restored { get; private set; }
@@ -68,6 +85,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         _clock = services.GetService<TimeProvider>() ?? TimeProvider.System;
         _groups = social.Context.Groups;
         _characters = social.Context.Characters;
+        _directory = social.Characters;
 
         // Cluster mode (S3a): the Social lease holder's group authority owns the groups, so that is what is restored and written, and only while this node holds the lease.
         _authority = _groups.Authority is not null ? services.GetService<PresenceHolderService>()?.Groups : null;
@@ -124,6 +142,16 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             _world.Updated -= OnUpdated;
         }
 
+        // A reread still running stores nothing: the rows stay as they are, and the table it was going to replace is not written.
+        _stopping = true;
+        await _stop.CancelAsync().ConfigureAwait(false);
+        if (_reload is { } reload)
+        {
+            await reload.ConfigureAwait(false);
+        }
+
+        _authority?.DropHeldCommands();
+
         // The world thread no longer runs (IWorldFeature.StopAsync), so the group table is quiet.
         Sync();
         await Writes.StopAsync().ConfigureAwait(false);
@@ -163,7 +191,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             if (!_holding)
             {
                 ReloadAuthority(authority);
-                _holding = true;
+                return; // nothing is written from this table until the read has replaced it
             }
 
             // The offline-leader handover of the whole realm runs here, at the holder, about once a second (the workers' mirrors never do it).
@@ -200,25 +228,86 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private bool HoldsSocial()
         => services.GetService<RealmAuthorityLeaseKeeper>() is not { } keeper || keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
 
+    /// <summary>The Social lease's token here, or null: a read started under one token is not installed under another.</summary>
+    private long? SocialToken() => services.GetService<RealmAuthorityLeaseKeeper>()?.TokenFor(RealmAuthorityScopes.Social);
+
     /// <summary>
-    /// The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover
-    /// continues from storage. Runs on the world thread once per gain.
+    /// World thread. The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover continues from storage. The read runs off
+    /// the world thread, nothing is written until it is installed, and commands that reach the table meanwhile wait in it. A failed read is tried again a second later.
     /// </summary>
     private void ReloadAuthority(GroupAuthority authority)
     {
-        IReadOnlyList<GroupRecord> stored;
-        using (IServiceScope scope = scopes.CreateScope())
+        if (_reloading || _stopping || Environment.TickCount64 < _reloadNotBeforeMs)
         {
-            if (scope.ServiceProvider.GetService<IGroupStore>() is not { } store)
-            {
-                return;
-            }
-
-            stored = store.LoadGroupsAsync().GetAwaiter().GetResult();
+            return;
         }
 
-        authority.Reset();
-        GroupRestoreResult result = authority.Restore(stored, _characters!);
+        _reloading = true;
+        authority.HoldForReload();
+        long? token = SocialToken();
+        WorldRuntime world = _world!;
+        _reload = Task.Run(() => ReadAuthorityStateAsync(world, authority, token));
+    }
+
+    private async Task ReadAuthorityStateAsync(WorldRuntime world, GroupAuthority authority, long? token)
+    {
+        try
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+            budget.CancelAfter(ReloadBudget);
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IReadOnlyList<GroupRecord> stored = await scope.ServiceProvider.GetRequiredService<IGroupStore>().LoadGroupsAsync(budget.Token).ConfigureAwait(false);
+
+            // Restore drops a group or member the directory does not know, and the drop deletes rows; this worker's directory has none of what other workers created since it started. So it is brought up to date first, and
+            // after the rows, which can only name characters stored before them. If it cannot be read nothing is installed: the catch below keeps the writes held.
+            await _directory!.RefreshAsync(scope.ServiceProvider.GetRequiredService<ICharacterStore>(), budget.Token).ConfigureAwait(false);
+            world.Post(() => InstallAuthorityState(authority, token, stored));
+        }
+        catch (OperationCanceledException) when (_stopping)
+        {
+            // Stopping: nothing was written from the old table, and nothing is now.
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault(LogLevel.Warning, "social.group-lease-gain-reload", ex, "Reading the groups after gaining the social lease failed; their writes stay held and the read is tried again");
+            world.Post(RetryReloadLater);
+        }
+    }
+
+    private void RetryReloadLater()
+    {
+        _reloading = false;
+        _reloadNotBeforeMs = Environment.TickCount64 + ReloadRetryDelayMs;
+    }
+
+    /// <summary>World thread: what was read replaces the table, the held commands run on it, and the writes resume. If the lease moved during the read the rows are not this holding's, and the next gain reads again.</summary>
+    private void InstallAuthorityState(GroupAuthority authority, long? token, IReadOnlyList<GroupRecord> stored)
+    {
+        _reloading = false;
+        if (_stopping)
+        {
+            return;
+        }
+
+        if (SocialToken() != token)
+        {
+            authority.DropHeldCommands();
+            return;
+        }
+
+        GroupRestoreResult result;
+        try
+        {
+            authority.Reset();
+            result = authority.Restore(stored, _characters!);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RetryReloadLater();
+            _logger.LogFault("social.group-lease-gain-install", ex, "Installing the groups read after gaining the social lease failed; their writes stay held and the read is tried again");
+            return;
+        }
+
         Restored = result;
         _written.Clear();
         Dictionary<uint, GroupRecord> byId = stored.ToDictionary(r => r.Id);
@@ -232,7 +321,9 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             Writes?.Save(Key(id), store => store.DeleteGroupAsync(id));
         }
 
-        _logger.LogInformation("Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped)", result.Restored.Count, result.Dropped.Count);
+        _holding = true;
+        int failed = authority.ReleaseHeldCommands();
+        _logger.LogInformation("Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped, {Failed} held commands failed)", result.Restored.Count, result.Dropped.Count, failed);
     }
 
     private static string Key(uint groupId) => "group:" + groupId;

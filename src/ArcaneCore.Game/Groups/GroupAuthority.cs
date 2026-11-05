@@ -123,13 +123,16 @@ public interface IGroupAuthorityLink
 /// </para>
 /// <para>
 /// Thread-safety: one lock guards all state; <see cref="Execute"/> and <see cref="Drain"/> may be called from any thread. Memory: the groups, plus at most
-/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped).
+/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped) and <see cref="MaxCommandsHeldForReload"/> commands during a reload.
 /// </para>
 /// </summary>
 public sealed class GroupAuthority(IRealmPresenceDirectory directory)
 {
     /// <summary>Most undelivered events kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedEventsPerWorker = 8192;
+
+    /// <summary>Most commands kept while the table is reloaded (<see cref="HoldForReload"/>).</summary>
+    public const int MaxCommandsHeldForReload = 4096;
 
     /// <summary>Encoded size past which <see cref="Drain"/> stops adding events to one reply.</summary>
     public const int MaxDrainBytes = 48 * 1024;
@@ -146,6 +149,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     private readonly Dictionary<ObjectGuid, long> _readyAnswerAt = [];
     private readonly Dictionary<ObjectGuid, Draft> _drafts = [];
     private uint _nextId = 1;
+    private List<(string WorkerId, GroupCommand Command)>? _heldForReload;
 
     private sealed class Draft
     {
@@ -212,6 +216,56 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
             _hint.Clear();
             _queues.Clear();
             _readyAnswerAt.Clear();
+        }
+    }
+
+    /// <summary>
+    /// The table is about to be replaced by a read that is still running: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away. At most
+    /// <see cref="MaxCommandsHeldForReload"/> are kept (the oldest goes first).
+    /// </summary>
+    public void HoldForReload()
+    {
+        lock (_gate)
+        {
+            _heldForReload ??= [];
+        }
+    }
+
+    /// <summary>The reload is over: the held commands run, in order, on the new table, ahead of any command still to come. Returns how many failed (the rest still ran).</summary>
+    public int ReleaseHeldCommands()
+    {
+        lock (_gate)
+        {
+            List<(string WorkerId, GroupCommand Command)>? held = _heldForReload;
+            _heldForReload = null;
+            if (held is null)
+            {
+                return 0;
+            }
+
+            int failed = 0;
+            foreach ((string workerId, GroupCommand command) in held)
+            {
+                try
+                {
+                    Execute(workerId, command);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    failed++;
+                }
+            }
+
+            return failed;
+        }
+    }
+
+    /// <summary>The reload will not finish here (the lease went, or the node is stopping): the held commands are dropped and commands apply again.</summary>
+    public void DropHeldCommands()
+    {
+        lock (_gate)
+        {
+            _heldForReload = null;
         }
     }
 
@@ -355,6 +409,17 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         ArgumentNullException.ThrowIfNull(command);
         lock (_gate)
         {
+            if (_heldForReload is { } held)
+            {
+                if (held.Count >= MaxCommandsHeldForReload)
+                {
+                    held.RemoveAt(0);
+                }
+
+                held.Add((workerId, command));
+                return;
+            }
+
             _drafts.Clear();
             var actor = new ObjectGuid(command.Actor);
             if (command.Kind != GroupCommandKind.Logout)
