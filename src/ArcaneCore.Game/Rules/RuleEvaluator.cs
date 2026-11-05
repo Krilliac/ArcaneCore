@@ -47,7 +47,7 @@ public sealed class RuleEvaluator(Random random)
 
     /// <summary>
     /// True when an action may fire the event that is already running for the same subject (the creature host: cmangos delivers an AI event
-    /// to the sender synchronously and blocks only the row that is running). The nesting limit (<see cref="MaxFireNesting"/>) still applies.
+    /// to the sender synchronously and blocks only the row that is running). An Update for a subject that is already inside an Update is still refused. The nesting limit (<see cref="MaxFireNesting"/>) still applies.
     /// </summary>
     public bool AllowSameEventNesting { get; init; }
 
@@ -139,7 +139,9 @@ public sealed class RuleEvaluator(Random random)
 
     private bool Enter(RuleSubjectState state, short eventType)
     {
-        for (int i = 0; i < _active && !AllowSameEventNesting; i++)
+        // AllowSameEventNesting lets an action re-fire the running event, but an Update must never nest in an Update of the same subject: it would walk the pending runs twice.
+        bool refuseSame = !AllowSameEventNesting || eventType == UpdateKey;
+        for (int i = 0; i < _active && refuseSame; i++)
         {
             if (ReferenceEquals(_activeStates[i], state) && _activeEvents[i] == eventType)
             {
