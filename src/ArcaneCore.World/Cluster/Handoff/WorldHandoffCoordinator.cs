@@ -22,7 +22,7 @@ public interface IWorldHandoffSource
 
     /// <summary>
     /// Wait until every save captured by the freeze, and every other write A has open at that point in a character, instance or social queue, offline characters and writes of no one character
-    /// included, is durable; throws, before the commit, when one cannot be. Group, GM audit, account and respawn writes are not waited for. On success A's writes are sealed until
+    /// included, and in the group, GM audit, account data, account address, creature and game object respawn and world-state save queues, is durable; throws, before the commit, when one cannot be. Pet saves and the running game-event set are not waited for. On success A's writes are sealed until
     /// <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected. A flush that outlives its freeze (A resumed
     /// meanwhile) throws and seals nothing. A write made after this returns has no durability promise: it lands only if the takeover has not.
     /// </summary>
@@ -35,7 +35,7 @@ public interface IWorldHandoffSource
     Task RetireAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write A could still attempt, of any character, because the takeover moved them all. A retry that fires
+    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write the character, instance and social queues and the save queue could still attempt, of any character, because the takeover moved them all (pets, groups, GM audit, accounts, respawns and world-state saves have no fence handling and are not stopped; the flush made them durable before the commit). A retry that fires
     /// while B is being promoted is skipped. Between the commit and this step the seal of <see cref="FlushAsync"/> covers the same retry: there it is refused and dropped, not terminal. Runs only
     /// after the commit (A still owned them before it) and on every roll-forward, a recovery included. Idempotent. <see cref="RetireAsync"/> includes it, for a world that retires without a
     /// coordinator. A source with no such queue (the default) does nothing.

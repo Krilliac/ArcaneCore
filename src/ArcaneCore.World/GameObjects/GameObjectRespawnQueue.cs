@@ -50,7 +50,7 @@ public sealed class GameObjectRespawnQueue(IServiceScopeFactory scopes, ILogger 
     private readonly StopDrainBudget _drain = drain ?? new StopDrainBudget();
 
     /// <summary>One queued store write. A spawn write names its key; an instance delete has <see cref="OpKey.SpawnGuid"/> 0 and <see cref="OpKey.InstanceWide"/> set.</summary>
-    private sealed record Op(OpKey Key, long Sequence, GameObjectRespawnRecord? SaveRecord, GameObjectRespawnKey? DeleteKey, bool IsSweep = false)
+    private sealed record Op(OpKey Key, long Sequence, GameObjectRespawnRecord? SaveRecord, GameObjectRespawnKey? DeleteKey, bool IsSweep = false, TaskCompletionSource? Done = null)
     {
         public Task ExecuteAsync(IGameObjectRespawnStore store)
         {
@@ -275,6 +275,30 @@ public sealed class GameObjectRespawnQueue(IServiceScopeFactory scopes, ILogger 
 
             EnqueueCore(new OpKey(instanceId, 0, true), null, null, forgetsInstance: true);
         }
+    }
+
+    /// <summary>
+    /// A handoff's flush: after every write queued before the call has been attempted, retry each retained write once more. Completes when none is
+    /// retained and faults (naming the keys) while any still is, so a caller can refuse to hand the world over with a respawn write not durable. A queue
+    /// that is not running (not started, stopping or closed) completes only when nothing is retained.
+    /// </summary>
+    public Task RetryRetainedAsync()
+    {
+        if (_consumer is null || _stopping)
+        {
+            return RetainedFailureTask();
+        }
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        return _channel.Writer.TryWrite(new Op(default, 0, null, null, IsSweep: true, Done: done)) ? done.Task : RetainedFailureTask();
+    }
+
+    private Task RetainedFailureTask()
+    {
+        IReadOnlyList<string> keys = RetainedKeys;
+        return keys.Count == 0
+            ? Task.CompletedTask
+            : Task.FromException(new InvalidOperationException($"game object respawn writes are not durable: {string.Join(", ", keys)}"));
     }
 
     /// <summary>Wait until every write queued so far has been attempted (tests, shutdown).</summary>
@@ -585,10 +609,34 @@ public sealed class GameObjectRespawnQueue(IServiceScopeFactory scopes, ILogger 
                     try
                     {
                         await SweepRetainedAsync().ConfigureAwait(false);
+                        if (op.Done is not null)
+                        {
+                            IReadOnlyList<string> left = RetainedKeys;
+                            if (left.Count == 0)
+                            {
+                                op.Done.TrySetResult();
+                            }
+                            else
+                            {
+                                op.Done.TrySetException(new InvalidOperationException($"game object respawn writes are not durable: {string.Join(", ", left)}"));
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        if (op.Done is null)
+                        {
+                            throw;
+                        }
+
+                        op.Done.TrySetException(ex);
                     }
                     finally
                     {
-                        Volatile.Write(ref _sweepQueued, 0); // a write retained during this sweep is caught by the next marker
+                        if (op.Done is null)
+                        {
+                            Volatile.Write(ref _sweepQueued, 0); // a write retained during this sweep is caught by the next marker
+                        }
                     }
 
                     continue; // not a counted write
