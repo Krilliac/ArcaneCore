@@ -62,7 +62,10 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   ScriptsStart defaults to SCRIPT_EXEC_PARAM_NONE (Map.h:233-240, Map.cpp:2181).
   A click does not reach it on an object in use: HandleGameObjectUseOpcode returns for GO_FLAG_IN_USE (SpellHandler.cpp:295-296), which a door
   or button holds until it resets (for good if it has no auto-close time) and a goober until GameObject::Update clears it after its auto-close
-  time (GameObject.cpp:549-552, 1385-1388, 1650). `UseCore` refuses the same way, before any script, hook or aura break. So a second run while
+  time (GameObject.cpp:549-552, 1385-1388, 1650). The goober's flag and its data6 cooldown come before its quest gate (GameObject.cpp:1485,
+  1650-1651, 1691-1693), so a click by a player without the quest runs the template script once and also holds the goober until its auto-close
+  time; `UseGoober` follows that order. vmangos breaks out at that gate before the flag, but it has no template script. As in the reference, a
+  consumable goober despawns after such a click. `UseCore` refuses the same way, before any script, hook or aura break. So a second run while
   a delayed step (Keystone 28 s, Shadowforge Lock 20 s, Sacred Fire 5 s) is pending needs the object to be usable again first, or a use through
   the open-lock spell or `UseByUnit`, which skip the opcode and have no such refusal. A click on a generic object starts nothing either
   (SpellHandler.cpp:289-293).

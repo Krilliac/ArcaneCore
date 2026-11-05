@@ -30,7 +30,8 @@ public sealed partial class GameObjectMapSystem
     /// script at :1490). A trap is gated by its cooldown alone: GetCooldown covers GAMEOBJECT_TYPE_TRAP and GOOBER (GameObject.h:458-466), so a
     /// trap on cooldown also returns before the template script. The not-ready half is not GameObject::Use: it keeps the script in step with
     /// <see cref="UseGoober"/> (a player: an object with an auto-close time that is not ready) and <see cref="UseGooberByUnit"/> (any other
-    /// unit: not ready), which refuse such a use on the spell and script paths, so the script does not start for a use they turn down. A click
+    /// unit: not ready), which refuse such a use on the spell and script paths, so the script does not start for a use they turn down. A use
+    /// that fails the goober's quest gate counts here too: <see cref="UseGoober"/> sets the cooldown and the in-use state before that gate. A click
     /// on an object in use, of any type, is refused earlier and does not depend on this gate (<see cref="UseCore"/>). Other types have no gate here.
     /// </summary>
     private bool GooberRefusesUse(Unit user, GameObject go)

@@ -25,6 +25,7 @@ public sealed class GameObjectDbScriptTests
     private const uint ObjectGuid = 50001;
     private const uint TemplateVariable = 19030;
     private const uint GuidVariable = 19031;
+    private const uint GatedQuest = 19032; // the object system of these tests has no quest journal, so no player has it
 
     private sealed class InterruptRecorder : IUnitSpellQueries
     {
@@ -210,6 +211,74 @@ public sealed class GameObjectDbScriptTests
             Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
             Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
             Assert.Equal(2, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Fact]
+    public void RepeatClicksOnAQuestGatedGoober_ByAPlayerWithoutTheQuest_RunTheTemplateScriptOnce_UntilTheAutoCloseTime()
+    {
+        // GameObject::Use sets GO_FLAG_IN_USE (GameObject.cpp:1650) before the quest gate (:1691-1693), so the opcode refuses the repeats
+        // (SpellHandler.cpp:295-296) until GameObject::Update clears the flag (:549-552). The guid script is behind the gate and never starts.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Goober, [(1, GatedQuest), .. AutoClose(GameObjectType.Goober, 1)]);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.NeedsQuest, objects.Use(player, go.Guid));
+            Assert.True(go.Flags.HasFlag(GameObjectFlags.InUse));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(GameObjectUseResult.InUse, objects.Use(player, go.Guid));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+
+            Run(world, 2500); // whole-second clock: the goober closes 1 to 2 seconds after the use
+            Assert.False(go.Flags.HasFlag(GameObjectFlags.InUse));
+            Assert.Equal(GameObjectUseResult.NeedsQuest, objects.Use(player, go.Guid));
+            Assert.Equal(2, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Fact]
+    public void TheCooldownOfAQuestGatedGoober_StartsOnAClickWithoutTheQuest_AndHoldsBackTheTemplateScript()
+    {
+        // m_cooldownTime is set at GameObject.cpp:1485, above the template script at :1490 and the quest gate at :1691-1693. No auto-close time
+        // here, so the in-use flag goes first and the cooldown alone refuses the later click.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Goober, (1, GatedQuest), (6, 10));
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.NeedsQuest, objects.Use(player, go.Guid));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+
+            Run(world, 2500);
+            Assert.False(go.Flags.HasFlag(GameObjectFlags.InUse));
+            Assert.Equal(GameObjectUseResult.OnCooldown, objects.Use(player, go.Guid));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+        }
+    }
+
+    [Fact]
+    public void TheScriptPath_ByAPlayerWithoutTheQuest_RunsTheTemplateScriptOnce_WhileTheGooberWaitsForItsAutoCloseTime()
+    {
+        // UseGooberByUnit hands a player to UseGoober, so the first use marks the goober before the quest gate and the not-ready gate refuses the next.
+        var ai = new CreatureAiContent([], []) { DbScripts = DelayedUseScripts(5000) };
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(new CreatureContent([Template()], [], [], [], [], ai));
+        using (world)
+        {
+            GameObjectMapSystem objects = AddObject(map, GameObjectType.Goober, [(1, GatedQuest), .. AutoClose(GameObjectType.Goober, 60)]);
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            GameObject go = Assert.Single(objects.GameObjects);
+            Assert.Equal(GameObjectUseResult.NeedsQuest, objects.UseByUnit(player, go));
+            Assert.Equal(1, system.PendingDbScriptSteps);
+
+            Assert.Equal(GameObjectUseResult.InUse, objects.UseByUnit(player, go));
+            Assert.Equal(1, system.PendingDbScriptSteps);
         }
     }
 

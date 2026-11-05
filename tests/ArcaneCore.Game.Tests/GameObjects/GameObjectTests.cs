@@ -476,9 +476,17 @@ public sealed class GameObjectTests
         Assert.Empty(rig.Quests.Used);
         // GameObject::Use, goober (GameObject.cpp:1547-1575): the page is shown before the quest gate, so a player without the quest reads it too.
         Assert.Single(Packets(session, WorldOpcode.SmsgGameobjectPagetext));
-        Assert.Equal(GameObjectState.Ready, goober.State);
-
+        // In use, activated and on cooldown before the quest gate (mangos-classic GameObject.cpp:1485, :1650-1651, :1691-1693), so even a player
+        // who has the quest by now is refused until the object is usable again.
+        Assert.Equal(GameObjectState.Active, goober.State);
+        Assert.True(goober.Flags.HasFlag(GameObjectFlags.InUse));
         rig.Quests.Incomplete.Add((player.Guid, QuestId));
+        Assert.Equal(GameObjectUseResult.InUse, rig.System.Use(player, goober.Guid));
+        Assert.Empty(rig.Quests.Used);
+
+        rig.World.RunTick(10_000);
+        Assert.Equal(GameObjectState.Ready, goober.State);
+        Assert.False(goober.Flags.HasFlag(GameObjectFlags.InUse));
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, goober.Guid));
         Assert.Equal([(player.Guid, GooberEntry, goober.Guid)], rig.Quests.Used);
         Assert.Equal([goober], used);

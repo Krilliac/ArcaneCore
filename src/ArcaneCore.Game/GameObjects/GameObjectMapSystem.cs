@@ -684,8 +684,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         // HandleGameObjectUseOpcode (mangos-classic SpellHandler.cpp:295-296) returns for a GO_FLAG_IN_USE object before GameObject::Use, so a
-        // repeated or crafted click on a door, button or goober still in use reaches no script, hook, aura break or dismount. That flag, not
-        // script uniqueness (the use scripts have none), is what stops a repeat click from starting another run.
+        // repeated or crafted click on a door, button or goober still in use reaches no script, hook, aura break or dismount. For those types
+        // that flag, not script uniqueness (the use scripts have none), stops a repeat click from starting another run. A goober takes the flag
+        // on any use that passes its cooldown, also one that then fails its quest gate (UseGoober), and keeps it until its auto-close time.
         if ((go.Flags & GameObjectFlags.InUse) != 0)
         {
             return GameObjectUseResult.InUse;
@@ -1470,7 +1471,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.InUse;
         }
 
-        // GameObject::Use, goober (GameObject.cpp:1547-1575): the page text or gossip comes first; only a positive questId gates the rest.
+        // mangos-classic GameObject::Use: the cooldown is set at GameObject.cpp:1485, and in use and activated at :1650-1659, all before the
+        // questId gate at :1691-1693. A click by a player without the quest therefore puts the goober in use too, and the opcode's in-use
+        // return (SpellHandler.cpp:295-296) refuses repeats until the auto-close time. vmangos breaks out at that gate before the flag, but
+        // it has no template script, which here runs before this method. An object with a custom animation (the display list, or
+        // goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active state. The auto-close
+        // time (data3, whole seconds) runs out in GameObject::Update (:549-555): the object is deactivated then, and a consumable one (data5)
+        // or one that may despawn goes away (ActivationExpired, Despawn).
+        StartGooberCooldown(go);
+        go.Flags |= GameObjectFlags.InUse;
+        go.LootState = GameObjectLootState.Activated;
+        if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)) || (autoCloseSeconds > 0 && go.Template.GetData(4) != 0))
+        {
+            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0), includeSelf: false);
+        }
+        else
+        {
+            go.State = GameObjectState.Active;
+        }
+
+        go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
+
+        // The page text or gossip comes next; only a positive questId gates the rest.
         ShowGooberPageOrGossip(player, go);
         // mangos-classic GameObject::Use, GAMEOBJECT_TYPE_GOOBER (GameObject.cpp:1683-1688): goober.eventId (data2) starts before the
         // questId gate. vmangos (GameObject.cpp:1564-1580) starts it only after the gate passes.
@@ -1487,37 +1509,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             StartGuidUseScript(player, go); // dbscripts_on_go_use (GameObject.cpp:1701-1705): after the quest gate, before the spell
         }
 
-        TriggerLinkedTrap(go, player); // GameObject.cpp:1593
-
-        if (go.Template.GetData(6) is var cooldown and not 0)
-        {
-            go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
-        }
+        TriggerLinkedTrap(go, player); // vmangos GameObject.cpp:1593
 
         go.UseCount++;
-
-        // GameObject::Use, goober (GameObject.cpp:1593-1606): in use and activated; an object with a custom animation (the display
-        // list, or goober.customAnim (data4) together with an auto-close time) plays animation 0, any other one shows its active
-        // state. The auto-close time (data3, whole seconds) runs out in GameObject::Update (:578-585): the object is deactivated
-        // then, and a consumable one (data5) or one that may despawn goes away (ActivationExpired, Despawn).
-        go.Flags |= GameObjectFlags.InUse;
-        go.LootState = GameObjectLootState.Activated;
-        if (GameObjectInfoView.HasCustomAnim(go.GetUInt32(UpdateFields.GameobjectDisplayid)) || (autoCloseSeconds > 0 && go.Template.GetData(4) != 0))
-        {
-            Map.BroadcastInRange(go, 0, WorldOpcode.SmsgGameobjectCustomAnim, GameObjectPackets.CustomAnim(go.Guid, 0), includeSelf: false);
-        }
-        else
-        {
-            go.State = GameObjectState.Active;
-        }
-
-        go.ResetAfterSecond = ClockSeconds + autoCloseSeconds;
         if (!scriptTookUse)
         {
             CastGooberSpell(player, go);
         }
 
         return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>GameObject::Use (GameObject.cpp:1482-1486): a goober with a cooldown (data6, seconds; GetCooldown, GameObject.h:458-466) starts it on any use that gets past it.</summary>
+    private void StartGooberCooldown(GameObject go)
+    {
+        if (go.Template.GetData(6) is var cooldown and not 0)
+        {
+            go.CooldownUntilMs = _clockMs + (cooldown * 1000L);
+        }
     }
 
     /// <summary>
