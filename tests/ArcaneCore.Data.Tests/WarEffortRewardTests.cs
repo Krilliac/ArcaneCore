@@ -41,6 +41,29 @@ public sealed class WarEffortRewardTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task SerializationFailureAfterTheContributionWasSaved_IsRetried_AndCountsItOnce(DatabaseProvider provider)
+    {
+        // The counter row is saved (+20) inside the first attempt, then the commit fails with 40001 and rolls back:
+        // the retry must read the counter again, not carry the tracked +20 over.
+        (DatabaseConnectionOptions connection, CharacterQuestRewardRequest request) = await CreateAsync(provider);
+        await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(connection))
+            await new EfWarEffortStateStore(db).SetPhaseAsync(WarEffortPhase.Gathering, 0);
+
+        var fault = new InjectedFault("commit", failures: 1, () => new FakeDbException("40001"));
+        await using (var db = new CharacterDbContext(new DbContextOptionsBuilder<CharacterDbContext>(
+                         TestContexts.Options<CharacterDbContext>(connection)).AddInterceptors(fault.Interceptors).Options))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(request));
+        }
+
+        Assert.Equal(2, fault.Attempts);
+        Assert.Equal(20, (await LoadAsync(connection)).Counters[0]);
+        Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(connection, request));
+        Assert.Equal(20, (await LoadAsync(connection)).Counters[0]);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task DisabledPhaseDoesNotCollectAndInvalidContributionRollsBackReward(DatabaseProvider provider)
     {
         (DatabaseConnectionOptions connection, CharacterQuestRewardRequest request) = await CreateAsync(provider);

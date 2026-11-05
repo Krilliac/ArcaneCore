@@ -259,6 +259,25 @@ public sealed class PlayerbotQaAllFaultsTests : IDisposable
     }
 
     [Fact]
+    public void ARealmLeaseNotHeldException_IsADocumentedNonFault_ByDefault_AndReportsWhenTheListIsEmpty()
+    {
+        var bus = new PlayerbotQaSignalBus(64);
+        var watch = new PlayerbotQaFirstChanceWatch(bus, Faults(repeats: 2));
+        for (int i = 0; i < 6; i++)
+        {
+            watch.ObserveFirstChance(new ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException("economy"), "Characters.StateSaveQueue");
+        }
+
+        Assert.Equal(0, bus.Received);
+        Assert.Equal(6, watch.Denied);
+
+        var open = new PlayerbotQaFirstChanceWatch(bus, Faults(repeats: 2, deny: []));
+        open.ObserveFirstChance(new ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException("economy"), "Characters.StateSaveQueue");
+        open.ObserveFirstChance(new ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException("economy"), "Characters.StateSaveQueue");
+        Assert.Equal(1, bus.Received);
+    }
+
+    [Fact]
     public void ADenylistEntryWithASite_DeniesTheTypeOnlyThere()
     {
         var bus = new PlayerbotQaSignalBus(64);

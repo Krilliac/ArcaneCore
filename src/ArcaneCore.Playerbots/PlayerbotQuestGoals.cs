@@ -586,7 +586,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (_stage == Stage.AcceptDetails && packet.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails)
                 {
                     _stage = Stage.Accept;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
                 else if (_stage == Stage.CompleteResponse && packet.Opcode == WorldOpcode.SmsgQuestgiverRequestItems)
@@ -598,13 +598,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         return false;
                     }
                     _stage = Stage.RewardRequest;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
                 else if ((_stage is Stage.CompleteResponse or Stage.RewardOffer) && packet.Opcode == WorldOpcode.SmsgQuestgiverOfferReward)
                 {
                     _stage = Stage.RewardChoice;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
             }
@@ -2065,11 +2065,26 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         _refused[questId] = unchecked(now + RefusedQuestMs);
     }
 
+    /// <summary>
+    /// How long a bot waits in the current turn-in stage: 15 s, or in <see cref="Stage.RewardConfirmation"/> (the wait for the server's
+    /// settlement of the reward) longer when the settlement can take longer. A reward settlement may use
+    /// <see cref="QuestNpcOptions.SettlementBudget"/> plus the 5 s reconcile that follows an abandoned one (<c>ReadRewardOutcomeAsync</c>), and a
+    /// bot that gave up inside that window would refuse a turn-in the server is still about to settle. 5 s of slack is added on top.
+    /// </summary>
+    private uint StageTimeoutMs()
+    {
+        if (_stage != Stage.RewardConfirmation)
+            return 15_000;
+        QuestNpcOptions? quest = _session.Services.GetService<QuestNpcFeature>()?.Services?.Options;
+        double settleSeconds = quest is null ? 0 : quest.SettlementBudget.TotalSeconds + 5 + 5;
+        return (uint)Math.Max(15_000, Math.Min(settleSeconds * 1000, 600_000));
+    }
+
     private void ArmStage(QuestTarget target)
     {
         _stageNpc = target.Npc.Guid;
         _stageQuest = target.Quest.Id;
-        _stageDeadline = unchecked(_session.World.NowMs + 15_000);
+        _stageDeadline = unchecked(_session.World.NowMs + StageTimeoutMs());
     }
 
     private void ClearStage()

@@ -109,6 +109,8 @@ public sealed class PlayerbotQaFaultOptions
         "System.Threading.Tasks.TaskCanceledException",
         // A peer that resets, aborts or closes its socket (client disconnects, 10053/10054/995) is the network, not a server defect. An IOException that wraps one matches through its inner chain.
         "System.Net.Sockets.SocketException",
+        // A realm-wide write refused because this node does not hold the authority lease is a documented non-fault: the state-save queue catches it and skips or forwards the save.
+        "ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException",
     ];
 
     /// <summary>

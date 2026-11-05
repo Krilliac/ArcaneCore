@@ -20731,7 +20731,8 @@ World.Playerbots.Qa.ExportIntervalSeconds = 300
 #        Type: string[]
 #        Default: 0 = System.OperationCanceledException; 1 =
 #                 System.Threading.Tasks.TaskCanceledException; 2 =
-#                 System.Net.Sockets.SocketException
+#                 System.Net.Sockets.SocketException; 3 =
+#                 ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException
 #        Allowed: a list: numbered keys 0, 1, 2, ...; each value is text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
@@ -20741,6 +20742,7 @@ World.Playerbots.Qa.ExportIntervalSeconds = 300
 # World.Playerbots.Qa.Faults.FirstChanceDenylist.0 = "System.OperationCanceledException"
 # World.Playerbots.Qa.Faults.FirstChanceDenylist.1 = "System.Threading.Tasks.TaskCanceledException"
 # World.Playerbots.Qa.Faults.FirstChanceDenylist.2 = "System.Net.Sockets.SocketException"
+# World.Playerbots.Qa.Faults.FirstChanceDenylist.3 = "ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException"
 
 #
 #    World.Playerbots.Qa.Faults.FirstChanceEnabled
