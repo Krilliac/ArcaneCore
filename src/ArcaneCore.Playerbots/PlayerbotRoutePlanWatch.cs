@@ -67,20 +67,35 @@ internal static partial class PlayerbotRoutePlanWatch
     /// </summary>
     internal const uint DutySuppressMs = 10_000;
 
+    private static readonly uint[] DutyBackoffSteps = [DutySuppressMs, 30_000, 60_000];
+
     /// <summary>The hold (ms) of a duty pair suppressed again: its 1st, 2nd and further suppressions (the last step repeats), so a goal that stays refused is asked about less often without being shelved; a successful plan for the pair starts it over.</summary>
-    internal static readonly uint[] DutyBackoffMs = [DutySuppressMs, 30_000, 60_000];
+    internal static ReadOnlySpan<uint> DutyBackoffMs => DutyBackoffSteps;
 
-    /// <summary>The hold (ms) of a pair's <paramref name="strikes"/>-th suppression under <see cref="Policy.Duty"/> (<see cref="DutyBackoffMs"/>).</summary>
-    internal static uint DutySpanMs(int strikes) => DutyBackoffMs[Math.Clamp(strikes - 1, 0, DutyBackoffMs.Length - 1)];
+    /// <summary>The hold (ms) of a pair's <paramref name="strikes"/>-th suppression under <see cref="HoldMode.DutyBackoff"/> (<see cref="DutyBackoffMs"/>).</summary>
+    internal static uint DutySpanMs(int strikes) => DutyBackoffSteps[Math.Clamp(strikes - 1, 0, DutyBackoffSteps.Length - 1)];
 
-    /// <summary>How a caller wants a suppressed pair handled: how long it is held, whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>, whether repeat suppressions of the pair lengthen the hold (<see cref="SuppressionSpanMs"/>), and whether they step through <see cref="DutyBackoffMs"/> instead.</summary>
-    internal readonly record struct Policy(uint SuppressMs, bool Blacklist, bool Escalate, bool DutyBackoff = false)
+    /// <summary>How long a suppressed pair is held; exactly one applies per <see cref="Policy"/>.</summary>
+    internal enum HoldMode
+    {
+        /// <summary>A flat <see cref="Policy.SuppressMs"/> every time.</summary>
+        Flat,
+
+        /// <summary>Doubled per earlier strike of the pair (<see cref="SuppressionSpanMs"/>).</summary>
+        Doubling,
+
+        /// <summary>Stepped through <see cref="DutyBackoffMs"/>, and a successful plan for the pair forgets its strikes.</summary>
+        DutyBackoff,
+    }
+
+    /// <summary>How a caller wants a suppressed pair handled: how long it is held (<paramref name="SuppressMs"/> for <see cref="HoldMode.Flat"/>, else per <paramref name="Hold"/>) and whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>.</summary>
+    internal readonly record struct Policy(uint SuppressMs, bool Blacklist, HoldMode Hold)
     {
         /// <summary>The long hold with the blacklist (every caller but the battleground AI).</summary>
-        internal static readonly Policy Default = new(PlayerbotRoutePlanWatch.SuppressMs, true, true);
+        internal static readonly Policy Default = new(PlayerbotRoutePlanWatch.SuppressMs, true, HoldMode.Doubling);
 
         /// <summary>The short hold without the blacklist (a goal the bot must go on trying: <see cref="DutySuppressMs"/>, then 30 s and 60 s per pair, never longer).</summary>
-        internal static readonly Policy Duty = new(DutySuppressMs, false, false, DutyBackoff: true);
+        internal static readonly Policy Duty = new(DutySuppressMs, false, HoldMode.DutyBackoff);
     }
 
     private const int MaxSuppressedEntries = 8;
@@ -178,7 +193,7 @@ internal static partial class PlayerbotRoutePlanWatch
         PruneExpired(state, now);
 
         uint mapId = player.Map?.MapId ?? player.MapId;
-        if (planned && (policy ?? Policy.Default).DutyBackoff) ForgetStrikes(state, mapId, origin, goal, now);
+        if (planned && (policy ?? Policy.Default).Hold == HoldMode.DutyBackoff) ForgetStrikes(state, mapId, origin, goal, now);
         float distNow = FlatDistance(origin, goal);
         Vector3 routeEnd = route is { Points.Count: > 0 } ? route.Points[^1] : goal;
 
@@ -262,7 +277,12 @@ internal static partial class PlayerbotRoutePlanWatch
         }
 
         // A duty goal backs off per pair 10 s, 30 s, 60 s and stops there: the 180 s hold shelved the bot (#1498), a flat 10 s re-asks the mesh forever.
-        uint span = policy.DutyBackoff ? DutySpanMs(strikes) : policy.Escalate ? SuppressionSpanMs(strikes) : policy.SuppressMs;
+        uint span = policy.Hold switch
+        {
+            HoldMode.DutyBackoff => DutySpanMs(strikes),
+            HoldMode.Doubling => SuppressionSpanMs(strikes),
+            _ => policy.SuppressMs,
+        };
         uint until = unchecked(now + span);
         state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until, strikes, unchecked(until + StrikeMemoryMs)));
         state.Epoch = unchecked(state.Epoch + 1);
