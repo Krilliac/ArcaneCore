@@ -86,8 +86,12 @@ Every client and server opcode below had no handler or no sender before the swee
 (vm) and mangos-classic `src/game/Server/Opcodes.cpp` at 8ec338a (mc). Line numbers are for those commits. A client opcode that both references leave
 unhandled stays on ArcaneCore's unhandled path on purpose: it is counted and logged there, so a real client that starts sending one shows up instead of vanishing
 (pinned by `DevOpcodeTests`). A server opcode is sent only where a reference sends it or retail needs it; the rest are reserved ids.
+That was the sweep's rule. Lane Z30 replaced it for every opcode in [its section](#opcode-gaps-after-the-client-check-lane-z30) below.
 
 ### Client opcodes: unhandled in both references, kept unhandled
+
+**Superseded by "Opcode gaps after the client check (lane Z30)" below** for every opcode named there: the client opcodes in this table are no longer on the unhandled path, and the
+reasons here record what the sweep decided, not the current state:
 
 | Opcode | vmangos | mangos-classic | Reason |
 | --- | --- | --- | --- |
