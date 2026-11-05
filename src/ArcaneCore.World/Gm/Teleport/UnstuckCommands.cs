@@ -20,8 +20,14 @@ namespace ArcaneCore.World.Gm.Teleport;
 /// usual (<see cref="UnstuckFeature"/>, vmangos SpellAuras.cpp:1919-1944). A ghost gets the sickness, a one-hour Undying Soul cooldown
 /// and a teleport to the nearest graveyard at once.
 /// <para>
-/// Differences: without a linked graveyard the expiry still kills (vmangos then sets health to 1 and sends the player to Westfall or
-/// the Barrens); the ghost's cooldown is server side only.
+/// The ghost's trip is a plain teleport (<see cref="ArcaneCore.Game.Graveyards.GraveyardRepopService.TeleportGhostToGraveyard"/>), never
+/// <c>RepopAtGraveyard</c>, which would resurrect a spirit that claims to be on a transport. With no linked graveyard the ghost goes to Westfall
+/// (Alliance) or the Barrens (Horde), as in vmangos (world safe locations 4 and 10).
+/// </para>
+/// <para>
+/// Differences: without a linked graveyard the expiry of a living player's Undying Soul still kills (vmangos then sets health to 1 and sends the
+/// player to Westfall or the Barrens); the ghost's cooldown is server side only; a living player whose Undying Soul cast fails after the rules
+/// allowed it is told <see cref="Unavailable"/> and the failure is logged (vmangos ignores the cast result, replies <see cref="Alive"/> and logs the use).
 /// </para>
 /// </summary>
 public sealed class UnstuckCommands : ICommandGroup
@@ -62,7 +68,8 @@ public sealed class UnstuckCommands : ICommandGroup
     /// The unstuck rules and effect for <paramref name="player"/> (world thread), as <c>.unstuck</c> applies them; the GM ticket assistant uses this for a
     /// living author only. False with <see cref="Unavailable"/> when the rules refuse (nothing is changed); otherwise true with <see cref="Alive"/> (Undying
     /// Soul cast, death when it expires) or <see cref="Dead"/> (a ghost: sickness, the cooldown and the trip to the graveyard). As in vmangos the ghost's
-    /// reply and penalty do not depend on that trip: with no graveyard or a refused teleport it stays where it is and still gets both. A caller that must
+    /// reply and penalty do not depend on that trip: with a refused teleport it stays where it is and still gets both. The trip is a plain teleport that
+    /// never resurrects. A caller that must
     /// know whether the ghost moved makes its own trip between <see cref="Permitted"/> and <see cref="PenaliseGhost"/>.
     /// </summary>
     internal static bool TryApply(IServiceProvider services, Player player, out string reply)
@@ -77,6 +84,8 @@ public sealed class UnstuckCommands : ICommandGroup
         {
             if (spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false) != SpellCastResult.CastOk)
             {
+                services.GetService<ILoggerFactory>()?.CreateLogger<UnstuckCommands>().LogWarning(
+                    "Player {Name} (guid {Guid}) used unstuck command but the Undying Soul cast failed at map {Map}.", player.Name, player.Guid.Low, player.MapId);
                 reply = Unavailable;
                 return false;
             }
@@ -86,7 +95,7 @@ public sealed class UnstuckCommands : ICommandGroup
         else
         {
             PenaliseGhost(spells, player);
-            services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
+            services.GetService<GraveyardFeature>()?.Service?.TeleportGhostToGraveyard(player);
             reply = Dead;
         }
 

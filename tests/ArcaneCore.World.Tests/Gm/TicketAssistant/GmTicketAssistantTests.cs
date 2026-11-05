@@ -576,6 +576,8 @@ public sealed class GmTicketAssistantTests
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         await AssertLeftAGhostAsync(host, ticket, outcome, -8900f, before);
+        Assert.False(await SickAsync(host));
+        Assert.True(await UnstuckReadyAsync(host));
     }
 
     private static Task<bool> SickAsync(WorldTestHost host) => host.PlayerStateAsync("Plainone", p =>
@@ -654,6 +656,118 @@ public sealed class GmTicketAssistantTests
         Assert.False(await UnstuckReadyAsync(host));
         Assert.Equal(1, AssistantOf(host).Status().Fixed);
         Assert.Contains(AssistantAudit(host), e => e.Line.Contains("unstuck: ghost sent to the graveyard", StringComparison.Ordinal));
+    }
+
+    // The player's own .unstuck as a ghost (UnstuckCommands.TryApply, what the command runs), on the world thread.
+    private static Task<(bool Applied, string Reply)> PlayerUnstuckAsync(WorldTestHost host, string name) => host.OnWorldAsync(() =>
+    {
+        bool applied = UnstuckCommands.TryApply(host.WorldServices, host.World.FindOnlinePlayer(name)!, out string reply);
+        return (applied, reply);
+    });
+
+    [Fact]
+    public async Task PlayerUnstuck_AGhostClaimingATransport_IsTeleportedNotResurrected()
+    {
+        // vmangos .unstuck calls TeleportTo; RepopAtGraveyard would bring a spirit on a transport back to life on the spot.
+        await using WorldTestHost host = Start(items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await AboardAsync(host, "Plainone");
+        uint before = await SwordDurabilityAsync(host, "Plainone");
+        await player.CollectAsync();
+
+        (bool applied, string reply) = await PlayerUnstuckAsync(host, "Plainone");
+
+        Assert.True(applied);
+        Assert.Equal(UnstuckCommands.Dead, reply);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.NotEqual(0u, await host.PlayerStateAsync("Plainone", p => (uint)(p.Flags & PlayerFlags.Ghost)));
+        Assert.Equal(before, await SwordDurabilityAsync(host, "Plainone"));
+        Assert.True(await SickAsync(host));
+        Assert.False(await UnstuckReadyAsync(host));
+    }
+
+    [Fact]
+    public async Task PlayerUnstuck_AGhostWithNoLinkedGraveyard_GoesToTheTeamFallbackLocation()
+    {
+        // World safe locations 4 (Alliance, Westfall) and 10 (Horde, Barrens) at the same spot, so either team lands there (vmangos TeleportCommands.cpp:1090-1096).
+        GraveyardContent fallbackOnly = new(
+            [new WorldSafeLoc(4, 0, GraveyardX, -100f, 90f, 1.5f, "Westfall"), new WorldSafeLoc(10, 0, GraveyardX, -100f, 90f, 1.5f, "Barrens")],
+            [new GraveyardLink(4, 99, 0)]);
+        await using WorldTestHost host = Start(items: WornSword(), graveyards: fallbackOnly);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await player.CollectAsync();
+
+        (bool applied, string reply) = await PlayerUnstuckAsync(host, "Plainone");
+
+        Assert.True(applied);
+        Assert.Equal(UnstuckCommands.Dead, reply);
+        await AckTeleportAsync(host, player, "Plainone", GraveyardX);
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+    }
+
+    [Fact]
+    public async Task PlayerUnstuck_AGhostWithNowhereToGo_StillPaysAndIsToldSo()
+    {
+        // vmangos adds the sickness and the cooldown before the trip and replies "teleported" whatever the trip did.
+        GraveyardContent none = new([new WorldSafeLoc(1, 0, GraveyardX, -100f, 90f, 1.5f, "Goldshire")], [new GraveyardLink(1, 99, 0)]);
+        await using WorldTestHost host = Start(items: WornSword(), graveyards: none);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+
+        (bool applied, string reply) = await PlayerUnstuckAsync(host, "Plainone");
+
+        Assert.True(applied);
+        Assert.Equal(UnstuckCommands.Dead, reply);
+        Assert.Equal(-8900f, await host.PlayerStateAsync("Plainone", p => p.X));
+        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.True(await SickAsync(host));
+        Assert.False(await UnstuckReadyAsync(host));
+    }
+
+    [Fact]
+    public async Task PlayerUnstuck_AGhostBelowLevelTen_IsRefusedAndChangesNothing()
+    {
+        await using WorldTestHost host = Start(items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Plainone")!.SetUInt32(UpdateFields.UnitFieldLevel, 9));
+
+        (bool applied, string reply) = await PlayerUnstuckAsync(host, "Plainone");
+
+        Assert.False(applied);
+        Assert.Equal(UnstuckCommands.Unavailable, reply);
+        Assert.Equal(-8900f, await host.PlayerStateAsync("Plainone", p => p.X));
+        Assert.False(await SickAsync(host));
+        Assert.True(await UnstuckReadyAsync(host));
+    }
+
+    [Fact]
+    public async Task PlayerUnstuck_AGhostTwice_IsRefusedTheSecondTime_AndIsNotTeleportedAgain()
+    {
+        await using WorldTestHost host = Start(items: WornSword(), graveyards: OneGraveyard());
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await host.PlaceAsync("Plainone", -8900f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
+        await GhostAtItsBodyAsync(host, "Plainone");
+        await player.CollectAsync();
+        Assert.True((await PlayerUnstuckAsync(host, "Plainone")).Applied);
+
+        (bool applied, string reply) = await PlayerUnstuckAsync(host, "Plainone");
+
+        Assert.False(applied);
+        Assert.Equal(UnstuckCommands.Unavailable, reply);
     }
 
     [Fact]

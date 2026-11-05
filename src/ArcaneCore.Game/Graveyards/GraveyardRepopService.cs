@@ -87,6 +87,45 @@ public sealed partial class GraveyardRepopService(WorldRuntime world, Func<Telep
         return moved;
     }
 
+    /// <summary>The world safe location a ghost with no linked graveyard is sent to: Alliance Westfall (4), Horde the Barrens (10).</summary>
+    public const uint AllianceFallbackSafeLoc = 4;
+
+    /// <summary>See <see cref="AllianceFallbackSafeLoc"/>.</summary>
+    public const uint HordeFallbackSafeLoc = 10;
+
+    /// <summary>
+    /// The ghost half of vmangos <c>.unstuck</c> (HandleUnstuckCommand, TeleportCommands.cpp:1090-1096): the closest linked graveyard for the
+    /// player's team, else Westfall (Alliance) or the Barrens (Horde), and a plain teleport there. Unlike <see cref="RepopAtGraveyard"/> it never
+    /// brings a spirit on a transport back to life, so a client that claims to be on a ship gains nothing. The ghost state is untouched; a
+    /// resurrection is the spirit healer's or the corpse's. True when the teleport started.
+    /// </summary>
+    public bool TeleportGhostToGraveyard(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.IsAlive || player.Map is not { } map)
+        {
+            return false;
+        }
+
+        WorldSafeLoc? target = Choose(player, map)
+            ?? WorldGraveyards.Of(world).Catalog.Find(player.Team == Team.Alliance ? AllianceFallbackSafeLoc : HordeFallbackSafeLoc);
+        if (target is null)
+        {
+            MarkVisibility(player);
+            return false;
+        }
+
+        bool moved = teleports() is { } service
+            && service.TeleportTo(player, target.MapId, target.X, target.Y, target.Z, target.Orientation);
+        if (moved)
+        {
+            player.LastReleasedGraveyard = target;
+        }
+
+        MarkVisibility(player);
+        return moved;
+    }
+
     /// <inheritdoc />
     public bool RelocateLeavingPlayer(Player player)
     {

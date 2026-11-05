@@ -705,7 +705,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     /// <summary>
     /// The ghost half of an unstuck for a ticket. Unlike <c>.unstuck</c>, which penalises first and whose reply does not depend on the trip (vmangos), the
     /// ghost is sent first and pays the sickness and the cooldown only once its teleport has started. So with no graveyard, no teleport service or a refused
-    /// teleport nothing changes and the ticket goes to a GM, and nobody is told they were moved when they were not.
+    /// teleport no sickness or cooldown is charged and the ticket goes to a GM, and nobody is told they were moved when they were not. The one trace of a
+    /// refused teleport is on the player: the repop clears <c>LastReleasedGraveyard</c> and sets <c>NeedsVisibilityUpdate</c> (a ghost's own refresh).
     /// </summary>
     private (bool Done, string Detail) UnstuckGhost(Player player, Map map)
     {
