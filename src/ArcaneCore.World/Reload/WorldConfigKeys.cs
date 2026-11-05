@@ -877,6 +877,22 @@ public static class WorldConfigKeys
             v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
         LivePlayerbotsValue("Economy:BuyBelowAskPercent", o => o.Economy.BuyBelowAskPercent, (o, v) => o.Economy.BuyBelowAskPercent = v,
             v => v is >= 1 and <= 99 ? null : "must be 1..99"),
+        // Not vmangos keys: bot trips to the capital cities (docs/areas/playbots-city.md). The capital goals read the shared
+        // PlayerbotOptions.City at every decision.
+        LivePlayerbots("City:Enabled", o => o.City.Enabled, (o, v) => o.City.Enabled = v),
+        LivePlayerbotsValue("City:VisitIntervalMinutes", o => o.City.VisitIntervalMinutes, (o, v) => o.City.VisitIntervalMinutes = v,
+            v => v is >= 1 and <= PlayerbotCityOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotCityOptions.MaxVisitIntervalMinutes}"),
+        LivePlayerbotsValue("City:MinGoldForAuctionTrip", o => o.City.MinGoldForAuctionTrip, (o, v) => o.City.MinGoldForAuctionTrip = v,
+            v => v is >= 0 and <= PlayerbotCityOptions.MaxMinGoldForAuctionTrip ? null : $"must be 0..{PlayerbotCityOptions.MaxMinGoldForAuctionTrip}"),
+        LivePlayerbots("City:BindInCapital", o => o.City.BindInCapital, (o, v) => o.City.BindInCapital = v),
+        LivePlayerbotsValue("City:MaxTripYards", o => o.City.MaxTripYards, (o, v) => o.City.MaxTripYards = v,
+            v => float.IsFinite(v) && v > 0f && v <= PlayerbotCityOptions.MaxTripYardsCeiling ? null : $"must be above 0 and at most {PlayerbotCityOptions.MaxTripYardsCeiling}"),
+        LivePlayerbotsValue("City:MinLevel", o => o.City.MinLevel, (o, v) => o.City.MinLevel = v,
+            v => v is >= 1 and <= PlayerbotCityOptions.MaxMinLevel ? null : $"must be 1..{PlayerbotCityOptions.MaxMinLevel}"),
+        LivePlayerbotsValue("City:MaxTripsPerCapital", o => o.City.MaxTripsPerCapital, (o, v) => o.City.MaxTripsPerCapital = v,
+            v => v is >= 1 and <= 1000 ? null : "must be 1..1000"),
+        LivePlayerbotsValue("City:MaxStartsPerMinute", o => o.City.MaxStartsPerMinute, (o, v) => o.City.MaxStartsPerMinute = v,
+            v => v is >= 1 and <= 600 ? null : "must be 1..600"),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),
