@@ -53,8 +53,9 @@ public sealed class WidowsEmbraceScript : ISpellScript
 /// <summary>
 /// Summon Blizzard (28560), Sapphiron's ground-phase SCRIPT_EFFECT (vmangos Spell::EffectScriptEffect case 28560, SpellEffects.cpp; mangos-classic
 /// boss_sapphiron.cpp SummonBlizzard): each unit the area spell reaches casts Summon Blizzard (28561) on itself, which raises the Blizzard under it.
-/// Limit: vmangos and mangos-classic pass the boss as the original caster so the Blizzard is Sapphiron's summon; <see cref="SpellSystem"/> has no
-/// original-caster seam, so the summon belongs to the unit that stands in it. Reimplemented, no GPL source copied.
+/// vmangos passes the boss as the original caster of the summon spell too, but only mangos-classic notifies that caster: its wild summon tells the boss's AI (<see cref="SapphironAI.OnJustSummoned"/>) and
+/// this follows it (vmangos spawns the Blizzard directly with its own AI). The references differ on Blizzard movement; this matches mangos-classic.
+/// The cast carries the boss as <see cref="SpellCast.OriginalCaster"/>. Reimplemented, no GPL source copied.
 /// </summary>
 [SpellScript(SpellId)]
 public sealed class SapphironSummonBlizzardScript : ISpellScript
@@ -65,7 +66,8 @@ public sealed class SapphironSummonBlizzardScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         if (context.EffectIndex != 0 || context.Effect.Effect != SpellEffectName.ScriptEffect) return;
-        context.System.CastSpell(context.Target, SummonBlizzard, SpellCastTargets.ForSelf(), triggered: true);
+        context.System.CastSpell(context.Target, SummonBlizzard, SpellCastTargets.ForSelf(), triggered: true, triggeringSpell: null,
+            originalCaster: context.Caster);
     }
 }
 

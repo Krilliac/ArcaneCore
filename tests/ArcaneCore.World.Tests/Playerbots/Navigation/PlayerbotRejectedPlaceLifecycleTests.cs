@@ -140,6 +140,65 @@ public sealed class PlayerbotRejectedPlaceLifecycleTests
         Assert.False(crosses, "A teleport drops the remembered places of the place the bot left.");
     }
 
+    /// <summary>
+    /// The refusal in PlayerbotNavigation.Usable: a whole mesh answer whose corner lies at a remembered rejected place is no route (and no verdict
+    /// on the destination: NonPathRefusal), while the same answer is a route once nothing is remembered.
+    /// </summary>
+    [Fact]
+    public async Task Usable_RefusesAMeshAnswerThroughARememberedPlace_AndTakesItOnceItIsForgotten()
+    {
+        (bool refused, bool routeNull, bool nonPath, bool takenAfterForgetting, bool controlWithNoMemory) = await ProbeAsync2(static (host, player, corner) =>
+        {
+            var options = new PlayerbotOptions { Enabled = true };
+            Vector3 destination = corner + new Vector3(30f, 0f, 0f);
+            var path = new PathResult(PathType.Normal, [Start, corner + new Vector3(1f, 1f, 0f), destination]);
+
+            PlayerbotNavigation.NonPathRefusal = false;
+            bool usable = PlayerbotNavigation.Usable(player, path, Start, destination, destination, partial: false, nearestEnd: false, options, out PlayerbotRoute? route);
+            bool nonPathRefusal = PlayerbotNavigation.NonPathRefusal;
+
+            // A path that avoids the remembered corner is a route even with the memory in place.
+            var around = new PathResult(PathType.Normal, [Start, Start + new Vector3(0f, 12f, 0f), destination + new Vector3(0f, 12f, 0f)]);
+            bool control = PlayerbotNavigation.Usable(player, around, Start, around.End, around.End, partial: false, nearestEnd: false, options, out _);
+
+            PlayerbotMotion.ForgetRejections(player);
+            bool after = PlayerbotNavigation.Usable(player, path, Start, destination, destination, partial: false, nearestEnd: false, options, out PlayerbotRoute? taken);
+            return (!usable, route is null, nonPathRefusal, after && taken is not null, control);
+        });
+
+        Assert.True(refused, "Usable must refuse a mesh answer with a corner at a remembered rejected place.");
+        Assert.True(routeNull);
+        Assert.True(nonPath, "The refusal is no verdict on the destination: the route-plan watch must not be charged.");
+        Assert.True(controlWithNoMemory, "A mesh answer that does not cross the remembered place is a route.");
+        Assert.True(takenAfterForgetting, "The same answer is a route once the places are forgotten.");
+    }
+
+    /// <summary><see cref="ProbeAsync"/> with a probe that returns a tuple, run on the world thread with the corner remembered 20 yards east.</summary>
+    private static async Task<(bool, bool, bool, bool, bool)> ProbeAsync2(Func<WorldTestHost, Player, Vector3, (bool, bool, bool, bool, bool)> probe)
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            return await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Relocate(Start.X, Start.Y, Start.Z, 0f, host.World.NowMs);
+                PlayerbotMotion.MotionState state = PlayerbotMotion.Of(player);
+                state.World = session.World;
+                state.RejectionsOn = player.Map;
+                var corner = new Vector3(Start.X + 20f, Start.Y, Floor);
+                state.RejectedPlaces.Add((corner, unchecked(host.World.NowMs + PlayerbotMotion.LoopBlacklistMs)));
+                return probe(host, player, corner);
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
     private static PlayerbotRoute ViaCorner(Vector3 corner)
         => new([Start, corner + new Vector3(1f, 1f, 0f), corner + new Vector3(30f, 0f, 0f)], 50f, navigated: false);
 

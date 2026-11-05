@@ -17,6 +17,7 @@ public sealed class SapphironAI : RaidBossAI
     private uint _airDelay = 46000;
     private int _icebolts;
     private readonly HashSet<ObjectGuid> _iceTargets = [];
+    private const uint BlizzardEntry = 16474;
 
     public SapphironAI(Creature creature) : base(creature, NaxxramasInstance.Sapphiron)
     {
@@ -33,6 +34,17 @@ public sealed class SapphironAI : RaidBossAI
         Cast(19818, Me, triggered: true);
         Cast(28529, Me, triggered: true);
         System?.SetInCombatWithZone(Me);
+    }
+
+    /// <summary>
+    /// mangos-classic boss_sapphiron.cpp JustSummoned: the Blizzard (16474) Summon Blizzard raised under a unit goes for a random player of
+    /// the threat list.
+    /// </summary>
+    public override void OnJustSummoned(Creature summoned)
+    {
+        base.OnJustSummoned(summoned);
+        if (summoned.Entry == BlizzardEntry && SelectRandomAttackingTarget(playerOnly: true) is { } enemy)
+            summoned.AI?.AttackStart(enemy);
     }
 
     protected override void ResetActions()

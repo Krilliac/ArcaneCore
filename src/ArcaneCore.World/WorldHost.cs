@@ -47,6 +47,7 @@ public sealed class WorldHost(
     private volatile bool _standby = workerOptions?.Value is { Enabled: true, Standby: true };
     private Task? _promotion;
     private volatile bool _standbyStarted;
+    private volatile bool _promotionCompleted;
 
     /// <summary>Whether a listener will bind <c>World:Port</c> after this host (test seam); null looks for a registered <see cref="Net.WorldServer"/>.</summary>
     internal bool? ListenerExpected { get; init; }
@@ -85,6 +86,12 @@ public sealed class WorldHost(
     /// included; <see cref="PromoteAsync"/> runs them under the taken-over ownership.
     /// </summary>
     public bool IsStandby => _standby;
+
+    /// <summary>
+    /// True once <see cref="PromoteAsync"/> has finished: the features are attached, the simulation runs and admissions are open. <see cref="IsStandby"/> turns false earlier (at the ownership
+    /// takeover, so Describe reports the promotion at once), but the features the transfer participants are built over are not attached until this is true.
+    /// </summary>
+    public bool PromotionCompleted => _promotionCompleted;
 
     /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
     public Guid Incarnation => _incarnation;
@@ -365,6 +372,7 @@ public sealed class WorldHost(
         // leaves a promoted world that owns the database but does not run: the host is stopped (as for a failed start), never re-opened as a standby.
         await AttachAndStartAsync(cancellationToken).ConfigureAwait(false);
         admission?.Open();
+        _promotionCompleted = true;
     }
 
     /// <summary>

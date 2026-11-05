@@ -131,8 +131,8 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     /// <summary>Most undelivered events kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedEventsPerWorker = 8192;
 
-    /// <summary>Most commands kept while the table is reloaded (<see cref="HoldForReload"/>).</summary>
-    public const int MaxCommandsHeldForReload = 4096;
+    /// <summary>Most commands kept while the table is held (<see cref="HoldForReload"/>): 16384, four workers' full outage backlogs (the routing queue holds 4096 each), because after a takeover the backlogs of several workers land here. Past it the oldest is dropped.</summary>
+    public const int MaxCommandsHeldForReload = 16384;
 
     /// <summary>Encoded size past which <see cref="Drain"/> stops adding events to one reply.</summary>
     public const int MaxDrainBytes = 48 * 1024;
@@ -220,8 +220,8 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
-    /// The table is about to be replaced by a read that is still running: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away. At most
-    /// <see cref="MaxCommandsHeldForReload"/> are kept (the oldest goes first).
+    /// The table is about to be replaced by a read: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away. Idempotent. On a node that
+    /// does not hold the Social lease the table is held from attach, so no command reaches a table that was never loaded. At most <see cref="MaxCommandsHeldForReload"/> are kept (the oldest goes first).
     /// </summary>
     public void HoldForReload()
     {
@@ -266,6 +266,18 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         lock (_gate)
         {
             _heldForReload = null;
+        }
+    }
+
+    /// <summary>The held commands belong to a holding that ended before its table was installed: they are discarded, and the table stays held for the next reload.</summary>
+    public void DiscardHeldCommands()
+    {
+        lock (_gate)
+        {
+            if (_heldForReload is not null)
+            {
+                _heldForReload = [];
+            }
         }
     }
 

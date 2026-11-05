@@ -4550,6 +4550,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         try
         {
             if (_stopping || _detaching || SplitBrainLatched) return;
+            // Hardening: the check above ran before WaitAsync(0), so a whole create that took the slot and released the lock in between would be missed (a create still holding the lock makes WaitAsync(0) fail instead). Look again under the lock.
+            long takenMeanwhile = Volatile.Read(ref _lastProvisionSweepMs);
+            if (takenMeanwhile != long.MinValue && now - takenMeanwhile < ProvisionSweepIntervalMs) return;
             Volatile.Write(ref _lastProvisionSweepMs, now);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);

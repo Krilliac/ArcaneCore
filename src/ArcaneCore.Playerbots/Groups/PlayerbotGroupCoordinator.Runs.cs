@@ -105,6 +105,9 @@ public sealed partial class PlayerbotGroupCoordinator
 
     private Task _encounterLoad = Task.CompletedTask;
 
+    // Cancelled by StopAsync only (a detach keeps a read under way, and so does the re-attach after a failed quiesce).
+    private CancellationTokenSource? _encounterCancel;
+
     /// <summary>The <c>instance_encounter</c> read started by the last attach; completed when it ended (tests wait on it).</summary>
     internal Task EncounterLoading => _encounterLoad;
 
@@ -119,10 +122,12 @@ public sealed partial class PlayerbotGroupCoordinator
         if (EncounterCatalog.IsLoaded || !_encounterLoad.IsCompleted) return;
         if (services.GetService<IServiceScopeFactory>() is not { } scopes) return;
         object? origin = _world?.Identity;
-        _encounterLoad = Task.Run(() => LoadEncountersAsync(scopes, origin));
+        if (_encounterCancel is null || _encounterCancel.IsCancellationRequested) _encounterCancel = new CancellationTokenSource();
+        CancellationToken stop = _encounterCancel.Token;
+        _encounterLoad = Task.Run(() => LoadEncountersAsync(scopes, origin, stop));
     }
 
-    private async Task LoadEncountersAsync(IServiceScopeFactory scopes, object? origin)
+    private async Task LoadEncountersAsync(IServiceScopeFactory scopes, object? origin, CancellationToken stop)
     {
         try
         {
@@ -133,11 +138,15 @@ public sealed partial class PlayerbotGroupCoordinator
                 return;
             }
 
-            IReadOnlyList<InstanceEncounter> rows = await store.LoadAsync().ConfigureAwait(false);
-            if (EncounterCatalog.IsLoaded) return; // a .reload instance_encounter ran while this read was under way: the newer rows win
-            EncounterCatalog.Replace(rows);
+            IReadOnlyList<InstanceEncounter> rows = await store.LoadAsync(stop).ConfigureAwait(false);
+            // A .reload instance_encounter that ran while this read was under way wins: the check and the swap are one step in the catalogue.
+            if (!EncounterCatalog.ReplaceIfNotLoaded(rows)) return;
             if (rows.Count == 0)
                 logger.LogInformation("Playerbot runs: the instance_encounter table is empty (refresh the world database from a classic-db dump); no dungeon or raid runs");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            // The world is stopping: the read was cut short, which is not a fault.
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Items.ItemUse;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 
@@ -67,8 +68,20 @@ public sealed partial class SpellSystem
             }
         }
 
-        // Same bound as the cast path (Cooldowns.cs): a mod result past it cannot wrap the IsStillRunning signed compare.
-        uint recovery = Math.Min((uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)EquipCooldownMs), 0), MaxReasonableCooldownMs);
+        // Same bound as the cast path (SpellSystem.Cooldowns.cs, which also reports it): a mod result or category time past it is reported and
+        // clamped, so it cannot wrap the IsStillRunning signed compare.
+        uint recovery = (uint)Math.Max(ModInt(state.Unit, spell, SpellModOp.Cooldown, (int)EquipCooldownMs), 0);
+        if (recovery > MaxReasonableCooldownMs || (spell.Category != 0 && spell.CategoryRecoveryTime > MaxReasonableCooldownMs))
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "cooldown-invalid",
+                FormatSpellSubject(spell.Id),
+                $"unit={FormatUnitSubject(state.Unit)} equipRecoveryMs={recovery} categoryRecoveryMs={spell.CategoryRecoveryTime}",
+                AnomalySeverity.Warning);
+        }
+
+        recovery = Math.Min(recovery, MaxReasonableCooldownMs);
         if (recovery > 0)
         {
             state.SpellCooldowns[spell.Id] = now + recovery;

@@ -45,6 +45,13 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     private volatile bool _quiesced;
     private int _loadGeneration;
 
+    // The pool read of the last attach (ends once the result is posted, not once the world applied it): quiesce and stop wait on this,
+    // never on Loading, which stays pending when the world stops.
+    private Task _read = Task.CompletedTask;
+
+    // Cancelled by StopAsync only: a detach (and the re-attach after a failed quiesce) keeps a read that is still under way.
+    private CancellationTokenSource? _readCancel;
+
     /// <summary>The intervals in use.</summary>
     internal EventScenarioTimings Timings { get; } = new();
 
@@ -88,8 +95,12 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         _host = null;
         _catalog = EventScenarioCatalog.Empty;
         _content = GameEventPlayerbotContent.Empty;
+
+        // A read still under way (the host re-attaches after a quiesce that failed or timed out) is kept, not duplicated: it applies its
+        // rows to this attach, which is why the posted result looks the feature's current world and bag up instead of capturing them.
+        if (!_read.IsCompleted) return;
+
         Loading = Task.CompletedTask;
-        _read = Task.CompletedTask;
         int generation = Interlocked.Increment(ref _loadGeneration); // a read still running for an earlier attach is ignored when it ends
         if (services.GetService<IOptions<PlayerbotOptions>>()?.Value is not { Enabled: true }) return;
         if (ContentSource is { } source)
@@ -104,12 +115,10 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
         // live world included) never waits on the database. Until then the scenario set is empty and nothing listens or ticks.
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Loading = done.Task;
-        _read = Task.Run(() => LoadAsync(world, subscriptions, scopes, generation, done));
+        if (_readCancel is null || _readCancel.IsCancellationRequested) _readCancel = new CancellationTokenSource();
+        CancellationToken stop = _readCancel.Token;
+        _read = Task.Run(() => LoadAsync(world, scopes, generation, done, stop));
     }
-
-    // The pool read of the last attach (ends once the result is posted, not once the world applied it): quiesce waits on this, never on
-    // Loading, which stays pending when the world stops.
-    private Task _read = Task.CompletedTask;
 
     /// <summary>World thread: take <paramref name="content"/> and, when it has rows, start listening and ticking.</summary>
     private void ApplyContent(WorldRuntime world, FeatureSubscriptions subscriptions, GameEventPlayerbotContent content)
@@ -136,7 +145,12 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
 
     public void Detach(FeatureHandover handover) => Release();
 
-    public Task StopAsync()
+    /// <summary>
+    /// The world is stopping: cancel a table read still under way and wait for it, so no code of this feature runs on the pool after the
+    /// service provider is disposed (a late read would fault on the disposed scope factory). The wait is bounded, so a store that ignores
+    /// its token cannot hold the shutdown.
+    /// </summary>
+    public async Task StopAsync()
     {
         try
         {
@@ -147,8 +161,32 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
             Release();
         }
 
-        return Task.CompletedTask;
+        CancellationTokenSource? cancel = _readCancel;
+        if (cancel is null) return;
+        try
+        {
+            await cancel.CancelAsync().ConfigureAwait(false);
+            await _read.WaitAsync(StopWait).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("Bot event scenarios: the table read did not end within {Seconds} s of the stop", StopWait.TotalSeconds);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogWarning(ex, "Bot event scenarios: the table read ended with {Type} at the stop", ex.GetType().Name);
+        }
+        finally
+        {
+            if (_read.IsCompleted)
+            {
+                cancel.Dispose();
+                if (ReferenceEquals(_readCancel, cancel)) _readCancel = null;
+            }
+        }
     }
+
+    private static readonly TimeSpan StopWait = TimeSpan.FromSeconds(10);
 
     /// <summary>Forget the world. The subscription bag removes the listener and the tick; bots, posts and a siege are left as they are.</summary>
     private void Release()
@@ -163,10 +201,11 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
     }
 
     /// <summary>
-    /// Thread pool: read the four tables, then post the result to the world thread (<see cref="ApplyContent"/>). A read that fails is an
-    /// empty scenario set, logged. A result that arrives after a detach or a newer attach is dropped.
+    /// Thread pool: read the four tables, then post the result to the world thread (<see cref="ApplyContent"/>), which applies it to the
+    /// feature's current attach. A read that fails is an empty scenario set, logged. A result that arrives after a detach (with no attach
+    /// since) or a newer read is dropped; a read cut short by <see cref="StopAsync"/> is not a fault.
     /// </summary>
-    private async Task LoadAsync(WorldRuntime world, FeatureSubscriptions subscriptions, IServiceScopeFactory scopes, int generation, TaskCompletionSource done)
+    private async Task LoadAsync(WorldRuntime world, IServiceScopeFactory scopes, int generation, TaskCompletionSource done, CancellationToken stop)
     {
         try
         {
@@ -179,21 +218,25 @@ public sealed class PlayerbotEventScenarioFeature(IServiceProvider services, ILo
                     return;
                 }
 
-                content = await store.LoadAsync().ConfigureAwait(false);
+                content = await store.LoadAsync(stop).ConfigureAwait(false);
             }
 
             world.Post(() =>
             {
                 try
                 {
-                    if (generation == Volatile.Read(ref _loadGeneration) && ReferenceEquals(_world, world) && !subscriptions.IsDisposed)
-                        ApplyContent(world, subscriptions, content);
+                    if (generation == Volatile.Read(ref _loadGeneration) && ReferenceEquals(_world, world) && _subscriptions is { IsDisposed: false } current)
+                        ApplyContent(world, current, content);
                 }
                 finally
                 {
                     done.TrySetResult();
                 }
             });
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            done.TrySetResult(); // the world is stopping: not a fault
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

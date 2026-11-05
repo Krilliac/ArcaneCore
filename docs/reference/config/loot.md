@@ -1,0 +1,26 @@
+# Loot options
+
+15 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `Loot`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `BossRewardDistanceBonus` | float | `150` | a number, '.' is the decimal point | World | start | Extra yards for a world boss victim (vmangos Object.cpp:1494). 0 restores the plain limit. |
+| `DropItemArtifactRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Artifact (World.cpp:503, default 1): the same for artifact quality items. |
+| `DropItemEpicRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Epic (World.cpp:501, default 1): the same for epic (purple) items. |
+| `DropItemLegendaryRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Legendary (World.cpp:502, default 1): the same for legendary (orange) items. |
+| `DropItemNormalRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Normal (World.cpp:498, default 1): the same for common (white) items. |
+| `DropItemPoorRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Poor (World.cpp:497, setConfigPos, default 1): multiplies the chance of an ungrouped loot row whose item is of poor (grey) quality (LootMgr.cpp:33-42 qualityToRate, applied in LootStoreItem::Roll, :256-268: a chance of 100 or more always drops, otherwise `roll_chance_f(chance * rate)`). Grouped rows are not scaled (LootGroup::Roll uses the raw chances, :1056-1086). |
+| `DropItemRareRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Rare (World.cpp:500, default 1): the same for rare (blue) items. |
+| `DropItemReferencedRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Referenced (World.cpp:504, default 1): multiplies the chance of an ungrouped reference row (a negative mincountOrRef) to be processed (LootStoreItem::Roll, LootMgr.cpp:261-262). |
+| `DropItemUncommonRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Item.Uncommon (World.cpp:499, default 1): the same for uncommon (green) items. |
+| `GroupLootDistance` | float | `74` | a number, '.' is the decimal point | World | start | vmangos CONFIG_FLOAT_GROUP_XP_DISTANCE: group members within it share loot and money. |
+| `LootDistance` | float | `5` | a number, '.' is the decimal point | World | start | INTERACTION_DISTANCE: how close a looter must stay to the corpse/chest (plus both radii). |
+| `LootedCorpseDecayRate` | float | `0` | a number, '.' is the decimal point | World | start | vmangos CONFIG_FLOAT_RATE_CORPSE_DECAY_LOOTED (Rate.Corpse.Decay.Looted, mangosd.conf.dist.in:1542; cmangos World.cpp:457 too): a looted-out corpse stays this share of its decay time. The retail default 0 means a third of the creature's respawn delay (Creature.cpp:3369-3370). |
+| `MoneyRate` | float | `1` | a number, '.' is the decimal point | World | start | vmangos Rate.Drop.Money. |
+| `RaidMapsUnlimitedRewardDistance` | bool | `true` | true \| false | World | start | Raid maps have no reward distance limit (vmangos Object.cpp:1482-1483). False applies `GroupLootDistance` there too. |
+| `RollTimeoutMs` | uint | `60000` | a whole number, 0 to 4294967295 | World | start | How long a need/greed roll waits for votes before the players who did not vote count as passed, in milliseconds (vmangos Group.cpp:72 LOOT_ROLL_TIMEOUT, 1 minute; the same value goes into SMSG_LOOT_START_ROLL as the countdown). |

@@ -53,7 +53,7 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
         session.SessionTrace?.Ack(session, player, opcode, ack.Movement.Time, knockback: false);
 
-        // vmangos judges the acknowledged block before relocating (MovementHandler.cpp:489-494); an applied order grants its own flag.
+        // vmangos judges the acknowledged block before relocating (MovementHandler.cpp:603-604); an applied order grants its own flag.
         MovementFlags orderGrant = !ack.Apply ? MovementFlags.None : type switch
         {
             MovementChangeType.WaterWalk => MovementFlags.WaterWalking,
@@ -62,7 +62,7 @@ public sealed class FlagAckHandlers : IOpcodeHandlerGroup
             _ => MovementFlags.None,
         };
         antiCheat?.JudgeAcknowledgedMovement(session, player, opcode, ack.Movement, orderGrant);
-        MovementHandlers.ApplyObserved(session, player, opcode, ack.Movement);
+        MovementHandlers.ApplyObservedAck(session, player, opcode, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);
         MovementControl.ApplyReal(player, type, ack.Apply);

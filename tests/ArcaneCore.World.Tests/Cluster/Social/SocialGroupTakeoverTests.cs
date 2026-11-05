@@ -138,6 +138,40 @@ public sealed class SocialGroupTakeoverTests
     }
 
     [Fact]
+    public async Task The_outage_backlog_of_this_worker_runs_on_the_reloaded_table()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.Rows.Seed(Group(1, 1, 2));
+        rig.Routing.Forward(ConvertToRaid(1)); // worker-b holds: the command waits in the routing queue
+        Assert.Empty(rig.Holder.Groups.Snapshots());
+
+        rig.BlockWorld(); // no tick runs, so no sync starts the read before the backlog has reached the table
+        rig.TakeOver();
+        await rig.Routing.FlushAsync().WaitAsync(Budget);
+        rig.ReleaseWorld();
+        await rig.WaitUntilLoadedAsync();
+        await rig.Persistence.Writes!.FlushAsync();
+
+        Assert.True(Assert.Single(rig.Holder.Groups.Snapshots()).IsRaid);
+        Assert.True(rig.Rows.Group(1)!.IsRaid);
+    }
+
+    [Fact]
+    public async Task A_command_that_reaches_the_table_before_the_first_sync_is_kept()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.Rows.Seed(Group(1, 1, 2));
+
+        rig.TakeOver();
+        rig.Holder.Groups.Execute("worker-c", ConvertToRaid(1)); // a peer's command, before any sync has started the read
+        await rig.WaitUntilLoadedAsync();
+        await rig.Persistence.Writes!.FlushAsync();
+
+        Assert.True(Assert.Single(rig.Holder.Groups.Snapshots()).IsRaid);
+        Assert.True(rig.Rows.Group(1)!.IsRaid);
+    }
+
+    [Fact]
     public async Task A_failed_directory_read_installs_nothing_and_is_tried_again()
     {
         await using Rig rig = await Rig.CreateAsync();
@@ -215,6 +249,7 @@ public sealed class SocialGroupTakeoverTests
     {
         private readonly ManualTimeProvider _time;
         private readonly ServiceProvider _services;
+        private readonly ManualResetEventSlim _worldGate = new(true);
 
         private Rig(ManualTimeProvider time, RealmAuthorityLeaseKeeper keeper, GroupRows rows, IdentityRows characters, CharacterDirectory directory, PresenceHolderService holder, ServiceProvider services)
         {
@@ -235,6 +270,8 @@ public sealed class SocialGroupTakeoverTests
         }
 
         public RealmAuthorityLeaseKeeper Keeper { get; }
+
+        public ClusterGroupRouting Routing => _services.GetRequiredService<ClusterGroupRouting>();
 
         public GroupRows Rows { get; }
 
@@ -279,7 +316,7 @@ public sealed class SocialGroupTakeoverTests
                 .AddSingleton<ICharacterStore>(characters)
                 .AddSingleton(keeper)
                 .AddSingleton(holder)
-                .AddSingleton(new ClusterGroupRouting(holder, "worker-a"))
+                .AddSingleton(new ClusterGroupRouting(new LeaseRoutedPresence(holder, () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null, () => null), "worker-a"))
                 .AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance))
                 .AddSingleton(provider => new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance, services: provider))
                 .BuildServiceProvider();
@@ -310,6 +347,15 @@ public sealed class SocialGroupTakeoverTests
             Assert.True(Keeper.Holds(RealmAuthorityScopes.Social));
         }
 
+        /// <summary>Parks the world thread inside a posted action, so no tick (and no sync) runs until <see cref="ReleaseWorld"/>.</summary>
+        public void BlockWorld()
+        {
+            _worldGate.Reset();
+            World.Post(() => _worldGate.Wait(Budget));
+        }
+
+        public void ReleaseWorld() => _worldGate.Set();
+
         public Task<T> OnWorld<T>(Func<T> action) => World.InvokeAsync(action).WaitAsync(Budget);
 
         public async Task WaitUntilLoadedAsync()
@@ -327,6 +373,7 @@ public sealed class SocialGroupTakeoverTests
 
         public async ValueTask DisposeAsync()
         {
+            _worldGate.Set();
             World.Dispose();
             await Persistence.StopAsync();
             await Social.StopAsync();

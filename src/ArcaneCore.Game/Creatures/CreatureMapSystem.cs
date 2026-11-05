@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells.Rules.CrowdControl;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using GridCoord = ArcaneCore.Game.Maps.Grid.GridCoord;
@@ -34,6 +35,7 @@ namespace ArcaneCore.Game.Creatures;
 /// </para>
 /// Thread affinity: world thread only.
 /// </summary>
+[WorldThreadOnly]
 public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown, ICreatureMover
 {
     private readonly CreatureContent _content;

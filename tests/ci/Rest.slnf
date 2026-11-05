@@ -9,7 +9,8 @@
       "tests/ArcaneCore.Gateway.Tests/ArcaneCore.Gateway.Tests.csproj",
       "tests/ArcaneCore.Atlas.Tests/ArcaneCore.Atlas.Tests.csproj",
       "tests/ArcaneCore.Cluster.E2E.Tests/ArcaneCore.Cluster.E2E.Tests.csproj",
-      "tests/ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj"
+      "tests/ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj",
+      "tests/ArcaneCore.Analyzers.Tests/ArcaneCore.Analyzers.Tests.csproj"
     ]
   }
 }

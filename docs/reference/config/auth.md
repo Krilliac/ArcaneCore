@@ -1,0 +1,31 @@
+# Auth options
+
+15 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `Auth`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `AutocreateAccounts` | bool | `false` | true \| false | Realm | start | WCell-style auto-create-on-login. When enabled, an unknown account whose login proof validates with password == username is created on the spot (see WCell Services/WCell.AuthServer/Authentication.cs). |
+| `BindAddress` | string | `0.0.0.0` | an IPv4 or IPv6 address such as 0.0.0.0, 127.0.0.1 or ::1 (host names are not resolved) | Realm | start | Interface to bind the logon listener to. |
+| `IntegrityHashes` | List<ClientIntegrityHashOptions> | `(empty)` | a list: numbered keys 0, 1, 2, ...; each entry is a group of keys | Realm | start | Known client integrity hashes. A zero hash skips the check for its exact client tuple. |
+| `IpBanCacheSeconds` | int | `60` | a whole number, -2147483648 to 2147483647 | Realm | start | How long the logon daemon keeps its in-memory copy of `ip_banned` before the next logon challenge reloads it, in seconds (realm `RealmIpBanCache`). Default 60, mangosd's BanListReloadTimer (World.cpp:697), whose in-memory IP list this mirrors (AccountMgr.cpp:340-367, 412-417). vmangos realmd reads the table on every challenge (AuthSocket.cpp:338-352); 0 restores that. An IP ban written elsewhere reaches the logon screen within this period; world authentication reads the rows directly and refuses the address at once. An unban written elsewhere also takes up to this period to let the address back in. When the list cannot be loaded, challenges use the single-row read for one period instead (closed only if that read fails too). |
+| `MaxConnections` | int | `0` | a whole number, -2147483648 to 2147483647 | Realm | start | Global cap on simultaneous logon connections; 0 = unlimited (retail, the default). Hardening (no vmangos equivalent). |
+| `MaxConnectionsPerIp` | int | `0` | a whole number, -2147483648 to 2147483647 | Realm | start | Cap per client IP address; 0 = unlimited (retail, the default). Hardening: a retail client holds one connection. |
+| `MaxSessionDurationSeconds` | int | `300` | a whole number, -2147483648 to 2147483647 | Realm | start | Hard cap on one logon connection's lifetime in seconds; 0 disables. vmangos MaxSessionDuration defaults to 300 (realmd.conf.dist.in, AuthSocket.cpp:76-82). |
+| `Port` | int | `3724` | a whole number, -2147483648 to 2147483647 | Realm | start | Logon/realm TCP port. Vanilla default is 3724. |
+| `ReadTimeoutSeconds` | int | `0` | a whole number, -2147483648 to 2147483647 | Realm | start | Longest a client may take to deliver the rest of a packet once its command byte has arrived, in seconds; 0 disables. Hardening (no vmangos equivalent, default 0 = retail): a retail client sends each logon packet in one write. |
+| `StrictUsernameCharset` | bool | `false` | true \| false | Realm | start | Reject account names containing anything but printable ASCII (0x21-0x7E). Hardening: vmangos only escapes the name for SQL. A 1.12 client cannot type other characters. Default off (retail). |
+| `StrictVersionCheck` | bool | `false` | true \| false | Realm | start | vmangos StrictVersionCheck, default false. Enabled checks crc_hash against a configured 20-byte hash for the client build/OS/platform. |
+
+## `Auth:AutoPatch`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `Directory` | string | `patches` | text | Realm | start | The folder patches are read from (vmangos PatchesDir, default "./patches"); relative paths are from the working directory. |
+| `Enabled` | bool | `false` | true \| false | Realm | start | Offer patches at all. Default false: a non-5875 client gets WOW_FAIL_VERSION_INVALID as before. |
+| `FileNamePattern` | string | `{build}{locale}.mpq` | text | Realm | start | The file looked up when no `Patches` entry matches: `{build}` and `{locale}` are replaced (vmangos "%d%s.mpq", e.g. 5464enUS.mpq). Empty disables the fallback so only listed patches are served. |
+| `Patches` | List<AutoPatchEntry> | `(empty)` | a list: numbered keys 0, 1, 2, ...; each entry is a group of keys | Realm | start | Explicit patches, checked first: an exact build and locale, then the same build with an empty (any) locale. |

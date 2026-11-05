@@ -69,7 +69,7 @@ After the two proofs, both directions switch to MAC-protected frames. Each end d
 with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
 direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
 reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
-The gateway contract version is 6 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`) and the peer link protocol version is 2, so a gateway or peer from before this change is
+The gateway contract version is 7 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`; 7 made `Promote` carry the slot the standby takes over and added the `LinkSlot` frame, 33, which names a worker link's slot right after admission) and the peer link protocol version is 2, so a gateway or peer from before this change is
 refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
 (`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
 
@@ -321,7 +321,9 @@ processes with the gateway as the one coordinator (design `_wf/handoff-control-D
 | `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |
 
 Each slot's standby is named on its worker entry: `Gateway:Workers:N:StandbyNodeId` (the standby's `Cluster:Worker:NodeId`, which must differ from
-every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). The reply timeouts are
+every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). Handoff rows name processes;
+transfer rows, bundles and verbs name the slot (`Gateway:Workers:N:NodeId`) whichever process serves it. The gateway tells a process that name: `Promote` does for a standby, and every worker link does
+right after admission (the `LinkSlot` frame), so a promoted process relaunched as active, whose own `Cluster:Worker:NodeId` is still the standby's, runs transfers again once its link is back. The reply timeouts are
 `Gateway:Control:*` and the recovery cadence `Gateway:Handoff:*`. One gateway per realm is the contract: a worker reports how many gateways it has
 admitted and the coordinator refuses to begin when it is more than one. The gateway and every worker must run the same link contract version.
 

@@ -28,6 +28,9 @@ public sealed class LiveFxData
 
     public DbcTable<SpellVisualEffectName>? VisualEffects { get; set; }
 
+    /// <summary>SpellVisual.dbc: read for the channel kit of <c>SMSG_SPELL_UPDATE_CHAIN_TARGETS</c> (not an .fx lookup kind).</summary>
+    public DbcTable<SpellVisualEntry>? Visuals { get; set; }
+
     public DbcTable<WorldStateUIEntry>? WorldStates { get; set; }
 
     /// <summary>The data of <paramref name="world"/> (empty, i.e. unchecked, on first use).</summary>

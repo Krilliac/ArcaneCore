@@ -11,7 +11,8 @@ namespace ArcaneCore.World.Gm.Events;
 /// <summary>
 /// Loads the client tables of <see cref="LiveFxData"/> at startup from <c>World:GmCommands:LiveFxDbcDirectory</c> (the
 /// developer's own build-5875 DBC files; nothing is shipped). Unset: one log line says the ids stay unchecked. Set: each of
-/// SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName and WorldStateUI .dbc found there is
+/// SoundEntries, ZoneMusic, CinematicSequences, SpellVisualKit, SpellVisualEffectName, WorldStateUI and SpellVisual (its channel kits gate
+/// SMSG_SPELL_UPDATE_CHAIN_TARGETS) .dbc found there is
 /// loaded (a missing file is a warning and leaves that kind unchecked; a malformed file or a missing directory stops the
 /// daemon, as every configured DBC does), and every <see cref="LiveFxCommands.Presets"/> sound id is checked against
 /// SoundEntries (a warning names a missing one). Nothing is loaded while <see cref="GmOptions.LiveFx"/> is off.
@@ -43,6 +44,7 @@ public sealed class LiveFxDataFeature(ILogger<LiveFxDataFeature> logger, IConfig
         attached.Cinematics = data.Cinematics;
         attached.VisualKits = data.VisualKits;
         attached.VisualEffects = data.VisualEffects;
+        attached.Visuals = data.Visuals;
         attached.WorldStates = data.WorldStates;
     }
 
@@ -63,6 +65,7 @@ public sealed class LiveFxDataFeature(ILogger<LiveFxDataFeature> logger, IConfig
             Cinematics = Optional(directory, CinematicSequencesDbcReader.FileName, CinematicSequencesDbcReader.Load, logger),
             VisualKits = Optional(directory, SpellVisualKitDbcReader.FileName, SpellVisualKitDbcReader.Load, logger),
             VisualEffects = Optional(directory, SpellVisualEffectNameDbcReader.FileName, SpellVisualEffectNameDbcReader.Load, logger),
+            Visuals = Optional(directory, SpellVisualDbcReader.FileName, SpellVisualDbcReader.Load, logger),
             WorldStates = Optional(directory, WorldStateUIDbcReader.FileName, WorldStateUIDbcReader.Load, logger),
         };
 

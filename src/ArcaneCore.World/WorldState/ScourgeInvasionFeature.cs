@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -420,6 +421,59 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             logger.LogFault("scourge-invasion.stop-necropolis-death", failure, "could not persist Scourge Necropolis death at shutdown");
     }
 
+    private HandoffCapture? _handoffCapture;
+
+    /// <summary>What the world thread held in memory when a handoff froze it: the queued writes and the pending Necropolis deaths.</summary>
+    private sealed record HandoffCapture(StoreOp[] Ops, (uint ZoneId, uint SpawnGuid, int NextAttackSeconds)[] Deaths, InFlightJob? Job);
+
+    /// <summary>The writes the store job in flight took from the queue and its result; world-thread field, cleared when the job's apply or fail step runs.</summary>
+    private sealed record InFlightJob(StoreOp[] Ops, RefreshResult Result);
+
+    private InFlightJob? _inFlightJob;
+
+    /// <summary>
+    /// Copies the queues a store job would write, for <see cref="FlushStateWritesAsync"/>. Called by the handoff source's Park on the world thread, between two ticks, so the queues are quiet and
+    /// the copy is a consistent view. The queues are left as they are: a resumed world launches them as usual.
+    /// </summary>
+    internal void CaptureForHandoff()
+    {
+        if (!_hasStore || _store is null) return;
+        Volatile.Write(ref _handoffCapture, new HandoffCapture(
+            [.. _ops], _pendingDeaths.Select(p => (p.Key.ZoneId, p.Key.SpawnGuid, NextAttackSeconds: p.Value)).ToArray(), _inFlightJob));
+    }
+
+    /// <summary>
+    /// The handoff flush: waits for the store job in flight, then writes the queued writes and Necropolis deaths <see cref="CaptureForHandoff"/> saw, the same writes <see cref="StopAsync"/> makes. None needs the
+    /// world thread (a parked one is the same quiet state a stopped world is in): only the job's apply step does, and durability does not depend on it. A failed job in flight is logged and its
+    /// pending deaths are retried here (they are in the capture), and so are its queued writes the store refused or never reached (kept from <see cref="TryLaunch"/> until the job's apply step).
+    /// A write that failed in a job already applied before the freeze is not owed here: it was logged when it failed. A write that fails here throws, so the flush fails and the handoff aborts; a non-holder of the world-state lease writes nothing (not checked).
+    /// Every store call is idempotent, so a world that resumes after an aborted handoff writes them again. Does nothing when the freeze captured nothing.
+    /// </summary>
+    internal async Task FlushStateWritesAsync()
+    {
+        if (!_hasStore || _store is null || Volatile.Read(ref _handoffCapture) is not { } captured) return;
+        try
+        {
+            await _store.InFlight.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault(LogLevel.Warning, "scourge-invasion.flush-inflight", ex, "the Scourge invasion store job in flight at the handoff flush failed; its pending deaths are retried");
+        }
+
+        // The job in flight swallows a refused write (logged, kept in FailedOps) and takes its ops out of the queue, so the capture's Ops do not hold them. A job that ended before it
+        // attempted every write (it faulted or was cancelled) gets all of its ops written again; every store call is idempotent.
+        StoreOp[] inFlightRetry = captured.Job is null ? [] : captured.Job.Result.OpsFinished ? [.. captured.Job.Result.FailedOps] : captured.Job.Ops;
+        StoreOp[] ops = [.. inFlightRetry, .. captured.Ops];
+        if (ops.Length == 0 && captured.Deaths.Length == 0) return;
+        var result = new RefreshResult();
+        await RunStoreAsync(ops, captured.Deaths, full: false, NowUnix(), [], result).ConfigureAwait(false);
+        List<Exception> failures = [.. result.OpFailures];
+        if (result.DeathFailure is { } deathFailure) failures.Add(deathFailure);
+        if (failures.Count == 1) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1) throw new AggregateException(failures);
+    }
+
     private void Enqueue(StoreOp op)
     {
         _ops.Add(op);
@@ -445,6 +499,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     {
         public readonly List<(uint ZoneId, uint SpawnGuid)> FlushedDeaths = [];
         public Exception? DeathFailure;
+        /// <summary>Queued writes the store refused (logged by the job; the handoff flush fails on them).</summary>
+        public readonly List<Exception> OpFailures = [];
+        /// <summary>The queued writes behind <see cref="OpFailures"/>, so a handoff flush can write them again.</summary>
+        public readonly List<StoreOp> FailedOps = [];
+        /// <summary>Every queued write was attempted (set after the loop); false when the job ended before it got that far.</summary>
+        public volatile bool OpsFinished;
         public ScourgeInvasionSnapshot? Snapshot;
         public readonly List<(ScourgeCityAttack City, int SpawnIndex, uint Entry)> Claims = [];
     }
@@ -470,10 +530,17 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             ? ScourgeInvasionCatalog.Cities.Where(c => Creatures(c.MapId) is not null).Select(c => c.ZoneId).ToHashSet()
             : [];
         var result = new RefreshResult();
+        // The job's ops left _ops above: keep them (until its apply or fail step runs) so a handoff freeze can still write what the job did not.
+        _inFlightJob = new InFlightJob(ops, result);
         _store.TryRun(() => RunStoreAsync(ops, deaths, full, now, summonable, result),
-            () => ApplyRefresh(result, full, syncEvents: full || deaths.Length > 0),
+            () =>
+            {
+                _inFlightJob = null;
+                ApplyRefresh(result, full, syncEvents: full || deaths.Length > 0);
+            },
             ex =>
             {
+                _inFlightJob = null;
                 foreach ((uint, uint) done in result.FlushedDeaths) _pendingDeaths.Remove(done);
                 FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
@@ -497,6 +564,8 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                result.OpFailures.Add(ex);
+                result.FailedOps.Add(op);
                 FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", $"scourge-invasion zone {op.Zone}", $"store-op error={ex.GetType().Name}: {ex.Message}");
 #pragma warning disable CA2254 // each StoreOp carries a constant template
@@ -504,6 +573,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
 #pragma warning restore CA2254
             }
         }
+        result.OpsFinished = true;
         try
         {
             foreach ((uint zone, uint guid, int next) in mayWrite ? deaths : [])

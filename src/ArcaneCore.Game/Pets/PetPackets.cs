@@ -237,6 +237,17 @@ public static class PetPackets
         return w.ToArray();
     }
 
+    /// <summary>SMSG_PET_DISMISS_SOUND: u32 sound id, float x, y, z (mangos-classic Unit::SendPetDismiss, Unit.cpp:9898-9903).</summary>
+    public static byte[] BuildDismissSound(uint soundId, float x, float y, float z)
+    {
+        var w = new PacketWriter(16);
+        w.WriteUInt32(soundId);
+        w.WriteSingle(x);
+        w.WriteSingle(y);
+        w.WriteSingle(z);
+        return w.ToArray();
+    }
+
     /// <summary>SMSG_AI_REACTION: u64 guid, u32 reaction (2 = AI_REACTION_HOSTILE, which plays the aggro sound).</summary>
     public static byte[] BuildAiReaction(ObjectGuid unit, uint reaction = 2)
     {

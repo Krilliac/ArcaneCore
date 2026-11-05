@@ -276,14 +276,24 @@ public sealed class WorldHandoffHostingTests
     }
 
     [Fact]
-    public void NotWorkerMode_OrAStandbyProcess_RegistersNothing()
+    public void NotWorkerMode_RegistersNothing()
     {
-        foreach (IConfiguration configuration in new[] { Configuration(workerEnabled: false), Configuration(standby: true) })
-        {
-            var services = new ServiceCollection();
-            services.AddWorldHandoff(configuration);
-            Assert.Empty(services);
-        }
+        var services = new ServiceCollection();
+        services.AddWorldHandoff(Configuration(workerEnabled: false));
+        Assert.Empty(services);
+    }
+
+    [Fact]
+    public void AStandbyProcess_RegistersTheSourceOnly()
+    {
+        var services = new ServiceCollection();
+        services.AddWorldHandoff(Configuration(standby: true));
+
+        Assert.Contains(services, d => d.ServiceType == typeof(IWorldHandoffSource));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(WorldHandoffCoordinatorProvider));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(WorldHandoffInFlight));
+        Assert.DoesNotContain(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService));
+        Assert.Single(services);
     }
 
     [Fact]

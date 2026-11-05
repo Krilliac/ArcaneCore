@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Persistence;
 /// Every write sets one absolute value for its key, so a newer write for a key that is still waiting replaces the older
 /// one. A write that fails all <c>MaxAttempts</c> attempts is RETAINED, never dropped: the next write of the key, the
 /// periodic retry (<see cref="RetainedRetryInterval"/>), <see cref="RetryRetainedAsync"/> and <see cref="StopAsync"/> (a
-/// final retry that throws if storage is still failing) all carry it. <see cref="FlushAsync"/> is a pure ordered barrier
+/// final retry that throws if storage is still failing) all carry it; the one exception is a key refused for the realm lease, which a <see cref="RetryRetainedAsync"/> call leaves to the periodic retry and the stop. <see cref="FlushAsync"/> is a pure ordered barrier
 /// that never retries and never throws. Retention is in process only. Without a registered <typeparamref name="TStore"/> a
 /// write is a no-op (the feature then lives in memory only).
 /// <para>
@@ -159,7 +159,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         return _channel.Writer.TryWrite(new Work(string.Empty, Kind.Barrier, done)) ? done.Task : Task.CompletedTask;
     }
 
-    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable, except a key whose failure is <see cref="RealmLeaseNotHeldException"/>: that refusal is not checked here. For a group the lease holder owns the data; a GM ticket taken on a non-holder is not durable, is not seen by another node, and is only named at stop (unless this node takes the lease over: <see cref="Gm.Audit.GmAuditFeature"/> then runs the change again itself, this queue never lands it).</summary>
+    /// <summary>After every earlier write, retry each retained write once more; faults while any is still not durable, except a key whose failure is <see cref="RealmLeaseNotHeldException"/>: that refusal is not checked here and its write is not re-run by this call either (the periodic retry and <see cref="StopAsync"/> still retry it). That holds even for a key refused during a lease gap on a node that has since regained the lease: the flush does not land it, the periodic retry does within <see cref="RetainedRetryInterval"/>, and a write the takeover fences in between is refused after the seal. A periodic retry already queued ahead of the flush's own retry runs its keys, lease-refused ones included, for <c>MaxAttempts</c> each on the one consumer before it, which can use up part of the flush's shared budget. For a group the lease holder owns the data; a GM ticket taken on a non-holder is not durable, is not seen by another node, and is only named at stop (unless this node takes the lease over: <see cref="Gm.Audit.GmAuditFeature"/> then runs the change again itself, this queue never lands it).</summary>
     public Task RetryRetainedAsync()
     {
         if (_consumer is null || _stopped)
@@ -235,24 +235,23 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
     /// The retained keys a retry can still owe: those a store refused because this node does not hold the realm lease for them (<see cref="RealmLeaseNotHeldException"/>) are left out. The
     /// key stays retained (the periodic retry lands it if the lease comes back, unless the write refuses itself as a held GM ticket write does, and stop still names it), but a handoff flush must not be refused by it. This is not a durability promise: for a group the holder owns the data, but a GM ticket saved on a non-holder reaches no holder, so it is not durable and the flush does not report it.
     /// </summary>
-    private string[] OwedKeys()
-    {
-        lock (_gate)
-        {
-            return [.. _keys.Where(k => k.Value.Failure is not null and not RealmLeaseNotHeldException).Select(k => k.Key).Order(StringComparer.Ordinal)];
-        }
-    }
+    private string[] OwedKeys() => OwedKeysAndFirstFailure().Keys;
 
     private Task RetainedFailureTask()
     {
-        string[] failed = OwedKeys();
-        Exception? first;
+        // One look under the gate: a key cannot leave the table between naming it and reading its failure (a write that lands removes the entry).
+        (string[] failed, Exception? first) = OwedKeysAndFirstFailure();
+        return failed.Length == 0 ? Task.CompletedTask : Task.FromException(NotDurable(failed, first));
+    }
+
+    /// <summary>The <see cref="OwedKeys"/> and the failure of the first of them, read together under one hold of the gate.</summary>
+    private (string[] Keys, Exception? First) OwedKeysAndFirstFailure()
+    {
         lock (_gate)
         {
-            first = failed.Length > 0 ? _keys[failed[0]].Failure : null;
+            KeyValuePair<string, Unsaved>[] owed = [.. _keys.Where(k => k.Value.Failure is not null and not RealmLeaseNotHeldException).OrderBy(k => k.Key, StringComparer.Ordinal)];
+            return ([.. owed.Select(k => k.Key)], owed.Length > 0 ? owed[0].Value.Failure : null);
         }
-
-        return failed.Length == 0 ? Task.CompletedTask : Task.FromException(NotDurable(failed, first));
     }
 
     private InvalidOperationException NotDurable(IReadOnlyList<string> keys, Exception? failure)
@@ -312,24 +311,21 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
 
                         break;
                     case Kind.RetryRetained:
-                        foreach (string key in RetainedKeys)
+                        // A flush's retry (it carries a completion) skips the keys a store refused for the realm lease: the flush does not check them (OwedKeys), so
+                        // re-running them (MaxAttempts, RetryDelay each) would spend the handoff's one shared budget on writes it never reports. The periodic retry and the stop
+                        // (no completion) still retry every retained key, so a regained lease lands them.
+                        foreach (string key in work.Done is null ? RetainedKeys : OwedKeys())
                         {
                             await ExecuteAsync(key, onlyIfFailed: true, clearQueued: false).ConfigureAwait(false);
                         }
 
-                        string[] failed = OwedKeys();
+                        (string[] failed, Exception? first) = OwedKeysAndFirstFailure();
                         if (failed.Length == 0)
                         {
                             work.Done?.TrySetResult();
                         }
                         else
                         {
-                            Exception? first;
-                            lock (_gate)
-                            {
-                                first = _keys.TryGetValue(failed[0], out Unsaved? unsaved) ? unsaved.Failure : null;
-                            }
-
                             work.Done?.TrySetException(NotDurable(failed, first));
                         }
 

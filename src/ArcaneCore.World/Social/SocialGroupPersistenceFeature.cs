@@ -56,7 +56,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     /// <summary>The write queue (exposed for health reporting and tests); null without a store.</summary>
     public KeyedStoreWriteQueue<IGroupStore>? Writes { get; private set; }
 
-    /// <summary>World thread: whether the authority table here is the one read from storage for this holding of the Social lease.</summary>
+    /// <summary>World thread: whether the authority table here is the one read from storage for this holding of the Social lease. The table is held from attach until the install, so no command reaches an unloaded table.</summary>
     internal bool AuthorityLoaded => _holding;
 
     /// <summary>What the start restored and dropped; null before attach or without a store.</summary>
@@ -94,10 +94,16 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
         if (_authority is not null)
         {
+            _authority.HoldForReload();
             _holding = HoldsSocial();
             if (_holding)
             {
                 Restored = _authority.Restore(stored, _characters);
+                int failedHeld = _authority.ReleaseHeldCommands();
+                if (failedHeld > 0)
+                {
+                    _logger.LogInformation("Social group table installed at attach: {Failed} held commands failed", failedHeld);
+                }
             }
             else
             {
@@ -157,7 +163,10 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         await Writes.StopAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Compare and write now (tests; the world tick does it once per second).</summary>
+    /// <summary>
+    /// Compare and write now: the world tick does it once per second, and a handoff's freeze (<see cref="Cluster.Handoff.LocalWorldHandoffSource"/>) does it on the simulation thread as it parks, so a group change
+    /// made in the last second before the freeze is queued, and then drained by the flush, instead of being in no queue at all. World thread only (tests use it through the world thread too).
+    /// </summary>
     public void SyncNow() => Sync();
 
     private void OnUpdated(uint diffMs)
@@ -184,7 +193,12 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         {
             if (!HoldsSocial())
             {
-                _holding = false; // another node owns the table now; it writes
+                if (_holding)
+                {
+                    _holding = false; // another node owns the table now; it writes
+                    authority.HoldForReload(); // and what reaches this table waits for the next install
+                }
+
                 return;
             }
 
@@ -233,7 +247,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
     /// <summary>
     /// World thread. The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover continues from storage. The read runs off
-    /// the world thread, nothing is written until it is installed, and commands that reach the table meanwhile wait in it. A failed read is tried again a second later.
+    /// the world thread, nothing is written until it is installed, and commands that reach the table meanwhile wait in it. The table is held from attach until the install (also on a node that never held the lease), so no command reaches an unloaded table. A failed read is tried again a second later.
     /// </summary>
     private void ReloadAuthority(GroupAuthority authority)
     {
@@ -291,7 +305,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
         if (SocialToken() != token)
         {
-            authority.DropHeldCommands();
+            authority.DiscardHeldCommands(); // DropHeldCommands would reopen a table that was never loaded
             return;
         }
 

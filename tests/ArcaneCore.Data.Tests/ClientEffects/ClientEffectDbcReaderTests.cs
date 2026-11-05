@@ -66,6 +66,23 @@ public sealed class ClientEffectDbcReaderTests
     }
 
     [Fact]
+    public void SpellVisual_DecodesTheChannelKitColumn_AndRefusesAnotherLayout()
+    {
+        // vmangos SpellVisualEntry: id 0, precast 1, cast 2, impact 3, state 4, channel 5 (16 fields).
+        var visual = new object?[16];
+        visual[0] = 7u;
+        visual[1] = 11; // precast kit, not the channel kit
+        visual[5] = 42;
+        var none = new object?[16];
+        none[0] = 8u;
+        none[5] = -1;
+        DbcTable<SpellVisualEntry> table = SpellVisualDbcReader.Read(DbcFile.Parse(Image(16, visual, none)));
+        Assert.Equal(new SpellVisualEntry(7, 42), table.Find(7));
+        Assert.Equal(new SpellVisualEntry(8, 0), table.Find(8));
+        Assert.Throws<InvalidDataException>(() => SpellVisualDbcReader.Read(DbcFile.Parse(Image(15, new object?[15]))));
+    }
+
+    [Fact]
     public void WorldStateUI_DecodesTheEnUsStringsAndTheStateVariable()
     {
         var row = new object?[39];

@@ -41,8 +41,11 @@ public sealed partial class TargetFrameworkHygieneTests
                         && !f.Contains($"{sep}artifacts{sep}", StringComparison.Ordinal))];
         Assert.True(projects.Length > 10, $"only {projects.Length} csproj files were found");
 
+        // src/ArcaneCore.Analyzers is loaded inside the compiler, which only accepts netstandard2.0; it can never follow the central value.
+        const string AnalyzerProject = "src/ArcaneCore.Analyzers/ArcaneCore.Analyzers.csproj";
         string[] wrong = [.. projects
             .Select(f => (File: Path.GetRelativePath(root, f).Replace('\\', '/'), Value: Declared(File.ReadAllText(f))))
+            .Where(p => p.File != AnalyzerProject)
             .Where(p => p.Value is not null && p.Value != central)
             .Select(p => $"{p.File}: {p.Value}")];
         Assert.True(wrong.Length == 0, $"csproj-local TargetFramework differs from Directory.Build.props ({central}):\n  " + string.Join("\n  ", wrong));

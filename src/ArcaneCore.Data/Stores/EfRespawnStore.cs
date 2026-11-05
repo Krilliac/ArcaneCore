@@ -23,8 +23,8 @@ public interface IRespawnRow
 /// <summary>
 /// EF Core implementation of <see cref="IRespawnStore{TRecord, TKey}"/> over the characters database, shared by the creature and game object tables
 /// (<typeparamref name="TRow"/> names the table). Meant for one writer at a time (the world's
-/// respawn queue): an upsert reads the key and updates or inserts it, so two concurrent writers of one key could both insert. Every write is one
-/// transaction; nothing here relies on advisory locks or the case of an identifier. On SQLite the upsert is one
+/// respawn queue): an upsert reads the key and updates or inserts it, so two concurrent writers of one key could both insert. A write is one
+/// transaction per chunk of 500 keys of one instance (deletes first, then upserts), not one for the whole call; nothing here relies on advisory locks or the case of an identifier. On SQLite the upsert is one
 /// <c>INSERT ... ON CONFLICT DO UPDATE</c> per row (<see cref="SqliteRowCommand"/>); other providers read, then update or insert. Queries address columns
 /// through <c>EF.Property</c> by the <see cref="IRespawnRow"/> names, so they translate for any row type of the model.
 /// </summary>

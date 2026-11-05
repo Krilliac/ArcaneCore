@@ -99,7 +99,33 @@ public sealed class CharacterWriteSweepTests
     }
 
     /// <summary>A synchronous <c>SaveChanges(</c> or <c>Database.BeginTransaction(</c> (the async forms end in <c>Async(</c> and do not match).</summary>
-    private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\.BeginTransaction)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex SyncWrite = new(@"(?<![\w])(SaveChanges|Database\s*\.\s*BeginTransaction)\s*\(", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Zero-based line numbers of the synchronous write calls in <paramref name="text"/>. Matched on the whole text, so a call split across lines
+    /// ("SaveChanges" then "(", or "Database" then ".BeginTransaction(") is found; a hit is attributed to the line its name starts on and skipped
+    /// when that line is a comment. Limit: the sweep only reads files whose text contains <c>CharacterDbContext</c>, so a file that reaches a characters
+    /// context some other way (a generic or a base type) is not scanned. The set-based sweep above is line-based and this sweep is whole-text; the file filter limits both.
+    /// </summary>
+    private static IReadOnlyList<int> FindSyncWriteLines(string text)
+    {
+        string[] lines = text.Split('\n');
+        var hitLines = new SortedSet<int>();
+        foreach (Match hit in SyncWrite.Matches(text))
+        {
+            int line = 0;
+            for (int c = 0; c < hit.Index; c++)
+            {
+                if (text[c] == '\n')
+                    line++;
+            }
+
+            if (!lines[line].TrimStart().StartsWith("//", StringComparison.Ordinal))
+                hitLines.Add(line);
+        }
+
+        return hitLines.ToList();
+    }
 
     /// <summary>"relative/path.cs::Member" -> why a synchronous transaction there is correct.</summary>
     private static readonly Dictionary<string, string> SyncExemptions = new(StringComparer.Ordinal)
@@ -124,11 +150,8 @@ public sealed class CharacterWriteSweepTests
             files++;
             string relative = Path.GetRelativePath(src, file).Replace('\\', '/');
             string[] lines = text.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
+            foreach (int i in FindSyncWriteLines(text))
             {
-                string trimmed = lines[i].TrimStart();
-                if (!SyncWrite.IsMatch(lines[i]) || trimmed.StartsWith("//", StringComparison.Ordinal))
-                    continue;
                 (string member, int start, int end) = EnclosingMember(lines, i);
                 string body = string.Join('\n', lines[start..end]);
                 if (SyncExemptions.ContainsKey($"{relative}::{member}"))
@@ -156,10 +179,42 @@ public sealed class CharacterWriteSweepTests
     }
 
     [Fact]
+    public void TheSynchronousWritePattern_FindsACallSplitAcrossTwoLines()
+    {
+        Assert.Matches(SyncWrite, "        db.SaveChanges\n            ();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database.BeginTransaction\r\n            ();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database\n            .BeginTransaction();");
+        Assert.Matches(SyncWrite, "        using var t = db.Database.\n            BeginTransaction();");
+    }
+
+    [Fact]
+    public void FindSyncWriteLines_AttributesASplitCallToItsFirstLine_AndSkipsAComment()
+    {
+        string split = "class C\n{\n    void M(Db db)\n    {\n        using var t = db.Database\n            .BeginTransaction();\n        db.SaveChanges\n            ();\n    }\n}";
+        Assert.Equal(new[] { 4, 6 }, FindSyncWriteLines(split));
+
+        string commented = "    void M(Db db)\n    {\n        // db.SaveChanges();\n        db.SaveChanges();\n    }";
+        Assert.Equal(new[] { 3 }, FindSyncWriteLines(commented));
+
+        Assert.Empty(FindSyncWriteLines("        await db.SaveChangesAsync(ct);\n        // db.Database.BeginTransaction();"));
+    }
+
+    [Fact]
     public void EveryExemption_NamesAFileThatStillExists()
     {
         string root = RepositorySource.FindRoot() ?? throw new InvalidOperationException("repository root not found");
         string src = Path.Combine(root, "src");
+        foreach (string key in SyncExemptions.Keys)
+        {
+            int cut = key.IndexOf("::", StringComparison.Ordinal);
+            Assert.True(cut > 0, $"synchronous exemption {key} must be file::Member");
+            string file = Path.Combine(src, key[..cut]);
+            Assert.True(File.Exists(file), $"stale synchronous exemption {key}: the file is gone");
+            string member = key[(cut + 2)..];
+            Assert.True(Regex.IsMatch(File.ReadAllText(file), $@"\b(?:private|internal|public|protected)\b[^;(=]*\b{Regex.Escape(member)}\s*\("),
+                $"stale synchronous exemption {key}: the member is gone from the file");
+        }
+
         foreach (string key in Exemptions.Keys)
         {
             int cut = key.IndexOf("::", StringComparison.Ordinal);
