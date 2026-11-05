@@ -59,6 +59,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
     private readonly HashSet<int> _exhaustedReported = []; // under _gate: characters whose retry-exhausted episode was already reported; cleared when the snapshot is written or discarded
     private readonly HashSet<int> _held = [];
     private readonly HashSet<int> _quarantined = [];
+    private readonly HashSet<int> _retired = []; // characters RetireCharacters gave to another world (guarded by _gate); a fence refusal of one of them is expected, never a terminal failure
     private readonly HashSet<int> _quarantineAnnounced = []; // quarantined characters whose first refused snapshot was announced (guarded by _gate)
     private readonly Dictionary<int, Slot> _slots = [];
     private readonly Queue<int> _priorityHints = new();
@@ -350,6 +351,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
                 characters++;
                 _quarantineAnnounced.Add(id); // the refused snapshots of a retired character are expected: nothing to tell the staff
+                _retired.Add(id);
                 bool waiting = _slots.TryGetValue(id, out Slot? slot) && slot.State is not null; // dropped by the consumer when it reaches the slot
                 bool retained = _failed.Remove(id);
                 _exhaustedReported.Remove(id);
@@ -380,9 +382,22 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         {
             _held.Remove(characterId);
             _quarantined.Remove(characterId);
+            _retired.Remove(characterId);
             _quarantineAnnounced.Remove(characterId);
             _failed.Remove(characterId);
             _exhaustedReported.Remove(characterId);
+        }
+    }
+
+    /// <summary>
+    /// The characters that have a retained (failed, not yet written) snapshot. A handoff's retirement names these too: a character that is offline here but whose last save failed
+    /// is not among the frozen online players, yet its retry would be refused by the characters fence once another world owns the shard. Any thread.
+    /// </summary>
+    public int[] RetainedCharacterIds()
+    {
+        lock (_gate)
+        {
+            return [.. _failed.Keys];
         }
     }
 
@@ -391,6 +406,14 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         lock (_gate)
         {
             return _held.Contains(characterId);
+        }
+    }
+
+    private bool IsRetired(int characterId)
+    {
+        lock (_gate)
+        {
+            return _retired.Contains(characterId);
         }
     }
 
@@ -862,6 +885,23 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 }
 
                 _logger.LogWarning("character {Id} snapshot dropped: {Reason}", state.Id, ex.Message);
+                if (trustedSettlement)
+                {
+                    throw; // a settlement is never told it was saved when nothing was written
+                }
+
+                return false;
+            }
+            catch (CharacterOwnershipRejectedException ex) when (IsRetired(state.Id))
+            {
+                // The write was already in flight when the handoff retired this character: the fence refusing it is the expected end, not a queue fault.
+                lock (_gate)
+                {
+                    _failed.Remove(state.Id);
+                    _exhaustedReported.Remove(state.Id);
+                }
+
+                _logger.LogInformation("character {Id} snapshot dropped: the character belongs to another world after the handoff ({Reason})", state.Id, ex.Message);
                 if (trustedSettlement)
                 {
                     throw; // a settlement is never told it was saved when nothing was written

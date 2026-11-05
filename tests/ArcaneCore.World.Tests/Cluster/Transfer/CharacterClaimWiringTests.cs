@@ -14,7 +14,9 @@ using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Honor;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -54,6 +56,47 @@ public sealed class CharacterClaimWiringTests
         await client.DisposeAsync(); // logout
         await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)id) is null, "the claim is released after the logout save");
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+    }
+
+    [Fact]
+    public async Task ADisconnect_AfterTryBeginLogin_BeforeEnterWorldRuns_ReleasesTheLoginsClaim_AndFaultsNothing()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        await using WorldTestHost host = rig.StartWorld(a);
+        (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE9", "Vanisher");
+
+        using var gate = new ManualResetEventSlim(false);
+        using var blocked = new ManualResetEventSlim(false);
+        try
+        {
+            // The world thread is held, so the login's EnterWorld command queues behind this one and cannot run yet.
+            host.World.Post(() =>
+            {
+                blocked.Set();
+                gate.Wait(TimeSpan.FromSeconds(30));
+            });
+            Assert.True(blocked.Wait(TimeSpan.FromSeconds(10)), "the world thread never reached the blocking command");
+
+            var login = new PacketWriter(8);
+            login.WriteUInt64((ulong)id);
+            await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+            await WorldTestHost.WaitForAsync(() => host.Registry.Sessions.Any(s => s.State == SessionState.LoggingIn), "the session to pass TryBeginLogin");
+            WorldSession session = host.Registry.Sessions.Single();
+            Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id)); // the login claimed the character before it was attached
+
+            await client.DisposeAsync(); // the disconnect lands between TryBeginLogin and EnterWorld
+            await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session to close");
+        }
+        finally
+        {
+            gate.Set();
+        }
+
+        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)id) is null, "the unentered login's claim to be released");
+        Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+        Assert.Empty(host.SessionFaults);
     }
 
     [Fact]

@@ -919,16 +919,40 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Never leave a session "in world" with a player that is in the registry but will never reach a map: undo the registration and kick.
-            FaultLedger.Shared.Record("cluster.transfer-target", ex);
-            claims?.AbandonTicket(characterId, claimTicket);
-            teleports.Forget(shadow);
-            _world.DetachPlayerForTransfer(shadow);
-            shadow.Session.Kick("transfer target could not start the arrival");
+            // Each undo step is guarded on its own, so a second failure cannot skip the ones after it (above all the detach, which unregisters the player).
+            // A session that closed since the probe (its scope disposed) is the client leaving, not a fault: it is logged, not recorded.
+            if (ex is ObjectDisposedException)
+            {
+                _logger.LogInformation("Transfer {TransferId}: the client of character {Character} closed while its arrival started", slot.TransferId, bundle.CharacterGuid);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("cluster.transfer-target", ex);
+            }
+
+            UndoStep(() => claims?.AbandonTicket(characterId, claimTicket), slot, "abandon the claim ticket");
+            UndoStep(() => teleports.Forget(shadow), slot, "forget the teleport");
+            UndoStep(() => _world.DetachPlayerForTransfer(shadow), slot, "detach the player");
+            UndoStep(() => shadow.Session.Kick("transfer target could not start the arrival"), slot, "kick the session");
             throw;
         }
 
         Finish(slot);
         return false;
+    }
+
+    /// <summary>One step of a failed arrival's undo: a failure is logged and recorded, never thrown, so the remaining steps still run. World thread.</summary>
+    private void UndoStep(Action step, Slot slot, string what)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-undo", ex);
+            _logger.LogError(ex, "Transfer {TransferId}: failed to {Step} while undoing a failed arrival", slot.TransferId, what);
+        }
     }
 
     /// <summary>

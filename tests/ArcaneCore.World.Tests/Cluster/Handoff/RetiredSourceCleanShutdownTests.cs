@@ -49,6 +49,28 @@ public sealed class RetiredSourceCleanShutdownTests
     }
 
     [Fact]
+    public async Task ASaveInFlightWhenTheCharacterIsRetired_IsDroppedNotTerminal_WhenTheFenceRefusesIt()
+    {
+        var store = new FencedStore(moved: 1);
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
+        var logger = new CaptureLogger();
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        Exception? fatal = null;
+        queue.FatalFailure += ex => fatal = ex;
+        store.OnSave = state => queue.RetireCharacters([state.Id]); // the handoff retires the character while its write is inside the store call
+
+        queue.Enqueue(State(1, 11));
+        queue.Start();
+        await queue.StopAsync(); // must not throw: the refusal of a retired character is expected
+
+        Assert.Null(fatal);
+        Assert.Null(queue.TerminalFailure);
+        Assert.Contains(store.Attempts, s => s.Id == 1);
+        Assert.Empty(queue.RetainedCharacterIds());
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Warning);
+    }
+
+    [Fact]
     public async Task WithoutRetirement_TheFenceRefusalOfAMovedCharacter_IsTerminalForTheQueue()
     {
         var store = new FencedStore(moved: 1);
@@ -226,9 +248,13 @@ public sealed class RetiredSourceCleanShutdownTests
         public ConcurrentQueue<CharacterState> Attempts { get; } = new();
         public ConcurrentQueue<CharacterState> Saved { get; } = new();
 
+        /// <summary>Runs inside the store call, before the fence answers: the point where a handoff can retire a character whose write is already in flight.</summary>
+        public Action<CharacterState>? OnSave { get; set; }
+
         public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
         {
             Attempts.Enqueue(state);
+            OnSave?.Invoke(state);
             if (state.Id == moved)
                 return Task.FromException(new CharacterOwnershipRejectedException("world", 7));
             Saved.Enqueue(state);

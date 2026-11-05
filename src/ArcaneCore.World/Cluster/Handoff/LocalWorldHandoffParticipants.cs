@@ -142,7 +142,7 @@ public sealed class LocalWorldHandoffSource(
         // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
         // (one informational line), instead of attempting writes the fence must refuse. Only the frozen characters are named; any other character keeps its writes.
         retirement?.Retire(moved);
-        saveQueue.RetireCharacters(moved);
+        saveQueue.RetireCharacters([.. moved, .. saveQueue.RetainedCharacterIds()]); // plus the offline characters whose last save is retained: their retry would be refused too
         return Task.CompletedTask;
     }
 

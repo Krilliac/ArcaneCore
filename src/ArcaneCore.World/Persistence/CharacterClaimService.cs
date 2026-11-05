@@ -56,9 +56,6 @@ public sealed class CharacterClaimService(
     /// <summary>Poll interval of a received claim's release while the transfer that brought it is still in flight (test seam).</summary>
     internal TimeSpan TransferSettlePoll { get; init; } = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>How long a received claim's release waits for the transfer that brought it to be marked completed before it leaves the claim in place (test seam).</summary>
-    internal TimeSpan TransferSettleWait { get; init; } = TimeSpan.FromSeconds(60);
-
     /// <summary>True when the verdict lets the login proceed: the character is claimed, or no claim exists in this mode.</summary>
     public static bool Admits(CharacterClaimResult result)
     {
@@ -168,7 +165,8 @@ public sealed class CharacterClaimService(
     /// ever release it, and while it stays, logins of the character on other workers are refused as <see cref="CharacterClaimOutcome.RefusedLiveOwner"/>. Takes a ticket for the
     /// received claim (<see cref="IssueTicketForReceivedClaim"/>), so a release of an older login cannot delete it and a login that claims after this call keeps it, then releases
     /// like <see cref="ScheduleRelease"/> once the transfer that brought the claim is marked completed (the claim row holds no transfer; until then the release would delete nothing).
-    /// If it is still in flight after <see cref="TransferSettleWait"/>, the claim stays and the next login of the character on this worker refreshes it. Call it after the arrival
+    /// While the transfer is still in flight the release keeps polling, until the claim settles, a login of the character supersedes it, or the service is disposed (then the claim
+    /// stays; this incarnation's death releases it), so a slow commit cannot strand the claim. Call it after the arrival
     /// was written. A no-op without a worker-shard token or a store. <paramref name="isOnline"/> (thread-safe) keeps the claim of a character that is online here by then.
     /// </summary>
     public void ScheduleReleaseOfReceivedClaim(int characterId, CharacterOwnershipToken? token, Func<bool>? isOnline = null)
@@ -358,12 +356,11 @@ public sealed class CharacterClaimService(
     }
 
     /// <summary>
-    /// Waits until the claim row of <paramref name="characterId"/> held by <paramref name="token"/> carries no transfer. False when the release must not go on: a login superseded it
-    /// (its marker is gone) or the transfer is still in flight after <see cref="TransferSettleWait"/> (then the pending marker is forgotten and the claim stays).
+    /// Waits until the claim row of <paramref name="characterId"/> held by <paramref name="token"/> carries no transfer, with no time limit (disposal cancels <paramref name="stop"/>).
+    /// False when the release must not go on: a login superseded it (its marker is gone).
     /// </summary>
     private async Task<bool> WaitForTransferSettledAsync(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, CancellationToken stop)
     {
-        DateTime deadline = DateTime.UtcNow + TransferSettleWait;
         while (true)
         {
             lock (_pendingGate)
@@ -374,14 +371,6 @@ public sealed class CharacterClaimService(
 
             if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
                 return true;
-
-            if (DateTime.UtcNow >= deadline)
-            {
-                logger?.LogWarning("character {Character} received claim kept: the transfer that brought it is still in flight after {Seconds} s; the next login of the character on this shard refreshes it",
-                    characterId, (int)TransferSettleWait.TotalSeconds);
-                ForgetPending(characterId, marker);
-                return false;
-            }
 
             await Task.Delay(TransferSettlePoll, stop).ConfigureAwait(false);
         }

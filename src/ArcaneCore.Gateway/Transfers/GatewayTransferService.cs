@@ -473,7 +473,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         GatewaySessionLinkClient? link = worker.Link;
         if (link is null)
         {
-            return; // the link went down while the request was being taken; the worker's pending request ended with it
+            return; // the link went down while the request was being taken; no answer is sent, so the worker's in-flight entry for it stays until its expiry (GatewayClusterFarTeleportRouter.InFlightExpiry)
         }
 
         if (submit.Body is not ControlTransferSubmit body)
