@@ -735,10 +735,25 @@ internal static partial class PlayerbotMotion
     /// <summary>
     /// Land after <see cref="StartFall"/>: MSG_MOVE_FALL_LAND at <paramref name="landing"/> with the time the fall took, as a client
     /// sends it; the server applies vmangos' fall damage (<c>Player::HandleFall</c>). True when the bot stands there afterwards.
+    /// Into deep water the fall ends at the surface instead: a client that drops into swimmable water sends MSG_MOVE_START_SWIM at swim
+    /// depth (<see cref="FallObserver"/> ends the fall on it) and never lands on the seabed, so no fall damage is taken. When
+    /// <paramref name="landing"/> is the floor under such water, the bot is put at swim depth under the surface above it.
     /// </summary>
     internal static bool Land(WorldSession session, Player player, Vector3 landing, float heading, uint fallTimeMs)
     {
         Of(player).World = session.World;
+        if (player.Map is { } map)
+        {
+            float collisionHeight = player.Locomotion.CollisionHeight;
+            if (map.GetLiquidStatus(landing.X, landing.Y, landing.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) != LiquidStatus.NoWater
+                && LiquidEnvironment.IsSwimDepth(map, landing.X, landing.Y, landing.Z, collisionHeight))
+            {
+                float swimZ = MathF.Max(landing.Z, liquid.Level - (collisionHeight * 0.75f) - SwimDepthEpsilonYards);
+                return Send(session, player, WorldOpcode.MsgMoveStartSwim, landing with { Z = swimZ }, heading, walk: false, moving: false,
+                    session.World.NowMs, budgeted: false, swim: true);
+            }
+        }
+
         return Send(session, player, WorldOpcode.MsgMoveFallLand, landing, heading, walk: false, moving: false, session.World.NowMs,
             budgeted: false, fallTime: fallTimeMs);
     }
@@ -761,7 +776,8 @@ internal static partial class PlayerbotMotion
 
     /// <summary>
     /// Step off a transport onto <paramref name="world"/>: MSG_MOVE_HEARTBEAT without MOVEFLAG_ONTRANSPORT and without the transport block,
-    /// as a client sends once its feet leave the car. True when the server stored it.
+    /// as a client sends once its feet leave the car. Into swim depth the position is lowered to it (<see cref="SwimHeight(Map, float, Vector3)"/>)
+    /// and the packet is MSG_MOVE_START_SWIM (MSG_MOVE_STOP_SWIM when a swimming bot steps onto land, as <see cref="SendStep"/> does). True when the server stored it.
     /// </summary>
     internal static bool SendStepOff(WorldSession session, Player player, Vector3 world, float heading)
     {
@@ -770,9 +786,21 @@ internal static partial class PlayerbotMotion
         if (state.Active || !CanMove(player)) return false;
         // The swim state is decided here, not by SwimAt: SwimAt reads player.Transport at call time, and the transport is still attached
         // while this packet (the one that leaves it) is built, so SwimAt would never report the water the bot steps into.
-        return Send(session, player, WorldOpcode.MsgMoveHeartbeat, world, heading, walk: false, moving: false, session.World.NowMs,
-            budgeted: false, seat: new Seat(false, 0, default, 0),
-            swim: player.Map is { } m && LiquidEnvironment.IsSwimDepth(m, world.X, world.Y, world.Z, player.Locomotion.CollisionHeight));
+        // Into deep water the step lands at swim depth, as every other step does (SwimHeight): a dock or deck at the liquid surface would
+        // otherwise leave the bot on top of the water without the swim state. A swimming packet after one that was not swimming is the
+        // crossing, MSG_MOVE_START_SWIM, as a client sends it (the packet before a step off a transport never carries Swimming).
+        float collisionHeight = player.Locomotion.CollisionHeight;
+        bool swim = false;
+        if (player.Map is { } map)
+        {
+            world = SwimHeight(map, collisionHeight, world);
+            swim = LiquidEnvironment.IsSwimDepth(map, world.X, world.Y, world.Z, collisionHeight);
+        }
+
+        bool swimming = (player.Movement.Flags & MovementFlags.Swimming) != 0;
+        WorldOpcode opcode = swim == swimming ? WorldOpcode.MsgMoveHeartbeat : swim ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
+        return Send(session, player, opcode, world, heading, walk: false, moving: false, session.World.NowMs,
+            budgeted: false, seat: new Seat(false, 0, default, 0), swim: swim);
     }
 
     private readonly record struct Seat(bool Aboard, ulong Guid, Vector3 Offset, float Orientation);
@@ -917,8 +945,17 @@ internal static partial class PlayerbotMotion
     internal static Vector3 SwimHeight(Map map, Player player, Vector3 at)
     {
         if (player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0) return at;
+        return SwimHeight(map, player.Locomotion.CollisionHeight, at);
+    }
+
+    /// <summary>
+    /// <see cref="SwimHeight(Map, Player, Vector3)"/> for a unit of <paramref name="collisionHeight"/> that is not aboard a transport (the caller
+    /// decides that): a step off a ship reads the transport still attached, so it cannot go through the player overload.
+    /// </summary>
+    private static Vector3 SwimHeight(Map map, float collisionHeight, Vector3 at)
+    {
         if (map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) == LiquidStatus.NoWater) return at;
-        float minSwimDepth = player.Locomotion.CollisionHeight * 0.75f;
+        float minSwimDepth = collisionHeight * 0.75f;
         if (at.Z < liquid.Level - minSwimDepth || at.Z > liquid.Level + SurfaceBandYards) return at;
         float swimZ = liquid.Level - minSwimDepth - SwimDepthEpsilonYards;
         float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
@@ -1294,8 +1331,10 @@ internal static partial class PlayerbotMotion
                         // bounded by StairStepMaxRiseYards. A step DOWN stays refused, as does any step with no mesh surface (resolved is then
                         // the route's straight-line height): that is what #1648 guards (a dock edge over a seabed, an unconnected lower polygon).
                     }
-                    else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
+                    else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
+                        && !OnOneWaterSurface(map, from, resolved))
                     {
+                        // (A swimmer's depth below the surface is not a storey: see OnOneWaterSurface.)
                         // No sight line clears the storey change: returning `resolved` would put the bot through a floor or slab.
                         rejectReason = "NoGroundSupport";
                         return null;
@@ -1350,6 +1389,37 @@ internal static partial class PlayerbotMotion
         if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
         return draped;
+    }
+
+    /// <summary>
+    /// How far under the liquid surface a swimmer's height may lie and still be on the surface's storey for <see cref="Validate"/>:
+    /// three quarters of a collision height (<see cref="SwimHeight(Map, Player, Vector3)"/>) is over <see cref="PlayerbotMoveCheck.DirectStepMaxStepUpYards"/>
+    /// (2) once the height passes 2.6, so a heartbeat from swim depth to the mesh's surface point would read as a storey change.
+    /// 3 covers heights up to 3.9.
+    /// </summary>
+    internal const float SwimSurfaceStoreyYards = 3f;
+
+    /// <summary>
+    /// Whether both heights lie under the same liquid surface: each within <see cref="SwimSurfaceStoreyYards"/> under its liquid level and at
+    /// most <see cref="SurfaceBandYards"/> over it, and the two levels equal within <see cref="SurfaceLevelToleranceYards"/>. A swimmer and the
+    /// surface a mesh route runs on over deep water are one storey, however tall the bot. A deck over the water (higher than the band), a
+    /// step between two liquid levels (a stepped river, a waterfall) and a floor more than <see cref="SwimSurfaceStoreyYards"/> under the
+    /// surface are not; a floor within that distance under the surface is, as a swimmer's own depth is.
+    /// </summary>
+    private static bool OnOneWaterSurface(Map map, Vector3 from, Vector3 to)
+        => TryBand(map, from, out float fromLevel) && TryBand(map, to, out float toLevel)
+            && MathF.Abs(fromLevel - toLevel) <= SurfaceLevelToleranceYards;
+
+    /// <summary>How far two liquid levels may differ and still be one surface for <see cref="OnOneWaterSurface"/> (a judgement call: wave and cell-interpolation noise).</summary>
+    internal const float SurfaceLevelToleranceYards = 0.1f;
+
+    private static bool TryBand(Map map, Vector3 at, out float level)
+    {
+        level = 0f;
+        if (map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) == LiquidStatus.NoWater
+            || at.Z < liquid.Level - SwimSurfaceStoreyYards || at.Z > liquid.Level + SurfaceBandYards) return false;
+        level = liquid.Level;
+        return true;
     }
 
     /// <summary>The most one step of a stair may rise or fall, however long the step is (a stalled bot's step covers many yards): well under a storey (the Orgrimmar slab is 18.6 yd), over a heartbeat's rise on the Deathknell stairs (2.3 yd).</summary>
@@ -1509,8 +1579,12 @@ internal static partial class PlayerbotMotion
             // Never the place the bot stands at: a route out of it has its first corner within SamePlaceYards, and refusing those traps the bot.
             if (toward.IsFinite() && Vector2.Distance(Flat(toward), Flat(anchor)) > SamePlaceYards)
             {
-                state.RejectedPlaces.RemoveAll(entry => Vector2.Distance(Flat(entry.Place), Flat(toward)) <= SamePlaceYards);
-                state.RejectedPlaces.Add((toward, unchecked(now + LoopBlacklistMs)));
+                // A reverse index loop, not RemoveAll with a closure over toward: this runs on every rejected step of a stuck bot.
+                List<(Vector3 Place, uint UntilMs)> places = state.RejectedPlaces;
+                Vector2 towardFlat = Flat(toward);
+                for (int index = places.Count - 1; index >= 0; index--)
+                    if (Vector2.Distance(Flat(places[index].Place), towardFlat) <= SamePlaceYards) places.RemoveAt(index);
+                places.Add((toward, unchecked(now + LoopBlacklistMs)));
             }
 
             GiveUp(session, player, state, [destination, waypoint], now);
