@@ -90,7 +90,7 @@ public static class WorkerTransferHosting
                 nodeId, world, new SaveQueueTransferPersistence(saves, services.GetService<CharacterPersistenceBarrier>()), new FeatureTransferPlayerProbe(services, saves),
                 logger: loggers?.CreateLogger<WorkerTransferSource>());
             var target = new WorkerTransferTarget(
-                nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle)), new WorldSessionTransferEntry(), admission,
+                nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle), services), new WorldSessionTransferEntry(services), admission,
                 MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
                 instances: AllocateInstance(services),
                 sessionReady: bundle => AdoptedSession(services, bundle) is not null,

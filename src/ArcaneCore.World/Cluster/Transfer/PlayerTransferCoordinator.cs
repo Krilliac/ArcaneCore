@@ -27,6 +27,9 @@ public interface ITransferSourceWorker
         string abortReason,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Whether this worker holds a frozen player of <paramref name="characterGuid"/>. True when it cannot tell (a remote proxy): the worker's self-heal then asks for the retire anyway.</summary>
+    bool HoldsClaim(ulong characterGuid) => true;
+
     /// <summary>Stage 6 / Post-commit roll-forward: permanently retires the frozen player entity from the source worker.</summary>
     Task RetireSourcePlayerAsync(
         Guid transferId,

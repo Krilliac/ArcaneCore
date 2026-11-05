@@ -232,6 +232,34 @@ public sealed class WorkerTransferSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task Retire_OfACharacterThisProcessNeverFroze_AndThatIsOffline_Succeeds_AndRefusesItsSaves()
+    {
+        // A restarted source: the suspension died with the old process, the character is not here, and the journal says the transfer is committed.
+        Guid id = Guid.NewGuid();
+        ObjectGuid gone = ObjectGuid.Player(9);
+
+        await _source.RetireSourcePlayerAsync(id, gone.Value, Token);
+
+        Assert.True(_queue.IsQuarantined(9)); // as after an ordinary retire: this world can never overwrite what the target saves
+        Assert.Equal(0, _loggingOut); // there was no player to tear down
+        await _source.RetireSourcePlayerAsync(id, gone.Value, Token); // a roll-forward repeats it
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _source.ResumeAfterAbortAsync(id, gone.Value, Token, "late"));
+    }
+
+    [Fact]
+    public async Task Retire_OfACharacterThisProcessNeverFroze_ButThatIsOnline_IsRefused_AndLeavesThePlayerAlone()
+    {
+        Guid id = Guid.NewGuid();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _source.RetireSourcePlayerAsync(id, _player.Guid.Value, Token));
+
+        Assert.False(_queue.IsQuarantined(7));
+        Assert.Equal(0, _loggingOut);
+        Assert.Same(_player, await _world.InvokeAsync(() => _world.FindOnlinePlayer(_player.Guid)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _source.RetireSourcePlayerAsync(id, _player.Guid.Value, Token)); // the refusal is not remembered as a retire
+    }
+
+    [Fact]
     public async Task Retire_RunsTheLogoutTeardownExactlyOnce_AndCaptureAndAbortNever()
     {
         Guid id = Guid.NewGuid();

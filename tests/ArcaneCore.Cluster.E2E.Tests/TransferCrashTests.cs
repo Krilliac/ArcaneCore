@@ -130,12 +130,10 @@ public sealed class TransferCrashTests(ITestOutputHelper output)
             switch (victim)
             {
                 case CrashVictim.Source:
-                    await cluster.KillWorkerAsync(SourceWorker);
-                    await cluster.RestartWorkerAsync(SourceWorker, ct);
+                    await KillAndRelinkWorkerAsync(cluster, SourceWorker, ct);
                     break;
                 case CrashVictim.Target:
-                    await cluster.KillWorkerAsync(TargetWorker);
-                    await cluster.RestartWorkerAsync(TargetWorker, ct);
+                    await KillAndRelinkWorkerAsync(cluster, TargetWorker, ct);
                     break;
                 default:
                     await cluster.KillGatewayAsync();
@@ -203,6 +201,20 @@ public sealed class TransferCrashTests(ITestOutputHelper output)
                 // A daemon still holds the directory open; the temp folder is cleaned by the OS later.
             }
         }
+    }
+
+    /// <summary>
+    /// Kills the worker, restarts it and waits until the gateway has registered the link to the new process, so the coordinator's next verb reaches the restarted worker and not a
+    /// link that is still down. How long that link takes is a race the scenario must not depend on: a verb that finds the link down is tolerated, one that reaches the new process is
+    /// answered by it, and only the second shows what a restarted worker does.
+    /// </summary>
+    private static async Task KillAndRelinkWorkerAsync(ClusterProcessFixture cluster, int index, CancellationToken ct)
+    {
+        ClusterWorkerInfo worker = cluster.Workers[index];
+        Task relinked = cluster.WaitForNextGatewayOutputAsync($"Worker link {worker.NodeId} to 127.0.0.1:{worker.LinkPort} registered", ct);
+        await cluster.KillWorkerAsync(index);
+        await cluster.RestartWorkerAsync(index, ct);
+        await relinked.WaitAsync(SettleWait, ct);
     }
 
     private static async Task WaitForMarkerAsync(string directory, PlayerTransferStage stage, CancellationToken ct)

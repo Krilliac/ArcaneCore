@@ -245,6 +245,34 @@ public sealed class WorkerSelfHealTests
     }
 
     [Fact]
+    public async Task Transfer_CompletedRow_RetiresOnlyAPlayerStillFrozenHere()
+    {
+        foreach (bool frozen in new[] { false, true })
+        {
+            var store = new InMemoryTransferDecisionStore();
+            var source = new FakeTransferSource { Holds = frozen };
+            await using WorkerSelfHealService heal = SelfHeal(store, source, TimeSpan.FromHours(1));
+            TransferDecisionRecord row = await NewReservationAsync(store);
+            Rig rig = await Rig.StartAsync(heal);
+            Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.PlayerTransfer, row.TransferId, ControlVerb.Suspend, Suspend(row))).Status);
+            await rig.DisposeAsync();
+
+            PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(row.TransferId, row.CharacterGuid, NodeA, NodeB, SourceToken);
+            foreach (PlayerTransferStage stage in new[] { PlayerTransferStage.SuspendAndCapture, PlayerTransferStage.InstallPassive, PlayerTransferStage.StageWorldPort })
+            {
+                await store.AdvancePreCommitStageAsync(row.TransferId, stage, bundle);
+            }
+
+            await store.CommitDecisionAsync(row.TransferId, IncarnationB);
+            await store.MarkCompletedAsync(row.TransferId);
+
+            // Without a frozen player the row says nothing about this worker any more: the character may have logged in and out here since, so its saves are left alone.
+            Assert.Equal(0, await heal.RunPassAsync(CancellationToken.None)); // nothing is held afterwards
+            Assert.Equal(frozen ? 1 : 0, source.Retires);
+        }
+    }
+
+    [Fact]
     public async Task Transfer_GatewayGoneAfterSuspend_CommittedRow_RetiresThePlayerHere()
     {
         var store = new InMemoryTransferDecisionStore();
@@ -563,6 +591,10 @@ public sealed class WorkerSelfHealTests
         public int Resumes => Volatile.Read(ref _resumes);
 
         public int Retires => Volatile.Read(ref _retires);
+
+        public bool Holds { get; init; } = true;
+
+        public bool HoldsClaim(ulong characterGuid) => Holds;
 
         public ulong LastResumedCharacter { get; private set; }
 

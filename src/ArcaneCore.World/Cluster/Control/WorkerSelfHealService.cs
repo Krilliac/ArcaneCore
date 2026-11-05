@@ -17,7 +17,7 @@ namespace ArcaneCore.World.Cluster.Control;
 /// <item><description>row Aborted: the operation ended before its point of no return, so the worker undoes its half locally (handoff: <see cref="IWorldHandoffSource.ResumeAsync"/>;
 /// transfer: <see cref="ITransferSourceWorker.ResumeAfterAbortAsync"/>). Whoever aborted the row (the restarted gateway, a second gateway's recovery, an operator) is irrelevant;</description></item>
 /// <item><description>row Committed or Completed: the point of no return passed, so the worker only rolls forward locally (handoff: <see cref="IWorldHandoffSource.RetireAsync"/>, which keeps the
-/// world frozen and closed; transfer: <see cref="ITransferSourceWorker.RetireSourcePlayerAsync"/>). It never resumes a committed operation;</description></item>
+/// world frozen and closed; transfer: <see cref="ITransferSourceWorker.RetireSourcePlayerAsync"/>, unless the row is Completed and nothing is frozen here). It never resumes a committed operation;</description></item>
 /// <item><description>row PreCommit: nothing. A worker never aborts on its own while the journal says the operation may still commit, because the coordinator may still be alive
 /// or about to be recovered and a worker-side resume would race its takeover.</description></item>
 /// </list>
@@ -290,6 +290,9 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
                 _logger.LogWarning("Self-heal: transfer {Operation} is aborted in the journal ({Reason}); resuming character {Character}", operation, record.AbortReason, record.CharacterGuid);
                 await source.ResumeAfterAbortAsync(
                     operation, record.CharacterGuid, record.SourceOwnershipToken, record.AbortReason ?? "self-heal: the journal aborted the transfer", ct).ConfigureAwait(false);
+                return HealResult.Healed;
+            case PlayerTransferDecisionState.Completed when !source.HoldsClaim(record.CharacterGuid):
+                // Nothing is frozen here, and the character is free again: it may have logged in and out here since, and a retire would refuse its saves.
                 return HealResult.Healed;
             case PlayerTransferDecisionState.Committed or PlayerTransferDecisionState.Completed:
                 _logger.LogWarning("Self-heal: transfer {Operation} is {State} in the journal; retiring character {Character} here", operation, record.DecisionState, record.CharacterGuid);

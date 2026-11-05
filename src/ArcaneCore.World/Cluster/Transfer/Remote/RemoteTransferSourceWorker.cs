@@ -15,7 +15,7 @@ namespace ArcaneCore.World.Cluster.Transfer.Remote;
 /// <list type="bullet">
 /// <item><description><see cref="SuspendAndCaptureAsync"/> sends <c>Suspend</c> and decodes the bundle from the reply with <see cref="PlayerTransferBundleJson"/> (the encoding the journal uses).</description></item>
 /// <item><description><see cref="ResumeAfterAbortAsync"/> sends <c>ResumeSource</c>; the worker reads the source token from the journal row.</description></item>
-/// <item><description><see cref="RetireSourcePlayerAsync"/> sends <c>RetireSource</c>. It is best effort when the source's link is down (the transfer is already committed; the worker retires its frozen player itself when it re-reads the journal, design section 3.5).</description></item>
+/// <item><description><see cref="RetireSourcePlayerAsync"/> sends <c>RetireSource</c>. It is best effort when the source's link is down (the transfer is already committed; a worker that stayed up retires its frozen player itself when it re-reads the journal, design section 3.5). A source that restarted has no frozen player and nothing re-reads the journal for it, but it answers the verb once its link is back: <see cref="WorkerTransferSource.RetireSourcePlayerAsync"/> succeeds for a character it never froze that is not online, and only a refusal of that verb stops the roll-forward.</description></item>
 /// </list>
 /// One proxy is registered once per configured slot, because the coordinator's registries are plain dictionaries; the proxy asks its channel provider for the slot's live link on every call and
 /// throws <see cref="ControlLinkLostException"/> when there is none. Immutable after construction; thread-safe (the channel is).

@@ -92,9 +92,9 @@ public interface ITransferSessionEntry
 /// scope. <paramref name="sessions"/> resolves the adopted <see cref="WorldSession"/> of a bundle (null while the gateway has not moved the
 /// client here); an unresolved session fails the load and the coordinator aborts or retries. The load saves nothing and registers nothing
 /// shared that <see cref="Release"/> does not undo. It skips the login's settlement barriers and rename check: the source's settlement save
-/// is durable before the bundle exists. Not thread-affine.
+/// is durable before the bundle exists. Not thread-affine. <paramref name="services"/> is the world's root provider: a shadow is released after its session may have closed and ended its scope.
 /// </summary>
-public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldSession?> sessions) : ITransferShadowLoader
+public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldSession?> sessions, IServiceProvider services) : ITransferShadowLoader
 {
     public async Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
     {
@@ -151,11 +151,9 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
     public void Release(Player shadow)
     {
         ArgumentNullException.ThrowIfNull(shadow);
-        if (shadow.Session is WorldSession session)
-        {
-            // HonorFeature.OnPlayerLoadingAsync tracked the shadow in the shared honor service.
-            session.Services.GetService<HonorFeature>()?.ActiveService?.Untrack(shadow);
-        }
+
+        // HonorFeature.OnPlayerLoadingAsync tracked the shadow in the shared honor service.
+        services.GetService<HonorFeature>()?.ActiveService?.Untrack(shadow);
     }
 }
 
@@ -163,7 +161,8 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
 /// Production <see cref="ITransferSessionEntry"/> over the adopted <see cref="WorldSession"/> of the player (the shadow was built with it).
 /// World thread. <see cref="TryAttach"/> needs the adopted session in <see cref="SessionState.CharacterSelect"/> (the same gate as a login).
 /// </summary>
-public sealed class WorldSessionTransferEntry : ITransferSessionEntry
+/// <param name="services">The world's root provider. The saves resume through it, not through the session's: a client that leaves during the arrival ends the session's scope before the logout abandons the arrival on the world thread.</param>
+public sealed class WorldSessionTransferEntry(IServiceProvider services) : ITransferSessionEntry
 {
     public bool TryAttach(Player player)
     {
@@ -185,15 +184,11 @@ public sealed class WorldSessionTransferEntry : ITransferSessionEntry
     public void ResumeSaves(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (player.Session is not WorldSession session)
-        {
-            return;
-        }
 
         // As the login does once the player is in its map: the saves held for the character since capture resume.
         int id = checked((int)player.Guid.Low);
-        session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(id);
-        session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(id);
+        services.GetService<CharacterSaveQueue>()?.ResumeCharacter(id);
+        services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(id);
     }
 }
 
@@ -669,7 +664,11 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         Player shadow = await AwaitLoadAsync(slot, load!, cancellationToken).ConfigureAwait(false);
 
         // The command must not lose a race to cancellation once it may have started adding the player.
-        await _world.InvokeAsync(() => ActivateOnWorldThread(slot, bundle, targetOwnershipToken, shadow), CancellationToken.None).ConfigureAwait(false);
+        bool clientLeft = await _world.InvokeAsync(() => ActivateOnWorldThread(slot, bundle, targetOwnershipToken, shadow), CancellationToken.None).ConfigureAwait(false);
+        if (clientLeft)
+        {
+            await ActivateOfflineAsync(transferId, bundle, targetOwnershipToken, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -783,6 +782,10 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         }
     }
 
+    /// <summary>
+    /// The world-thread step of an activation. True when the client left before it and the character must arrive offline (the slot stays, for <see cref="ActivateOfflineAsync"/>);
+    /// false when the step is done. Any exception leaves the slot open for the retry: a slot left activating would refuse every later attempt, for a transfer that can only roll forward.
+    /// </summary>
     private bool ActivateOnWorldThread(Slot slot, PlayerTransferBundle bundle, CharacterOwnershipToken token, Player shadow)
     {
         lock (_gate)
@@ -800,6 +803,19 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             slot.Activating = true; // from here a discard of this transfer is ignored
         }
 
+        try
+        {
+            return AddActivatedPlayer(slot, bundle, token, shadow);
+        }
+        catch
+        {
+            slot.Activating = false;
+            throw;
+        }
+    }
+
+    private bool AddActivatedPlayer(Slot slot, PlayerTransferBundle bundle, CharacterOwnershipToken token, Player shadow)
+    {
         if (_world.FindOnlinePlayer(shadow.Guid) is { } online)
         {
             if (ReferenceEquals(online, shadow))
@@ -817,20 +833,17 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return false;
             }
 
-            slot.Activating = false;
             throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{_workerId}'");
         }
 
         if (_world.TryGetMap(bundle.TargetMapId, bundle.TargetInstanceId, out Map? map) != MapAccessResult.Granted || map is null)
         {
-            slot.Activating = false;
             throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
         }
 
         TeleportService? teleports = TeleportService.Of(_world);
         if (teleports is null)
         {
-            slot.Activating = false;
             throw new InvalidOperationException($"worker '{_workerId}' has no teleport service attached");
         }
 
@@ -840,7 +853,6 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         // A commit to another scope or incarnation (this worker restarted since) is never adopted: the character could not be written here.
         if (PlayerTokenFor(token) is not { } playerToken)
         {
-            slot.Activating = false;
             throw new InvalidOperationException(
                 $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
         }
@@ -849,7 +861,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         shadow.CharacterOwnership = playerToken;
         // The claim moved to this worker with the commit: the activated player gets its own claim ticket, so its logout release is invalidated by any newer login's claim
         // (a quick relogin that claims before the posted release runs) exactly as for a character that logged in here.
-        CharacterClaimService? claims = (shadow.Session as WorldSession)?.Services.GetService<CharacterClaimService>();
+        // Not through the session: it may have closed since the probe, and its scope with it.
+        CharacterClaimService? claims = _claims;
         int characterId = (int)shadow.Guid.Low;
         long claimTicket = claims?.IssueTicketForReceivedClaim(characterId, token) ?? 0;
         claims?.BindTicket(shadow, claimTicket);
@@ -857,10 +870,28 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         shadow.Relocate(at.X, at.Y, at.Z, at.Orientation, _world.NowMs);
         ApplyTransportIntent(shadow, bundle.NotLeaveTransport);
 
-        if (!_entry.TryAttach(shadow))
+        bool attached;
+        try
+        {
+            attached = _entry.TryAttach(shadow);
+        }
+        catch
+        {
+            claims?.AbandonTicket(characterId, claimTicket);
+            throw;
+        }
+
+        if (!attached)
         {
             _logger.LogInformation("Transfer {TransferId}: the client of character {Character} left before activation; nothing to add", slot.TransferId, bundle.CharacterGuid);
             claims?.AbandonTicket(characterId, claimTicket);
+            if (_offline is not null)
+            {
+                // As for a client that left before the probe: the stored position must become the target, and the claim the commit moved here must be released.
+                slot.Activating = false;
+                return true;
+            }
+
             ReleaseShadow(shadow);
             ReleaseUnboundInstance(slot);
             Finish(slot);
@@ -893,12 +924,11 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             teleports.Forget(shadow);
             _world.DetachPlayerForTransfer(shadow);
             shadow.Session.Kick("transfer target could not start the arrival");
-            slot.Activating = false;
             throw;
         }
 
         Finish(slot);
-        return true;
+        return false;
     }
 
     /// <summary>

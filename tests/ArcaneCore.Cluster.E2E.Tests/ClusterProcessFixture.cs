@@ -842,6 +842,16 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return gateway.WaitForLineAsync(fragment, cancellationToken);
     }
 
+    /// <summary>
+    /// Starts watching the running gateway's output and completes on the next line containing <paramref name="fragment"/>. Unlike <see cref="WaitForGatewayOutputAsync"/>, a line
+    /// already written does not count, so call this before the event: a worker's link registers at startup too, and that line is still in the tail when the worker is restarted.
+    /// </summary>
+    public Task WaitForNextGatewayOutputAsync(string fragment, CancellationToken cancellationToken)
+    {
+        ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway is not running.");
+        return gateway.WaitForLineAsync(fragment, cancellationToken, onlyNewLines: true);
+    }
+
     /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
     public Task KillGatewayAsync()
     {
@@ -1171,15 +1181,18 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             }
         }
 
-        /// <summary>Completes once this process has written a line containing <paramref name="fragment"/> (a line still in the tail counts, and so does any later one).</summary>
-        internal async Task WaitForLineAsync(string fragment, CancellationToken cancellationToken)
+        /// <summary>
+        /// Completes once this process has written a line containing <paramref name="fragment"/> (a line still in the tail counts, and so does any later one; with
+        /// <paramref name="onlyNewLines"/> only a later one). The watch is in place when this returns.
+        /// </summary>
+        internal async Task WaitForLineAsync(string fragment, CancellationToken cancellationToken, bool onlyNewLines = false)
         {
             ArgumentException.ThrowIfNullOrEmpty(fragment);
             var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             (string Fragment, TaskCompletionSource Seen) watch = (fragment, seen);
             lock (_gate)
             {
-                if (_tail.Any(line => line.Contains(fragment, StringComparison.Ordinal)))
+                if (!onlyNewLines && _tail.Any(line => line.Contains(fragment, StringComparison.Ordinal)))
                 {
                     return;
                 }
