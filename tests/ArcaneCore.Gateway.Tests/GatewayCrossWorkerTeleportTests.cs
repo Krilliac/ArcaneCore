@@ -284,6 +284,8 @@ public sealed class GatewayCrossWorkerTeleportTests
         GatewayClientConnection? ackConnection = null;
         using var ackRead = new ManualResetEventSlim();
         using var ackRelease = new ManualResetEventSlim();
+        // Set after the hook's last write: the release only wakes the blocked read loop, so the test must not read ackRoutedAfter on the strength of the release alone.
+        var ackRouted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         cluster.Gateway.BeforeRouteClientPacket = (connection, opcode) =>
         {
             if (opcode != WorldOpcode.MsgMoveWorldportAck)
@@ -300,6 +302,7 @@ public sealed class GatewayCrossWorkerTeleportTests
             HoldUntil(ackRelease, cts.Token);
 
             Interlocked.Exchange(ref ackRoutedAfter, connection.SessionGeneration);
+            ackRouted.TrySetResult();
         };
 
         // The Kalimdor world thread waits until the gateway has read the ack, so the activation (a command on that thread) and the route switch after it
@@ -319,6 +322,7 @@ public sealed class GatewayCrossWorkerTeleportTests
                 async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
             cluster.Gateway.BeforeRouteClientPacket = null;
             await releasing;
+            await ackRouted.Task.WaitAsync(cts.Token);
         }
         finally
         {

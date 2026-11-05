@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -16,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.Gateway.Tests;
 
@@ -25,7 +28,7 @@ namespace ArcaneCore.Gateway.Tests;
 /// closes it on the login worker. The wire frames are pinned with golden bytes (the existing frames must stay byte-identical), then the whole path runs
 /// over loopback sockets with two real worlds on one set of databases.
 /// </summary>
-public sealed class LoginRedirectTests
+public sealed class LoginRedirectTests(ITestOutputHelper output)
 {
     private const string Secret = "redirect-link-secret-0123456789";
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
@@ -98,6 +101,7 @@ public sealed class LoginRedirectTests
     {
         using var cts = new CancellationTokenSource(Deadline);
         await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        cluster.Output = output;
         await cluster.Server.AddAccountAsync("REDIRHERO", "PASSWORD", cts.Token);
         await using WorldClient client = await cluster.ConnectAsync("REDIRHERO", cts.Token);
         int character = await cluster.CreateCharacterOnMapAsync(client, "Redirhero", mapId: 1, cts.Token);
@@ -425,14 +429,23 @@ public sealed class LoginRedirectTests
 
         public SyntheticArcaneServer Server => Eastern;
 
+        /// <summary>The last lines both worlds and the gateway logged (the gateway logs through the Eastern world's factory).</summary>
+        public required ServerLog Log { get; init; }
+
+        /// <summary>Where a slow but successful character create is reported. A failed one is reported in its exception whether or not this is set.</summary>
+        public ITestOutputHelper? Output { get; set; }
+
         /// <param name="kalimdorLinkLater">When set, the Kalimdor worker's link listener is not started (the caller starts <see cref="KalimdorWorker"/>), and only the login worker's link is awaited.</param>
         /// <param name="linkRetryDelay">The gateway's first reconnect delay (Gateway:LinkRetryDelay); 100 ms when not given.</param>
         public static async Task<Cluster> StartAsync(CancellationToken token, bool kalimdorLinkLater = false, TimeSpan? linkRetryDelay = null)
         {
             // Both worlds run as Cluster:Fencing:Scope=Worker workers (design _wf/writer-lock-DESIGN.md, C8): each takes its own shard lock and ownership scope, so they write
             // the one characters database concurrently, as two world processes of a split realm do. SQLite is allowed for this in-process fixture only (AllowSqliteWorkerScope).
+            var log = new ServerLog();
             SyntheticArcaneServer eastern = await SyntheticArcaneServer.StartAsync(
-                new SyntheticServerOptions { Configuration = WorkerScopeConfiguration("w-east", "0") }, configureServices: null, token);
+                new SyntheticServerOptions { Configuration = WorkerScopeConfiguration("w-east", "0") },
+                services => services.AddLogging(builder => builder.AddProvider(log.For("east"))),
+                token);
             SyntheticArcaneServer? kalimdor = null;
             GatewayWorkerEndpoint? easternWorker = null;
             GatewayWorkerEndpoint? kalimdorWorker = null;
@@ -441,7 +454,7 @@ public sealed class LoginRedirectTests
             {
                 kalimdor = await SyntheticArcaneServer.StartAsync(
                     new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory, Configuration = WorkerScopeConfiguration("w-kalimdor", "1") },
-                    configureServices: null,
+                    services => services.AddLogging(builder => builder.AddProvider(log.For("kalimdor"))),
                     token);
                 eastern.World.Ownership = Owns("0");
                 kalimdor.World.Ownership = Owns("1");
@@ -481,7 +494,7 @@ public sealed class LoginRedirectTests
                 }
                 return new Cluster
                 {
-                    Eastern = eastern, Kalimdor = kalimdor, EasternWorker = easternWorker, KalimdorWorker = kalimdorWorker, Gateway = gateway,
+                    Eastern = eastern, Kalimdor = kalimdor, EasternWorker = easternWorker, KalimdorWorker = kalimdorWorker, Gateway = gateway, Log = log,
                 };
             }
             catch
@@ -525,7 +538,7 @@ public sealed class LoginRedirectTests
         public async Task<int> CreateCharacterOnMapAsync(WorldClient client, string name, uint mapId, CancellationToken token)
         {
             await client.SendAsync((ushort)WorldOpcode.CmsgCharCreate, CharacterCreate(name), token);
-            WorldFrame created = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharCreate, token);
+            WorldFrame created = await ReadCharacterCreateAsync(client, token);
             Assert.Equal(new byte[] { 0x2E }, created.Payload);
             await client.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, token);
             WorldFrame list = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, token);
@@ -541,6 +554,42 @@ public sealed class LoginRedirectTests
             Assert.Equal(mapId, saved.MapId);
             return id;
         }
+
+        /// <summary>
+        /// Reads SMSG_CHAR_CREATE and reports the server side when it is late. Gate 1c7134022 timed out here at the then 5 s bound with no server output for the connection, so the cause
+        /// is unknown (see this assembly's TestDeadlines). A read that fails carries the report in its exception; one that succeeds past the old bound, which the wider bound would otherwise
+        /// hide, writes it to the test's output.
+        /// </summary>
+        private async Task<WorldFrame> ReadCharacterCreateAsync(WorldClient client, CancellationToken token)
+        {
+            var waited = Stopwatch.StartNew();
+            try
+            {
+                WorldFrame created = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharCreate, token);
+                if (waited.Elapsed >= ProtocolIO.DefaultOperationTimeout)
+                {
+                    Output?.WriteLine($"SMSG_CHAR_CREATE took {waited.ElapsedMilliseconds} ms.{Environment.NewLine}{DescribeServerSide()}");
+                }
+
+                return created;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                throw new InvalidOperationException($"No SMSG_CHAR_CREATE after {waited.ElapsedMilliseconds} ms ({ex.Message}){Environment.NewLine}{DescribeServerSide()}", ex);
+            }
+        }
+
+        /// <summary>Plain reads only: a stalled world thread must not stall the report, so nothing here posts to a world.</summary>
+        private string DescribeServerSide() => string.Join(
+            Environment.NewLine,
+            $"gateway link sessions: east {LinkSessions(0)}, kalimdor {LinkSessions(1)}",
+            $"east worker sessions: [{string.Join(", ", EasternWorker.Acceptor!.Sessions.Values.Select(remote => remote.Session.State))}]",
+            $"last world tick: east {Eastern.World.LastTickDurationMicros} us, kalimdor {Kalimdor.World.LastTickDurationMicros} us",
+            $"thread pool: {ThreadPool.ThreadCount} threads, {ThreadPool.PendingWorkItemCount} queued",
+            "server log tail (UTC):",
+            Log.Tail());
+
+        private string LinkSessions(int worker) => Gateway.Workers[worker].Link is { } link ? link.SessionCount.ToString(CultureInfo.InvariantCulture) : "no link";
 
         public async ValueTask DisposeAsync()
         {
@@ -582,6 +631,58 @@ public sealed class LoginRedirectTests
                 server.World,
                 services.GetRequiredService<SessionRegistry>(),
                 services.GetRequiredService<ILoggerFactory>());
+        }
+    }
+
+    /// <summary>The newest lines of the fixture's servers with their time and source, for a failure report; the synthetic servers otherwise log nowhere. World startup logs thousands of lines, so this keeps a bounded tail.</summary>
+    private sealed class ServerLog
+    {
+        private const int Capacity = 300;
+        private readonly Queue<string> _lines = new();
+
+        public ILoggerProvider For(string source) => new Provider(this, source);
+
+        public string Tail()
+        {
+            lock (_lines)
+            {
+                return string.Join(Environment.NewLine, _lines);
+            }
+        }
+
+        private void Add(string line)
+        {
+            lock (_lines)
+            {
+                if (_lines.Count == Capacity)
+                {
+                    _lines.Dequeue();
+                }
+
+                _lines.Enqueue(line);
+            }
+        }
+
+        private sealed class Provider(ServerLog log, string source) : ILoggerProvider
+        {
+            public ILogger CreateLogger(string categoryName) => new Logger(log, source, categoryName);
+
+            public void Dispose()
+            {
+            }
+        }
+
+        private sealed class Logger(ServerLog log, string source, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                string time = DateTime.UtcNow.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
+                log.Add($"{time} {source} {logLevel} {category}: {formatter(state, exception)}{(exception is null ? string.Empty : " " + exception)}");
+            }
         }
     }
 }

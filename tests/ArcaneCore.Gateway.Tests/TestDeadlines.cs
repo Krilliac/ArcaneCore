@@ -5,13 +5,12 @@ namespace ArcaneCore.Gateway.Tests;
 
 /// <summary>
 /// The mock client's per-operation deadline in this suite. The tool's 5 s (<see cref="ProtocolIO.DefaultOperationTimeout"/>) is a
-/// wall-clock limit on a real server answering a real SQLite or process hop; under full-gate load it failed healthy scenarios with
-/// "World packet read exceeded the 5-second deadline" (gate 1c7134022: TransferCrashTests login, LoginRedirectTests character create).
-/// Measured cause (gate 1c7134022 log): the login that tripped it reached a freshly started worker (its gateway link registered only 4 s before)
-/// and sat about 3 s in the first login's lazy load of the player base data (StatsFeature.EnsureLoadedAsync), then entered the world 120 ms after the
-/// 5 s read had expired. The cost is real and cold-only, so the bound here is a hang bound rather than a speed assertion.
-/// Here the deadline is only a hang bound, set once before any test runs, as in ArcaneCore.MockClient.Tests; each scenario keeps its
-/// own overall deadline.
+/// wall-clock limit on a real server answering a real SQLite or process hop. Gate 1c7134022 failed LoginRedirectTests in this assembly with
+/// "World packet search for 0x003A exceeded the 5-second deadline": SMSG_CHAR_CREATE did not arrive in 5 s, before any login.
+/// That timeout has NO KNOWN CAUSE: the gate's log holds no server output for the failing connection, so the stall may be load or may be a defect.
+/// The 30 s here is an unproven mitigation, not a fix, and it would hide a stall of 5 to 30 s. So LoginRedirectTests' fixture reports its server log and
+/// state when that read fails, and in the test's output when it succeeds after more than 5 s: the next occurrence can be diagnosed.
+/// The value is set once before any test runs, as in ArcaneCore.MockClient.Tests; each scenario keeps its own overall deadline.
 /// </summary>
 internal static class TestDeadlines
 {
