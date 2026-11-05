@@ -187,10 +187,18 @@ public sealed partial class MapCombat
     /// (vmangos Player::TeleportTo, Player.cpp:1953-1966: DEAD, map above 1, a different map, the corpse in the target map).
     /// Returns whether it happened.
     /// </summary>
-    internal bool ReviveForDungeonEntry(Player player, uint targetMapId)
+    internal bool ReviveForDungeonEntry(Player player, uint targetMapId) => player.MapId != targetMapId && ReviveWithBodyIn(player, targetMapId);
+
+    /// <summary>
+    /// <see cref="ReviveForDungeonEntry"/> for a ghost that came from another worker: the same rule, applied once the player is in the map (its body put back) and read against the map
+    /// it left (<paramref name="sourceMapId"/>). The source does not revive: the transfer can still be refused or aborted there, and a revive cannot be taken back, so a refusal would be
+    /// a free resurrection. Returns whether it happened.
+    /// </summary>
+    internal bool ReviveAfterTransferArrival(Player player, uint sourceMapId) => player.MapId != sourceMapId && ReviveWithBodyIn(player, player.MapId);
+
+    private bool ReviveWithBodyIn(Player player, uint mapId)
     {
-        if (player.Combat.DeathState != DeathState.Dead || targetMapId <= 1 || player.MapId == targetMapId
-            || player.Combat.Corpse is not { } corpse || corpse.MapId != targetMapId)
+        if (player.Combat.DeathState != DeathState.Dead || mapId <= 1 || player.Combat.Corpse is not { } corpse || corpse.MapId != mapId)
         {
             return false;
         }
@@ -313,8 +321,9 @@ public sealed partial class MapCombat
     /// The map a restored body goes back into (vmangos <c>corpse.instance</c>), or null to keep it out of every map. A body in this
     /// map's instance, or a row from before the corpse instance was stored (instance 0) of an instanceable map with this map's id, goes
     /// here: the old code put such a body into the ghost's map whenever the map ids matched. A body on a continent goes into its
-    /// map. A dungeon body goes into its instance's map only when that map is loaded or a live instance owns it
-    /// (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); a corpse never creates an instance
+    /// map when this worker owns that map; on a continent another worker owns (a ghost that crossed workers) it stays out of every map
+    /// here, and the owner puts it back when the ghost returns. A dungeon body goes into its instance's map only when that map is loaded, or a live instance owns it and this
+    /// worker owns that copy (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); on a worker without instance copies it stays out of every map too. A corpse never creates an instance
     /// map by itself, as vmangos never does.
     /// </summary>
     private MapCombat? ResolveCorpseMap(Kernel.Characters.CorpseSnapshot snapshot)
@@ -327,7 +336,7 @@ public sealed partial class MapCombat
 
         if (!instanceable)
         {
-            return _world.GetMap(snapshot.MapId).Combat;
+            return _world.TryGetMap(snapshot.MapId, 0, out Maps.Map? continent) == Maps.MapAccessResult.Granted ? continent!.Combat : null;
         }
 
         Maps.Map? map = _world.FindMap(snapshot.MapId, snapshot.InstanceId)
@@ -370,8 +379,8 @@ public sealed partial class MapCombat
         }
         else
         {
-            // Its instance is not loaded and no live instance owns it: the ghost keeps the body (and its instance, for the next
-            // save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
+            // Its instance is not loaded and no live instance owns it, or another worker owns its continent or its instance copy: the ghost keeps the body (and its
+            // instance, for the next save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
             corpse.InstanceId = snapshot.InstanceId;
         }
 
@@ -885,9 +894,10 @@ public sealed partial class MapCombat
     private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim, bool touchOnly = false)
     {
         // vmangos Unit.cpp:6042-6053: the pulse needs a victim that is not the attacker's own (the player behind the victim, its owner or charmer,
-        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith).
+        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith) nor a free-for-all pair (both IsFFAPvP, Unit.cpp:6047).
         Player? victimPlayer = DuelRules.ControllingPlayer(victim);
-        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)))
+        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)
+            || ((attacker.Flags & PlayerFlags.FfaPvp) != 0 && (victimPlayer.Flags & PlayerFlags.FfaPvp) != 0)))
         {
             return;
         }

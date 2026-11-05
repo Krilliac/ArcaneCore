@@ -89,6 +89,38 @@ public sealed class GatewayHandoffHardeningTests
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
     }
 
+    /// <summary>The roll-forward of a handoff whose source died sends RetireWrites, ReleaseWriterLock and Retire, each best effort: the first finds the link down after the grace, the others must not wait it again.</summary>
+    [Fact]
+    public async Task ADeadSourceAfterTheReroute_CostsOneLinkGraceForTheWholeRollForward_NotOnePerBestEffortVerb()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        Guid handoffId = Guid.Empty;
+        await Assert.ThrowsAsync<CoordinatorCrash>(() => rig.Service.HandoffAsync(NodeA, async (stage, _) =>
+        {
+            if (stage == WorldHandoffStage.Begun)
+            {
+                handoffId = (await rig.Store.GetUnresolvedAsync(cts.Token)).Single().HandoffId;
+            }
+
+            if (stage == WorldHandoffStage.Rerouted)
+            {
+                throw new CoordinatorCrash();
+            }
+        }, cts.Token));
+
+        // A dies: after the reroute it is reached through the standby link, which goes down with it.
+        await rig.AEndpoint.StopAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Task.FromResult(rig.Service.StandbyChannel(NodeA) is null), cts.Token);
+        rig.Service.LinkGrace = TimeSpan.FromMilliseconds(400);
+        int before = rig.Service.LinkGraceTimeouts;
+
+        Assert.Equal(1, await rig.Recovery.RecoverOnceAsync(cts.Token));
+
+        Assert.Equal(WorldHandoffStage.Retired, (await rig.Store.GetAsync(handoffId, cts.Token))!.Stage);
+        Assert.Equal(1, rig.Service.LinkGraceTimeouts - before);
+    }
+
     [Fact]
     public async Task AStandbyLinkRetargetedToAnEndpointNobodyListensOn_PublishesNoChannel_UntilItIsPointedBackAtTheStandby()
     {

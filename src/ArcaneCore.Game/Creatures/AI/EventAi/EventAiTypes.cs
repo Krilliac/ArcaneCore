@@ -47,6 +47,7 @@ public enum EventAiActionType : byte
     TextNew = 54,
     /// <summary>cmangos ACTION_T_SET_RANGED_MODE: range mode type and chase distance.</summary>
     SetRangedMode = 57,
+    SetSpellSet = 60,
 }
 
 /// <summary>cmangos EventAI target types (<c>Target</c>, CreatureEventAI.h:161-198); the ones with a resolver.</summary>

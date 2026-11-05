@@ -17,6 +17,7 @@ namespace ArcaneCore.World.Tests;
 /// Creatures built while the world features attach (script and world-state spawns, the first grid spawns) resolve their creature_equip_template
 /// items through <see cref="ItemsFeature"/>; the item content must therefore be loaded by the world start, not by the first login.
 /// </summary>
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class WorldStartupItemTemplatesTests
 {
     private const uint SwordItem = 1899;

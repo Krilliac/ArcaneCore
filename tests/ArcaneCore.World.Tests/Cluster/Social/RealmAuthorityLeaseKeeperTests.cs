@@ -1,3 +1,4 @@
+using System.Data.Common;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
@@ -76,6 +77,65 @@ public sealed class RealmAuthorityLeaseKeeperTests
         await acquire.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Social));
+    }
+
+    private sealed class StoreDbException() : DbException("a lock wait outlasted the command timeout");
+
+    /// <summary>Advances the manual clock one retry delay at a time until <paramref name="task"/> is done (the start's retry waits on a timer of that clock). Unproven until the integration gate runs it.</summary>
+    private async Task AdvanceRetryDelaysUntilAsync(Task task)
+    {
+        for (int step = 0; step < 500 && !task.IsCompleted; step++)
+        {
+            _time.Advance(RealmAuthorityLeaseKeeper.StartAcquireRetryDelay);
+            await Task.Delay(5);
+        }
+
+        Assert.True(task.IsCompleted, "the start did not finish");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcquireAtStart_RetriesAStoreFailure_AndThenHoldsTheScope(bool databaseException)
+    {
+        // A takeover's FOR UPDATE can wait behind a stream of fenced writers past the command timeout; the first attempts fail, the next one succeeds, and the start must not fail.
+        var store = new ControlledStore(_inner) { AcquireFailure = () => databaseException ? new StoreDbException() : new TimeoutException("lock wait") };
+        store.FailNextAcquires(2);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await AdvanceRetryDelaysUntilAsync(acquire);
+        await acquire.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.Equal(3 + 4, store.Acquires); // social: two failures and the grant; the four other map worker scopes: one call each
+    }
+
+    [Fact]
+    public async Task AcquireAtStart_GivesUpAfterTheBoundedAttempts_WithTheStoreFailure()
+    {
+        var store = new ControlledStore(_inner) { AcquireFailure = () => new TimeoutException("lock wait") };
+        store.FailNextAcquires(1000);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await AdvanceRetryDelaysUntilAsync(acquire);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => acquire.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(RealmAuthorityLeaseKeeper.StartAcquireAttempts, store.Acquires);
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
+    }
+
+    [Fact]
+    public async Task AcquireAtStart_DoesNotRetryAFailureThatIsNotAStoreOrTimeoutFailure()
+    {
+        var store = new ControlledStore(_inner) { AcquireFailure = () => new InvalidOperationException("a bug, not a lock wait") };
+        store.FailNextAcquires(1);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10)));
+
+        Assert.Equal(1, store.Acquires);
     }
 
     /// <summary>A clock whose one-shot timers fire <c>early</c> before they are due, as an operating-system timer on a coarse tick clock can.</summary>
@@ -625,6 +685,13 @@ public sealed class RealmAuthorityLeaseKeeperTests
         public bool ThrowOnRelease { get; set; }
         public bool BlockRenewals { get; set; }
 
+        private int _acquireFailuresLeft;
+
+        /// <summary>The failure the next <see cref="FailNextAcquires"/> acquires throw, before they reach the inner store.</summary>
+        public Func<Exception>? AcquireFailure { get; set; }
+
+        public void FailNextAcquires(int count) => Volatile.Write(ref _acquireFailuresLeft, count);
+
         /// <summary>Every acquire (also a refused one) hangs until <see cref="Release"/>, before it reaches the inner store.</summary>
         public bool BlockAcquires { get; set; }
 
@@ -647,6 +714,11 @@ public sealed class RealmAuthorityLeaseKeeperTests
         public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
         {
             Interlocked.Increment(ref _acquires);
+            if (AcquireFailure is { } failure && Interlocked.Decrement(ref _acquireFailuresLeft) >= 0)
+            {
+                throw failure();
+            }
+
             if (BlockAcquires)
             {
                 Interlocked.Increment(ref _blockedAcquires);

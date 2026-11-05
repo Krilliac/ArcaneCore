@@ -19,6 +19,7 @@ namespace ArcaneCore.World.Tests;
 /// M6 end to end: the full vmangos login sequence and its account/character state (MOTD, bind
 /// point, tutorials, account data, action bar), character name rules, and name/time queries.
 /// </summary>
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class M6LoginAndAccountTests
 {
     // InMemoryWorldDataStore's start position (human and orc warriors).

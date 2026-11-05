@@ -4,7 +4,7 @@ namespace ArcaneCore.Cryptography;
 
 /// <summary>Client-side file checksum and realmd VerifyVersion proof. GenericCheck follows
 /// WowSrp Integrity.cs (gtker/wow_srp_csharp 85ad800, MIT OR Apache-2.0); VerifyVersion
-/// follows vmangos AuthSocket.cpp:1433-1470. See THIRD_PARTY_NOTICES.md.</summary>
+/// follows vmangos AuthSocket.cpp:1450-1486. See THIRD_PARTY_NOTICES.md.</summary>
 public static class ClientIntegrity
 {
     public static byte[] GenericCheck(ReadOnlySpan<byte> files, ReadOnlySpan<byte> checksumSalt,

@@ -138,17 +138,27 @@ public sealed class AntiCheatGmStreamTests
         Assert.DoesNotContain("(Player:", line, StringComparison.Ordinal);
         Assert.Contains("CMSG_ATTACKSWING", line, StringComparison.Ordinal);
         Assert.EndsWith($": {notice.Detail} [Warning]", line, StringComparison.Ordinal);
-        Assert.DoesNotContain("PHSTREAM", line, StringComparison.OrdinalIgnoreCase); // no account name either
-        Assert.DoesNotContain("Phstream", line, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PHSTREAM", line, StringComparison.OrdinalIgnoreCase); // neither the account name nor the character name (the same text, ignoring case)
+    }
+
+    [Fact]
+    public void ThePacketLine_MarksInjectedToolAndBotTraffic_SoItDoesNotReadAsTheTargetCheating()
+    {
+        Assert.Equal("packet wrong-state tool (Player:77) account 5: text [Warning]",
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning, PacketTraffic.Tool));
+        Assert.Equal("packet wrong-state bot account 5: text [Info]",
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", default, 5, "text", AnomalySeverity.Info, PacketTraffic.Bot));
+        Assert.Equal("packet wrong-state (Player:77) account 5: text [Warning]",
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning, PacketTraffic.Staff));
     }
 
     [Fact]
     public void ThePacketLine_CarriesGuidAndAccount_WhenAPlayerExists_AndTheAccountAlone_WhenNot()
     {
         Assert.Equal("packet wrong-state (Player:77) account 5: text [Warning]",
-            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning));
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning, PacketTraffic.Player));
         Assert.Equal("packet wrong-state account 5: text [Warning]",
-            PacketHeuristicsFeature.FormatPacketLine("wrong-state", default, 5, "text", AnomalySeverity.Warning));
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", default, 5, "text", AnomalySeverity.Warning, PacketTraffic.Player));
     }
 
     [Fact]
@@ -206,15 +216,16 @@ public sealed class AntiCheatGmStreamTests
             Account account = (await host.Accounts.FindByUsernameAsync("PHGUID"))!;
             Assert.StartsWith($"[anticheat] packet {PacketChecks.Code(PacketCheck.WrongState)} (Player:{player.Guid.Low}) account {account.Id}: ", delivered.Text, StringComparison.Ordinal);
             Assert.EndsWith($": {notice.Detail} [Warning]", delivered.Text, StringComparison.Ordinal);
-            Assert.DoesNotContain("Phguid", delivered.Text, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("PHGUID", delivered.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("PHGUID", delivered.Text, StringComparison.OrdinalIgnoreCase); // neither the account name nor the character name (the same text, ignoring case)
         }
     }
 
-    /// <summary>A sink that claims a subscriber and then fails every publish.</summary>
+    /// <summary>A sink that claims a subscriber and then fails every publish; it counts only the publishes to the anticheat channel (other channels may publish concurrently).</summary>
     private sealed class ThrowingSink : IGmTraceSink
     {
-        public int Attempts;
+        private int _attempts;
+
+        public int Attempts => Volatile.Read(ref _attempts);
 
         public bool IsActive => true;
 
@@ -222,7 +233,11 @@ public sealed class AntiCheatGmStreamTests
 
         public int Publish<TState>(string channel, in GmTraceSubject subject, TState state, Func<TState, string> format)
         {
-            Attempts++;
+            if (channel == GmStreamChannels.AntiCheat)
+            {
+                Interlocked.Increment(ref _attempts);
+            }
+
             throw new InvalidOperationException("sink failure under test");
         }
     }

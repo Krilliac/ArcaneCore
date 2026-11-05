@@ -7,7 +7,7 @@
 //   --stack-depth <bytes>      run a 2 KB-a-frame recursion, guarded by the production StackGuard.TryEnter, on a thread created with that stack size, print "depth <n>" and exit 0 (stack-guard tests)
 //   --game-dll <path>          the ArcaneCore.Game.dll that holds StackGuard (internal: reached by reflection, so the fixture needs no project reference); required with --stack-depth
 //   --unguarded                with --stack-depth: suspend the production guard on the recursion thread (StackGuard.Suspend), so the recursion overflows the stack and the process dies (the RED run)
-//   --cr-heartbeat             after "ready", write one line "noise<CR>heartbeat <utc> pid=<pid> alive" (a bare CR, not CRLF), then the line "done"
+//   --cr-heartbeat             after "ready", write one line "noise<CR>heartbeat <utc> pid=<pid> alive token=<run token>" (a bare CR, not CRLF; the token suffix is present only when the supervisor gave the child ARCANECORE_SUPERVISOR_TOKEN, else the beat is token-less), then the line "done"
 // Otherwise: print "ready" on stdout and sleep for the bounded lifetime, then exit 0. The bound is what cleans up after a failing test:
 // nothing ever kills a fixture by pid, so a fixture that is left behind ends by itself.
 using System.Diagnostics;

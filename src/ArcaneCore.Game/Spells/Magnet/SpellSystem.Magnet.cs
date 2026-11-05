@@ -94,9 +94,10 @@ public sealed partial class SpellSystem
     /// A magnet (a totem, a pet) whose controlling player and the caster's controlling player are two free-for-all flagged players that the
     /// relation treats as hostile (different players, not grouped) is attackable. mangos-classic GetReactionTo returns hostile for a pair of
     /// free-for-all controlling players (Relations.cpp, IsPvPFreeForAll on the controlling players) and vmangos GetReactionTo has the same
-    /// clause on the affecting players (Object.cpp); the faction-template reaction used by <c>CombatHooks.CanAttack</c> for a player-controlled
-    /// unit has no such clause and reads the totem as a friend of its own team. The player pair itself is judged by the same relation, so a
-    /// group mate or the caster's own totem is not exempted. A magnet that is itself a player is judged by that relation already.
+    /// clause on the affecting players (Object.cpp); a template-only reaction (hooks that read a player-controlled unit by its faction template alone) has no
+    /// such clause and reads the totem as a friend of its own team. The production hooks and the base <c>CombatHooks</c> carry the clause, so with them this
+    /// exemption is reached only for a magnet without the player-controlled flag or on a group-test mismatch. The player pair itself is judged by the same relation, so a
+    /// group mate or the caster's own totem is not exempted. A magnet that is itself a player is judged by that relation already. The magnet's own state must still allow an attack (<see cref="CombatHooks.IsAttackableState"/>).
     /// </summary>
     private bool IsFreeForAllOpponentOwned(Unit caster, Unit magnet)
         => DuelRules.ControllingPlayer(caster) is { } casterPlayer
@@ -104,7 +105,8 @@ public sealed partial class SpellSystem
             && !ReferenceEquals(casterPlayer, magnetPlayer)
             && (casterPlayer.Flags & PlayerFlags.FfaPvp) != 0
             && (magnetPlayer.Flags & PlayerFlags.FfaPvp) != 0
-            && Relations.IsHostile(casterPlayer, magnetPlayer);
+            && Relations.IsHostile(casterPlayer, magnetPlayer)
+            && CombatHooks.IsAttackableState(magnet); // the owners only decide the relation: a magnet that is itself not attackable (non-attackable flag, taxi, evade, GM) stays refused, as mangos-classic Unit::CanAttack does (Relations.cpp:351)
 
     private bool IsMagnetTargetEligible(SpellInfo spell, Unit magnet, bool casterSelector)
     {

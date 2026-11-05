@@ -172,7 +172,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     /// <c>World:Realm:Id</c> above 0 (the default is 1) it could flip the realm's row Online and Offline beside the world that really serves it. Such a child
     /// must carry <c>--World:Realm:Id=0</c> in its own Arguments: the supervisor does not forward its own command line or configuration, and the child may
     /// have another working directory and conf, so the shared configuration is not trusted. Any mention of the key that is not the exact <c>--Key=value</c>
-    /// form (space form, slash form) is unreadable here and refused, as is a value that is not 0.
+    /// form (space form, slash form, inside a quoted value, or right after a <c>--Key</c> that has no <c>=</c>) is unreadable here and refused, as is a value that is not 0.
     /// </summary>
     private static IEnumerable<ConfigIssue> CheckRealmRowLabels(ClusterSupervisorOptions options)
     {
@@ -194,38 +194,94 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         }
     }
 
-    /// <summary>The realm id the child's Arguments set, for the message; <paramref name="writesRow"/> is false only when every mention of the key is an exact <c>--World:Realm:Id=0</c>.</summary>
-    private static string ResolveChildRealmId(string arguments, out bool writesRow)
+    /// <summary>
+    /// The realm id the child's Arguments set, for the message; <paramref name="writesRow"/> is false only when every mention of the key is an exact <c>--World:Realm:Id=0</c>.
+    /// The line is split the way the child's command line is (whitespace outside double quotes, the quotes themselves removed), so a mention that sits inside a quoted
+    /// value of another key is not a setting of its own and is refused as unreadable, and so is a mention that follows a <c>--Key</c> with no <c>=</c>
+    /// (the configuration command-line provider takes that next word as the key's value, not as a key). With several mentions the message names the offending
+    /// value (the first that is not 0), not the last one. A bare <c>/Key</c> counts like a bare <c>--Key</c> (the command-line provider reads both the same way), and a line holding a
+    /// line break (the child's argv splits only at space and tab) or a backslash before a double quote is refused outright (the operating system's escape rules are not modelled here). The check is deliberately over-strict: <c>--A --B --World:Realm:Id=0</c>
+    /// is refused although the provider gives <c>--A</c> the value <c>--B</c> and does read the id; that fails closed.
+    /// </summary>
+    internal static string ResolveChildRealmId(string arguments, out bool writesRow)
     {
         const string KeyName = "World:Realm:Id";
+        string prefix = "--" + KeyName + "=";
         string? last = null;
+        string? offending = null;
         bool unreadable = false;
-        bool nonZero = false;
-        foreach (string token in arguments.Split(WhitespaceSeparators, StringSplitOptions.RemoveEmptyEntries))
+        bool previousWasBareKey = false;
+
+        // The Arguments string reaches the child raw and the operating system's argument parsing treats a backslash before a double quote as an escape, which this
+        // splitter does not model; a line holding one cannot be read reliably here, so it is refused rather than guessed at.
+        // A line break is refused too: the child's argv splits only at space and tab, so a CR or LF keeps "--A=x<LF>--World:Realm:Id=0" one argument (a mention inside another key's value).
+        if (arguments.Contains("\\\"", StringComparison.Ordinal) || arguments.AsSpan().IndexOfAny('\r', '\n') >= 0)
         {
-            string text = token.Trim('"');
-            if (text.IndexOf(KeyName, StringComparison.OrdinalIgnoreCase) < 0)
+            writesRow = true;
+            return "an argument form the supervisor cannot read";
+        }
+
+        foreach (string text in SplitCommandLine(arguments))
+        {
+            bool mentions = text.Contains(KeyName, StringComparison.OrdinalIgnoreCase);
+            if (mentions)
             {
-                continue;
+                if (previousWasBareKey || !text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    unreadable = true;
+                }
+                else
+                {
+                    string value = text[prefix.Length..];
+                    last = value;
+                    if (offending is null
+                        && (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0))
+                    {
+                        offending = value;
+                    }
+                }
             }
 
-            string prefix = "--" + KeyName + "=";
-            if (!text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                unreadable = true;
-                continue;
-            }
+            previousWasBareKey = (text.StartsWith("--", StringComparison.Ordinal) || text.StartsWith('/')) && !text.Contains('=', StringComparison.Ordinal);
+        }
 
-            string value = text[prefix.Length..].Trim('"');
-            last = value;
-            if (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0)
+        writesRow = last is null || unreadable || offending is not null;
+        return unreadable ? "an argument form the supervisor cannot read" : offending ?? last ?? "no value, so the default 1";
+    }
+
+    /// <summary>Splits a command line at whitespace outside double quotes; the quote characters are dropped, as the operating system's argument parsing drops them.</summary>
+    private static IEnumerable<string> SplitCommandLine(string arguments)
+    {
+        var current = new System.Text.StringBuilder();
+        bool inQuote = false;
+        bool started = false;
+        foreach (char c in arguments)
+        {
+            if (c == '"')
             {
-                nonZero = true;
+                inQuote = !inQuote;
+                started = true;
+            }
+            else if (!inQuote && (c == ' ' || c == '\t'))
+            {
+                if (started)
+                {
+                    yield return current.ToString();
+                    current.Clear();
+                    started = false;
+                }
+            }
+            else
+            {
+                current.Append(c);
+                started = true;
             }
         }
 
-        writesRow = last is null || unreadable || nonZero;
-        return unreadable ? "an argument form the supervisor cannot read" : last ?? "no value, so the default 1";
+        if (started)
+        {
+            yield return current.ToString();
+        }
     }
 
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];

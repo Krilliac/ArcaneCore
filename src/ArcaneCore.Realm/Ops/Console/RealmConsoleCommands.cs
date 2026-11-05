@@ -13,7 +13,7 @@ namespace ArcaneCore.Realm.Ops.ServerConsole;
 /// The realm console's commands (docs/areas/server-console.md): <c>help</c>, <c>info</c>, <c>realmlist</c>, <c>online</c>,
 /// <c>account create|set-password|set-gmlevel</c> (the arcane-account tool's logic: <see cref="WowSrp6.CreateCredentials"/>,
 /// <see cref="AccountSecurityText.TryParse"/>, the same <see cref="IAccountStore"/> calls and messages),
-/// <c>account delete</c> (two steps, refused while the account has characters; see <see cref="DeleteAccountAsync"/>) and
+/// <c>account delete</c> (two steps, refused unless the recorded character count is 0, which can be stale; see <see cref="DeleteAccountAsync"/>) and
 /// <c>quit</c>/<c>shutdown</c>/<c>exit</c> (graceful host stop).
 /// <para>
 /// Threading: the realm has no world thread. <see cref="ExecuteAsync"/> runs on the console reader thread; each command opens
@@ -98,7 +98,7 @@ public sealed class RealmConsoleCommands(
         say("  account create <name> <password>            create an account (the password is visible while typed; arcane-account prompts without echo)");
         say("  account set-password <name> <password>      change an account's password");
         say("  account set-gmlevel <name> <0-3|name>       set an account's GM level (applies from the next world login)");
-        say("  account delete <name>                       arm the deletion of an account proven to have no characters (then repeat with 'confirm' within 60 s; irreversible)");
+        say("  account delete <name>                       arm the deletion of an account whose recorded character count is 0 (then repeat with 'confirm' within 60 s; irreversible)");
         say("  quit | shutdown                             stop the realm daemon");
     }
 
@@ -198,12 +198,14 @@ public sealed class RealmConsoleCommands(
     /// console is the local operator's stdin, which is the highest authority this daemon has (there is no in-band account to check a GM
     /// level of), so the guardrails are the two steps and a character check that fails closed. This daemon cannot read the characters
     /// database, so its only evidence is the <c>realmcharacters</c> cache (written by the world), and a missing row is NOT evidence of 0
-    /// (characters that predate the table, player-dump imports, playerbot characters, a world with realm id 0 and a failed count write all
+    /// (characters that predate the table, playerbot characters, a world with realm id 0 and a failed count write all
     /// leave no row). The delete is therefore refused unless the count store is configured, at least one realm is listed, and every listed
     /// realm has an explicit row of 0 for the account; any recorded character refuses it too. Deliberate deviation from vmangos
     /// AccountMgr.cpp:82-105, which removes the characters first and then deletes the account row (:104) and the <c>realmcharacters</c>
     /// rows (:105) in one transaction: here the account row goes first, then the count rows, as two separate statements (no transaction
     /// spans the stores). A failure in between leaves harmless count rows of a dead account id instead of a live account with no rows.
+    /// Limit: a recorded 0 is what the world last wrote, not proof: a failed count write, realm id 0 or a character added outside the world's
+    /// create, delete, list and player-dump import paths leaves a stale 0, and this command trusts it.
     /// Limit: the realm cannot kick a world session, so an account online at character select keeps its session until it ends.
     /// Bans, realms and other accounts are untouched.
     /// </summary>

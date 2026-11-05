@@ -254,8 +254,9 @@ public sealed class WorkerTransferTargetProductionTests
     }
 
     /// <summary>
-    /// The life of a ghost travels through the characters database, not the bundle: the source's save wrote it, the production loader reads it on the target, and the arrival's logged-in
-    /// notification puts the body back (DeathFeature, vmangos Player::LoadCorpse). So the spirit arrives as a spirit, with its body where it was stored.
+    /// The target half: the life of a ghost is restored from the characters database, not the bundle (the bundle's copy is the journal's record): the production loader reads what the source's
+    /// save wrote, and the arrival's logged-in notification puts the body back (DeathFeature, vmangos Player::LoadCorpse). So the spirit arrives as a spirit, with its body where it was stored.
+    /// The source half and the real save are in <c>GatewayCrossWorkerTeleportTests</c>.
     /// </summary>
     [Fact]
     public async Task AGhostThroughATransfer_ArrivesAsAGhost_WithItsBodyAtTheStoredPlace()
@@ -289,6 +290,52 @@ public sealed class WorkerTransferTargetProductionTests
             Corpse corpse = Assert.Single(player.Map!.Combat.Corpses);
             Assert.Equal((body.X, body.Y, body.Z), (corpse.X, corpse.Y, corpse.Z));
             Assert.Equal(player.Guid.Value, corpse.Owner.Value);
+        });
+    }
+
+    /// <summary>
+    /// A ghost entering the dungeon of its body (vmangos Player::TeleportTo, Player.cpp:1953-1966) is revived by the target once it has arrived: the source no longer does it, because a refused
+    /// transfer could not undo the revive. It comes back at half health and the body goes. The whole way runs against a real dungeon template and the production allocator: the map is the
+    /// managed instance a worker reserves for an instance-0 request (never an unmanaged instance 0 of the dungeon), and the body lies in that instance.
+    /// </summary>
+    [Fact]
+    public async Task AGhostArrivingInTheMapOfItsBody_IsRevivedOnTheTarget_AndItsBodyGoes()
+    {
+        const uint Dungeon = 36;
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ArcaneCore.Kernel.WorldData.IMapDataStore, GridTerrain.InMemoryMapDataStore>());
+        (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERREVIVE", "Ghostrevived", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        var instances = host.WorldServices.GetRequiredService<ArcaneCore.World.Instances.InstanceFeature>().Instances;
+        Assert.True(instances.IsInstancedMap(Dungeon)); // the registry holds the dungeon template: without it the arrival kicks the session
+        TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+        var target = new WorkerTransferTarget(
+            Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices), instances: new InstanceManagerTransferAllocator(instances));
+        Guid id = Guid.NewGuid();
+
+        TransferSlotReservation reservation = await target.ReserveSlotAsync(id, ObjectGuid.Player((uint)character.Id).Value, Dungeon, 0);
+        Assert.True(reservation.Reserved);
+        Assert.NotEqual(0u, reservation.InstanceId);
+
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var body = new CorpseSnapshot(Dungeon, -16f, -383f, 61f, 1f, now - 100, (byte)CorpseType.ResurrectablePve, reservation.InstanceId);
+        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, Dungeon, new TransferPosition(-16f, -383f, 61f, 0f))
+            with { TargetInstanceId = reservation.InstanceId, SourceMapId = 0, Health = 1, IsGhost = true, Corpse = body };
+        ObjectGuid guid = new(bundle.CharacterGuid);
+
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
+        Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
+        Assert.True(await host.World.InvokeAsync(() => teleports.HandleWorldportAck(player)));
+        await host.WaitForWorldAsync(() => player.IsAlive, "the ghost to be revived on arrival");
+
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Equal(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.Equal((Dungeon, reservation.InstanceId), (player.Map!.MapId, player.Map.InstanceId));
+            Assert.True(player.Health > 1);
+            Assert.Null(player.Combat.Corpse);
+            Assert.Empty(player.Map.Combat.Corpses);
         });
     }
 

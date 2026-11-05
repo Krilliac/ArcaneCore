@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
+using ArcaneCore.Data.Characters.Rename;
 using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Game;
@@ -10,6 +11,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Honor;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Transfer;
@@ -616,6 +618,7 @@ public sealed class CharacterClaimWiringTests
                 record.Money = 98765;
                 record.MapId = 1;
                 (record.X, record.Y, record.Z, record.Orientation) = (1629.36f, -4373.39f, 31.25f, 3.14f);
+                (record.HomeMapId, record.HomeZoneId, record.HomeX, record.HomeY, record.HomeZ) = (1u, 14u, 1500.5f, -4400.25f, 40.75f);
             }
 
             Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
@@ -625,14 +628,140 @@ public sealed class CharacterClaimWiringTests
 
         Assert.True(reads.Fired);
         ObjectGuid guid = ObjectGuid.Player((uint)id);
-        (uint money, uint map) = await host.World.InvokeAsync(() =>
+        (uint money, uint map, HomeBind home) = await host.World.InvokeAsync(() =>
         {
             ArcaneCore.Game.Entities.Player player = host.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
-            return (player.Money, player.MapId);
+            return (player.Money, player.MapId, player.Home);
         });
         Assert.Equal(98765u, money);
         Assert.Equal(1u, map);
+        Assert.Equal(new HomeBind(1u, 14u, 1500.5f, -4400.25f, 40.75f), home); // the bind point the previous owner saved, not the one read before the claim
         Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
+    }
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheReadAfterTheClaimFails()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE13", "Rereader", (_, trip, reads) => reads.BeforeRead = () => trip.ThrowWhileClaimedAsync("the read after the claim failed"));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheRenameGateRefusesAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE10", "Renamer",
+            (services, trip, _) => services.AddSingleton<ICharacterRenameStore>(new PostClaimRenameStore(trip)));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheWorldDataIsMissingAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE11", "Nodata",
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheWorldDataReadThrowsAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE12", "Databoom",
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+                (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)));
+
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenThePlayerBuildThrowsAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE14", "Nobuttons", (_, trip, reads) => reads.BeforeActionButtons = () => trip.ThrowWhileClaimedAsync("the action buttons could not be read"));
+
+    /// <summary>
+    /// A login whose step after the claim fails, by a refusal or a throw. <c>faultAfterClaim</c> installs the fault through <see cref="PostClaimTrip"/>, which fires only while the claim row
+    /// names this world, so the same checks made before the claim pass and the login really claims. The login is answered as failed, the fault saw the claim held, no player exists, and the
+    /// claim is given back: a login on another worker can then claim the character.
+    /// </summary>
+    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip, StaleReadStore> faultAfterClaim)
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        var trip = new PostClaimTrip(rig.Store, a);
+        await using WorldTestHost host = rig.StartWorld(a, configure: services =>
+        {
+            ICharacterStore inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
+            StaleReadStore reads = StaleReadStore.Wrap(inner);
+            services.AddSingleton((ICharacterStore)(object)reads);
+            faultAfterClaim(services, trip, reads);
+        });
+        (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, account, name);
+        trip.CharacterId = id;
+
+        var login = new PacketWriter(8);
+        login.WriteUInt64((ulong)id);
+        await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+        byte[] failed = await client.ReadUntilAsync(WorldOpcode.SmsgCharacterLoginFailed);
+
+        Assert.Equal((byte)CharResult.CharLoginFailed, failed[0]);
+        Assert.Equal(a, trip.HeldAtFault); // read inside the fault: this login held the claim when the step failed
+        Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the claim is given back by the failed login");
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome); // another worker can claim now
+    }
+
+    /// <summary>
+    /// Decides a fault from the claim row itself, not from counting calls: <see cref="ClaimedAsync"/> is true only while the row names <paramref name="login"/>, so a check made before the
+    /// claim (the row is empty) passes and the first one after it fails. <see cref="HeldAtFault"/> keeps the owner the fault saw: a login that refused before claiming leaves it null.
+    /// </summary>
+    private sealed class PostClaimTrip(EfTransferDecisionStore store, CharacterOwnershipToken login)
+    {
+        private volatile CharacterOwnershipToken? _heldAtFault;
+
+        public volatile int CharacterId;
+
+        public CharacterOwnershipToken? HeldAtFault => _heldAtFault;
+
+        public async Task<bool> ClaimedAsync()
+        {
+            if (CharacterId == 0 || await store.GetActiveOwnershipAsync((ulong)CharacterId) is not { } owner || owner != login)
+            {
+                return false;
+            }
+
+            _heldAtFault = owner;
+            return true;
+        }
+
+        public async Task ThrowWhileClaimedAsync(string message)
+        {
+            if (await ClaimedAsync())
+            {
+                throw new InvalidOperationException(message);
+            }
+        }
+    }
+
+    private sealed class PostClaimRenameStore(PostClaimTrip trip) : ICharacterRenameStore
+    {
+        public Task<bool> SetFlagAsync(int characterId, uint flag, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<CharacterRenameResult> RenameAsync(int characterId, int accountId, string newName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async Task<IReadOnlyDictionary<int, uint>> GetFlagsAsync(int accountId, CancellationToken cancellationToken = default)
+            => await trip.ClaimedAsync() ? new Dictionary<int, uint> { [trip.CharacterId] = CharacterAtLoginFlags.Rename } : new Dictionary<int, uint>();
+    }
+
+    private sealed class PostClaimWorldData(IWorldDataStore inner, PostClaimTrip trip, bool throws) : IWorldDataStore
+    {
+        public Task<StartPosition?> GetStartPositionAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.GetStartPositionAsync(race, cls, cancellationToken);
+
+        public Task<ClassInfo?> GetClassInfoAsync(byte cls, CancellationToken cancellationToken = default) => inner.GetClassInfoAsync(cls, cancellationToken);
+
+        public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.IsValidRaceClassAsync(race, cls, cancellationToken);
+
+        public async Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
+        {
+            if (!await trip.ClaimedAsync())
+            {
+                return await inner.GetRaceInfoAsync(race, gender, cancellationToken);
+            }
+
+            if (throws)
+            {
+                throw new InvalidOperationException("world data failed after the claim");
+            }
+
+            return null;
+        }
     }
 
     /// <summary>
@@ -663,7 +792,7 @@ public sealed class CharacterClaimWiringTests
         // a's scope under an incarnation that is not the live one (a restarted target's dead token, say).
         var stale = new CharacterOwnershipToken(a.Scope, a.Epoch, Guid.NewGuid());
         rig.Holder.Current = stale;
-        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => arrival.CompleteAsync(bundle, stale, 0, CancellationToken.None));
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => arrival.CompleteAsync(bundle, stale, 0, CancellationToken.None));
         Assert.Equal(0u, (await rig.CharacterAsync(character))!.MapId);
 
         rig.Holder.Current = a;
@@ -803,6 +932,70 @@ public sealed class CharacterClaimWiringTests
         Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
     }
 
+    /// <summary>
+    /// The offline arrival through the real target: the worker's token holds a committed transfer's claim, the client's session is not here, so the activation writes the position and
+    /// schedules the release of the received claim. The claim stays while the transfer is not completed and is released once it is, so a login of the character on another worker
+    /// claims it instead of being refused as a live owner's. (Without the target's scheduling, nothing would ever release it: no logout runs for a character nobody plays.)
+    /// </summary>
+    [Fact]
+    public async Task TheTargetsOfflineArrival_ReleasesTheReceivedClaim_OnceTheTransferIsCompleted()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Stranded");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        Guid transfer = await rig.CommitClaimMoveAsync(character, a, b); // committed to b, not yet completed
+        await using WorldTestHost host = rig.StartWorld(b);
+        rig.Holder.Current = b;
+        CharacterClaimService claims = host.WorldServices.GetRequiredService<CharacterClaimService>();
+        var target = new WorkerTransferTarget(
+            NodeB, host.World, new NoShadowLoader(), new NoSessionEntry(), sessionReady: _ => false,
+            offlineArrival: new CharacterStoreOfflineArrival(rig.Services.GetRequiredService<IServiceScopeFactory>()), claims: claims)
+        {
+            SessionOpenGrace = TimeSpan.FromMilliseconds(50),
+        };
+        PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(transfer, ObjectGuid.Player((uint)character).Value, NodeA, NodeB) with
+        {
+            CharacterId = character,
+            AccountId = 1,
+            NotLeaveTransport = false,
+        };
+
+        await target.ActivateTargetPlayerAsync(transfer, bundle, b).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)character)));
+        Assert.Equal(bundle.TargetMapId, (await rig.CharacterAsync(character))!.MapId); // the arrival was written
+        await Task.Delay(600); // several polls: the transfer is still in flight, so nothing is deleted
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
+        Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
+
+        await rig.Store.MarkCompletedAsync(transfer);
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)character)).GetAwaiter().GetResult() is null, "the received claim to be released");
+        await claims.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
+    }
+
+    /// <summary>A shadow loader for a target that must never load one (the offline path builds no shadow).</summary>
+    private sealed class NoShadowLoader : ITransferShadowLoader
+    {
+        public Task<ArcaneCore.Game.Entities.Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("the offline arrival loads no shadow");
+
+        public void Release(ArcaneCore.Game.Entities.Player shadow)
+        {
+        }
+    }
+
+    /// <summary>A session entry for a target that must never attach a player (the offline path has none).</summary>
+    private sealed class NoSessionEntry : ITransferSessionEntry
+    {
+        public bool TryAttach(ArcaneCore.Game.Entities.Player player) => throw new InvalidOperationException("the offline arrival attaches no player");
+
+        public void ResumeSaves(ArcaneCore.Game.Entities.Player player) => throw new InvalidOperationException("the offline arrival resumes no saves");
+    }
+
     /// <summary>A scope factory that throws from the next N scope creations, then delegates.</summary>
     private sealed class FailingScopeFactory(IServiceScopeFactory inner) : IServiceScopeFactory
     {
@@ -860,6 +1053,12 @@ public sealed class CharacterClaimWiringTests
 
         public bool Fired { get; private set; }
 
+        /// <summary>Runs before every read of a character; what it throws is the read's failure.</summary>
+        public Func<Task>? BeforeRead { get; set; }
+
+        /// <summary>Runs before every read of a character's action buttons; what it throws is the read's failure.</summary>
+        public Func<Task>? BeforeActionButtons { get; set; }
+
         public static StaleReadStore Wrap(ICharacterStore inner)
         {
             object proxy = Create<ICharacterStore, StaleReadStore>();
@@ -879,6 +1078,16 @@ public sealed class CharacterClaimWiringTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
+            if (targetMethod.Name == nameof(ICharacterStore.GetByIdAsync) && args is [int read, CancellationToken readToken] && BeforeRead is { } beforeRead)
+            {
+                return ReadAfterAsync(beforeRead, read, readToken);
+            }
+
+            if (targetMethod.Name == nameof(ICharacterStore.GetActionButtonsAsync) && args is [int owner, CancellationToken buttonsToken] && BeforeActionButtons is { } beforeButtons)
+            {
+                return ActionButtonsAfterAsync(beforeButtons, owner, buttonsToken);
+            }
+
             if (targetMethod.Name == nameof(ICharacterStore.GetByIdAsync) && args is [int id, CancellationToken ct] && _onRead is not null && id == _armedId)
             {
                 return ReadAsync(id, ct);
@@ -893,6 +1102,18 @@ public sealed class CharacterClaimWiringTests
                 ExceptionDispatchInfo.Throw(ex.InnerException);
                 throw;
             }
+        }
+
+        private async Task<CharacterRecord?> ReadAfterAsync(Func<Task> before, int id, CancellationToken ct)
+        {
+            await before();
+            return await _inner.GetByIdAsync(id, ct);
+        }
+
+        private async Task<IReadOnlyList<ActionButton>> ActionButtonsAfterAsync(Func<Task> before, int id, CancellationToken ct)
+        {
+            await before();
+            return await _inner.GetActionButtonsAsync(id, ct);
         }
 
         private async Task<CharacterRecord?> ReadAsync(int id, CancellationToken ct)

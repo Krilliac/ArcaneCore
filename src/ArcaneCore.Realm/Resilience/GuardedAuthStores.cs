@@ -83,6 +83,31 @@ internal sealed class GuardedRealmCharacterCountStore(GuardedCalls<IRealmCharact
         => calls.RunAsync(static (store, s, ct) => store.DeleteByAccountAsync(s, ct), accountId, cancellationToken);
 }
 
+/// <summary>
+/// See <see cref="GuardedAccountStore"/>. The administrative account store the realm console's <c>account delete</c> uses: without the
+/// guard that one call ran on the caller's own scope, outside the Auth breaker, timeout and bulkhead the other stores of the command have.
+/// </summary>
+internal sealed class GuardedAccountAdmin(GuardedCalls<IAccountAdmin> calls) : IAccountAdmin
+{
+    public Task<bool> SetStatusAsync(string username, AccountStatus status, int? actorAccountId = null, CancellationToken cancellationToken = default)
+        => calls.RunAsync(
+            static (store, s, ct) => store.SetStatusAsync(s.Username, s.Status, s.ActorAccountId, ct),
+            (Username: username, Status: status, ActorAccountId: actorAccountId),
+            cancellationToken);
+
+    public Task<bool> RevokeSessionKeyAsync(int accountId, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.RevokeSessionKeyAsync(s, ct), accountId, cancellationToken);
+
+    public Task<bool> DeleteAsync(string username, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.DeleteAsync(s, ct), username, cancellationToken);
+
+    public Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.GetUsernamesAsync(s, ct), accountIds, cancellationToken);
+
+    public Task<IReadOnlySet<int>> FindNonActiveAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.FindNonActiveAsync(s, ct), accountIds, cancellationToken);
+}
+
 /// <summary>See <see cref="GuardedAccountStore"/>.</summary>
 internal sealed class GuardedBanStore(GuardedCalls<IBanStore> calls) : IBanStore
 {

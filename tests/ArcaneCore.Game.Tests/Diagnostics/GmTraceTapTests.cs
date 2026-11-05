@@ -574,6 +574,7 @@ public sealed class GmTraceTapTests
         Assert.Equal("anticheat", GmStreamChannels.Find("AntiCheat")?.Name);
         Assert.Null(GmStreamChannels.Find("proc"));
     }
+
     // --- melee spells (the spell-owned SMSG_ATTACKERSTATEUPDATE), environmental damage, game-object targets ----
 
     private const uint NextSwingStrike = 993_001;

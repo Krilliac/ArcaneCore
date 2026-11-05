@@ -145,6 +145,18 @@ public interface ICreatureSpellCaster
     /// </summary>
     bool CanCastMainSpell(Creature caster, uint spellId) => true;
 
+    /// <summary>The spell's data, or null when the spell is unknown or there is no spell system. Null by default.</summary>
+    SpellInfo? FindSpell(uint spellId) => null;
+
+    /// <summary>The spell is off cooldown for <paramref name="caster"/> (cmangos Unit::IsSpellReady). True by default.</summary>
+    bool IsSpellReady(Creature caster, uint spellId) => true;
+
+    /// <summary>The auras on <paramref name="unit"/>; none by default.</summary>
+    IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit) => [];
+
+    /// <summary><paramref name="target"/> is immune to <paramref name="spell"/> (cmangos Unit::IsImmuneToSpell). False by default.</summary>
+    bool IsImmuneToSpell(Unit target, SpellInfo spell) => false;
+
     bool IsCasting(Creature caster);
 
     bool HasAura(Unit unit, uint spellId);

@@ -278,4 +278,26 @@ public sealed class ChestGoldAndConditionTests
         LootItem hide = Assert.Single(rig.Loot.FindLoot(rig.Single(FreeChestEntry).Guid)!.Items, i => i.ItemId == Hide);
         Assert.Equal([bob.Guid], hide.AllowedLooters);
     }
+
+    private static uint RolledChestGold(int seed)
+    {
+        Rig rig = CreateRig([GoSpawn(1, ChestEntry, 3, 0)], minGold: 1, maxGold: 1_000_000, seed: seed);
+        (Player player, FakeSession session) = rig.Join(1);
+        session.Clear();
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(player, rig.Single(ChestEntry).Guid));
+        return LootResponse(session).Gold;
+    }
+
+    [Fact]
+    public void ChestGold_IsReproducibleFromTheLootServiceSeed()
+    {
+        // The seeded Random handed to LootService is the seam for loot determinism; the gold roll draws from it.
+        uint first = RolledChestGold(seed: 11);
+        uint second = RolledChestGold(seed: 11);
+        uint other = RolledChestGold(seed: 12);
+
+        Assert.InRange(first, 1u, 1_000_000u);
+        Assert.Equal(first, second);
+        Assert.NotEqual(first, other); // proves the roll depends on the seed, so the equality above is not vacuous
+    }
 }

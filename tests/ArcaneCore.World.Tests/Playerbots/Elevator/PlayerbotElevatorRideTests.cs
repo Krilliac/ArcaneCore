@@ -84,7 +84,8 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
     /// destination begins a lift ride instead of a walk into the cliff. The brain walks the bot to the landing beside a car at the foot,
     /// it waits, steps aboard when the car stands there, reports itself on the car (MOVEFLAG_ONTRANSPORT, the car's GUID, at the car's
     /// position) all the way up, and steps off onto the plateau; the destination then walks on from there. No step of the bot is a jump
-    /// farther than stepping aboard or off, and the anticheat, judging the bot as a client, finds nothing.
+    /// farther than stepping aboard or off, and the anticheat, judging the bot as a client, finds nothing: the walk to the lift went
+    /// through the distance budget, and the same bot overrunning it afterwards is scored (<see cref="BotAntiCheatTestKit"/>).
     /// </summary>
     [Fact]
     public async Task ABotInThousandNeedles_RidesTheGreatLiftUp_ToRatchet()
@@ -164,6 +165,9 @@ public sealed class PlayerbotElevatorRideTests(ITestOutputHelper output)
         Assert.True(await world.OnWorldAsync(() => PlayerbotMotion.IsActive(world.Player)), "not walking towards Ratchet");
         foreach (AntiCheatFinding finding in findings) output.WriteLine($"anticheat: {finding.Type} {finding}");
         Assert.DoesNotContain(findings, f => f.Type is AntiCheatViolation.Flag or AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+
+        // The canyon floor to the cars at the foot is 85 yards and more, all of it steps on the ground.
+        await BotAntiCheatTestKit.AssertJudgedThenOverrunIsScoredAsync(world.Host, world.Session, anticheat, findings, atLeastYards: 60f);
     }
 
     /// <summary>

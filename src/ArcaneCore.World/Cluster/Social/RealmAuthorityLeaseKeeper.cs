@@ -1,3 +1,4 @@
+using System.Data.Common;
 using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
@@ -37,6 +38,16 @@ public interface IRealmSingletonHalt
 /// </summary>
 public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFenceSource
 {
+    /// <summary>
+    /// How many times <see cref="AcquireAtStartAsync"/> asks the store for one scope before a store failure ends the start. On PostgreSQL a takeover waits (<c>FOR UPDATE</c>, bounded by the command timeout, a third of the renewal
+    /// interval and at least a second) for the in-flight fenced writers of the lapsed holder's scope; a steady stream of them can keep it waiting past that timeout, and without a retry the new node would fail its start on a lock wait
+    /// that the next attempt would not hit. Only a store or timeout failure is retried (<see cref="DbException"/>, <see cref="TimeoutException"/>); a refusal is an answer and is not.
+    /// </summary>
+    public const int StartAcquireAttempts = 4;
+
+    /// <summary>The pause between two start attempts of <see cref="StartAcquireAttempts"/>; the whole bounded retry adds at most (attempts - 1) times this to the start, on top of the command timeouts.</summary>
+    public static readonly TimeSpan StartAcquireRetryDelay = TimeSpan.FromSeconds(1);
+
     private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy];
     private static readonly string[] MapWorkerScopes =
     [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
@@ -160,7 +171,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         _incarnation = incarnation;
         foreach (string scope in ScopesToTake)
         {
-            AuthorityLeaseResult? first = await TryAcquireOrSkipAsync(scope).ConfigureAwait(false);
+            AuthorityLeaseResult? first = await TryAcquireOrSkipAsync(scope, cancellationToken).ConfigureAwait(false);
             if (first is null)
             {
                 continue;
@@ -186,7 +197,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
                     wait = holder.ExpiresAtUtc - _time.GetUtcNow();
                 }
 
-                result = await TryAcquireAsync(scope).ConfigureAwait(false);
+                result = await TryAcquireWithRetryAsync(scope, cancellationToken).ConfigureAwait(false);
             }
 
             if (result.Outcome is AuthorityLeaseOutcome.Granted or AuthorityLeaseOutcome.Renewed && result.Lease is { } lease)
@@ -217,11 +228,11 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     }
 
     // Null when an optional scope has no lease row (ArgumentException from the durable store, see OptionalScopes); every other failure propagates.
-    private async Task<AuthorityLeaseResult?> TryAcquireOrSkipAsync(string scope)
+    private async Task<AuthorityLeaseResult?> TryAcquireOrSkipAsync(string scope, CancellationToken cancellationToken)
     {
         try
         {
-            return await TryAcquireAsync(scope).ConfigureAwait(false);
+            return await TryAcquireWithRetryAsync(scope, cancellationToken).ConfigureAwait(false);
         }
         catch (ArgumentException ex) when (ex.ParamName == "scope" && Array.IndexOf(OptionalScopes, scope) >= 0) // the store's UnknownScope: the scope parameter names the missing row
         {
@@ -232,6 +243,23 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
             }
 
             return null;
+        }
+    }
+
+    // The start's acquire: a bounded number of attempts (StartAcquireAttempts) across store and timeout failures, so a lock wait that outlasts one command timeout does not fail the node's start.
+    private async Task<AuthorityLeaseResult> TryAcquireWithRetryAsync(string scope, CancellationToken cancellationToken)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await TryAcquireAsync(scope).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < StartAcquireAttempts && ex is DbException or TimeoutException)
+            {
+                _logger.LogWarning(ex, "Taking the {Scope} lease at start failed (attempt {Attempt} of {Attempts}); retrying in {Seconds:F0} s", scope, attempt, StartAcquireAttempts, StartAcquireRetryDelay.TotalSeconds);
+                await Task.Delay(StartAcquireRetryDelay, _time, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

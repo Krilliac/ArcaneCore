@@ -18,6 +18,7 @@ namespace ArcaneCore.World.Tests;
 /// <c>RunAsync</c>, the crash handler turned it into a fail-fast, and the host disposed the container under a world thread and a save queue that were never
 /// stopped: the retained character snapshots were retried into a disposed provider and lost. These run the real generic host through <see cref="WorldStartup.RunAsync"/>.
 /// </summary>
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class WorldStopDuringStartupTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);

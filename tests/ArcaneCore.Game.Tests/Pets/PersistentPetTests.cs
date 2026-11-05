@@ -318,10 +318,10 @@ public sealed class PersistentPetTests
 
     // Pet.cpp:413 (LoadPetFromDB) -> SynchronizeLevelWithOwner (Pet.cpp:2353-2356): a hunter pet saved above its owner loads at the owner's level.
     [Theory]
-    [InlineData(25, 20, 20u, 200u, 200u, 50u, 50u, 0u, 12)]
-    [InlineData(20, 20, 20u, 200u, 90u, 50u, 7u, 500u, 10)]
-    [InlineData(5, 20, 5u, 100u, 90u, 10u, 7u, 500u, 10)]
-    public void CachedRestore_ClampsAHunterPetToTheOwnersLevel(byte savedLevel, byte ownerLevel, uint expectedLevel, uint expectedMaxHealth, uint expectedHealth, uint expectedMaxMana, uint expectedMana, uint expectedExperience, int expectedTrainingPoints)
+    [InlineData(25, 20, 20u, 200u, 200u, 0u, 12)]
+    [InlineData(20, 20, 20u, 200u, 90u, 500u, 10)]
+    [InlineData(5, 20, 5u, 100u, 90u, 500u, 10)]
+    public void CachedRestore_ClampsAHunterPetToTheOwnersLevel(byte savedLevel, byte ownerLevel, uint expectedLevel, uint expectedMaxHealth, uint expectedHealth, uint expectedExperience, int expectedTrainingPoints)
     {
         var content = new PetContent(
             [
@@ -339,8 +339,8 @@ public sealed class PersistentPetTests
         Assert.Equal(expectedLevel, (uint)pet.Level);
         Assert.Equal(expectedMaxHealth, pet.MaxHealth);
         Assert.Equal(expectedHealth, pet.Health);
-        Assert.Equal(expectedMaxMana, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
-        Assert.Equal(expectedMana, pet.GetUInt32(UpdateFields.UnitFieldPower1));
+        // The row's mana (10..60) is not a hunter pet's pool (Pet.cpp:1409-1426 never calls SetCreateMana): see HunterPetStatsRowTests.
+        Assert.NotEqual(50u, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
         Assert.Equal(expectedExperience, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
         Assert.Equal(expectedTrainingPoints, pet.Summon!.Charm!.TrainingPoints);
     }

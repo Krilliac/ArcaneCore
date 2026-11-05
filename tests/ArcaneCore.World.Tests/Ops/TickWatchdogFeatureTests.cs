@@ -33,8 +33,35 @@ public sealed class TickWatchdogFeatureTests
         return options;
     }
 
+    /// <summary>
+    /// Stands in for the runtime actuators, which write the process-global <c>ExitCodes.Current</c> and stop the host. Their action options
+    /// default to None, so today none of these tests reaches them; a test that later turns an action on must not write that global while another
+    /// class asserts it in parallel, so the real actuators are never registered here.
+    /// </summary>
+    private sealed class NoActuator : ITickHangActuator, IMemoryPressureActuator
+    {
+        public void Stop(string reason)
+        {
+        }
+
+        public void FailFast(string reason)
+        {
+        }
+
+        public void Collect()
+        {
+        }
+
+        public void Stop()
+        {
+        }
+    }
+
     private static void Register(IServiceCollection services, WatchdogOptions options, WatchdogClock? clock = null)
     {
+        var actuator = new NoActuator(); // before AddTickWatchdog: its TryAdd then keeps these
+        services.AddSingleton<ITickHangActuator>(actuator);
+        services.AddSingleton<IMemoryPressureActuator>(actuator);
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(options));
         services.AddSingleton(new CounterRegistry());
         if (clock is not null)

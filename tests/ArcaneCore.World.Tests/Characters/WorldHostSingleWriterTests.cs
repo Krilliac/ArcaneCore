@@ -28,6 +28,7 @@ namespace ArcaneCore.World.Tests.Characters;
 /// One world per characters database, and a free port, are checked before the first playerbot row is read or written (the 2026-10 incident: a second world
 /// restored 863 bots on the live database and then failed to bind its port). The writer lock is a file lock, so two hosts in one process contend exactly as two processes do.
 /// </summary>
+[Xunit.Collection(Net.PacketCaptureCollection.Name)] // a host stop drains every open packet trace in the process
 public sealed class WorldHostSingleWriterTests
 {
     [Fact]

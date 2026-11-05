@@ -176,7 +176,30 @@ public sealed partial class GroupManager(SocialContext context)
     public Group? GetInvite(ObjectGuid guid) => _invitedTo.GetValueOrDefault(guid);
 
     /// <summary>Whether two players share a group (vmangos Player::IsInSameRaidWith).</summary>
-    public bool AreInSameGroup(ObjectGuid a, ObjectGuid b) => a == b || (GetGroup(a) is { } g && g.IsMember(b));
+    public bool AreInSameGroup(ObjectGuid a, ObjectGuid b)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+
+        if (GetGroup(a) is not { } group)
+        {
+            return false;
+        }
+
+        // A manual scan: Group.IsMember allocates a closure per call and this runs from the combat hooks on map threads.
+        IReadOnlyList<GroupMemberSlot> members = group.Members;
+        for (int i = 0; i < members.Count; i++)
+        {
+            if (members[i].Guid == b)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Queues the current player's pet-name bit for the next out-of-range stats pass.</summary>
     public void MarkPetNameChanged(Player player)

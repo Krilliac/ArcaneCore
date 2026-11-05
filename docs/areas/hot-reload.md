@@ -232,7 +232,7 @@ table or catalog from the database).
 | `command` (817), `mangos_string` (864) | yes (:899-901) | none | no store |
 | `reserved_name` (888) | yes (:900) | `reserved_name` (in `all` when a SQL reserved-name store is registered; see below) | delivered |
 | `creature` (819), `creature_groups` (823), `creature_display_info_addon` (822), `cinematic_waypoints` (816) | no | none | owner lane (creature-movement-spawns) |
-| `creature_spells` (828) | no | none | no store |
+| `creature_spells` (828) | no | none | no store (the cmangos spell lists reload with `creature_template`: their catalog is part of the AI content, and a creature rebinds at its next tick out of combat) |
 | `creature_onkill_reputation` (826), `reputation_reward_rate` (886), `reputation_spillover_template` (887) | no | none | owner lane (reputation-factions) |
 | `spell_proc_item_enchant` (901) | yes, via all_spell (:972-981) | `spell_proc_item_enchant` (in `all` when its SQL store is registered; see below) | delivered |
 | `spell_enchant_charges` (no vmangos reload command) | - | `spell_enchant_charges`, an ArcaneCore addition (in `all` when its SQL store is registered; see below) | delivered |

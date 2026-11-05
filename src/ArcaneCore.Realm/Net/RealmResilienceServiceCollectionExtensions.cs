@@ -17,7 +17,7 @@ public static class RealmResilienceServiceCollectionExtensions
     /// <summary>
     /// Register the guard (<see cref="DatabaseResilienceServiceCollectionExtensions.AddDatabaseResilience"/>) and put
     /// the Auth breaker in front of <see cref="IAccountStore"/>, <see cref="IRealmStore"/> and, when registered,
-    /// <see cref="IBanStore"/>, <see cref="IAccountLoginInfoStore"/> and <see cref="IRealmCharacterCountStore"/>. Must follow <c>AddAuthDatabase</c>: there is nothing to decorate before it, and the
+    /// <see cref="IBanStore"/>, <see cref="IAccountLoginInfoStore"/>, <see cref="IRealmCharacterCountStore"/> and <see cref="IAccountAdmin"/>. Must follow <c>AddAuthDatabase</c>: there is nothing to decorate before it, and the
     /// call says so instead of silently guarding nothing.
     /// </summary>
     public static IServiceCollection AddRealmResilience(this IServiceCollection services, IConfiguration configuration)
@@ -31,6 +31,7 @@ public static class RealmResilienceServiceCollectionExtensions
         Decorate<IBanStore>(services, static calls => new GuardedBanStore(calls), required: false);
         Decorate<IAccountLoginInfoStore>(services, static calls => new GuardedAccountLoginInfoStore(calls), required: false);
         Decorate<IRealmCharacterCountStore>(services, static calls => new GuardedRealmCharacterCountStore(calls), required: false);
+        Decorate<IAccountAdmin>(services, static calls => new GuardedAccountAdmin(calls), required: false);
         return services;
     }
 

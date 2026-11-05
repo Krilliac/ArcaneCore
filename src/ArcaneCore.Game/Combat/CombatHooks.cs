@@ -90,7 +90,7 @@ public class CombatHooks
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Maps.WorldRuntime, Func<Player, Player, bool>> s_sameGroup = new();
 
     /// <summary>
-    /// The group test the free-for-all rule needs (vmangos Player::IsInRaidWith): two players of one group stay friends in an arena.
+    /// The group test the free-for-all rule needs (vmangos Unit::IsInRaidWith, Unit.h:1173, called by GetReactionTo at Object.cpp:3655): two players of one group stay friends in an arena.
     /// Per world; without one nobody is grouped. Called by the spell feature when it attaches and the social area is present.
     /// </summary>
     public static void RegisterSameGroup(Maps.WorldRuntime world, Func<Player, Player, bool> sameGroup)
@@ -140,13 +140,57 @@ public class CombatHooks
             return false;
         }
 
-        if (ReferenceEquals(ca, cb) || (pa.Map?.World is { } world && s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup) && sameGroup(ca, cb)))
+        if (ReferenceEquals(ca, cb))
         {
             return true;
         }
 
-        return !AreBothFreeForAll(ca, cb) && ca.Team == cb.Team;
+        // The cheap tests come first: the group answer can only change the result when the pair is otherwise not friendly (two
+        // free-for-all players, or two teams), so the common same-team pair never reads the group manager. CanAttack runs on map
+        // threads; the group manager is written by packet handlers and bots under the world's serial gate (in-world packets run inside
+        // Map.Update), so its reads and writes must both be inside that gate or on the world thread. InSameGroup enforces that: a read
+        // from a thread outside the gate during the parallel phase is reported and made to take the gate (WorldRuntime.EnterSerialForRead).
+        if (!AreBothFreeForAll(ca, cb) && ca.Team == cb.Team)
+        {
+            return true;
+        }
+
+        return InSameGroup(pa, ca, cb);
     }
+
+    /// <summary>
+    /// The victim's own state allows an attack whoever the attacker is (the flag mask of vmangos IsValidAttackTarget, a GM in GM mode,
+    /// a creature in evade mode): not non-attackable, spawning, on a taxi, not selectable. <see cref="CanAttack"/> and the magnet
+    /// redirect share it (mangos-classic Unit::CanAttack, Relations.cpp:351).
+    /// </summary>
+    internal static bool IsAttackableState(Unit victim)
+    {
+        const UnitFlags notAttackable = UnitFlags.NonAttackable2 | UnitFlags.Spawning | UnitFlags.TaxiFlight
+            | UnitFlags.NotAttackable1 | UnitFlags.NotSelectable;
+        return (victim.UnitFlags & notAttackable) == 0
+            && victim is not Player { IsGameMaster: true }
+            && victim is not ICombatCreature { IsInEvadeMode: true };
+    }
+
+    private static bool InSameGroup(Unit mapOf, Player a, Player b)
+    {
+        if (mapOf.Map?.World is not { } world || !s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup))
+        {
+            return false;
+        }
+
+        using Maps.WorldRuntime.SerialScope gate = world.EnterSerialForRead("GroupManager");
+        return sameGroup(a, b);
+    }
+
+    /// <summary>
+    /// The free-for-all hostile clause of GetReactionTo (vmangos Object.cpp:3661-3662) for any two units: the players they act for
+    /// (<see cref="DuelRules.ControllingPlayer"/>) are two different, ungrouped players who both carry the free-for-all flag. Hunter traps,
+    /// pets and totems of such a player therefore treat the other one's side as hostile whatever the teams. False when a side acts for no player.
+    /// </summary>
+    internal static bool AreFreeForAllOpponents(Unit a, Unit b)
+        => DuelRules.ControllingPlayer(a) is { } ca && DuelRules.ControllingPlayer(b) is { } cb
+            && !ReferenceEquals(ca, cb) && AreBothFreeForAll(ca, cb) && !InSameGroup(a, ca, cb);
 
     /// <summary>Both players carry the free-for-all PvP flag (vmangos IsFFAPvP on each, GetReactionTo and IsValidAttackTarget).</summary>
     private static bool AreBothFreeForAll(Player a, Player b)
@@ -163,7 +207,7 @@ public class CombatHooks
     /// <summary>
     /// Whether <paramref name="attacker"/> may attack <paramref name="victim"/> (the parts of
     /// vmangos Unit::IsValidAttackTarget / IsTargetableBy that do not need factions): both in
-    /// the same map, the victim alive and not flagged non-attackable, not a GM in GM mode, not
+    /// the same map, the victim in the world and not flagged non-attackable, not a GM in GM mode, not
     /// friendly, and an enemy player must be PvP-flagged.
     /// </summary>
     public virtual bool CanAttack(Unit attacker, Unit victim)
@@ -173,19 +217,7 @@ public class CombatHooks
             return false;
         }
 
-        const UnitFlags notAttackable = UnitFlags.NonAttackable2 | UnitFlags.Spawning | UnitFlags.TaxiFlight
-            | UnitFlags.NotAttackable1 | UnitFlags.NotSelectable;
-        if ((victim.UnitFlags & notAttackable) != 0)
-        {
-            return false;
-        }
-
-        if (victim is Player { IsGameMaster: true })
-        {
-            return false;
-        }
-
-        if (victim is ICombatCreature { IsInEvadeMode: true })
+        if (!IsAttackableState(victim))
         {
             return false;
         }

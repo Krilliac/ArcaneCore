@@ -66,6 +66,38 @@ public sealed class SessionTraceAntiCheatTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task ABehindStampedBlinkOfAnExemptPlayer_IsTracedAsATeleport_ByTheShadow()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using WorldTestHost host = SessionTraceTestKit.Start(new FakeTimeProvider(), logs);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAC7", "Behindgm", AccountSecurity.GameMaster);
+        await ApplyAsync(host, new AntiCheatOptions());
+        await gm.CollectAsync();
+        Assert.StartsWith("Session trace on for Behindgm", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session on"), StringComparison.Ordinal);
+
+        TraceMover mover = await SessionTraceTestKit.MoverAsync(host, gm, "Behindgm");
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Behindgm", mover);
+        await host.OnWorldAsync(() => 0);
+        Assert.DoesNotContain(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat");
+
+        // 80 yards in 100 ms of real time, the stamp 200 ms behind the last block: under the regression threshold, so the timestamp check
+        // stays quiet and the shadow, like the feature, must judge the step by the teleport distance alone.
+        await Task.Delay(100);
+        mover.Time -= 200;
+        mover.X += 80f;
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, MovementFlags.Forward);
+        await SessionTraceTestKit.SettledAsync(host, "Behindgm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        TraceLine line = await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal), "the exempt Teleport line of the behind-stamped blink");
+        Assert.EndsWith(" exempt reason=staff (not enforced)", line.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat" && l.Detail.StartsWith("PacketTiming ", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task APlayerWhenChecksAreOff_IsTracedAsExemptWithTheChecksOffReason()
     {
         var logs = new CapturingLoggerProvider();

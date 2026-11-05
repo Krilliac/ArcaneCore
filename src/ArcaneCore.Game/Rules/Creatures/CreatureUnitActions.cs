@@ -379,6 +379,18 @@ public sealed class CreatureSetImmunitySetAction : CreatureAction
     }
 }
 
+[RulePrimitive(RuleHostKind.Creature, CreatureRuleIds.ActionSetSpellList, "creature.set_spell_list",
+    Description = "Change the creature's spell list: 0 clears it, an unknown id keeps the current one, and a list set in combat arms its initial cooldowns.")]
+[RuleParam(1, "list_id", RuleParamKind.NonNegative)]
+public sealed class CreatureSetSpellListAction : CreatureAction
+{
+    internal override bool Run(CreatureRuleRunner runner, in RuleActionContext context, Unit? target)
+    {
+        runner.System?.SetSpellList(runner.Me, (uint)Math.Max(0, context.Action.Param(1)));
+        return true;
+    }
+}
+
 [RulePrimitive(RuleHostKind.Creature, CreatureRuleIds.ActionSetFollowMovement, "creature.set_follow_movement", Description = "0 holds a follow movement still, 1 lets it follow again.")]
 [RuleParam(1, "state", RuleParamKind.Int)]
 public sealed class CreatureSetFollowMovementAction : CreatureAction

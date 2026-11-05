@@ -21,6 +21,9 @@ public class GuardAI(Creature creature) : CreatureAI(creature)
 {
     public override bool AggroesOnSight => true;
 
+    /// <inheritdoc/>
+    public override bool RunsSpellList => GetType() == typeof(GuardAI);
+
     /// <summary>vmangos GuardAI::MoveInLineOfSight (GuardAI.cpp:50-77): attack when the host's guard rule allows it.</summary>
     public override void MoveInLineOfSight(Unit who)
     {

@@ -23,6 +23,11 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureModelInfoRow> models = await db.Set<CreatureModelInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureEquipmentRow> equipment = await db.Set<CreatureEquipmentRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureImmunityRow> immunities = await db.Set<CreatureImmunityRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureSpellListHeaderRow> spellListHeaders = await db.Set<CreatureSpellListHeaderRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureSpellListRow> spellListEntries = await db.Set<CreatureSpellListRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureSpellTargetingRow> spellTargeting = await db.Set<CreatureSpellTargetingRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CombatConditionRow> combatConditions = await db.Set<CombatConditionRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<UnitConditionRow> unitConditions = await db.Set<UnitConditionRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiScriptRow> scripts = await db.Set<CreatureAiScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -79,6 +84,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
                     relayTemplates.Select(row => new RelayScriptTemplateChoice(row.Id, row.RelayId, row.Chance))),
                 DbScripts = new DbScriptCatalog(dbScripts.Select(row => (DbScriptDataModule.KindOf(row), DbScriptDataModule.ToStep(row)))),
                 SmartScripts = new SmartScriptCatalog(smartScripts.Select(SmartScriptDataModule.ToRow), smartReferences),
+                SpellLists = CreatureSpellListDataModule.ToCatalog(spellListHeaders, spellListEntries, spellTargeting, combatConditions, unitConditions),
             },
             entryPaths.Select(p => (p.Entry, p.PathId, new CreatureWaypoint(p.Point, p.X, p.Y, p.Z, p.Orientation, p.WaitTimeMs) { ScriptId = p.ScriptId })),
             spawnEntries.Select(e => (e.SpawnGuid, e.Entry)),
@@ -166,6 +172,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         RangedBaseAttackTime = r.RangedBaseAttackTime,
         DamageSchool = r.DamageSchool,
         PetSpellDataId = r.PetSpellDataId,
+        SpellList = r.SpellList,
         MovementType = r.MovementType,
         CorpseDecaySeconds = r.CorpseDecaySeconds,
         ExtraFlags = r.ExtraFlags,

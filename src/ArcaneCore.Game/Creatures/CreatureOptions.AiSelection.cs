@@ -10,4 +10,11 @@ public sealed partial class CreatureOptions
     /// (AI/EventAI/CreatureEventAI.cpp:51-63) for hand-edited data; an explicit AIName always wins. A deviation from retail.
     /// </summary>
     public bool ImplicitEventAi { get; set; }
+
+    /// <summary>
+    /// <c>Creatures:SpellListContinueAfterCast</c> (default off): a creature spell list casts one blocking spell per tick, as cmangos doc/SpellLists.txt
+    /// describes retail ("always one spell is selected"). Switched on, the tick keeps walking the eligible blocking entries after a success, as the
+    /// cmangos loop in UnitAI::UpdateSpellLists does; an instant spell can then fire a second one in the same tick. A deviation from retail.
+    /// </summary>
+    public bool SpellListContinueAfterCast { get; set; }
 }

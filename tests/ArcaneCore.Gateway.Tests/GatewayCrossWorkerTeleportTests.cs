@@ -3,6 +3,8 @@ using System.Net;
 using System.Text;
 using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
@@ -80,6 +82,66 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.Equal(0, cluster.Gateway.Transfers.StagedCount);
         await Cluster.WaitUntilAsync(
             () => Task.FromResult(cluster.Gateway.Workers[1].Link!.SessionCount == 1 && cluster.Gateway.Workers[0].Link!.SessionCount == 0), cts.Token);
+    }
+
+    /// <summary>
+    /// A real ghost through the whole transfer, from a body made by a real death. The source captures it into the production bundle and its settlement save writes it, the journal holds the
+    /// bundle, the target rebuilds the ghost from the stored life and, not owning the body's continent, keeps the body outside every map; the source's map loses the body at the retire, and
+    /// the target's logout save stores it unchanged, so nothing lost it on the way.
+    /// </summary>
+    [Fact]
+    public async Task AGhostTeleportedToKalimdor_ArrivesAsAGhost_AndItsBodySurvivesTheTransfer_FromBundleToTheNextSave()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        WorldClient client = await cluster.EnterEastAsync("TELEGHOST", "Teleghost", cts.Token);
+        await using var ownedClient = client;
+        ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
+        await Cluster.WaitUntilAsync(() => Task.FromResult(cluster.EastTeleports.ClusterFarRouter is not null), cts.Token);
+
+        CorpseSnapshot body = await cluster.Eastern.World.InvokeAsync(() =>
+        {
+            Player player = cluster.Eastern.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            Assert.True(player.Map.Combat.RepopPlayer(player));
+            return PlayerLife.Capture(player).Corpse ?? throw new InvalidOperationException("the release made no body");
+        }, cts.Token);
+        Assert.Equal(0u, body.MapId);
+
+        Assert.True(await cluster.TeleportAsync(guid, Landing));
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
+        await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1, Combat.Corpse: not null }, cts.Token), cts.Token);
+
+        Guid transferId = cluster.Router.LastTransferId;
+        await Cluster.WaitUntilAsync(
+            async () => (await cluster.Store.GetDecisionAsync(transferId, cts.Token))?.DecisionState == PlayerTransferDecisionState.Completed, cts.Token);
+        PlayerTransferBundle journalled = Assert.IsType<PlayerTransferBundle>((await cluster.Store.GetDecisionAsync(transferId, cts.Token))!.CapturedBundle);
+        Assert.True(journalled.IsGhost);
+        Assert.Equal(body, journalled.Corpse);
+
+        await cluster.Kalimdor.World.InvokeAsync(() =>
+        {
+            Player player = cluster.Kalimdor.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.False(player.IsAlive);
+            Assert.Equal(1u, player.Health);
+            Assert.Equal(body, PlayerLife.Capture(player).Corpse);
+            Assert.Null(player.Combat.Corpse!.Map); // map 0 belongs to the east worker
+            Assert.Null(cluster.Kalimdor.World.FindMap(0));
+            return true;
+        }, cts.Token);
+        await Cluster.WaitUntilAsync(
+            async () => await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.GetMap(0).Combat.Corpses.Count == 0, cts.Token), cts.Token);
+
+        await client.DisposeAsync(); // logout on the target: its save is the next write of the body
+        await Cluster.WaitUntilAsync(async () => await cluster.Store.GetActiveOwnershipAsync((ulong)cluster.CharacterId, cts.Token) is null, cts.Token);
+        await using AsyncServiceScope scope = cluster.Kalimdor.Services.CreateAsyncScope();
+        CharacterLife stored = Assert.IsType<CharacterLife>(await scope.ServiceProvider.GetRequiredService<ICharacterLifeStore>().LoadAsync(cluster.CharacterId, cts.Token));
+        Assert.True(stored.IsGhost);
+        Assert.Equal(body, stored.Corpse);
     }
 
     [Fact]

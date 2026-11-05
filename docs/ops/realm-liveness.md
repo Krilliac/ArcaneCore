@@ -83,6 +83,14 @@ Not written by the world: with `World:Realm:Id` 0, with no auth database, and in
 where an active and a standby world share the realm and the gateway owns the client-facing address. There the gateway writes
 the row (section 7).
 
+Startup refusal (exit 78): under the host supervisor, a child labelled `social` or `coordinator` is a whole World executable, so its own
+`Arguments` must carry `--World:Realm:Id=0` in the exact `--Key=value` form, or the supervisor's config check refuses to start. Any other form is refused
+too (space form, slash form, a mention inside a quoted value, a mention right after a `--Key` that has no `=`), as is any non-zero value among
+several mentions (the message names the offending one). A labelled child that also sets `Cluster:Worker:Enabled=true` is still refused until it carries `--World:Realm:Id=0`.
+Accepted limit: the check covers only the `social` and `coordinator` labels. A second `combined` child, or a `worker` child that does not set
+`Cluster:Worker:Enabled=true`, is not refused for the realm row and, with `World:Realm:Id` above 0, writes it beside the world that serves the realm:
+give such a child `--World:Realm:Id=0` yourself (tests: `ClusterSupervisorConfigChecksTests`).
+
 ## 5. How the logon daemon reads it
 
 `RealmListProjection` (pure, `src/ArcaneCore.Realm/Protocol`) turns the row, the heartbeat age and the account's GM level
@@ -160,3 +168,28 @@ cannot disagree about a count, and a standby (which admits no session) writes no
 
 Verified by `GatewayRealmLivenessTests` (ticks stop for 60 s goes Offline, a restart countdown shows Restarting, standby ticks alone
 leave the row Offline, population is the sum over the workers).
+
+## 8. Clustered nodes: lease clock skew and lease liveness
+
+The realm-singleton authority leases (`realm_authority_lease`, taken by every non-Combined node) are not the realm-list heartbeat above, but they share its clock rule and
+decide whether a clustered realm keeps a writer, so the requirements sit here next to it.
+
+**Clock skew between cluster nodes.** A lease's expiry is written from its holder's clock and judged by the next acquirer's clock. A holder renews every
+`Cluster:Node:AuthorityLeaseRenewSeconds` (10) for a TTL of `Cluster:Node:AuthorityLeaseTtlSeconds` (30), so a lease never ages past about one renewal interval, and another node sees it lapsed once its own clock runs ahead of
+the holder's by more than TTL minus renewal interval: **20 s with the defaults, less the jitter of a renewal round**. Beyond that a healthy holder is deposed: the new node takes the scope with a higher fencing token, the old holder's
+writes behind a commit-time lease check (economy, social, instances, honor maintenance batches) are refused at commit, its next renewal is refused and the keeper stops the process (fail-stop). Stores with no commit check (the worldstate stores, the playerbot ledgers, the honor first-start state) ask only the keeper, whose answer stays true until that next renewal is refused: up to one renewal interval (10 s by default) in which the deposed node writes alongside the new holder. A skewed takeover is therefore an outage of the holder and, for those stores, a short double-writer window. Therefore:
+
+* run NTP (or chrony, or the platform's time service) on every cluster host and keep the nodes within a few seconds of each other, well under TTL minus renewal interval;
+* when raising the renewal interval (at most a third of the TTL), the skew budget shrinks; raise the TTL with it;
+* a node that shows `lost: the store refused the renewal` right after another node's `Took over` line is the symptom to check the clocks for.
+
+**Taking over under write load.** On PostgreSQL a takeover (and a release) first takes `FOR UPDATE` on the lease row, which waits for the in-flight fenced writers of that scope (they hold `FOR KEY SHARE` until their transaction ends).
+The wait is bounded by the lease command timeout (a third of the renewal interval, at least a second), so a steady stream of fenced writers can keep a legitimate takeover waiting past it. `AcquireAtStartAsync` therefore retries
+a store or timeout failure of a scope for up to `RealmAuthorityLeaseKeeper.StartAcquireAttempts` (4) attempts in total (3 retries), one second apart, before the start fails; the runtime takeover pass retries on every renewal tick anyway.
+On MariaDB and SQLite a call that another node's live lease would refuse is answered from a read-only look first and takes no write lock.
+
+**Renewals during a long WAL stall.** A renewal commits with `synchronous_commit = off`, so a slow WAL flush alone does not delay it, but if the WAL buffers fill (the stall outlasts `wal_buffers`), every commit
+waits again. Watch `pg_stat_wal.wal_buffers_full` on the PostgreSQL server: a count that keeps growing during a stall means renewals can miss their deadline and the keeper will stop the node.
+
+**Accepted limits of the fence.** On a store that requires the fence (`RequireFence`) or the held lease (`RequireHeld`), a node that holds no fence is refused, and a boot sweep skips (`LeaseFencedWrite.TryBeginSweep`). Some fenced writes keep null-means-unchecked and have no such refusal: the instance store (save, save instance data, delete, bind save and delete, last-instance save, character delete) and the social store write with no commit check on a node that holds no fence. A node whose keeper marked the lease lost locally lets the commit fence decide,
+and a store behind `RequireHeld` (no commit check) can still write briefly after a takeover, both in the WAL-stall-plus-PostgreSQL-crash case described on `LeaseFencedWrite` and after a clock-skew takeover (until its next renewal is refused, one renewal interval).

@@ -21,7 +21,7 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>
 /// The pin ledger every bot shares (<see cref="PlayerbotSharedPins"/>): a cell two different bots dead-end-pinned is a world pin for a while,
 /// so a third bot escapes at its first stall and explore keeps out of the cell. A world pin never refuses a plan (an NPC in the cell stays
-/// reachable), is never made in a city or on an instanceable map, and an outdoor bot's explore skips indoor spawns.
+/// reachable), is never made in a city or on an instanceable map, and an outdoor bot's explore skips indoor spawns. In a cut region it takes a crowd of bots.
 /// </summary>
 public sealed class PlayerbotSharedPinsTests : IDisposable
 {
@@ -158,7 +158,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     /// <summary>
     /// Timbermaw Hold (issues #1478 and #1479): stalls inside the tunnel, a region that is the only way between two large parts of the
     /// mesh, were shared as world pins, so every bot avoided the only route between Felwood and Winterspring. A region of a graph A - B - C
-    /// that joins two large parts is a cut region and tells the world nothing; a region of a part does.
+    /// that joins two large parts is a cut region and two bots there tell the world nothing; a region of a part does.
     /// </summary>
     [Fact]
     public void TwoBotsStallingInACutRegion_MakeNoWorldPin_ButTwoBotsStallingInAPartDo()
@@ -174,11 +174,11 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         var botA = new PlayerbotStallWatch { SharedPins = pins };
         var botB = new PlayerbotStallWatch { SharedPins = pins };
         // The overload the brain reports through (PlayerbotBrain.ReportWorldPin): the region of the stalled bot in the graph decides.
-        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2090f, 1_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
-        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2091f, 2_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
-        Assert.Equal(0, pins.Count);
-        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
-        Assert.False(botA.IsWorldPin(1, 0, 7020f, -2090f, 2_000));
+        Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 7020f, -2091f, 1_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Null(botB.ReportDeadEndPin(2, 1, 0, 7021f, -2092f, 2_000, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+        Assert.Equal(1, pins.Count); // one cell: both reports wait in its record, and two bots stay below the crowd
+        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2091f, 2_000));
+        Assert.False(botA.IsWorldPin(1, 0, 7020f, -2091f, 2_000));
 
         // The same two reports from a region of one of the parts, or with no graph built, or from no region: the second bot makes the cell a world pin.
         Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 6627f, -2024f, 1_000, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons));
@@ -188,6 +188,104 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 101f, 101f, 2_000, null, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
         Assert.Null(botA.ReportDeadEndPin(1, 1, 0, 300f, 300f, 1_000, graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
         Assert.NotNull(botB.ReportDeadEndPin(2, 1, 0, 301f, 301f, 2_000, graph, -1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+    }
+
+    /// <summary>
+    /// Audit cid 44: 53 different bots dead-end-pinned one cell of Deadwind Pass in under three hours (at the peak 21 in 30 minutes, the live logs of
+    /// 2026-10) and no world pin formed. By elimination the cell lies in some cut region of at most 5000 polygons, where every stall was dropped; which region is
+    /// unknown, since no log or lookup names the cell's own. The middle region's 4323 polygons here is a stand-in: the size of region 126021, the region of a
+    /// neighbouring point 71 yards away (the split stage's <c>world-dead-end-pin-unshared</c> line of 2026-11-05). Size cannot tell a cut region from the tunnel:
+    /// Timbermaw's largest region holds 4882 polygons. Whether a crowd of <see cref="PlayerbotSharedPins.CutRegionBotsToShare"/> can is unproven (see that constant).
+    /// </summary>
+    [Fact]
+    public void ACrowdOfBotsPinningOneCellOfACutRegion_MakesAWorldPin()
+    {
+        NavRegionGraph standIn = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 4323, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        Assert.True(PlayerbotNavigation.IsCutRegion(standIn, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons));
+
+        var pins = new PlayerbotSharedPins();
+        string? created = null;
+        for (ulong bot = 1; bot <= 4; bot++)
+        {
+            Assert.False(pins.IsWorldPin(0, 0, -11153.8f, -1878.6f, 1_000), $"no world pin before bot {bot}");
+            var watch = new PlayerbotStallWatch { SharedPins = pins };
+            created = watch.ReportDeadEndPin(bot, 0, 0, -11153.8f, -1878.6f, 1_000, standIn, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons);
+            if (bot < 4) Assert.Null(created);
+        }
+
+        Assert.NotNull(created);
+        Assert.Contains("30 min", created, StringComparison.Ordinal);
+        Assert.True(pins.IsWorldPin(0, 0, -11153.8f, -1878.6f, 1_000), "the fourth different bot makes the cell a world pin");
+        Assert.Equal(4, PlayerbotSharedPins.CutRegionBotsToShare);
+    }
+
+    [Fact]
+    public void ACutRegionCrowd_CountsDifferentBotsInsideTheWindow()
+    {
+        var pins = new PlayerbotSharedPins();
+        for (int i = 0; i < 8; i++) Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 1, nowMs: 1_000, inCutRegion: true)); // one bot is no crowd
+        Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 2, nowMs: 1_000, inCutRegion: true));
+        Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 3, nowMs: 1_000, inCutRegion: true));
+        uint later = 1_000 + PlayerbotSharedPins.WindowMs + 1;
+        Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 4, nowMs: later, inCutRegion: true)); // the first three have left the window
+        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, later));
+    }
+
+    /// <summary>A 10-yard cell can hold a tunnel and the ground above it: one report from each is two stalls of different kinds, not two bots on one dead end.</summary>
+    [Fact]
+    public void AReportFromACutRegion_DoesNotMakeUpTheTwoBotsOfAPart()
+    {
+        var pins = new PlayerbotSharedPins();
+        Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 1, nowMs: 1_000, inCutRegion: true));
+        Assert.Null(pins.Report(1, 0, 7020f, -2090f, bot: 2, nowMs: 1_000));
+        Assert.False(pins.IsWorldPin(1, 0, 7020f, -2090f, 1_000));
+        Assert.NotNull(pins.Report(1, 0, 7020f, -2090f, bot: 3, nowMs: 1_000)); // two bots outside the cut region
+    }
+
+    [Fact]
+    public void ThePendingLine_SaysHowManyBotsTheCellTakes()
+    {
+        NavRegionGraph graph = NavRegionGraph.FromJoints(0, [PlayerbotNavigation.CutRegionPartPolygons + 100, 4323, PlayerbotNavigation.CutRegionPartPolygons + 200],
+            [(0, 1), (1, 2)]);
+        string inCut = PlayerbotBrain.DeadEndPinPendingDetail(true, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons, 41);
+        Assert.Contains("cut region 1 of 4323 polygons (zone 41)", inCut, StringComparison.Ordinal);
+        Assert.Contains($"{PlayerbotSharedPins.CutRegionBotsToShare} different bots", inCut, StringComparison.Ordinal);
+        string inPart = PlayerbotBrain.DeadEndPinPendingDetail(true, graph, 0, PlayerbotOptions.DefaultCutRegionMaxPolygons, 41);
+        Assert.DoesNotContain("cut region", inPart, StringComparison.Ordinal);
+        Assert.Contains($"{PlayerbotSharedPins.BotsToShare} different bots", inPart, StringComparison.Ordinal);
+        Assert.Contains("no shared pin ledger", PlayerbotBrain.DeadEndPinPendingDetail(false, graph, 1, PlayerbotOptions.DefaultCutRegionMaxPolygons, 41), StringComparison.Ordinal);
+    }
+
+    /// <summary>The same crowd through the brain: three other bots pinned the tunnel cell, and this bot's own pin there is the one that makes it a world pin.</summary>
+    [Fact]
+    public async Task ABotsOwnPinInACutRegion_CompletesACrowdThroughTheBrain()
+    {
+        await using SyntheticNavWorld world = await TunnelWorldAsync();
+        var options = new PlayerbotOptions { Enabled = true };
+        var pins = new PlayerbotSharedPins { World = world.Host.World };
+        await world.PlaceAsync(InB);
+        var bot = new PlayerbotBrain(world.Session, options) { SharedPins = pins };
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            uint now = world.Host.World.NowMs;
+            PlayerbotNavigation.SetStallWatch(world.Player, bot.StallWatch);
+            for (ulong other = 1; other <= 3; other++)
+            {
+                var watch = new PlayerbotStallWatch { SharedPins = pins };
+                Assert.Null(watch.ReportDeadEndPin(world.Player.Guid.Value + other, 0, 0, InB.X, InB.Y, now, inCutRegion: true));
+            }
+
+            for (int i = 0; i < 2; i++)
+            {
+                bot.HoldGoalForTests(PlayerbotGoalKind.Quest, 266, 65);
+                bot.GiveUpStalledGoal(world.Player, shareable: false);
+            }
+
+            Assert.True(pins.IsWorldPin(0, 0, InB.X, InB.Y, now), "three other bots and this one are a crowd");
+            return true;
+        });
     }
 
     /// <summary>
@@ -561,7 +659,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     }
 
     /// <summary>
-    /// Through the brain (<c>ReportWorldPin</c>): a bot that stalls twice in a cut region reports nothing to the ledger, so a second bot reporting
+    /// Through the brain (<c>ReportWorldPin</c>): a bot that stalls twice in a cut region counts only towards a crowd, so a second bot reporting
     /// there makes no world pin. The control is the same stalls in a cell of a large part, which do.
     /// </summary>
     [Fact]
@@ -594,7 +692,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
         (bool ownInB, bool worldInB) = await StallTwiceThenAnotherBotReportsAsync(InB);
         Assert.True(ownInB, "the bot's own pin is made all the same");
         Assert.False(worldInB, "a stall in the tunnel is no world pin");
-        Assert.Equal(1, pins.Count); // only the second bot's own report, from which no pin follows
+        Assert.Equal(1, pins.Count); // the cell's two reports, from which no pin follows
 
         (bool ownInA, bool worldInA) = await StallTwiceThenAnotherBotReportsAsync(InAFar);
         Assert.True(ownInA);

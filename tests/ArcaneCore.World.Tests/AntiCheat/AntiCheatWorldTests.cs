@@ -246,6 +246,44 @@ public sealed class AntiCheatWorldTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task AFarMoveWhileExempt_IsNoBaseline_TheStepAfterLeavingGmModeIsFreshAndNotAFalseTeleport()
+    {
+        await using var host = WorldTestHost.Start();
+        await ApplyAsync(host, new AntiCheatOptions { ExemptSecurity = AccountSecurity.Administrator });
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
+        await using WorldTestClient gm = await host.EnterWorldAsync("EXEMPTFAR", "Exemptfar", AccountSecurity.GameMaster);
+        Mover mover = await MoverAsync(host, gm, "Exemptfar");
+
+        // Judged: the checks hold a baseline at the start.
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SettledAsync(host, "Exemptfar", mover);
+        Assert.Empty(seen);
+
+        // GM mode: the player is carried 80 yards, stored unjudged (the position the server holds moves with it).
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".gm on");
+        await gm.ReadChatAsync();
+        await mover.StepAsync(100, 80f);
+        await SettledAsync(host, "Exemptfar", mover);
+        Assert.Empty(seen);
+
+        // Out of GM mode: the next block is a new baseline. Measured from the position before the exemption it was an 80 yard step.
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".gm off");
+        await gm.ReadChatAsync();
+        await mover.StepAsync(100, 0.7f);
+        await SettledAsync(host, "Exemptfar", mover);
+        await host.OnWorldAsync(() => 0);
+        Assert.Empty(seen);
+
+        // The checks are live again.
+        await mover.StepAsync(100, 80f);
+        await SettledAsync(host, "Exemptfar", mover);
+        await host.WaitForWorldAsync(() => !seen.IsEmpty, "the blink is scored");
+        Assert.Contains(seen, s => s.Player == "Exemptfar" && s.Finding.Type == AntiCheatViolation.Teleport);
+    }
+
+    [Fact]
     public async Task TheGmAlert_ReachesTheStaffOnline_AndTheRubberband_MovesTheCheaterBack()
     {
         await using var host = WorldTestHost.Start();

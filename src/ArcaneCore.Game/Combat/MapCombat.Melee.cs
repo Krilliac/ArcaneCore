@@ -1255,11 +1255,11 @@ public sealed partial class MapCombat
     /// </summary>
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor, string caller)
     {
-        // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
+        // Duel opponents and free-for-all pairs do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith and not both IsFFAPvP).
         // Both sides resolve to the player behind them (vmangos Unit.cpp:5959-5975 reads GetAffectingPlayer), so a pet's or totem's hit
         // pulses its owner's PvP combat too. The owner's flag stands in as the pet's PvP state (pets copy it only when created).
         if (PvpActor(aggressor) is { } pa && (pa.UnitFlags & UnitFlags.Pvp) != 0 && PvpActor(victim) is { } pv && !ReferenceEquals(pv, pa)
-            && !DuelRules.IsInDuelWith(pv, pa))
+            && !DuelRules.IsInDuelWith(pv, pa) && !((pv.Flags & PlayerFlags.FfaPvp) != 0 && (pa.Flags & PlayerFlags.FfaPvp) != 0))
         {
             pv.Combat.InPvpCombat = true;
             UpdatePvp(pv, true);
