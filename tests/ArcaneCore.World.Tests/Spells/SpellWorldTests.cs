@@ -166,6 +166,27 @@ public sealed class SpellWorldTests
     }
 
     [Fact]
+    public async Task CastSelf_NeedsASelectedUnit_ThenCastsOnIt_AndRejectsBadSyntax()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("SELFCAST", "Selfcast", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        Player self = await host.PlayerAsync("Selfcast");
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew}");
+        Assert.Equal("Select a character or creature.", (await gm.ReadChatAsync()).Text);
+        Assert.Equal(0u, self.GetUInt32(UpdateFields.UnitFieldAura));
+
+        await gm.SendAsync(WorldOpcode.CmsgSetSelection, BitConverter.GetBytes(self.Guid.Value));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Selfcast")!.Selection == self.Guid, "self selected");
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew} junk");
+        Assert.Equal(0u, self.GetUInt32(UpdateFields.UnitFieldAura)); // trailing junk is a syntax error (vmangos: only "triggered" may follow)
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew} triggered");
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Selfcast")!.GetUInt32(UpdateFields.UnitFieldAura) == Renew, "aura from .cast self");
+    }
+
+    [Fact]
     public async Task ACooldownOnEventAura_CancelledByTheClient_SendsCooldownEvent_AndRefusesARecastUntilItEnds()
     {
         await using var host = WorldTestHost.Start();

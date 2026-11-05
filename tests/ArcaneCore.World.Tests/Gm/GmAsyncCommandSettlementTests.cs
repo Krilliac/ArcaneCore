@@ -86,6 +86,23 @@ public sealed class GmAsyncCommandSettlementTests
         Assert.Equal("no-such-account", context.Failure);
     }
 
+    [Theory]
+    [InlineData("dump.txt NoSuchChar", "player-not-found")]
+    [InlineData("sub/dump.txt Pdwadmin", "file-open-failed")]
+    public async Task APlayerDumpWrite_ThatCannotStart_ReportsTheFailure(string args, string failure)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("PDWADMIN", "Pdwadmin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+
+        (CommandContext context, bool early, ConcurrentQueue<string> replies) = await RunAsync(host, session, "pdump write", args);
+
+        Assert.False(early);
+        Assert.Single(replies);
+        Assert.Equal(failure, context.Failure); // RA must report #done error, not #done ok
+    }
+
     [Fact]
     public async Task AnArcaneBanCheck_OfAnUnknownAccount_StaysOpenUntilItsReplyWasSent_AndReportsTheFailure()
     {

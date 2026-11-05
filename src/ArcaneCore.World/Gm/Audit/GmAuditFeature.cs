@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Gm;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Features;
@@ -185,6 +186,12 @@ public sealed partial class GmAuditFeature(
 
     // ---- audit tail -----------------------------------------------------------------------------
 
+    /// <summary>
+    /// Longest command text kept in the tail. The text is client-typed and is echoed back to GMs by <c>.arcane gmlog</c>, so control and format
+    /// characters are escaped on the way in (<see cref="LogSafe"/>), the same as the log line itself.
+    /// </summary>
+    internal const int MaxTailCommandLength = 1024;
+
     /// <summary>Remember an audit line (the newest <see cref="GmOptions.AuditTailSize"/> are kept).</summary>
     public void RecordCommand(int accountId, string player, string commandText, string line)
     {
@@ -200,7 +207,7 @@ public sealed partial class GmAuditFeature(
                 _tail.Dequeue();
             }
 
-            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, player, commandText, line));
+            _tail.Enqueue(new GmAuditEntry(NowUnixSeconds, accountId, LogSafe.Escape(player), LogSafe.Escape(commandText, MaxTailCommandLength), line));
         }
     }
 

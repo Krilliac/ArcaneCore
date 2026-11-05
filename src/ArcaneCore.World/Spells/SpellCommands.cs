@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Gm.Args;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Spells;
@@ -19,7 +20,18 @@ public sealed class SpellCommands : ICommandGroup
     [
         new ChatCommand("learn", AccountSecurity.Administrator, "Syntax: .learn #spell — teach a spell to the selected player or yourself.", Learn, RetailLevel: 5),
         new ChatCommand("unlearn", AccountSecurity.GameMaster, "Syntax: .unlearn #spell — make the selected player or yourself forget a spell.", Unlearn),
-        new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself.", Cast),
+        new ChatCommand("cast", AccountSecurity.Administrator, "Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist.", Cast, Children:
+        [
+            // vmangos castCommandTable (Chat.cpp:195-203): back, dist, self and target, all SEC_DEVELOPER (here Administrator like .cast).
+            new ChatCommand("self", AccountSecurity.Administrator, "Syntax: .cast self #spell [triggered]
+Make the selected unit cast a spell on itself.", CastSelf),
+            new ChatCommand("target", AccountSecurity.Administrator, "Syntax: .cast target #spell [triggered]
+Make the selected unit cast a spell on its victim.", CastTarget),
+            new ChatCommand("back", AccountSecurity.Administrator, "Syntax: .cast back #spell [triggered]
+Make the selected unit cast a spell on you.", CastBack),
+            new ChatCommand("dist", AccountSecurity.Administrator, "Syntax: .cast dist #spell #distance [triggered]
+Cast a spell at a point the given distance in front of you.", CastDist),
+        ]),
         new ChatCommand("unaura", AccountSecurity.GameMaster, "Syntax: .unaura #spell|all — remove auras from the selected player or yourself.", Unaura),
         new ChatCommand("cooldown", AccountSecurity.Administrator, "Syntax: .cooldown [#spell] — clear one or every spell cooldown of the selected player or yourself.", Cooldown, Children:
         [
@@ -124,6 +136,146 @@ public sealed class SpellCommands : ICommandGroup
             : SpellCastTargets.ForUnit(target.Guid);
         SpellCastResult result = Feature(context).System.CastSpell(context.Player, spellId, targets, triggered: true);
         context.Reply(result == SpellCastResult.CastOk ? $"Cast spell {spellId}." : $"Spell {spellId} failed: {result}.");
+        return true;
+    }
+
+    /// <summary>
+    /// vmangos ExtractSpellIdFromLink, ExtractFloat and ExtractLiteralArg "triggered" (UnitCommands.cpp:1212-1385): a spell id, an optional distance, then an
+    /// optional <c>triggered</c> word and nothing else. False on any syntax error.
+    /// </summary>
+    private static bool TryParseCastArgs(string text, bool withDistance, out uint spellId, out float distance, out bool triggered)
+    {
+        distance = 0f;
+        triggered = false;
+        var args = new CommandArgs(text.Trim().TrimStart('#'));
+        if (!args.ExtractUInt32(out spellId) || spellId == 0)
+        {
+            return false;
+        }
+
+        if (withDistance && (!args.ExtractFloat(out distance) || !float.IsFinite(distance)))
+        {
+            return false;
+        }
+
+        triggered = args.ExtractLiteral("triggered") is not null;
+        return triggered || args.IsEmpty;
+    }
+
+    /// <summary>The selected unit, or null after replying (vmangos GetSelectedUnit, LANG_SELECT_CHAR_OR_CREATURE; a selected player must be actable on).</summary>
+    private static Unit? SelectedUnit(CommandContext context)
+    {
+        Player player = context.Player;
+        Unit? unit = player.Selection.IsEmpty ? null : player.Map?.Combat.FindUnit(player.Selection);
+        if (unit is null)
+        {
+            context.Reply("Select a character or creature.");
+            return null;
+        }
+
+        return unit is Player selectedPlayer && !context.CanActOn(selectedPlayer) ? null : unit;
+    }
+
+    private static void ReplyCast(CommandContext context, uint spellId, SpellCastResult result)
+        => context.Reply(result == SpellCastResult.CastOk ? $"Cast spell {spellId}." : $"Spell {spellId} failed: {result}.");
+
+    private static bool SpellExists(CommandContext context, uint spellId)
+    {
+        if (Feature(context).System.Store.Get(spellId) is not null)
+        {
+            return true;
+        }
+
+        context.Reply($"Spell {spellId} does not exist.");
+        return false;
+    }
+
+    private static bool CastSelf(CommandContext context, string args)
+    {
+        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        {
+            return false;
+        }
+
+        if (SelectedUnit(context) is not { } caster)
+        {
+            return true;
+        }
+
+        if (SpellExists(context, spellId))
+        {
+            ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForSelf(), triggered));
+        }
+
+        return true;
+    }
+
+    private static bool CastTarget(CommandContext context, string args)
+    {
+        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        {
+            return false;
+        }
+
+        if (SelectedUnit(context) is not { } caster)
+        {
+            return true;
+        }
+
+        if (caster.Combat.Victim is not { } victim)
+        {
+            context.Reply("The selected unit has no victim.");
+            return true;
+        }
+
+        if (SpellExists(context, spellId))
+        {
+            ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(victim.Guid), triggered));
+        }
+
+        return true;
+    }
+
+    private static bool CastBack(CommandContext context, string args)
+    {
+        if (!TryParseCastArgs(args, withDistance: false, out uint spellId, out _, out bool triggered))
+        {
+            return false;
+        }
+
+        if (SelectedUnit(context) is not { } caster)
+        {
+            return true;
+        }
+
+        if (SpellExists(context, spellId))
+        {
+            ReplyCast(context, spellId, Feature(context).System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(context.Player.Guid), triggered));
+        }
+
+        return true;
+    }
+
+    private static bool CastDist(CommandContext context, string args)
+    {
+        if (!TryParseCastArgs(args, withDistance: true, out uint spellId, out float distance, out bool triggered))
+        {
+            return false;
+        }
+
+        if (!SpellExists(context, spellId))
+        {
+            return true;
+        }
+
+        // vmangos GetClosePoint(x, y, z, dist): the point `dist` yards in front of the invoker (its own size is not added here).
+        Player player = context.Player;
+        var targets = new SpellCastTargets
+        {
+            Mask = SpellCastTargetFlags.DestLocation,
+            Dest = (player.X + (MathF.Cos(player.Orientation) * distance), player.Y + (MathF.Sin(player.Orientation) * distance), player.Z),
+        };
+        ReplyCast(context, spellId, Feature(context).System.CastSpell(player, spellId, targets, triggered));
         return true;
     }
 
