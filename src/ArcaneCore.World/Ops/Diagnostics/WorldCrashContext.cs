@@ -15,6 +15,12 @@ namespace ArcaneCore.World.Ops.Diagnostics;
 /// whose lock is held by its owner only to copy the ring and never while calling out; nothing can wait on the
 /// world thread, so a crash with the world thread wedged still reports.
 /// <para>
+/// Uptime and world clock are the game clock's tick-start snapshot, so a crash during a hung tick reports the uptime at which that
+/// tick began, not the wall-clock time of the crash (before the first tick, on the real clock, the world clock is a live stopwatch
+/// read, so a startup crash reports live time). The "tick position" line gives the live time spent in the current phase or work item
+/// since it began, not since the tick began: each phase, map, handler and command restamps the position.
+/// </para>
+/// <para>
 /// Ownership: a singleton created by DI; <see cref="OnTick"/> runs on the world thread (the only
 /// writer of the counter), <see cref="Describe"/> on whatever thread is crashing.
 /// </para>
