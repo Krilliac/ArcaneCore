@@ -120,7 +120,7 @@ internal sealed class GameObjectTypeRig
     public const uint InUseEventGoober = 325; // the same with a 5 s auto-close time (data3), in use until it runs out
     public const uint EventRestockChest = 326; // a restocking chest (30 s) with a chest.eventId (data6), as the Stones of Binding
     public const uint Lever295 = 327;         // a button with display 295, the Scarlet Monastery levers
-    public const uint Banner = 328;           // a goober whose lock has SLOW_OPEN in its second slot, as the Arathi Basin capture banners
+    public const uint Banner = 328;           // a goober whose lock has SLOW_OPEN in its second slot (a banner-like goober; not checked against real banner data)
     public const uint DespawnableGoober = 392; // a lockless goober whose noDamageImmune column (data11) is set, so a script despawn takes it out of the world (without it NODESPAWN keeps it)
     public const uint KeyRestockChest = 391;  // a key-locked (expendable key) restocking chest (30 s)
     public const uint ChestEvent = 9043;

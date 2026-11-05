@@ -31,6 +31,8 @@ public sealed partial class SpellSystem
             // effects. Publish the same provenance as an ordinary item cast: source item
             // GUID, owner as caster, real recipient item in the TradeItem target, and the
             // selected template cooldown metadata. Item casts have no power or GCD payment.
+            // These two SMSG_SPELL_GO sends stay outside the IsNeedSendToClient gate: a trade or item cast is the player's own non-triggered cast
+            // in vmangos, which IsNeedSendToClient always shows.
             var itemTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.TradeItem, Item = item.Guid };
             ObjectGuid castItemOrCaster = itemCast.CastItemReagentPaymentWaived ? caster.Guid : itemCast.CastItemGuid;
             AddCooldown(GetOrCreateState(caster), spell, triggered: true,

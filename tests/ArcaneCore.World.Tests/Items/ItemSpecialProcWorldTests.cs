@@ -33,7 +33,7 @@ public sealed class ItemSpecialProcWorldTests
         };
         SpellTemplateRow procRow = new()
         {
-            Id = proc, SpellName = "Special weapon proc", RangeIndex = SpellConstants.RangeIndexCombat,
+            Id = proc, SpellName = "Special weapon proc", RangeIndex = SpellConstants.RangeIndexCombat, SpellVisual = 1,
             Effect1 = 3, EffectBasePoints1 = -1,
             EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 6,
             ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0,

@@ -113,6 +113,12 @@ public sealed class SpellCast
     /// </summary>
     public GameObject? CasterGameObject { get; internal init; }
 
+    /// <summary>
+    /// Whether this is the object's own <c>GameObject::Use</c> spell (a goober's or spell caster's), which vmangos casts non-triggered
+    /// (GameObject.cpp:1403, 2001-2005). Only affects what is shown to the client (<c>Spell::IsNeedSendToClient</c>).
+    /// </summary>
+    internal bool IsObjectUse { get; init; }
+
     /// <summary>Set only when another unit caused this cast (see <see cref="OriginalCaster"/>); null when the caster is its own original caster.</summary>
     internal Unit? OriginalCasterOverride { get; init; }
 

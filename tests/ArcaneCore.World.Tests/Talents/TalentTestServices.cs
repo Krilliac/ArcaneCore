@@ -101,6 +101,7 @@ internal sealed class TalentWorldFixture : INpcContentStore
             Id = UntalentVisual,
             SpellName = "Untalent Visual Effect",
             RangeIndex = 1,
+            SpellVisual = 1,
             Effect1 = 3,                      // SPELL_EFFECT_DUMMY
             EffectBaseDice1 = 1,
             EffectDieSides1 = 1,
