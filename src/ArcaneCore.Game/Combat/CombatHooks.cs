@@ -146,10 +146,10 @@ public class CombatHooks
         }
 
         // The cheap tests come first: the group answer can only change the result when the pair is otherwise not friendly (two
-        // free-for-all players, or two teams), so the common same-team pair never reads the group manager. CanAttack runs on parallel
-        // map threads while the group manager belongs to the world thread: groups change only in the serial phases (the multithreading
-        // plan's rule for global services, docs/research/multithreading-plan-20261017.md section 5.2), so the read here is of a table
-        // nobody writes during the parallel maps phase, and it is reached only for the pairs that need it.
+        // free-for-all players, or two teams), so the common same-team pair never reads the group manager. CanAttack runs on map
+        // threads; the group manager is written by packet handlers and bots under the world's serial gate (in-world packets run inside
+        // Map.Update), so its reads and writes must both be inside that gate or on the world thread. InSameGroup enforces that: a read
+        // from a thread outside the gate during the parallel phase is reported and made to take the gate (WorldRuntime.EnterSerialForRead).
         if (!AreBothFreeForAll(ca, cb) && ca.Team == cb.Team)
         {
             return true;
@@ -173,10 +173,18 @@ public class CombatHooks
     }
 
     private static bool InSameGroup(Unit mapOf, Player a, Player b)
-        => mapOf.Map?.World is { } world && s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup) && sameGroup(a, b);
+    {
+        if (mapOf.Map?.World is not { } world || !s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup))
+        {
+            return false;
+        }
+
+        using Maps.WorldRuntime.SerialScope gate = world.EnterSerialForRead("GroupManager");
+        return sameGroup(a, b);
+    }
 
     /// <summary>
-    /// The free-for-all hostile clause of GetReactionTo (vmangos Object.cpp:3659-3660) for any two units: the players they act for
+    /// The free-for-all hostile clause of GetReactionTo (vmangos Object.cpp:3661-3662) for any two units: the players they act for
     /// (<see cref="DuelRules.ControllingPlayer"/>) are two different, ungrouped players who both carry the free-for-all flag. Hunter traps,
     /// pets and totems of such a player therefore treat the other one's side as hostile whatever the teams. False when a side acts for no player.
     /// </summary>

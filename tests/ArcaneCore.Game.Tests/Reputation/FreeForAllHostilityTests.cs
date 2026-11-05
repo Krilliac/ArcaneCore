@@ -134,7 +134,7 @@ public sealed class FreeForAllHostilityTests
 
         rig.Map.Combat.DealDamage(rig.A, rig.B, 5);
 
-        Assert.False(rig.A.Combat.InPvpCombat); // Unit.cpp:6046: both IsFFAPvP, no pulse
+        Assert.False(rig.A.Combat.InPvpCombat); // Unit.cpp:6047: both IsFFAPvP, no pulse
         Assert.False(rig.B.Combat.InPvpCombat);
 
         rig.Map.Combat.DealDamage(rig.A, rig.C, 5); // control: C is not free-for-all

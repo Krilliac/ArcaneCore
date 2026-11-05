@@ -623,12 +623,14 @@ public sealed class SpellMagnetTests
         victim.MaxHealth = victim.Health = magnet.MaxHealth = magnet.Health = 100;
         Creature caster = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
         caster.MaxHealth = caster.Health = 100;
+        // The protection goes on first, while the default relations still let the magnet assist the victim (CanAssist reads IsHostile in
+        // both directions); only then are the relations installed that make the magnet hostile to the creature's victim.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(magnet, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
         var relations = new FakeRelations();
         relations.Hostile.Add(caster.Guid); // the creature is hostile to the victim...
         relations.Hostile.Add(magnet.Guid); // ...and friendly to the magnet
         kit.System.Relations = relations;
         kit.System.CombatRules = SpellCombatRules.Neutral;
-        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(magnet, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
 
         // A creature's own cast is not triggered, so the gate applies to it like to a player's (vmangos checks creature casts too).
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(victim.Guid), false));

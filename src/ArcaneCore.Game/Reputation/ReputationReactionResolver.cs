@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Reputation;
 /// The full unit-to-unit reaction ladder of vmangos <c>WorldObject::GetReactionTo</c> and
 /// <c>GetFactionReactionTo</c> (vmangos@0e3ff01 src/game/Objects/Object.cpp:3608-3743), re-implemented with the
 /// reputation state, forced reactions, duels and group membership this codebase has. Order: self; the same
-/// charmer or owner guid; GM neutral; forced rank; for player-controlled units the duel, same-raid and reputation
+/// charmer or owner guid; GM neutral; forced rank; for player-controlled units the duel, same-raid, free-for-all and reputation
 /// (at war) rules; then the faction rule (contested guards, forced rank, standing capped at Neutral while at war, and
 /// finally the template relations). The player a pet, totem or charmed unit acts for is <c>Unit::GetAffectingPlayer</c>
 /// (the summoned-by / charmed-by fields). A stand-in that only implements <see cref="IPlayerControlledUnit"/> still counts.
@@ -121,7 +121,7 @@ public sealed class ReputationReactionResolver(
                 }
 
                 // Two free-for-all players that are not grouped are hostile whatever their teams and templates, and so are the pets, totems and
-                // charmed units acting for them (Object.cpp:3659-3660, IsFFAPvP on both affecting players). The unit-level flags above gate
+                // charmed units acting for them (Object.cpp:3661-3662, IsFFAPvP on both affecting players). The unit-level flags above gate
                 // the clause like vmangos; CombatHooks.CanAttack uses the same pair test for players.
                 if ((selfOwner.Flags & PlayerFlags.FfaPvp) != 0 && (targetOwner.Flags & PlayerFlags.FfaPvp) != 0)
                 {

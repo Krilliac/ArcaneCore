@@ -6,6 +6,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Duel;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -226,6 +227,51 @@ public sealed class TrapSystemTests : IDisposable
         _hunter.Combat.PvpFlagTimer = CombatConstants.PvpFlagTimerMs; // the combat system clears a PvP flag whose timer ran out
         Tick(5000); // wait out nothing: the first scan above never fired, so the cooldown is clear
         Assert.Equal([enemy], _hit);
+    }
+
+    [Fact]
+    public void AnUnflaggedOwnersTrap_FiresOnAFreeForAllPlayer_OnlyWhenTheOwnerIsFreeForAllToo()
+    {
+        // GameObject.cpp:292: an owner without PvP still triggers on a player when both carry the free-for-all flag (an arena); both
+        // players are of one team here, so only the exception can let the trap fire.
+        GameObject trap = LayTrap(CustomEntry);
+        Player mate = TestWorld.CreatePlayer(2, trap.X + 1, trap.Y, new FakeSession(2));
+        _world.AddPlayer(mate);
+        _relations.Hostile.Add(mate.Guid);
+        Assert.Equal(0, (int)(_hunter.UnitFlags & UnitFlags.Pvp));
+
+        mate.Flags |= PlayerFlags.FfaPvp; // only the target is free-for-all: the owner still needs PvP
+        Tick();
+        Assert.Empty(_hit);
+
+        _hunter.Flags |= PlayerFlags.FfaPvp;
+        Tick(5000);
+        Assert.Equal([mate], _hit);
+    }
+
+    [Fact]
+    public void ATrapOwnerMayTrigger_OnAPetOfAFreeForAllPlayer_ButNotOfAnUnflaggedOne()
+    {
+        Player mate = TestWorld.CreatePlayer(2, 0, 0, new FakeSession(2));
+        var pet = new OwnedUnit { Owner = mate };
+        Assert.False(TrapRules.OwnerMayTrigger(_hunter, pet)); // GetCharmerOrOwnerPlayerOrPlayerItself: the pet acts for a player
+
+        _hunter.Flags |= PlayerFlags.FfaPvp;
+        mate.Flags |= PlayerFlags.FfaPvp;
+        Assert.True(TrapRules.OwnerMayTrigger(_hunter, pet));
+    }
+
+    [Fact]
+    public void ATrapOwnerMayTrigger_OnTheOpponentOfAStartedDuel_ButNotOfAPendingOne()
+    {
+        Player foe = TestWorld.CreatePlayer(3, 0, 0, new FakeSession(3));
+        Assert.False(TrapRules.OwnerMayTrigger(_hunter, foe));
+
+        DuelTestKit.Link(_hunter, foe); // challenged, not started: IsInDuelWith needs a start time
+        Assert.False(TrapRules.OwnerMayTrigger(_hunter, foe));
+
+        DuelTestKit.Link(_hunter, foe, startTime: 1000);
+        Assert.True(TrapRules.OwnerMayTrigger(_hunter, foe));
     }
 
     [Fact]

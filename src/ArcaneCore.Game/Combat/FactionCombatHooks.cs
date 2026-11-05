@@ -29,7 +29,7 @@ namespace ArcaneCore.Game.Combat;
 /// factions (Object.cpp:3775-3792); the contested-guard rule (IsContestedGuardFaction plus PLAYER_FLAGS_CONTESTED_PVP
 /// => HOSTILE, Object.cpp:3714-3716); GM players reading NEUTRAL (Object.cpp:3625-3626, 3633-3634) and forced
 /// reactions (GetForcedRankIfAny); the same-group ordering (Object.cpp:3654-3657, left to the base hooks and the reputation resolver) and
-/// the FFA part of the PvP block (Object.cpp:3805-3815, modelled in the base hooks); the free-for-all reaction (Object.cpp:3659-3660), the duel reaction and the duel PvP exemption ARE modelled
+/// the FFA part of the PvP block (Object.cpp:3805-3815, modelled in the base hooks); the free-for-all reaction (Object.cpp:3661-3662), the duel reaction and the duel PvP exemption ARE modelled
 /// (the duel ones in the base <see cref="CombatHooks"/>, Object.cpp:3650-3652, 3797-3800, see <see cref="DuelRules"/>); the player behind a pet or charm is resolved through <see cref="DuelRules.ControllingPlayer"/>.
 /// <see cref="CombatHooks.IsFriendly"/> uses the loaded template reaction for non-player pairs, exposing known
 /// friendly NPCs to friendly spell targeting while retaining the base player/team/duel and unknown-template rules.
@@ -98,7 +98,7 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
 
         if (DuelRules.IsOpponentHostile(attacker, victim) || AreFreeForAllOpponents(attacker, victim))
         {
-            return true; // the duel and free-for-all reactions are hostile whatever the templates say (Object.cpp:3650-3652, 3659-3660)
+            return true; // the duel and free-for-all reactions are hostile whatever the templates say (Object.cpp:3650-3652, 3661-3662)
         }
 
         Reaction forward = ReactionTo(attacker, victim);
@@ -115,12 +115,12 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
 
     /// <summary>
     /// vmangos Unit::IsHostileTo (Unit.cpp:4429-4432): the template reaction of <paramref name="a"/> towards
-    /// <paramref name="b"/> is hostile (a started duel makes the opponent's units hostile first). Neutral units are not hostile. The reputation and PvP parts of
-    /// GetReactionTo are not modelled (see the class remarks).
+    /// <paramref name="b"/> is hostile (a started duel makes the opponent's units hostile first). Neutral units are not hostile. The reputation part of
+    /// GetReactionTo is not modelled (see the class remarks); the free-for-all clause is (<see cref="CombatHooks.AreFreeForAllOpponents"/>).
     /// </summary>
     public override bool IsHostileTo(Unit a, Unit b)
         => a.CharmerOrOwnerOrOwnGuid != b.CharmerOrOwnerOrOwnGuid // never hostile to a charmer, owner or co-controlled unit (Object.cpp:3614-3617)
-            && (DuelRules.IsOpponentHostile(a, b) || AreFreeForAllOpponents(a, b) || ReactionTo(a, b) == Reaction.Hostile); // GetReactionTo duel clause next (Object.cpp:3650-3652), then the free-for-all clause (Object.cpp:3659-3660)
+            && (DuelRules.IsOpponentHostile(a, b) || AreFreeForAllOpponents(a, b) || ReactionTo(a, b) == Reaction.Hostile); // GetReactionTo duel clause next (Object.cpp:3650-3652), then the free-for-all clause (Object.cpp:3661-3662)
 
     // WorldObject::GetFactionReactionTo, template part only (Object.cpp:3701-3741).
     private Reaction ReactionTo(Unit from, Unit to)

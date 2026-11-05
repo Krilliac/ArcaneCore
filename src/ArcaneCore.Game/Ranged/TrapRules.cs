@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 
@@ -63,13 +64,21 @@ public static class TrapRules
     }
 
     /// <summary>
-    /// The owner side of HunterTrapTargetSelectorCheck: a player owner's trap ignores player targets
-    /// unless the owner is PvP-flagged (free-for-all and duel exceptions are not modelled).
+    /// The owner side of HunterTrapTargetSelectorCheck (GameObject.cpp:287-295): a player owner's trap ignores a target that acts for a
+    /// player (the player himself, or a pet, totem or charmed unit he controls, GetCharmerOrOwnerPlayerOrPlayerItself) unless the owner is
+    /// PvP-flagged, or both players carry the free-for-all flag, or the owner is in a started duel with that player.
     /// </summary>
     public static bool OwnerMayTrigger(Unit owner, Unit target)
     {
         ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(target);
-        return owner is not Player || target is not Player || (owner.UnitFlags & UnitFlags.Pvp) != 0;
+        if (owner is not Player ownerPlayer || DuelRules.ControllingPlayer(target) is not { } targetPlayer)
+        {
+            return true;
+        }
+
+        return (ownerPlayer.UnitFlags & UnitFlags.Pvp) != 0
+            || ((ownerPlayer.Flags & PlayerFlags.FfaPvp) != 0 && (targetPlayer.Flags & PlayerFlags.FfaPvp) != 0)
+            || DuelRules.IsInDuelWith(ownerPlayer, targetPlayer);
     }
 }
