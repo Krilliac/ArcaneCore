@@ -29,6 +29,12 @@ public interface ICharacterPersistenceParticipant
 
     /// <summary>Drain and retry any pending or retained writes for <paramref name="characterId"/>; fault if not durable.</summary>
     Task FlushCharacterAsync(int characterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The characters this participant still has a pending or retained write for, so a cluster handoff flushes an offline character too (<see cref="CharacterPersistenceBarrier.OpenCharacterIdsAsync"/>).
+    /// The default reports none: a participant that cannot enumerate is only flushed for characters another queue or the freeze names. Any thread.
+    /// </summary>
+    IReadOnlyCollection<int> OpenCharacterIds => [];
 }
 
 /// <summary>A single queue or settlement failure observed during <see cref="CharacterPersistenceBarrier"/>.</summary>
@@ -303,6 +309,12 @@ public sealed class CharacterPersistenceBarrier
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         budget.CancelAfter(DefaultTimeout);
         var open = new SortedSet<int>();
+
+        // Settlement barriers and participants name what they hold themselves (an operation in flight, a pending or retained write). A member that throws fails the query like a queue that does not answer.
+        foreach (ICharacterSettlementBarrier barrier in _services.GetServices<ICharacterSettlementBarrier>())
+            open.UnionWith(barrier.SettlingCharacters);
+        foreach (ICharacterPersistenceParticipant participant in _services.GetServices<ICharacterPersistenceParticipant>())
+            open.UnionWith(participant.OpenCharacterIds);
 
         async Task AddAsync(Func<Task> drain, Func<IEnumerable<int>> retained)
         {

@@ -356,9 +356,13 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 if (!_quarantined.Add(id))
                 {
                     // Already quarantined (a settlement failure): its retained snapshot is still dropped, or the stop would report it as undrained.
-                    if (_failed.Remove(id))
+                    if (_failed.Remove(id, out FailedSave? parked))
                     {
-                        lostRetained.Add(id);
+                        if (parked.Failure is not CharacterOwnershipRejectedException)
+                        {
+                            lostRetained.Add(id);
+                        }
+
                         dropped++;
                     }
 
@@ -369,10 +373,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 characters++;
                 _quarantineAnnounced.Add(id); // the refused snapshots of a retired character are expected: nothing to tell the staff
                 bool waiting = _slots.TryGetValue(id, out Slot? slot) && slot.State is not null; // dropped by the consumer when it reaches the slot
-                bool retained = _failed.Remove(id);
-                if (retained)
+                bool retained = _failed.Remove(id, out FailedSave? retainedSave);
+                if (retained && retainedSave!.Failure is not CharacterOwnershipRejectedException)
                 {
-                    lostRetained.Add(id);
+                    lostRetained.Add(id); // a refusal kept while sealed was refused by the takeover itself: nothing was lost that a write could have saved
                 }
 
                 _exhaustedReported.Remove(id);
@@ -669,6 +673,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         }
 
         InvalidOperationException? notDrained = null;
+        var sealedDropped = new List<int>();
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
@@ -680,11 +685,30 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 DropRetainedIfRetiredLocked(retiredId); // final pass: whatever a failure path re-retained after the retirement
             }
 
+            if (_sealed)
+            {
+                // The handoff never decided (its retirement did not reach this process, for example with the gateway link down): a snapshot the fence refused while sealed can never be written once
+                // the takeover landed, so the stop names it in a warning instead of failing on it.
+                foreach ((int sealedId, FailedSave sealedFailure) in _failed.ToArray())
+                {
+                    if (sealedFailure.Failure is CharacterOwnershipRejectedException)
+                    {
+                        _failed.Remove(sealedId);
+                        sealedDropped.Add(sealedId);
+                    }
+                }
+            }
+
             if (_failed.Count > 0)
             {
                 notDrained = new InvalidOperationException($"character saves did not drain for characters {string.Join(", ", _failed.Keys.Order())}",
                     _failed.Values.First().Failure);
             }
+        }
+
+        if (sealedDropped.Count > 0)
+        {
+            _logger.LogWarning("Snapshot(s) of character(s) {Characters} were refused by the fence while a handoff was undecided at stop and are dropped", string.Join(", ", sealedDropped.Order()));
         }
 
         if (notDrained is not null)
@@ -1000,13 +1024,28 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             catch (CharacterOwnershipRejectedException ex) when (RefusalIsExpected(state.Id))
             {
                 // The handoff is past its flush and the takeover landed, or it retired this character while the write was in flight: the fence refusing it is the expected end, not a queue fault.
+                // A refusal that is expected only because the handoff is sealed (nothing retired yet) is not proven final: if the handoff aborts, A resumes and still owns the character, so the
+                // snapshot stays retained (not deferred: no timer retries it into the fence) for the next barrier or newer snapshot. The retirement drops it (RetireCharacters), without the lost-save warning.
+                bool retainedForAbort;
                 lock (_gate)
                 {
-                    _failed.Remove(state.Id);
-                    _exhaustedReported.Remove(state.Id);
+                    retainedForAbort = _sealed && !_allRetired && !_retired.Contains(state.Id) && !_quarantined.Contains(state.Id);
+                    if (retainedForAbort)
+                    {
+                        _failed[state.Id] = new FailedSave(state, ex);
+                    }
+                    else
+                    {
+                        _failed.Remove(state.Id);
+                        _exhaustedReported.Remove(state.Id);
+                    }
                 }
 
-                _logger.LogInformation("character {Id} snapshot dropped: the character belongs to another world after the handoff ({Reason})", state.Id, ex.Message);
+                _logger.LogInformation(
+                    retainedForAbort
+                        ? "character {Id} snapshot refused while the handoff is undecided; retained in case it aborts ({Reason})"
+                        : "character {Id} snapshot dropped: the character belongs to another world after the handoff ({Reason})",
+                    state.Id, ex.Message);
                 if (trustedSettlement)
                 {
                     throw; // a settlement is never told it was saved when nothing was written

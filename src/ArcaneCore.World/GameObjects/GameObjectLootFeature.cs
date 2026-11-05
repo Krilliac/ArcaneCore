@@ -227,6 +227,9 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     public Task WaitForSettlementAsync(int characterId, CancellationToken cancellationToken = default)
         => _settlements?.WaitForCharacterAsync(characterId, cancellationToken) ?? Task.CompletedTask;
 
+    /// <summary>The characters with a chest operation in flight (see <see cref="ICharacterSettlementBarrier.SettlingCharacters"/>).</summary>
+    public IReadOnlyCollection<int> SettlingCharacters => _settlements?.SettlingCharacters ?? Array.Empty<int>();
+
     /// <summary>Cancel in-flight chest operations and finalize them without world publication.</summary>
     public Task StopAsync() => _settlements?.StopAsync() ?? Task.CompletedTask;
 
