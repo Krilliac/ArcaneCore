@@ -27,6 +27,9 @@ public sealed class IntellectSpellCritSource : ISpellCritSource
             return SpellCritTable.NonPlayerSpellCrit;
         }
 
-        return SpellCritTable.CritFromIntellect(player.Class, player.Level, player.GetUInt32(UpdateFields.UnitFieldStat0 + IntellectStat));
+        // The field can hold a negative value here (flat negative auras/items are written unclamped); vmangos clamps stats at 0 on write
+        // (Object::SetStatInt32Value, Object.cpp:1274-1280), so read it signed and floor at 0 rather than wrapping to ~4.29e9.
+        int intellect = Math.Max(0, player.GetInt32(UpdateFields.UnitFieldStat0 + IntellectStat));
+        return SpellCritTable.CritFromIntellect(player.Class, player.Level, (uint)intellect);
     }
 }

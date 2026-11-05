@@ -1,7 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
-using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Game.Tests.SpellRules;
 using ArcaneCore.Game.Tests.Spells;
@@ -60,6 +59,20 @@ public sealed class IntellectSpellCritSourceTests
     }
 
     [Fact]
+    public void NegativeIntellectField_IsTreatedAsZeroIntellect()
+    {
+        using SpellTestKit kit = Kit();
+        Player mage = MakePlayer(kit, 1, Class.Mage, 60, 0);
+        float zeroIntellect = new IntellectSpellCritSource().SpellCritPercent(mage, SpellSchool.Fire);
+        mage.SetInt32(UpdateFields.UnitFieldStat0 + 3, -25);
+
+        float percent = new IntellectSpellCritSource().SpellCritPercent(mage, SpellSchool.Fire);
+
+        Assert.Equal(zeroIntellect, percent, Tol);
+        Assert.True(percent < 50f);
+    }
+
+    [Fact]
     public void NonPlayer_GetsFlatFivePercent()
     {
         Creature creature = FoundationTests.MakeCreature(0, 20);
@@ -68,7 +81,7 @@ public sealed class IntellectSpellCritSourceTests
     }
 
     [Fact]
-    public void CritChance_UsesTheSource_ForAPlayerCaster_AndAddsAuraBonuses()
+    public void CritChance_UsesTheSource_ForAPlayerCaster()
     {
         using SpellTestKit kit = Kit();
         Player mage = MakePlayer(kit, 1, Class.Mage, 60, 100);

@@ -168,7 +168,7 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   the interrupted spell, not every spell of the school.
 - Summon is a seam only: no creature/pet/totem summoning exists yet (without a sink the effect is
   reported as not implemented).
-- Player base spell crit is a flat 5% until the stats area provides intellect-based crit; the
+- Player base spell crit comes from the intellect table (`IntellectSpellCritSource`); the
   resist distribution is the simplified two-step spread; binary spells get no extra resist chance
   (they are only excluded from partial resists); no spell penetration or hit-from-gear.
 - Saves happen on logout only: no periodic autosave or crash-safe save of auras/cooldowns.

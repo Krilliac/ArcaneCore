@@ -141,8 +141,7 @@ one warning. A failed load is not cached and fails the login (fail closed, like 
 |---|---|---|
 | An incomplete player base data import does not refuse the login; the agility terms of crit/dodge are left out and the level stats may be absent (vmangos exits at startup, ObjectMgr.cpp:4876-4882, 4988-4994, 5117-5129) | `Stats:RequireImportedData` | `false` (set `true` on a host that imported the data to get the retail refusal) |
 
-Everything else follows vmangos. Unverified-retail items inherited from vmangos: spell crit table (not
-consumed), the weapon-entry zeroing above.
+Everything else follows vmangos. Unverified-retail items inherited from vmangos: spell crit table, the weapon-entry zeroing above.
 
 ## Limits (not done)
 
