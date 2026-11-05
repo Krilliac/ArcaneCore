@@ -40,10 +40,11 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
 - A unit standing in for a game object (`SpellSystem.CastForGameObject`) has no done side: `SpellBonusModule` skips the done
   bonus and the absorb-shield bonus for it, and the crit rolls of direct damage and healing are skipped (a game object has no
   auras and never crits, `SpellCaster.h:320`); the target side still applies.
-- Limit (not implemented, kept as a documented gap): spell power does not yet model: damage done versus creature types, equipped-item restricted auras, class script modifiers,
-  talent spell mods, Ignite, totem/pet owner bonuses, weapon-based periodic damage (left to the melee formulas), absorb.
-  Spell crit from intellect is installed by the spell rules feature (`IntellectSpellCritSource`); the spell hit/resist tables belong to the
-  stats lane, so caster damage is not fully retail until those land.
+- Spell power models damage done versus creature types, equipped-item restricted auras, class script modifiers (including the
+  owner's), talent spell mods and Ignite. Limits (see the `SpellBonusModule` header): the paladin seal exception for
+  weapon-restricted percent auras, weapon-based periodic damage (left to the melee formulas) and the melee class SCHOOL_DAMAGE
+  spells' `MeleeDamageBonusDone` (they take only the DAMAGE spell mod). Spell crit from intellect is installed by the spell rules
+  feature (`IntellectSpellCritSource`).
 - Five second rule: the consumers of the timer (mp5, aura 134 interrupt percentage, Evocation, Mage Armor) are in the stats
   and spell-breadth lanes. Until they merge a caster regenerates 0 mana for 5 s after any paid cast, as a gearless retail
   caster does, with none of the offsets.

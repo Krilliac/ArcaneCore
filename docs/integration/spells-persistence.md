@@ -166,19 +166,17 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   an earlier packed-GUID form was a protocol-audit finding, see docs/integration/protocol-audit-codex.md).
 - No SMSG_SPELLDISPELLOG and no dispel resistance; the interrupt's SMSG_SPELL_COOLDOWN names only
   the interrupted spell, not every spell of the school.
-- Summon is a seam only: no creature/pet/totem summoning exists yet (without a sink the effect is
-  reported as not implemented).
+- Summon goes through `ISpellSummonSink` (implemented by `SummonService`); without a sink the effect is
+  reported as not implemented.
 - Player base spell crit comes from the intellect table (`IntellectSpellCritSource`); the
   resist distribution is the simplified two-step spread; binary spells get no extra resist chance
   (they are only excluded from partial resists); no spell penetration or hit-from-gear.
-- Saves happen on logout only: no periodic autosave or crash-safe save of auras/cooldowns.
+- Auras and cooldowns are saved at logout and at a cluster transfer capture only. The periodic character autosave (`WorldRuntime.Autosave.cs`) snapshots the character state without them, so a crash loses them.
 - Line of sight covers static models only (vmap-los limits: no terrain or game-object LOS).
-- Proc charges are persisted and restored but nothing consumes them yet (no proc system).
+- Proc charges are persisted and restored; the proc system lives in `Spells/Procs` (`SpellSystem.Procs.cs`, `BuiltInProcHandlers.cs`) and covers only the aura types with a built-in handler.
 - Melee damage forwarding needs the combat area's `MapCombat`; units that take damage outside it
   call `SpellSystem.OnDamageTaken` themselves.
 
 ## Suggested next slice
 
-Proc system (`PROC_FLAG_*`, charges consumption, `SPELL_AURA_PROC_TRIGGER_SPELL`), stat-driven
-spell hit (stat-driven spell crit now exists via `IntellectSpellCritSource`, not proven retail), totems and summoned creatures through `ISpellSummonSink`, and an autosave hook so
-auras/cooldowns survive a crash.
+Save auras and cooldowns from the periodic autosave so they survive a crash, and add stat-driven spell hit (stat-driven spell crit exists via `IntellectSpellCritSource`, not proven retail).
