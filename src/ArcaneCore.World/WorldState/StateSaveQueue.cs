@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.WorldState;
@@ -14,6 +15,7 @@ namespace ArcaneCore.World.WorldState;
 /// handoff calls, it writes the retained values again through the same ordered drain and faults, naming the keys, while one is still not durable.
 /// A store that refuses the write because this node does not hold the realm lease for it (<see cref="RealmLeaseNotHeldException"/>, the worldstate lease of the
 /// durable world state) is not a fault: the value stays the in-memory truth, the holder writes the stored one, and the refusal is only counted (<see cref="Skipped"/>).
+/// One exception: the Silithyst store (<c>EfSilithystStore</c>) lets the worker that explicitly owns Kalimdor write its row even when another node holds the lease, so that queue's write is refused only on a node that does neither.
 /// </summary>
 internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILogger? logger, string what)
     where TKey : notnull
@@ -152,8 +154,8 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record($"worldstate.save-queue:{what}", ex);
-            logger?.LogError(ex, "could not save the {What} state", what);
+            if (logger is null) ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record($"worldstate.save-queue:{what}", ex);
+            else logger.LogFault($"worldstate.save-queue:{what}", ex, "could not save the {What} state", what); // LogFault records into the ledger itself
             lock (_gate)
             {
                 if (!_pending.ContainsKey(key)) _failed[key] = state; // a newer value already waiting supersedes this one and settles the key itself

@@ -1660,6 +1660,101 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
+    public async Task EnqueueWithACallback_SettlesAfterTheWrite_AndASupersededSnapshotsCallbackWithTheNewerWrite()
+    {
+        await using var kit = new Kit();
+        var settled = new ConcurrentQueue<string>();
+        kit.Queue.Enqueue(State(1, 1), () => settled.Enqueue("first"));
+        kit.Queue.Enqueue(State(1, 2), () => settled.Enqueue("second")); // supersedes the first before the consumer started
+        kit.Queue.Start();
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (settled.Count < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(["first", "second"], settled.ToArray());
+        Assert.Single(kit.Store.Saved); // one write settled both
+        Assert.Equal(2u, kit.Store.Saved.Single().Money);
+    }
+
+    [Fact]
+    public async Task EnqueueWithACallback_ForAQuarantinedCharacter_SettlesAtOnce()
+    {
+        await using var kit = new Kit();
+        kit.Queue.QuarantineCharacter(7);
+        int settled = 0;
+
+        kit.Queue.Enqueue(State(7, 1), () => Interlocked.Increment(ref settled));
+
+        Assert.Equal(1, settled);
+        Assert.Empty(kit.Store.Attempts);
+    }
+
+    [Fact]
+    public async Task EnqueueWithACallback_WhoseWriteFails_StillSettles_SoTheManualClockIsNotHeld()
+    {
+        await using var kit = new Kit();
+        kit.Store.OnSave = (_, _) => Task.FromException(new IOException("disk gone"));
+        int settled = 0;
+        kit.Queue.Start();
+
+        kit.Queue.Enqueue(State(3, 1), () => Interlocked.Increment(ref settled));
+
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (Volatile.Read(ref settled) == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.Equal(1, settled);
+        Assert.Contains(3, kit.Queue.RetainedCharacters);
+    }
+
+    [Trait("Category", "Timing")]
+    [Fact]
+    public async Task APausedLane_AttemptsNothing_KeepsTheNewestSnapshot_AndWritesItAfterResume()
+    {
+        var drain = new ShutdownDrain();
+        await using var kit = new Kit(drain: drain);
+        drain.Saves.Pause("the characters database writer lock is lost");
+        kit.Queue.Start();
+        kit.Queue.Enqueue(State(1, 1));
+        kit.Queue.Enqueue(State(1, 2)); // supersedes the first while it waits
+        kit.Queue.Enqueue(State(2, 5));
+
+        await Task.Delay(1500); // longer than the consumer's one-second pause poll: it has looked at the lane at least once
+        Assert.Empty(kit.Store.Attempts);
+        Assert.Equal(0, drain.Saves.Refused); // nothing was attempted, so nothing was refused either
+
+        drain.Saves.Resume();
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (kit.Store.Saved.Count < 2 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal([1, 2], kit.Store.Saved.Select(s => s.Id).Order());
+        Assert.Equal(1, kit.Store.Attempts.Count(a => a.Id == 1)); // only the newest snapshot of character 1 was ever written
+    }
+
+    [Fact]
+    public async Task Stop_WhileTheLaneIsPaused_RefusesAndRetainsEverySnapshot()
+    {
+        var drain = new ShutdownDrain();
+        await using var kit = new Kit(drain: drain);
+        drain.Saves.Pause("the characters database writer lock is lost");
+        kit.Queue.Enqueue(State(1, 1));
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Contains("1", refused.Message, StringComparison.Ordinal); // the retained character is named
+
+        Assert.Empty(kit.Store.Attempts); // a pause is never lifted by the stop: nothing is written into a database whose lock is lost
+        Assert.True(drain.Saves.Refused >= 1, drain.Saves.Describe());
+    }
+
+    [Fact]
     public void SavesLaneDefault_IsThreeBusyTimeouts()
     {
         var drain = new ShutdownDrain();

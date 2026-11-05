@@ -29,8 +29,10 @@ namespace ArcaneCore.World;
 /// (<see cref="IHostApplicationLifetime.StopApplication"/>, as the realm authority lease does) and suppresses the drain lanes (<see cref="StopDrainBudget.Suppress"/>). The fence is the backstop: every further
 /// connection, transaction, statement and commit of this process on the characters database is refused at the data layer, whichever feature issues it, including the writers that have no lane. The lanes are the
 /// polite path: a suppressed lane refuses every attempt of every save and feature queue from then on, stopping or not (the host's <c>SaveAll</c> runs while the queues are still live), so the shutdown
-/// saves are skipped and the snapshots stay retained, lost with the process. Residual window: while the lock is merely lost, and until the first retake that finds the rival (the second health tick after the loss),
-/// this world keeps writing and its queues are not paused; those saves land, and so does a write already on the wire at the instant of the trip. New logins are not gated separately.
+/// saves are skipped and the snapshots stay retained, lost with the process. While the lock is merely lost, and until the first retake that finds the rival (the second health tick after the loss),
+/// the queues are paused: <see cref="OnLockLost"/> pauses the save and feature lanes (<see cref="StopDrainBudget.Pause"/>), so no new write is attempted and the character save queue keeps its snapshots waiting
+/// (the newest wins); <see cref="OnLockRecovered"/> resumes them, a conflict suppresses them for good. A write already on the wire at the instant of the loss or the trip still lands, and the window
+/// before the loss is noticed (up to one health interval) is not covered. New logins are not gated separately.
 /// </para>
 /// </summary>
 public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions = null, ILogger<WorldWriterGuard>? logger = null, bool deferUntilPromotion = false,
@@ -123,11 +125,20 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
 
     /// <summary>A held server lock was found lost. Logged only: the lock keeps trying to take itself back, and a take-over is <see cref="OnLockConflict"/>.</summary>
     internal void OnLockLost(string reason)
-        => logger?.LogCritical("The characters database writer lock was LOST: {Reason}. This world no longer excludes a second world writer on the same database; it tries to take the lock back on every health check and stops itself if another session has taken it.", DatabaseStartup.Scrub(reason, null));
+    {
+        const string Why = "the characters database writer lock is lost";
+        drain?.Saves.Pause(Why);
+        drain?.Features.Pause(Why);
+        logger?.LogCritical("The characters database writer lock was LOST: {Reason}. This world no longer excludes a second world writer on the same database; it tries to take the lock back on every health check and stops itself if another session has taken it. Its save and feature write queues are paused until then.", DatabaseStartup.Scrub(reason, null));
+    }
 
     /// <summary>A lost server lock was taken again.</summary>
     internal void OnLockRecovered(string description)
-        => logger?.LogWarning("The characters database writer lock was RE-TAKEN: {LockPath}. This world excludes a second world writer again; writes during the gap were not guarded.", DatabaseStartup.Scrub(description, null));
+    {
+        drain?.Saves.Resume();
+        drain?.Features.Resume();
+        logger?.LogWarning("The characters database writer lock was RE-TAKEN: {LockPath}. This world excludes a second world writer again; its write queues resume (writes were paused during the gap, so nothing new was written unguarded).", DatabaseStartup.Scrub(description, null));
+    }
 
     /// <summary>A retake of the lost lock could not complete (server unreachable, or this process's own dead session still holds it). Throttled by the lock.</summary>
     internal void OnLockRetakeBlocked(string reason)
