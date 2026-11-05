@@ -172,7 +172,8 @@ public sealed class PlayerbotEconomyPaceAndReportWorldTests : PlayerbotEconomyWo
             await c.ReadAsync(() => { driver.Economy.SpendBudget = budget; return true; });
 
             await StartVisitAsync(c, driver);
-            await FinishAsync(c, driver, 1);
+            // Manual world clock: the wall limit is only a hang guard, wide enough for a World run under full load (the default 60 s timed out once there).
+            await FinishAsync(c, driver, 1, TimeSpan.FromSeconds(180));
 
             ScenarioContext.ExpectEqual(5, await c.ReadAsync(() => driver.Economy.ListingsPlaced), "listings placed: 2 slots + 3 for the money goal");
             ScenarioContext.ExpectEqual(5, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low)), "auctions of the bot");

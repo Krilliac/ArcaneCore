@@ -172,16 +172,16 @@ public sealed class PlayerbotBrainStallTests
         Assert.True(walked, $"the lingering bot moved only {distance:F2} yd (goal {world.Brain.Goal})");
     }
 
-    // Timing: the think budget is wall-clock (PlayerbotThinkProbe.MsSince), so a loaded host spends it before the bot fights (flake ledger #32).
     /// <summary>
     /// Cluster 2, the target the bot cannot hurt (bot QA #697, #700, #862, #834: goal=Combat stalls, moving:no dest:none, phase combat, the
     /// same target entry again within minutes): the creature the bot fights stands in melee range but soft-evades (it cannot reach the bot,
     /// <see cref="Creature.IsEvadingUnreachable"/>) and regenerates to full as an evading creature does, so the fight never gets anywhere.
     /// Its health never falls and the bot makes no step, so after
     /// <see cref="PlayerbotBrain.FightNoProgressMs"/> the bot sets it aside, and for about a respawn (<see cref="PlayerbotBrain.StalledTargetMs"/>).
+    /// The thinks run under a probe on a frozen clock (<see cref="ThinkUntilOnAFrozenBudgetAsync"/>): the brain's optional think budget is
+    /// wall-clock, and a loaded host spent it before the bot fought (flake ledger #32); this test is about world time only.
     /// </summary>
     [Fact]
-    [Trait("Category", "Timing")]
     public async Task ATargetTheBotCannotHurt_IsSetAside_AndNotTakenBackSoon()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);
@@ -200,16 +200,16 @@ public sealed class PlayerbotBrainStallTests
         }
         await world.OnWorldAsync(() => { Evade(); return true; });
 
-        Assert.True(await world.ThinkUntilAsync(5_000, () => ReferenceEquals(world.Brain.InspectionTarget, mob), Evade),
+        Assert.True(await ThinkUntilOnAFrozenBudgetAsync(world, 5_000, () => ReferenceEquals(world.Brain.InspectionTarget, mob), Evade),
             "the bot never fought the creature: the test proves nothing");
         uint heldFrom = await world.OnWorldAsync(() => world.Host.World.NowMs);
-        bool released = await world.ThinkUntilAsync(PlayerbotBrain.FightNoProgressMs + 5_000,
+        bool released = await ThinkUntilOnAFrozenBudgetAsync(world, PlayerbotBrain.FightNoProgressMs + 5_000,
             () => !ReferenceEquals(world.Brain.InspectionTarget, mob), Evade);
         uint heldMs = await world.OnWorldAsync(() => world.Host.World.NowMs) - heldFrom;
         Assert.True(await world.OnWorldAsync(() => mob.IsAlive), "the creature died: the test proves nothing");
         Assert.True(released, $"the bot held the target it cannot hurt for {heldMs} ms");
 
-        bool takenBack = await world.ThinkUntilAsync(60_000, () => ReferenceEquals(world.Brain.InspectionTarget, mob), Evade);
+        bool takenBack = await ThinkUntilOnAFrozenBudgetAsync(world, 60_000, () => ReferenceEquals(world.Brain.InspectionTarget, mob), Evade);
         Assert.False(takenBack, "the target set aside was taken back within a minute");
     }
 
@@ -412,6 +412,32 @@ public sealed class PlayerbotBrainStallTests
             await Bot.ManagedClosed;
             await Host.DisposeAsync();
         }
+    }
+
+    /// <summary>
+    /// <see cref="RiskTestWorld.ThinkUntilAsync"/> with every think run under a probe whose clock never moves: the brain's optional work
+    /// (<see cref="PlayerbotBrain.HasOptionalThinkBudget"/>, 15 ms) reads the wall clock when no probe is running, so a loaded host spent the
+    /// budget before the bot had looked at its target. World time moves as in <see cref="RiskTestWorld.ThinkAsync"/>.
+    /// </summary>
+    private static async Task<bool> ThinkUntilOnAFrozenBudgetAsync(RiskTestWorld world, uint maxMs, Func<bool> condition, Action each)
+    {
+        var clock = new PlayerbotThinkProbeTests.ManualClock();
+        for (uint elapsed = 0; elapsed < maxMs; elapsed += RiskTestWorld.ThinkMs)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                world.Session.ManagedBudget = new ManagedActionBudget(8);
+                var probe = new PlayerbotThinkProbe(clock);
+                probe.Begin();
+                try { world.Brain.Update(RiskTestWorld.ThinkMs); }
+                finally { probe.End(); }
+                return true;
+            });
+            await world.Host.World.AdvanceClockAsync(RiskTestWorld.ThinkMs);
+            if (await world.OnWorldAsync(() => { each(); return condition(); })) return true;
+        }
+
+        return false;
     }
 
     private sealed class ManualStallClock : IWorldFeature

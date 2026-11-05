@@ -144,17 +144,26 @@ public sealed class ManagedPlayerbotPerfTests
         for (int i = 0; i < bots; i++)
             lanes[i] = i % 10 == 0 ? ThinkLane.Priority : ThinkLane.Normal;
 
-        var rotation = new PlayerbotThinkRotation();
-        long start = Stopwatch.GetTimestamp();
-        int totalThinks = 0;
-        for (int tick = 0; tick < 200; tick++)
+        // A shared CI runner can stall any single pass (one cold pass once took 88 ms), so the first pass warms the JIT and the
+        // bound applies to the fastest of five measured passes: a real slowdown makes every pass slow, a noisy neighbour does not.
+        double bestMs = double.MaxValue;
+        for (int pass = 0; pass <= 5; pass++)
         {
-            var driver = new ArrayLaneDriver(lanes, priorityBudget: 33, mainBudget: 15, stepMs: 0.1);
-            totalThinks += rotation.TickLanes(bots, budgetMs: 8.0, priorityShare: 0.7, ref driver);
+            var rotation = new PlayerbotThinkRotation();
+            long start = Stopwatch.GetTimestamp();
+            int totalThinks = 0;
+            for (int tick = 0; tick < 200; tick++)
+            {
+                var driver = new ArrayLaneDriver(lanes, priorityBudget: 33, mainBudget: 15, stepMs: 0.1);
+                totalThinks += rotation.TickLanes(bots, budgetMs: 8.0, priorityShare: 0.7, ref driver);
+            }
+
+            double elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            Assert.Equal(200 * 48, totalThinks);
+            if (pass > 0)
+                bestMs = Math.Min(bestMs, elapsedMs);
         }
 
-        double elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-        Assert.Equal(200 * 48, totalThinks);
-        Assert.True(elapsedMs < 50.0, $"Expected 200 rotation ticks over 4,500 bots to take < 50 ms, took {elapsedMs:F2} ms");
+        Assert.True(bestMs < 50.0, $"Expected 200 rotation ticks over 4,500 bots to take < 50 ms, fastest of 5 passes took {bestMs:F2} ms");
     }
 }
