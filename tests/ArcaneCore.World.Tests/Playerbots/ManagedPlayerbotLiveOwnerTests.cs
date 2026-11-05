@@ -671,6 +671,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     {
         // The retry's pick passes the ownership check (map 0 is owned); while its Starting row is written another worker takes the claim and this worker stops owning the login map, so the login is refused
         // and the second probe finds the holder: the raced-login path of the start, reached through a whole pass.
+        // The trigger is filtered to the retried bot: the pass's pre-loop create also writes a Starting row (for a new bot) and must not spend the race.
         (PopulationTestHost world, FakeLiveOwners live, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(baseMs);
         world.Feature.ForeignBotMemoryMs = foreignMs;
         ManagedPlayerbot before = world.Owners.Peek(poisoned)!;
@@ -683,7 +684,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         bool raced = false;
         world.Owners.BeforeUpdate = (bot, _) =>
         {
-            if (!raced && bot.State == ManagedPlayerbotState.Starting)
+            if (!raced && bot.BotId == before.BotId && bot.State == ManagedPlayerbotState.Starting)
             {
                 raced = true;
                 world.Host.World.Ownership = Owning(1);
@@ -719,11 +720,13 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     [Fact]
     public async Task ARetryWhoseLoginRaced_IsRememberedAsAnotherWorkersBot()
     {
-        (PopulationTestHost world, _, ManagedPlayerbot before, Func<int> retries) = await RacedRetryAsync(baseMs: 1000, foreignMs: 1500);
+        (PopulationTestHost world, FakeLiveOwners live, ManagedPlayerbot before, Func<int> retries) = await RacedRetryAsync(baseMs: 1000, foreignMs: 1500);
         await using PopulationTestHost owned = world;
+        int baseline = live.CallsFor(before.CharacterId);
 
         await PassAndStatusAsync(world, 1_000_000);
         Assert.Equal(1, retries());
+        Assert.Equal(baseline + 2, live.CallsFor(before.CharacterId)); // the check, then the probe after the refused login: the raced path, not a first-probe LiveOnOtherWorker
         world.Host.World.Ownership = Owning(0, 1);
         await PassAfterAsync(world, 1000); // the attempt's wait is over, the foreign memory (1500 ms) is not: the bot is skipped without a read
         Assert.Equal(1, retries());
