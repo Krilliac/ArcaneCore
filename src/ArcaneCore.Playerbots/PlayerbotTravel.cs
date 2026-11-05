@@ -624,7 +624,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             Portals = portals,
             Ships = ships,
             TriggerPortals = triggerPortals,
-            Walkable = WalkableFor(player),
+            Walkable = WalkableFor(player, triggerPortals),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
     }
@@ -667,9 +667,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         => Population.PopulationTownProgression.SeparatedByWater(a.MapId, a.Position.X, a.Position.Y, b.MapId, b.Position.X, b.Position.Y);
 
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
-    internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
+    internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player, IReadOnlyList<TriggerPortal>? triggers = null)
     {
-        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId && !Separated(a, b);
+        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return (a, b) => a.MapId == b.MapId && !Separated(a, b) && !TriggerSeparates(a, b, triggers);
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
         int blocking = 0;
         var self = new TravelPlace(player.MapId, new Vector3(player.X, player.Y, player.Z));
@@ -702,9 +702,42 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             if (a.MapId != b.MapId || Separated(a, b)) return false;
             (int ca, bool da) = Locate(a);
             (int cb, bool db) = Locate(b);
-            return !da || !db || ca == cb;
+            return Joined(a, b, ca, da, cb, db, triggers);
         };
     }
+
+    /// <summary>A same-map trigger that moves the bot up or down by more than this many yards joins two levels no walk joins (Rut'theran to Teldrassil's upper ground).</summary>
+    private const float TriggerLevelYards = 150f;
+
+    /// <summary>A place stands on a trigger's level when its height is within this many yards of the trigger's end.</summary>
+    private const float OnLevelYards = 75f;
+
+    /// <summary>
+    /// Whether two places of one map (not separated by water) count as walkable from each other, given what the region graph answered for
+    /// each (<c>d*</c>: it placed the place in component <c>c*</c>). Two placed places are joined when they share a component. A place the
+    /// graph could not place counts as joined, except between the two levels a same-map teleport trigger joins
+    /// (<see cref="TriggerSeparates"/>): a walk planned there fails only after thousands of yards, and the trigger is the way.
+    /// </summary>
+    internal static bool Joined(TravelPlace a, TravelPlace b, int ca, bool da, int cb, bool db, IReadOnlyList<TriggerPortal>? triggers)
+    {
+        if (da && db) return ca == cb;
+        return !TriggerSeparates(a, b, triggers);
+    }
+
+    /// <summary>Whether a trigger that changes the bot's height by more than <see cref="TriggerLevelYards"/> has one place at its entrance's height and the other at its exit's (either way round).</summary>
+    internal static bool TriggerSeparates(TravelPlace a, TravelPlace b, IReadOnlyList<TriggerPortal>? triggers)
+    {
+        if (triggers is null) return false;
+        foreach (TriggerPortal t in triggers)
+        {
+            if (MathF.Abs(t.Entrance.Position.Z - t.Exit.Position.Z) <= TriggerLevelYards) continue;
+            if ((OnLevel(a, t.Entrance) && OnLevel(b, t.Exit)) || (OnLevel(a, t.Exit) && OnLevel(b, t.Entrance))) return true;
+        }
+
+        return false;
+    }
+
+    private static bool OnLevel(TravelPlace place, TravelPlace end) => MathF.Abs(place.Position.Z - end.Position.Z) <= OnLevelYards;
 
     /// <summary>The flight estimate of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>, or null without the taxi data.</summary>
     private static Func<TravelPlace, TravelPlace, (float Seconds, uint Copper)?>? FlightFor(WorldSession session, Player player, PlayerbotOptions options,
@@ -1116,6 +1149,13 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 if (player.Combat.IsInCombat) return StepResult.Yield;
                 return Walk(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.AreaTrigger:
+                if (SwitchOf(leg.Means, options) is { } triggerOff)
+                {
+                    PlayerbotMovementControl.Stop(session, player);
+                    why = triggerOff;
+                    return StepResult.SwitchedOff;
+                }
+
                 if (player.Combat.IsInCombat) return StepResult.Yield;
                 return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Boat:
