@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Honor;
 
 /// <summary>
 /// The configuration section <c>World:Honor</c> as the binder sees it (mutable properties); <see cref="ToOptions"/> builds
-/// the <see cref="HonorOptions"/> the game code reads (init-only, except <c>Rate</c>, which <c>.rates set</c> changes live). Every default is the retail 1.12 value
+/// the <see cref="HonorOptions"/> the game code reads (init-only, except <c>Rate</c>, which <c>.rates set</c> changes live). Every default is the retail 1.12 value, except <c>GmCrossFactionInspect</c> (true: a game master may inspect the other faction)
 /// (docs/areas/honor.md lists the keys).
 /// </summary>
 public sealed class HonorSettings

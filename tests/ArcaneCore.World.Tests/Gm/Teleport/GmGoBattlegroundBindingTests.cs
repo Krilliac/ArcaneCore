@@ -429,7 +429,7 @@ public sealed class GmGoBattlegroundBindingTests : GmGoBattlegroundAndInstanceTe
     /// with the battleground entry point, Map.cpp:2045-2072) before the map is asked to unload, which a map with players would refuse.
     /// </summary>
     [Fact]
-    public async Task AGmOnTheMapOfADeletedMatch_IsSentToItsEntryPoint_AndTheMapUnloads()
+    public async Task AGmOnTheMapOfADeletedMatch_IsSentToItsEntryPoint()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
         await RunAsync(world, "gm-appear-bg-map-closes", async context =>
