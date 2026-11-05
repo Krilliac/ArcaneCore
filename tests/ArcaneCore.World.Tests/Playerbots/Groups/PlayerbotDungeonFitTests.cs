@@ -31,12 +31,14 @@ public sealed class PlayerbotDungeonFitTests
     [InlineData(509u)] // Ruins of Ahn'Qiraj
     [InlineData(531u)] // Temple of Ahn'Qiraj
     [InlineData(533u)] // Naxxramas
-    public void BandOf_ForARaidMap_StartsAtTheRaidLevel_AndOnlyWidensAboveIt(uint raidMap)
+    public void BandOf_ForARaidMapWithoutACataloguePlan_KeepsThePlusMinusTwoFallback(uint raidMap)
     {
+        // Raid maps take the same +-2 fallback around the recommended level 60 as every other instance (CHANGELOG, Unreleased).
         PlayerbotDungeonBand band = PlayerbotDungeonFit.BandOf(raidMap, 60, []);
-        Assert.Equal(new PlayerbotDungeonBand(60, 62), band);
-        Assert.False(band.Holds(59));
-        Assert.True(band.Holds(60));
+        Assert.Equal(new PlayerbotDungeonBand(58, 62), band);
+        Assert.True(band.Holds(58));
+        Assert.False(band.Holds(57));
+        Assert.False(band.Holds(63));
     }
 
     [Fact]

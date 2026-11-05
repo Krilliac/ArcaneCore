@@ -422,10 +422,12 @@ public sealed class PlayerbotVolunteerWorldTests
             PlayerbotVolunteerResult noted = await VolunteerAsync(world, tank.Id);
             Assert.Equal(PlayerbotVolunteerOutcome.Noted, noted.Outcome);
 
-            await RememberRivalAsync(world, tank); // after the offer was checked; the priest (the leader) alone would invite the player
+            await RememberRivalAsync(world, tank); // after the offer was checked; the best tank (Voltank, the leader) now holds the player as a rival
             await world.AddBotAsync("Volheal", Human, Priest, 10, [LesserHeal, Smite]);
+            Assert.True(await world.RunUntilAsync(40_000, () => world.Coordinator.WaitingBots.Count() == 2), await world.TraceAsync()); // positive control: the priest began waiting, so the group could have formed
             await world.RunAsync(40_000);
             Assert.False(PlayerInvited(world));
+            Assert.False(await IsVolunteerAsync(world)); // the entry was dropped silently, not kept to expire into a whisper from the rival
         }
     }
 
@@ -536,6 +538,78 @@ public sealed class PlayerbotVolunteerWorldTests
             Assert.Equal(8, await world.OnWorldAsync(() => feature.Voice.AnswersKept));
             await world.OnWorldAsync(() => { feature.Voice.RecordAnswer(chat, Key(me, 13)); return true; });
             Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.AnswersKept));
+        }
+    }
+
+    // --- the answer is recorded only once sent; no reply is no record; one Ready for the whole formed group ---------------------------
+
+    [Fact]
+    public async Task AnAnswer_TheLimiterRefused_IsGivenOnTheNextInv_EvenInsideTheRepeatWindow()
+    {
+        var (world, tank, _, player, chat, feature) = await StartAsync(healer: true, o => { o.Chat.Speech.BotLinesPerMinute = 1; o.Chat.Lfg.AnswerRepeatSeconds = 600; }, pair: false);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            // Use up the bot's one line of the minute, so the answer to the "inv" is refused by the limiter.
+            Assert.Equal(BotSpeechAdmission.Queued, await world.OnWorldAsync(() =>
+            {
+                Player bot = world.Player(tank.Id);
+                return chat.Limiter.TryTake(tank.Id, bot.Guid, BotSpeech.WhisperTo("Nobody", ObjectGuid.Empty, string.Empty, "test-filler", BotSpeechPriority.Normal), null, chat.SpeechOptions, chat.NowMs);
+            }));
+            long before = await world.OnWorldAsync(() => feature.Voice.Asked);
+            await WhisperAsync(world, chat, tank.Id, "inv");
+            Assert.Equal(before, await world.OnWorldAsync(() => feature.Voice.Asked)); // refused: nothing said
+            Assert.Equal(0, await world.OnWorldAsync(() => feature.Voice.AnswersKept));  // and nothing remembered as answered
+
+            await world.RunAsync(61_000); // the minute passes; the 600 s repeat window has not
+            await world.OnWorldAsync(() =>
+            {
+                chat.Voice.Post(tank.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, chat.NowMs, "the ogre", MinLevel: 1));
+                return true;
+            });
+            await WhisperAsync(world, chat, tank.Id, "inv");
+            Assert.Equal(before + 1, await world.OnWorldAsync(() => feature.Voice.Asked)); // answered now
+            Assert.Equal(1, await world.OnWorldAsync(() => feature.Voice.AnswersKept));
+        }
+    }
+
+    [Fact]
+    public async Task APlayerOfTheOtherFaction_GetsNoReply_AndNothingIsRecorded()
+    {
+        var (world, tank, _, player, chat, feature) = await StartAsync(healer: true);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            await world.OnWorldAsync(() =>
+            {
+                world.World.Host.World.FindOnlinePlayer(PlayerName)!.SetByte(UpdateFields.UnitFieldBytes0, 0, (byte)Race.Orc); // Horde against the Alliance bots
+                return true;
+            });
+            long before = await world.OnWorldAsync(() => feature.Voice.Asked);
+            await WhisperAsync(world, chat, tank.Id, "inv");
+            Assert.Equal(before, await world.OnWorldAsync(() => feature.Voice.Asked));
+            Assert.Equal(0, await world.OnWorldAsync(() => feature.Voice.AnswersKept));
+            Assert.False(await IsVolunteerAsync(world));
+        }
+    }
+
+    [Fact]
+    public async Task AReadyThroughOneMember_ThenAnInvToTheOtherBotWithAPost_IsQuiet_AndThePostStays()
+    {
+        var (world, tank, other, player, chat, feature) = await StartAsync(healer: true);
+        await using (world)
+        await using (player)
+        {
+            await SetLevelAsync(world, 9);
+            long before = await world.OnWorldAsync(() => feature.Voice.Asked);
+            await WhisperAsync(world, chat, other.Id, "inv pls"); // the member without a post: Ready, the group forms and the invitation is pending
+            Assert.Equal(before + 1, await world.OnWorldAsync(() => feature.Voice.Asked));
+
+            await WhisperAsync(world, chat, tank.Id, "inv"); // the poster, asked next
+            Assert.Equal(before + 1, await world.OnWorldAsync(() => feature.Voice.Asked)); // quiet: the formed group already answered
+            Assert.NotNull(await world.OnWorldAsync(() => chat.Voice.Find(tank.Id, chat.NowMs, 600_000L))); // the post was kept
         }
     }
 }

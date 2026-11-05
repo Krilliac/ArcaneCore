@@ -353,7 +353,11 @@ public sealed partial class PlayerbotGroupCoordinator
             if (PlanForVolunteer(real, candidates, size, goal, volunteerBot, entry.Role) is { } plan)
             {
                 // The offer was checked against the bots waiting then; the plan's bots may have changed since (an ignore or a rivalry made in the meantime).
-                if (IgnoresOrRivals(real, plan.Members.Where(m => m.Bot.BotId != Guid.Empty).Select(m => m.Bot.BotId))) continue;
+                if (IgnoresOrRivals(real, plan.Members.Where(m => m.Bot.BotId != Guid.Empty).Select(m => m.Bot.BotId)))
+                {
+                    _volunteers.Remove(guid); // as Volunteer does: no invitation, no reply, and no 'expired' whisper from a bot that holds them as a rival
+                    continue;
+                }
                 volunteer = guid;
                 return plan;
             }

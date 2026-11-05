@@ -1122,8 +1122,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 if (result.Outcome == PlayerbotVolunteerOutcome.Ignored) return true; // no invitation and no reply
                 if (result.Outcome == PlayerbotVolunteerOutcome.NotWaiting)
                 {
-                    // The group formed on this player's earlier inv (the invitation is pending): the repeat is quiet and the post stays.
-                    // Quiet while this player's invitation from the bot's own formed group is pending, or when that group's Ready was answered lately.
+                    // The group formed on this player's earlier inv: quiet while that invitation is pending or its Ready was answered lately; the post stays.
                     int formed = coordinator.FormedGroupIdOf(line.BotId);
                     if (AnsweredLately(chat, ReadyKey(asker.Guid, formed)) || (formed != 0 && coordinator.AwaitedGroupIdOf(asker.Guid) == formed)) return true;
                     chat.Voice.Forget(line.BotId);

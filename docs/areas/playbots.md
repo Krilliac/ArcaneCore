@@ -1980,10 +1980,11 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
 
 - **LFG / LFM** (`LookingForGroup`): for each group goal bots wait on (by goal and team), the one waiting longest posts in
   LookingForGroup (outside a capital `GeneralSharePercent` of the time in General) "LFG SFK, 24 mage" alone or "LF2M SFK, need tank and
-  heals" with the roles still missing, once per `LookingForGroupRepeatSeconds`. A real player's whisper to the poster asking for an
+  heals" with the roles still missing, once per `LookingForGroupRepeatSeconds`. A real player's whisper asking for an
   invite ("inv", "can i join", "i can heal") within `PostLifeSeconds` puts the player into that group's matching
   (`PlayerbotGroupCoordinator.Volunteer`): the group forms with the player when enough bots wait, and the leader invites through the
-  normal group path. Too low, already grouped or no longer looking is answered so.
+  normal group path. The poster takes the whisper or, with `Enabled` on, any bot of the waiting group does (the post of the group stands in
+  for a member that did not post). Too low, already grouped or no longer looking is answered so.
 - **Where bots advertise** (`LfgNearDungeonOnly`, `LfgMaxTravelSeconds`): a bot posts an LFG, LFM or quest-help line for a place only
   when it could be there soon. Of the bots waiting for one goal, the first in waiting order that is alive and out of combat and that stands
   in the place's zone or a bordering one, or whose planned trip to the place (the travel planner: known flight paths, the hearthstone and
@@ -2033,9 +2034,9 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   (a warrior or a priest) at the same level and place would have been placed, so the role named is the true reason; Noted when the bots are
   too few (the player is kept for five minutes and matched, with the stated role and with the ignore and rivalry check made again against
   the bots of the plan, once the group can form); CannotPlace for every other reason. A repeated "inv" inside `AnswerRepeatSeconds` is
-  applied again, but an identical answer is said once. An answer counts as given only once the whisper was sent: one the limiter or the
-  chat service refused is repeated on the next "inv". A different outcome, such as CannotPlace then Noted, is answered again; after Ready
-  the repeat is quiet while the invitation of the formed group is pending (whichever bot of that group is asked) and the post stays;
+  applied again, but an identical answer is said once. An answer counts as given once the chat service accepted it for sending: one the limiter or the
+  chat service refused is said again at the next "inv" that gets the same answer. A different outcome, such as CannotPlace then Noted, is answered again; after Ready
+  the repeat is quiet while the invitation of the formed group is pending (to the poster, or to a member that has the group's post) and the post stays;
   `MaxTrackedVolunteers` bounds the answers remembered. `Enabled` off leaves
   only the whisper to the poster itself.
 
