@@ -23,10 +23,13 @@ public readonly record struct SpeedHackDecision(bool Fire, int Severity, double 
 /// </para>
 /// <para>
 /// Long-term drift (<see cref="SpeedClockOptions.LongTermDriftMs"/>, off by default): the window above only sees a clock that runs fast
-/// by more than the tolerance. A client that runs a few percent fast, below the tolerance, gains time for as long as it plays. Every
-/// usable pair (not discarded by the guards above, after any time-skip credit) adds its client delta minus its real delta to a running
-/// excess, floored at minus the limit; the excess of an honest client telescopes (lag stretches the real side and the catch-up burst gives
-/// it back), so it stays near zero, while a slow clock hack climbs steadily. Reaching the limit fires once and restarts the excess.
+/// by more than the tolerance. A client that runs a few percent fast, below the tolerance, gains time for as long as it plays. The excess is
+/// measured as a span from an anchor: the client time elapsed since the anchor minus the real time elapsed since it, summed over every pair
+/// including the ones the guards discard for the window (a signed client step, so a stamp slightly behind the last one counts as a small
+/// negative step instead of wrapping). Because it is a difference of spans it telescopes across any stall, lag spike or catch-up burst: the
+/// excess of an honest client returns to about zero once the held packets have arrived. It is floored at minus twice the limit, so a hacker
+/// cannot bank unlimited negative time, and an honest stall longer than twice the limit leaves at most the part beyond it. Reaching the limit
+/// (outside the cooldown) fires once and moves the anchor to the current packet.
 /// </para>
 /// Pure, single-player, single-threaded; times are milliseconds and wrap like the client's 32-bit clock.
 /// </summary>
@@ -98,10 +101,24 @@ public sealed class SpeedHackDetector
         }
 
         var sample = default(Sample);
+        bool havePair = false;
+        long driftStep = 0;
         if (_havePrevious)
         {
             uint clientDelta = unchecked(clientTime - _previousClient);
             uint realDelta = unchecked(receivedMs - _previousReal);
+
+            // The drift's own step: signed (a stamp behind the last one is a small negative step, not a wrapped huge one), credited the same way,
+            // and counted for every pair, discarded or not, so the excess is the difference of two spans.
+            long signedClient = unchecked((int)clientDelta);
+            if (_credit > 0 && signedClient > realDelta)
+            {
+                signedClient -= Math.Min(_credit, signedClient - realDelta);
+            }
+
+            havePair = true;
+            driftStep = signedClient - realDelta;
+            _driftRealMs += realDelta;
             if (_credit > 0 && clientDelta > realDelta)
             {
                 clientDelta -= Math.Min(_credit, clientDelta - realDelta);
@@ -141,34 +158,37 @@ public sealed class SpeedHackDetector
 
         _ring[_head] = sample;
         _head = (_head + 1) % _ring.Length;
-        bool driftFired = false;
-        long driftExcess = 0;
-        long driftSpan = 0;
         if (sample.Valid)
         {
             _sumClient += sample.ClientDelta;
             _sumReal += sample.RealDelta;
             _validCount++;
-            long limit = _options.LongTermDriftMs;
-            if (limit > 0)
-            {
-                _drift = Math.Max(-limit, _drift + ((long)sample.ClientDelta - sample.RealDelta));
-                _driftRealMs += sample.RealDelta;
-                if (_drift >= limit)
-                {
-                    driftFired = true;
-                    driftExcess = _drift;
-                    driftSpan = _driftRealMs;
-                    _drift = 0;
-                    _driftRealMs = 0;
-                }
-            }
         }
 
         // The cooldown ends once the receive clock reaches its deadline (wrap-safe signed comparison).
         if (_inCooldown && unchecked((int)(receivedMs - _cooldownUntil)) >= 0)
         {
             _inCooldown = false;
+        }
+
+        bool driftFired = false;
+        long driftExcess = 0;
+        long driftSpan = 0;
+        long limit = _options.LongTermDriftMs;
+        if (limit > 0 && havePair)
+        {
+            _drift = Math.Max(-2 * limit, _drift + driftStep);
+            if (_drift >= limit && !_inCooldown)
+            {
+                driftFired = true;
+                driftExcess = _drift;
+                driftSpan = _driftRealMs;
+                _drift = 0;
+                _driftRealMs = 0;
+                _consecutiveHot = 0;
+                _inCooldown = true;
+                _cooldownUntil = unchecked(receivedMs + (uint)Math.Max(0, _options.CooldownMs));
+            }
         }
 
         if (driftFired)

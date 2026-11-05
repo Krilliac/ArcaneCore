@@ -81,9 +81,6 @@ public static class PacketChecks
     {
         PacketCheck.Malformed => "packet malformed payload",
         PacketCheck.Shape => "packet shape",
-        PacketCheck.Cadence => "packet cadence",
-        PacketCheck.Replay => "packet replay",
-        PacketCheck.OrphanAck => "packet orphan acknowledgement",
         PacketCheck.DevOpcode => "packet stripped developer opcode",
         _ => throw new ArgumentOutOfRangeException(nameof(check)),
     };

@@ -90,6 +90,67 @@ public sealed class SpeedHackDriftTests
     }
 
     [Fact]
+    public void HonestPlay_AStallAboveMaxGap_ThenABurst_DoesNotAccumulateTowardsTheLimit()
+    {
+        // The stalled pair (5000 ms of real time, above MaxGapMs 3000) is discarded by the window's guards, but the drift still counts it, so the
+        // burst that follows repays it. Only the drift is asserted: the window's own verdict on a burst is not what this pins.
+        var detector = new SpeedHackDetector(Options(5000));
+        uint client = 100000, real = 5000;
+        detector.Feed(client, real);
+        for (int round = 0; round < 300; round++)
+        {
+            client += 500;
+            real += 5000;
+            Assert.False(detector.Feed(client, real).LongTermDrift);
+            for (int i = 0; i < 9; i++)
+            {
+                client += 500;
+                real += 1;
+                Assert.False(detector.Feed(client, real).LongTermDrift, $"round {round} packet {i}");
+            }
+        }
+    }
+
+    [Fact]
+    public void HonestPlay_AStampSlightlyBehindThePreviousOne_DoesNotAccumulateTowardsTheLimit()
+    {
+        // The client's stamps jitter: every other packet carries a stamp 200 ms behind the true client time (still inside the regression
+        // tolerance). The excess must stay at zero, not gain 200 ms per round.
+        var detector = new SpeedHackDetector(Options(5000));
+        uint real = 5000;
+        const uint Offset = 100000;
+        detector.Feed(real + Offset, real);
+        for (int round = 0; round < 500; round++)
+        {
+            real += 500;
+            Assert.False(detector.Feed(real + Offset - 200, real).LongTermDrift);
+            real += 500;
+            Assert.False(detector.Feed(real + Offset, real).LongTermDrift, $"round {round}");
+        }
+    }
+
+    [Fact]
+    public void AFireInsideTheCooldown_WaitsForItsEnd()
+    {
+        // A clock 3x fast with the limit at its minimum: the first fire starts the cooldown, so the next ones are held back until it ends.
+        var detector = new SpeedHackDetector(Options(1000));
+        uint client = 100000, real = 5000;
+        detector.Feed(client, real);
+        int fires = 0;
+        for (int i = 0; i < 40; i++) // 40 pairs of 100 ms real: 4000 ms, cooldown 10000
+        {
+            real += 100;
+            client += 300;
+            if (detector.Feed(client, real).LongTermDrift)
+            {
+                fires++;
+            }
+        }
+
+        Assert.Equal(1, fires);
+    }
+
+    [Fact]
     public void AReset_ForgetsTheExcess()
     {
         var detector = new SpeedHackDetector(Options(5000));
