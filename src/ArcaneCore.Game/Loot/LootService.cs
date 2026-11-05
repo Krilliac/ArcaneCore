@@ -69,8 +69,9 @@ public sealed partial class LootService : IViewerFieldFilter
 
     // The content is immutable; the live reload (.reload all_loot, creature_loot_template, ...) swaps the whole of it on the
     // world thread, between ticks. Loot already generated keeps the items it rolled (vmangos rolls at corpse generation too).
-    private LootContent _content;
-    private LootGenerator _generator;
+    // Volatile: the reload swaps them on the world thread while a session thread may read Content or Generator (a reader sees the old or the new reference, never a stale one).
+    private volatile LootContent _content;
+    private volatile LootGenerator _generator;
 
     public LootContent Content => _content;
 

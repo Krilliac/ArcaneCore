@@ -144,8 +144,8 @@ copied). Each piece of code cites file:line.
   requirement table and the play-time flag are not modelled in gathering. An immune gatherer is refused before anything opens
   or a skill rises (review finding 58, `Spell::EffectOpenLock`, `SpellEffects.cpp:2117-2118`), and a quest-bound herb or vein
   stays closed without its quest (finding 59).
-- Auto-unequip after losing a weapon skill mails an item that finds no bag space in vmangos; there is no mail system, so
-  the item stays equipped.
+- Auto-unequip after losing a weapon skill mails an item that finds no bag space in vmangos (`AutoUnequipItemFromSlot`, `Player.cpp:19721-19746`); the
+  inventory lives in Game and has no seam to the mail feature (World), so such an item stays equipped.
 - The database matrix (MariaDB, PostgreSQL) was not available here: the store tests ran on SQLite only.
 
 ## Acceptance

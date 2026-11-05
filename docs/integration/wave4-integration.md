@@ -85,8 +85,8 @@ Tips after integration: **Characters 25, World 28, Auth 3**. The lane docs that 
 * **Spell casting (Prepare/AddCooldown/cast)**: ranged auto-repeat (`autoRepeatShot`), crafting (`castItem`, item cooldown category), spell
   mods (`ModScope`, cooldown mod) all compose; `AddCooldown` uses the picked item cooldown's category with the cooldown spell mod applied.
 * **ReputationChanged**: reputation lane and quests-advanced both implemented `QuestNpcServices.ReputationChanged`; kept the quests-advanced
-  (status filtered) version. The reputation feature calls it directly; the quests lane's `QuestReputationBinding` finds no
-  `IReputationChangeSource` and logs one information line (see open questions).
+  (status filtered) version. The reputation feature calls it directly; the quests lane's `QuestReputationBinding` was a dead
+  subscriber and has been removed (see open questions).
 * **Evade health snap**: creature-movement-spawns (`Creatures:Movement:EvadeRestoresFullHealth`) and threat (a top-level duplicate)
   added the same switch. One switch remains: `Creatures:Movement:EvadeRestoresFullHealth` (default false = retail). The threat lane's
   `EvadeResetsAuras` stays.
@@ -142,20 +142,31 @@ Config-defaulted-on behaviours worth a second look because their default is "on"
 
 ## Open questions (lanes' plus integration)
 
-* Aura 52 crit percent on the character sheet and weapon-dependent crit mods (above).
-* `QuestReputationBinding` logs "No reputation change source is registered" at startup because the reputation lane calls the quest service
-  directly; either register `ReputationService` as the source and drop the direct call, or remove the binding.
-* Per-entry `.reload creature_template <entry>` is not supported (no entry-aware contract on `IContentReloadable`).
-* Spell mods: should pet/totem casts spend charges, should `PassiveReapply` be uncapped, should the leech multiplier follow vmangos?
-* Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest.
-* Battlegrounds S3/S5/S6/S7 need the integrator's schema numbers (now free: Characters 26+, World 29+) and a composite map resolver.
-* Reputation: wire widths (u16 versus u32 slots, forced reactions) need a client capture; forced reactions across login unproven.
-* Graveyards: durability exemption `NO_DURABILITY_LOSS` not modelled; resurrection request packet layout vs real client unverified.
-* Warlock-mage: `PaysPerSecondCost` is a heuristic verified on Health Funnel only. (The dropped invisibility rule's group-mate and Hunter's Mark clauses were compared against `StealthVisibilityRule` at release review and are present; its owner/charmer clause was missing and is now restored.)
-* Aura lane: real Spell.dbc flags of Polymorph, Sap, Gouge, Freezing Trap, Wyvern Sting, Prowl need checking.
-* Hot reload: `LootService.Content`/`Generator` are plain fields swapped on the world thread; make them volatile if a session thread reads them.
-* Threat: `Player.SetGameMaster` does not call `CombatStopWithPets`; no taxi producer for the offline threat state.
-* druid-forms: the Transform guard in shapeshift display code has no test.
+Each item was re-checked against the code at the uc2 integration branch (Y96). Resolved items say how; the rest are real limits.
+
+* Aura 52 crit percent on the character sheet: resolved. `CombatStatAuras.ApplyCrit` registers MOD_CRIT_PERCENT (vmangos `HandleAuraModCritPercent`) and
+  the crit fields take the generic and the weapon-fitting amounts (`AuraSupportBaseline` lists it as a handler).
+* `QuestReputationBinding`: removed. The reputation feature calls `QuestNpcServices.ReputationChanged` directly (one delivery path), nothing registers an
+  `IReputationChangeSource` in the container, and the binding only ever logged "No reputation change source is registered" at startup.
+* Per-entry `.reload creature_template <entry>` (and gameobject_template): the entry is accepted and the whole table is reloaded, a superset of vmangos'
+  single-template reload (`ServerCommands.cpp:1758-1785`); the reply says so and the entry is no longer taken for the reason text. An entry-aware
+  `IContentReloadable` contract is not built: a full reload is the stricter result.
+* Spell mods: the leech multiplier follows vmangos (MULTIPLE_VALUE, `docs/areas/spell-mods.md`). Whether pet/totem casts should spend the owner's charges and
+  whether `PassiveReapply` should be uncapped are recorded there as unswitched deviations awaiting a developer decision (neither retail behaviour is a sensible default).
+* Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest (a real client is needed).
+* Battlegrounds S3, S5, S6 and S7: delivered since (`BattlegroundFeature`, `CharacterBattlegroundDataModule`); the schema numbers were assigned in merge order.
+* Reputation wire widths (u16 versus u32 slots) and forced reactions across login need a client capture. Nothing can settle this without one.
+* Graveyards: the death durability exemption (`SPELL_ATTR_EX3_NO_DURABILITY_LOSS`, vmangos `Unit.cpp:1196`) is modelled in `MapCombat.DeathDurability.cs`
+  and tested in `DeathDurabilityTests`. The resurrection request packet layout against a real client is still unverified.
+* Warlock-mage `PaysPerSecondCost`: checked against the vmangos spell table (build 5875), where every spell with both `SPELL_ATTR_EX2_NO_TARGET_PER_SECOND_COSTS`
+  and a per-second cost is a Health Funnel rank (755, 3698-3700, 11693-11695). The heuristic covers exactly those.
+* Aura lane damage-break flags, checked in the vmangos spell table: Polymorph, Sap, Gouge and Freezing Trap Effect carry the damage interrupt flag and no
+  proc flags, so they break even while the break skips auras with proc flags; Wyvern Sting carries both and is spared by that rule and by
+  `DamageBreakExemptSpells`; Prowl is in the exempt list. Nothing to change.
+* Hot reload: `LootService` now holds `Content` and `Generator` in volatile fields.
+* Threat: `Player.SetGameMaster(true)` now ends combat for the player and its pet (vmangos `CombatStopWithPets`, `Player.cpp:2640`; guardians and charms have no
+  enumeration here), and a taxi flight parks the player offline in every threat list and brings it back on landing (`WaypointMovementGenerator.cpp:394, 366-368`).
+* druid-forms: the Transform guard has a test (`FormDisplayTests.RemovingFormUnderTransform_PreservesTransformAndRestoresNative`, both orders).
 
 ## Release notes
 

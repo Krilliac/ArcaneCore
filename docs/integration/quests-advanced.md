@@ -98,8 +98,8 @@ name as covered. The quest feature installs its sink on the spell system (`Quest
 ### Reputation objectives (c78baca)
 `QuestNpcServices.ReputationChanged` (`Player::ReputationChanged`, `Player.cpp:14239-14264`) and the seam `IReputationChangeSource`. The
 **reputation lane must raise the event** from its change path (`ReputationService.ApplyAndNotify`) and register an implementation in the
-service container; until then `QuestReputationBinding` subscribes nothing and logs once, and reputation objectives refresh only on
-accept and login (as before).
+service container. The reputation feature instead calls `QuestNpcServices.ReputationChanged` directly (`ReputationFeature.OnReputationChanged`), so
+reputation objectives complete and revert when the standing crosses them; the subscriber binding that waited for the seam was removed.
 
 ### Giver marks (1599359)
 Quest level 0 (and negative) uses the player's level (`Player.h:1114`); the status query only refuses hostile creatures
@@ -149,7 +149,7 @@ PostgreSQL case alike.
 * `QuestNpcServices.AcceptQuest` now has one accept core (`AddQuestFrom`) used by NPC, player (share) and confirm accepts; other lanes
   editing `Interaction.cs` should rebase on it.
 * Spell effect 16 is registered by `QuestCompleteSpellEffect`: a second registration by another lane fails at startup (duplicate rule).
-* A new `IWorldFeature` (`QuestReputationBinding`) and `IOpcodeHandlerGroup` (`QuestShareHandlers`) are discovered automatically.
+* A new `IOpcodeHandlerGroup` (`QuestShareHandlers`) is discovered automatically (a second new feature, `QuestReputationBinding`, was removed later: see wave4-integration).
 
 ## Tests
 `QuestSupportGateTests`, `QuestTurnInTests`, `QuestShareTests`, `QuestAcceptEffectTests`, `QuestCompleteSpellEffectTests`,

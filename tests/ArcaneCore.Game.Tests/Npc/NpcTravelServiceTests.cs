@@ -268,6 +268,27 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void AFlight_ParksThePlayerOfflineInEveryThreatList_AndLandingBringsItBack()
+    {
+        // FlightPathMovementGenerator::Reset and ::Finalize (WaypointMovementGenerator.cpp:394, 366-368).
+        using var rig = new TaxiRig();
+        NpcServiceTestKit kit = rig.Kit;
+        var holder = new ArcaneCore.Game.Tests.CombatCore.CombatTestUnit();
+        holder.Combat.Threat.AddThreat(kit.Player, 100);
+        kit.Player.Money = 150;
+
+        kit.Services.ActivateTaxi(kit.Player, kit.Npc.Guid, 1, 2);
+        Assert.True(rig.Flights.IsFlying(kit.Player));
+        Assert.Same(kit.Player, Assert.Single(holder.Combat.Threat.OfflineEntries).Target);
+
+        rig.Flights.Update(rig.Map, 1000);
+        rig.Flights.Update(rig.Map, 1100);
+        Assert.False(rig.Flights.IsFlying(kit.Player));
+        Assert.Empty(holder.Combat.Threat.OfflineEntries);
+        Assert.Equal(100f, holder.Combat.Threat.GetThreat(kit.Player));
+    }
+
+    [Fact]
     public void ActivateTaxiExpress_RoundsEachLegHalfUp_NotTheCeilOfTheSum()
     {
         // Player.cpp:17977 and 17997: every leg is uint32(price × discount + 0.5f), paid when its path starts (taxi lane).

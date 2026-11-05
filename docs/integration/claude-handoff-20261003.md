@@ -172,9 +172,8 @@ details in `docs/integration/npc-quest-fidelity.md`, "Known deviations without a
 
 - Condition types that cannot be resolved fail closed (the row is "not satisfied" and its gossip option, vendor row or
   quest stays hidden) and cannot be configured.
-- `AcceptableQuest` silently withholds quests that have a source spell, a source item/count, a PartyAccept, AutoRewarded
-  or StayAlive flag, an exploration objective without a known area trigger, a reputation objective without a reputation
-  owner, or an unsupported quest type, with no reply to the client.
+- `AcceptableQuest` (superseded): quests are withheld only when a behaviour they need has no registered adapter, and the
+  startup log counts them per reason (see `docs/integration/npc-quest-fidelity.md`).
 - `Stats:RequireImportedData` defaults to false (vmangos refuses to start without the player base data); the startup log
   says so when the data is incomplete. It is the one deliberate difference of the stat feature.
 - Hot reload is off by default (`HotReload:Commands=false`); a development server enables it.

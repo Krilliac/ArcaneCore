@@ -68,9 +68,31 @@ public sealed class ReloadCommands : ICommandGroup
             return true;
         }
 
-        context.Reply($"Re-loading {name}...");
+        // vmangos HandleReloadCreatureTemplatesCommand / HandleReloadGameObjectTemplatesCommand (ServerCommands.cpp:1758-1785) take an optional entry and
+        // reload only that template. The contract here has no entry-aware build, so the whole table is reloaded (a superset); the entry is not a reason.
+        string scope = string.Empty;
+        if (name is "creature_template" or "gameobject_template" && TakeEntry(ref reason, out uint entry))
+        {
+            scope = $" (entry {entry}: the whole table is reloaded, a superset of vmangos' single-template reload)";
+        }
+
+        context.Reply($"Re-loading {name}{scope}...");
         HotSwapOrigin origin = HotSwapOrigin.FromCommand(context, reason);
         Run(context, async () => [await feature.Coordinator.ReloadAsync(name, origin: origin).ConfigureAwait(false)]);
+        return true;
+    }
+
+    /// <summary>Whether <paramref name="reason"/> starts with a decimal entry; when it does the entry is removed from the reason.</summary>
+    internal static bool TakeEntry(ref string reason, out uint entry)
+    {
+        int space = reason.IndexOfAny([' ', '\t']);
+        string head = space < 0 ? reason : reason[..space];
+        if (!uint.TryParse(head, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out entry))
+        {
+            return false;
+        }
+
+        reason = space < 0 ? string.Empty : reason[(space + 1)..].TrimStart();
         return true;
     }
 

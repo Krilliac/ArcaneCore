@@ -10,8 +10,9 @@ namespace ArcaneCore.Game.Tests.CombatMechanics;
 
 /// <summary>
 /// vmangos Unit::GetUnitDodgeChance / GetUnitParryChance / GetUnitBlockChance (Unit.cpp:2474-2550): a victim that is
-/// casting a non-melee spell (IsNonMeleeSpellCasted(false)) or stunned has no dodge, parry or block, and a totem
-/// (Creature::IsTotem, creature type TOTEM for parry) has none either.
+/// casting a non-melee spell (IsNonMeleeSpellCasted(false)) or stunned has no dodge, parry or block. A summoned totem
+/// (Creature::IsTotem) has no dodge or block, and a creature of type TOTEM has no parry (Unit.cpp:2481, 2501-2508, 2544): the two
+/// tests are separate, so a TOTEM-typed creature that is not a summoned totem still dodges and blocks.
 /// </summary>
 public sealed class MeleeVictimDefenseTests
 {
@@ -76,7 +77,7 @@ public sealed class MeleeVictimDefenseTests
     }
 
     [Fact]
-    public void ATotemVictim_CannotDodgeParryOrBlock()
+    public void ACreatureOfTypeTotem_CannotParry_ButStillDodgesAndBlocksUnlessSummoned()
     {
         (WorldRuntime world, Map map, Player attacker) = Scene();
         using WorldRuntime _ = world;
@@ -90,6 +91,34 @@ public sealed class MeleeVictimDefenseTests
 
         MeleeRollInput input = map.Combat.BuildRollInput(attacker, totem, WeaponAttackType.BaseAttack);
 
-        Assert.Equal((0f, 0f, 0f), (input.DodgeChance, input.ParryChance, input.BlockChance));
+        // Unit::GetUnitParryChance withholds only for creature type TOTEM; dodge and block test Creature::IsTotem (the summoned subtype), which this unregistered creature is not.
+        Assert.Equal((5f, 0f, 5f), (input.DodgeChance, input.ParryChance, input.BlockChance));
+    }
+
+    [Fact]
+    public void ASummonedTotemOfAnotherType_CannotDodgeOrBlock_ButStillParries()
+    {
+        // Creature::IsTotem (the summoned subtype) removes dodge and block (Unit.cpp:2481, 2544); GetUnitParryChance tests only the creature type.
+        (WorldRuntime world, Map map, Player attacker) = Scene();
+        using WorldRuntime _ = world;
+        var template = new CreatureTemplate { Entry = 989_311, Name = "Test Summoned Totem", MinLevel = 60, MaxLevel = 60,
+            MinLevelHealth = 100, MaxLevelHealth = 100, DisplayIds = [1], Faction = 35, CreatureType = 1 };
+        var totem = new Creature(989_311, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
+        totem.Relocate(2, 0, 83.5f, MathF.PI, 0);
+        totem.MapId = 0;
+        map.AddObject(totem);
+        map.Combat.Track(totem);
+        var info = new ArcaneCore.Game.Totems.TotemInfo(totem, attacker, ArcaneCore.Game.Totems.TotemSlot.Fire, 1, 1, 10000);
+        ArcaneCore.Game.Totems.TotemQuery.Add(info);
+        try
+        {
+            MeleeRollInput input = map.Combat.BuildRollInput(attacker, totem, WeaponAttackType.BaseAttack);
+
+            Assert.Equal((0f, 5f, 0f), (input.DodgeChance, input.ParryChance, input.BlockChance));
+        }
+        finally
+        {
+            ArcaneCore.Game.Totems.TotemQuery.Remove(info);
+        }
     }
 }
