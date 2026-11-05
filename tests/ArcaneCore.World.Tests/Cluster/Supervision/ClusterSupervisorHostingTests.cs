@@ -430,6 +430,174 @@ public sealed class ClusterSupervisorHostingTests
         await hosted.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task Start_WithAReserveThatLeavesNoRoomForTheMinimumProcesses_ThrowsAConfigurationError_InsteadOfWaitingForever()
+    {
+        var launcher = new RecordingLauncher();
+        // Reserve 600 is below the 1000 MiB total, but 600 + the 500 MiB one process needs is above it: no free memory can ever admit it.
+        ClusterSupervisorHostedService hosted = HostedWith(
+            Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "600"), ("Cluster:Supervisor:Processes:p0:RequiredMemoryMb", "500")),
+            launcher, new SequenceProbe(10), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1000;
+        hosted.DelayAsync = (_, _) => throw new InvalidOperationException("the supervisor waited");
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Contains("smallest", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("waited", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(launcher.Launched);
+    }
+
+    [Fact]
+    public async Task Start_WithAReserveAndTheSmallestMinimumExactlyFillingTheHost_StillWaitsForMemory()
+    {
+        var launcher = new RecordingLauncher();
+        ClusterSupervisorHostedService hosted = HostedWith(
+            Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "500"), ("Cluster:Supervisor:Processes:p0:RequiredMemoryMb", "500")),
+            launcher, new SequenceProbe(10, 1000, 1000), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1000;
+        int delays = 0;
+        hosted.DelayAsync = (_, _) =>
+        {
+            delays++;
+            return Task.CompletedTask;
+        };
+
+        await hosted.StartAsync(CancellationToken.None);
+
+        Assert.Equal(1, delays);
+        Assert.Equal(["p0"], launcher.Launched.ToArray());
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TheDefaultTotalMemory_IsTheHostWideTotalOfTheSameSourceAsTheAdmissionProbe()
+    {
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1), new RecordingLauncher(), new FixedProbe(1), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+
+        long? hostBytes = HostMemory.TryGetTotalBytes();
+        Assert.True(hostBytes is > 0, "this platform has an OS total memory source");
+        Assert.Equal(hostBytes!.Value / (1024L * 1024L), hosted.TotalMemoryMb());
+    }
+
+    [Fact]
+    public void HostMemory_ParsesMemTotalOfAProcMeminfoText_AndRejectsAMissingOrMalformedLine()
+    {
+        const string text = "MemTotal:       32768000 kB\nMemFree:         1000 kB\nMemAvailable:   20480000 kB\n";
+
+        Assert.Equal(32768000L * 1024, HostMemory.ParseMemTotalBytes(text));
+        Assert.Equal(20480000L * 1024, HostMemory.ParseMemAvailableBytes(text));
+        Assert.Null(HostMemory.ParseMemTotalBytes("MemAvailable: 1 kB\n"));
+        Assert.Null(HostMemory.ParseMemTotalBytes("MemTotal: lots kB\n"));
+    }
+
+    [Fact]
+    public async Task Start_WhenMemoryNeverReturnsAfterAChildLaunched_GivesUpAfterTheRetryCap()
+    {
+        var launcher = new RecordingLauncher();
+        // The plan and p0's admission see plenty; every later read (p1's admission) sees 10 MiB, so p1 is refused for the reserve each time.
+        var probe = new SequenceProbe(100_000, 100_000, 10);
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50")), launcher, probe, out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        int delays = 0;
+        hosted.DelayAsync = (_, _) =>
+        {
+            delays++;
+            return Task.CompletedTask;
+        };
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Equal(ClusterSupervisorHostedService.MaxMidStartMemoryRetries, delays);
+        Assert.Equal(["p0"], launcher.Launched.ToArray());
+        Assert.Contains("never launched", ex.Message, StringComparison.Ordinal);
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Start_WhileWaitingForMemoryMidStart_RepeatsTheGroupReadyWaitOfTheGroupInProgress()
+    {
+        var launcher = new RecordingLauncher();
+        // p0 and p1 share start order 0 (the config gives every process order 0): p0 launched, p1 refused once. No child ever sends a heartbeat, so the repeated wait ends at its timeout.
+        var probe = new SequenceProbe(100_000, 100_000, 10, 100_000);
+        ClusterSupervisorHostedService hosted = HostedWith(
+            Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50"), ("Cluster:Supervisor:StartGroupReadySeconds", "1")),
+            launcher, probe, out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        hosted.DelayAsync = (_, _) => Task.CompletedTask;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        await hosted.StartAsync(CancellationToken.None);
+
+        // Only the repeated wait can take the second (a lower bound, so no timing flake): the first pass launched p0 and p1 in one group without waiting.
+        Assert.True(clock.Elapsed >= TimeSpan.FromMilliseconds(800), $"the group-ready wait was skipped ({clock.Elapsed.TotalMilliseconds:F0} ms)");
+        Assert.Equal(["p0", "p1"], launcher.Launched.ToArray());
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Start_WhileWaitingForMemoryMidStart_WatchesTheMinimum_SoAnExitDuringTheWaitIsSeen()
+    {
+        var launcher = new RecordingLauncher();
+        var probe = new SequenceProbe(100_000, 100_000, 10, 100_000);
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50")), launcher, probe, out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        ClusterHostSupervisor supervisor = provider.GetRequiredService<ClusterHostSupervisor>();
+        var below = new TaskCompletionSource<SupervisorBelowMinimum>(TaskCreationOptions.RunContinuationsAsynchronously);
+        supervisor.BelowMinimum += report => below.TrySetResult(report);
+        // The only child launched so far ends during the wait: with the watch armed that is below the minimum of 1 and is reported; without it nothing would notice.
+        hosted.DelayAsync = async (_, _) =>
+        {
+            launcher.ExitProcess("p0", 0);
+            await below.Task.WaitAsync(TimeSpan.FromSeconds(30)); // the monitor loop sees the exit on its own thread; without the armed watch this never completes
+        };
+
+        await hosted.StartAsync(CancellationToken.None);
+
+        SupervisorBelowMinimum report = await below.Task;
+        Assert.Equal(0, report.Running);
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void FlushLogProviders_SwallowsAnOrdinaryFailure_ButNeverOutOfMemory()
+    {
+        ClusterSupervisorHosting.FlushLogProviders(new ThrowingServices(new NotSupportedException("a torn-down container")));
+
+        Assert.Throws<OutOfMemoryException>(() => ClusterSupervisorHosting.FlushLogProviders(new ThrowingServices(new OutOfMemoryException())));
+    }
+
+    [Fact]
+    public void WriteExit_SurvivesALoggerThatThrowsAnythingButOutOfMemory_AndStillWritesStderr()
+    {
+        var error = new StringWriter();
+
+        ClusterSupervisorHosting.WriteExit(new ThrowingLogger(new NotSupportedException("a sink of its own")), error, 3, "why", null);
+
+        Assert.Contains("with code 3", error.ToString(), StringComparison.Ordinal);
+        Assert.Throws<OutOfMemoryException>(() => ClusterSupervisorHosting.WriteExit(new ThrowingLogger(new OutOfMemoryException()), new StringWriter(), 3, "why", null));
+    }
+
+    private sealed class ThrowingServices(Exception failure) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => throw failure;
+    }
+
+    private sealed class ThrowingLogger(Exception failure) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => throw failure;
+    }
+
     [Theory]
     [InlineData("Cannot admit process 'w': available host memory (10 MiB) minus RequiredMemoryMb (1 MiB) is below MinFreeMemoryReserveMb (50 MiB).", true)]
     [InlineData("active process count (3) would exceed MaxConcurrentProcesses (2).", false)]
@@ -467,8 +635,15 @@ public sealed class ClusterSupervisorHostingTests
         public ISupervisedProcess Launch(SupervisedProcessConfig config)
         {
             Launched.Enqueue(config.Name);
-            return new Process(this, 20_000 + Launched.Count);
+            var process = new Process(this, 20_000 + Launched.Count);
+            _processes[config.Name] = process;
+            return process;
         }
+
+        private readonly ConcurrentDictionary<string, Process> _processes = new(StringComparer.Ordinal);
+
+        /// <summary>Makes the last launched process of <paramref name="name"/> exit on its own with <paramref name="code"/> (0 is a clean exit the supervisor leaves down).</summary>
+        public void ExitProcess(string name, int code) => _processes[name].Exit(code);
 
         private sealed class Process(RecordingLauncher owner, int pid) : ISupervisedProcess
         {
@@ -501,6 +676,8 @@ public sealed class ClusterSupervisorHostingTests
             }
 
             public void KillOwnedProcess() => _exit.TrySetResult(-1);
+
+            public void Exit(int code) => _exit.TrySetResult(code);
 
             public void Dispose() => Interlocked.Increment(ref owner._disposed);
         }
