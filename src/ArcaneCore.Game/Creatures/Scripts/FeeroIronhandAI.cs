@@ -13,9 +13,9 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// to die makes him speak (SummonedCreatureJustDied :709-730) and he yells once when Balizar first hits him (AttackedBy :687-699). At 31 the
 /// quest is done for the group. The wave counter resets with the script only while he is not escorting (Reset :647-654).
 /// <para>
-/// Differences: the ambush points of the fans are the ground height under the point 30 yd away (GetNearPoint's collision search, which can move
-/// the point, is not ported); his AttackedBy override does not call the base reaction, as in the source, so a retaliation comes only from the
-/// threat the attackers put on him.
+/// Difference: the ambush points of the fans are the ground height under the point 30 yd away (GetNearPoint's collision search, which can move
+/// the point, is not run here: the pets lane owns that free-spot search, Y94). As in the source, his AttackedBy override does not call the base reaction, so a retaliation comes only from the threat the
+/// attackers put on him.
 /// </para>
 /// </summary>
 public sealed class FeeroIronhandAI(Creature creature) : EscortAI(creature), IQuestScriptAI

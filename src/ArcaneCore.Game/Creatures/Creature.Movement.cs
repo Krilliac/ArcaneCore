@@ -65,10 +65,11 @@ public sealed partial class Creature : Unit, ICombatCreature
 
     /// <summary>
     /// A creature's flight is server state (vmangos Unit::SetFly sets MOVEFLAG_FLYING on m_movementInfo, Unit.cpp:7304-7310): its moves and
-    /// relocations keep it, as they keep the walk mode.
+    /// relocations keep it, as they keep the walk mode. The same holds for the levitation a script sets (Unit::SetLevitate,
+    /// MOVEFLAG_LEVITATING, Unit.cpp:12371-12381): a gravity-free creature stays up.
     /// </summary>
     private protected override MovementFlags RelocationKeptFlags
-        => MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.WalkMode | MovementFlags.Flying;
+        => MovementFlags.Root | MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.WalkMode | MovementFlags.Flying | MovementFlags.Levitating;
 
     // --- movement --------------------------------------------------------------------------
 

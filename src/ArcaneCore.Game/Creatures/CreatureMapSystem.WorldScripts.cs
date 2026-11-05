@@ -44,6 +44,27 @@ public sealed partial class CreatureMapSystem
     }
 
     /// <summary>
+    /// ScriptDev GetCreatureListWithEntryInGrid(list, center, entry, range): the creatures of <paramref name="entry"/> on this map within
+    /// <paramref name="range"/> yards (3D) of <paramref name="center"/>, corpses included and <paramref name="center"/> itself left out. The
+    /// caller filters (alive, in combat).
+    /// </summary>
+    public List<Creature> CreaturesOfEntry(WorldObject center, uint entry, float range)
+    {
+        ArgumentNullException.ThrowIfNull(center);
+        var found = new List<Creature>();
+        float rangeSq = range * range;
+        foreach (Creature c in _creatures.Values)
+        {
+            if (c.Template.Entry == entry && !ReferenceEquals(c, center) && WorldGeometry.DistanceSq3D(center, c) <= rangeSq)
+            {
+                found.Add(c);
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>
     /// cmangos UnitAI::SendAIEvent(eventType, invoker, receiver) called on the receiver's own AI (AI/BaseAI/UnitAI.cpp): the receiver is both
     /// sender and receiver, <paramref name="invoker"/> the unit the event is about (TARGET_T_ACTION_INVOKER). A dead creature or one without
     /// an AI hears nothing. False when <paramref name="receiver"/> is not on this map.
