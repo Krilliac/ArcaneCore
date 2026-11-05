@@ -44,7 +44,12 @@ public sealed partial class CreatureMapSystem
         [DbScriptKind.Event] = new(),
         [DbScriptKind.CreatureMovement] = new(),
         [DbScriptKind.Spell] = new(),
+        [DbScriptKind.GameObject] = new(),
+        [DbScriptKind.GameObjectTemplate] = new(),
     };
+
+    /// <summary>The table of the script whose step runs now (<see cref="ReportRelay"/> names it); saved and restored around every start and update so a nested script start does not clobber it.</summary>
+    private DbScriptKind _runningScriptKind = DbScriptKind.Relay;
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
     private readonly List<(Creature Creature, long AtMs)> _scriptDespawns = [];
     private readonly List<(GameObjects.GameObject GameObject, long AtMs)> _scriptObjectDespawns = [];
@@ -96,7 +101,16 @@ public sealed partial class CreatureMapSystem
             : source is Unit or GameObjects.GameObject ? DbScriptUniqueness.Source
             : target is Unit or GameObjects.GameObject ? DbScriptUniqueness.Target
             : DbScriptUniqueness.SourceAndTarget;
-        return runner.Start(steps, source?.Guid ?? default, target?.Guid ?? default, _clockMs, ExecuteRelayStep, unique);
+        DbScriptKind outer = _runningScriptKind;
+        _runningScriptKind = kind;
+        try
+        {
+            return runner.Start(steps, source?.Guid ?? default, target?.Guid ?? default, _clockMs, ExecuteRelayStep, unique);
+        }
+        finally
+        {
+            _runningScriptKind = outer;
+        }
     }
 
     /// <summary>
@@ -127,7 +141,16 @@ public sealed partial class CreatureMapSystem
             return false;
         }
 
-        return _relays.Start(steps, source.Guid, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
+        DbScriptKind outer = _runningScriptKind;
+        _runningScriptKind = DbScriptKind.Relay;
+        try
+        {
+            return _relays.Start(steps, source.Guid, target?.Guid ?? default, _clockMs, ExecuteRelayStep);
+        }
+        finally
+        {
+            _runningScriptKind = outer;
+        }
     }
 
     /// <summary>cmangos ScriptMgr::GetRandomRelayDbscriptFromTemplate: a relay id from template <paramref name="templateId"/> (0: none chosen).</summary>
@@ -139,11 +162,22 @@ public sealed partial class CreatureMapSystem
     private void UpdateRelayScripts()
     {
         Func<RelayScriptPendingStep, bool> execute = _executeRelayStep ??= ExecuteRelayStep; // one delegate, not one per tick
-        _relays.Update(_clockMs, execute);
-        foreach (RelayScriptRunner runner in _dbScriptRunners.Values)
+        DbScriptKind outer = _runningScriptKind;
+        try
         {
-            runner.Update(_clockMs, execute);
+            _runningScriptKind = DbScriptKind.Relay;
+            _relays.Update(_clockMs, execute);
+            foreach ((DbScriptKind kind, RelayScriptRunner runner) in _dbScriptRunners)
+            {
+                _runningScriptKind = kind;
+                runner.Update(_clockMs, execute);
+            }
         }
+        finally
+        {
+            _runningScriptKind = outer;
+        }
+
         for (int i = _scriptDespawns.Count - 1; i >= 0; i--)
         {
             if (_scriptDespawns[i].AtMs <= _clockMs)
@@ -826,6 +860,23 @@ public sealed partial class CreatureMapSystem
             case 51: // SCRIPT_COMMAND_SPAWN_GROUP (the formation subcommands; CreatureMapSystem.RelayFormation.cs).
                 return RelaySpawnGroup(step, source, target);
 
+            case 47: // SCRIPT_COMMAND_INTERRUPT_SPELL (mangos-classic ScriptMgr.cpp:2983-2991): the source unit's spell of slot datalong
+                if (source is not Unit interrupted)
+                {
+                    ReportRelay(step, "INTERRUPT_SPELL by a non-unit"); // LogIfNotUnit(pSource)
+                    return false;
+                }
+
+                // The loader refuses a slot above CURRENT_MAX_SPELL - 1 (3) and skips the row (ScriptMgr.cpp:815-819).
+                if (step.DataLong > 3)
+                {
+                    ReportRelay(step, $"INTERRUPT_SPELL of current spell type {step.DataLong}");
+                    return false;
+                }
+
+                _ai.UnitSpells?.InterruptSpell(interrupted, step.DataLong);
+                return false;
+
             default:
                 ReportRelay(step, $"command {step.Command}");
                 return false;
@@ -960,9 +1011,19 @@ public sealed partial class CreatureMapSystem
 
     private void ReportRelay(RelayScriptStep step, string what)
     {
-        if (_reportedAi.Add($"relay:{step.Id}:{what}"))
+        // The warning names the table the script came from (dbscripts_on_creature_movement 705201 is no relay): a relay keeps the plain
+        // wording, the other tables add their table after it so the line still starts the way the QA parser reads it.
+        if (_reportedAi.Add($"relay:{_runningScriptKind}:{step.Id}:{what}"))
         {
-            _logger.LogWarning("relay script {Relay} uses unsupported {What}; that step is skipped", step.Id, what);
+            if (_runningScriptKind == DbScriptKind.Relay)
+            {
+                _logger.LogWarning("relay script {Relay} uses unsupported {What}; that step is skipped", step.Id, what);
+            }
+            else
+            {
+                _logger.LogWarning("relay script {Relay} uses unsupported {What}; that step is skipped (script of table {Table})",
+                    step.Id, what, DbScriptCatalog.TableOf(_runningScriptKind));
+            }
         }
     }
 }

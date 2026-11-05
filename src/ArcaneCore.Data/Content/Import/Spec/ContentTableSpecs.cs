@@ -195,7 +195,7 @@ public static class ContentTableSpecs
                 "z", "o", "speed", "condition_id",
             ], []),
         // World schema 42: the quest, gossip and event DB scripts (the relay layout, no key; DbScriptDumpImporter) and ScriptDev2's escort paths.
-        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell" }.Select(table => new TableSpec(table,
+        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell", "dbscripts_on_go_use", "dbscripts_on_go_template_use" }.Select(table => new TableSpec(table,
             [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
              new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
             [

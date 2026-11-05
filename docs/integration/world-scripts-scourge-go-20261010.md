@@ -52,13 +52,12 @@ An auto-discovered `IWorldFeature` with the `HolidayObjectsFeature` pattern (ins
   also calls `JustSpawned` at grid load, which depends on load order; the heads are dormant spawns (-21600 s) respawned by the
   quest-end dbscript command 9 (7491 -> guid 40134, 7496 -> 40135, 7782 -> 40151, 7784 -> 40150). ArcaneCore fires on the respawn
   transition only and does not fire for a head that is merely loaded dormant.
-- **Coffer `dbscripts_on_go_template_use` 122088 (command 40, despawn self) does not run, and that is not caused by the creature use.**
-  z2815 has a `dbscripts_on_go_template_use` row for 122088 (command 40). ArcaneCore has no importer, table or runner for
-  `dbscripts_on_go_template_use`: no source file under `src/` references it (the ContentImporter and `DbScriptDataModule` handle
-  relay, gossip, quest, spell and creature scripts only), and `GameObjectMapSystem.UseByUnit` / the player use path never start a
-  go-template-use script for any user. So the coffer toggles and fires its trap on creature use, and is not despawned by the row,
-  exactly as for a player. Closing this needs a go_template_use script type in the DB-script system (a schema/importer change, out of
-  this lane's no-schema policy).
+- **Coffer `dbscripts_on_go_template_use` 122088 (command 40, despawn self) now runs.** It did not when this lane landed: ArcaneCore had no
+  importer, table or runner for `dbscripts_on_go_template_use` or `dbscripts_on_go_use`. World schema 70 (`DbGameObjectScriptDataModule`)
+  adds both tables, the content importer reads them from the classic-db dump, and `GameObjectMapSystem` starts them as mangos-classic
+  `GameObject::Use` does (GameObject.cpp:1490 template script for every type; :1506, :1529, :1703 the guid script of a door, button and
+  goober), with the user as source and the object as target, on the map's DB script executor. The coffer therefore toggles, fires its trap
+  and then runs command 40 on use by a creature, as for a player.
 
 ## Tests
 

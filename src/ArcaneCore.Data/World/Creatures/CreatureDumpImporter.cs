@@ -559,6 +559,8 @@ public sealed class CreatureDumpImporter
                 case DbScriptDataModule.GossipTable:
                 case DbScriptDataModule.CreatureMovementTable:
                 case DbScriptDataModule.SpellTable:
+                case DbScriptDataModule.GameObjectUseTable:
+                case DbScriptDataModule.GameObjectTemplateUseTable:
                 case VmangosSpellScriptTranslator.Table:
                 case "conditions": // read only to resolve the conditions of vmangos spell_scripts (the conditions importer writes the table)
                     _dbScripts.Accept(row);

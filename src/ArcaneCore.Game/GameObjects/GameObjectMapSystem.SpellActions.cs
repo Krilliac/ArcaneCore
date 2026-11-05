@@ -151,6 +151,7 @@ public sealed partial class GameObjectMapSystem
         if (go.CooldownUntilMs > _clockMs || go.LootState != GameObjectLootState.Ready)
             return GameObjectUseResult.InUse;
 
+        StartGuidUseScript(user, go); // dbscripts_on_go_use of a goober used by a creature (GameObject.cpp:1703)
         TriggerLinkedTrap(go, user);
         uint autoClose = go.Template.AutoCloseSeconds();
         go.Flags |= GameObjectFlags.InUse;

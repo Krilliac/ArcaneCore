@@ -711,7 +711,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
 
         // cmangos GameObject::Use runs the ScriptDev2 GOUse script after the mount check; a locked object reaches it only once its lock
         // is open (the direct-use lock here, the open-lock spell in OpenLock).
-        bool scriptTookUse = CheckDirectLock(player, go) == GameObjectUseResult.Ok && InstanceScriptTookUse(player, go);
+        bool lockOpen = CheckDirectLock(player, go) == GameObjectUseResult.Ok;
+        bool scriptTookUse = lockOpen && InstanceScriptTookUse(player, go);
+        if (lockOpen && !scriptTookUse)
+        {
+            // dbscripts_on_go_template_use (GameObject.cpp:1489-1490): skipped when the ScriptDev2 hook took the use.
+            StartTemplateUseScript(player, go);
+        }
 
         // An area owns a type (fishing bobbers: ArcaneCore.Game.Fishing) and registers its handler instead of editing this switch.
         result = _useHandlers.TryGetValue(go.Type, out Func<Player, GameObject, GameObjectUseResult>? useHandler) ? useHandler(player, go) : go.Type switch
@@ -849,13 +855,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         // GameObject::Use, reached through Spell::SendLoot, runs the ScriptDev2 GOUse script of the opened object.
         bool scriptTookUse = (go.Type is GameObjectType.Chest or GameObjectType.Door or GameObjectType.Button or GameObjectType.SpellFocus
             or GameObjectType.Goober) && InstanceScriptTookUse(player, go);
+        if (!scriptTookUse)
+        {
+            StartTemplateUseScript(player, go); // GameObject::Use, reached through Spell::SendLoot (GameObject.cpp:1489-1490)
+        }
 
         result = go.Type switch
         {
             // The chest quest gate of UseChest holds for the spell path too: a gathering node tied to a quest opens only for that quest.
             // Spell::SendLoot hands the chest to GameObject::Use too, so a key or lockpick opening starts the chest event as the click does.
             GameObjectType.Chest => ChestQuestAllows(player, go) ? OpenChestStartingEvent(player, go, onChestOpened) : GameObjectUseResult.NeedsQuest,
-            GameObjectType.Door or GameObjectType.Button => ActivateDoorOrButton(go, go.Template.AutoCloseSeconds()),
+            GameObjectType.Door or GameObjectType.Button => ActivateDoorAndStartScript(player, go, scriptTookUse),
             GameObjectType.SpellFocus => UseSpellFocus(player, go),
             GameObjectType.Goober => UseGoober(player, go, lockChecked: true, scriptTookUse: scriptTookUse),
             _ => GameObjectUseResult.NotUsable,
@@ -1097,6 +1107,24 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         if (go.Type == GameObjectType.Button)
         {
             TriggerLinkedTrap(go, player); // GameObject::Use, button (GameObject.cpp:1441-1455)
+        }
+
+        // dbscripts_on_go_use of a door or button (GameObject.cpp:1506, :1529): started whatever the toggle answered. The ScriptDev2
+        // hook's answer (scriptReturnValue) is not known here: the instance script of a click is asked in UseCore.
+        StartGuidUseScript(player, go);
+        return result;
+    }
+
+    /// <summary>
+    /// A door or button opened by a spell (Spell::SendLoot hands it to GameObject::Use): the toggle, then <c>dbscripts_on_go_use</c> unless the
+    /// ScriptDev2 hook took the use (<paramref name="scriptTookUse"/>).
+    /// </summary>
+    private GameObjectUseResult ActivateDoorAndStartScript(Unit user, GameObject go, bool scriptTookUse)
+    {
+        GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(user, go);
         }
 
         return result;
@@ -1437,6 +1465,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         RewardGroupAtUse(player, go);
+        if (!scriptTookUse)
+        {
+            StartGuidUseScript(player, go); // dbscripts_on_go_use (GameObject.cpp:1701-1705): after the quest gate, before the spell
+        }
+
         TriggerLinkedTrap(go, player); // GameObject.cpp:1593
 
         if (go.Template.GetData(6) is var cooldown and not 0)
@@ -1942,7 +1975,9 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
         if (!pending && TryRestorePersistedRespawn(spawn, out long restoredAt))
         {
-            // A restart (or an instance map recreated while its save lives on) keeps a looted chest or a mined node despawned for what is left of its time.
+            // A restart (or an instance map recreated while its save lives on) keeps a despawned spawn despawned for what is left of its time. Only
+            // a spawn with a positive spawn time that is in no pool and no spawn group qualifies (TryRestorePersistedRespawn), so a looted chest or a
+            // mined node stays gone only when it is such a standalone spawn: the pool members, which most gathering nodes and chests are, do not.
             pending = true;
             respawnAt = restoredAt;
         }

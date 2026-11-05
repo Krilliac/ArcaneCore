@@ -1191,6 +1191,8 @@ public static partial class ContentImporterCli
                 (DbScriptDataModule.EventTable, await db.Set<EventScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 (DbScriptDataModule.CreatureMovementTable, await db.Set<CreatureMovementScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 (DbScriptDataModule.SpellTable, await db.Set<SpellScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.GameObjectUseTable, await db.Set<GameObjectUseScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.GameObjectTemplateUseTable, await db.Set<GameObjectTemplateUseScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_script_target", await db.Set<SpellScriptTargetRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_linking", await db.Set<CreatureLinkRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_linking_template", await db.Set<CreatureTemplateLinkRow>().CountAsync(ct).ConfigureAwait(false)),

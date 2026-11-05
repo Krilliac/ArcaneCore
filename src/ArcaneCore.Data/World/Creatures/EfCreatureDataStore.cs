@@ -43,6 +43,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         dbScripts.AddRange(await db.Set<EventScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         dbScripts.AddRange(await db.Set<CreatureMovementScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         dbScripts.AddRange(await db.Set<SpellScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<GameObjectUseScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
+        dbScripts.AddRange(await db.Set<GameObjectTemplateUseScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false));
         List<ScriptWaypointRow> scriptWaypoints = await db.Set<ScriptWaypointRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         SpawnGroupCatalog spawnGroups = await SpawnGroupStore.LoadAsync(db, SpawnGroupType.Creature, cancellationToken).ConfigureAwait(false);
         List<CreatureLinkRow> links = await db.Set<CreatureLinkRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);

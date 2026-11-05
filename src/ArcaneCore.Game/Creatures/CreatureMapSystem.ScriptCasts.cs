@@ -16,7 +16,8 @@ public sealed partial class CreatureMapSystem
 {
     /// <summary>
     /// The CAST_SPELL step of a source that is not a creature. A game object source makes the target cast the spell on itself, triggered
-    /// (:2173-2181: GO casts are not implemented in cmangos); any other unit casts it like a creature does, at the target unless
+    /// (:2173-2181: GO casts are not implemented in cmangos); COMMAND_ADDITIONAL clears the target before that branch is reached
+    /// (:2169-2170), so the step then has no unit target and casts nothing. Any other unit casts it like a creature does, at the target unless
     /// COMMAND_ADDITIONAL, triggered when datalong2 has TRIGGERED_OLD_TRIGGERED (LogIfNotUnit then Unit::CastSpell, :2183-2200). The spell is
     /// chosen as for a creature, so the random draw is the same.
     /// </summary>
@@ -24,7 +25,8 @@ public sealed partial class CreatureMapSystem
     {
         if (source is GameObjects.GameObject)
         {
-            if (target is not Unit self)
+            // :2169-2170 clears the target on COMMAND_ADDITIONAL before the game object branch, which then logs and stops (LogIfNotUnit(nullptr)).
+            if ((step.DataFlags & FlagCommandAdditional) != 0 || target is not Unit self)
             {
                 ReportRelay(step, "CAST_SPELL by a game object without a unit target");
                 return false;
