@@ -210,7 +210,8 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// A spirit released on a transport is taken off it and comes back alive at the graveyard (vmangos Player::RepopAtGraveyard,
-    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body is not left behind in the world.
+    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body leaves the world too, unless removing the corpse faults
+    /// (<see cref="RemoveResurrectedCorpse"/> records that and leaves the corpse referenced and in the world).
     /// </summary>
     internal void ResurrectFromTransport(Player player)
     {
@@ -427,8 +428,10 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Player::ResurrectPlayer: ALIVE, ghost form removed, unrooted, health/mana/energy
-    /// restored to <paramref name="restorePercent"/> and rage emptied (when &gt; 0).
+    /// vmangos Player::ResurrectPlayer: casts on the player are interrupted, ALIVE, ghost form removed, unrooted, health/mana/energy
+    /// restored to <paramref name="restorePercent"/> and rage emptied (when &gt; 0). Atomic past the quest-settlement check: a fault in a
+    /// step is recorded and the remaining steps still run; the player ends fully alive, or fully dead when the Alive step itself fails.
+    /// The corpse is not part of it (see <see cref="RemoveResurrectedCorpse"/>).
     /// </summary>
     public void ResurrectPlayer(Player player, float restorePercent, bool applySickness)
     {
@@ -439,7 +442,8 @@ public sealed partial class MapCombat
 
         // Atomic (vmangos Player::ResurrectPlayer runs to its end, Player.cpp:4638-4667): past the quest-settlement check nothing below
         // throws. A fault in a step is recorded once and the remaining steps still run; the player ends fully alive, or still fully
-        // dead when the step that sets Alive fails. Alive never keeps PLAYER_FLAGS_GHOST or the ghost aura.
+        // dead when the step that sets Alive fails. Alive never keeps PLAYER_FLAGS_GHOST; the ghost auras are stripped directly only when the
+        // ghost-form hook fails and a spell system is attached.
         Action<Player, ResurrectStep>? inject = ResurrectFaultInjection;
         bool wasGhost = (player.Flags & PlayerFlags.Ghost) != 0;
 
@@ -597,7 +601,10 @@ public sealed partial class MapCombat
     private void LogResurrectFault(string site, Exception ex, Player player)
         => _map.Logger.LogFault(site, ex, "resurrection step failed for player {Player} (guid={Guid}); the resurrection continues", player.Name, player.Guid.Low);
 
-    /// <summary>The steps of <see cref="ResurrectPlayer"/>, in order; the argument of <see cref="ResurrectFaultInjection"/>.</summary>
+    /// <summary>
+    /// The steps of <see cref="ResurrectPlayer"/> in order, then <c>RemoveCorpse</c>, which <see cref="RemoveResurrectedCorpse"/> runs
+    /// separately after it; the argument of <see cref="ResurrectFaultInjection"/>.
+    /// </summary>
     internal enum ResurrectStep
     {
         InterruptCasts,

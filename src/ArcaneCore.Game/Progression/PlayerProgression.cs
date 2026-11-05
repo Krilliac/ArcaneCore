@@ -114,15 +114,13 @@ public sealed partial class PlayerProgression : IQuestExperience
         ulong newXp = (ulong)CurrentXp(player) + xp + rested;
         uint next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
         bool leveled = false;
+        byte firstOldLevel = player.Level;
         while (next > 0 && newXp >= next && player.Level < Options.MaxPlayerLevel)
         {
             newXp -= next;
-            byte oldLevel = player.Level;
-            if (ApplyLevel(player, (byte)(oldLevel + 1)))
+            if (ApplyLevel(player, (byte)(player.Level + 1)))
             {
                 leveled = true;
-                // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires per level.
-                player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
             }
 
             next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
@@ -132,6 +130,14 @@ public sealed partial class PlayerProgression : IQuestExperience
         if (leveled)
         {
             LevelChanged?.Invoke(player);
+
+            // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires once per level (oldLevel
+            // counts up). It runs after LevelChanged and PLAYER_XP, like GiveLevel, so a script sees talents, skills and XP already
+            // updated; Level is the final level for every call.
+            for (byte oldLevel = firstOldLevel; oldLevel < player.Level; oldLevel++)
+            {
+                player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
+            }
         }
 
         return xp + rested;
