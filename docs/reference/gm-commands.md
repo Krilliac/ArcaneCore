@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 410 |
-| `Administrator` | 6 | 617 |
+| `GameMaster` | 3 | 411 |
+| `Administrator` | 6 | 618 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -364,6 +364,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.ticket respond` | 3 | GameMaster | stored level through the map | Syntax: .ticket respond $id $text Answer an open ticket; the player is told at once if online. The ticket stays open. |
 | `.ticket close` | 3 | GameMaster | stored level through the map | Syntax: .ticket close $id [$text] Close an open ticket, with an optional final answer. The player is told if online. |
 | `.ticket delete` | 6 | Administrator | stored level through the map | Syntax: .ticket delete $id Delete an open ticket without trace (the row is removed). |
+| `.ticket assistant` | 3 | GameMaster | stored level through the map | Syntax: .ticket assistant status\|on\|off\|run $id status: whether the ticket assistant is on and what it has done (Game Master). on/off/run: Administrator only; on/off switch it until the daemon restarts, run $id handles that open ticket now. |
 | `.maxskill` | 3 | GameMaster | stored level through the map | Syntax: .maxskill — set every level-dependent skill of the selected player (or yourself) to its maximum for the level. |
 | `.setskill` | 3 | GameMaster | stored level through the map | Syntax: .setskill #skill #level [#max] — set a skill the selected player (or yourself) already has. |
 | `.whispers` | 1 | Moderator | stored level through the map | Syntax: .whispers on\|off  Enable/disable accepting whispers by GM from players. By default use the World:Chat:GmWhisperingTo setting. |

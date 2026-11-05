@@ -2005,12 +2005,12 @@ Cluster.NodeBridge.Enabled = false
 #                     does not turn the bridge on (a warning is logged when Enabled is false). Only
 #                     read when Enabled is true.
 #        Type: string
-#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|30,33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusternodebridge
 #
-Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|30,33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
 # Cluster:Peer
@@ -8700,6 +8700,25 @@ SpellRules.ImmunityEnforcement = true
 SpellRules.MagicHitFloorPercent = 22
 
 #
+#    SpellRules.MagnetRequiresAttackable
+#        Description: Whether a spell redirected by a Grounding-style magnet (SPELL_MAGNET) skips a
+#                     magnet the caster may not attack (an unflagged or friendly owner's totem).
+#                     Default false: vmangos SpellCaster::SelectMagnetTarget (SpellCaster.cpp:31-68)
+#                     has no hostility test on the magnet and mangoszero (Unit.cpp:3590 via
+#                     CheckTarget) refuses only unattackable-flagged targets, with no reaction test.
+#                     true reproduces mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924,
+#                     CanAttack(magnet)). Reference-core evidence only, no retail capture. Applies
+#                     to non-triggered casts and client-named triggered blocks, creature casters
+#                     included.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.MagnetRequiresAttackable = false
+
+#
 #    SpellRules.ResistTablePath
 #        Description: Path of a file with vmangos' partial-resist outcome table (ResistOutcomeTable:
 #                     31 rows of resist100,resist75,resist50,resist25,resist0,chanceResist,
@@ -12505,6 +12524,156 @@ World.GmCommands.FirstLoginTools.ShowToolGuide = true
 # World.GmCommands.FirstLoginTools.SpellIds.0 =
 
 #----------------------------------------------------------------------------
+# World:GmTicketAssistant
+#----------------------------------------------------------------------------
+
+#
+#    World.GmTicketAssistant.ActionCooldownSeconds
+#        Description: Seconds before the same account gets another world-changing fix (unstuck,
+#                     revive, combat reset) (0..86400).
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.ActionCooldownSeconds = 600
+
+#
+#    World.GmTicketAssistant.AssistantName
+#        Description: The name the assistant's answers carry ("&lt;GM&gt;Name answers your ticket:
+#                     ...") and the actor of its audit lines.
+#        Type: string
+#        Default: "Ticketbot"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.AssistantName = "Ticketbot"
+
+#
+#    World.GmTicketAssistant.DeadSeconds
+#        Description: Seconds since the assistant first saw the author dead (not since the release)
+#                     before a ghost is resurrected at a graveyard (0..86400).
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.DeadSeconds = 180
+
+#
+#    World.GmTicketAssistant.Enabled
+#        Description: Whether the assistant handles tickets at all (default false). .ticket
+#                     assistant on|off changes it until restart.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.Enabled = false
+
+#
+#    World.GmTicketAssistant.FaqPath
+#        Description: Path of the FAQ text the assistant answers questions from; empty uses the
+#                     starter FAQ built into the server.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.FaqPath = ""
+
+#
+#    World.GmTicketAssistant.MaxActionsPerAccountPerDay
+#        Description: The most automatic actions (fixes and answers) per account per UTC day
+#                     (0..1000); past it the ticket is left to a human. 0 allows none.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number from 0 to 1000
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.MaxActionsPerAccountPerDay = 3
+
+#
+#    World.GmTicketAssistant.ModelTimeoutSeconds
+#        Description: Seconds a model call (classification or answer) may take before the keyword
+#                     fallback or an escalation takes over (1..120).
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number from 1 to 120
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.ModelTimeoutSeconds = 15
+
+#
+#    World.GmTicketAssistant.PollSeconds
+#        Description: Seconds between passes over the open tickets (1..86400).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number from 1 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.PollSeconds = 30
+
+#
+#    World.GmTicketAssistant.SignalWindowSeconds
+#        Description: Seconds an anomaly signal (under the terrain floor, client-reported) is shown
+#                     to the GM with a ticket; it never triggers an action (1..86400).
+#        Type: int
+#        Default: 900
+#        Allowed: a whole number from 1 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.SignalWindowSeconds = 900
+
+#
+#    World.GmTicketAssistant.StaleCombatSeconds
+#        Description: Seconds the author must have been "in combat" with nobody fighting them before
+#                     the combat state is cleared (0..86400).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.StaleCombatSeconds = 30
+
+#
+#    World.GmTicketAssistant.StuckIdleSeconds
+#        Description: Seconds the author must not have moved before "stuck" counts as evidence
+#                     (0..86400).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.StuckIdleSeconds = 120
+
+#
+#    World.GmTicketAssistant.UseModel
+#        Description: Whether a model may classify tickets and draft answers (when the playerbot
+#                     chat stack has a model provider). Default false: keywords only, no answers
+#                     drafted, so no model-written text reaches a player and an FAQ ticket is left
+#                     to a GM. On, the model picks the category and also writes the player-visible
+#                     answer that closes a Question ticket.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.UseModel = false
+
+#----------------------------------------------------------------------------
 # World:Guild
 #----------------------------------------------------------------------------
 
@@ -14970,6 +15139,111 @@ World.Playerbots.Chat.Voice.Trade = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.Voice.TradeRepeatSeconds = 900
+
+#
+#    World.Playerbots.City.BindInCapital
+#        Description: Make the capital's inn the bot's home on a trip (off by default). Players bind
+#                     where they quest, and a bot with its bind in a capital that is stranded or
+#                     stalled is sent there with nothing of its level to fight; this makes the
+#                     hearthstone lead to the capital's services instead. Only an innkeeper that
+#                     likes the bot is used, and a bind already in the capital stays.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.BindInCapital = false
+
+#
+#    World.Playerbots.City.Enabled
+#        Description: Let bots make capital city trips (on by default). Off: no trip starts; one
+#                     under way is dropped.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.Enabled = true
+
+#
+#    World.Playerbots.City.MaxStartsPerMinute
+#        Description: The most trips that start for one capital in a minute (1..600), so a restart
+#                     or a level-up wave does not send the whole population at once.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number from 1 to 600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxStartsPerMinute = 4
+
+#
+#    World.Playerbots.City.MaxTripYards
+#        Description: The longest straight line in yards (above 0, at most 100000) from the bot to a
+#                     capital on its own map for a trip to start by walking. A capital beyond it is
+#                     skipped. A bot whose home bind is in a capital may use its hearthstone for any
+#                     distance.
+#        Type: float
+#        Default: 6000
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxTripYards = 6000
+
+#
+#    World.Playerbots.City.MaxTripsPerCapital
+#        Description: The most trips under way to one capital at the same moment (1..1000). A bot
+#                     whose trigger fires while the city is at the cap waits and asks again.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number from 1 to 1000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxTripsPerCapital = 6
+
+#
+#    World.Playerbots.City.MinGoldForAuctionTrip
+#        Description: The copper a bot must hold (0..2000000000) for the gold to send it to the
+#                     auction house on its own: with this much money and something to buy or sell
+#                     there, and no trip for half a VisitIntervalMinutes, it leaves. 50000 is five
+#                     gold.
+#        Type: int
+#        Default: 50000
+#        Allowed: a whole number from 0 to 2000000000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MinGoldForAuctionTrip = 50000
+
+#
+#    World.Playerbots.City.MinLevel
+#        Description: The level a bot must have reached (1..60) before it makes trips of its own
+#                     accord.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number from 1 to 60
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MinLevel = 10
+
+#
+#    World.Playerbots.City.VisitIntervalMinutes
+#        Description: Minutes between two capital city trips of one bot when nothing else sent it
+#                     (1..10080). Each bot's own interval is this value plus or minus a quarter,
+#                     fixed by its guid, and the first one is a random point of the first interval,
+#                     so the bots do not all leave at once.
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number from 1 to 10080
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.VisitIntervalMinutes = 90
 
 #
 #    World.Playerbots.ClientFidelity
