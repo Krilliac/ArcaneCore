@@ -45,8 +45,8 @@ public interface ISpellModEngine : ISpellModifiers
     /// <summary>
     /// Open a consume window: while it is open, every <see cref="ISpellModifiers.Apply"/> for the scope's caster and spell spends
     /// the charges of the mods it uses, except for the operations vmangos reads without a spell (duration, cooldowns, threat,
-    /// charges, activation time, chance of success, haste, attack power). Outside a window the engine only reads (the
-    /// first CheckCast, power checks): a pinned mod (-1 charges) still applies there. Windows nest; dispose to close.
+    /// charges, activation time, chance of success, haste, attack power). Windows open around the first CheckCast (range reads only),
+    /// the cast-time read and the cast phase. Outside a window (the re-check, power checks, auto-repeat) the engine only reads: a pinned mod (-1 charges) still applies there. Windows nest; dispose to close.
     /// </summary>
     SpellModWindow Begin(SpellModScope scope);
 
