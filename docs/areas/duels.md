@@ -6,7 +6,7 @@ used to record differences. Code: `src/ArcaneCore.Game/Combat/Duel/` (state, rul
 points in shared files: [integration/duels.md](../integration/duels.md).
 
 Evidence: automated tests against the references cited below and synthetic clients over loopback. **Not verified against a
-real 1.12.1 client** (charter 1.3); the client checklist at the end is what a client pass has to confirm.
+real 1.12.1 client** (see [real-client acceptance](../guide/client-acceptance.md)); the client checklist at the end is what a client pass has to confirm.
 
 ## Delivered scope
 
