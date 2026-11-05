@@ -36,6 +36,22 @@ public enum TeleportStage
 }
 
 /// <summary>
+/// What the cluster transfer target hears while a transferred player loads its map (<see cref="TeleportService.BeginClusterArrival"/>). All
+/// calls run on the world thread.
+/// </summary>
+public interface ITransferArrivalObserver
+{
+    /// <summary>The player was added to the map, before the login packets that follow the add (so saves held since the transfer resume before the client sees itself in the world).</summary>
+    void MapAdded(Player player);
+
+    /// <summary>The arrival finished: map add and the login packets after it are done.</summary>
+    void Entered(Player player);
+
+    /// <summary>The arrival ended without the player entering the map (disconnect, or the map could not be entered and the session is kicked).</summary>
+    void Abandoned(Player player);
+}
+
+/// <summary>
 /// Teleports (vmangos <c>Player::TeleportTo</c>, <c>ExecuteTeleportFar</c>,
 /// <c>ExecuteTeleportNear</c>, <c>WorldSession::HandleMoveWorldportAckOpcode</c>).
 /// <para>
@@ -334,9 +350,29 @@ public sealed partial class TeleportService
             return false;
         }
 
+        // Cluster:Worker:OwnedMaps: a destination another worker owns is refused here, before TRANSFER_PENDING / NEW_WORLD reach the client
+        // (a loading screen for a map this worker cannot serve). With a ClusterFarRouter the transfer to the owner replaces the refusal.
+        bool remote = !_world.Owns(mapId, target.Instanceable ? 1u : 0u);
+        if (remote && ClusterFarRouter is null)
+        {
+            if (log)
+            {
+                _logger.LogWarning("teleport of {Player} to map {MapId} refused: the map is owned by another worker", player.Name, mapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "map-not-owned",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport refused: map {mapId} is not owned by this worker (destination {x:F1},{y:F1},{z:F1})"));
+            }
+
+            return false;
+        }
+
         // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
-        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
-        if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
+        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map. A battleground map another worker
+        // owns is not judged here: this worker holds no match binding for it, so the router (the coordinator that placed the match) decides
+        // eligibility, and the owning worker's own arrival check applies on landing.
+        if (!remote && target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
         {
             return false;
         }
@@ -349,7 +385,8 @@ public sealed partial class TeleportService
 
         // vmangos TeleportTo → MapManager::CanPlayerEnter: the instance rules may refuse a far
         // teleport (raid group, full or resetting instance) before anything changes.
-        bool allowed = current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
+        // The instance rules of the owning worker judge a remote destination; this worker holds no instance state for it.
+        bool allowed = remote || current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
         if (!allowed && log)
         {
             ServerAnomalies.Report(
@@ -368,6 +405,12 @@ public sealed partial class TeleportService
     /// is bound to (vmangos <c>InBattleGround()</c>). Null (no battleground system) refuses every battleground map. World thread.
     /// </summary>
     public Func<Player, uint, bool>? BattlegroundEntryAllowed { get; set; }
+
+    /// <summary>
+    /// Hands a far teleport to a map another worker owns to the cluster transfer (<see cref="IClusterFarTeleportRouter"/>). Unset (the
+    /// single-process default) keeps the refusal of an unowned destination. Set by the World host of a cluster worker. World thread.
+    /// </summary>
+    public IClusterFarTeleportRouter? ClusterFarRouter { get; set; }
 
     /// <summary>
     /// Runs after a near teleport moved the player (vmangos Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true),
@@ -398,9 +441,15 @@ public sealed partial class TeleportService
             return false;
         }
 
+        WorldMaps maps = WorldMaps.Of(_world);
+        bool remote = maps.Registry.Find(mapId) is { } template && !_world.Owns(mapId, template.Instanceable ? 1u : 0u);
+        if (remote)
+        {
+            return TeleportToRemoteMap(player, new TeleportDestination(mapId, x, y, z, orientation), options);
+        }
+
         // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
         current.Combat.ReviveForDungeonEntry(player, mapId);
-        WorldMaps maps = WorldMaps.Of(_world);
 
         // vmangos TeleportTo (Player.cpp:1868-1872): leave the ship unless told to stay on it.
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
@@ -463,6 +512,88 @@ public sealed partial class TeleportService
         };
         _pending[player.Guid] = pending;
         current.RunAfterUpdate(pending.ExecuteFar);
+        return true;
+    }
+
+    /// <summary>
+    /// Hands the player to the cluster far transfer whatever this worker's own map ownership is: for a destination a coordinator has already
+    /// placed on another node (a battleground match the holder created and whose invitation it consumed), where a worker that owns instance
+    /// copies (Cluster:Worker AllowInstanceMaps) would otherwise keep the teleport local and fail the battleground entry gate. Returns false,
+    /// changing nothing, without a <see cref="ClusterFarRouter"/>, for non-finite coordinates, a player in no map, a far teleport already
+    /// under way, or a refusal of the router. World thread.
+    /// </summary>
+    public bool TeleportToClusterMap(Player player, TeleportDestination destination, TeleportOptions options = TeleportOptions.None)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (ClusterFarRouter is null
+            || !float.IsFinite(destination.X) || !float.IsFinite(destination.Y) || !float.IsFinite(destination.Z) || !float.IsFinite(destination.Orientation)
+            || player.Map is null
+            || IsBeingTeleportedFar(player))
+        {
+            return false;
+        }
+
+        return TeleportToRemoteMap(player, destination, options);
+    }
+
+    // A destination another worker owns: the transfer replaces the local map change. This worker sends no loading-screen packet; the target
+    // worker's BeginClusterArrival sends SMSG_TRANSFER_PENDING then SMSG_NEW_WORLD, and the arrival completes on MSG_MOVE_WORLDPORT_ACK.
+    private bool TeleportToRemoteMap(Player player, TeleportDestination destination, TeleportOptions options)
+    {
+        if (ClusterFarRouter is not { } router || !router.TryBeginTransfer(player, destination, options))
+        {
+            return false;
+        }
+
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966), before the map change; done once the router
+        // took the request, so a request it declines here changes nothing. The gateway decides later, and its refusal does not undo this revive or
+        // the transport removal below. The revive reads no map state of the destination.
+        player.Map?.Combat.ReviveForDungeonEntry(player, destination.MapId);
+
+        // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872).
+        bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
+        if (!staysAboard)
+        {
+            player.Transport?.RemovePassenger(player);
+        }
+
+        ResetMovementForTeleport(player, staysAboard);
+        return true;
+    }
+
+    /// <summary>
+    /// A transferred player's arrival on this worker, with the retail far-teleport sequence (vmangos Player::ExecuteTeleportFar sends
+    /// SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD, Player.cpp:2068-2118; the map add and both login packet groups run in
+    /// HandleMoveWorldportAckOpcode only, MovementHandler.cpp:112-146): the client gets the loading screen now, and the player enters
+    /// <paramref name="map"/> when its MSG_MOVE_WORLDPORT_ACK arrives. The player must already be in the online registry without a map
+    /// (<see cref="WorldRuntime.RegisterPlayerForTransferArrival"/>). A map that cannot be entered kicks the session (the source no longer
+    /// owns the character, so there is no origin to return to). Returns false, sending nothing, when the player is not registered, is in a
+    /// map or has a teleport pending. World thread.
+    /// </summary>
+    public bool BeginClusterArrival(Player player, Map map, TeleportDestination destination, ITransferArrivalObserver observer)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(observer);
+        if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null || _pending.ContainsKey(player.Guid))
+        {
+            return false;
+        }
+
+        var arrival = new Pending(this, player, destination, TeleportStage.Far, map, destination)
+        {
+            ArrivalMap = map,
+            Observer = observer,
+            StartedMs = _world.NowMs,
+            StageSinceMs = _world.NowMs,
+        };
+        _pending[player.Guid] = arrival;
+        map.BeginTransit(player); // the map keeps handling this player's packets (the worldport ack) until it enters
+        player.MapId = destination.MapId;
+        player.Relocate(destination.X, destination.Y, destination.Z, destination.Orientation, _world.NowMs);
+        player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(destination.MapId));
+        player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(destination.MapId, destination.X, destination.Y, destination.Z, destination.Orientation));
+        FarStageReached?.Invoke(player, TeleportStage.Far);
         return true;
     }
 
@@ -590,7 +721,19 @@ public sealed partial class TeleportService
                     pending.Destination.MapId, pending.Destination.X, pending.Destination.Y, pending.Destination.Z, elapsedMs);
             }
 
+            // vmangos Player::SaveToDB (Player.cpp:16408-16424): while IsBeingTeleported the destination is saved instead of the
+            // current position, so the next login lands where the teleport was going. The final snapshot follows this handler
+            // (WorldRuntime.RemovePlayer); a location already chosen (a spirit's graveyard) wins.
+            // A passenger that stays aboard through the teleport (a ship's map change) keeps its seat instead: the snapshot
+            // drops the seat for a relocated player, and the next login must put it back on the ship.
+            if (player.Transport is null && player.LogoutTransportSeat is null)
+            {
+                player.LogoutLocation ??= (pending.Destination.MapId, pending.Destination.X, pending.Destination.Y,
+                    pending.Destination.Z, pending.Destination.Orientation);
+            }
+
             pending.SourceMap.EndTransit(player);
+            pending.Observer?.Abandoned(player);
         }
     }
 
@@ -669,11 +812,18 @@ public sealed partial class TeleportService
         pending.SourceMap.EndTransit(player);
         if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null)
         {
+            pending.Observer?.Abandoned(player);
             return;
         }
 
         TeleportDestination dest = pending.Destination;
         WorldMaps maps = WorldMaps.Of(_world);
+        if (pending.ArrivalMap is { } arrivalMap)
+        {
+            CompleteClusterArrival(player, pending, arrivalMap, maps);
+            return;
+        }
+
         if (!maps.Registry.Contains(dest.MapId) || !GridDefines.IsValidMapCoord(dest.X, dest.Y, dest.Z, dest.Orientation))
         {
             // vmangos: an invalid destination sends the player to its bind point.
@@ -747,6 +897,34 @@ public sealed partial class TeleportService
         }
     }
 
+    // The worldport ack of a transferred player: the map was chosen by the transfer (this worker's copy of the target map), so there is no
+    // resolver pick, no bind-point fallback and no origin to return to; a destination that cannot be entered kicks the session.
+    private void CompleteClusterArrival(Player player, Pending pending, Map map, WorldMaps maps)
+    {
+        TeleportDestination dest = pending.Destination;
+        if (!maps.Registry.Contains(dest.MapId)
+            || !GridDefines.IsValidMapCoord(dest.X, dest.Y, dest.Z, dest.Orientation)
+            || !TryEnterMap(player, dest, map, pending.Observer))
+        {
+            _logger.LogError("{Player} could not enter transferred map {MapId}; disconnecting", player.Name, dest.MapId);
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "map-entry-failed",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} after a cluster transfer (map not in the registry, invalid destination or the player is already in it); the session is kicked"),
+                AnomalySeverity.Error);
+            pending.Observer?.Abandoned(player);
+            player.Session.Kick();
+            return;
+        }
+
+        // The same arrival steps as CompleteTeleportFar (cheat flags cleared, landing verified, Honorless Target on a PvP-enforced arrival).
+        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
+        VerifyLanding(player, dest, dest.MapId);
+        HonorlessTargetDue?.Invoke(player, true);
+        pending.Observer?.Entered(player);
+    }
+
     /// <summary>
     /// A new far teleport for a player that is in no map (the failed-teleport fallback to the bind point, vmangos <c>TeleportToHomebind</c>): the
     /// client gets SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD for the map it must load and the entry waits for its MSG_MOVE_WORLDPORT_ACK, as
@@ -775,12 +953,37 @@ public sealed partial class TeleportService
         return true;
     }
 
-    private bool TryEnterMap(Player player, TeleportDestination dest)
+    private bool TryEnterMap(Player player, TeleportDestination dest, Map? chosenMap = null, ITransferArrivalObserver? arrival = null)
     {
         // The map resolver picks (or creates) the instance and binds the player or its group
-        // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry.
+        // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry. A cluster arrival brings the map the transfer chose.
         IMapResolver? resolver = _world.MapResolver;
-        Map? map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+        Map? map;
+        try
+        {
+            if (chosenMap is not null)
+            {
+                map = chosenMap;
+            }
+            else if (resolver is null)
+            {
+                // The typed answer is the seam the redirect / far transfer to the owning worker hooks into.
+                if (_world.TryGetMap(dest.MapId, 0, out map) == MapAccessResult.NotOwned)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                map = resolver.ResolveEntry(player, dest.MapId);
+            }
+        }
+        catch (MapNotOwnedException)
+        {
+            // Another worker owns the destination (Cluster:Worker:OwnedMaps): refuse cleanly until a far transfer to the owner exists.
+            return false;
+        }
+
         if (map is null || map.FindObject(player.Guid) is not null)
         {
             return false;
@@ -813,7 +1016,13 @@ public sealed partial class TeleportService
 
         UpdateZone(map, player);
         _beforeAddToMap(player);
+        if (chosenMap is not null)
+        {
+            resolver?.OnLoginMapAdd(player, map); // the instance bind of a login add (WorldRuntime.AddPlayer), which the transfer arrival replaces
+        }
+
         map.AddPlayer(player);
+        arrival?.MapAdded(player);
         _afterAddToMap(player);
         resolver?.OnEntered(player, map);
         TeleportCompleted?.Invoke(player);
@@ -999,6 +1208,12 @@ public sealed partial class TeleportService
 
         /// <summary>Whether this teleport is the bind-point fallback of a failed far teleport (it is not retried when it fails too).</summary>
         public bool IsHomebindFallback { get; init; }
+
+        /// <summary>The map a cluster transfer brings the player to (null for an ordinary teleport).</summary>
+        public Map? ArrivalMap { get; init; }
+
+        /// <summary>The cluster transfer target that hears of the arrival (null for an ordinary teleport).</summary>
+        public ITransferArrivalObserver? Observer { get; init; }
 
         /// <summary>vmangos DELAYED_CAST_HONORLESS_TARGET scheduled by a same-map teleport.</summary>
         public bool HonorlessTarget { get; init; }

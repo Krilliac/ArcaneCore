@@ -33,6 +33,9 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
     /// <summary>The refusal code for facts built from a creature content or area table that has since been replaced.</summary>
     internal const string StaleCode = "placement-data-stale";
 
+    /// <summary>The refusal code for a bot something else drives now (a controller, its party, a group, the battlegrounds): it was autonomous when the pass began.</summary>
+    internal const string HeldCode = "bot-held";
+
     /// <summary>The pass hold while the facts are not ready.</summary>
     internal const string WaitingReason = "waiting for the placement safety data";
 
@@ -136,6 +139,8 @@ internal sealed class PopulationProvisioner(IServiceProvider services)
         if (!player.IsAlive) return "bot-dead";
         if (player.Combat.IsInCombat) return "bot-in-combat";
         if (IsInTransit(player)) return "bot-in-transit";
+        // The pass captured the bot as autonomous and has awaited the store since: a player may have invited it, an operator scripted it.
+        if (services.GetService<ManagedPlayerbotFeature>()?.HeldFromBrain(botId) is not null) return HeldCode;
         if (!IsCurrent(session.World, facts)) return StaleCode;
         if (!IsSafe(facts, location, player.Level, player.FactionTemplate))
         {

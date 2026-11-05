@@ -28,6 +28,9 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// <summary>The per-read bound of the setup steps; settable so a test can prove the guard fires.</summary>
     internal TimeSpan HandshakeTimeout { get; set; } = DefaultHandshakeTimeout;
 
+    /// <summary>How long <see cref="IsClosedByServerAsync"/> waits for the server to close; settable so a test can drive the timeout path.</summary>
+    internal TimeSpan CloseTimeout { get; set; } = ReadTimeout;
+
     private readonly TcpClient _client;
     private readonly NetworkStream _stream;
     private readonly WorldHeaderCrypt _crypt = new();
@@ -503,7 +506,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
     /// <summary>True once the server has closed the connection.</summary>
     public async Task<bool> IsClosedByServerAsync()
     {
-        using var timeout = new CancellationTokenSource(ReadTimeout);
+        using var timeout = new CancellationTokenSource(CloseTimeout);
         byte[] one = new byte[1];
         try
         {
@@ -516,8 +519,14 @@ internal sealed class WorldTestClient : IAsyncDisposable
                 }
             }
         }
-        catch (IOException)
+        catch (OperationCanceledException)
         {
+            throw new TimeoutException($"the server did not close the connection within {CloseTimeout.TotalSeconds:0.###} s");
+        }
+        catch (Exception e) when (e is IOException or SocketException or ObjectDisposedException)
+        {
+            // a reset is the server closing the connection. ObjectDisposedException also covers a test that disposed the client
+            // itself too early, so callers must not dispose the client before asking.
             return true;
         }
     }
@@ -565,6 +574,12 @@ internal sealed record ChatMessage(ChatType Type, Language Language, ulong Sende
         var reader = new PacketReader(payload);
         var type = (ChatType)reader.ReadByte();
         var language = (Language)reader.ReadUInt32();
+        if (type == ChatType.Channel)
+        {
+            reader.ReadCString(); // the channel name
+            reader.ReadUInt32();  // the sender's honor rank
+        }
+
         ulong sender = reader.ReadUInt64();
         ulong? sender2 = type is ChatType.Say or ChatType.Party or ChatType.Yell ? reader.ReadUInt64() : null;
         uint length = reader.ReadUInt32();

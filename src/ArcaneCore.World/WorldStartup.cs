@@ -2,6 +2,9 @@ using System.Runtime.InteropServices;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Ops;
+using ArcaneCore.World.Clustering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,8 +17,8 @@ internal static class WorldStartup
 {
     /// <summary>
     /// First the single-writer lock (<see cref="WorldWriterGuard"/>: the SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL session advisory lock), then the schema initializers
-    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
-    /// a full disk), are both one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
+    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. With Cluster:Fencing:Scope=Worker the lock is the worker's shard lock, so several workers start on one database and only the same shard twice is refused. A lock that is held elsewhere, and one that cannot be created at all (permissions,
+    /// a full disk) and a Worker-scope configuration that cannot run (a bad shard id, SQLite without the test switch), are all one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
     /// </summary>
     /// <returns>0 when ready, otherwise the exit code the process should return.</returns>
     public static async Task<int> PrepareDatabasesAsync(IServiceProvider services, Func<Task> initialize, TextWriter error)
@@ -33,7 +36,7 @@ internal static class WorldStartup
                 {
                     guard.Acquire();
                 }
-                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException or WorkerScopeConfigurationException)
                 {
                     refusal = ex;
                 }
@@ -96,7 +99,7 @@ internal static class WorldStartup
 
         if (startup != 0)
         {
-            await DisposeAsync(host).ConfigureAwait(false);
+            await DisposeAsync(host, logger).ConfigureAwait(false);
             return startup;
         }
 
@@ -104,10 +107,10 @@ internal static class WorldStartup
         {
             int code = exitCode();
             logger.LogWarning("World start-up stopped on request ({Request}) before the world started; exit code {ExitCode}", stopped, code);
-            await DisposeAsync(host).ConfigureAwait(false);
-            return code;
+            return Finish(code, await DisposeAsync(host, logger).ConfigureAwait(false));
         }
 
+        bool failed = false;
         try
         {
             bool started = false;
@@ -122,15 +125,26 @@ internal static class WorldStartup
                     .LogWarning("Shutdown was requested while the world was starting; stopping in order");
             }
 
-            if (started) await host.WaitForShutdownAsync().ConfigureAwait(false);
-            else await host.StopAsync().ConfigureAwait(false);
+            // The stop runs here, not in the disposal: WaitForShutdownAsync stops the host once the shutdown was requested, and a failed start that was a stop request stops it directly.
+            // A hosted service that throws from its stop (WorldHost: "World feature shutdown failed") surfaces from this call; it is a failure of the run, not an unhandled crash.
+            try
+            {
+                if (started) await host.WaitForShutdownAsync().ConfigureAwait(false);
+                else await host.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                failed = true;
+                RecordFailure(logger, "world.host-stop", "Stopping the host failed", ex);
+            }
         }
         finally
         {
-            await DisposeAsync(host).ConfigureAwait(false);
+            // Disposal is still attempted after a failed stop (the container releases the writer lock and drains the log queue last).
+            failed |= await DisposeAsync(host, logger).ConfigureAwait(false);
         }
 
-        return exitCode();
+        return Finish(exitCode(), failed);
     }
 
     /// <summary>
@@ -154,11 +168,44 @@ internal static class WorldStartup
         ]);
     }
 
-    private static async Task DisposeAsync(IHost host)
+    /// <summary>
+    /// A failure of the host's stop or of its disposal (the container disposing a service whose <c>Dispose</c> throws): logged critical, recorded once in the <see cref="FaultLedger"/> under <paramref name="site"/>, and
+    /// a still-zero <see cref="ExitCodes.Current"/> becomes <see cref="ExitCodes.Failure"/>, so the supervisor sees a failed run. Nothing is rethrown: an exception that escaped <c>Main</c> here would be turned by the crash
+    /// handler into a fail-fast with a full dump. That removes the dump, not the relaunch delay: a supervisor relaunches after exit code 1 with the same backoff it applies after a fail-fast. Combined mode with no supervisor just
+    /// ends with the code. Runtime errors elsewhere keep the crash handler's fail-fast.
+    /// </summary>
+    private static void RecordFailure(ILogger logger, string site, string what, Exception ex)
     {
-        if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-        else host.Dispose();
+        logger.LogCritical(ex, "{What} ({Type}); exiting with a failure code instead of crashing", what, ex.GetType().Name);
+        FaultLedger.Shared.Record(site, ex);
+        if (ExitCodes.Current == ExitCodes.Success) ExitCodes.Current = ExitCodes.Failure;
     }
+
+    /// <summary>
+    /// Disposes the host, which disposes the container and with it every service (the writer lock last). A service whose disposal throws escapes from here;
+    /// anything but OutOfMemoryException is handled by <see cref="RecordFailure"/> (site <c>world.host-dispose</c>) and not rethrown.
+    /// </summary>
+    /// <returns>True when the disposal threw.</returns>
+    private static async Task<bool> DisposeAsync(IHost host, ILogger logger)
+    {
+        try
+        {
+            if (host is IAsyncDisposable asyncDisposable) await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            else host.Dispose();
+            return false;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            RecordFailure(logger, "world.host-dispose", "Disposing the host failed", ex);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The code to return: the supervisor-visible one, but never 0 after a failed stop or disposal. A code that is already set stays as it is, including 2 (a restart request): a restart that was asked for is
+    /// still a restart when its stop fails (the failure is logged and in the fault ledger either way).
+    /// </summary>
+    private static int Finish(int code, bool failed) => failed && code == ExitCodes.Success ? ExitCodes.Failure : code;
 
     private sealed class SignalRegistrations(PosixSignalRegistration[] registrations) : IDisposable
     {

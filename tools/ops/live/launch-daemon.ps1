@@ -35,6 +35,9 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "$exe not found" }
 $buildConfiguration = (Get-LiveBuildConfiguration -BinDir (Join-Path $LiveHome 'bin')).Configuration
 $titleName = if ($ClusterSupervisor) { "ArcaneCore.$Role supervisor" } else { "ArcaneCore.$Role" }
 try { $Host.UI.RawUI.WindowTitle = Get-LiveWindowTitle -Name $titleName -Configuration $buildConfiguration } catch { }
+# A 'pwsh -NoExit' window can run this script again: Add-Type of the same name with a different body is a terminating error that
+# -ErrorAction does not silence, so the type is added only when the session does not have it yet.
+if (-not ('Win32.ConsoleModeHelper' -as [type])) {
 Add-Type -Name ConsoleModeHelper -Namespace Win32 -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
@@ -46,7 +49,8 @@ public static void DisableQuickEdit() {
         SetConsoleMode(h, (mode & ~0x0040u) | 0x0080u);
     }
 }
-'@ -ErrorAction SilentlyContinue
+'@
+}
 try { [Win32.ConsoleModeHelper]::DisableQuickEdit() } catch { }
 # A process started from a tree that ignores Ctrl-C (a background shell, a service wrapper) inherits that flag, and the daemon would then
 # never see redeploy.ps1's Ctrl-C (2026-10-17: the World ran on for minutes after it). Clearing it here makes the daemon inherit a

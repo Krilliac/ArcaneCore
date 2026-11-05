@@ -1,0 +1,280 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Ownership;
+using ArcaneCore.Data.Characters.Transfers;
+using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Transfer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace ArcaneCore.Data.Tests;
+
+/// <summary>
+/// Per-character claims (writer-lock design C5, _wf/writer-lock-DESIGN.md section 1b) on every configured provider. The SQLite branch of the claim check is an
+/// idempotent row UPDATE; MariaDB and PostgreSQL take a shared row lock (<c>LOCK IN SHARE MODE</c>, <c>FOR SHARE OF o</c>), which only these cases exercise
+/// where <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c> name a server. The World.Tests <c>CharacterClaimTests</c> cover the queue and Realm-scope cases on SQLite.
+/// </summary>
+public sealed class CharacterClaimProviderTests : IAsyncLifetime
+{
+    private static readonly WorkerNodeId NodeA = new("node-a");
+    private static readonly WorkerNodeId NodeB = new("node-b");
+    private readonly TestDatabases _databases = new();
+    private readonly List<ServiceProvider> _providers = [];
+
+    public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
+    {
+        foreach (ServiceProvider provider in _providers)
+            await provider.DisposeAsync();
+        await _databases.DisposeAsync();
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ALiveClaim_IsRefused_AndADeadIncarnationsClaim_IsTakenOver(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await store.TryClaimCharacterAsync(41, a)).Outcome);
+        CharacterClaimResult refused = await store.TryClaimCharacterAsync(41, b);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, refused.Outcome);
+        Assert.Equal(a.Scope, refused.PreviousScope);
+        await WriteAsync(services, 41, a);
+        await Assert.ThrowsAsync<CharacterClaimRejectedException>(() => WriteAsync(services, 41, b));
+
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            Assert.NotNull(await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryReclaimAsync(a, "node-restarted", Guid.NewGuid(), [1u]));
+        }
+
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(41, b)).Outcome);
+        await WriteAsync(services, 41, b);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ARetiredSourcesRetainedSnapshot_IsDurablyRefusedAfterCommit(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        await store.TryClaimCharacterAsync(42, a);
+        await WriteAsync(services, 42, a);
+
+        Guid transfer = Guid.NewGuid();
+        await store.CreateReservationAsync(transfer, 42, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.SuspendAndCapture, Bundle(transfer, 42, a));
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.InstallPassive);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
+        await WriteAsync(services, 42, a); // the settlement save during the reservation still passes
+
+        TransferDecisionRecord committed = await store.CommitDecisionAsync(transfer, b.Incarnation, CancellationToken.None, b.Scope);
+        Assert.Equal(b.Scope, committed.TargetOwnershipToken!.Scope);
+
+        await Assert.ThrowsAsync<CharacterClaimRejectedException>(() => WriteAsync(services, 42, a));
+        await WriteAsync(services, 42, b);
+        Assert.Equal(b.Scope, (await store.MarkCompletedAsync(transfer)).TargetOwnershipToken!.Scope);
+    }
+
+    /// <summary>
+    /// Follow-up C18 (design _wf/handoff-control-DESIGN.md): the target restarted after the commit, so the committed token names a dead incarnation the restarted target can
+    /// never write under. Rebinding moves the commit and the claim to the scope's live incarnation, only that one, and leaves the transfer completable.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ACommittedTransfer_RebindsToTheRestartedTargetsLiveIncarnation_AndToNoOther(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        await store.TryClaimCharacterAsync(44, a);
+        Guid transfer = Guid.NewGuid();
+        await store.CreateReservationAsync(transfer, 44, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.SuspendAndCapture, Bundle(transfer, 44, a));
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.InstallPassive);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
+        await store.CommitDecisionAsync(transfer, b.Incarnation, CancellationToken.None, b.Scope);
+
+        CharacterOwnershipToken restarted;
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            restarted = (await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryReclaimAsync(b, "node-b", Guid.NewGuid(), [30u]))!;
+        }
+
+        Assert.NotNull(restarted);
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => store.RebindCommittedTargetAsync(transfer, Guid.NewGuid()));
+
+        TransferDecisionRecord rebound = await store.RebindCommittedTargetAsync(transfer, restarted.Incarnation);
+        Assert.Equal(restarted, rebound.TargetOwnershipToken);
+        Assert.Equal(PlayerTransferDecisionState.Committed, rebound.DecisionState);
+        Assert.Equal(restarted, (await store.RebindCommittedTargetAsync(transfer, restarted.Incarnation)).TargetOwnershipToken); // the same incarnation again: unchanged
+        await WriteAsync(services, 44, restarted);
+        await Assert.ThrowsAsync<CharacterClaimRejectedException>(() => WriteAsync(services, 44, a));
+
+        Assert.Equal(restarted, (await store.MarkCompletedAsync(transfer)).TargetOwnershipToken);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RebindCommittedTargetAsync(transfer, Guid.NewGuid()));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ADeadShard_IsReapedAtLogin_OnlyWithAStaleHeartbeatAndAFreeLock(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        await store.TryClaimCharacterAsync(43, a);
+        var policy = new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(true));
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        await HeartbeatAsync(services, a, now);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(43, b, policy)).Outcome);
+        await HeartbeatAsync(services, a, now - (long)TimeSpan.FromMinutes(10).TotalMilliseconds);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(43, b)).Outcome);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner,
+            (await store.TryClaimCharacterAsync(43, b, new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(false)))).Outcome);
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(43, b, policy)).Outcome);
+        await WriteAsync(services, 43, b);
+    }
+
+    /// <summary>
+    /// The read-only live-owner probe a playerbot start asks before it writes anything: it must say "live" exactly when the claim would refuse (a fresh holder, a holder with no heartbeat, a
+    /// stale holder whose shard lock is still held, a transfer in flight) and "not live" exactly when the claim would take the character (no row, its own claim, a dead incarnation, a stale
+    /// heartbeat with the lock free). Each case is checked against the real claim, so the two cannot drift apart.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheLiveOwnerProbe_AgreesWithTheClaim_OnEveryCase(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long stale = now - (long)TimeSpan.FromMinutes(10).TotalMilliseconds;
+        var lockFree = new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(true));
+        var lockHeld = new CharacterClaimReapPolicy(TimeSpan.FromSeconds(150), (_, _) => Task.FromResult(false));
+
+        // No row.
+        Assert.Null(await store.FindLiveOtherOwnerAsync(50, b, lockFree));
+        // Its own claim.
+        await store.TryClaimCharacterAsync(51, b);
+        Assert.Null(await store.FindLiveOtherOwnerAsync(51, b, lockFree));
+        // A realm token claims nothing and probes nothing.
+        Assert.Null(await store.FindLiveOtherOwnerAsync(51, new CharacterOwnershipToken(CharacterOwnershipScopes.World, 1, Guid.NewGuid()), lockFree));
+
+        // A fresh holder of another scope.
+        await store.TryClaimCharacterAsync(52, a);
+        await HeartbeatAsync(services, a, now);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, lockFree));
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, null));
+
+        // A holder with no heartbeat is live whatever the lock says (the reap needs a heartbeat to be stale).
+        await store.TryClaimCharacterAsync(53, a);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(53, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(53, b, lockFree)).Outcome);
+        await HeartbeatAsync(services, a, now);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(53, b, lockFree)).Outcome);
+
+        // A stale heartbeat with the lock held: the claim refuses, so the probe must say live (it used to say not live).
+        await HeartbeatAsync(services, a, stale);
+        Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, (await store.TryClaimCharacterAsync(52, b, lockHeld)).Outcome);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, lockHeld));
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(52, b, null)); // no reap policy: the claim refuses a stale holder too
+        // A stale heartbeat with the lock free: the claim would reap, so the probe says not live (and writes nothing: the claim below still has to do the reap itself).
+        Assert.Null(await store.FindLiveOtherOwnerAsync(52, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(52, b, lockFree)).Outcome);
+
+        // A transfer in flight.
+        await store.TryClaimCharacterAsync(54, a);
+        await store.CreateReservationAsync(Guid.NewGuid(), 54, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        Assert.Equal(a.Scope, await store.FindLiveOtherOwnerAsync(54, b, lockFree));
+
+        // A dead incarnation: the scope was reclaimed by a restarted node, so the old holder is no live owner.
+        CharacterOwnershipToken c = await AcquireAsync(services, "c", 60); // its own shard: the reap above deactivated a's
+        await store.TryClaimCharacterAsync(55, c);
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            Assert.NotNull(await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryReclaimAsync(c, "node-restarted", Guid.NewGuid(), [60u]));
+        }
+
+        Assert.Null(await store.FindLiveOtherOwnerAsync(55, b, lockFree));
+        Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, (await store.TryClaimCharacterAsync(55, b)).Outcome);
+    }
+
+    /// <summary>Begin and commit a characters transaction as the worker holding <paramref name="as"/> under the claim scope the write queues set; the fence verifies at begin.</summary>
+    private static async Task WriteAsync(ServiceProvider services, int characterId, CharacterOwnershipToken @as)
+    {
+        services.GetRequiredService<CharacterOwnershipContext>().Current = @as;
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        using (CharacterWriteClaim.Use(characterId))
+        {
+            await using IDbContextTransaction transaction = await db.Database.BeginTransactionAsync();
+            await transaction.CommitAsync();
+        }
+    }
+
+    private static async Task HeartbeatAsync(ServiceProvider services, CharacterOwnershipToken token, long nowUnixMs)
+    {
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        Assert.True(await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().HeartbeatAsync(token, nowUnixMs));
+    }
+
+    private static async Task<CharacterOwnershipToken> AcquireAsync(ServiceProvider services, string shard, uint map)
+    {
+        await using AsyncServiceScope scope = services.CreateAsyncScope();
+        return (await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>()
+            .TryAcquireAsync(CharacterOwnershipScopes.ForShard(shard), "node-" + shard, Guid.NewGuid(), [map]))!;
+    }
+
+    private async Task<(ServiceProvider Services, EfTransferDecisionStore Store)> OpenAsync(DatabaseConnectionOptions connection)
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Database:Provider"] = connection.Provider.ToString(),
+            ["Database:ConnectionString"] = connection.ConnectionString,
+            ["Cluster:Fencing:Enabled"] = "true",
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddCharacterDatabase(configuration);
+        ServiceProvider provider = services.BuildServiceProvider();
+        _providers.Add(provider);
+        await provider.GetRequiredService<CharacterDbInitializer>().InitializeAsync();
+        return (provider, provider.GetRequiredService<EfTransferDecisionStore>());
+    }
+
+    private static PlayerTransferBundle Bundle(Guid transferId, ulong guid, CharacterOwnershipToken source) => new()
+    {
+        TransferId = transferId,
+        CharacterGuid = guid,
+        CharacterId = (int)guid,
+        AccountId = 1,
+        SessionGeneration = 1,
+        SourceWorkerId = NodeA,
+        TargetWorkerId = NodeB,
+        SourceOwnershipToken = source,
+        CapturedAtUtcMs = 1_700_000_000_000,
+        SourceMapId = 0,
+        SourcePosition = new TransferPosition(-8949.95f, -132.49f, 83.53f, 0.5f),
+        TargetMapId = 0,
+        TargetPosition = new TransferPosition(-8949.95f, -132.49f, 83.53f, 0.5f),
+        Health = 55,
+        MaxHealth = 60,
+        Powers = [10, 0, 100, 0, 0],
+        Level = 3,
+        Money = 1234,
+        Items = [new TransferItemSnapshot(500, 25, 0, 15, 1, 20, 20, 0, 0, 0, 0, [0, 0, 0, 0, 0], [new TransferItemEnchantment(0, 37, 0, 0)])],
+        Quests = [new TransferQuestSlotSnapshot(0, 783, 1, false, false, 0, [1, 0, 0, 0])],
+        KnownSpells = [78, 81, 2457],
+        HomeBind = new HomeBind(0, 12, -8949.95f, -132.49f, 83.53f),
+        Corpse = new CorpseSnapshot(0, 1f, 2f, 3f, 0f, 1_700_000_000, 1),
+        TaxiNodesMask = [2u],
+    };
+}

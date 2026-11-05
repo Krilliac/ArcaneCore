@@ -74,6 +74,8 @@ public sealed partial class SummonService
             return true;
         }
 
+        PetPower.TickFocus(pet, charm, diffMs, _spells);
+
         charm.HappinessTimerMs -= (int)diffMs;
         if (charm.HappinessTimerMs <= 0)
         {
@@ -119,7 +121,7 @@ public sealed partial class SummonService
         owner.Session.Send(WorldOpcode.SmsgPetBroken, ReadOnlySpan<byte>.Empty);
         QueueDeletePet(owner);
         ForgetPetForSpiritHealer(owner);
-        Unsummon(pet);
+        Unsummon(pet, PetUnsummonReason.RanAway);
         return false;
     }
 }

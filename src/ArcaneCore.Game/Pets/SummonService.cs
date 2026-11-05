@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
@@ -34,6 +35,7 @@ public sealed partial class SummonService : ISpellSummonSink
     private readonly HashSet<string> _warned = [];
     private SpellSystem? _spells;
     private uint _petNumbers;
+    private volatile DurableIdBlockAllocator? _idBlockAllocator;
     private bool _summonPetRegistered;
     private bool _demonsInstalled;
 
@@ -46,6 +48,28 @@ public sealed partial class SummonService : ISpellSummonSink
         _logger = logger ?? NullLogger.Instance;
         _random = random ?? new Random();
     }
+
+    /// <summary>
+    /// Durable block allocator for the <c>"pet"</c> scope. Set by the host before the world starts when several workers share one
+    /// characters database; pet numbers are then realm-unique and survive restarts. Null keeps the process counter (Realm mode).
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator
+    {
+        get => _idBlockAllocator;
+        set
+        {
+            if (value is not null && !string.Equals(value.Scope, IdRangeScopes.Pet, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Block allocator scope must be '{IdRangeScopes.Pet}', but was '{value.Scope}'.", nameof(value));
+            }
+
+            _idBlockAllocator = value;
+        }
+    }
+
+    /// <summary>When true (Worker mode) a pet number is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public volatile bool RequireDurableIds;
 
     /// <summary>The pet tables (<c>pet_levelstats</c>, <c>petcreateinfo_spell</c>); empty until the world loads them.</summary>
     public PetContent Content { get; set; } = PetContent.Empty;
@@ -80,7 +104,7 @@ public sealed partial class SummonService : ISpellSummonSink
                 && (!DetachedPersistenceConfigured || DetachedPersistenceSupported))
             {
                 QueueDetachedPetSave(player);
-                Unsummon(pet);
+                Unsummon(pet, PetUnsummonReason.Dismissed);
             }
         });
     }
@@ -124,12 +148,24 @@ public sealed partial class SummonService : ISpellSummonSink
     /// Remove a summon from the world: the owner's pet link for a pet (vmangos Pet::Unsummon),
     /// then the creature itself.
     /// </summary>
-    public void Unsummon(Creature creature)
+    public void Unsummon(Creature creature) => Unsummon(creature, PetUnsummonReason.Unspecified);
+
+    /// <summary>
+    /// <see cref="Unsummon(Creature)"/> with the cause. The departure is logged at Debug (<see cref="PetUnsummonReasons.LevelOf"/>), except a pet that
+    /// ran away, so the routine unsummons of a busy world stay out of the normal log.
+    /// </summary>
+    public void Unsummon(Creature creature, PetUnsummonReason reason)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (creature.Summon is not { } links)
         {
             return;
+        }
+
+        LogLevel level = PetUnsummonReasons.LevelOf(reason);
+        if (_logger.IsEnabled(level))
+        {
+            _logger.Log(level, "unsummon {Kind} {Pet} (owner {Owner}): {Reason}", links.Kind, creature.Guid, creature.OwnerGuid, reason);
         }
 
         Unit? owner = creature.GetOwner();
@@ -147,6 +183,24 @@ public sealed partial class SummonService : ISpellSummonSink
 
         map?.Pets?.Forget(creature);
         creature.System?.Despawn(creature);
+    }
+
+    /// <summary>
+    /// Send SMSG_PET_SPELLS only after the owner has the pet's create block and its own UNIT_FIELD_SUMMON. vmangos adds the pet to the map (which
+    /// sends the create block at once), sets the pet link and only then runs <c>Player::PetSpellInitialize</c> (SpellEffects.cpp:3306-3321). Here
+    /// <c>SpawnSummoned</c> only queues the create block for the end-of-tick flush, so without this the client got the pet bar for a unit it did not
+    /// know yet and its pet frame (UNIT_PET / PET_BAR_UPDATE) never refreshed. The visibility of the pet and the owner's queued values are pushed
+    /// now, in that order, into the owner's update buffer, which is flushed before the packet is queued. World thread; no I/O.
+    /// </summary>
+    internal static void SendPetSpellsAfterCreate(Player owner, Creature pet, byte[] payload)
+    {
+        if (pet.Map is { } map && ReferenceEquals(owner.Map, map))
+        {
+            map.RefreshVisibility(pet);
+            map.FlushPlayerValuesNow(owner);
+        }
+
+        owner.Session.Send(WorldOpcode.SmsgPetSpells, payload);
     }
 
     /// <summary>
@@ -220,7 +274,7 @@ public sealed partial class SummonService : ISpellSummonSink
         // Player::PetSpellInitialize (SpellEffects.cpp:2417-2420)
         if (caster is Player owner)
         {
-            owner.Session.Send(WorldOpcode.SmsgPetSpells, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
+            SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
         }
 
         return pet;
@@ -251,13 +305,37 @@ public sealed partial class SummonService : ISpellSummonSink
     internal void AttachPetAi(Creature pet) => pet.AI = new PetAI(pet, () => _spells, _random);
 
     /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
-    internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);
+    internal uint NextPetNumber()
+    {
+        if (_idBlockAllocator is { } allocator)
+        {
+            uint allocated = allocator.Next();
+            ReservePetNumber(allocated);
+            return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Pet,
+                $"Pet number allocator for scope '{IdRangeScopes.Pet}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+
+        return Interlocked.Increment(ref _petNumbers);
+    }
 
     /// <summary>A fresh pet number above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (vmangos PlayerDumpReader).</summary>
     public uint ReservePetNumberAbove(uint atLeast)
     {
         ReservePetNumber(atLeast);
-        return NextPetNumber();
+        uint number = NextPetNumber();
+        // A durable block starts above every stored number, so this loop only runs when a dump carries a number above them.
+        while (number <= atLeast && _idBlockAllocator is not null)
+        {
+            number = NextPetNumber();
+        }
+
+        return number;
     }
 
     /// <summary>Keep subsequently generated pet GUID counters above a loaded durable pet.</summary>

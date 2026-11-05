@@ -48,7 +48,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         _services = services ?? throw new ArgumentNullException(nameof(services));
         ArgumentNullException.ThrowIfNull(loggers);
         _logger = loggers.CreateLogger<RestFeature>();
-        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
+        Writes = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), loggers.CreateLogger<RestWriteQueue>(), services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         Writes.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("rest.writes-fatal", ex);
@@ -99,6 +99,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         LoadTaverns();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += OnPlayerTransferPreparing;
         world.WorldTick += OnWorldTick;
         _logger.LogInformation("Rest: rates in-game {InGame}, offline in tavern or city {Tavern}, offline in the wilderness {Wild}; {Taverns} inn triggers; save every {Save} s",
             Rest.Options.RateInGame, Rest.Options.RateOfflineInTavernOrCity, Rest.Options.RateOfflineInWilderness, Taverns.Count, Rest.Options.SaveIntervalSeconds);
@@ -226,12 +227,27 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
 
         int characterId = (int)player.Guid.Low;
         _tracked.Remove(player);
-        Writes.Save(characterId, ToRow(Rest.Capture(player, DeathHooks.For(world).Clock.UnixSeconds)));
+        if (!world.IsRetiringTransferredPlayer) // a retire after a committed transfer must not write: the target owns the row
+        {
+            Writes.Save(characterId, ToRow(Rest.Capture(player, DeathHooks.For(world).Clock.UnixSeconds)));
+        }
+
         Rest.Forget(player);
-        if (Writes.HasRetainedFailure(characterId))
+        if (!world.IsRetiringTransferredPlayer && Writes.HasRetainedFailure(characterId))
         {
             Writes.RequestRetry(characterId);
         }
+    }
+
+    /// <summary>A cluster transfer's capture: the rest state a logout would write, queued before the capture's flush.</summary>
+    private void OnPlayerTransferPreparing(Player player)
+    {
+        if (_world is not { } world)
+        {
+            return;
+        }
+
+        Writes.Save((int)player.Guid.Low, ToRow(Rest.Capture(player, DeathHooks.For(world).Clock.UnixSeconds)));
     }
 
     /// <summary>

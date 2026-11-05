@@ -26,7 +26,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 public sealed class PlayerbotWorldBossWorldTests
 {
     /// <summary>Two warriors, three priests and four mages: roles for a raid of five or six (one tank, two healers) with room for a refusal.</summary>
-    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix = "Wb", byte level = 60) => AddBotsAsync(world, prefix, 2, 3, 4, level);
+    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix = "Wb", byte level = 60) => AddBotsAsync(world, prefix, 2, 3, 4, level, parkSpares: true);
 
     private static Task<bool> RaidFormedAsync(GroupTestWorld world, uint maxMs = 300_000)
         => world.RunUntilAsync(maxMs, () => Raid(world) is { State: not PlayerbotGroupState.Forming });
@@ -354,7 +354,13 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.Equal(0, counts.Of(PlayerbotWorldBossOutcomes.Killed));
     }
 
+    // Timing: the one failure seen (flake ledger 2026-10-29: Expected 2, Actual 1) means the raid ended after its first wipe by a path other than the second
+    // wipe: PlayerbotGroupCoordinator.cs increments raid.Wipes and calls Finish("wiped") in the same branch, so a second wipe cannot end it unseen. The manual
+    // clock fixes game time, but the bots' thinks that fight, die and walk back between the wipes use wall-clock budgets (PlayerbotThinkProbe.MsSince), so
+    // under load a bot can stall or leave the group (stalled, regroup-timeout, too-few) before the second pull. Which path ended it was not recorded;
+    // the failure message below now carries the trace with the "gave up ..." note. Until it is seen, this runs in the serial timing stage.
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task WithMaxWipesTwo_TheFirstWipeRegroups_AndTheSecondEndsTheAttempt()
     {
         // The generic Wiped arm gives up at the const MaxFailures (2) for every other group; this raid counts its own wipes against MaxWipes.
@@ -379,8 +385,9 @@ public sealed class PlayerbotWorldBossWorldTests
         }), await world.TraceAsync());
 
         Assert.True(regrouped, "no regroup after the first wipe: " + await world.TraceAsync());
+        // The world runs on the manual clock with a 2,400 s game budget; the trace names the reason a raid ended without its second wipe (the "gave up ... : <reason>" note).
+        Assert.True(Noted(world, "disbanded (wiped)"), "the raid ended without its second wipe (wipes seen: " + mostWipes + "): " + await world.TraceAsync());
         Assert.Equal(2, mostWipes);
-        Assert.True(Noted(world, "disbanded (wiped)"), await world.TraceAsync());
         Assert.Equal(1, counts.Of(PlayerbotWorldBossOutcomes.Wiped));
     }
 
@@ -393,7 +400,9 @@ public sealed class PlayerbotWorldBossWorldTests
         // teleports a straggler to its leader (Party.TeleportToLeader, on by default); a world-boss raid does not unless CatchUpTeleport is on.
         await using GroupTestWorld world = await StartAsync(boss => { boss.CatchUpTeleport = false; boss.HoldSeconds = 600; }, options => options.Party.TeleportToLeader = true, Passive());
         List<(Guid Id, string Name)> bots = await AddBotsAsync(world, "We", 1, 2, 2);
-        (Guid Id, string Name) far = await world.AddBotAsync("Wbstraggler", Human, Mage, 60, [Fireball], new Vector3(StartX - 500f, StartY, StartZ));
+        // 500 yards due south of the start, off the line to the quest elites (the warlord stands 70 yards west): a straggler walking in from the west
+        // meets the warlord, fights it and dies, and the graveyard (689 yards away) is then what moves it, not a catch-up teleport.
+        (Guid Id, string Name) far = await world.AddBotAsync("Wbstraggler", Human, Mage, 60, [Fireball], new Vector3(StartX, StartY - 500f, StartZ));
         await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
 
         var jumps = new List<(string Name, float Yards)>();

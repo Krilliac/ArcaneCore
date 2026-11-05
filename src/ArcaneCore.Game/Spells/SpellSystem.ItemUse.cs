@@ -49,6 +49,15 @@ public sealed partial class SpellSystem
             item.SetBinding(true);
         }
 
+        // A client-started use-item cast validates its explicit target mask (Player.cpp:7390 SetClientStarted, Spell.cpp:6685-6711),
+        // before any deferral, as CMSG_CAST_SPELL does in HandleCastRequest.
+        if (Store.Get(item.Template.Spells[spellIndex].SpellId) is { } selected && NamesUnallowedItemTarget(selected, targets))
+        {
+            player.Inventory.SendEquipError(InventoryResult.None, item, null);
+            SendCastResult(player, selected, SpellCastResult.BadTargets, triggered: false);
+            return SpellCastResult.BadTargets;
+        }
+
         // Item-use eligibility and binding intentionally precede deferral, matching the
         // ordinary vmangos CastItemUseSpell path. The callback owns planning and settlement;
         // no ordinary Prepare, charge consumption, or global cooldown may run here.

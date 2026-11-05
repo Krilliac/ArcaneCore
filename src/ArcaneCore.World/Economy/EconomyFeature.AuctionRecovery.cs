@@ -24,6 +24,11 @@ public sealed partial class EconomyFeature
     internal long? AuctionRecoveryNotBeforeMs(uint auctionId)
         => _auctionRecoveries.TryGetValue(auctionId, out AuctionRecovery? recovery) ? recovery.NotBeforeMs : null;
 
+    private long _recoveryReads;
+
+    /// <summary>Recovery reads this node has started (tests: a node without the economy lease starts none).</summary>
+    internal long RecoveryReadsStarted => Interlocked.Read(ref _recoveryReads);
+
     private long NowMs => _clock.GetUtcNow().ToUnixTimeMilliseconds();
 
     private void QuarantineAuction(uint auctionId, IReadOnlyList<EconomyChange> changes)
@@ -79,7 +84,8 @@ public sealed partial class EconomyFeature
 
     internal void RecoverAuctions()
     {
-        if (_stopping)
+        // The recovery timer is not the sweep: a node that is not the economy lease holder never settles a reserved auction either.
+        if (_stopping || !HoldsEconomyLease)
         {
             return;
         }
@@ -89,6 +95,7 @@ public sealed partial class EconomyFeature
             .Where(p => !p.Value.InFlight && p.Value.NotBeforeMs <= nowMs).Take(ExpiryBatch).ToArray())
         {
             recovery.InFlight = true;
+            Interlocked.Increment(ref _recoveryReads);
             Read(async (store, ct) =>
             {
                 // One transaction for row and escrow: a concurrent writer cannot be seen half-applied.

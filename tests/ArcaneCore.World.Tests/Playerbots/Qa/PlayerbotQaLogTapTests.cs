@@ -30,7 +30,7 @@ public sealed class PlayerbotQaLogTapTests
         Assert.Equal("ArcaneCore.World.Playerbots.ManagedPlayerbotFeature", PlayerbotQaLogTap.BotCategory);
 
         ILogger other = tap.CreateLogger("ArcaneCore.World.Chat.ChatFeature");
-        Assert.False(other.IsEnabled(LogLevel.Warning));
+        Assert.True(other.IsEnabled(LogLevel.Warning)); // a Warning may carry an exception; a plain one is dropped by Log, whatever its text
         LogStall(other, QaData.Bot1, "Ironwander"); // another category: ignored even though the text matches
         bots.LogInformation("Playerbot {BotId} ({Name}) {Stall}; it gives up that goal", QaData.Bot1, "Ironwander", StallText); // below Warning: ignored
         Assert.Equal(0, bus.Received);
@@ -136,7 +136,7 @@ public sealed class PlayerbotQaLogTapTests
     public void FullBus_ConcurrentWriters_LoseNothingUncounted()
     {
         var bus = new PlayerbotQaSignalBus(64);
-        Parallel.For(0, 8, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
         {
             for (int i = 0; i < 500; i++) bus.TryWrite(QaData.Stall(QaData.Bot1, 0, 0));
         });
@@ -190,7 +190,7 @@ public sealed class PlayerbotQaLogTapTests
         using var tap = new PlayerbotQaLogTap(bus, true, null, null);
         ILogger chat = tap.CreateLogger("ArcaneCore.World.Chat.ChatFeature");
 
-        Assert.False(chat.IsEnabled(LogLevel.Warning));
+        Assert.True(chat.IsEnabled(LogLevel.Warning)); // only a Warning with an exception is a fault
         Assert.True(chat.IsEnabled(LogLevel.Error));
         Assert.True(chat.IsEnabled(LogLevel.Critical));
 

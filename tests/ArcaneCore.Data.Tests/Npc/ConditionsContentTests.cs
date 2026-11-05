@@ -67,8 +67,8 @@ public sealed class ConditionsContentTests : IAsyncLifetime
     public void ALaterRowWithTheSameKeyReplacesTheEarlierOne_AndIsCounted()
     {
         var importer = new ConditionsDumpImporter();
-        importer.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES (1,15,5,1,0,0,0);"));
-        importer.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES (1,15,9,2,0,0,0);"));
+        importer.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES (1,15,5,1,0,0,0,'');"));
+        importer.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES (1,15,9,2,0,0,0,'');"));
 
         Assert.Equal(1, importer.BuildReport().Conditions);
         Assert.Equal(1, importer.BuildReport().Replaced);
@@ -94,7 +94,7 @@ public sealed class ConditionsContentTests : IAsyncLifetime
     {
         var importer = new ConditionsDumpImporter();
         Assert.ThrowsAny<Exception>(() => importer.Read(new StringReader(
-            "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES " + tuple + ";")));
+            "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES " + tuple[..^1] + ",'');")));
     }
 
     [Theory]
@@ -132,7 +132,7 @@ public sealed class ConditionsContentTests : IAsyncLifetime
 
         // Replace semantics: the table holds exactly the new dump.
         var second = new ConditionsDumpImporter();
-        second.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES (9,15,10,1,0,0,0);"));
+        second.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES (9,15,10,1,0,0,0,'');"));
         await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
         {
             await second.WriteAsync(db, replace: true);

@@ -18,6 +18,11 @@ namespace ArcaneCore.World.RealmList;
 /// finish out of order. A failed write is logged and never fails the create, delete or character list. Does nothing when
 /// <see cref="RealmStatusOptions.Id"/> is 0 or no auth database is registered.
 /// </para>
+/// <para>
+/// Gateway worker mode needs nothing different: the refresh does not depend on the liveness writer, and whichever worker serves the create, delete
+/// or character list recounts the account from the shared characters database and writes the same row, so two workers (or an active and a promoted
+/// standby) cannot disagree about a count (docs/ops/realm-liveness.md section 7).
+/// </para>
 /// </summary>
 public static class RealmCharacterCounts
 {

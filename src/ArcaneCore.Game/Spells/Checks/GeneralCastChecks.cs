@@ -197,7 +197,8 @@ public sealed class OnlyPeacefulTargetCastCheck : ISpellCastCheck
 {
     public SpellCheckPhase Phase => SpellCheckPhase.Target;
 
-    public int Order => SpellCastCheckOrder.TargetCreatureType + 20;
+    // Spell.cpp:5487 runs before the creature type check at :5580, so an in-combat wrong-type target answers TARGET_AFFECTING_COMBAT.
+    public int Order => SpellCastCheckOrder.TargetLevel + 10;
 
     public SpellCastResult Check(in SpellCastCheckContext context)
         => !context.Triggered && context.Strict && context.Target is { } target && !ReferenceEquals(target, context.Caster)

@@ -12,7 +12,7 @@ using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 
-/// <summary>SCRIPT_COMMAND_TELEPORT_TO (6) and SEND_MAIL (38) in the DB script runner (cmangos ScriptMgr.cpp:1925-1933).</summary>
+/// <summary>SCRIPT_COMMAND_TELEPORT_TO (6) and SEND_MAIL (38) in the DB script runner (cmangos ScriptMgr.cpp:1925-1933; vmangos ScriptCommands.cpp:273-295 for a non-player source).</summary>
 public sealed class RelayScriptMailTeleportTests
 {
     private const uint ScriptId = 5162;
@@ -117,7 +117,7 @@ public sealed class RelayScriptMailTeleportTests
     }
 
     [Fact]
-    public void TeleportToCommand_WithoutAPlayerDoesNothing()
+    public void TeleportToCommand_WithoutAPlayerNearTeleportsTheCreatureSource()
     {
         var teleports = new RecordingTeleports();
         (WorldRuntime world, CreatureMapSystem system) = Build(teleports);
@@ -126,8 +126,13 @@ public sealed class RelayScriptMailTeleportTests
             _ = AddPlayer(world, 1, 0, 10); // a player in range spawns the wolf; the script gets no player target
             Creature giver = Assert.Single(system.Creatures);
             Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, null));
-            Run(world, 12000);
+            Run(world, 10000);
             Assert.Empty(teleports.Calls);
+            Run(world, 1500);
+            // vmangos ScriptCommands.cpp:273-295: a non-player source unit is moved by Unit::NearTeleportTo, on its own map.
+            (Unit unit, uint map, float x, float y, float z, float o) = Assert.Single(teleports.Calls);
+            Assert.Same(giver, unit);
+            Assert.Equal((giver.MapId, 1535f, -2629f, 380f, 1.5f), (map, x, y, z, o));
         }
     }
 

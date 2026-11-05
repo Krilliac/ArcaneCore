@@ -577,7 +577,15 @@ public sealed class LiveFeedTests
         await first.WriteAsync(Wire.Frame(1, 4, 1, Wire.Entity("1", "bot", 1, 2, 3)));
         await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
         first.Drop();
-        await Wait.UntilAsync(() => !rig.Feed.IsConnected, "the drop is noticed");
+        // IsConnected goes false when the reader ends, slightly before the store is emptied; the disconnected status is published after both.
+        JsonObject closed;
+        do
+        {
+            closed = (await rig.Log.NextAsync(EventHub.Topics.LiveStatus))!.AsObject();
+        }
+        while (closed["connected"]!.GetValue<bool>());
+
+        Assert.False(rig.Feed.IsConnected);
         Assert.Equal(0, rig.Feed.Store.EntityCount);
 
         FakeFeedServer second = rig.NewServer();

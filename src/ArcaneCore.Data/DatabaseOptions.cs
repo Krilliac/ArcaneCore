@@ -1,8 +1,8 @@
 namespace ArcaneCore.Data;
 
 /// <summary>
-/// Supported relational engines. MariaDB is primary; MySQL and PostgreSQL 16 are supported
-/// (charter §2); SQLite serves zero-setup development and the end-to-end tests (ROADMAP).
+/// Supported relational engines. MariaDB is primary; MySQL and PostgreSQL 16 are supported;
+/// SQLite serves zero-setup development and the end-to-end tests (ROADMAP).
 /// </summary>
 public enum DatabaseProvider
 {
@@ -71,7 +71,7 @@ public sealed class DatabaseConnectionOptions
 /// component without one falls back to the section's own Provider/ConnectionString, which is
 /// the single-database layout M1–M4 configurations use.
 /// </summary>
-[Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.Both)]
+[Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.Both | Kernel.Configuration.ConfigDaemon.Gateway)]
 public sealed class DatabaseOptions
 {
     public const string SectionName = "Database";
@@ -136,7 +136,7 @@ public sealed class DatabaseOptions
 
     public DatabaseConnectionOptions? Auth { get; set; }
 
-    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]
+    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World | Kernel.Configuration.ConfigDaemon.Gateway)]
     public DatabaseConnectionOptions? Characters { get; set; }
 
     [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]

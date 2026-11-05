@@ -1,6 +1,7 @@
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Clustering;
 using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Cluster;
@@ -25,7 +26,20 @@ public sealed class ClusterNodeConfigChecks : IConfigCheck
         }
 
         bool workerEnabled = bool.TryParse(configuration[$"{GatewayWorkerOptions.SectionName}:Enabled"], out bool enabled) && enabled;
-        return [.. options.Validate(workerEnabled).Select(problem => new ConfigIssue(
-            ConfigSeverity.Error, ClusterNodeOptions.SectionName, problem, "see the node role section of docs/areas/gateway.md"))];
+        var issues = options.Validate(workerEnabled).Select(problem => new ConfigIssue(
+            ConfigSeverity.Error, ClusterNodeOptions.SectionName, problem, "see the node role section of docs/areas/gateway.md")).ToList();
+
+        // A role other than Combined means another world process shares the characters database: fencing is what keeps the writers apart and
+        // primes the durable id allocators (an unfenced world collides on its in-memory id counters). A SQLite characters database with such a
+        // role is refused by ClusterSqliteConfigChecks.
+        if (issues.Count == 0 && options.Role != ClusterNodeRole.Combined
+            && !(bool.TryParse(configuration[$"{CharacterFencingOptions.SectionName}:Enabled"], out bool fenced) && fenced))
+        {
+            issues.Add(new ConfigIssue(ConfigSeverity.Error, $"{CharacterFencingOptions.SectionName}:Enabled",
+                $"{ClusterNodeOptions.SectionName}:Role is {options.Role}, but character fencing is off: another world shares the characters database, and an unfenced world skips the durable id allocator priming and collides on in-memory id counters.",
+                $"set {CharacterFencingOptions.SectionName}:Enabled=true, with a distinct {CharacterFencingOptions.SectionName}:OwnerNode, on a PostgreSQL or MariaDB characters database"));
+        }
+
+        return issues;
     }
 }

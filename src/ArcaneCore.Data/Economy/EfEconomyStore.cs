@@ -1,5 +1,6 @@
 using System.Data;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.ServerMail;
@@ -7,6 +8,7 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Items;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -21,10 +23,15 @@ namespace ArcaneCore.Data.Economy;
 /// complete inventory must equal its Before snapshot; every row change checks its expected
 /// value; and a final integrity pass proves that each touched item exists exactly once
 /// (in one inventory, or escrowed under exactly one letter or auction). Any mismatch rolls
-/// back with Conflict; any exception rolls back and propagates.
+/// back with Conflict; any exception rolls back and propagates. When a <see cref="IRealmLeaseFenceSource"/> reports a held economy lease, the commit first verifies
+/// that lease in its own transaction (<see cref="LeaseFencedWrite"/>) and throws <see cref="RealmLeaseFenceLostException"/> if it was taken over.
 /// </summary>
-public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
+public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IEconomyStore
 {
+    /// <summary>A commit with no participant that deletes an auction or a letter: the expiry sweeps' shape (a player's take, cancel or buyout always names its participants).</summary>
+    internal static bool IsRealmSweep(EconomyCommitRequest request)
+        => request.Participants.Count == 0 && request.Changes.Any(change => change is DeleteAuction or DeleteMail);
+
     public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -40,10 +47,39 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
         EconomyRequestValidation.Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
-            .ConfigureAwait(false);
+        // The expiry operations (and the auction house bot's removals) are the realm's, not a character's: no participant, and they delete an auction or a letter. A clustered node
+        // that has no economy fence is refused outright (writer-lock design section 2b, economy row: RequireFence on the expiry operations); one that holds a fence but was marked lost locally is left to the commit fence below, which
+        // refuses it exactly when another node took the lease over, whatever its sweep thinks.
+        if (IsRealmSweep(request))
+        {
+            LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Economy);
+        }
+
+        // Worker fencing scope: as the transaction begins, the write fence also proves that every participant's per-character claim is held by a live worker
+        // (the Economy holder commits for characters other workers have claimed; a character nobody holds, one whose owner died or one mid-transfer is refused),
+        // design _wf/writer-lock-DESIGN.md section 1b and Q12. Realm scope and an unfenced context issue no claim SQL.
+        IDbContextTransaction began;
         try
         {
+            using (CharacterWriteClaim.Use([.. request.Participants.Select(p => p.Before.Id)], CharacterClaimRequirement.HeldByAnyLiveWorker))
+            {
+                began = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (CharacterClaimRejectedException)
+        {
+            return EconomyCommitResult.Conflict; // the state the request was built from is no longer the live one; nothing was read or written
+        }
+
+        await using var transaction = began;
+        try
+        {
+            // A clustered node that holds the economy lease proves, in this transaction, that nobody took the scope over; a former holder is refused before anything is read or written.
+            if (leaseFences?.FenceFor(RealmAuthorityScopes.Economy) is { } fence)
+            {
+                await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            }
+
             string key = request.OperationId.ToString("D");
             if (await db.Set<EconomyOperationRow>().AsNoTracking().AnyAsync(r => r.Id == key, cancellationToken).ConfigureAwait(false))
             {

@@ -13,6 +13,39 @@ public sealed partial class GmAuditFeature
     private readonly Dictionary<int, GmTicketRecord> _tickets = [];
     private readonly Dictionary<int, (long WindowStart, int Count)> _ticketPacketWindows = [];
     private int _lastTicketId;
+
+    /// <summary>
+    /// Durable block allocator for the <c>"gm_ticket"</c> scope. Set by the host before the world starts when several workers share one
+    /// characters database; null keeps the counter seeded from the highest stored id (Realm mode).
+    /// </summary>
+    public DurableIdBlockAllocator? TicketIdAllocator { get; set; }
+
+    /// <summary>When true (Worker mode) a ticket id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    /// <summary>The next ticket id; call with <c>_gate</c> held (the allocator never blocks on I/O).</summary>
+    private int NextTicketId()
+    {
+        if (TicketIdAllocator is { } allocator)
+        {
+            int allocated = allocator.NextInt32();
+            if (allocated > _lastTicketId)
+            {
+                _lastTicketId = allocated;
+            }
+
+            return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.GmTicket,
+                $"GM ticket id allocator for scope '{IdRangeScopes.GmTicket}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+
+        return ++_lastTicketId;
+    }
     private long _lastTicketChange;
 
     /// <summary>
@@ -127,7 +160,7 @@ public sealed partial class GmAuditFeature
             }
 
             long now = NowUnixSeconds;
-            ticket = new GmTicketRecord(++_lastTicketId, characterId, text, category, mapId, x, y, z, now, now, GmTicketStatus.Open, string.Empty, string.Empty, 0);
+            ticket = new GmTicketRecord(NextTicketId(), characterId, text, category, mapId, x, y, z, now, now, GmTicketStatus.Open, string.Empty, string.Empty, 0);
             _tickets[ticket.Id] = ticket;
         }
 

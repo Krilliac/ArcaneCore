@@ -20,7 +20,7 @@ namespace ArcaneCore.Realm.Net;
 
 /// <summary>
 /// Handles one logon connection: the SRP6 challenge/proof exchange and the realm-list
-/// reply. Drives the command loop documented in docs/M1_ACCEPTANCE.md.
+/// reply. Drives the command loop checked by the logon steps in docs/guide/client-acceptance.md.
 ///
 /// Flow and packet shapes verified against vmangos src/realmd/AuthSocket.cpp; the
 /// auto-create-on-login behavior follows WCell Services/WCell.AuthServer/Authentication.cs.
@@ -265,7 +265,7 @@ public sealed class LogonSession(
             }
             catch (ResilienceException ex)
             {
-                FaultLedger.Shared.Record("logon.resilience", ex);
+                FaultLedger.Shared.Record(LogonFaults.ResilienceSite, ex);
                 AnomalyLedger.Shared.Report("logon", "resilience-rejected", "logon-session", ex.Message, AnomalySeverity.Warning);
                 await RefuseDatabaseUnavailableAsync(command, ex, cancellationToken).ConfigureAwait(false);
                 return;
@@ -276,7 +276,7 @@ public sealed class LogonSession(
             }
             catch (Exception ex)
             {
-                FaultLedger.Shared.Record("logon.session", ex);
+                FaultLedger.Shared.Record(LogonFaults.SessionSite, ex);
                 AnomalyLedger.Shared.Report("logon", "session-fault", "logon-session", ex.GetType().Name, AnomalySeverity.Error);
                 RecordSessionFault(command, ex);
                 throw;
@@ -307,7 +307,7 @@ public sealed class LogonSession(
     {
         string stage = DescribeStage(command);
         string category = ClassifyFaultCategory(exception);
-        string site = $"logon/{stage}/{category}";
+        string site = LogonFaults.SessionFaultSite(stage, category);
         FaultRecording recording = FaultLedger.Shared.Record(site, exception);
         string stack = CondensedStack(site, exception);
         TagFaultContext(exception, recording.Id, stage, command, stack);
@@ -374,17 +374,17 @@ public sealed class LogonSession(
         {
             if (!exception.Data.IsReadOnly)
             {
-                exception.Data["arcanecore.logon.recorded"] = faultId;
-                exception.Data["arcanecore.logon.stage"] = stage;
-                exception.Data["arcanecore.logon.opcode"] = $"0x{_inboundCommand:X2}/{command}";
-                exception.Data["arcanecore.logon.endpoint"] = remoteEndpoint;
-                exception.Data["arcanecore.logon.stack"] = stack;
+                exception.Data[LogonFaults.RecordedKey] = faultId;
+                exception.Data[LogonFaults.StageKey] = stage;
+                exception.Data[LogonFaults.OpcodeKey] = $"0x{_inboundCommand:X2}/{command}";
+                exception.Data[LogonFaults.EndpointKey] = remoteEndpoint;
+                exception.Data[LogonFaults.StackKey] = stack;
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Fault metadata tagging must never mask the original exception.
-            FaultLedger.Shared.Record("logon/tag-fault-context", ex);
+            FaultLedger.Shared.Record(LogonFaults.TagFaultContextSite, ex);
         }
     }
 
@@ -397,7 +397,7 @@ public sealed class LogonSession(
     private async Task RefuseDatabaseUnavailableAsync(AuthCommand command, ResilienceException reason, CancellationToken cancellationToken)
     {
         string stage = DescribeStage(command);
-        string site = $"logon/{stage}/resilience";
+        string site = LogonFaults.SessionFaultSite(stage, "resilience");
         FaultRecording recording = FaultLedger.Shared.Record(site, reason);
         string stack = CondensedStack(site, reason);
         TagFaultContext(reason, recording.Id, stage, command, stack);
@@ -1020,7 +1020,7 @@ public sealed class LogonSession(
             }
             catch (FormatException ex)
             {
-                FaultRecording recording = FaultLedger.Shared.Record("logon/verify-version/format", ex);
+                FaultRecording recording = FaultLedger.Shared.Record(LogonFaults.VerifyVersionFormatSite, ex);
                 logger.LogWarning(
                     "[{Endpoint}] malformed IntegrityHashes hex for build {Build} {Os}/{Platform} (faultId={FaultId}); skipping entry",
                     remoteEndpoint,

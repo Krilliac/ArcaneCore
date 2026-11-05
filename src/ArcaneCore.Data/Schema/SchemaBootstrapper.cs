@@ -78,6 +78,12 @@ public sealed class SchemaDefinition
     public IReadOnlyList<EnsureRowChange> ModelSeedDeclarations { get; init; } = [];
 
     /// <summary>
+    /// Columns that steps outside a truncated step prefix add. The model's seed rows carry null for them, so model-differ validation
+    /// accepts a null for these columns exactly as it does for columns that <see cref="Steps"/> add. Metadata only: nothing is added.
+    /// </summary>
+    public IReadOnlyList<AddColumnChange> ModelColumnDeclarations { get; init; } = [];
+
+    /// <summary>
     /// Other development lines whose databases this build migrates to its own numbering once (the Codex line before
     /// the 2026-10-07 merge, <see cref="CodexLine"/>); empty for a component no other line renumbered.
     /// </summary>
@@ -563,16 +569,8 @@ public static class SchemaBootstrapper
     }
 
     /// <summary>The recorded version without the side effects of <see cref="TryReadVersionAsync"/> (it writes nothing); null without a row.</summary>
-    private static async Task<int?> ReadRecordedVersionAsync(DbContext db, SchemaDefinition definition, CancellationToken ct)
-    {
-        if (!await SchemaCatalog.TableExistsAsync(db, definition.VersionTable, ct).ConfigureAwait(false))
-        {
-            return null;
-        }
-
-        SchemaVersionRow? row = await db.Set<SchemaVersionRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, ct).ConfigureAwait(false);
-        return row?.Version;
-    }
+    private static Task<int?> ReadRecordedVersionAsync(DbContext db, SchemaDefinition definition, CancellationToken ct)
+        => SchemaVersionReader.ReadAsync(db, definition, ct);
 
     private static async Task<int?> TryReadVersionAsync(DbContext db, SchemaDefinition definition, CancellationToken ct)
     {

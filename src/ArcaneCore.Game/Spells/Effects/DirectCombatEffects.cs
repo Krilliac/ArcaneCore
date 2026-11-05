@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -75,7 +76,7 @@ public sealed class DirectCombatEffects : ISpellHandlerModule
             heal *= (100.0f + positive) / 100.0f;
         }
 
-        uint amount = Dither(system, heal);
+        uint amount = SpellRounding.DitherUnsignedDouble(heal, system.Random);
         if (amount > 0)
         {
             system.DeliverHeal(context, amount);
@@ -129,18 +130,5 @@ public sealed class DirectCombatEffects : ISpellHandlerModule
         }
 
         return false;
-    }
-
-    /// <summary>vmangos rand_ditheru: round down or up with probability equal to the fraction.</summary>
-    private static uint Dither(SpellSystem system, float value)
-    {
-        if (value <= 0f)
-        {
-            return 0;
-        }
-
-        uint whole = (uint)value;
-        float fraction = value - whole;
-        return fraction > 0f && system.Random.NextDouble() < fraction ? whole + 1 : whole;
     }
 }

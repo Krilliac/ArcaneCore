@@ -375,6 +375,27 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     private static readonly ConditionalWeakTable<Player, TravelJourney> Journeys = [];
 
+    /// <summary>After a plan that found no route, the same destination is not planned again for this long (<see cref="TryBegin(WorldSession, Player, uint, Vector3, out string?, out TravelRoute?)"/>).</summary>
+    internal const uint JourneyPlanCooldownMs = 10_000;
+
+    /// <summary>The side (yards) of the square a goal counts as the same destination in for the cooldown.</summary>
+    private const float CooldownCellYards = 64f;
+
+    private const int MaxCooldowns = 16;
+
+    /// <summary>Per bot, the destinations (map and 64-yard cell) a plan found no route to, and until when they are not planned again.</summary>
+    private static readonly ConditionalWeakTable<Player, Dictionary<(uint Map, int X, int Y), uint>> PlanCooldowns = [];
+
+    private static (uint, int, int) CooldownKey(TravelPlace goal)
+        => (goal.MapId, (int)MathF.Floor(goal.Position.X / CooldownCellYards), (int)MathF.Floor(goal.Position.Y / CooldownCellYards));
+
+    /// <summary>Forget the bot's no-route cooldowns (the GM command plans at once, whatever happened before).</summary>
+    internal static void ClearPlanCooldown(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (PlanCooldowns.TryGetValue(player, out Dictionary<(uint Map, int X, int Y), uint>? cooldowns)) cooldowns.Clear();
+    }
+
     // The ship routes CanReachStatic answers from: the classic routes of the transport system a journey last saw, an array of immutable
     // records written once per system (Volatile.Write) and never changed after; readers take it with Volatile.Read.
     private static readonly ConditionalWeakTable<TransportSystem, object> Published = [];
@@ -432,13 +453,25 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             return Refuse(out why, "a travel leg is under way");
         }
 
+        // After a plan that found no route the same destination is not planned for JourneyPlanCooldownMs: a bot that cannot get there (the water of
+        // Teldrassil, a dock that failed) would otherwise search the whole graph at every think. Other destinations are planned as ever.
+        uint now = session.World.NowMs;
+        Dictionary<(uint Map, int X, int Y), uint> cooldowns = PlanCooldowns.GetValue(player, static _ => []);
+        (uint, int, int) cell = CooldownKey(goal);
+        if (cooldowns.TryGetValue(cell, out uint until) && unchecked((int)(until - now)) > 0)
+            return Refuse(out why, string.Create(CultureInfo.InvariantCulture, $"journey planning to this destination is cooling down ({unchecked(until - now)} ms left)"));
         TravelFacts facts = BuildFacts(session, player, _options, ShipRoutes(session.World), null);
         TravelPlace here = TravelPlace.Of(player);
         if (PlayerbotTravelPlanner.Plan(facts, here, goal) is not { } planned)
+        {
+            if (cooldowns.Count >= MaxCooldowns) cooldowns.Clear();
+            cooldowns[cell] = unchecked(now + JourneyPlanCooldownMs);
             return Refuse(out why, $"no route from map {here.MapId} to map {toMap} by the bot's own means");
+        }
+
         PublishStaticRoutes(session.World);
+        cooldowns.Remove(cell);
         if (planned.Legs.Count == 0) return true; // already there
-        uint now = session.World.NowMs;
         Journeys.AddOrUpdate(player, new TravelJourney(goal, planned, now, DeadlineOf(planned, now), ShipRoutes));
         route = planned;
         return true;
@@ -513,7 +546,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// (<see cref="PlayerbotPortalBoard.Offers"/>); both empty with <see cref="PlayerbotTravelOptions.MageService"/> off.</item>
     /// <item>The ships of <paramref name="allShips"/> the bot may ride (<see cref="PlayerbotShipNetwork.Filter"/>: faction and the Boats and
     /// Zeppelins switches), less a route one of whose docks is backed off for the bot (<see cref="PlayerbotShip.IsBackedOff"/>).</item>
-    /// <item>Walkable: the same map, and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
+    /// <item>Walkable: the same map, not separated by the water of Teldrassil (<c>SeparatedByWater</c>, #1466), and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
     /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
     /// failure then replans. The goal reads its tile at once (<see cref="BlockingLocates"/>), so a goal on a tile not read yet is placed.
@@ -629,10 +662,14 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// </summary>
     internal const int BlockingLocates = 1;
 
+    /// <summary>Water between the two places that no walk crosses (Teldrassil on map 1), whatever the mesh has loaded (#1466).</summary>
+    private static bool Separated(TravelPlace a, TravelPlace b)
+        => Population.PopulationTownProgression.SeparatedByWater(a.MapId, a.Position.X, a.Position.Y, b.MapId, b.Position.X, b.Position.Y);
+
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
-    private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
+    internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
     {
-        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
+        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId && !Separated(a, b);
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
         int blocking = 0;
         var self = new TravelPlace(player.MapId, new Vector3(player.X, player.Y, player.Z));
@@ -662,7 +699,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
         return (a, b) =>
         {
-            if (a.MapId != b.MapId) return false;
+            if (a.MapId != b.MapId || Separated(a, b)) return false;
             (int ca, bool da) = Locate(a);
             (int cb, bool db) = Locate(b);
             return !da || !db || ca == cb;
@@ -1230,6 +1267,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             return StepResult.Failed;
         }
 
+        // Walking into this volume is the errand: it is not held back as a portal beside the landing (PlayerbotAreaTriggers.Want).
+        PlayerbotAreaTriggers.Want(player, leg.TriggerId, now);
         switch (journey.Walk.Step(session, player, options, leg.From.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
         {
             case JourneyWalk.Outcome.Yield:

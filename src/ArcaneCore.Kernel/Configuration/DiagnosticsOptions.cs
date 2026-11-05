@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// the process behaving as the .NET runtime would without this section, except that each event is
 /// now written to the log first. Read once when the daemon starts; none of these keys is live.
 /// </summary>
-[ConfigDaemons(ConfigDaemon.Both)]
+[ConfigDaemons(ConfigDaemon.Both | ConfigDaemon.Gateway)]
 public sealed class DiagnosticsOptions
 {
     public const string SectionName = "Diagnostics";
@@ -164,12 +164,14 @@ public sealed class CrashDumpOptions
     /// How many of this feature's dump files are kept in the directory: after a dump is written the oldest beyond this count are deleted. Only files
     /// named by the pattern above are touched. 0 keeps every file. Default 5.
     /// </summary>
+    [ConfigAllowed("a whole number, 0 or more; 0 keeps every file")]
     public int MaxFiles { get; set; } = 5;
 
     /// <summary>
     /// Free space, in GiB, the dump volume must have for a Full dump; below it Full falls back to Heap. Default 16, the launcher's threshold
     /// (<c>tools/ops/live/LiveDiagnostics.ps1</c>). 0 never falls back for space.
     /// </summary>
+    [ConfigAllowed("a whole number of GiB, 0 or more; 0 never falls back for space")]
     public int FullMinFreeGB { get; set; } = 16;
 
     /// <summary>
@@ -180,6 +182,7 @@ public sealed class CrashDumpOptions
     /// While it dumps the daemon publishes the heartbeat state <c>dumping</c>, which supervisors honour for a grace of this long plus a margin.
     /// Default 120.
     /// </summary>
+    [ConfigAllowed("a whole number of seconds, 1 or more (a lower value is raised to 1)")]
     public int TimeoutSeconds { get; set; } = 120;
 }
 

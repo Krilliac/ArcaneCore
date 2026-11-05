@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,10 @@ public sealed class ClusterTransferDecisionRow
     public string SourceIncarnation { get; set; } = string.Empty;
     public long? TargetEpoch { get; set; }
     public string? TargetIncarnation { get; set; }
+
+    /// <summary>The ownership scope the target claims under (<c>worker:&lt;shard&gt;</c>); null means <see cref="SourceScope"/> (mapped by <see cref="ClusterTransferTargetScopeDataModule"/>).</summary>
+    public string? TargetScope { get; set; }
+
     public string? Bundle { get; set; }
     public string? AbortReason { get; set; }
     public long UpdatedAtUtcMs { get; set; }
@@ -54,6 +59,9 @@ public sealed class ClusterWorldHandoffRow
 
     /// <summary><see cref="ClusterTransferDataModule.OpenHandoffKey"/> while the handoff is unresolved, null after; unique, so only one handoff is open at a time.</summary>
     public string? OpenKey { get; set; }
+
+    /// <summary>The ownership scope this handoff moves while it is unresolved (<c>world</c> or <c>worker:&lt;shard&gt;</c>), null after; unique, so one handoff is open per scope (<see cref="ClusterHandoffScopeDataModule"/>, schema 73). Null on a handoff opened before that schema: those are always <c>world</c> handoffs.</summary>
+    public string? OpenScope { get; set; }
 
     public string SourceWorker { get; set; } = string.Empty;
     public string TargetWorker { get; set; } = string.Empty;
@@ -174,8 +182,10 @@ public sealed class ClusterTransferDataModule : IDataModule, ICharacterDataClean
     /// <summary>
     /// Refuses to delete a character while a transfer of it is unresolved (its <see cref="ClusterTransferOwnerRow.ActiveTransfer"/>
     /// claim is held, or a decision is still pre-commit or committed): the transfer would otherwise resume, roll forward or abort onto a
-    /// character that no longer exists. Otherwise removes its ownership token and its (resolved) transfer decisions. A player character's
-    /// guid is its id (high part 0), which is how the transfer rows key it.
+    /// character that no longer exists. In Worker fencing scope it also refuses while a live worker holds the character's claim (the character is online
+    /// there, so a delete from anywhere else would race its saves; design _wf/writer-lock-DESIGN.md section 2(a), "deletion claim check"); a claim whose owner is
+    /// dead does not block. Otherwise removes its ownership token and its (resolved) transfer decisions. A player character's guid is its id (high part 0), which is
+    /// how the transfer rows key it.
     /// </summary>
     public async Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
     {
@@ -189,6 +199,15 @@ public sealed class ClusterTransferDataModule : IDataModule, ICharacterDataClean
                 .ConfigureAwait(false);
         if (unresolved)
             throw new CharacterDeletionRefusedException($"character {characterId} has a cluster transfer in flight");
+
+        // A worker-shard claim is live while its owner's ownership row is active under the claim's incarnation. The 'world' scope has no per-character claim to honour.
+        string workerPrefix = CharacterOwnershipScopes.WorkerPrefix;
+        bool claimedLive = await (from claim in db.Set<ClusterTransferOwnerRow>()
+                                  join owner in db.Set<CharacterOwnershipRow>() on claim.Scope equals owner.Scope
+                                  where claim.CharacterGuid == guid && claim.Scope.StartsWith(workerPrefix) && owner.Active && owner.OwnerIncarnation == claim.Incarnation
+                                  select claim.CharacterGuid).AnyAsync(cancellationToken).ConfigureAwait(false);
+        if (claimedLive)
+            throw new CharacterDeletionRefusedException($"character {characterId} is claimed by a live worker (it is online there)");
 
         await db.Set<ClusterTransferDecisionRow>().Where(r => r.CharacterGuid == guid).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ClusterTransferOwnerRow>().Where(r => r.CharacterGuid == guid).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

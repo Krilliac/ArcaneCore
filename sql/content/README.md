@@ -16,6 +16,8 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 | `world/<provider>/0001_undercity_siege.sql` | 54 | game event 900 "Bot scenario: Undercity siege" and its `game_event_playerbot_*` rows ([bot event scenarios](../../docs/areas/playbots-scenarios-events.md)) |
 | `world/<provider>/0002_holiday_flavour.sql` | 62 | the `holiday_flavour` rows: how bots tell each festival, keyed by holiday id (also seeded into an empty table at world start; this file resets or edits them) ([world events](../../docs/areas/playbots-social.md)) |
 | `world/<provider>/0003_tuning_tables.sql` | 63 | the shipped rows of the tuning tables: auction bot value and loot matrices, bot ship routes, lift regions and the Deeprun Tram ([tuning tables](../../docs/areas/tuning-tables.md)); the world also seeds an empty table with the same rows at start |
+| `world/<provider>/0004_item_enchant_procs.sql` | 33 | the `spell_proc_item_enchant` PPM rows of Frostbrand, Fiery Weapon, Lifestealing and Icy Chill, as mangos-classic ships them ([crafting](../../docs/areas/crafting.md)) |
+| `world/<provider>/0005_spell_enchant_charges.sql` | 35 | the 19 `spell_enchant_charges` rows (poison and temporary enchant charges) of the vmangos migration `20180830022134_world.sql` ([crafting](../../docs/areas/crafting.md)) |
 
 ## Rules every content file follows
 
@@ -29,7 +31,7 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 - **A custom id range.** Game events 900 to 999 are reserved for shipped bot scenarios. The file deletes and recreates the `game_event` row
   of its id, so check an imported `game_event` table for a row of that number you want to keep before installing.
 - **A test applies it** to a clean SQLite world database twice and compares the rows (`GameEventPlayerbotDataTests`), and the World.Tests
-  project (`EventScenarioFeatureWiringTests`) loads the shipped SQLite file and validates the scenario it describes.
+  project (`EventScenarioFeatureWiringTests`) loads the shipped SQLite file and validates the scenario it describes. `EnchantSeedContentTests` applies files 0004 and 0005 twice on every available provider and compares the rows.
 
 ## Applying a file
 

@@ -19,6 +19,19 @@ namespace ArcaneCore.World.Tests.Playerbots;
 
 public sealed class PlayerbotExploreTests
 {
+
+    /// <summary>
+    /// One Explore think on a frozen think clock: the atlas find's 4 ms slice and the 15 ms optional budget never run out, so the find
+    /// judges every spawn in the first think whatever the load (the same pin as the explore stall fix tests).
+    /// </summary>
+    private static void ExploreFrozen(MethodInfo explore, PlayerbotBrain brain, Player player, uint elapsedMs)
+    {
+        var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
+        probe.Begin();
+        try { explore.Invoke(brain, [player, elapsedMs]); }
+        finally { probe.End(); }
+    }
+
     [Fact]
     public async Task NoQuestWork_ExploresTowardRightLevelSpawnsInsteadOfLowLevelSpawns()
     {
@@ -45,8 +58,7 @@ public sealed class PlayerbotExploreTests
                 Player player = session.Player!;
                 player.Level = 8;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .Invoke(brain, [player, 500u]);
+                ExploreFrozen(typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!, brain, player, 500u);
                 var route = (PlayerbotRoute?)typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!
                     .GetValue(brain);
                 Assert.NotNull(route);
@@ -131,7 +143,7 @@ public sealed class PlayerbotExploreTests
                 MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 FieldInfo route = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 Assert.True(((PlayerbotRoute)route.GetValue(brain)!).Points.Last().X > startX);
                 if (stalled)
                     brain.GiveUpStalledGoal(player, shareable: false);
@@ -142,7 +154,7 @@ public sealed class PlayerbotExploreTests
                     route.SetValue(brain, null);
                 }
                 session.ManagedBudget = new ManagedActionBudget(1);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 var chosen = (PlayerbotExploreAtlas.Candidate?)typeof(PlayerbotBrain)
                     .GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain);
                 Assert.Equal(2u, chosen!.Value.Spawn.Guid);
@@ -186,8 +198,7 @@ public sealed class PlayerbotExploreTests
                 Player player = session.Player!;
                 player.Level = 8;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .Invoke(brain, [player, 500u]);
+                ExploreFrozen(typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!, brain, player, 500u);
                 var chosen = (PlayerbotExploreAtlas.Candidate?)typeof(PlayerbotBrain)
                     .GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain);
                 Assert.Equal(99102u, chosen!.Value.Spawn.Entry);
@@ -236,8 +247,7 @@ public sealed class PlayerbotExploreTests
                 WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor());
                 session.Player!.Level = 8;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .Invoke(brain, [session.Player, 500u]);
+                ExploreFrozen(typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!, brain, session.Player, 500u);
                 var chosen = (PlayerbotExploreAtlas.Candidate?)typeof(PlayerbotBrain)
                     .GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain);
                 if (safeAvailable)
@@ -292,7 +302,7 @@ public sealed class PlayerbotExploreTests
                 FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 FieldInfo siteField = typeof(PlayerbotBrain).GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 object? route = routeField.GetValue(brain);
                 Assert.NotNull(route);
                 Assert.NotNull(siteField.GetValue(brain));
@@ -310,7 +320,7 @@ public sealed class PlayerbotExploreTests
                     movement.Flags |= reason == "root" ? MovementFlags.Root : MovementFlags.Jumping;
                     player.ApplyMovement(movement, host.World.NowMs);
                 }
-                explore.Invoke(brain, [player, reason == "elapsed" ? 0u : 500u]);
+                ExploreFrozen(explore, brain, player, reason == "elapsed" ? 0u : 500u);
                 Assert.Same(route, routeField.GetValue(brain));
                 Assert.NotNull(siteField.GetValue(brain));
                 return true;
@@ -346,11 +356,11 @@ public sealed class PlayerbotExploreTests
                 MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 FieldInfo site = typeof(PlayerbotBrain).GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!;
                 session.ManagedBudget = new ManagedActionBudget(1);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 Assert.Equal(1u, ((PlayerbotExploreAtlas.Candidate?)site.GetValue(brain))!.Value.Spawn.Guid);
                 player.SetPosition(startX - 400, y, z, player.Orientation);
                 session.ManagedBudget = new ManagedActionBudget(1);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 Assert.Equal(2u, ((PlayerbotExploreAtlas.Candidate?)site.GetValue(brain))!.Value.Spawn.Guid);
                 return true;
             });
@@ -476,7 +486,7 @@ public sealed class PlayerbotExploreTests
                 for (int think = 0; think < 6; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(2);
-                    explore.Invoke(brain, [player, 500u]);
+                    ExploreFrozen(explore, brain, player, 500u);
                     if (routeField.GetValue(brain) is PlayerbotRoute valid && valid.Points[^1].X < 95f)
                     {
                         walkedAway = true;
@@ -523,7 +533,7 @@ public sealed class PlayerbotExploreTests
                 for (int think = 0; think < 4 && walked is null; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(2);
-                    explore.Invoke(brain, [player, 500u]);
+                    ExploreFrozen(explore, brain, player, 500u);
                     if (routeField.GetValue(brain) is PlayerbotRoute route
                         && Vector2.Distance(new(origin.X, origin.Y), new(route.Points[^1].X, route.Points[^1].Y))
                             >= PlayerbotStallWatch.ProgressYards)
@@ -564,18 +574,18 @@ public sealed class PlayerbotExploreTests
                 MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
                 session.ManagedBudget = new ManagedActionBudget(2);
-                explore.Invoke(brain, [player, 500u]); // 48-yard ray, refused: the mesh stops 36 yards short
+                ExploreFrozen(explore, brain, player, 500u); // 48-yard ray, refused: the mesh stops 36 yards short
                 Assert.DoesNotContain(paths.Ends, IsShortenedRay);
 
                 options.MoveSpeed = 0f; // the shortened route is planned, then TryAdvance refuses it (no speed)
                 session.ManagedBudget = new ManagedActionBudget(2);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 Vector3 failed = Assert.Single(paths.Ends, IsShortenedRay);
                 options.MoveSpeed = 7f;
 
                 int before = paths.Ends.Count;
                 session.ManagedBudget = new ManagedActionBudget(2);
-                explore.Invoke(brain, [player, 500u]);
+                ExploreFrozen(explore, brain, player, 500u);
                 Vector3 next = paths.Ends.Skip(before).First(end => RayYards(end) > 10f);
                 Assert.True(IsShortenedRay(next),
                     $"the leg after a failed walk must stay shortened, not go back to a 48-yard ray ({RayYards(next):F1} yd)");
@@ -620,7 +630,7 @@ public sealed class PlayerbotExploreTests
                 for (int think = 0; think < 6 && walked is null; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(2);
-                    explore.Invoke(brain, [player, 500u]);
+                    ExploreFrozen(explore, brain, player, 500u);
                     if (routeField.GetValue(brain) is PlayerbotRoute route) walked = route;
                 }
 
@@ -713,7 +723,7 @@ public sealed class PlayerbotExploreTests
                 for (int think = 0; think < 8 && walked is null; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(2);
-                    explore.Invoke(brain, [player, 500u]);
+                    ExploreFrozen(explore, brain, player, 500u);
                     if (routeField.GetValue(brain) is PlayerbotRoute route && route.Points[^1].X > 120f) walked = route;
                 }
 

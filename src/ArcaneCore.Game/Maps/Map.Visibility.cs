@@ -538,9 +538,44 @@ public sealed partial class Map
         }
     }
 
+    private readonly HashSet<(long Viewer, long Target)> _pairsEvaluated = [];
+    private bool _pairDedupeActive;
+
+    /// <summary>Cumulative viewer/target evaluations (<see cref="UpdateVisibilityOf"/>), repeats included; a work counter for tests and diagnostics; map thread.</summary>
+    internal long VisibilityPairEvaluations { get; private set; }
+
+    /// <summary>Cumulative ordered-pair repeats inside one Output stage that were skipped instead of re-evaluated; map thread.</summary>
+    internal long VisibilityPairDuplicatesSkipped { get; private set; }
+
+    /// <summary>Starts recording evaluated ordered pairs for the visibility passes of one Output stage. Map thread.</summary>
+    private void BeginVisibilityPairStage()
+    {
+        _pairsEvaluated.Clear();
+        _pairDedupeActive = true;
+    }
+
+    /// <summary>Ends the Output stage's pair record, so evaluations outside a stage (joins, forced refreshes) always run. Map thread.</summary>
+    private void EndVisibilityPairStage()
+    {
+        _pairDedupeActive = false;
+        _pairsEvaluated.Clear();
+    }
+
     /// <summary>vmangos Player::UpdateVisibilityOf: create on entering range, out-of-range on leaving.</summary>
     private void UpdateVisibilityOf(Player viewer, WorldObject target)
     {
+        // Inside one Output stage nothing moves and every rule is a pure function of viewer, target and the visible list, which
+        // the first evaluation leaves converged (a create or removal makes the next answer the same). So an ordered pair seen
+        // twice in the stage (both players moved: A's pass runs A-B and B-A, then B's pass runs both again) gives no change the
+        // second time. Per ordered pair, never unordered: stealth, ghost and GM rules are asymmetric. A detection pass
+        // (_detecting) answers differently from a movement pass and is never folded into one.
+        VisibilityPairEvaluations++;
+        if (_pairDedupeActive && !_detecting && !_pairsEvaluated.Add((viewer.MapSequence, target.MapSequence)))
+        {
+            VisibilityPairDuplicatesSkipped++;
+            return;
+        }
+
         bool inVisibleList = viewer.VisibleObjects.Contains(target.Guid);
 
         // vmangos Player::UpdateVisibilityOf(viewPoint, target): distance from the camera, and the camera's own body is always in range.

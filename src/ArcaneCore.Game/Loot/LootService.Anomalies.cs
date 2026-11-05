@@ -147,7 +147,7 @@ public sealed partial class LootService
     }
 
     private bool ConditionPasses(Player player, uint conditionId)
-        => conditionId == 0 || Conditions?.Invoke(player, conditionId) == true;
+        => conditionId == 0 || Conditions?.Invoke(player, null, conditionId) == true;
 
     /// <summary>The row's item is known and some recipient passes its condition (and, for a quest row, needs the item).</summary>
     private bool CanYield(LootStoreRow row, IReadOnlyList<Player> recipients)
@@ -271,7 +271,7 @@ public sealed partial class LootService
             if (fault == WindowFault.SourceGone)
             {
                 AnomalyLedger.Shared.Report(AnomalySubsystem, WindowLeftOpenCode, SubjectOf(bag),
-                    string.Create(CultureInfo.InvariantCulture, $"{player.Name} (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
+                    string.Create(CultureInfo.InvariantCulture, $"player (guid {player.Guid.Low}) still had the loot window open after its source was gone; released"));
             }
 
             // A looter who died or is out of reach (it died with the window open, a same-map teleport, a pickpocket target that walked off)

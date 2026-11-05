@@ -164,6 +164,17 @@ public static partial class DbUpgradeCli
             }
         }
 
+        /// <summary>
+        /// Whether the lock of the (valid) worker shard is held. A SQLite shard sidecar that does not exist means no worker ever took the lock, so the preflight reports it free without
+        /// creating the file (<see cref="CharacterDatabaseWriterLock.ProbeShardFree"/> opens with OpenOrCreate, which would leave a sidecar next to a database this read-only check only reads).
+        /// </summary>
+        private static bool ShardLockHeldWithoutCreating(DatabaseConnectionOptions options, string shard)
+        {
+            if (options.Provider == DatabaseProvider.Sqlite && (CharacterDatabaseWriterLock.ShardLockPathFor(options, shard) is not { } path || !File.Exists(path)))
+                return false;
+            return !CharacterDatabaseWriterLock.ProbeShardFree(options, shard);
+        }
+
         /// <summary>Components commit one by one: after a later one fails the earlier ones stay in the target, and a re-run needs <c>--replace</c>.</summary>
         private static string CommittedNote(IReadOnlyList<string> committed)
             => $"error: already committed before this failure: {string.Join(", ", committed)}. Their rows stay in the target, so the target is no longer empty; run the copy again with --replace.";
@@ -196,7 +207,7 @@ public static partial class DbUpgradeCli
             }
         }
 
-        private CopyEnd ResolveCopyEnd(Spec spec, DbUpgradeArguments a, bool isSource)
+        private CopyEnd ResolveCopyEnd(Spec spec, DbUpgradeArguments a, bool isSource, bool readOnlyTarget = false)
         {
             string role = isSource ? "source" : "target";
             string? connectionString = a.Value($"--{role}-connection");
@@ -243,7 +254,7 @@ public static partial class DbUpgradeCli
                 _secrets = [.. _secrets, connectionString];
             }
 
-            DatabaseConnectionOptions prepared = Prepare(resolved, readOnly: isSource, $"{spec.Name} {role}");
+            DatabaseConnectionOptions prepared = Prepare(resolved, readOnly: isSource || readOnlyTarget, $"{spec.Name} {role}");
             Spec named = spec with { Name = $"{spec.Name} {role}" };
             return new CopyEnd(resolved, new Target(named, prepared, Describe(prepared)));
         }
@@ -323,6 +334,33 @@ public static partial class DbUpgradeCli
                     && await ServerProbe.CountOtherSessionsAsync(sdb, ct).ConfigureAwait(false) is int sessions and > 0)
                 {
                     refusals.Add($"{spec.Name}: {sessions} other session(s) are connected to the source database; stop every ArcaneCore daemon first (or pass --allow-active-sessions)");
+                }
+
+                if (spec.Component == DatabaseComponent.Characters)
+                {
+                    // Worker fencing scope (design _wf/writer-lock-DESIGN.md, step C8): several workers write this database, each under its own shard lock, and the realm lock above does not
+                    // cover them. An active ownership row or a held shard lock means a world is (or may still be) writing: the copy would race it.
+                    await foreach (object?[] row in SchemaCatalog.RowsAsync(sdb, $"SELECT scope, active FROM {CharacterOwnershipDataModule.Table}", ct).ConfigureAwait(false))
+                    {
+                        string scope = Convert.ToString(row[0], CultureInfo.InvariantCulture) ?? string.Empty;
+                        if (Convert.ToBoolean(row[1], CultureInfo.InvariantCulture))
+                        {
+                            refusals.Add($"{spec.Name}: the ownership scope '{scope}' of the source is active: a world process owns the characters database; stop it first (a crashed world leaves its row active until the next start of that scope releases it)");
+                        }
+                        else if (CharacterOwnershipScopes.IsWorker(scope))
+                        {
+                            string shard = scope[CharacterOwnershipScopes.WorkerPrefix.Length..];
+                            if (!CharacterDatabaseWriterLock.IsValidShardId(shard))
+                            {
+                                // As WorldWriterGuard.ProbeShardFree: a scope that is not a usable shard id cannot be probed, and the copy cannot prove no worker holds it.
+                                refusals.Add($"{spec.Name}: the ownership scope '{scope}' of the source is not a valid worker shard id, so its shard lock cannot be checked; fix or remove that row first");
+                            }
+                            else if (ShardLockHeldWithoutCreating(source.Resolved, shard))
+                            {
+                                refusals.Add($"{spec.Name}: the shard lock of '{scope}' is held: a worker process is running on the source characters database; stop it first");
+                            }
+                        }
+                    }
                 }
 
                 return 0;

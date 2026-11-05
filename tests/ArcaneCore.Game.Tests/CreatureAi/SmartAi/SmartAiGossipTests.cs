@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Npc;
@@ -40,11 +41,11 @@ public sealed class SmartAiGossipTests
     {
         private readonly SmartRig _rig;
 
-        public Rig(IEnumerable<SmartScriptRow> rows)
+        public Rig(IEnumerable<SmartScriptRow> rows, NpcFlags flags = NpcFlags.Gossip)
         {
             _rig = SmartRig.Start(rows);
             Creature wolf = _rig.Wolf;
-            Npc = new NpcInfo(wolf.Guid, wolf.Entry, 1, NpcFlags.Gossip, _rig.Map.MapId, _rig.Player.X + 1, _rig.Player.Y, _rig.Player.Z, 0.5f, true, false, false, false, MenuId);
+            Npc = new NpcInfo(wolf.Guid, wolf.Entry, 1, flags, _rig.Map.MapId, _rig.Player.X + 1, _rig.Player.Y, _rig.Player.Z, 0.5f, true, false, false, false, MenuId);
             Services = new QuestNpcServices(new QuestStore(QuestContent.Empty), new NpcStore(Content()),
                 new QuestNpcDependencies(Creatures: new Lookup(Npc)), new QuestNpcOptions(), new Sink(), () => 100, NullLogger.Instance);
             Services.CompleteLoad(Services.Track(_rig.Player), new CharacterQuestData([], []));
@@ -93,6 +94,22 @@ public sealed class SmartAiGossipTests
         rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
 
         Assert.Single(rig.Smart.Spells.Casts, c => c.Spell == HelloSpell && ReferenceEquals(c.Target, rig.Smart.Player));
+    }
+
+    [Fact]
+    public void GossipHello_OnANonBattlegroundSpiritGuide_StillRunsTheEvent64Row()
+    {
+        // A spirit-guide-flagged creature outside a battleground is an ordinary gossip NPC: only the battleground spirit guide handler
+        // (NPCHandler.cpp HandleGossipHelloOpcode) returns before the AI hook. A spirit guide is only reachable by the dead.
+        using var rig = new Rig([CreatureRow(WolfEntry, 0, SmartEvent.GossipHello, SmartAction.Cast, SmartTarget.ActionInvoker, a1: HelloSpell)],
+            NpcFlags.Gossip | NpcFlags.SpiritGuide);
+        rig.Smart.Map.Combat.DealDamage(rig.Smart.Wolf, rig.Smart.Player, rig.Smart.Player.MaxHealth, direct: false);
+        Assert.False(rig.Smart.Player.IsAlive);
+        rig.Smart.Spells.Casts.Clear();
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+
+        Assert.Single(rig.Smart.Spells.Casts, c => c.Spell == HelloSpell);
     }
 
     [Fact]

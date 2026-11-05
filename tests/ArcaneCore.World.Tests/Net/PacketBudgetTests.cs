@@ -22,7 +22,7 @@ public sealed class PacketBudgetTests
     private static async Task<(WorldTestClient Client, Task Session, CancellationTokenSource Stop, TcpListener Listener)> ConnectAsync(WorldTestHost host, NetGuard guard)
     {
         byte[] key = await host.AddAccountAsync("BUDGET");
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         var stop = new CancellationTokenSource();
         Task session = Task.Run(async () =>

@@ -128,6 +128,56 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private uint _restUntilMs;
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
+
+    /// <summary>
+    /// How long (world ms) the plan toward one explore candidate may stay <see cref="PlanOutcome.Pending"/> before Explore stops holding for it and
+    /// walks its short wander leg meanwhile (a path job's wait is bounded at <see cref="PlayerbotOptions.PathJobWaitMaxMs"/>, and a stale
+    /// answer restarts it: live 2026-10-24, bot QA #1465, bots standing at the spawns of creature 7460 until the stall watch).
+    /// </summary>
+    internal const uint ExplorePendingMaxMs = 10_000;
+
+    private uint _explorePendingSpawn;
+    private uint _explorePendingSince;
+    private uint _explorePendingLast;
+    private bool _explorePendingTraced;
+    private bool _wanderPendingTraced;
+
+    /// <summary>The most headings one wander think tries while rays end in another walking component (<see cref="WanderLegEndInOwnComponent"/>).</summary>
+    internal const int WanderComponentTries = 6;
+
+    /// <summary>Refusals within one <see cref="WanderRefusalCellYards"/> cell after which Explore takes a region-graph leg out of it.</summary>
+    internal const int WanderRegionLegRefusals = 8;
+
+    /// <summary>The side (yards) of the cells <see cref="WanderRegionLegRefusals"/> counts in.</summary>
+    internal const float WanderRefusalCellYards = 10f;
+
+    private int _wanderCellX, _wanderCellY, _wanderCellRefusals;
+    private bool _wanderCellValid;
+
+    /// <summary>Where the bot last started a wander leg that walked (the ground the region-graph leg of a boxed-in wander heads back to).</summary>
+    private System.Numerics.Vector3? _wanderGoodGround;
+    private uint _wanderGroundMap;
+    private uint _wanderGroundInstance;
+    private uint _wanderCellMap;
+    private uint _wanderCellLastMs;
+
+    /// <summary>
+    /// Test seam for the region-graph leg of a boxed-in wander (<see cref="PlayerbotNavigation.PlanRegionLeg"/> when null): plans a leg toward
+    /// <c>goal</c>. A fake graph cannot be built without navigation tiles, so the 8-refusal trigger is tested through this.
+    /// </summary>
+    internal Func<Player, System.Numerics.Vector3, (PlanOutcome Outcome, PlayerbotRoute? Route)>? WanderRegionLegPlanner { get; set; }
+
+    /// <summary>
+    /// Test seam for the walking component of a place (<see cref="PlayerbotNavigation.ComponentAt"/> when null): -1 for a place on no region.
+    /// Set before the first think; world thread.
+    /// </summary>
+    internal Func<Player, System.Numerics.Vector3, int>? WanderComponentProbe { get; set; }
+
+    /// <summary>Wander rays the component pre-check turned away from another component (tests, inspection).</summary>
+    internal int WanderComponentRotations { get; private set; }
+
+    /// <summary>Region-graph legs taken out of a boxed-in wander cell (tests, inspection).</summary>
+    internal int WanderRegionLegs { get; private set; }
     private int _exploreRefusals;
 
     /// <summary>
@@ -180,7 +230,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private Func<int, int, bool>? _exploreBlockedFilter;
     private uint _exploreSearchAfter;
     private long _exploreSearchStartedAt;
-    private int _exploreCandidateChecks;
+    private PlayerbotExploreAtlas.FindCursor? _exploreFindCursor;
+    private uint _exploreFindBegunAt;
+    private uint _exploreFindLastStepAt;
+    private int _exploreFindSlices;
+    private Func<bool>? _exploreFindOutOfBudget;
     private long _thinkStartedAt;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private PlayerbotGoalKind? _planningGoal;
@@ -209,6 +263,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private PlayerbotPvpFight Pvp => _pvpFight ??= new PlayerbotPvpFight(session, _combatSpells);
     private readonly Progression.PlayerbotCrafting _crafting = new(session, options);
     private PlayerbotOpportunities? _opportunities;
+    private PlayerbotWorldPvpObjectives? _worldPvp;
     private readonly PlayerbotRecovery _recovery = new(session, options);
     private readonly PlayerbotHomeReturn _homeReturn = new();
     private PlayerbotHomeArea? _home;
@@ -231,6 +286,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
+            _trainers.Home = value;
+            _town.Home = value;
             _crafting.Home = value;
             DropIntent();
         }
@@ -246,6 +303,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotHomeArea? active = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId ? home : null;
         _quests.Home = active;
         _destinations.Home = active;
+        _trainers.Home = active;
+        _town.Home = active;
         _crafting.Home = active;
     }
 
@@ -314,6 +373,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
 
+    /// <summary>
+    /// The diagnostic snapshot taken at the start of <see cref="GiveUpStalledGoal"/>, before the give-up stops the bot and the same think plans a
+    /// new leg (a snapshot taken after read <c>moving:yes</c> for a bot that had stood still). The feature logs it with the stall and clears it.
+    /// </summary>
+    internal string? StallSnapshot { get; set; }
+
+    private int _snapshotStallCount;
+
     /// <summary>A goal this bot's stall set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>), until the feature logs it.</summary>
     internal PlayerbotSharedSetAside? SharedSetAside { get; set; }
 
@@ -356,6 +423,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>The most health and mana seen while resting (<see cref="Fingerprint"/>): a rise is progress for the stall watch.</summary>
     private ulong _restMark;
+
+    /// <summary>Kills the bot had loot rights to (a stall-watch fingerprint field: a level-capped bot killing respawns is progressing).</summary>
+    private uint _lootedKills;
+
+    /// <summary>Kills the bot had loot rights to, as the stall watch counts them (tests, inspection).</summary>
+    internal uint LootedKills => _lootedKills;
+
+    /// <summary>The corpse last counted in <see cref="_lootedKills"/>, so the several thinks spent looting it count once.</summary>
+    private ObjectGuid _killCredited;
     private bool _deathIntentRetired;
     private int _stopped;
     // Creatures the bot could not path to (or looped trying to reach): skipped for a while, so the next think does
@@ -384,8 +460,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 _contention.ReleaseClaim();
                 ReleaseEventSpot(PlayerbotEventMeters.Done);
+                ReleaseDefenseCall();
             }
-            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); return true; });
+            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); ReleaseDefenseCall(); return true; });
         }
         _destinations.Dispose();
     }
@@ -693,7 +770,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                NoteDefenseDeath();
                 _opportunities?.BotDied();
+                _worldPvp?.BotDied();
                 RetireDeathIntent();
                 // A death ends a tram trip (its stage, car and entrance consent belong to the living bot): the ghost's corpse run may
                 // walk the tram map to a body there (PlayerbotTram.AllowsWalkingOn), and a bot revived there takes the nearest exit.
@@ -975,6 +1054,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                NoteDefenseDeath();
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -1050,8 +1130,20 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("pvp");
         if (TryFightPlayer(player, interval)) return;
 
+        // A real player inspecting the bot (PlayerbotOptions.InspectHoldSeconds) keeps it still within the client's 10-yard gear range; the walk resumes after.
+        if (TryHoldForInspector(player)) return;
+
         // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
         if (TryStay(player, interval)) return;
+
+        // A defense call (World:Playerbots:Pvp:Defense, PlayerbotBrain.Defense.cs): a bot the social pass assigned as a reinforcement walks to the call and takes on its
+        // attackers. After the stay (which owns the bot) and before the hunt, initiate and every errand, so an en-route responder is not grabbed by them.
+        if (TryRespond(player, interval)) return;
+
+        // War Mode (World:WarMode:Enabled): an idle bot hunts a flagged enemy it holds a grudge against, and World:Playerbots:Pvp:Initiate starts on a flagged
+        // enemy near it (PlayerbotBrain.Hunt.cs). Both come after the scenario stay, which owns the bot while its lease lives.
+        if (HuntScanDue() && TryHunt(player, interval)) return;
+        if (InitiateScanDue() && TryInitiate(player, interval)) return;
 
         PlayerbotThinkProbe.Phase("quest return");
         if (_quests.AbandonDistantCompletedQuest(player))
@@ -1317,6 +1409,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("combat");
         if (target.IsAlive)
         {
+            _killCredited = default; // alive: the next death of this creature (a respawn keeps its guid) is a new kill
             // The soft claim on the mob being walked to (refreshed each think; ended once it is tagged).
             _contention.Claim(player.Guid.Value, target, _session.World.NowMs);
 
@@ -1502,6 +1595,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // A kill with loot rights is progress for the stall watch even when it pays nothing a bot can keep (level cap, full bags, a no-coin beast).
+        // Counted once per death: the thinks spent on one corpse share the credit, and a respawn (the same creature object, the same guid) is a
+        // new kill, because the target seen alive again clears it (the combat branch above).
+        if (_killCredited != target.Guid)
+        {
+            _killCredited = target.Guid;
+            _lootedKills++;
+        }
+
         bool hasBagSpace = HasFreeBagSlot(player);
         if (!hasBagSpace)
         {
@@ -1684,6 +1786,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        // A stalled responder gives its call up (and sits out the blocked-walk backoff): the stall belongs to the call's walk, not to the home walk below.
+        bool responding = _defenseCallId != 0;
+        if (responding) DropDefense(player, DefenseBackoffMs);
+        // Before the give-up stops the bot and the think plans a new leg. Taken once per reported stall (the feature logs a stall once);
+        // the repeated give-ups of one stall do not build the string again.
+        if (StallCount != _snapshotStallCount)
+        {
+            _snapshotStallCount = StallCount;
+            StallSnapshot = FormatDiagnosticSnapshot(player);
+        }
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
         // Asked before this bot reports: a cell other bots already found a dead end is one at this bot's first stall.
         bool worldPin = _stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now);
@@ -1695,8 +1807,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
-            if (CanShareDeadEndPin(player) && ReportWorldPin(player, now) is { } newPin)
+            if (DeadEndPinShareBlock(player, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? pinGraph, out int pinRegion) is { } blocked)
+            {
+                // Live 2026-10 (audit cid 44): 53 bots pinned one placement point and no world pin formed, and the two rules that keep a pin
+                // from being shared (the area flags, the cut-region exemption) could not be told apart from the logs. Say which one held it back.
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-unshared", $"this bot's dead-end pin is not shared with the world: {blocked}", AnomalySeverity.Info);
+            }
+            else if (ReportWorldPin(player, now, pinGraph, pinRegion) is { } newPin)
+            {
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+            }
+            else if (!_stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now))
+            {
+                // Neither refused nor made a pin: the ledger holds this bot's report and waits for another bot (PlayerbotSharedPins.BotsToShare),
+                // or there is no ledger. Said once the cell is no pin, so a cell that stays unpinned for many stalls is told from a blocked one.
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-pending",
+                    _stall.SharedPins is null ? "no shared pin ledger on this bot, so its dead-end pin cannot become a world pin"
+                        : $"reported to the shared pin ledger; the cell becomes a world pin when {PlayerbotSharedPins.BotsToShare} different bots have pinned it",
+                    AnomalySeverity.Info);
+            }
         }
         else if (worldPin)
         {
@@ -1759,7 +1888,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (stalledChest) TargetEntry = 0;
                 break;
             case PlayerbotGoalKind.Home:
-                _homeReturn.MarkBlocked(now);
+                if (!responding) _homeReturn.MarkBlocked(now);
                 break;
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
@@ -1775,6 +1904,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     uint leftZone = player.ZoneId;
                     if (TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true)) RememberEscapedZone(leftZone); // among creatures too strong for it
                 }
+                break;
+            case PlayerbotGoalKind.WorldPvp:
+                // The run owns the goal like the opportunity chest does: giving the goal up without ending the episode lets the same think
+                // take it again. Stalled ends it, sets the geyser aside and, for a carrier, drops the flag and holds off a new run.
+                _worldPvp?.Stalled(player);
                 break;
             case PlayerbotGoalKind.Rest:
             case PlayerbotGoalKind.Recover:
@@ -1815,37 +1949,57 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     }
 
     /// <summary>
-    /// Whether this bot's dead-end pin may count towards a world pin: only on an open-world map (never a dungeon, raid or battleground, whose
-    /// stalls are the instance's) and outside a capital or city, where bots crowd round quest givers and vendors and stall for reasons that
-    /// say nothing about the ground. Fails closed when the area table is missing.
+    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may. The area rule (<see cref="DeadEndPinAreaBlock"/>:
+    /// only an open-world map, never a dungeon, raid or battleground whose stalls are the instance's, and outside a capital or city, where
+    /// bots crowd round quest givers and vendors and stall for reasons that say nothing about the ground; it fails closed when the area table
+    /// is missing) comes first, then the cut-region exemption (<see cref="PlayerbotNavigation.IsCutRegion"/>). The reason names the zone,
+    /// area, region and its polygon count so the rules can be told apart from the anomaly log. <paramref name="graph"/> and
+    /// <paramref name="region"/> are the bot's region lookup once the area rule passed (else null and -1), for <see cref="ReportWorldPin"/>
+    /// to reuse instead of looking the region up again.
     /// </summary>
-    private bool CanShareDeadEndPin(Player player)
+    private string? DeadEndPinShareBlock(Player player, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region)
     {
-        if (player.Map is not { } map || map.Template is not { } template || template.Instanceable) return false;
+        graph = null;
+        region = -1;
+        if (player.Map is not { } map || map.Template is not { } template) return "no map template";
         ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
         uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
-        return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+        if (DeadEndPinAreaBlock(template, areas, player.ZoneId, area) is { } areaBlock)
+            return string.Create(CultureInfo.InvariantCulture, $"{areaBlock} (zone {player.ZoneId}, area {area})");
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out graph, out region);
+        if (PlayerbotNavigation.IsCutRegion(graph, region, _options.CutRegionMaxPolygons))
+            return string.Create(CultureInfo.InvariantCulture,
+                $"cut region {region} of {graph!.RegionPolygons(region)} polygons (zone {player.ZoneId}, area {area}, at most {_options.CutRegionMaxPolygons} polygons are exempt)");
+        return null;
     }
 
-    /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
-    private string? ReportWorldPin(Player player, uint now)
-    {
-        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
-        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
-    }
+    /// <summary>Tell the world this bot dead-end-pinned its cell, from <paramref name="region"/> of <paramref name="graph"/> (<see cref="DeadEndPinShareBlock"/>'s lookup), unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin(ulong, uint, uint, float, float, uint, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?, int, int)"/>).</summary>
+    private string? ReportWorldPin(Player player, uint now, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region)
+        => _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
 
     /// <summary>
-    /// The rule of <see cref="CanShareDeadEndPin(Player)"/> on its inputs: an open-world map (not instanceable), a known zone, and neither
+    /// The area rule of the bot-level share check (<c>DeadEndPinShareBlock</c>) on its inputs: an open-world map (not instanceable), a known zone, and neither
     /// the zone nor the sub-area (<paramref name="areaId"/>, 0 when unknown) flagged as a capital, city or town
     /// (<c>Capital</c>, <c>City</c>, <c>SlaveCapital</c>, <c>SlaveCapital2</c>), so Goldshire, Sentinel Hill or Booty Bay inside an open zone do not pin.
     /// </summary>
     internal static bool CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
+        => DeadEndPinAreaBlock(template, areas, zoneId, areaId) is null;
+
+    /// <summary>
+    /// The area rule of <see cref="CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate?, ArcaneCore.Game.Maps.Terrain.AreaTable, uint, uint)"/> with its
+    /// reason: null when the pin may be shared, otherwise which input refused it (no template, an instanced map, an unknown zone, a town zone, a town sub-area).
+    /// </summary>
+    internal static string? DeadEndPinAreaBlock(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
     {
-        if (template is null || template.Instanceable || zoneId == 0 || areas.GetById(zoneId) is not { } zone) return false;
+        if (template is null) return "no map template";
+        if (template.Instanceable) return "instanced map";
+        if (zoneId == 0) return "no zone";
+        if (areas.GetById(zoneId) is not { } zone) return "zone missing from the area table";
         const uint townFlags = (uint)(ArcaneCore.Game.WorldState.Zones.AreaFlags.Capital | ArcaneCore.Game.WorldState.Zones.AreaFlags.City
             | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital2);
-        if ((zone.Flags & townFlags) != 0) return false;
-        return areaId == 0 || areas.GetById(areaId) is not { } area || (area.Flags & townFlags) == 0;
+        if ((zone.Flags & townFlags) != 0) return "zone flagged as a capital or city";
+        if (areaId != 0 && areas.GetById(areaId) is { } area && (area.Flags & townFlags) != 0) return "sub-area flagged as a capital, city or town";
+        return null;
     }
 
     /// <summary>
@@ -2029,7 +2183,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
         PlayerbotThinkProbe.Phase("stall hits");
         return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells, _restMark,
-            _killObserver?.ProgressHitsBy(player) ?? 0);
+            _killObserver?.ProgressHitsBy(player) ?? 0, _lootedKills);
     }
 
     /// <summary>
@@ -2138,6 +2292,53 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         if (!step.Busy) return false;
         OpportunityDriven = true;
+        RetireIdleCombatRoute();
+        _goal = step.Goal;
+        TargetEntry = step.TargetEntry;
+        return true;
+    }
+
+    /// <summary>The Silithyst run (<see cref="PlayerbotWorldPvpObjectives"/>, docs/areas/playbots-social.md; inspection and tests).</summary>
+    internal PlayerbotWorldPvpObjectives WorldPvp => _worldPvp ??= new PlayerbotWorldPvpObjectives(_session, _options, _contention.Claims);
+
+    private long _silithystThink = -1;
+    private SilithystAuras _silithyst;
+
+    /// <summary>Aura walks the Silithyst view did (tests: one per think in zone 1377, none outside it).</summary>
+    internal int SilithystScans { get; private set; }
+
+    /// <summary>The bot's flag and Traces of Silithyst, from one aura walk per think shared by both rungs; walked only in zone 1377 or while the controller has work.</summary>
+    private SilithystAuras SilithystThisThink(Player player)
+    {
+        if (_silithystThink == ThinkCount) return _silithyst;
+        _silithystThink = ThinkCount;
+        if (player.ZoneId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.SilithusZone || _worldPvp is { NeedsAuras: true })
+        {
+            SilithystScans++;
+            _silithyst = PlayerbotWorldPvpObjectives.Scan(_session, player);
+        }
+        else
+        {
+            _silithyst = SilithystAuras.None;
+        }
+
+        return _silithyst;
+    }
+
+    /// <summary>
+    /// Offers the world PvP run to the ladder: true when it drove the bot this think (walked to a geyser, used it, carried the flag).
+    /// <paramref name="mayBegin"/> false only carries on a run in progress and takes up a bot that already holds the flag.
+    /// </summary>
+    private bool TakeWorldPvp(Player player, uint interval, bool mayBegin)
+    {
+        // Nothing to do for a bot with no run that is away from Silithus (no aura walk outside zone 1377) or has the objective off.
+        // A bot holding the flag with no run (the option is off, or a GM or a script gave it) is still taken up, so the carry or its give-up
+        // (drop and back-off) runs instead of the dust staying on forever.
+        SilithystAuras auras = SilithystThisThink(player);
+        if (_worldPvp is null && !auras.Carries
+            && (!mayBegin || !_options.WorldPvp.Silithyst.Enabled || !PlayerbotWorldPvpObjectives.Eligible(player))) return false;
+        WorldPvpStep step = WorldPvp.Update(player, interval, mayBegin, auras);
+        if (!step.Busy) return false;
         RetireIdleCombatRoute();
         _goal = step.Goal;
         TargetEntry = step.TargetEntry;
@@ -2509,421 +2710,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || idleTooLong;
         if (!melee) return distance > preferredRange ? PlayerbotFightPosition.ChaseToRange : PlayerbotFightPosition.Hold;
         return closeEnough ? PlayerbotFightPosition.Melee : PlayerbotFightPosition.ChaseToMelee;
-    }
-
-    /// <summary>
-    /// Whether <paramref name="creature"/> belongs to another player's fight: tapped by someone outside the bot's group (the
-    /// client's grey name: UNIT_DYNFLAG_TAPPED without TAPPED_BY_PLAYER as the bot sees it, LootService's viewer filter over
-    /// Creature.LootTapper), or fighting a player who is neither the bot nor in its group (its victim, or any player on
-    /// its threat list). vmangos bots take such targets only from their leader's fight (PartyBotAI::SelectAttackTarget).
-    /// </summary>
-    internal static bool IsSomeoneElses(Player player, Creature creature, GroupManager? groups)
-    {
-        uint seen = creature.GetValueFor(UpdateFields.UnitDynamicFlags, player);
-        if ((seen & Game.Loot.LootService.UnitDynFlagTapped) != 0 && (seen & Game.Loot.LootService.UnitDynFlagTappedByPlayer) == 0)
-            return true;
-        if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups))
-            return true;
-        if (!creature.Combat.HasThreatList) return false;
-        IReadOnlyList<ThreatEntry> entries = creature.Combat.Threat.Entries;
-        for (int index = 0; index < entries.Count; index++) // indexed: an enumerator over the interface would be boxed for every candidate
-        {
-            if (entries[index].Target is Player other && IsStranger(player, other, groups))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// The player behind a creature's tag or fight: the player who tapped it (or the owner of the pet that did), else the stranger it
-    /// fights or holds on its threat list. Null when nobody can be found.
-    /// </summary>
-    internal static Player? TaggerOf(Player player, Creature creature, GroupManager? groups)
-    {
-        if (creature.Map is not { } map) return null;
-        ObjectGuid tap = creature.LootTapper;
-        if (!tap.IsEmpty && TapperOf(map, tap) is { } tapper) return tapper;
-
-        if (creature.Combat.Victim is Player victim && IsStranger(player, victim, groups)) return victim;
-        if (!creature.Combat.HasThreatList) return null;
-        IReadOnlyList<ThreatEntry> entries = creature.Combat.Threat.Entries;
-        for (int index = 0; index < entries.Count; index++)
-            if (entries[index].Target is Player other && IsStranger(player, other, groups)) return other;
-        return null;
-    }
-
-    /// <summary>The player a tap belongs to: the tapper itself, or the owner of the pet that tapped. Null when neither is on the map.</summary>
-    private static Player? TapperOf(Map map, ObjectGuid tap)
-    {
-        if (map.FindPlayer(tap) is { } tapper) return tapper;
-        if (map.FindObject(tap) is Unit pet && pet.CharmerOrOwnerGuid.IsPlayer && map.FindPlayer(pet.CharmerOrOwnerGuid) is { } owner) return owner;
-        return null;
-    }
-
-    /// <summary>
-    /// The kill-steal rule (spec 12.3: only when the other side started second). Tracks the mob the bot is engaged with (on its threat list while nobody
-    /// outside the bot's group holds its tap) in <see cref="_engagedMob"/>, and records the steal when an outsider takes the tag while the bot is still on the list.
-    /// Tag and group are sampled once per think: a groupmate who tags and leaves the group (or is kicked) within one think is seen first as a stranger holding the tag,
-    /// which differs from the stored tapper (none yet), and so can be blamed for a steal.
-    /// </summary>
-    private void NoteEngagement(Player player, Creature held, bool onThreatList, GroupManager? groups)
-    {
-        ulong mob = held.Guid.Value;
-        if (!onThreatList)
-        {
-            // Not (or no longer) on its threat list: the bot was walking up, or the mob evaded or reset. Whatever tags it next took nothing from the bot.
-            if (_engagedMob == mob) ClearEngagement();
-            return;
-        }
-
-        ObjectGuid tap = held.LootTapper;
-        Player? tapper = tap.IsEmpty || held.Map is not { } map ? null : TapperOf(map, tap);
-        if (tap.IsEmpty || tapper is not null && !IsStranger(player, tapper, groups))
-        {
-            // Untagged, or tagged by the bot or its group: the bot has it. The tapper is stored as it is now: a tap that is unchanged when the group
-            // changes under it (the player leaves, kicks the bot, the group disbands) turns that tapper into a stranger, but takes nothing from the bot.
-            _engagedMob = mob;
-            _engagedTapper = tapper?.Guid.Value ?? 0;
-            return;
-        }
-
-        // An outsider holds the tag. It is a steal only if the tag CHANGED to them since the bot engaged (from untagged or from the own side):
-        // the bot engaged first and the other side started second.
-        if (tapper is not null && _engagedMob == mob && tapper.Guid.Value != _engagedTapper)
-        {
-            ClearEngagement(); // once per engagement
-            Social?.Note(player.Guid, tapper.Guid, BotSocial.PlayerbotSocialEvent.KillSteal, tapper.Team != player.Team);
-        }
-    }
-
-    /// <summary>
-    /// Whether the corpse of <paramref name="creature"/> is the bot's to loot and count: the viewer's own tapped flag (the tap is the
-    /// bot's or its group's), and not a tap that is another's (<see cref="Game.Loot.LootService.UnitDynFlagTapped"/> without
-    /// <see cref="Game.Loot.LootService.UnitDynFlagTappedByPlayer"/> as the bot sees it) or a kill that earns nobody credit. A corpse with
-    /// no tap on record is left to the loot request, as before.
-    /// </summary>
-    internal static bool HasLootRights(Player player, Creature creature)
-    {
-        if (!creature.KillCreditAllowed) return false;
-        uint seen = creature.GetValueFor(UpdateFields.UnitDynamicFlags, player);
-        if ((seen & Game.Loot.LootService.UnitDynFlagTappedByPlayer) != 0) return true;
-        return (seen & Game.Loot.LootService.UnitDynFlagTapped) == 0;
-    }
-
-    private static bool IsStranger(Player player, Player other, GroupManager? groups)
-        => other.Guid != player.Guid && groups?.AreInSameGroup(player.Guid, other.Guid) != true;
-
-    /// <summary>The creature a bot in combat without a victim of its own fights back (internal for the allocation test).</summary>
-    internal Creature? FindDefensiveAttacker(Player player, bool defend = false)
-    {
-        if (player.Map is not { } map) return null;
-        // A creature swinging at the bot comes first; if none is, any living creature that still holds the bot on its
-        // threat list (fighting a pet, a party/camp fellow, or held at range) is the fight keeping Combat.IsInCombat on.
-        return FirstDefensiveCandidate(player, map, player.Combat.Attackers, defend)
-            ?? FirstDefensiveCandidate(player, map, player.Combat.ThreatenedBy, defend);
-    }
-
-    /// <summary>
-    /// The defensive target among <paramref name="units"/>: a living, attackable creature on the bot's map, reachable ones first, then the
-    /// bot's current target, then the nearest; of equals the first met wins. One pass with no allocation: it runs at every think of a
-    /// fighting bot, and the LINQ chain it replaced (OfType, Where, OrderBy, two ThenBy) allocated about 140 MB in 40 s at 400 bots
-    /// (perf-tick 2026-10-20). The live sets are hash sets, walked with their own enumerator.
-    /// </summary>
-    private Creature? FirstDefensiveCandidate(Player player, Map map, IReadOnlySet<Unit> units, bool defend)
-    {
-        DefensiveCandidate best = default;
-        if (units is HashSet<Unit> set)
-        {
-            foreach (Unit unit in set)
-                best = BetterDefensiveCandidate(player, map, unit, best, defend);
-        }
-        else
-        {
-            foreach (Unit unit in units)
-                best = BetterDefensiveCandidate(player, map, unit, best, defend);
-        }
-
-        return best.Creature;
-    }
-
-    private DefensiveCandidate BetterDefensiveCandidate(Player player, Map map, Unit unit, DefensiveCandidate best, bool defend)
-    {
-        if (unit is not Creature creature || !creature.IsInWorld || !creature.IsAlive || creature.IsInEvadeMode || IsFruitless(creature)
-            || !ReferenceEquals(creature.Map, map)
-            || !map.Combat.Hooks.CanAttack(player, creature) || (defend && DefendSkips(player, creature))) return best;
-        var candidate = new DefensiveCandidate(creature, IsUnreachable(creature), ReferenceEquals(creature, _target) ? 0 : 1, Distance(player, creature));
-        if (best.Creature is null) return candidate;
-        int order = candidate.Unreachable.CompareTo(best.Unreachable);
-        if (order == 0) order = candidate.TargetRank.CompareTo(best.TargetRank);
-        if (order == 0) order = candidate.Distance.CompareTo(best.Distance);
-        return order < 0 ? candidate : best;
-    }
-
-    /// <summary>One candidate of <see cref="FirstDefensiveCandidate"/> with its sort keys.</summary>
-    private readonly record struct DefensiveCandidate(Creature? Creature, bool Unreachable, int TargetRank, float Distance);
-
-    private void MarkUnreachable(Creature creature, uint forMs = UnreachableTargetMs)
-    {
-        uint now = _session.World.NowMs;
-        foreach (ObjectGuid expired in _unreachable.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
-            _unreachable.Remove(expired);
-        if (_unreachable.Count < 64 || _unreachable.ContainsKey(creature.Guid)) _unreachable[creature.Guid] = unchecked(now + forMs);
-    }
-
-    /// <summary>
-    /// How long a target the bot stalled on, or fought without a blow or a step for <see cref="FightNoProgressMs"/>, is skipped: about a
-    /// respawn, not the 30 seconds of a refused chase (<see cref="UnreachableTargetMs"/>), after which the same creature was chosen again
-    /// and held the bot for another stall (bot QA #697, #700, #862: the same target entry stalled again within a minute or two).
-    /// </summary>
-    internal const uint StalledTargetMs = 300_000;
-
-    /// <summary>The longest a bot holds a living target without its health falling and without moving <see cref="FightProgressYards"/> (<see cref="FightGoesNowhere"/>).</summary>
-    internal const uint FightNoProgressMs = 20_000;
-
-    /// <summary>A step this long (yards) at a target counts as progress of the fight (a chase, a reposition).</summary>
-    internal const float FightProgressYards = 3f;
-
-    private ObjectGuid _fightWatchTarget;
-    private uint _fightWatchHealth;
-    private System.Numerics.Vector3 _fightWatchAt;
-    private uint _fightWatchSince;
-    private uint _fightWatchSeen;
-
-    /// <summary>A fight not looked at for this long (world ms: the bot rested, travelled or did something else) is watched afresh.</summary>
-    private const uint FightWatchGapMs = 15_000;
-
-    /// <summary>
-    /// The fight with <paramref name="target"/> makes no progress: since the bot took it (or since its last progress) its health has not
-    /// fallen and the bot has not moved <see cref="FightProgressYards"/>, for <see cref="FightNoProgressMs"/>. A bot that chases, swings
-    /// or casts at a target it can reach makes progress well within that; one that stands under a target on a ledge, or re-plans a
-    /// chase that ends where it stands, does not (bot QA #697, #700, #862: <c>goal=Combat</c> stalls with motion moving:no dest:none,
-    /// phase combat). True once, then the watch starts over.
-    /// </summary>
-    private bool FightGoesNowhere(Player player, Creature target)
-    {
-        uint now = _session.World.NowMs;
-        var at = new System.Numerics.Vector3(player.X, player.Y, player.Z);
-        bool gap = unchecked(now - _fightWatchSeen) > FightWatchGapMs;
-        _fightWatchSeen = now;
-        if (gap || target.Guid != _fightWatchTarget || target.Health < _fightWatchHealth
-            || System.Numerics.Vector3.Distance(at, _fightWatchAt) >= FightProgressYards)
-        {
-            (_fightWatchTarget, _fightWatchHealth, _fightWatchAt, _fightWatchSince) = (target.Guid, target.Health, at, now);
-            return false;
-        }
-
-        _fightWatchHealth = target.Health; // a target healing back up is no progress, and none taken back either
-        if (unchecked(now - _fightWatchSince) < FightNoProgressMs) return false;
-        _fightWatchTarget = default;
-        return true;
-    }
-
-    /// <summary>
-    /// The target's health has been held at its death-prevention threshold for <c>Contention.InvincibleTargetAbandonSeconds</c> (a creature
-    /// an EventAI script keeps at 1 health, quest 2681's servants): the bot cannot kill it. True once, with the anomaly reported; the caller
-    /// sets the creature aside the way it does a fight that goes nowhere (<see cref="Combat.PlayerbotInvincibleWatch"/>).
-    /// </summary>
-    private bool FightsInvincibleTarget(Player player, Creature target)
-        => _invincibleWatch.Observe(player, target, _session.World.NowMs,
-            (uint)Math.Clamp(_options.Contention.InvincibleTargetAbandonSeconds, 1, 600) * 1000u);
-
-    /// <summary>
-    /// Whether the creature's EventAI holds it invincible from spawn until a particular spell hits it
-    /// (<see cref="ArcaneCore.Kernel.WorldData.Creatures.CreatureAiContent.IsInvincibleUntilSpellHit"/>): no target for a bot's grind or hunt.
-    /// </summary>
-    private bool IsHeldInvincibleEntry(Creature creature)
-    {
-        if (!_deferFeaturesLooked)
-        {
-            _deferCreatures = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>();
-            _deferQuests = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>();
-            _deferFeaturesLooked = true;
-        }
-
-        return _deferCreatures?.Content?.Ai.IsInvincibleUntilSpellHit(creature.Entry) == true;
-    }
-
-    private bool IsUnreachable(Creature creature)
-        => _unreachable.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
-
-    /// <summary>
-    /// Creatures the bot fought without progress (<see cref="FightGoesNowhere"/>) until when (world ms): no defensive target either while
-    /// the mark lasts (<see cref="StalledTargetMs"/>). An attacker is otherwise always the bot's fight, unreachable or not, so the one the bot
-    /// had just set aside, still swinging at it, was taken back on the next think and held it for the next 20 seconds.
-    /// </summary>
-    private readonly Dictionary<ObjectGuid, uint> _fruitless = [];
-
-    // The mob the bot is on the threat list of while nobody outside its group holds the tap (NoteEngagement): the only mob another player's tag can steal.
-    // Cleared when the bot's target changes or dies (UpdateCore), and when the bot is off the mob's threat list (evade, reset, walking up).
-    private ulong _engagedMob;
-
-    // The player behind the tap of _engagedMob when the engagement was last noted (pets resolved to their owner), 0 when the mob was untagged.
-    // A KillSteal needs the current tapper to be a stranger who differs from it.
-    private ulong _engagedTapper;
-
-    private void ClearEngagement()
-    {
-        _engagedMob = 0;
-        _engagedTapper = 0;
-    }
-
-    private void MarkFruitless(Creature creature)
-    {
-        uint now = _session.World.NowMs;
-        foreach (ObjectGuid expired in _fruitless.Where(entry => unchecked((int)(entry.Value - now)) <= 0).Select(entry => entry.Key).ToArray())
-            _fruitless.Remove(expired);
-        if (_fruitless.Count < 16 || _fruitless.ContainsKey(creature.Guid)) _fruitless[creature.Guid] = unchecked(now + StalledTargetMs);
-    }
-
-    private bool IsFruitless(Creature creature)
-        => _fruitless.Count != 0 && _fruitless.TryGetValue(creature.Guid, out uint until) && unchecked((int)(until - _session.World.NowMs)) > 0;
-
-    /// <summary>Whether a live creature in sight is no target for the bot (the grind filter's rules; <see cref="PlayerbotWorldDestinations.Untakeable"/>).</summary>
-    internal bool IsUntakeable(Player player, Creature creature)
-        => _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
-            ? IsUnreachable(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
-                || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
-                || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature)
-                || _quests.IsUnavailableItemTarget(creature, _session.World.NowMs)
-            : IsSkipped(creature) || _contention.IsSetAside(creature.Guid.Value, _session.World.NowMs)
-                || IsSomeoneElses(player, creature, GroupsOf(player))
-                || player.Map is { } map && !map.Combat.Hooks.CanAttack(player, creature);
-
-    /// <summary>
-    /// A creature the goals do not choose now: unreachable, of an entry set aside (stall, death loop), or outside the bot's home area
-    /// (outside the circle or, for a zone-clipped home, out of the home's zone: <see cref="PlayerbotHomeArea.Contains(Unit)"/>; a
-    /// creature on another map than the home is not judged: the bot is off-map and behaves as one with no home). This holds wherever
-    /// the bot is on the home map, so a bot away on an errand (a vendor in Stormwind) picks no fight on the road (fail closed).
-    /// The defensive-attacker path does not use this: a bot always fights back.
-    /// </summary>
-    private bool IsSkipped(Creature creature)
-        => IsUnreachable(creature) || IsHeldInvincibleEntry(creature) || _suspensions.IsEntrySuspended(creature.Entry, _session.World.NowMs)
-            || _contention.IsEntrySuspended(creature.Entry, _session.World.NowMs)
-            || _quests.PreferredItemUseId != 0 && creature.Entry == _quests.PreferredCreatureEntry
-            || _home is { } home && creature.MapId == home.MapId && !home.Contains(creature);
-
-    /// <summary>
-    /// The held mob turned out to be another player's (a tag or a fight the bot is not part of, <see cref="IsSomeoneElses"/>; the bot is
-    /// not on its threat list). Leave it alone for <see cref="PlayerbotContentionOptions.SomeoneElsesMemorySeconds"/> and let the caller
-    /// choose again, unless the bot decides to help its tagger (<see cref="PlayerbotContention.Decide"/>, at most once per mob per memory
-    /// window): then it keeps the mob as an assist-only target, no credit and no loot, until the mob dies or the tagger stops fighting.
-    /// </summary>
-    private void DropIfSomeoneElses(Player player, Creature held)
-    {
-        uint now = _session.World.NowMs;
-        ulong mob = held.Guid.Value;
-        bool mine = player.Combat.ThreatenedBy.Contains(held) || ReferenceEquals(held.Combat.Victim, player);
-        GroupManager? groups = GroupsOf(player);
-        // Before the early exit below: a bot still on the threat list is "mine", and that is exactly when a tag taken from it is a steal.
-        // (_attacking says only that a swing was sent; it can be stale.)
-        NoteEngagement(player, held, mine, groups);
-
-        if (_contention.IsAssisting(held.Guid))
-        {
-            // The mob evaded and the bot tagged it afresh: it is the bot's own now, kill and loot included.
-            if (mine && held.LootTapper == player.Guid) { _contention.EndAssist(); return; }
-            if (player.Map?.FindPlayer(_contention.AssistTagger) is { IsAlive: true } helped && helped.Combat.IsInCombat) return;
-            _contention.EndAssist();
-            if (!mine) LeaveSomeoneElses(player, held, now);
-            return;
-        }
-
-        if (mine) return;
-        if (_contention.IsSetAside(mob, now)) { LeaveSomeoneElses(player, held, now); return; }
-        if (!IsSomeoneElses(player, held, groups)) return;
-
-        // Only a tagged mob has a tagger to help: an untagged one that merely fights a stranger is left alone (helping would take its tag).
-        Player? tagger = held.LootTapper.IsEmpty ? null : TaggerOf(player, held, groups);
-        bool shares = tagger is not null && _quests.SharesKillQuest(player, tagger, held.Entry);
-        var facts = new PlayerbotHelpFacts(tagger is not null,
-            tagger is null ? float.PositiveInfinity : Distance(player, tagger),
-            player.MaxHealth == 0 ? 0f : player.Health * 100f / player.MaxHealth,
-            _quests.ReturnQuest != 0 || Risk.Retreat.Active || Risk.Waiting,
-            tagger is not null && TaggerIsLosing(tagger),
-            tagger?.Session is WorldSession { IsManaged: false },
-            shares);
-        if (tagger is not null && shares) RaiseContentionSignal(player, tagger, held, groups, now);
-        if (_contention.Decide(facts, player.Guid.Value, mob, now) == PlayerbotHelpDecision.Help && tagger is not null)
-        {
-            _contention.BeginAssist(held.Guid, tagger.Guid);
-            Social?.NoteHelp(player, tagger);
-            _contention.ReleaseClaim();
-            return;
-        }
-
-        LeaveSomeoneElses(player, held, now);
-    }
-
-    private void LeaveSomeoneElses(Player player, Creature mob, uint now)
-    {
-        _contention.MarkSomeoneElses(mob.Guid.Value, now);
-        _contention.NoteLostMob(mob.Entry);
-        _contention.ReleaseClaim();
-        if (_attacking || ReferenceEquals(player.Combat.Victim, mob)) _session.TryManagedAction(WorldOpcode.CmsgAttackstop, []);
-        _target = null;
-        AbandonRoute();
-        _attacking = false;
-        _lootOpened = false;
-        TargetEntry = 0;
-    }
-
-    /// <summary>The tagger is under <see cref="PlayerbotContention.LosingHealthPct"/> of its health, or has <see cref="PlayerbotContention.LosingEnemies"/> enemies on it.</summary>
-    private static bool TaggerIsLosing(Player tagger)
-        => tagger.MaxHealth > 0 && tagger.Health * 100f < PlayerbotContention.LosingHealthPct * tagger.MaxHealth
-            || Math.Max(tagger.Combat.Attackers.Count, tagger.Combat.ThreatenedBy.Count) >= PlayerbotContention.LosingEnemies;
-
-    /// <summary>
-    /// Both the bot and the tagger are ungrouped and have the creature as an unfinished kill objective of the same quest: ask for a
-    /// group (source "contention"; the coordinator matches by objective, and with <see cref="PlayerbotGroupOptions.InvitePlayers"/> a
-    /// real player nearby is invited, PlayerbotGroupCoordinator.MatchWithPlayer).
-    /// </summary>
-    private void RaiseContentionSignal(Player player, Player tagger, Creature mob, GroupManager? groups, uint now)
-    {
-        if (!_options.Groups.Enabled || groups is null || Distance(player, tagger) > PlayerbotContention.HelpYards) return;
-        if (groups.GetGroup(player.Guid) is not null || groups.GetGroup(tagger.Guid) is not null) return;
-        Risk.RaiseGroupSignal(new PlayerbotGroupSignal(mob.Entry, 2, player.MapId, new System.Numerics.Vector3(mob.X, mob.Y, mob.Z), now,
-            PlayerbotGroupSignal.ContentionSource));
-    }
-
-    /// <summary>The bot gained no credit on its quest creature <paramref name="entry"/> and no other objective is left: ask for a group.</summary>
-    private void RaiseContentionExhausted(uint entry, uint quest)
-    {
-        if (!_options.Groups.Enabled || _session.Player is not { } player) return;
-        Risk.RaiseGroupSignal(new PlayerbotGroupSignal(entry, 2, player.MapId, new System.Numerics.Vector3(player.X, player.Y, player.Z),
-            _session.World.NowMs, PlayerbotGroupSignal.ContentionSource, quest));
-    }
-
-    private static bool IsPvpFlagged(Player player) => (player.UnitFlags & UnitFlags.Pvp) != 0 || (player.Flags & PlayerFlags.FfaPvp) != 0;
-
-    /// <summary>
-    /// Whether the bot may cast a heal at <paramref name="tagger"/>: alive, on the bot's map, of the bot's team and friendly (never
-    /// hostile), not flagged for PvP unless the bot is too (a heal on a flagged player flags the healer), and in line of sight. Range
-    /// and the rest of castability are the rotation's own check. A server refusal would also bar that spell from the bot's own rotation
-    /// for <see cref="PlayerbotCombatSpells.RefusalBackoffMs"/>, so a cast that would be refused is never sent.
-    /// </summary>
-    internal static bool IsSafeHealTarget(Player player, Player tagger)
-    {
-        if (!tagger.IsAlive || !tagger.IsInWorld || !ReferenceEquals(tagger.Map, player.Map) || player.Map is not { } map) return false;
-        if (tagger.Team != player.Team || !map.Combat.Hooks.IsFriendly(player, tagger) || map.Combat.Hooks.IsHostileTo(player, tagger)) return false;
-        if (IsPvpFlagged(tagger) && !IsPvpFlagged(player)) return false;
-        return player.IsWithinLineOfSight(tagger);
-    }
-
-    /// <summary>
-    /// A healer class with a direct heal tops the tagger it helps up (below 85% health) before it fights the mob, when
-    /// <see cref="IsSafeHealTarget"/> holds. The combat view is built once for the heals (<see cref="PlayerbotCombatSpells.FirstCastable"/>).
-    /// True: a heal was accepted (or a cast is under way) and the think is spent.
-    /// </summary>
-    internal bool TryHealTagger(Player player)
-    {
-        if (player.Class is not (Game.Class.Priest or Game.Class.Paladin or Game.Class.Druid or Game.Class.Shaman)) return false;
-        if (player.Map?.FindPlayer(_contention.AssistTagger) is not { } tagger || !IsSafeHealTarget(player, tagger)
-            || tagger.MaxHealth == 0 || tagger.Health * 100f >= 85f * tagger.MaxHealth) return false;
-        // A self-only heal such as Desperate Prayer would heal the bot, not its tagger; a scripted (Holy Light) or chain (Healing Wave) heal lands on the target.
-        PlayerbotAbilities abilities = _combatSpells.Abilities(player);
-        bool healed = _combatSpells.FirstCastable(player, abilities.DirectHeals, tagger, abilities.HealsAnotherUnit) is { } heal && _combatSpells.CastAt(player, heal, tagger);
-        if (healed) Social?.NoteHelp(player, tagger);
-        return healed;
     }
 
     private void RememberAttackers(Player player)
@@ -3339,15 +3125,27 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
         PlayerbotThinkProbe.Phase("explore wander plan");
-        System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
+        SyncWanderCell(player);
+        if (_wanderCellRefusals >= WanderRegionLegRefusals && budget && HasOptionalThinkBudget(15.0) && TryWanderRegionLeg(player, elapsedMs)) return;
+        int roamBefore = _roamDirection;
+        System.Numerics.Vector3 destination = WanderLegEndInOwnComponent(player, new(player.X, player.Y, player.Z), player.Orientation,
+            out bool otherComponent);
         ExploreWanderPlans++;
         int strongRefusals = Risk.StrongRefusals;
-        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        bool shortfall = false;
+        PlanOutcome wanderPlan = PlanOutcome.Refused;
+        if (!otherComponent)
+            wanderPlan = PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route, out shortfall);
+        else _route = null;
+        if (wanderPlan == PlanOutcome.Pending)
         {
+            if (!_wanderPendingTraced) _trace.Record(_session.World.NowMs, "wander-pending");
+            _wanderPendingTraced = true;
             AbandonRoute();
-            _roamDirection--; // the same leg again once the tile is in
+            _roamDirection = roamBefore; // the same leg again once the tile is in (every rotation of this think undone)
             return;
         }
+        _wanderPendingTraced = false;
         if (_route is { } wanderRoute)
         {
             // A pause (no budget, rooted, falling) is not a refusal: the leg stays and is walked when movement resumes.
@@ -3367,13 +3165,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 AbandonRoute();
                 _exploreRefusals++;
-                TraceWanderRefusal();
+                NoteWanderRefusal(player, "advance");
                 PlayerbotMovementControl.Stop(_session, player);
             }
             else
             {
                 _exploreRefusals = 0;
                 _exploreRefusalTraced = false;
+                _wanderCellRefusals = 0;
+                _wanderGoodGround = new(player.X, player.Y, player.Z);
+                _wanderGroundMap = player.MapId;
+                _wanderGroundInstance = player.Map?.InstanceId ?? 0;
                 MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
@@ -3382,7 +3184,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             _exploreRefusals++;
             _exploreRingRefused = Risk.StrongRefusals != strongRefusals;
-            TraceWanderRefusal();
+            NoteWanderRefusal(player, otherComponent ? "component" : shortfall ? "shortfall" : "no-path");
             if (_exploreRefusals >= 2 && TryWanderToMeshPoint(player, elapsedMs)) return;
             PlayerbotMovementControl.Stop(_session, player);
         }
@@ -3395,16 +3197,38 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private bool OutsideHome(Player player, System.Numerics.Vector3 point)
         => _home is { } area && area.MapId == (player.Map?.MapId ?? player.MapId)
-            && (area.DistanceTo(point.X, point.Y) > area.ExploreRadius
-                || (area.ZoneClipped && !area.InZone(point.X, point.Y, point.Z)));
+            && OutsideHomeLimits(area, player.X, player.Y, point);
 
-    /// <summary>Records "wander-refused" once per refusal episode. A give-up presets the count (GiveUpStalledGoal), so a count test hid every later refusal.</summary>
-    private void TraceWanderRefusal()
+    /// <summary>
+    /// The home limits of <see cref="OutsideHome"/> for a bot standing at (<paramref name="fromX"/>, <paramref name="fromY"/>) and a mesh point
+    /// <paramref name="point"/> of the home's map. A point beyond <see cref="PlayerbotHomeArea.ExploreRadius"/> is outside, unless the bot itself is
+    /// beyond it and the point is nearer the centre than the bot (a bot in a pocket outside the circle must be able to wander back toward it: the
+    /// samples around it are all beyond the radius, and refusing every one left it no fallback). A clipped home is limited to its zone, except
+    /// one whose own centre has no known zone (<see cref="PlayerbotHomeArea.ZoneUnknown"/>), which has no zone to keep to and is limited by the
+    /// circle alone, as the walk home is (PlayerbotHome.cs): refusing every point there left the bot with no wander at all.
+    /// </summary>
+    internal static bool OutsideHomeLimits(PlayerbotHomeArea area, float fromX, float fromY, System.Numerics.Vector3 point)
     {
-        if (_exploreRefusalTraced) return;
-        _exploreRefusalTraced = true;
-        _trace.Record(_session.World.NowMs, "wander-refused");
+        float pointDistance = area.DistanceTo(point.X, point.Y);
+        if (pointDistance > area.ExploreRadius && pointDistance >= area.DistanceTo(fromX, fromY)) return true;
+        return area.ZoneClipped && !area.ZoneUnknown && !area.InZone(point.X, point.Y, point.Z);
     }
+
+    /// <summary>Base wait (ms) before the mesh-point wander fallback is tried again after a think in which no sample gave a leg.</summary>
+    internal const uint WanderMeshBackoffBaseMs = 10_000;
+
+    /// <summary>
+    /// How long the mesh-point fallback stays off after <paramref name="empties"/> empty runs in a row (1 or fewer: the base, doubling per
+    /// further empty run up to eight times the base): a pocket with no walkable sample would otherwise pay the sampling and the exact plans at every think.
+    /// </summary>
+    internal static uint WanderMeshBackoffMs(int empties)
+        => WanderMeshBackoffBaseMs << Math.Clamp(empties - 1, 0, 3);
+
+    /// <summary>World time before which <see cref="TryWanderToMeshPoint"/> takes no samples (an empty run backed it off); 0: not backed off.</summary>
+    private uint _wanderMeshBackoffUntilMs;
+
+    /// <summary>Empty mesh-point fallback runs in a row (a mesh leg taken resets it; the back-off times out by itself, also after a change of map).</summary>
+    private int _wanderMeshEmpties;
 
     /// <summary>Mesh points sampled per think by the wander fallback.</summary>
     private const int WanderMeshSamples = 4;
@@ -3418,6 +3242,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private bool TryWanderToMeshPoint(Player player, uint elapsedMs)
     {
         if (player.Map is not { } map || map.Collision.MeshPoints is not { } mesh) return false;
+        uint startMs = _session.World.NowMs;
+        if (_wanderMeshBackoffUntilMs != 0 && unchecked((int)(startMs - _wanderMeshBackoffUntilMs)) < 0) return false;
+        bool budgetCut = false;
         _wanderRandom ??= new Random((int)(player.Guid.Low & 0x7fffffff));
         var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         float minimum = ExploreLegLength(1);
@@ -3426,7 +3253,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             // Each exact plan is a synchronous world-thread search (a leg's node budget is under the path-job threshold): a think that
             // spent its optional budget takes none, the first included (the ray plans just before this already used some). The
             // fallback is tried again at the next think.
-            if (!HasOptionalThinkBudget(15.0)) break;
+            if (!HasOptionalThinkBudget(15.0))
+            {
+                budgetCut = true;
+                break;
+            }
+
             if (!mesh.TryGetRandomPointAround(map.MapId, here, ExploreLegYards, _wanderRandom, PlayerbotMoveCheck.MeshOptions, out System.Numerics.Vector3 point)
                 || !point.IsFinite()
                 || System.Numerics.Vector2.Distance(new(point.X, point.Y), new(here.X, here.Y)) < minimum
@@ -3454,6 +3286,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 _exploreRefusals = 0;
                 _exploreRefusalTraced = false;
+                _wanderMeshEmpties = 0;
+                _wanderMeshBackoffUntilMs = 0;
                 return true;
             }
             if (!PlayerbotNavigation.TryAdvance(_session, found, _options, elapsedMs, _session.World.NowMs))
@@ -3464,10 +3298,167 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreRefusals = 0;
             _exploreRefusalTraced = false;
             _trace.Record(_session.World.NowMs, "wander-mesh-point");
+            _wanderMeshEmpties = 0;
+            _wanderMeshBackoffUntilMs = 0;
             MarkLeg(found, townWalk: false);
             ChainWanderLeg(player, elapsedMs);
             return true;
         }
+
+        // Every sample was unusable (a think cut short by its budget proves nothing and is tried again at the next think): back off.
+        if (!budgetCut)
+        {
+            _wanderMeshEmpties++;
+            uint until = unchecked(startMs + WanderMeshBackoffMs(_wanderMeshEmpties));
+            _wanderMeshBackoffUntilMs = until == 0 ? 1u : until;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the plan toward explore candidate <paramref name="spawn"/> has been pending for more than <see cref="ExplorePendingMaxMs"/>
+    /// (world ms, one streak: the same candidate, holds no more than three think gaps apart, at least <see cref="TileWait.GapMs"/>). Records <c>explore-pending</c> once
+    /// per streak. True: Explore stops holding and walks its short wander leg meanwhile, as it does for a refused candidate.
+    /// </summary>
+    private bool ExplorePendingExpired(Player player, uint spawn, uint now)
+    {
+        // The streak survives the bot's own think gap (about 13 s live, more when thinks run slow): holds are one think apart, so the
+        // allowance is a few thinks, never less than the tile wait's gap.
+        uint thinkGap = Math.Max(PlayerbotMotion.ThinkGapMs(player), (uint)Math.Max(_options.ThinkIntervalMs, 0));
+        uint allowed = Math.Max(TileWait.GapMs, thinkGap * 3);
+        if (_explorePendingSince == 0 || _explorePendingSpawn != spawn || unchecked(now - _explorePendingLast) > allowed)
+        {
+            _explorePendingSpawn = spawn;
+            _explorePendingSince = now == 0 ? 1u : now;
+            _explorePendingTraced = false;
+        }
+
+        _explorePendingLast = now;
+        if (!_explorePendingTraced)
+        {
+            _explorePendingTraced = true;
+            _trace.Record(now, "explore-pending");
+        }
+
+        return unchecked(now - _explorePendingSince) > ExplorePendingMaxMs;
+    }
+
+    /// <summary>
+    /// A wander leg was refused for <paramref name="reason"/> (<c>no-path</c>: the path query had no route; <c>shortfall</c>: the route stopped
+    /// short of the ray's end; <c>advance</c>: the walk would not start; <c>component</c>: every heading tried ended in another walking
+    /// component). Traced as <c>wander-refused:reason</c> at the first refusal of a streak and again at every fifth, and counted in the
+    /// bot's 10-yard cell: <see cref="WanderRegionLegRefusals"/> of them there call for a region-graph leg out (<see cref="TryWanderRegionLeg"/>).
+    /// The caller has already counted the refusal in <c>_exploreRefusals</c>.
+    /// </summary>
+    private void NoteWanderRefusal(Player player, string reason)
+    {
+        // The first refusal of an episode (a give-up presets the count, GiveUpStalledGoal, so the count alone hid every later one) and every fifth.
+        if (!_exploreRefusalTraced || _exploreRefusals % 5 == 0)
+        {
+            _exploreRefusalTraced = true;
+            _trace.Record(_session.World.NowMs, "wander-refused:" + reason);
+        }
+
+        SyncWanderCell(player);
+        _wanderCellRefusals++;
+        _wanderCellLastMs = _session.World.NowMs;
+    }
+
+    /// <summary>
+    /// Points the refusal count at the bot's present 10-yard cell: a bot that left the cell, changed map or instance, or was away from
+    /// wandering for 30 s starts counting again, and the ground remembered on another map is forgotten.
+    /// </summary>
+    private void SyncWanderCell(Player player)
+    {
+        int cellX = (int)MathF.Floor(player.X / WanderRefusalCellYards), cellY = (int)MathF.Floor(player.Y / WanderRefusalCellYards);
+        uint now = _session.World.NowMs;
+        if (!_wanderCellValid || cellX != _wanderCellX || cellY != _wanderCellY || player.MapId != _wanderCellMap
+            || unchecked(now - _wanderCellLastMs) > 30_000u)
+        {
+            _wanderCellValid = true;
+            _wanderCellX = cellX;
+            _wanderCellY = cellY;
+            _wanderCellMap = player.MapId;
+            _wanderCellRefusals = 0;
+        }
+
+        _wanderCellLastMs = _wanderCellRefusals == 0 ? now : _wanderCellLastMs;
+        if (_wanderGoodGround is not null && (_wanderGroundMap != player.MapId || _wanderGroundInstance != (player.Map?.InstanceId ?? 0)))
+            _wanderGoodGround = null;
+    }
+
+    private int WanderComponentOf(Player player, System.Numerics.Vector3 point)
+        => WanderComponentProbe is { } probe ? probe(player, point) : PlayerbotNavigation.ComponentAt(player, point);
+
+    /// <summary>
+    /// <see cref="WanderLegEnd"/>, except that a ray whose end lies in another walking component than the bot's own (the region graph with
+    /// steep slopes excluded: a plateau cut off by slopes, Feralas' Twin Colossals, live 2026-10-24 bot QA #1464) is turned to the next heading, up
+    /// to <see cref="WanderComponentTries"/> times. Both components must be decided (a place on no region is kept), and a bot on a mesh
+    /// fragment is not judged (its escapes belong to the planner). <paramref name="otherComponent"/> is true when every heading tried ended in
+    /// another component: the first ray is returned and the caller counts a <c>component</c> refusal without a path query.
+    /// </summary>
+    private System.Numerics.Vector3 WanderLegEndInOwnComponent(Player player, System.Numerics.Vector3 from, float orientation, out bool otherComponent)
+    {
+        otherComponent = false;
+        System.Numerics.Vector3 first = WanderLegEnd(player, from, orientation);
+        if (WanderComponentProbe is null && PlayerbotNavigation.IsOnMeshFragment(player)) return first;
+        int own = WanderComponentOf(player, from);
+        if (own < 0) return first;
+        System.Numerics.Vector3 candidate = first;
+        for (int turn = 0; turn < WanderComponentTries; turn++)
+        {
+            int end = WanderComponentOf(player, candidate);
+            if (end < 0 || end == own) return candidate;
+            WanderComponentRotations++;
+            if (turn + 1 < WanderComponentTries) candidate = WanderLegEnd(player, from, orientation, turn + 1);
+        }
+
+        otherComponent = true;
+        return first;
+    }
+
+    /// <summary>
+    /// Eight or more refused wander legs inside one 10-yard cell: the bot is boxed in by broken ground. Takes one region-graph leg
+    /// (<see cref="PlayerbotNavigation.PlanRegionLeg"/>) toward the ground it last walked a wander leg from (else its home's centre), when that
+    /// lies in the bot's own walking component, rather than wait for the stall watch. True when the leg was taken. The count is cleared on a
+    /// take and halved on a miss, so a miss is retried after four more refusals.
+    /// </summary>
+    private bool TryWanderRegionLeg(Player player, uint elapsedMs)
+    {
+        System.Numerics.Vector3 here = new(player.X, player.Y, player.Z);
+        System.Numerics.Vector3? goal = _wanderGoodGround;
+        if (goal is null && _home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId)
+            goal = new System.Numerics.Vector3(area.Centre.X, area.Centre.Y, area.Centre.Z);
+        if (goal is not { } target || System.Numerics.Vector2.DistanceSquared(new(here.X, here.Y), new(target.X, target.Y)) < 30f * 30f
+            || WanderComponentOf(player, target) is var comp && (comp < 0 || comp != WanderComponentOf(player, here)))
+        {
+            _wanderCellRefusals /= 2;
+            return false;
+        }
+
+        PlayerbotThinkProbe.Phase("explore wander region leg");
+        PlayerbotRoute? leg;
+        PlanOutcome plan;
+        if (WanderRegionLegPlanner is { } planner) (plan, leg) = planner(player, target);
+        else plan = PlayerbotNavigation.PlanRegionLeg(player, target, _options, ref _tileWait, _session.World.NowMs, out leg);
+        if (plan == PlanOutcome.Route && leg is not null)
+        {
+            _route = leg;
+            if (PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+            {
+                _trace.Record(_session.World.NowMs, "wander-regionleg");
+                WanderRegionLegs++;
+                _wanderCellRefusals = 0;
+                _exploreRefusals = 0;
+                MarkLeg(leg, townWalk: true); // not chained onward: it heads for known ground, not along a ray
+                return true;
+            }
+
+            AbandonRoute();
+        }
+
+        _wanderCellRefusals /= 2;
         return false;
     }
 
@@ -3621,13 +3612,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// Westfall-Duskwood border inside the circle). Back in is the centre first, then, while legs are refused, a fan around it (InwardLeg).
     /// Takes the next direction of the rotation (<c>_roamDirection</c>).
     /// </summary>
-    private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation)
+    private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation, int rotate = 0)
     {
         int attempt = _roamDirection++;
         float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
         float turnSign = (player.Guid.Low & 1) == 0 ? 1f : -1f;
-        float angle = _exploreRefusals >= 1
-            ? orientation + (turnSign * _exploreRefusals * 2.39996323f)
+        int turns = _exploreRefusals + rotate;
+        float angle = turns >= 1
+            ? orientation + (turnSign * turns * 2.39996323f)
             : orientation + (spread * MathF.PI * 2f / 3f);
         // A ray refused for a ring of strong creatures stays full length: a short one fits inside the ring, is taken, and the bot paces
         // there instead of being boxed in and escaping through a gap (PlayerbotRisk.Refused; PlayerbotRingEscapeTests, red since d302bdd4).
@@ -3642,7 +3634,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 destination = InwardLeg(area, from, _exploreRefusals, player.Map);
             }
-            else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
+            else if (area.ZoneClipped && !area.ZoneUnknown && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
                 destination = HasOptionalThinkBudget(15.0)
                     ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals, player.Map)
@@ -3855,11 +3847,34 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
             _exploreBlockedFilter ??= ExploreBlocked;
-            _exploreSearchStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            _exploreCandidateChecks = 0;
+            _exploreSearchStartedAt = PlayerbotThinkProbe.Timestamp();
+            // The search is sliced (ExploreFindSliceChecks spawns, ExploreFindSliceMs, the think's optional budget): a slice that
+            // runs out leaves the walk in the cursor and this think wanders; the next think resumes from the next cell. A cursor left
+            // by a bot that changed map or level, moved on, or searched for too long is dropped and the search begins again.
+            var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+            if (_exploreFindCursor is { } held
+                && ExploreFindCursorStale(held.SearchMap, held.SearchLevel, mapId, player.Level, unchecked(now - _exploreFindLastStepAt),
+                    unchecked(now - _exploreFindBegunAt), System.Numerics.Vector3.DistanceSquared(held.SearchFrom, from)))
+                _exploreFindCursor = null;
+            if (_exploreFindCursor is null)
+            {
+                _exploreFindCursor = new PlayerbotExploreAtlas.FindCursor();
+                _exploreFindBegunAt = now;
+                _exploreFindSlices = 0;
+            }
+            _exploreFindLastStepAt = now;
+            _exploreFindSlices++;
             PlayerbotThinkProbe.Phase("explore atlas find");
-            _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
-                _exploreBlockedFilter, out _, _exploreFactionFilter);
+            PlayerbotExploreAtlas.FindStatus found = atlas.FindStep(_exploreFindCursor, mapId, player.Level, from, _exploreEligibleFilter,
+                _exploreBlockedFilter, ExploreFindSliceChecks, _exploreFindOutOfBudget ??= ExploreFindOutOfBudget,
+                out PlayerbotExploreAtlas.Candidate? foundCandidate, out _, _exploreFactionFilter);
+            if (found == PlayerbotExploreAtlas.FindStatus.Pending) return false;
+            _exploreFindCursor = null;
+            // The best candidate of a resumed search was judged in an earlier slice: a spawn marked visited or suspended since is not taken.
+            // The search begins again at the next think (no search-after delay: nothing was exhausted).
+            // A search that ended in its first slice was judged by this very think's filter: no second pass over the winner.
+            if (_exploreFindSlices > 1 && foundCandidate is { } judged && !_exploreEligibleFilter(judged)) return false;
+            _exploreCandidate = foundCandidate;
             if (_exploreCandidate is null)
             {
                 _exploreSearchAfter = unchecked(now + 5_000u);
@@ -3886,7 +3901,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             ? PlanOutcome.Route
             : PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out walk);
         _route = walk;
-        if (atlasPlan == PlanOutcome.Pending) return true;
+        if (atlasPlan == PlanOutcome.Pending)
+        {
+            if (!ExplorePendingExpired(player, chosen.Spawn.Guid, now)) return true;
+            // Held too long: set the candidate's cell aside so Explore does not alternate between it and the wander leg for ever.
+            BlockExploreCell(chosen);
+            _explorePendingSince = 0;
+            return false;
+        }
+        _explorePendingSince = 0;
         float flatDistSq = (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y);
         if (atlasPlan == PlanOutcome.Refused
             || _route is not { Points.Count: > 0 } plannedRoute
@@ -3917,6 +3940,41 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>), shared by the plans this brain makes.</summary>
     private TileWait _tileWait;
+
+    /// <summary>The spawns one slice of the explore atlas find checks at most (<see cref="PlayerbotExploreAtlas.FindStep"/>), to the end of the cell it is in.</summary>
+    internal const int ExploreFindSliceChecks = 96;
+
+    /// <summary>The milliseconds one slice of the explore atlas find runs at most (read after each occupied cell). The unbounded search took 635 ms in one think (audit evidence).</summary>
+    internal const double ExploreFindSliceMs = 4.0;
+
+    /// <summary>
+    /// How long a resumable explore find may go without a slice (world milliseconds) before it begins again: a bot that left Explore for
+    /// other goals comes back to inputs (hazards, suspensions, blocked cells) that have moved on. A walk still taking a slice every think
+    /// is not stale however long it runs: its result is re-checked against the eligibility filter when it is found, and the walk is
+    /// bounded by <see cref="ExploreFindMaxAgeMs"/>.
+    /// </summary>
+    internal const uint ExploreFindMaxIdleMs = 20_000;
+
+    /// <summary>
+    /// The ceiling on one search's life (world milliseconds), far above what a full ring walk needs at one slice per think (a search of
+    /// several hundred slices at the default 500 ms think interval); it only stops a search that is somehow never finishing.
+    /// </summary>
+    internal const uint ExploreFindMaxAgeMs = 600_000;
+
+    /// <summary>
+    /// Whether a held explore find cursor is dropped: the bot changed map or level, moved more than a cell from where the search began,
+    /// has not stepped the search for <see cref="ExploreFindMaxIdleMs"/> (its inputs went stale), or the search is older than
+    /// <see cref="ExploreFindMaxAgeMs"/>. Wall time since the search began is deliberately not the test while slices keep coming: at
+    /// 4 ms per slice (one occupied cell on a loaded think) and a slice per 500 ms think, a 20 s age cut the search off after about 40
+    /// cells and a bot whose nearest eligible spawn lay beyond them restarted for ever.
+    /// </summary>
+    internal static bool ExploreFindCursorStale(uint heldMap, uint heldLevel, uint mapId, uint level, uint idleMs, uint ageMs, float movedSquared)
+        => heldMap != mapId || heldLevel != level || idleMs > ExploreFindMaxIdleMs || ageMs > ExploreFindMaxAgeMs
+            || movedSquared > PlayerbotExploreAtlas.CellYards * PlayerbotExploreAtlas.CellYards;
+
+    /// <summary>Whether the running slice of the explore find has used its time or the think its optional budget.</summary>
+    private bool ExploreFindOutOfBudget()
+        => !HasOptionalThinkBudget(15.0) || PlayerbotThinkProbe.MsSince(_exploreSearchStartedAt) >= ExploreFindSliceMs;
 
     private bool ExploreBlocked(int x, int y)
         => _exploreBlockedCells.ContainsKey((_exploreSearchMap, x, y));
@@ -3981,9 +4039,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _exploreSearchContent is not { } content
             || _exploreSearchAtlas is not { } atlas
             || _exploreThreatFilter is not { } threatFilter)
-            return false;
-        if (++_exploreCandidateChecks > 24
-            && (!HasOptionalThinkBudget(15.0) || System.Diagnostics.Stopwatch.GetElapsedTime(_exploreSearchStartedAt).TotalMilliseconds >= 12.0))
             return false;
         CreatureSpawn spawn = candidate.Spawn;
         uint now = _session.World.NowMs;

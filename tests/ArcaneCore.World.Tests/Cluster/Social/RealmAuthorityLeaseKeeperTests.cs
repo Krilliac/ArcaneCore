@@ -130,7 +130,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
 
         _time.Advance(TimeSpan.FromSeconds(10));
         Assert.Equal(0, _lifetime.Stops); // a healthy renewal stops nothing
-        Assert.Equal(2, store.Renewals);
+        Assert.Equal(5, store.Renewals); // one renewal per scope of a map worker: social, economy, instances, maintenance, worldstate
 
         // Another node took the lease over: this node's renewal is refused.
         store.RejectRenewals = true;
@@ -168,7 +168,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
         await keeper.ReleaseAllAsync();
         await keeper.ReleaseAllAsync();
 
-        Assert.Equal(2, store.Releases); // social and economy, once each
+        Assert.Equal(5, store.Releases); // social, economy, instances, maintenance and worldstate, once each
         Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Social, _time.GetUtcNow()));
         Assert.Equal(1, _inner.GetHighWaterToken(RealmAuthorityScopes.Social)); // the high-water token survives
         Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
@@ -263,7 +263,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
 
         await keeper.ReleaseAllAsync();
 
-        Assert.Equal(2, store.Releases);
+        Assert.Equal(5, store.Releases); // every scope is attempted even though each release throws
     }
 
     [Fact]
@@ -281,6 +281,65 @@ public sealed class RealmAuthorityLeaseKeeperTests
         {
             Assert.Empty(_exitCodes);
         }
+    }
+
+    [Fact]
+    public async Task LateRenewalAfterRelease_DoesNotRenewTheRemainingScopes_OrHoldTheLease()
+    {
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.BlockAfterRenew = true;
+
+        Task tick = Task.Run(() => _time.Advance(TimeSpan.FromSeconds(10))); // the tick's first scope is renewed in the store, then the reply is held back
+        try
+        {
+            await WaitUntilAsync(() => store.BlockedRenewals == 1);
+            await keeper.ReleaseAllAsync(); // the orderly stop gives every lease back while that reply is late
+        }
+        finally
+        {
+            store.Release();
+        }
+
+        await tick.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, store.Renewals); // the other scopes were not renewed after the release
+        Assert.Equal(0, _lifetime.Stops); // and the late result is not a loss
+        Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Social, _time.GetUtcNow())); // no scope holds a lease in the store
+        Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Economy, _time.GetUtcNow()));
+        Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Instances, _time.GetUtcNow()));
+    }
+
+    [Fact]
+    public async Task Lose_HaltsTheSingletonsWithinTheTickThatFindsTheLoss()
+    {
+        var bot = new FakeHalt();
+        var broadcast = new FakeHalt();
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [bot, broadcast]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.RejectRenewals = true;
+
+        _time.Advance(TimeSpan.FromSeconds(10)); // exactly one renewal tick
+
+        Assert.Equal(1, bot.Calls);
+        Assert.Equal(1, broadcast.Calls);
+    }
+
+    [Fact]
+    public async Task ReleaseAll_StopsTheRenewalTimer_SoNothingIsHalted()
+    {
+        var halt = new FakeHalt();
+        var store = new ControlledStore(_inner) { RejectRenewals = true };
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [halt]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await keeper.ReleaseAllAsync();
+
+        _time.Advance(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, halt.Calls);
+        Assert.Equal(0, _lifetime.Stops);
     }
 
     [Fact]
@@ -365,6 +424,9 @@ public sealed class RealmAuthorityLeaseKeeperTests
         public bool ThrowOnRenew { get; set; }
         public bool ThrowOnRelease { get; set; }
         public bool BlockRenewals { get; set; }
+
+        /// <summary>Renew in the inner store first, then hold the reply until <see cref="Release"/>: a renewal that succeeded but whose caller learns of it late.</summary>
+        public bool BlockAfterRenew { get; set; }
         public Action? OnRenew { get; set; }
         private readonly ManualResetEventSlim _gate = new(false);
         private int _blocked;
@@ -384,6 +446,14 @@ public sealed class RealmAuthorityLeaseKeeperTests
                 Interlocked.Increment(ref _blocked);
                 _gate.Wait();
                 return inner.TryRenew(scope, ownerNodeId, ownerIncarnation, fencingToken, ttl, nowUtc);
+            }
+
+            if (BlockAfterRenew)
+            {
+                AuthorityLeaseResult renewed = inner.TryRenew(scope, ownerNodeId, ownerIncarnation, fencingToken, ttl, nowUtc);
+                Interlocked.Increment(ref _blocked);
+                _gate.Wait();
+                return renewed;
             }
 
             OnRenew?.Invoke();

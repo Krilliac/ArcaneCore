@@ -19,6 +19,12 @@ public interface IRemoteSessionOutput
 {
     /// <summary>Queue one server packet for the gateway. False when the link is gone; the session then closes.</summary>
     bool TrySend(WorldOpcode opcode, ReadOnlySpan<byte> payload);
+
+    /// <summary>
+    /// Ask the gateway to move the session to the worker that owns the map copy (login redirect). The gateway answers by opening the session
+    /// on that worker and closing this one; the session does nothing further until then. False when the output cannot redirect (the default) or the link is gone.
+    /// </summary>
+    bool TryRedirect(uint mapId, uint instanceId) => false;
 }
 
 /// <summary>
@@ -35,7 +41,8 @@ public sealed partial class WorldSession
     private uint _remoteBuild;
     private byte[]? _remoteSessionKey;
 
-    private readonly record struct RemoteInbound(WorldOpcode Opcode, byte[] Payload);
+    /// <summary>One client opcode from the gateway; <paramref name="ReceivedMs"/> is the gateway receive time on this worker's clock, or null to stamp on arrival here.</summary>
+    private readonly record struct RemoteInbound(WorldOpcode Opcode, byte[] Payload, uint? ReceivedMs = null);
 
     /// <summary>True for a session fed by a gateway instead of a socket.</summary>
     internal bool IsRemote => _remoteOutput is not null;
@@ -142,12 +149,19 @@ public sealed partial class WorldSession
 
     /// <summary>
     /// After the gateway has been told the session is open (so nothing this sends can overtake SMSG_AUTH_RESPONSE): start
-    /// Warden on this side exactly as <see cref="HandleAuthSessionAsync"/> does. Warden traffic is ordinary opcodes, so it is
-    /// forwarded through the gateway unchanged.
+    /// Warden on this side exactly as <see cref="HandleAuthSessionAsync"/> does, unless the gateway owns Warden. A worker that
+    /// registered a gateway verdict verifier (worker mode, <c>AddGatewayWorker</c>) leaves Warden to the gateway: it holds the
+    /// session key and the client stream, intercepts CMSG_WARDEN_DATA and reports verdicts over the link. Starting a second Warden
+    /// here would send the client a second handshake that the gateway swallows the replies to.
     /// </summary>
     internal void StartRemote()
     {
         Invariant.Assert(IsRemote, "StartRemote is for gateway-backed sessions");
+        if (Services.GetService<global::ArcaneCore.World.Cluster.Auxiliary.GatewayWardenManifestVerifier>() is not null)
+        {
+            return;
+        }
+
         if (_remoteSessionKey is { } key)
         {
             Services.GetService<Warden.WardenFeature>()?.OnAuthenticated(this, _remoteBuild, key);
@@ -158,15 +172,28 @@ public sealed partial class WorldSession
     /// Hand one client opcode to the session (the link's receive loop). Never blocks: a session whose backlog is over its bound
     /// is kicked, as a socket session over World:MaxQueuedWorldPackets is.
     /// </summary>
-    internal void DeliverRemote(WorldOpcode opcode, byte[] payload)
+    internal void DeliverRemote(WorldOpcode opcode, byte[] payload, uint? receivedMs = null)
     {
-        if (_remoteInbound is not { } inbound || inbound.Writer.TryWrite(new RemoteInbound(opcode, payload)))
+        if (_remoteInbound is not { } inbound || inbound.Writer.TryWrite(new RemoteInbound(opcode, payload, receivedMs)))
         {
             return;
         }
 
         _logger.LogWarning("[{Endpoint}] gateway inbound backlog over its bound; disconnecting", RemoteEndpoint);
         Kick("gateway inbound backlog over its bound");
+    }
+
+    /// <summary>
+    /// Login redirect: ask the gateway to move this session to the worker that owns <paramref name="mapId"/> (the saved map of the character the
+    /// client asked for). Nothing of the character exists here yet. False when the session is not gateway-backed, is closed, or the output cannot redirect;
+    /// the caller then keeps its own refusal path. Called from the session task.
+    /// </summary>
+    internal bool TryRedirectRemote(uint mapId, uint instanceId)
+    {
+        lock (_sendLock)
+        {
+            return _state != SessionState.Closed && _remoteOutput is { } output && output.TryRedirect(mapId, instanceId);
+        }
     }
 
     /// <summary>The gateway closed the client side (disconnect, superseded, link lost): stop reading and close.</summary>
@@ -209,7 +236,7 @@ public sealed partial class WorldSession
                 }
 
                 CapturePacket(true, packet.Opcode, packet.Payload);
-                if (!await DispatchFromClientAsync(packet.Opcode, packet.Payload, linked.Token).ConfigureAwait(false))
+                if (!await DispatchFromClientAsync(packet.Opcode, packet.Payload, linked.Token, packet.ReceivedMs).ConfigureAwait(false))
                 {
                     break;
                 }
@@ -222,6 +249,7 @@ public sealed partial class WorldSession
         finally
         {
             Close();
+            await AwaitWorldCloseAsync().ConfigureAwait(false); // the caller ends the session's scope next
         }
     }
 

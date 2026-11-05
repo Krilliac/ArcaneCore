@@ -34,7 +34,7 @@ public enum AccountLockFlags : byte
 
 /// <summary>
 /// A logon account. Credentials are stored as the SRP6 salt + verifier only — never
-/// a recoverable password (Charter §3; mirrors the vmangos `account` table semantics).
+/// a recoverable password (mirrors the vmangos `account` table semantics).
 /// </summary>
 public sealed class Account
 {

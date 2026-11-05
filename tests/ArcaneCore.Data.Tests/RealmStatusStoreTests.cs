@@ -3,6 +3,7 @@ using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Realms;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests;
@@ -116,6 +117,41 @@ public sealed class RealmStatusStoreTests : IAsyncLifetime
 
         await WithCountsAsync(cs, s => s.SetCountAsync(1, 7, -4));
         Assert.Equal(0, (await ReadCountsAsync(cs, 7))[1]); // a negative count is stored as 0
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task SetAllowedSecurityLevel_ChangesOnlyTheLock_AndAnUnknownRealmIsReported(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        int id = await SeedAsync(cs, new RealmEntry { Name = "Lock", Address = "127.0.0.1:8085", Flags = RealmFlags.Recommended, Population = 1.5f, Category = 1 });
+
+        Assert.True(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id, 2)));
+        RealmEntry locked = await ReadAsync(cs, id);
+        Assert.Equal(2, locked.AllowedSecurityLevel);
+        Assert.Equal(RealmFlags.Recommended, locked.Flags);
+        Assert.Equal(1.5f, locked.Population, 3);
+
+        Assert.True(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id, 0)));
+        Assert.Equal(0, (await ReadAsync(cs, id)).AllowedSecurityLevel);
+        Assert.False(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id + 1000, 1)));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheFlagsRead_HasADeterministicOrder_SoEfNeverWarnsAboutAnUnorderedRowLimit(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        int id = await SeedAsync(cs, new RealmEntry { Name = "Order", Address = "127.0.0.1:8085", Flags = RealmFlags.Offline, Category = 1 });
+
+        var builder = new DbContextOptionsBuilder<AuthDbContext>();
+        DataServiceCollectionExtensions.ConfigureProvider(builder, cs);
+        builder.ConfigureWarnings(w => w.Throw(CoreEventId.RowLimitingOperationWithoutOrderByWarning));
+        await using var db = new AuthDbContext(builder.Options);
+        var store = new EfRealmStatusStore(db);
+
+        Assert.True(await store.SetOnlineAsync(id, Beat));
+        Assert.False(await store.SetStoppedAsync(id + 1000));
     }
 
     private async Task<int> SeedAsync(DatabaseConnectionOptions cs, RealmEntry realm)

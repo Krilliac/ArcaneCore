@@ -202,7 +202,7 @@ public sealed class AuctionBotTests
         {
             Id = id, ItemEntry = entry, ItemCount = count, SellerId = seller, StartBid = 1, Buyout = buyout,
         };
-        IReadOnlyList<AuctionBotBuyIntent> buys = planner.PlanBuy(
+        IReadOnlyList<AuctionBotPlannedBuy> buys = planner.PlanBuy(
         [
             A(1, 1, 1500),            // below 2000: bought
             A(2, 1, 2500),            // above: bid at the start bid instead
@@ -232,7 +232,7 @@ public sealed class AuctionBotTests
         {
             Id = id, ItemEntry = 1, ItemCount = 1, SellerId = 5, StartBid = start, Buyout = buyout, Bid = bid, BidderId = bidder,
         };
-        IReadOnlyList<AuctionBotBuyIntent> intents = planner.PlanBuy(
+        IReadOnlyList<AuctionBotPlannedBuy> intents = planner.PlanBuy(
         [
             A(1, 1000, 9),            // a player's 1000: next is 1000 + 50
             A(2, 1000, 0),            // the bot's own standing bid: skipped

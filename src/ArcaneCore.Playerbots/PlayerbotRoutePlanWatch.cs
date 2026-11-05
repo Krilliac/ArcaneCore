@@ -61,6 +61,22 @@ internal static partial class PlayerbotRoutePlanWatch
     /// </summary>
     internal const uint StrikeMemoryMs = MaxSuppressMs;
 
+    /// <summary>
+    /// Duration (ms) a battleground duty goal is held (<see cref="Policy.Duty"/>). A bot that respawns at the same graveyard plans the same duty
+    /// goal from the same spot every life, so the 180 s hold of <see cref="SuppressMs"/> shelved it for 12 idle bounds (#1498).
+    /// </summary>
+    internal const uint DutySuppressMs = 10_000;
+
+    /// <summary>How a caller wants a suppressed pair handled: how long it is held, whether the goal is also blacklisted in <see cref="PlayerbotMotion"/>, and whether repeat suppressions of the pair lengthen the hold (<see cref="SuppressionSpanMs"/>).</summary>
+    internal readonly record struct Policy(uint SuppressMs, bool Blacklist, bool Escalate)
+    {
+        /// <summary>The long hold with the blacklist (every caller but the battleground AI).</summary>
+        internal static readonly Policy Default = new(PlayerbotRoutePlanWatch.SuppressMs, true, true);
+
+        /// <summary>The short hold without the blacklist (a goal the bot must go on trying: <see cref="DutySuppressMs"/>).</summary>
+        internal static readonly Policy Duty = new(DutySuppressMs, false, false);
+    }
+
     private const int MaxSuppressedEntries = 8;
 
     /// <summary>A suppressed pair: refused until <see cref="UntilMs"/>, its <see cref="Strikes"/> remembered until <see cref="ForgetAtMs"/>.</summary>
@@ -106,7 +122,7 @@ internal static partial class PlayerbotRoutePlanWatch
     /// True when <paramref name="goal"/> from <paramref name="origin"/> is currently suppressed for <paramref name="player"/>,
     /// or when the active watch has already reached the unproductive-plan ceiling and must refuse the next attempt.
     /// </summary>
-    internal static bool ShouldRefuse(Player player, Vector3 origin, Vector3 goal, uint now)
+    internal static bool ShouldRefuse(Player player, Vector3 origin, Vector3 goal, uint now, Policy? policy = null)
     {
         if (!States.TryGetValue(player, out WatchState? state)) return false;
         PruneExpired(state, now);
@@ -141,7 +157,7 @@ internal static partial class PlayerbotRoutePlanWatch
             && state.Plans >= MaxUnproductivePlans
             && unchecked(now - state.FirstAt) >= MinLoopSpanMs)
         {
-            Suppress(player, state, mapId, state.Origin, goal, state.LastRouteEnd, now);
+            Suppress(player, state, mapId, state.Origin, goal, state.LastRouteEnd, now, policy ?? Policy.Default);
             return true;
         }
 
@@ -149,7 +165,8 @@ internal static partial class PlayerbotRoutePlanWatch
     }
 
     /// <summary>Records the outcome of a definitive (non-pending, non-deferred) timestamped <c>TryPlanToward</c> call.</summary>
-    internal static void RecordOutcome(Player player, Vector3 origin, Vector3 goal, bool planned, PlayerbotRoute? route, uint now)
+    internal static void RecordOutcome(Player player, Vector3 origin, Vector3 goal, bool planned, PlayerbotRoute? route, uint now,
+        Policy? policy = null)
     {
         WatchState state = States.GetValue(player, static _ => new WatchState());
         PruneExpired(state, now);
@@ -207,13 +224,14 @@ internal static partial class PlayerbotRoutePlanWatch
         state.Refusals++;
         if (state.Refusals >= MaxConsecutiveRefusals)
         {
-            Suppress(player, state, mapId, state.Origin, goal, goal, now);
+            Suppress(player, state, mapId, state.Origin, goal, goal, now, policy ?? Policy.Default);
         }
     }
 
     internal static void Clear(Player player) => States.Remove(player);
 
-    private static void Suppress(Player player, WatchState state, uint mapId, Vector3 origin, Vector3 goal, Vector3 routeEnd, uint now)
+    private static void Suppress(Player player, WatchState state, uint mapId, Vector3 origin, Vector3 goal, Vector3 routeEnd, uint now,
+        Policy policy)
     {
         // A pair suppressed before (its strike still remembered) is held longer each time: the goal did not become reachable meanwhile.
         int strikes = 1;
@@ -236,12 +254,13 @@ internal static partial class PlayerbotRoutePlanWatch
             state.Suppressed.RemoveAt(evict >= 0 ? evict : 0);
         }
 
-        uint until = unchecked(now + SuppressionSpanMs(strikes));
+        // A duty goal keeps its short flat hold: escalating it would shelve the bot again (#1498).
+        uint until = unchecked(now + (policy.Escalate ? SuppressionSpanMs(strikes) : policy.SuppressMs));
         state.Suppressed.Add(new SuppressedPair(mapId, origin, goal, until, strikes, unchecked(until + StrikeMemoryMs)));
         state.Epoch = unchecked(state.Epoch + 1);
         state.LastStrikes = strikes;
         state.Has = false;
-        if (player.IsAlive)
+        if (policy.Blacklist && player.IsAlive)
         {
             PlayerbotMotion.Blacklist(player, [goal, routeEnd], now);
         }

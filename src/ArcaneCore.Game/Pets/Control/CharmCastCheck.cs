@@ -43,8 +43,9 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
 
             // SPELL_EFFECT_SUMMON, SUMMON_PHANTASM, SUMMON_DEMON and SUMMON_PET (Spell.cpp:6124-6141): a caster that charms something
             // uncharms it first when the spell has SPELL_ATTR_EX_DISMISS_PET_FIRST, else ALREADY_HAVE_CHARM. The separate ALREADY_HAVE_SUMMON check
-            // (Spell.cpp:6133-6134) is not made here: SummonService.UnsummonOldPetBeforeNewSummon dismisses a player's old pet at effect time
-            // and only refuses a dead pet on Call Pet or a non-player caster.
+            // (Spell.cpp:6133-6134) is not made here for the summon effects: SummonService.UnsummonOldPetBeforeNewSummon dismisses a player's old pet
+            // at effect time and only refuses a dead pet on Call Pet or a non-player caster. AlreadyHaveSummon is returned by CheckCharm below, for the
+            // charm and possess auras only.
             if (effect.Effect is SpellEffectName.Summon or SpellEffectName.SummonPhantasm or SpellEffectName.SummonDemon or SpellEffectName.SummonPet
                 && !caster.CharmGuid.IsEmpty)
             {
@@ -156,5 +157,5 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
     }
 
     /// <summary>vmangos Pet::Unsummon(PET_SAVE_NOT_IN_SLOT) of the caster's pet before the charm (SPELL_ATTR_EX_DISMISS_PET_FIRST).</summary>
-    private void DismissPet(Creature pet) => service.Summons?.Unsummon(pet);
+    private void DismissPet(Creature pet) => service.Summons?.Unsummon(pet, PetUnsummonReason.Dismissed);
 }

@@ -1608,13 +1608,13 @@ public sealed class PlayerbotChaosEngine
             case 2:
                 return player.Guid.Value;
             case 3:
-                return player.Combat.Victim?.Guid.Value ?? (0xF130000000000000UL | (ulong)(uint)rng.Next(1, 50000));
+                return player.Combat.Victim?.Guid.Value ?? (((ulong)HighGuid.Unit << 48) | (ulong)(uint)rng.Next(1, 50000));
             case 4:
                 foreach (ObjectGuid visible in player.VisibleObjects)
                 {
                     if (visible != player.Guid) return visible.Value;
                 }
-                return 0xF13000000000FFFFUL;
+                return ((ulong)HighGuid.Unit << 48) | 0xFFFFUL;
             default:
                 return unchecked((ulong)rng.NextInt64());
         }

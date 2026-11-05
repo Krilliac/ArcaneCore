@@ -35,7 +35,7 @@ public abstract class PlayerbotSiegeWorldTestBase
     /// <summary>The creature the sieges are after: a level 10 body that takes a raid a while.</summary>
     private protected const uint Objective = 990803;
 
-    /// <summary>Where a fresh bot character stands (the graveyard it logs in at): the way and its creatures are laid out from here.</summary>
+    /// <summary>Where a fresh bot character stands (the siege tests put the bots here: a fresh character otherwise logs in at the scenario start): the way and its creatures are laid out from here.</summary>
     private protected static readonly Vector3 Origin = new(-8913f, 550f, StartZ);
 
     private protected static (CreatureTemplate Template, CreatureSpawn Spawn) Guard(uint entry, float dx, float dy, uint health = 60, uint npcFlags = 0, uint faction = 14, byte creatureType = 7) => (
@@ -59,16 +59,18 @@ public abstract class PlayerbotSiegeWorldTestBase
     {
         (Guid, string)[] bots =
         [
-            await world.AddBotAsync("Sgatank", 1, 1, 10, [GroupTestWorld.Taunt]),
-            await world.AddBotAsync("Sgbtank", 1, 1, 10, [GroupTestWorld.Taunt]),
-            await world.AddBotAsync("Sgaheal", 1, 5, 10, []),
-            await world.AddBotAsync("Sgbheal", 1, 5, 10, []),
-            await world.AddBotAsync("Sgamage", 1, 8, 10, []),
-            await world.AddBotAsync("Sgbmage", 1, 8, 10, []),
+            await world.AddBotAsync("Sgatank", 1, 1, 10, [GroupTestWorld.Taunt], Origin),
+            await world.AddBotAsync("Sgbtank", 1, 1, 10, [GroupTestWorld.Taunt], Origin),
+            await world.AddBotAsync("Sgaheal", 1, 5, 10, [], Origin),
+            await world.AddBotAsync("Sgbheal", 1, 5, 10, [], Origin),
+            await world.AddBotAsync("Sgamage", 1, 8, 10, [], Origin),
+            await world.AddBotAsync("Sgbmage", 1, 8, 10, [], Origin),
         ];
         await world.RunAsync(2_000); // the bots are in the world and the coordinator has seen them
         await world.OnWorldAsync(() =>
         {
+            // The bots explore on their own while they are logged in and idle (they walk on the order of ten yards in these two seconds): back to the layout origin the way and its creatures are measured from.
+            foreach ((Guid id, _) in bots) world.Player(id).Relocate(Origin.X, Origin.Y, Origin.Z, 0, world.World.Host.World.NowMs);
             foreach (float dx in waypoints) Assert.Null(world.Coordinator.AddSiegeWaypoint(0, At(dx)));
             return true;
         });

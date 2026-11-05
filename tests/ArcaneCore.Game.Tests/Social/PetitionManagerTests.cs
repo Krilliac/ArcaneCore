@@ -201,6 +201,21 @@ public sealed class PetitionManagerTests
         Assert.Empty(k.Persistence.PetitionWrites);
     }
 
+    [Fact] // an id allocation that throws (unprimed Worker-mode allocator) must not cost the player the charter fee
+    public void Buy_WhenThePetitionIdCannotBeAllocated_ChargesNothingAndHandsOutNothing()
+    {
+        using var k = new PetitionTestKit();
+        k.Petitions.RequireDurableIds = true;
+        Player a = k.Add(1);
+
+        Assert.Throws<ArcaneCore.Kernel.Characters.IdRangeExhaustedException>(() => k.Petitions.Buy(a, k.Npc.Guid, "Arcane Order"));
+
+        Assert.Equal(10_000u, a.Money);
+        Assert.Equal(0u, a.Inventory.GetItemCount(PetitionConstants.CharterEntry));
+        Assert.Null(k.Petitions.GetByOwner(a.Guid.Low));
+        Assert.Empty(k.Persistence.PetitionWrites);
+    }
+
     [Fact] // :98-103
     public void Buy_WithoutACharterTemplate_AnswersBuyFailedCantFindItem()
     {

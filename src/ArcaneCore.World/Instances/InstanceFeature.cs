@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -36,7 +37,7 @@ namespace ArcaneCore.World.Instances;
 /// last instance are dropped and a purge of its rows is queued after any later write.</para>
 /// <para>Options come from the <c>World:Instances</c> configuration section (<see cref="InstanceOptions"/>).</para>
 /// </summary>
-public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable
+public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable, Cluster.Social.IRealmSingletonHalt
 {
     /// <summary>How often the reset schedule runs (vmangos checks it every world update; resets are minute-granular).</summary>
     public const int ScheduleIntervalMs = 5000;
@@ -95,6 +96,73 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     private WorldRuntime? _world;
     private Task? _stopped;
     private readonly Lock _lifecycleLock = new();
+    private Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
+    private volatile bool _halted;
+    private long _scheduleRuns;
+
+    /// <summary>Whether <see cref="Halt"/> was called (the instances realm authority lease was lost): the reset scheduler never runs again. The keeper halts every singleton when any scope is lost, so this includes a node that never held Instances.</summary>
+    public bool Halted => _halted;
+
+    /// <summary>Reset schedule ticks that were queued on the world thread so far (tests).</summary>
+    public long ScheduleRuns => Interlocked.Read(ref _scheduleRuns);
+
+    /// <summary>
+    /// Whether this node makes the realm-wide durable writes of the instance reset schedule (raid reset time rows, durable deletion of expired saves): the one node holding the
+    /// <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster, every single-process (combined) world, never after <see cref="Halt"/>.
+    /// Every node still runs the schedule itself (in-memory reset times, warnings, unbinding and resetting its own loaded maps); a non-holder only skips the durable writes.
+    /// </summary>
+    public bool HoldsScheduleAuthority => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
+
+    /// <summary>Turn the 5 s schedule timer off (tests drive <see cref="RunScheduleTickAsync"/> themselves). Set before <see cref="Attach"/>.</summary>
+    public bool ScheduleTimerEnabled { get; init; } = true;
+
+    /// <summary>Stop the reset schedule on this node for good (a lost instances realm authority lease: fail-stop like the other scopes). Safe from any thread.</summary>
+    public void Halt()
+    {
+        if (_halted) return;
+        _halted = true;
+        _logger.LogWarning("instance reset schedule halted: the node no longer holds the instances realm authority lease");
+    }
+
+    /// <summary>One timer tick: queue the reset schedule update on the world thread. Public for tests.</summary>
+    public void RunScheduleTick() => _ = RunScheduleTickAsync();
+
+    /// <summary>
+    /// Queue the reset schedule update on the world thread; the task completes when it ran (false when it did not run: not attached or halted).
+    /// The update runs on every attached node until halted; the durable writes inside it are made only while this node holds the instances lease
+    /// (<see cref="InstanceManager.HoldsRealmAuthority"/>, evaluated on the world thread when it runs).
+    /// </summary>
+    public Task<bool> RunScheduleTickAsync()
+    {
+        if (_world is not { } world || _manager is not { } manager || _halted)
+        {
+            return Task.FromResult(false);
+        }
+
+        Interlocked.Increment(ref _scheduleRuns);
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        world.Post(() =>
+        {
+            if (_halted)
+            {
+                done.SetResult(false);
+                return;
+            }
+
+            try
+            {
+                manager.UpdateSchedule();
+                done.SetResult(true);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("instance.feature", ex);
+                _logger.LogFault("instance.schedule-update", ex, "instance reset schedule update failed");
+                done.SetResult(false);
+            }
+        });
+        return done.Task;
+    }
 
     /// <summary>The instance manager (world thread only; available after <see cref="Attach"/>).</summary>
     public InstanceManager Instances => _manager ?? throw new InvalidOperationException("the instance feature is not attached");
@@ -146,6 +214,8 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        // Resolved here, not in the constructor: the keeper itself takes the halts (this feature among them).
+        _leaseKeeper = services.GetService<Cluster.Social.RealmAuthorityLeaseKeeper>();
         services.GetService<IConfiguration>()?.GetSection(InstanceOptions.SectionName).Bind(Options);
         InstanceStoreSnapshot snapshot = InstanceStoreSnapshot.Empty;
         using (IServiceScope scope = scopes.CreateScope())
@@ -156,7 +226,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             }
         }
 
-        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
+        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>(), services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         _writes.FatalFailure += error =>
         {
             FaultLedger.Shared.Record("instance.write-queue-fatal", error, terminating: true);
@@ -180,8 +250,9 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _manager.ScriptCastPlayerSpell = (player, spell) => services.GetService<SpellFeature>()?.System.CastSpell(player, spell,
             SpellCastTargets.ForSelf(), triggered: true);
         _manager.ScriptCastPlayerTargetSpell = (player, spell, target) => services.GetService<SpellFeature>()?.System.CastSpell(
-            player, spell, SpellCastTargets.ForUnit(target), triggered: true);
+            player, spell, SpellCastTargets.ForUnit(target), triggered: true) == SpellCastResult.CastOk;
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
+        _manager.HoldsRealmAuthority = () => HoldsScheduleAuthority;
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
@@ -227,18 +298,11 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
                 }
             }
         });
-        _scheduleTimer = new Timer(_ => world.Post(() =>
+        if (ScheduleTimerEnabled)
         {
-            try
-            {
-                manager.UpdateSchedule();
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("instance.feature", ex);
-                _logger.LogFault("instance.schedule-update", ex, "instance reset schedule update failed");
-            }
-        }), null, ScheduleIntervalMs, ScheduleIntervalMs);
+            _scheduleTimer = new Timer(_ => RunScheduleTick(), null, ScheduleIntervalMs, ScheduleIntervalMs);
+        }
+
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
     }
 
@@ -336,7 +400,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         try
         {
             int characterId = (int)player.Guid.Low;
-            if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+            if (_world is not { IsRetiringTransferredPlayer: true } && _writes is { } writes && writes.HasRetainedFailure(characterId))
             {
                 writes.RequestRetry(characterId);
             }

@@ -14,6 +14,8 @@ public sealed class ServicesTests
 
         public TimeSpan Delay { get; init; }
 
+        public ManualResetEventSlim? Gate { get; init; }
+
         public Func<TileKey, Exception?> Fail { get; init; } = _ => null;
 
         public IReadOnlyList<string> Layers { get; } = [LayerIds.Terrain];
@@ -28,6 +30,11 @@ public sealed class ServicesTests
             if (Delay > TimeSpan.Zero)
             {
                 Thread.Sleep(Delay);
+            }
+
+            if (Gate is not null && !Gate.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("the build gate never opened");
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -73,10 +80,19 @@ public sealed class ServicesTests
     [Fact]
     public async Task Cache_SharesOneBuildBetweenConcurrentRequests()
     {
-        (LayerCache cache, CountingSource source) = Cache(source: new CountingSource { Delay = TimeSpan.FromMilliseconds(150) });
+        using var gate = new ManualResetEventSlim();
+        (LayerCache cache, CountingSource source) = Cache(source: new CountingSource { Gate = gate });
         var tile = new TileKey(0, 32, 32);
 
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => cache.Get(LayerIds.Terrain, tile, CancellationToken.None))));
+        // The first request holds the build open on the gate; the other seven call Get only after that, so each one meets a build in flight.
+        Task first = Task.Run(() => cache.Get(LayerIds.Terrain, tile, CancellationToken.None));
+        Assert.True(SpinWait.SpinUntil(() => source.Builds == 1, TimeSpan.FromSeconds(10)), "no build started");
+        Task[] rest = Enumerable.Range(0, 7).Select(_ => Task.Run(() => cache.Get(LayerIds.Terrain, tile, CancellationToken.None))).ToArray();
+        Task waiters = Task.WhenAll(rest);
+        await Task.WhenAny(waiters, Task.Delay(100));
+        Assert.False(waiters.IsCompleted, "a request finished while the build was held");
+        gate.Set();
+        await Task.WhenAll([first, .. rest]).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(1, source.Builds);
     }

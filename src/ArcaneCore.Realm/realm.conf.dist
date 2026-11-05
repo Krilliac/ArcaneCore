@@ -143,7 +143,7 @@ Auth.MaxSessionDurationSeconds = 300
 
 #
 #    Auth.Port
-#        Description: Logon/realm TCP port. Vanilla default is 3724 (Charter §3).
+#        Description: Logon/realm TCP port. Vanilla default is 3724.
 #        Type: int
 #        Default: 3724
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -283,7 +283,7 @@ Database.Auth.Provider = MariaDb
 #                     ignore it.
 #        Type: int?
 #        Default: (not set)
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number from 0 to 60000
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#database
 #
@@ -431,7 +431,7 @@ Database.Sqlite.Checkpoint.IntervalMs = 2000
 #                     auth writes.
 #        Type: long
 #        Default: 33554432
-#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Allowed: a whole number from 0 to 1099511627776
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#database
 #
@@ -666,7 +666,7 @@ Diagnostics.CrashDump.Directory = ""
 #                     (tools/ops/live/LiveDiagnostics.ps1). 0 never falls back for space.
 #        Type: int
 #        Default: 16
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number of GiB, 0 or more; 0 never falls back for space
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #
@@ -679,7 +679,7 @@ Diagnostics.CrashDump.FullMinFreeGB = 16
 #                     pattern above are touched. 0 keeps every file. Default 5.
 #        Type: int
 #        Default: 5
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number, 0 or more; 0 keeps every file
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #
@@ -713,7 +713,7 @@ Diagnostics.CrashDump.Mode = Full
 #                     Default 120.
 #        Type: int
 #        Default: 120
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number of seconds, 1 or more (a lower value is raised to 1)
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #
@@ -2143,7 +2143,7 @@ Resilience.Database.QueryTimeoutMs = 5000
 #
 #    Startup.Strict
 #        Description: true makes a configuration warning fail start-up like an error (exit code 78);
-#                     read by ConfigReport.Run in both daemons.
+#                     read by ConfigReport.Run in the world, realm and gateway daemons.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false

@@ -1,6 +1,6 @@
 # Gateway passthrough (Tier 3a)
 
-Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client.** This is phase 3a of
+Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client** (checklist: [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md)). This is phase 3a of
 [Hot reload tiers](../design/hot-reload-tiers.md#53-phases): a separate `ArcaneCore.Gateway` process owns the client
 socket and forwards plaintext opcodes to a World running in worker mode. There is no handoff yet: a gateway restart drops
 its clients, and a World restart drops them too. With the default configuration nothing here is active and the World
@@ -50,21 +50,38 @@ on it ends (`LinkLost`).
 
 ### Link admission
 
-The worker sends a 32-byte random challenge; the gateway answers with HMAC-SHA256 of it keyed by the shared link secret,
-then registers a `Gateway`-role manifest (realm id, contract version, content revision, schema versions). The worker
-checks the proof, the role and the manifest before it accepts any session. Worker mode refuses to start unless
+The worker sends a 32-byte random challenge; the gateway answers with HMAC-SHA256 of it keyed by the shared link secret
+plus its own 32-byte random nonce. The worker checks the proof and answers with its own proof (HMAC-SHA256 under the secret
+over a fixed label and both nonces), so the gateway knows the worker holds the secret and that the answer is fresh for this
+connection. Only then does the gateway register a `Gateway`-role manifest (realm id, contract version, content revision,
+schema versions). The worker checks the proof, the role and the manifest before it accepts any session. A wrong or missing
+proof is answered with a plain refusal and the link closes. A proof recorded on one connection is useless on another: the
+challenge differs per connection. Worker mode refuses to start unless
 `Cluster:Worker:LinkSecret` is at least 16 characters, **on every bind address, loopback included**: with an empty secret
 the proof is an HMAC any local process can compute, and the manifest values are public defaults. The gateway likewise
 refuses to start unless its own `LinkSecret` (the `Gateway` section below) is at least 16 characters. **An admitted gateway can open a session for any
 account it names (the worker checks the account's status and bans, not a session-key proof), so the link secret is as
 sensitive as a database password.**
 
+### Frame integrity
+
+After the two proofs, both directions switch to MAC-protected frames. Each end derives two 32-byte keys (one per direction)
+with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
+direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
+reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
+The gateway contract version is 5 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32) and the peer link protocol version is 2, so a gateway or peer from before this change is
+refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
+(`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
+
+Until this change the link assumed a loopback-only or fully trusted network: the gateway answered any challenge and frames
+carried no MAC.
+
 What the link does not protect:
 
-- **The worker is not authenticated to the gateway.** The gateway answers any challenge; it never checks that the worker
-  knows the secret. A process that binds the worker port before the World does receives every client's plaintext opcodes.
-- **The link is not encrypted and frames carry no MAC after the handshake.** Anyone on the path can read and inject.
-  Keep the link on loopback or a private network you control.
+- **The link is not encrypted.** Frames are authenticated, not hidden: anyone on the path can read the client opcodes (they
+  are plaintext after the header cipher is removed at the gateway) but cannot inject, alter, replay or reorder frames without
+  the secret. Keep the link on loopback or a private network you control.
+- **A holder of the secret is trusted completely** (see above), and a stolen secret defeats both proofs.
 
 ## Running it
 
@@ -81,13 +98,14 @@ Cluster.Worker.LinkSecret = "<long random string>"
 The World's own client listener (`World:Port`) stays open in worker mode; point the realm list at the gateway's port to
 send clients through the gateway.
 
-Realm liveness in this topology belongs to the operator, not to a world. A combined-mode world keeps its realm-list row current: offline
+Realm liveness in this topology belongs to the gateway, not to a world. A combined-mode world keeps its realm-list row current: offline
 while starting, online while its loop ticks, offline at stop, with a heartbeat the logon daemon judges (`World:Realm:Id`,
 [installation](../guide/installation.md) section 4, [realm list liveness](../ops/realm-liveness.md), vmangos Master.cpp:215/:330). A worker
-does not (neither state nor heartbeat; having the gateway own liveness would need the worker's tick counter on the link and is not built): an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
-the promoted standby is serving, and the client-facing endpoint is the gateway, which has no realm-list writer. Set the row's flags with
-SQL (`realmlist.Flags`, Offline = 0x02) when the gateway itself is taken down, and keep `realmlist.State` at 0 (Unknown) so the logon daemon
-enforces no heartbeat for a row no world writes: a row left at another state by an earlier combined-mode world would go offline for good.
+does not write the row (an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
+the promoted standby is serving). Instead each worker sends its tick counter, session count and countdown state on the link (a `WorkerStatus` frame), and
+the gateway writes the row of `Gateway:RealmId`: Online while an active worker ticks, Restarting during a restart countdown, Starting until a worker is
+ready, Offline when no active worker has ticked for 60 s, and the summed population; a standby's ticks do not count
+([realm list liveness](../ops/realm-liveness.md) section 7, with the failover behaviour). `Gateway:RealmId` must therefore be the realm's `realmlist` row id.
 
 Worker mode makes character fencing **mandatory** (Tier 3b groundwork): with `Cluster:Worker:Enabled = true` the
 characters write fence is registered whatever `Cluster:Fencing:Enabled` says, and the World refuses to start unless
@@ -107,6 +125,32 @@ below drives it in process.
 
 A clustered realm needs a server database: with the characters database on SQLite, `Cluster:Worker:Enabled` (standby included), `Cluster:Node:Role` = MapWorker, or a supervisor listing a gateway-worker child or more than one world-type child is a configuration error (exit 78, even without `Startup:Strict`), because SQLite allows one writer process and the clusters world processes write it concurrently. Use PostgreSQL or MariaDB for `Database:Characters` (moving a SQLite realm: [database upgrade](../ops/database-upgrade.md)); `tools/ops/live/start-cluster.ps1 -Gateway` makes the world a gateway worker, so it needs a server database too. A supervisor running exactly one combined world child on SQLite is allowed and warns that the realm cannot grow beyond one world.
 
+### Split topology: concurrent map workers
+
+`tools/ops/live/start-cluster.ps1 -Topology Split` starts the realm, three map-worker worlds (EK, Kalimdor, instances) and the gateway; a real (non `-Plan`) start is allowed on PostgreSQL only (the secret file `pg-cutover.ps1` reads; a real start refuses without it). Every world runs `Cluster:Fencing:Scope=Worker` with `Cluster:Node:Role=MapWorker`: it takes its own shard advisory lock and claims its own `worker:<shard>` ownership row instead of the realm-wide `world` lock, so the three worlds write the one characters database concurrently, with durable id blocks and per-character claims (`CharacterClaimService`) keeping their rows apart. The world named by `-LeaseHolder` starts first and runs the schema DDL; the others get `Database:Upgrade:ValidateOnly=true`. The supervisor does not launch a start-order group before the previous one has sent its first `alive` heartbeat (`Cluster:Supervisor:StartGroupReadySeconds`, which the script sets to 600 for the split topology; default 0 means no wait), so the holder's DDL is finished before a validate-only world checks the schema; a child that exits first, or one still silent after the limit, only logs a warning and the start goes on (a validate-only world that then finds the schema behind exits and is restarted by the supervisor). The supervisor's config check refuses two worker children whose shard ids differ only in letter case. A character whose last live login ticket is abandoned (a duplicate login refused in EnterWorld) while nobody is online has its claim released again, so logins on the other workers are not refused as live-owned. `arcane-db copy` of the characters database refuses while any ownership row is active, any worker shard lock is held, or an ownership row names a worker scope whose shard id is not valid (it cannot be probed); the preflight is read-only and never creates a SQLite shard lock file. Design: `_wf/writer-lock-DESIGN.md`; the two-worker end-to-end scenarios are `TwoWorkerScenarioTests` (they need `ARCANECORE_TEST_POSTGRES`). The split start also wires the worker-to-worker peer link: every world (and standby) gets its own `Cluster:Peer:Port` (`-PeerPort` + index, default 8105), the whole node map as `Cluster:Peer:Endpoints:<n>:NodeId` / `Address` (the list form of `Cluster:Peer:Nodes`, needed because node ids contain `:`), its own `World:RemoteAdmin:Port` (`-RemoteAdminPort` + index, default 3443), and the one link secret is also set as `ARCANECORE_PEER_LINK_SECRET`.
+
+
+
+**Limits of the group wait.** If the schema-holder world crashes before its first alive heartbeat, the wait for that group ends (the child exited), and the next group may start while the relaunched holder is still running DDL. The validate-only worlds then fail and are restarted, and those restarts count toward `Cluster:Supervisor:CrashLoopMaxRestarts`, so a slow DDL combined with one holder crash can still push a validator into the crash loop. Also, `StartAsync` of the supervisor hosted service blocks up to `Cluster:Supervisor:StartGroupReadySeconds` per group (600 s with `-Topology Split`, four group boundaries, so up to 40 min when children stay silent); services registered after it wait that long, and Ctrl+C cancels the wait.
+
+
+### Login redirect to the map owner
+
+A session opens on the login worker (or, while that worker's link is down, on any worker with a ready link). When the client logs a character in, the worker checks whether it owns the character's map copy; if it does not, it answers with a session redirect instead of entering the world. The gateway then re-opens the session on the worker that owns the map, hands it the buffered `CMSG_PLAYER_LOGIN`, closes the session on the first worker, and replays the client packets it held in the meantime. A redirect can happen once per connection.
+
+- **Owner known but its link is down.** A starting gateway registers its links one by one, and a worker can be restarting, so the map's owner may have no registered link when the redirect arrives. When the route table still lists a configured owner for the map (the static map list of that worker), the gateway holds the login for up to 30 s instead of closing the client, and logs "holding the login for up to 30 s". For as long as any login waits, that worker's link supervisor dials it every 500 ms plus the time a failed dial takes (about 2 s on Windows, where a refused loopback connect is retried; immediate on Linux) instead of following its doubling reconnect backoff (`LinkRetryDelay`, up to 30 s). The hold does not reset that backoff: it keeps doubling through the hold's dials, so after a long hold on a dead worker it is at its 30 s maximum. On the owner's registration the login moves there. After 30 s, or when the map resolves back to the worker that sent the redirect, the client is disconnected and the log names the reason.
+- **Packet cap.** While the login is held the client's packets are buffered, up to 256; a client that sends more is disconnected. The gateway still answers `CMSG_PING` itself.
+- **Unowned map.** A map that no configured worker owns is refused at once (the client is disconnected immediately, as before redirects existed).
+- **Handoffs.** A redirect that arrives while a whole-World handoff holds the session's packets is refused, and the refusal disconnects the client (the login worker's session is closed as a worker close, which kicks the connection). A redirect whose session moved to another link, or ended, while it waited drops the redirected session and also disconnects the client.
+
+Tests: `LoginRedirectTests` (in process, including an owner that comes up 20 s into the hold) and `TwoWorkerScenarioTests` (a late-started worker, multi-process).
+
+### Transfer to a map whose owner has no link
+
+A far teleport routes the same way a login redirect does, and a worker whose link is down owns nothing for routing, whether it is dead or only between two dials of its reconnect backoff. So when the target map has a configured owner with no registered link, the gateway waits up to 10 s for that link before it answers the transfer request, and logs "waits up to 10 s for the link of its owner". The owner is dialled every 500 ms during the wait, as for a held login, so a worker that is up is reached at once. The player stays in the world and nothing is journalled while it waits. However the wait ends, the map is routed again: if it now has an owner the transfer starts, and if not the teleport is refused with `NoEligibleWorker` (`map-unassigned`) and the player sees "The teleport could not be completed." The teleport is also refused if the session ends or the gateway begins stopping during the wait. A map that no configured worker owns is refused at once. A refusal does not undo what the source worker did when it sent the request: a ghost entering its corpse's map stays revived, and a player taken off a transport stays off it. The answer goes to the source worker's current link, so a link that reconnected during the wait still ends the worker's in-flight entry; if the link is down when the answer is ready, the answer is lost and that entry blocks the character's far teleports until it expires (5 minutes).
+
+Tests: `GatewayCrossWorkerTeleportTests` (in process, the target worker up during a 30 s backoff), `GatewayTransferServiceTests` (the outcomes of the wait) and `ClusterControlChannelScenarioTests` (a late-started worker, multi-process).
+
 ### Whole-World handoff (Tier 3b groundwork, in process only)
 
 `WorldHandoffCoordinator` (`src/ArcaneCore.World/Cluster/Handoff/`) runs the drain protocol of design section 5.3 over
@@ -116,16 +160,23 @@ capturing every online player's save), the saves and every per-character queue f
 then the **epoch takeover** (one transaction: the ownership row moves from A at epoch N to B at N + 1). Any failure
 before the takeover resumes A and then journals the abort (a failed journal write leaves A running and the handoff open
 for `RecoverAsync`); after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
-one from the journal): promote B, reroute, retire A. The gateway reroute (`GatewayWorldHandoffRouter`,
-`GatewayServer.RetargetWorkerAsync`) moves the gateway's single worker link to B: **clients on A are disconnected and log
-in again** (no `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` carry-over, no input buffering during the freeze). A retired A
+one from the journal): promote B, reroute, retire A. The gateway side (`GatewayWorldHandoffRouter`) is seamless:
+when A freezes, the gateway holds every client's input (`GatewayServer.HoldSessionsForHandoff`, at most 256 packets per
+client, one past that is disconnected; an abort replays it to A). After B is promoted, `GatewayServer.RetargetWorkerSeamlessAsync`
+connects the gateway's worker link to B while the link to A is still open and re-points every session: B adopts the character
+with the client's buffered `CMSG_PLAYER_LOGIN` (it loads the save A captured at the freeze), B's `SMSG_LOGIN_VERIFY_WORLD`
+reaches the client as `SMSG_TRANSFER_PENDING` + `SMSG_NEW_WORLD` (same map and position as the save: the same-map world port
+the real client accepts, design section 5.5), the held input is delivered to B in order, and the link to A closes. A client at
+character select just gets a plain session on B. A client whose move fails (B refuses, 30 s timeout) is disconnected and logs
+in again. A **gateway restart still drops every client**: the sessions and their ciphers live in the gateway process. The loss
+contract of section 5.3 applies (loading screen; cast, combat, trade, loot and similar transients are cancelled). A retired A
 stays frozen; when its process stops, every write it still attempts is refused by the fence. The participants are not
-registered in DI and there is no cross-process control channel: one coordinator can drive them only when A, B and the
-gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design
-section 5.6.
+registered in DI unless the opt-in control channel is on (see [Handoff and transfers over the control channel](#handoff-and-transfers-over-the-control-channel-opt-in));
+without it one coordinator can drive them only when A, B and the gateway share a process (the tests). Known limits, including B crashing after the takeover,
+are listed in design section 5.6.
 
-Gateway side: `gateway.json` next to the executable, then environment variables and the command line (generic host
-order). The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
+Gateway side, lowest precedence first: `appsettings.json`, `gateway.conf` (or `--config <file>`, the same format as `world.conf`),
+`gateway.json` next to the executable, environment variables, the command line. The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
 The build copies the World's `appsettings.json` into the gateway's output directory as a side effect of the project
 reference; when the gateway is started from that directory it supplies the same `Database:Auth` defaults the World uses.
 The `Gateway` section:
@@ -138,15 +189,39 @@ The `Gateway` section:
 | `MaxConnectionsPerIp` | `0` | Most simultaneous connections from one address; 0 means no cap of the gateway's own |
 | `PreAuthTimeout` | `00:00:10` | A connection without a valid `CMSG_AUTH_SESSION` by then is closed |
 | `MaxOutboundBytes` | `8388608` | A client with more unsent bytes than this is disconnected |
-| `WorkerAddress` / `WorkerPort` | `127.0.0.1` / `8095` | The worker's `Cluster:Worker` listener |
+| `Workers` | empty | One entry per world worker: `NodeId`, `Address`, `Port`, optional `Maps` (map ids it owns, informational). The gateway keeps one link per entry, each with its own reconnect backoff and state; a new login goes to the ready link with the fewest sessions, and a worker that goes away drops only its own sessions |
+| `WorkerAddress` / `WorkerPort` | `127.0.0.1` / `8095` | The single-worker form, used only while `Workers` is empty (one entry named `worker`): the worker's `Cluster:Worker` listener |
 | `LinkSecret` | empty | Must equal the worker's link secret; at least 16 characters, or the gateway refuses to start |
 | `LinkRetryDelay` | `00:00:01` | First wait before reconnecting the link; doubles up to 30 s |
 | `NodeId` | `gateway` | Node id in the link manifest |
-| `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `dev`, `1`, `1` | Must equal the worker's values or the link is refused |
+| `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `world-schema-N`, the build's characters schema version, the build's world schema version (N is the world version) | Must equal the worker's values or the link is refused. A worker reads the real versions from its databases by default (`Cluster:Worker:VersionsFromDatabase`, `true`); `false` makes it advertise its `Cluster:Worker` `ContentRevision`/`CharactersSchemaVersion`/`WorldSchemaVersion` labels instead (explicit override, same defaults as the gateway's), and a worker whose database is behind the gateway's build is refused |
 
-These keys are **not** in the generated configuration catalog: the catalog covers the World and Realm daemons
-(`ConfigDaemon` has no Gateway value), and there is no `gateway.conf.dist` or `--check-config` for the gateway yet. The
-source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `ConfigExceptionTable.UncataloguedSourceRoots`.
+These keys are in the generated configuration catalog (`ConfigDaemon.Gateway`, the `Gateway` section of the
+[configuration reference](../reference/configuration.md)), together with the shared sections the gateway also reads (`Database`,
+`Net:Protection`, `Logging`, `Diagnostics`). `src/ArcaneCore.Gateway/gateway.conf.dist` is generated from the catalog like
+the world and realm files (`ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`).
+
+### Command line
+
+| Command | What it does |
+|---|---|
+| `ArcaneCore.Gateway --check-config` (or `check-config`) | Loads the whole configuration, validates `Gateway:*` (`GatewayOptions.Validate`) and the link secret rule, prints every problem and exits: 0 valid, 78 invalid. Nothing is started and no database is touched. The `.conf` key check warns about misspelled keys |
+| `ArcaneCore.Gateway write-config (--defaults\|--current) <file\|->` | Writes the documented defaults or the effective configuration |
+| `ArcaneCore.Gateway --help` | Usage (exit 64); a mistyped or world-only option is a usage error (64), not silently dropped |
+
+The same validation runs at every start (exit 78 when invalid).
+
+### Metrics
+
+The gateway records `System.Diagnostics.Metrics` instruments on the meter `ArcaneCore.Gateway` (collected by a `MetricsStore` when a host
+registers one; with no listener each is a single enabled check). Every series carries `node` (`Gateway:NodeId`):
+`arcanecore.gateway.link_state` (links up), `arcanecore.gateway.worker_link_state` (1 up, 0 down; extra tags `worker_node`, `worker`), `arcanecore.gateway.sessions` (sessions open across the links),
+`arcanecore.gateway.connections` (client connections), `arcanecore.gateway.link_reconnects`, `arcanecore.gateway.link_failures`,
+`arcanecore.gateway.forwarded_packets` and `arcanecore.gateway.forwarded_bytes` (tag `direction`: `to_worker`, `to_client`),
+`arcanecore.gateway.session_opens` (tag `result`: `accepted`, `refused`, `no_link`) and `arcanecore.gateway.link_latency`
+(histogram, milliseconds: the session-open round trip over the link, tag `worker`). Client packets and bytes stay on
+`arcanecore.net.packets_in`, `arcanecore.net.packets_out`, `arcanecore.net.bytes_in` and `arcanecore.net.bytes_out`.
+The gateway does not start a metrics exporter yet (see below).
 
 ## Running under the host supervisor
 
@@ -227,33 +302,84 @@ database. A dedicated `Social` or `Economy` process is not built.
 Tier 3b groundwork: `StandbyWorkerTests` (8: standby registration, standby without worker mode refused, a closed
 worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a refused promotion of a
 released ownership claims nothing, a promoted standby takes a session and writes while the old world is fenced) and
-`WorldHandoffTests` (10: a full handoff with a player in the world through the gateway and the re-login landing on B;
+`WorldHandoffTests` (11: a full handoff with a player in the world through the gateway, B answering the input held during the freeze;
 an abort injected after each of the five pre-commit stages; a source that lost its ownership; a failed abort journal
 write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
 recovery).
 
+## Handoff and transfers over the control channel (opt-in)
+
+By default the whole-World handoff and the player transfer run only in process (the tests). Four keys, all `false` by default, host them across
+processes with the gateway as the one coordinator (design `_wf/handoff-control-DESIGN.md`; the tier view is
+[hot-reload-tiers.md](../design/hot-reload-tiers.md) section 5.6):
+
+| Key | Where | Effect when `true` |
+|---|---|---|
+| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
+| `Cluster:Worker:Transfers:Enabled` | worker (and standby) | The worker builds its production transfer source and target and answers the transfer verbs; a teleport to a map another worker owns becomes a transfer request. Off, it answers `Disabled` and the refusal of that teleport is unchanged |
+| `Gateway:Handoff:Enabled` | gateway | The gateway connects to the characters database (validate-only, nothing is created or upgraded), keeps a control link to each slot's standby, coordinates handoffs and operator restarts and recovers interrupted ones from the journal |
+| `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |
+
+Each slot's standby is named on its worker entry: `Gateway:Workers:N:StandbyNodeId` (the standby's `Cluster:Worker:NodeId`, which must differ from
+every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). The reply timeouts are
+`Gateway:Control:*` and the recovery cadence `Gateway:Handoff:*`. One gateway per realm is the contract: a worker reports how many gateways it has
+admitted and the coordinator refuses to begin when it is more than one. The gateway and every worker must run the same link contract version.
+
+Under the supervisor, a retired source is relaunched as the slot's next standby, addressed by child name, so the supervisor child of a world must be
+named by its node id. `start-cluster.ps1` does this itself:
+
+```
+pwsh -NoProfile -File tools/ops/live/start-cluster.ps1 -Topology Split -Standby -Transfers
+```
+
+`-Standby` (Split only) adds one standby per world (`standby-EK`, `standby-Kalimdor`, `standby-instances`; node ids `standby:EK` and so on; their own
+link and client ports after the three worlds'), starts it with `Cluster:Worker:Standby=true`, `Cluster:Fencing:Shard` set to the shard of the world it
+stands behind (so its promotion takes over that world's durable scope) and its own `Cluster:Fencing:OwnerNode` and node id, names the world children
+by node id, and sets the handoff keys on the worlds and the gateway. `-Transfers` sets the transfer keys on the worlds, the standbys and the gateway.
+`-Plan` prints all of it. Without either switch the launch is exactly the plain Split launch. The gateway needs the characters database; it inherits
+the PostgreSQL environment of the supervisor and only validates the schema, so a role limited to `cluster_world_handoff`, `cluster_transfer_*` and
+`character_ownership` is enough.
+
+Operator commands: `.cluster restart $worker` (Administrator) hands the slot off and asks the supervisor to relaunch the retired process as the next
+standby; `.cluster handoff status [$operationId]` (Game Master) shows the unresolved handoffs of the journal or one by id. The PostgreSQL end to end
+scenarios (a cross-worker teleport, `.cluster restart`) are `ClusterControlChannelScenarioTests`, skipped without `ARCANECORE_TEST_POSTGRES`.
+
+## Cross-worker player transfer, gateway side (S5c)
+
+`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. The source worker's coordinator host
+(`PlayerTransferCoordinatorHost` with `LinkTransferGatewayRouter`) sends `TransferStage`, `TransferCancel` and `TransferCommit` control
+frames on the worker's own gateway link (`GatewayTransferWire`; each is answered with a `TransferAck`). Stage buffers the session's client
+packets (at most 256 packets and 256 KiB), opens a session on the target worker and sends a synthesized `SMSG_TRANSFER_PENDING`. Cancel
+replays the buffer to the source and closes the target session. Commit replays the buffer to the target in order, re-points the connection
+(link and generation) and retires the old generation, so packets still stamped with it are dropped. A buffer overflow frees the buffer, closes
+the target session and disconnects the client; the later commit is then a no-op. Node ids in the frames are the `Gateway:Workers:N:NodeId` values.
+Not built: the worker-side peer-link participant for the target, and the session of the target being resolvable by the shadow loader before
+stage 4 (the target session opens at stage 4, after the passive shadow install).
+
 ## Not done yet (rest of 3a and beyond)
 
-- **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only.
+- **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
 - Warden runs on the worker, not the gateway.
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
-- The gateway has no conf catalog entry, `.conf.dist`, `--check-config` or metrics; its link counters are only in-process.
-- Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5); the reroute itself is not built.
-- A gateway or World restart still drops every client. The 3b handoff above moves the ownership and the players' saved
-  state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
-  per-session routing, synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, input buffered during the freeze) and an
-  authenticated operator trigger are not built.
-- The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
-  assembly is still to be split out.
+- The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
+- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process only, not on a real client.
+- The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
+- A gateway or World restart still drops every client. An authenticated operator trigger for the handoff is not built.
+- The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
+  gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
+  link client and the handoff router seam; those need their own split before the reference can go.
 - **Cluster roles beyond combined and worker are not hosted.** The World daemon runs either combined or as a gateway worker
-  (Cluster:Worker). No daemon runs a social, economy or coordinator role, and nothing reads a node role. So the M15.2 pieces
-  that only matter in that topology are tested library code, not live:
-  - `ClusterRoleFeatureFilter` (keeps realm-singleton timers such as AutoBroadcast and the auction bot on one node) is never
-    constructed. Every feature attaches on every World process, which is correct for the single combined or worker process
-    that exists today.
-  - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
-    therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
+  (Cluster:Worker). `ClusterNodeOptions.Validate` refuses the Social, Economy and Gateway roles on a World process, so the
+  only cluster role a World process takes is MapWorker. The role pieces that exist are registered and used, but only in that
+  one shape:
+  - `ClusterNodeHosting.AddClusterNodeRole` registers `ClusterRoleFeatureFilter`, `RealmAuthorityLeaseKeeper` and the
+    database-backed `EfRealmAuthorityLeaseStore` (as `IRealmAuthorityLeaseStore`) whenever `Cluster:Node:Role` is not
+    Combined. `WorldHost` takes the leases it can get at start and attaches a feature only when the filter admits it, so
+    the auction bot and AutoBroadcast run only under a lease the node holds. A MapWorker also takes the Instances lease scope; it gates only the realm-wide durable writes of the instance reset schedule (see [instances.md](instances.md)).
+  - What is still missing is what those pieces serve: cross-process realm services on the link at the lease holder
+    (S2/S3) and map routing (S4). Decision D3 means there will be no dedicated social or economy process. The staged plan is in the
+    [design](../CLUSTERING_DESIGN.md#decisions-and-staged-plan-2026-10-30) (S0-S7).
 - **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
   supervisor only (see "Running under the host supervisor" above and the
   [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)); the `Cluster:Supervisor` keys are in the conf

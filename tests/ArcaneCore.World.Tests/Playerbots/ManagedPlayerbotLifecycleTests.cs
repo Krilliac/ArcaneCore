@@ -528,20 +528,26 @@ public sealed class ManagedPlayerbotLifecycleTests
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
-        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 3; });
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultback", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the quarantine", 20);
+        // Game time, not wall time: the backoff and the checkpoints that act on it run on the manual world clock.
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Faulted, null, "the quarantine");
         Assert.StartsWith("quarantined (fault 1/3): action: fixture-action-fault", (await owners.FindAsync(id))!.ErrorCode);
 
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Running, "the retry", 30);
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Running, null, "the retry");
 
         ManagedPlayerbot record = (await owners.FindAsync(id))!;
         Assert.True(record.DesiredEnabled);
         Assert.Null(record.ErrorCode);
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Faultback") is not null, "the bot is back in the world");
+        for (int tick = 0; tick < 2_000 && !await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultback") is not null); tick++)
+        {
+            await host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.NotNull(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultback")));
         Assert.False(feature.IsScripted(id)); // the scenario controller that faulted is gone; the brain runs it
     }
 
@@ -551,18 +557,24 @@ public sealed class ManagedPlayerbotLifecycleTests
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
         var owners = new MemoryManagedPlayerbotStore();
-        await using WorldTestHost host = Start(accounts, characters, owners, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 1; });
+        await using WorldTestHost host = Start(accounts, characters, owners, manualClock: true, configure: o => { o.FaultBackoffSeconds = 1; o.MaxFaults = 1; });
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Faultout", 1, 1)).BotId);
         Assert.True((await feature.StartScriptedAsync(id.ToString(), new ThrowingController(1))).Success);
 
-        await WaitAsync(async () => (await owners.FindAsync(id))?.State == ManagedPlayerbotState.Faulted, "the fault", 20);
+        await StepUntilAsync(host, feature, () => owners.Peek(id)?.State == ManagedPlayerbotState.Faulted, null, "the fault");
         ManagedPlayerbot record = (await owners.FindAsync(id))!;
         Assert.False(record.DesiredEnabled);
         Assert.StartsWith("disabled after 1 faults: action: fixture-action-fault", record.ErrorCode);
 
-        await Task.Delay(TimeSpan.FromSeconds(7)); // past the next checkpoint and the backoff
+        // 7 s of game time: past the next checkpoint and the backoff.
+        for (int tick = 0; tick < 140; tick++)
+        {
+            await host.World.AdvanceClockAsync(50);
+            await (await host.World.InvokeAsync(() => feature.LastCheckpoint)).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
         Assert.Equal(ManagedPlayerbotState.Faulted, (await owners.FindAsync(id))!.State);
         Assert.Null(await host.World.InvokeAsync(() => host.World.FindOnlinePlayer("Faultout")));
     }
@@ -899,12 +911,31 @@ public sealed class ManagedPlayerbotLifecycleTests
         public async Task<Account> CreateAsync(Guid botId, Account account, CancellationToken cancellationToken = default)
         {
             Account created = await accounts.CreateAsync(account, cancellationToken);
-            _pending[botId] = new ManagedPlayerbotProvision(botId, created.Id, created.Username, 1);
+            // The clock the real journal stamps rows with (EfManagedPlayerbotProvisionStore): a split cluster's sweep tells a create in flight from a dead one by this age.
+            _pending[botId] = new ManagedPlayerbotProvision(botId, created.Id, created.Username, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             return created;
         }
 
+        /// <summary>Remove the journal rows of an account name behind the feature's back.</summary>
+        public void RemovePendingOutOfBand(string accountName)
+        {
+            foreach (ManagedPlayerbotProvision row in _pending.Values.Where(r => r.AccountName == accountName)) _pending.TryRemove(row.BotId, out _);
+        }
+
+        /// <summary>A journal row another worker wrote (or left behind), with the creation time the test chooses.</summary>
+        public void AddPendingOutOfBand(Guid botId, int accountId, string accountName, long createdUnix)
+            => _pending[botId] = new ManagedPlayerbotProvision(botId, accountId, accountName, createdUnix);
+
+        private int _loadPendingCalls;
+
+        /// <summary>How many times the pending rows were loaded (every reconcile loads them once).</summary>
+        public int LoadPendingCalls => Volatile.Read(ref _loadPendingCalls);
+
         public Task<IReadOnlyList<ManagedPlayerbotProvision>> LoadPendingAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.ToArray());
+        {
+            Interlocked.Increment(ref _loadPendingCalls);
+            return Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.OrderBy(row => row.CreatedUnix).ThenBy(row => row.BotId).ToArray());
+        }
 
         public Task<bool> CompleteAsync(Guid botId, int accountId, CancellationToken cancellationToken = default)
             => Task.FromResult(_pending.TryRemove(botId, out ManagedPlayerbotProvision? proof) && proof.AccountId == accountId);
@@ -995,8 +1026,29 @@ public sealed class ManagedPlayerbotLifecycleTests
         /// <summary>Runs first in the next registrations (a test changes the world mid-creation here).</summary>
         public Action<ManagedPlayerbot>? OnCreate { get; set; }
 
+        private TaskCompletionSource? _createHeld;
+        private TaskCompletionSource _createRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// The next registration waits (before storing anything, with its journal row and character already written) until <see cref="ReleaseHeldCreate"/>; the returned task completes
+        /// when it is waiting. A create parked here is another worker's create in flight.
+        /// </summary>
+        public TaskCompletionSource HoldNextCreate()
+        {
+            _createRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _createHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        public void ReleaseHeldCreate() => _createRelease.TrySetResult();
+
         public async Task CreateAsync(ManagedPlayerbot bot, CancellationToken cancellationToken = default)
         {
+            if (Interlocked.Exchange(ref _createHeld, null) is { } createHeld)
+            {
+                createHeld.TrySetResult();
+                await _createRelease.Task.WaitAsync(TimeSpan.FromSeconds(60), CancellationToken.None);
+            }
+
             OnCreate?.Invoke(bot);
             if (FailNextCreate) { FailNextCreate = false; throw new InvalidOperationException("fixture-create-failure"); }
             if (Interlocked.Exchange(ref _nextCreateException, null) is { } next) throw next;

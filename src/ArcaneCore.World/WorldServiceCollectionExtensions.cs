@@ -64,6 +64,7 @@ public static class WorldServiceCollectionExtensions
         services.Configure<AntiCheat.PacketHeuristics.PacketHeuristicsOptions>(configuration.GetSection(AntiCheat.PacketHeuristics.PacketHeuristicsOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
         services.Configure<Cluster.Supervision.ClusterSupervisorOptions>(configuration.GetSection(Cluster.Supervision.ClusterSupervisorOptions.SectionName));
+        Cluster.Supervision.ClusterRestartHosting.AddClusterRestart(services, configuration); // .cluster restart: handoff driver + supervisor restart requester (only with Cluster:Supervisor:Processes)
         // Subsystem modules (the playerbot pack's options and services, bot QA): discovered, so the core names none of their types.
         foreach (IWorldServiceModule module in ServiceModules)
         {
@@ -79,16 +80,20 @@ public static class WorldServiceCollectionExtensions
         services.AddWorldFeatures();
         services.AddSingleton<Cluster.Social.IRealmSingletonHalt>(sp => sp.GetRequiredService<Economy.AuctionBotFeature>()); // halted when the economy realm authority lease is lost
         services.AddSingleton<Cluster.Social.IRealmSingletonHalt>(sp => sp.GetRequiredService<ServerMail.AutoBroadcastFeature>()); // halted when the social realm authority lease is lost
+        services.AddSingleton<Cluster.Social.IRealmSingletonHalt>(sp => sp.GetRequiredService<Instances.InstanceFeature>()); // halted when the instances realm authority lease is lost
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
         services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
         services.AddSingleton(sp => new SessionRegistry(sp.GetRequiredService<IAccountSessionClaimStore>()));
         services.AddSingleton<ISessionClaims>(sp => sp.GetRequiredService<SessionRegistry>());
+        services.AddSingleton(sp => new WorldLoginAdmission(sp, sp.GetRequiredService<IOptions<RealmList.RealmStatusOptions>>(), sp.GetRequiredService<ILogger<WorldLoginAdmission>>())); // .server plimit: the player limit and the realm lock checked at CMSG_AUTH_SESSION
         services.TryAddSingleton<WorldWriterGuard>(); // the characters database's single-writer file lock (WorldStartup takes it before the schema initializers)
         services.TryAddSingleton<ShutdownDrain>(); // the stall-only shutdown lanes of the write queues (WorldHost begins them)
+        services.TryAddSingleton<CharacterRetirementRegistry>(); // the characters a whole-World handoff moved to another process: every character write queue drops their writes
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();
+        services.AddSingleton<CharacterClaimService>(); // Worker scope: the login claim (with the login-time reap) and the logout release of a character's cluster_transfer_owner claim
         services.AddSingleton(sp => Gm.Diagnostics.WorldPersistenceProbes.CreateRegistry(sp)); // every write-behind queue, for .arcane queues
         services.AddSingleton(sp => new WorldRuntime(
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,
@@ -104,7 +109,10 @@ public static class WorldServiceCollectionExtensions
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
         Cluster.Gateway.GatewayWorkerServiceCollectionExtensions.AddGatewayWorker(services, configuration); // Cluster:Worker (Tier 3a), off by default: registers nothing
+        Cluster.Handoff.WorldHandoffHosting.AddWorldHandoff(services, configuration); // whole-World handoff source, coordinator provider and start-up recovery (worker mode only)
         Cluster.Social.ClusterNodeHosting.AddClusterNodeRole(services, configuration); // Cluster:Node (M15.2), Combined by default: registers only the options
+        Cluster.Social.ClusterPresenceHosting.AddClusterPresence(services); // realm presence directory, social router and the publisher the social feature feeds (M15.2)
+        Cluster.Social.ClusterPeerLinkHosting.AddClusterPeerLink(services, configuration); // Cluster:Peer: peer link client and the Social holder's presence listener (cluster mode only)
 
         services.AddOpsAnnouncer(configuration); // staff notices / world messages (World:Announce); the hot swap lanes report through it
 

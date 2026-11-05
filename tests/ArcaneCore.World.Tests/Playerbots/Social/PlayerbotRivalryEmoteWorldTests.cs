@@ -553,7 +553,7 @@ public sealed class PlayerbotRivalryEmoteWorldTests
     // --- the layers: War Mode and RudeAtBots (design 7.1) -------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task UnderWarMode_AWarOnlyRivalPlayerIsTaunted_ButABotIsStillJudgedByTheNormalLayer()
+    public async Task UnderWarMode_AWarOnlyRivalPlayerIsTaunted_AndSoIsAWarOnlyRivalBot()
     {
         await using SocialWorld world = await RivalryKit.StartAsync(o => o.Social.Rivalry.Emotes.RudeAtBots = true);
         Guid bot = await world.AddBotAsync("Rvwarbot");
@@ -572,7 +572,7 @@ public sealed class PlayerbotRivalryEmoteWorldTests
 
         await RivalryKit.RunAsync(world, 3_600_000);
         Assert.Contains(Sends(world), s => s.Bot == bot && s.Target == playerGuid && s.Rude && !s.TargetIsBot); // toward a player the war layer decides
-        Assert.DoesNotContain(Sends(world), s => s.Bot == bot && s.Target == foeBotGuid);                      // toward a bot only the normal layer does
+        Assert.Contains(Sends(world), s => s.Bot == bot && s.Target == foeBotGuid && s.Rude && s.TargetIsBot);  // and toward a bot (RudeAtBots on)
 
         // War Mode off: the same player is just a dislike again, and the bot stays quiet toward both.
         world.Options.Social.WarMode.Enabled = false;

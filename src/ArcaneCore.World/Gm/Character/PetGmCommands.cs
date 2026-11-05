@@ -149,6 +149,7 @@ public sealed class PetGmCommands : ICommandGroup
             catch (Exception ex)
             {
                 log.LogError(ex, "Reading the pets of character {Id} for .pet list failed", identity.Id);
+                context.Fail("failed");
                 lines = [PetsUnavailable];
             }
 
@@ -277,14 +278,17 @@ public sealed class PetGmCommands : ICommandGroup
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<IPetAdminStore>() is not { } store)
                 {
+                    context.Fail("failed");
                     reply = PetsUnavailable;
                 }
                 else if (await store.FindAsync(petNumber).ConfigureAwait(false) is not { } found)
                 {
+                    context.Fail("no-such-pet");
                     reply = PetNotFound(petNumber);
                 }
                 else if (await context.World.InvokeAsync(() => OnlineOwnerOrFence(context, summons, found.CharacterId)).ConfigureAwait(false) is { } online)
                 {
+                    context.Fail("owner-online");
                     reply = OwnerOnline(petNumber, online);
                 }
                 else
@@ -307,6 +311,7 @@ public sealed class PetGmCommands : ICommandGroup
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 log.LogError(ex, "GM change of stored pet #{PetNumber} failed", petNumber);
+                context.Fail("failed");
                 reply = PetStoreFailed;
             }
 

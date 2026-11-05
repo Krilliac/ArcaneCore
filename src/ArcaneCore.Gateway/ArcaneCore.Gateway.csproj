@@ -2,9 +2,10 @@
 
   <!-- Tier 3a gateway (docs/areas/gateway.md, docs/design/hot-reload-tiers.md section 5): owns the client sockets, the world
        auth handshake and the header cipher, and forwards plaintext opcodes to a World running in worker mode (Cluster:Worker).
-       It references ArcaneCore.World for the link protocol (src/ArcaneCore.World/Cluster/Gateway) and the build protocols;
-       splitting those into a small shared assembly is follow-up work, so this process loads the World assembly but runs none
-       of its game code. -->
+       The link protocol lives in ArcaneCore.Cluster.Protocol. The Gateway still references ArcaneCore.World for the opcode-level
+       types it shares with the world (World.Net: WorldSession constants, AddonInfo, build protocols over Game), the session link
+       client (World/Cluster/Gateway) and the handoff router seam (World/Cluster/Handoff); this process loads the World assembly but
+       runs none of its game code. -->
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <OutputType>Exe</OutputType>
@@ -21,6 +22,7 @@
     <ProjectReference Include="..\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
     <ProjectReference Include="..\ArcaneCore.Data\ArcaneCore.Data.csproj" />
     <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Cluster.Protocol\ArcaneCore.Cluster.Protocol.csproj" />
     <ProjectReference Include="..\ArcaneCore.World\ArcaneCore.World.csproj" />
   </ItemGroup>
 

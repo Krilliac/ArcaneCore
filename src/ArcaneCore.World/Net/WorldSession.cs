@@ -66,6 +66,21 @@ public sealed class WorldSessionOptions
     internal TimeSpan EffectiveWriterDrainBound => WriterDrainGrace > TimeSpan.Zero ? WriterDrainGrace : DefaultWriterDrainBound;
 
     /// <summary>
+    /// How long a closing session waits for its close command to run on the world thread, behind the commands it queued earlier (an
+    /// EnterWorld already past its claim check, a handler mid-run), so they finish while the session's DI scope is still alive.
+    /// <see cref="TimeSpan.Zero"/>, the default, means the built-in 10 s bound; the wait is never unbounded and a timeout is logged
+    /// (the scope then ends anyway). It is skipped when no world thread runs. vmangos has no per-connection scope and so no such
+    /// wait. Bound from World:WorldCloseGrace (for example "00:00:05").
+    /// </summary>
+    public TimeSpan WorldCloseGrace { get; set; } = TimeSpan.Zero;
+
+    /// <summary>The bound a zero (or negative) <see cref="WorldCloseGrace"/> stands for.</summary>
+    public static readonly TimeSpan DefaultWorldCloseBound = TimeSpan.FromSeconds(10);
+
+    /// <summary>The bound a closing session applies: <see cref="WorldCloseGrace"/> when positive, else <see cref="DefaultWorldCloseBound"/>.</summary>
+    internal TimeSpan EffectiveWorldCloseBound => WorldCloseGrace > TimeSpan.Zero ? WorldCloseGrace : DefaultWorldCloseBound;
+
+    /// <summary>
     /// How long a world connection may stay unauthenticated (no valid CMSG_AUTH_SESSION yet),
     /// counted from accept; the session is closed when it expires. This is the retail rule:
     /// vmangos <c>Network.TimeoutSecsIfNoAuth = 10</c> (WorldSocket.cpp:621-628,
@@ -137,6 +152,10 @@ public sealed partial class WorldSession : IPlayerSession
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly ConcurrentQueue<QueuedPacket> _worldQueue = new();
     private readonly CancellationTokenSource _kick = new();
+
+    // Completed by the command Close() posts to the world thread (World.Post is FIFO), so it runs after every command the session queued earlier.
+    private readonly TaskCompletionSource _worldClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private volatile bool _worldCloseQueued;
     private readonly CancellationTokenSource _writerAbort = new();
     private long _outboundBytes;
     private int _queuedPackets;
@@ -221,6 +240,9 @@ public sealed partial class WorldSession : IPlayerSession
 
     public SessionState State => _state;
 
+    /// <inheritdoc />
+    public bool IsDisconnected => _state == SessionState.Closed;
+
     /// <summary>World-handler packets queued for the world thread and not yet handled or dropped.</summary>
     public int QueuedWorldPackets => Volatile.Read(ref _queuedPackets);
 
@@ -296,7 +318,34 @@ public sealed partial class WorldSession : IPlayerSession
         finally
         {
             Close();
+            await AwaitWorldCloseAsync().ConfigureAwait(false);
             await DrainWriterAsync(writer).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Wait (bounded by <see cref="WorldSessionOptions.EffectiveWorldCloseBound"/>) until the close command <see cref="Close"/> posted has run
+    /// on the world thread. Commands the session queued earlier (EnterWorld resolves services from the session's scope) run before it, so
+    /// the caller may end the scope afterwards. Not waited for when no world thread runs, which covers a stopped world (<c>Stop</c> retires the
+    /// thread before it marks the world stopped, so nothing would complete the close), nor on the world thread itself (the close command is
+    /// queued behind the running one, so a caller that blocked on this task there would deadlock the thread that has to run it). A timeout is logged and the caller proceeds, so a stalled world
+    /// cannot hang disconnect or shutdown.
+    /// </summary>
+    internal async Task AwaitWorldCloseAsync()
+    {
+        if (!_worldCloseQueued || World.IsMainWorldThread || _worldClosed.Task.IsCompleted)
+        {
+            return;
+        }
+
+        TimeSpan bound = _options.EffectiveWorldCloseBound;
+        try
+        {
+            await _worldClosed.Task.WaitAsync(bound).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("[{Endpoint}] the world thread did not run the session close within {Bound}; ending the session scope anyway", RemoteEndpoint, bound);
         }
     }
 
@@ -320,6 +369,10 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Outbound(opcode, payload);
+        }
 
         if (opcode == WorldOpcode.SmsgNewWorld)
         {
@@ -474,6 +527,11 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     return;
                 }
+            }
+
+            if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
             }
         }
     }
@@ -736,7 +794,7 @@ public sealed partial class WorldSession : IPlayerSession
     /// </summary>
     private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception);
 
-    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload)
+    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload, uint? receivedMs = null)
     {
         try
         {
@@ -818,7 +876,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
-                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds(), _injectDispatch));
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, receivedMs ?? (uint)Clock.Milliseconds(), _injectDispatch));
                     World.WakeIfManual();
                 }
                 else
@@ -837,7 +895,13 @@ public sealed partial class WorldSession : IPlayerSession
                 return true;
             }
 
+            long traceStart = Volatile.Read(ref _sessionTrace) is null ? 0 : Stopwatch.GetTimestamp();
             await handler.Session!(this, payload).ConfigureAwait(false);
+            if (traceStart != 0 && Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(opcode, traceStart, 0);
+            }
+
             return true;
         }
         catch (Exception ex) when (IsMalformed(ex))
@@ -947,6 +1011,7 @@ public sealed partial class WorldSession : IPlayerSession
     private void ReportUnhandled(WorldOpcode opcode, int length)
     {
         long count = _unhandled.Record(opcode);
+        NoteUnhandledOpcode(opcode);
         if (count == 1)
         {
             string label = UnhandledOpcodeTracker.LabelOf(opcode);
@@ -1036,6 +1101,22 @@ public sealed partial class WorldSession : IPlayerSession
             _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Banned);
             return false;
+        }
+
+        // .server plimit: a realm lock above the account's security level, or a full world for a plain player, is refused before the
+        // account data is read (vmangos WorldSocket.cpp:349-358 AUTH_UNAVAILABLE; World.cpp:316 queue, which ArcaneCore answers the same way).
+        // A reconnect of an account that already has a session replaces it, so that account is not counted against the limit.
+        // Managed sessions (playerbots, console) are not clients waiting for a slot, so they are left out: ArcaneCore has no login queue,
+        // and counting bots would refuse every real player once enough bots are online.
+        if (Services.GetService<WorldLoginAdmission>() is { } admission)
+        {
+            int others = admission.AmountLimit > 0 ? WorldLoginAdmission.CountOtherSessions(_registry.Sessions, stored.Id) : 0;
+            if (admission.Check(stored.Security, others) is { } refusal)
+            {
+                _logger.LogInformation("[{Endpoint}] refused world login for '{Account}': the realm is locked or full (limit {Limit})", RemoteEndpoint, account, admission.Limit);
+                SendAuthResponse(refusal);
+                return false;
+            }
         }
 
         // An earlier session of the account may hold values not yet written (throttled or queued): take them before the read and lay
@@ -1207,6 +1288,10 @@ public sealed partial class WorldSession : IPlayerSession
         // The 1.12 client uploads its changed settings in a burst as it logs out: the last session of the account queues what the throttle
         // still holds (the feature writes from a scope of its own, so this session's scope ending does not matter).
         Interlocked.Exchange(ref _accountDataFeature, null)?.EndSession(_accountDataAccountId);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Disconnected(this);
+        }
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing
@@ -1214,12 +1299,20 @@ public sealed partial class WorldSession : IPlayerSession
 
         // Remove the player on the world thread; queued after any pending login command, which
         // sees the Closed state and backs out.
+        _worldCloseQueued = true;
         World.Post(() =>
         {
-            if (Player is { } player)
+            try
             {
-                World.RemovePlayer(player);
-                Player = null;
+                if (Player is { } player)
+                {
+                    World.RemovePlayer(player);
+                    Player = null;
+                }
+            }
+            finally
+            {
+                _worldClosed.TrySetResult();
             }
         });
         _logger.LogInformation("[{Endpoint}] session closed", RemoteEndpoint);

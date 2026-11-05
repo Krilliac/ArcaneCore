@@ -350,7 +350,7 @@ public sealed class GatewayWardenVerdictReplayGuardTests
         var sources = Enumerable.Range(0, 8).Select(i => new ClusterWardenVerdictSource("gateway-stress", Guid.NewGuid())).ToArray();
         int[] acceptedPerId = new int[ids];
 
-        Parallel.For(0, ids * 4, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
+        System.Threading.Tasks.Parallel.For(0, ids * 4, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
         {
             int id = n % ids;
             ClusterWardenVerdictSource source = sources[id % sources.Length];

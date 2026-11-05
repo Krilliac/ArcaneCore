@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -47,6 +48,11 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
         _retryDelay = retryDelay ?? TimeSpan.FromSeconds(2);
     }
 
+    private const string QueueName = "SkillSaveCoordinator";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
     /// <summary>Characters with a snapshot waiting or being retried.</summary>
     public int Pending => _pending.Count;
 
@@ -71,6 +77,11 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
     public void Enqueue(int characterId, CharacterSkillSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         _pending[characterId] = new Entry(snapshot, Interlocked.Increment(ref _version));
         _signal.Release();
     }
@@ -135,6 +146,7 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
             }
         }
 
+        Retirement?.LogStopSummary(_logger, QueueName);
         _stop.Dispose();
         _signal.Dispose();
     }
@@ -279,6 +291,12 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
     private async Task<bool> TryWriteAsync(int characterId, Entry entry)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            DropRetired(characterId, entry); // retired since it was queued (or retained): dropped, so it counts as drained
+            return true;
+        }
+
         lock (_waitersLock)
         {
             if (_terminalFailure is { } terminal)
@@ -316,6 +334,11 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
                 return true;
             }
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                DropRetired(characterId, entry); // refused because the character moved to another world: counted, neither logged nor terminal
+                return true;
+            }
             catch (CharacterOwnershipRejectedException ex)
             {
                 FaultLedger.Shared.Record("writequeue.skill-ownership", ex);
@@ -344,6 +367,16 @@ public sealed class SkillSaveCoordinator : IAsyncDisposable
 
             _logger.LogFault("writequeue.skill", ex, "Saving the skills of character {Character} failed; it is retried", characterId);
             return false;
+        }
+    }
+
+    /// <summary>Forget the snapshot (only that one: a newer one is itself dropped when reached) and the failure of a character that moved to another world.</summary>
+    private void DropRetired(int characterId, Entry entry)
+    {
+        _pending.TryRemove(new KeyValuePair<int, Entry>(characterId, entry));
+        lock (_waitersLock)
+        {
+            _lastFailure.Remove(characterId);
         }
     }
 

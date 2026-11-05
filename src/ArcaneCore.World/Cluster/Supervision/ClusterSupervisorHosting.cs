@@ -44,6 +44,15 @@ public sealed class ClusterSupervisorHostedService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // Before anything is planned or launched: children a crashed predecessor left running are adopted or terminated, so no orphan worker keeps its leases.
+        SupervisorReconciliationReport reconciled = _supervisor.ReconcileOrphans();
+        if (reconciled.Adopted.Count + reconciled.Terminated.Count + reconciled.Failed.Count > 0)
+        {
+            _logger.LogWarning(
+                "Supervisor restart reconciliation: adopted [{Adopted}], terminated [{Terminated}], could not terminate [{Failed}]",
+                string.Join(", ", reconciled.Adopted), string.Join(", ", reconciled.Terminated), string.Join(", ", reconciled.Failed));
+        }
+
         SupervisorStartPlan plan = _supervisor.PlanStartAll();
         foreach ((string name, string reason) in plan.Denied)
         {
@@ -57,11 +66,10 @@ public sealed class ClusterSupervisorHostedService : IHostedService
         }
 
         _supervisor.BelowMinimum += OnBelowMinimum;
-        foreach (string name in plan.Admitted)
-        {
-            SupervisedProcessSnapshot snapshot = await _supervisor.StartProcessAsync(name, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId);
-        }
+        await _supervisor.StartInGroupsAsync(
+            plan.Admitted,
+            snapshot => _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId),
+            cancellationToken).ConfigureAwait(false);
 
         _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started
     }
@@ -136,10 +144,16 @@ public static class ClusterSupervisorHosting
             timeProvider: sp.GetService<TimeProvider>(),
             hangCapture: sp.GetRequiredService<ISupervisedHangCapture>(),
             crashDialog: sp.GetService<SupervisorCrashDialog>(),
-            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterHostSupervisor>()));
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterHostSupervisor>(),
+            childStateFile: CreateChildStateFile(sp.GetRequiredService<IOptions<ClusterSupervisorOptions>>().Value),
+            processInspector: sp.GetService<ISupervisorProcessInspector>()));
         services.AddHostedService<ClusterSupervisorHostedService>();
         return services;
     }
+
+    /// <summary>The state file named by <see cref="ClusterSupervisorOptions.ChildStateFile"/>, or null when that is empty (the record is off).</summary>
+    private static SupervisorChildStateFile? CreateChildStateFile(ClusterSupervisorOptions options)
+        => string.IsNullOrWhiteSpace(options.ChildStateFile) ? null : new SupervisorChildStateFile(options.ChildStateFile);
 
     /// <summary>
     /// The supervisor's own crash dialog for children that exit unexpectedly. The supervisor mode never calls <c>UseArcaneDiagnostics</c>, so the

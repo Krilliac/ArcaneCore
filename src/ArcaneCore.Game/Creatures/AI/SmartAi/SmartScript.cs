@@ -59,6 +59,13 @@ public sealed class SmartScript
     private readonly List<SmartHolder> _timedList = [];
     private readonly List<string> _unsupported = [];
     private bool _processingTimedList;
+
+    // SMART_ACTION_TALK bookkeeping for SMART_EVENT_TEXT_OVER (SmartScript.cpp:259-262, 5322-5335): the last text group said, who said it, and the
+    // countdown of its duration.
+    private uint _textTimerMs;
+    private uint _lastTextGroup;
+    private uint _talkerEntry;
+    private bool _useTextTimer;
     private int _actionDepth;
 
     internal SmartScript(CreatureSmartAI ai, IReadOnlyList<SmartScriptRow> rows, SmartScriptCatalog? catalog = null)
@@ -182,6 +189,22 @@ public sealed class SmartScript
         }
 
         if (needCleanup) _timedList.Clear();
+
+        // SmartScript.cpp:5322-5335: the said text's duration ran out (a countdown below this update, so duration 0 fires on the next one).
+        if (_useTextTimer && Me is not null)
+        {
+            if (_textTimerMs < diffMs)
+            {
+                uint group = _lastTextGroup;
+                uint entry = _talkerEntry;
+                _lastTextGroup = 0;
+                _talkerEntry = 0;
+                _textTimerMs = 0;
+                _useTextTimer = false;
+                ProcessEventsFor(SmartEvent.TextOver, null, group, null, entry);
+            }
+            else _textTimerMs -= diffMs;
+        }
     }
 
     /// <summary>AzerothCore UpdateTimer: phase and combat gates, the cast delay while casting, then the timed events run.</summary>
@@ -264,6 +287,11 @@ public sealed class SmartScript
 
     private void ProcessEvent(SmartHolder e, Unit? invoker, uint var0 = 0, SpellInfo? spell = null, uint var1 = 0)
     {
+        if (!StackGuard.TryEnter("smartai.action"))
+        {
+            return; // a script chain too deep for the stack: the nested event is dropped (the fault is recorded)
+        }
+
         try
         {
             if (!e.Active && e.Event != SmartEvent.Link) return;
@@ -363,6 +391,12 @@ public sealed class SmartScript
                     RecalcTimer(e, r.EventParam2, r.EventParam3);
                     ProcessAction(e, invoker);
                     break;
+                case SmartEvent.RewardQuest:
+                    // SmartScript.cpp:4728-4735: param1 the quest (var0, 0 any); cooldown param2..param3.
+                    if (r.EventParam1 != 0 && r.EventParam1 != var0) return;
+                    RecalcTimer(e, r.EventParam2, r.EventParam3);
+                    ProcessAction(e, invoker);
+                    break;
                 case SmartEvent.ReceiveEmote:
                     // SMART_EVENT_RECEIVE_EMOTE: param1 the text emote (var0); cooldown param2..param3.
                     if (r.EventParam1 != var0) return;
@@ -379,6 +413,23 @@ public sealed class SmartScript
                 case SmartEvent.GossipSelect:
                     // SmartScript.cpp:4780-4787: param1 the gossip menu id (var0) and param2 the option id (var1) must both match.
                     if (r.EventParam1 != var0 || r.EventParam2 != var1) return;
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.MovementInform:
+                    // SmartScript.cpp:4683-4693: param1 the movement type (0 any; var0, AzerothCore numbering), param2 the point id (0 any; var1).
+                    // The path id (param3) is refused unless 0 at load.
+                    if ((r.EventParam1 != 0 && var0 != r.EventParam1) || (r.EventParam2 != 0 && var1 != r.EventParam2)) return;
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.DataSet:
+                    // SmartScript.cpp:4757-4764: param1 the data id (var0) and param2 the value (var1) must both match; cooldown param3..param4.
+                    if (r.EventParam1 != var0 || r.EventParam2 != var1) return;
+                    RecalcTimer(e, r.EventParam3, r.EventParam4);
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.TextOver:
+                    // SmartScript.cpp:4750-4756: param1 the text group said (var0), param2 the speaker's entry (0 any; var1).
+                    if (var0 != r.EventParam1 || (r.EventParam2 != 0 && var1 != r.EventParam2)) return;
                     ProcessAction(e, invoker);
                     break;
                 case SmartEvent.GossipHello:
@@ -436,6 +487,15 @@ public sealed class SmartScript
                         if (system is null) break;
                         Unit? talkTarget = targets.OfType<Unit>().FirstOrDefault() ?? invoker;
                         system.SayText(me, (int)r.ActionParam1, talkTarget);
+
+                        // SmartScript.cpp:253-262: only an existing text arms SMART_EVENT_TEXT_OVER; param2 is the duration in milliseconds.
+                        if (system.TextExists((int)r.ActionParam1))
+                        {
+                            _talkerEntry = me.Entry;
+                            _lastTextGroup = r.ActionParam1;
+                            _textTimerMs = r.ActionParam2;
+                            _useTextTimer = true;
+                        }
                     }
                     else
                     {
@@ -552,9 +612,9 @@ public sealed class SmartScript
                     foreach (Unit u in targets.OfType<Unit>()) u.SetUInt32(UpdateFields.UnitNpcEmotestate, r.ActionParam1);
                     break;
                 case SmartAction.Evade:
-                    // SMART_ACTION_EVADE: only `me` evades (the target is ignored). The reason is the calling member, so unlike EventAI's evade
-                    // (CreatureAnomalies.ScriptedEvadeReason) a SmartAI evade loop is reported as creature/evade-loop.
-                    if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me);
+                    // SMART_ACTION_EVADE: only `me` evades (the target is ignored). Like EventAI's evade it passes
+                    // CreatureAnomalies.ScriptedEvadeReason: a fight a script ends on purpose is no creature/evade-loop.
+                    if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me, CreatureAnomalies.ScriptedEvadeReason);
                     break;
                 case SmartAction.RemoveAurasFromSpell:
                     // SMART_ACTION_REMOVEAURASFROMSPELL: spell 0 strips every aura (creature targets only here), else the spell's auras go.
@@ -620,6 +680,26 @@ public sealed class SmartScript
                         ? (r.TargetX, r.TargetY, r.TargetZ)
                         : targets.FirstOrDefault() is { } t ? (t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ) : null;
                     if (point is { } p) me.Motion.MovePoint(r.ActionParam1, p.x, p.y, p.z, run: me.Combat.IsInCombat);
+                    break;
+                }
+                case SmartAction.SetInstData:
+                    // SmartScript.cpp:1236-1269: the base object's (else the invoker's) instance script; type 0 only (refused otherwise at load).
+                    ((WorldObject?)_owner.Base ?? invoker)?.Map?.FindUpdater<Instances.Scripts.InstanceData>()?.SetData(r.ActionParam1, r.ActionParam2);
+                    break;
+                case SmartAction.SummonGo:
+                {
+                    // SmartScript.cpp:1651-1681: per target at its position plus the offsets, or at the base object with targetsummon; then at a
+                    // POSITION target. The despawn time is seconds (Object.cpp:2494 SetRespawnTime).
+                    if (_owner.Base is not { } summoner || _owner.Objects is not { } objects) break;
+                    foreach (WorldObject t in targets)
+                    {
+                        if (r.ActionParam3 == 0)
+                            objects.Summon(r.ActionParam1, t.X + r.TargetX, t.Y + r.TargetY, t.Z + r.TargetZ, t.Orientation + r.TargetO, r.ActionParam2);
+                        else objects.Summon(r.ActionParam1, summoner.X, summoner.Y, summoner.Z, summoner.Orientation, r.ActionParam2);
+                    }
+
+                    if (r.TargetType == (byte)SmartTarget.Position)
+                        objects.Summon(r.ActionParam1, r.TargetX, r.TargetY, r.TargetZ, r.TargetO, r.ActionParam2);
                     break;
                 }
                 case SmartAction.CallTimedActionList:

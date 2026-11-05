@@ -71,6 +71,15 @@ internal static partial class DbCopyTestSupport
             }
         }
 
+        if (model.Tables.Any(t => t.Name == "character_ownership"))
+        {
+            // The generated rows alternate true and false for a bool column: a seeded source must look like a database no world owns (copy refuses an active ownership scope).
+            await using SqliteCommand release = connection.CreateCommand();
+            release.Transaction = (SqliteTransaction)transaction;
+            release.CommandText = "UPDATE \"character_ownership\" SET \"active\" = 0";
+            await release.ExecuteNonQueryAsync();
+        }
+
         await transaction.CommitAsync();
     }
 

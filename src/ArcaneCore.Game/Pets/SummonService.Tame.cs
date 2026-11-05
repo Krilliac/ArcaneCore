@@ -50,6 +50,10 @@ public sealed partial class SummonService
         spells.RegisterEffect(SpellEffectName.FeedPet, EffectFeedPet);
         spells.RegisterEffectCheck(SpellEffectName.LearnPetSpell, CheckLearnPetSpell);
         spells.RegisterEffect(SpellEffectName.LearnPetSpell, EffectLearnPetSpell);
+        // vmangos Spell::CheckCast SPELL_EFFECT_LEARN_SPELL (Spell.cpp:5806-5833): a learn spell aimed at the caster's pet (Warlock Grimoires) has the
+        // LEARN_PET_SPELL checks; its effect reaches EffectLearnPetSpell through SpellSystem.EffectLearnSpell.
+        spells.RegisterEffectCheck(SpellEffectName.LearnSpell,
+            context => context.Effect.TargetA == SpellImplicitTarget.UnitCasterPet ? CheckLearnPetSpell(context) : SpellCastResult.CastOk);
     }
 
     /// <summary>vmangos Spell::CheckTamingSpell: the failure reason, or null when the target can be tamed.</summary>

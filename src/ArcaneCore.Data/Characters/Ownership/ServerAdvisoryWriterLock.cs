@@ -156,17 +156,34 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     }
 
     /// <summary>The MariaDB/MySQL lock name for a database: <see cref="NamePrefix"/> + lower-cased name, or the prefix + 32 hex characters of SHA-256(lower-cased name) when that exceeds 64 characters.</summary>
-    internal static string MySqlLockName(string databaseName)
+    internal static string MySqlLockName(string databaseName) => MySqlLockName(databaseName, null);
+
+    /// <summary>
+    /// The MariaDB/MySQL lock name for a worker shard of a database: <see cref="NamePrefix"/> + lower-cased name + <see cref="ShardMarker"/> + lower-cased shard, with the same 64-character SHA-256 fallback
+    /// (over the whole folded identity). A null <paramref name="shard"/> is the realm lock, byte for byte what <see cref="MySqlLockName(string)"/> always returned.
+    /// </summary>
+    internal static string MySqlLockName(string databaseName, string? shard)
     {
-        string folded = databaseName.ToLowerInvariant();
+        string folded = ShardIdentity(databaseName.ToLowerInvariant(), shard?.ToLowerInvariant());
         string name = NamePrefix + folded;
         if (name.Length <= MaxMySqlLockName) return name;
         return NamePrefix + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(folded)).AsSpan(0, 16)).ToLowerInvariant();
     }
 
     /// <summary>The PostgreSQL advisory key for a database: the first 8 bytes (little-endian) of SHA-256(<see cref="NamePrefix"/> + name).</summary>
-    internal static long PostgresLockKey(string databaseName)
-        => BinaryPrimitives.ReadInt64LittleEndian(SHA256.HashData(Encoding.UTF8.GetBytes(NamePrefix + databaseName)));
+    internal static long PostgresLockKey(string databaseName) => PostgresLockKey(databaseName, null);
+
+    /// <summary>
+    /// The PostgreSQL advisory key of a worker shard: the first 8 bytes (little-endian) of SHA-256(<see cref="NamePrefix"/> + name + <see cref="ShardMarker"/> + shard), shard case preserved.
+    /// A null <paramref name="shard"/> is the realm key (unchanged).
+    /// </summary>
+    internal static long PostgresLockKey(string databaseName, string? shard)
+        => BinaryPrimitives.ReadInt64LittleEndian(SHA256.HashData(Encoding.UTF8.GetBytes(NamePrefix + ShardIdentity(databaseName, shard))));
+
+    /// <summary>Separates the database name from the shard id in a shard lock identity.</summary>
+    internal const string ShardMarker = "#shard:";
+
+    private static string ShardIdentity(string databaseName, string? shard) => shard is null ? databaseName : databaseName + ShardMarker + shard;
 
     /// <summary>
     /// How long the server may leave the lock session idle before it ends it: four health intervals (a live session is checked every interval, so it is never that idle), at least 10 s,
@@ -211,14 +228,15 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     /// <param name="onRetakeBlocked">Called on a thread-pool thread, throttled (the first and every tenth try of a loss), with why a retake could not complete: the server is unreachable, or this process's own dead session still holds the lock.</param>
     /// <param name="staleSessionTimeout">How long the server may leave this session idle before it ends it; null is <see cref="StaleSessionTimeoutFor"/> of the interval.</param>
     public static ServerAdvisoryWriterLock TryAcquire(DatabaseConnectionOptions options, string databaseName, Action<string>? onLost = null, TimeSpan? healthInterval = null,
-        Action<string>? onRecovered = null, Action<string>? onConflict = null, TimeSpan? staleSessionTimeout = null, Action<string>? onRetakeBlocked = null)
+        Action<string>? onRecovered = null, Action<string>? onConflict = null, TimeSpan? staleSessionTimeout = null, Action<string>? onRetakeBlocked = null, string? shard = null)
     {
         bool postgres = options.Provider == DatabaseProvider.PostgreSql;
-        string mySqlName = MySqlLockName(databaseName);
-        long key = PostgresLockKey(databaseName);
-        string lockDatabase = string.IsNullOrWhiteSpace(options.WriterLockDatabase) ? CharacterDatabaseWriterLock.DefaultPostgresLockDatabase : options.WriterLockDatabase;
+        string mySqlName = MySqlLockName(databaseName, shard);
+        long key = PostgresLockKey(databaseName, shard);
+        string lockDatabase = LockDatabaseOf(options);
+        string shardNote = shard is null ? string.Empty : $" shard '{shard}'";
         string description = postgres
-            ? $"PostgreSQL advisory lock {key} for database '{databaseName}' (taken in database '{lockDatabase}')"
+            ? $"PostgreSQL advisory lock {key} for database '{databaseName}'{shardNote} (taken in database '{lockDatabase}')"
             : $"{(options.Provider == DatabaseProvider.MySql ? "MySQL" : "MariaDB")} advisory lock '{mySqlName}'";
 
         TimeSpan interval = healthInterval ?? HealthInterval;
@@ -236,6 +254,38 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
             connection.Dispose();
             throw;
         }
+    }
+
+    private static string LockDatabaseOf(DatabaseConnectionOptions options)
+        => string.IsNullOrWhiteSpace(options.WriterLockDatabase) ? CharacterDatabaseWriterLock.DefaultPostgresLockDatabase : options.WriterLockDatabase;
+
+    /// <summary>
+    /// Whether the realm lock of <paramref name="databaseName"/> (or, with <paramref name="shard"/>, that worker shard's lock) is free right now, without keeping it. MariaDB/MySQL: <c>IS_USED_LOCK(name) IS NULL</c> (a pure read, it never takes the lock).
+    /// PostgreSQL: a try-take on a short-lived connection that is given back at once, which also sees a holder in another lock database. A refusal whose holder is already gone counts as not free (it was
+    /// held a moment ago; the caller refuses and may retry). A server that cannot be reached propagates the driver's <see cref="DbException"/>.
+    /// </summary>
+    public static bool ProbeFree(DatabaseConnectionOptions options, string databaseName, string? shard = null)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        bool postgres = options.Provider == DatabaseProvider.PostgreSql;
+        string mySqlName = MySqlLockName(databaseName, shard);
+        long key = PostgresLockKey(databaseName, shard);
+        TimeSpan stale = StaleSessionTimeoutFor(HealthInterval);
+        using DbConnection connection = Open(postgres, options.ConnectionString, LockDatabaseOf(options), stale, HealthInterval);
+        if (!postgres)
+        {
+            using DbCommand holder = CreateCommand(connection, "SELECT IS_USED_LOCK(@name)");
+            AddParameter(holder, "@name", mySqlName);
+            return holder.ExecuteScalar() is null or DBNull;
+        }
+
+        long session = ReadSessionId(connection, postgres);
+        TakeResult taken = TryTake(connection, postgres, mySqlName, key, session);
+        if (taken.Kind != TakeKind.Taken) return false;
+        using DbCommand release = CreateCommand(connection, "SELECT pg_advisory_unlock(@key)");
+        AddParameter(release, "@key", key);
+        release.ExecuteScalar();
+        return true;
     }
 
     /// <summary>Whether this session still holds the lock, asked of the server now. False when the connection is dead or the lock is gone. Used by the periodic check and by tests.</summary>

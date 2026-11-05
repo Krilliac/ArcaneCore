@@ -871,6 +871,38 @@ public sealed class PlayerbotMountTests
     }
 
     [Fact]
+    public async Task CancelPendingMountCast_StopsTheMountUpCast_SoItNeverLands()
+    {
+        await RunAsync(new MountFixture(), (host, session) => host.OnWorldAsync(() =>
+        {
+            const uint summonWarhorse = 13819;
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All.Where(s => s.Id != summonWarhorse), new SpellInfo
+            {
+                Id = summonWarhorse,
+                Name = "Summon Warhorse",
+                CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+            }], [], []);
+            Player player = session.Player!;
+            Assert.True(feature.Spellbook.LearnSpell(player, summonWarhorse));
+            var options = new PlayerbotOptions { Enabled = true };
+
+            Assert.False(PlayerbotMount.CancelPendingMountCast(session, player), "a cancel was sent with no mount-up cast running");
+            session.ManagedBudget = new ManagedActionBudget(5);
+            Assert.True(PlayerbotMount.BeforeStep(session, player, LongRoute(player), options));
+            Assert.True(PlayerbotMount.IsBusy(session));
+
+            Assert.True(PlayerbotMount.CancelPendingMountCast(session, player));
+            Assert.False(PlayerbotMount.IsBusy(session));
+            feature.System.Update(3000);
+            Assert.False(MountService.IsMounted(player), "the cancelled mount-up cast still landed");
+            return true;
+        }));
+    }
+
+    [Fact]
     public async Task RidingTrip_StartsWhenDue_AndWalksTowardTheTrainer()
     {
         await RunAsync(new MountFixture { SpawnOffset = 130 }, (host, session) => host.OnWorldAsync(() =>
@@ -922,15 +954,28 @@ public sealed class PlayerbotMountTests
             Player player = session.Player!;
             PlayerbotRidingTrips trips = FarTrips(host, session, new PlayerbotOptions { Enabled = true }, out _);
             player.Money = 10_000;
+            float startX = player.X, startY = player.Y, startZ = player.Z;
             session.ManagedBudget = new ManagedActionBudget(1);
             trips.Update(player, 500);
+            player.Relocate(startX, startY, startZ, player.Orientation);
             session.ManagedBudget = new ManagedActionBudget(1);
             Assert.True(trips.Update(player, 500));
             Assert.Equal(MountFixture.TrainerEntry, trips.TargetEntry);
 
             // No step can be taken (no packet budget): the bot closes no distance, and after the stuck time the only site is set aside.
+            // Everything here runs inside one world-thread callback, so no tick and no clock movement can touch the bot between the Updates
+            // (WorldClock.NowMs is the tick-start snapshot). The only writers of the stored position are inside Update itself: while the
+            // bot is moving, PlayerbotMotion.Follow still runs at a zero budget (a heartbeat is not budgeted) and its floor snaps
+            // (TrySnapDirectStepStart / TrySnapPlayerToFloor, SetPosition up to several yards in Z) move the bot after the first Update
+            // recorded its best distance. The stuck check (PlayerbotRidingTrips.Update) counts a drop of more than half a yard as progress
+            // and resets the stuck time, which is how Update returned true at StuckMs. Identified by reading the code; not reproduced.
+            // So the position is pinned (position only, WorldObject.Relocate keeps the movement state) to where the walk started, i.e. the
+            // position the best distance was taken from.
+            float x = startX, y = startY, z = startZ;
             session.ManagedBudget = new ManagedActionBudget(0);
+            player.Relocate(x, y, z, player.Orientation);
             trips.Update(player, 500);
+            player.Relocate(x, y, z, player.Orientation);
             Assert.False(trips.Update(player, PlayerbotRidingTrips.StuckMs));
             Assert.Equal(0u, trips.TargetEntry);
 

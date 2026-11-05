@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
@@ -61,6 +62,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
     private int _pending;
     private long _enqueued;
     private long _attempted;
+
+    private const string QueueName = "InstanceWriteQueue";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
 
     private enum KeyKind
     {
@@ -401,6 +407,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(logger, QueueName);
         string[] left;
         Exception? first;
         Exception? terminal;
@@ -457,6 +464,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private void EnqueueWriteCore(Key key, Payload value)
     {
+        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        {
+            return; // the character belongs to another world now: nothing is enqueued, retained or reported
+        }
+
         if (_stopped)
         {
             Exception failure = _terminalFailure ?? new InvalidOperationException("the instance write queue is stopped; the change was not persisted");
@@ -919,6 +931,11 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
+        if (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        {
+            return null; // retired since it was queued (or retained): dropped, which the caller records as drained
+        }
+
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
@@ -969,13 +986,13 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                         await store.SaveResetTimeAsync(reset).ConfigureAwait(false);
                         break;
                     case KeyKind.PlayerBind when value.Bind is { } bind:
-                        await store.SaveBindAsync(bind).ConfigureAwait(false);
+                        await TryWriteClaimedAsync(bind.CharacterId, () => store.SaveBindAsync(bind)).ConfigureAwait(false);
                         break;
                     case KeyKind.PlayerBind:
                         await store.DeleteBindAsync(key.A, (uint)key.B).ConfigureAwait(false);
                         break;
                     case KeyKind.LastInstance when value.Last is { } last:
-                        await store.SaveLastInstanceAsync(last).ConfigureAwait(false);
+                        await TryWriteClaimedAsync(last.CharacterId, () => store.SaveLastInstanceAsync(last)).ConfigureAwait(false);
                         break;
                     case KeyKind.GroupBind when value.GroupBind is { } groupBind:
                         await store.SaveGroupBindAsync(groupBind).ConfigureAwait(false);
@@ -990,6 +1007,10 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
                 progress.Succeeded();
                 return null;
+            }
+            catch (CharacterOwnershipRejectedException) when (IsCharacterKey(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+            {
+                return null; // refused because the character moved to another world: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {
@@ -1017,6 +1038,27 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 FaultLedger.Shared.Record("writequeue.instance-failure", ex);
                 return ex;
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs a write of one character's own instance row under <see cref="CharacterWriteClaim"/> (checked by the write fence in Worker scope only; design
+    /// _wf/writer-lock-DESIGN.md C5). A refused claim means another world holds the character now (or nobody does): the write is durably refused and
+    /// superseded, so it is dropped (false) rather than retained, which would fault every barrier of the character.
+    /// </summary>
+    private async Task<bool> TryWriteClaimedAsync(int characterId, Func<Task> write)
+    {
+        try
+        {
+            using CharacterWriteClaim.Scope claim = CharacterWriteClaim.Use(characterId);
+            await write().ConfigureAwait(false);
+            return true;
+        }
+        catch (CharacterClaimRejectedException ex)
+        {
+            FaultLedger.Shared.Record("writequeue.instance-claim", ex);
+            logger.LogWarning("instance write for character {Character} dropped: {Reason}", characterId, ex.Message);
+            return false;
         }
     }
 

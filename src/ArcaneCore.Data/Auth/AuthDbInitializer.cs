@@ -49,6 +49,8 @@ public sealed class AuthDbInitializer(IServiceProvider services, ILogger<AuthDbI
                             Flags = entry.Flags,
                             Population = entry.Population,
                             Category = entry.Category,
+                            // A seeded row is Stopped (offline in the realm list) until a world reports in; Unknown would show it online.
+                            State = RealmRuntimeState.Stopped,
                         });
                     }
 

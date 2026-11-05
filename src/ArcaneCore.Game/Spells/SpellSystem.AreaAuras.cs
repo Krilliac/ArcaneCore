@@ -1,5 +1,11 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells.Procs.Talents;
+using ArcaneCore.Game.Stealth;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -69,6 +75,81 @@ public sealed partial class SpellSystem
     private readonly List<KeyValuePair<ObjectGuid, SpellAuraHolder>> _areaChildScratch = [];
     private bool _areaChildScratchInUse;
 
+    // Scratch for CollectAreaUnits (grid objects and the dedupe set), with the same in-use rule as the collections above. World thread only.
+    private readonly List<WorldObject> _areaObjectScratch = [];
+    private readonly HashSet<Unit> _areaSeenScratch = new(ReferenceEqualityComparer.Instance);
+    private bool _areaScanScratchInUse;
+
+    /// <summary>
+    /// Append the guids of the units an enemy or friend area aura source on <paramref name="caster"/> may reach (radius plus the unit's bounding radius,
+    /// as <c>UnitsInRadius</c>) to <paramref name="members"/>. Enemy: <see cref="IsValidEnemyAreaTarget"/>. Friend: living and friendly. Reuses scratch
+    /// collections, so a steady-state update allocates nothing; the scratch is cleared before returning.
+    /// </summary>
+    private void CollectAreaUnits(Maps.Map map, Unit caster, float radius, bool enemy, List<ObjectGuid> members)
+    {
+        bool owned = !_areaScanScratchInUse;
+        List<WorldObject> objects = owned ? _areaObjectScratch : [];
+        HashSet<Unit> seen = owned ? _areaSeenScratch : new HashSet<Unit>(ReferenceEqualityComparer.Instance);
+        _areaScanScratchInUse |= owned;
+        try
+        {
+            map.Grids.CollectObjects(caster.X, caster.Y, radius, objects);
+            for (int i = 0; i < objects.Count; i++)
+            {
+                if (objects[i] is not Unit unit || !unit.IsInWorld || !ReferenceEquals(unit.Map, map) || !seen.Add(unit) || ReferenceEquals(unit, caster))
+                {
+                    continue;
+                }
+
+                float dx = unit.X - caster.X;
+                float dy = unit.Y - caster.Y;
+                float dz = unit.Z - caster.Z;
+                float reach = radius + unit.BoundingRadius;
+                if ((dx * dx) + (dy * dy) + (dz * dz) > reach * reach)
+                {
+                    continue;
+                }
+
+                if (enemy ? IsEnemy(caster, unit) && IsValidEnemyAreaTarget(caster, unit) : unit.IsAlive && Relations.IsFriendly(caster, unit))
+                {
+                    members.Add(unit.Guid);
+                }
+            }
+        }
+        finally
+        {
+            if (owned)
+            {
+                objects.Clear();
+                seen.Clear();
+                _areaScanScratchInUse = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The extra target checks of vmangos AnyAoETargetUnitInObjectRangeCheck (GridNotifiers.h:952-968) on top of the hostility test: a totem is
+    /// immune to AoE (Creature::IsImmuneToAoe; the creature_template AoE immunity flag is not mapped here), a unit the caster cannot see is skipped
+    /// (a GM-invisible player the caster's security does not reach), and a caster that is not PvP flagged does not hit another player's units
+    /// (Unit::CanAttackWithoutEnablingPvP, Unit.cpp:9985-9993; free-for-all pairs and duel opponents are exempt). Units under an invisibility
+    /// aura are still hit, as in vmangos (the AoE check has no stealth or invisibility test). The GM-invisible skip follows the lane brief; vmangos's
+    /// <c>u->CanSeeInWorld(caster)</c> is a world-mask test from the target toward the caster, and there is no world mask here.
+    /// </summary>
+    private bool IsValidEnemyAreaTarget(Unit caster, Unit unit)
+    {
+        if (unit is Creature { IsTotem: true })
+        {
+            return false;
+        }
+
+        if (unit is Player { GmInvisible: true } hidden && !(caster is Player viewer && GmInvisibilityRule.Instance.CanSee(viewer, hidden, true, false)))
+        {
+            return false;
+        }
+
+        return TalentProcSupport.CanAttackWithoutEnablingPvP(caster, unit);
+    }
+
     /// <summary>Test seam: one <see cref="UpdateAreaAuras"/> pass for <paramref name="unit"/>'s state without the rest of <see cref="Update"/> (allocation tests).</summary>
     internal void UpdateAreaAurasOf(Unit unit)
     {
@@ -123,7 +204,17 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                UpdateAreaAuraSource(state, source, map);
+                // One throwing source must not stop the next source's tick (the caller's catch would abort the whole pass).
+                // The phase stays "UpdateAuras", the fault names this source's spell.
+                try
+                {
+                    UpdateAreaAuraSource(state, source, map);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("spell.script", ex);
+                    RecordSpellScriptFault("UpdateAuras", ex, source.Spell, state.Unit, state.Unit);
+                }
             }
         }
         finally
@@ -168,27 +259,11 @@ public sealed partial class SpellSystem
                 _areaMemberScratchInUse |= membersOwned;
                 try
                 {
-                    if (enemyArea)
+                    if (enemyArea || friendArea)
                     {
-                        // vmangos AreaAura::Update, AREA_AURA_ENEMY (SpellAuras.cpp:689-695): every valid AoE target around the caster.
-                        foreach (Unit unit in UnitsInRadius(map, state.Unit.X, state.Unit.Y, state.Unit.Z, radius))
-                        {
-                            if (!ReferenceEquals(unit, state.Unit) && IsEnemy(state.Unit, unit))
-                            {
-                                members.Add(unit.Guid);
-                            }
-                        }
-                    }
-                    else if (friendArea)
-                    {
-                        // vmangos AreaAura::Update, AREA_AURA_FRIEND (SpellAuras.cpp:682-687): every living unit around the caster that is friendly to it.
-                        foreach (Unit unit in UnitsInRadius(map, state.Unit.X, state.Unit.Y, state.Unit.Z, radius))
-                        {
-                            if (!ReferenceEquals(unit, state.Unit) && unit.IsAlive && Relations.IsFriendly(state.Unit, unit))
-                            {
-                                members.Add(unit.Guid);
-                            }
-                        }
+                        // vmangos AreaAura::Update, AREA_AURA_ENEMY (SpellAuras.cpp:689-695, valid AoE targets around the caster) and AREA_AURA_FRIEND
+                        // (SpellAuras.cpp:682-687, living friendly units around the caster), collected without a per-update allocation.
+                        CollectAreaUnits(map, state.Unit, radius, enemyArea, members);
                     }
                     else if (petArea)
                     {

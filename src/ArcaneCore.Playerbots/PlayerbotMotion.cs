@@ -78,9 +78,13 @@ internal static partial class PlayerbotMotion
         internal float Heading;
         internal float Speed;
         internal bool Walk;
+        /// <summary>Whether the bot is at swim depth (<see cref="SwimAt"/>) as of its last packet's validated position (<see cref="SwimHeight"/> applied): <see cref="Speed"/> is its swim speed then.</summary>
+        internal bool Swim;
         internal float MoveSpeedCap;
         /// <summary>The live options the bot follows its routes with (<c>.reload config</c> changes them in place).</summary>
         internal PlayerbotOptions? Options;
+        /// <summary>This bot's movement packet writer, reset before each use (<see cref="Send"/>); world thread only, like the rest of the state.</summary>
+        internal PacketWriter? Writer;
         internal uint LeaseMs;
         internal uint RenewedMs;
         /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
@@ -214,13 +218,18 @@ internal static partial class PlayerbotMotion
     /// <summary>
     /// Lifts the refusal of one place: removes the blacklist entries within <see cref="SamePlaceYards"/> of <paramref name="destination"/>
     /// and nothing else. The other refused places, the loop pattern and the rejection count stay (<see cref="ForgetLoops"/> clears them
-    /// all, which a caller that may run again and again would turn into a guard that never trips). 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
+    /// all, which a caller that may run again and again would turn into a guard that never trips). It lifts every entry within that distance whichever goal put it there, so callers use it only for a place that is their own plan. Allocation-free. 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
     /// the rest of the motion state.
     /// </summary>
     internal static void Unblacklist(Player player, Vector3 destination)
     {
         if (!States.TryGetValue(player, out MotionState? state) || state.Blacklist.Count == 0) return;
-        state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(destination)) <= SamePlaceYards);
+        var entries = state.Blacklist;
+        Vector2 at = Flat(destination);
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            if (Vector2.Distance(Flat(entries[i].Destination), at) <= SamePlaceYards) entries.RemoveAt(i);
+        }
     }
 
     /// <summary>
@@ -327,7 +336,8 @@ internal static partial class PlayerbotMotion
             return false;
         }
 
-        if (!Speed(player, options.MoveSpeed, out float speed, out bool walk))
+        // Only the can-move check; the speed that counts is the one at the place the walk starts (below).
+        if (!Speed(player, options.MoveSpeed, swimming: false, out float speed, out bool walk))
         {
             if (!keepMotion) Stop(session, player);
             return false;
@@ -371,6 +381,20 @@ internal static partial class PlayerbotMotion
                 return false;
             }
         }
+        // The speed is the one at the place the walk starts: swim speed in swimmable water. A mesh start on the surface of deep water
+        // is put at swim depth first (SwimHeight), so the start packet, the speed and the environment flags agree.
+        current = SwimHeight(map, player, current);
+        bool swim = SwimAt(map, player, current);
+        // A fresh start is walked from rest in the state of where it starts: SendStep compares with state.Swim, so seeding it here keeps a
+        // start in water a START_FORWARD with MOVEFLAG_SWIMMING and no START_SWIM/STOP_SWIM. A running bot keeps the state of its last packet,
+        // so a route switch at the shore still reports the crossing.
+        if (!moving) state.Swim = swim;
+        if (!Speed(player, options.MoveSpeed, swim, out speed, out walk))
+        {
+            if (!keepMotion) Stop(session, player);
+            return false;
+        }
+
         // The first stretch must be walkable before anything is announced.
         float probeStep = MathF.Max(speed * (HeartbeatIntervalMs / 1000f), 2f);
         Vector3 probe = Walk(route, current, route.NextPoint, probeStep,
@@ -406,7 +430,8 @@ internal static partial class PlayerbotMotion
         float heading = HeadingTo(current, route.Points[route.NextPoint]);
         // A deliberate start spends the caller's action budget; a running bot changing its route does not.
         WorldOpcode opcode = moving ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStartForward;
-        if (!Send(session, player, opcode, current, heading, walk, moving: true, now, budgeted: !moving))
+        if (!SendStep(session, player, map, state, opcode, current, heading, walk, moving: true, now, budgeted: !moving,
+                out current, out _, out swim))
         {
             // A start the caller's action budget refused is its own back-off, not the server refusing the move.
             if (hadBudget || moving)
@@ -437,6 +462,7 @@ internal static partial class PlayerbotMotion
         state.Heading = heading;
         state.Speed = speed;
         state.Walk = walk;
+        state.Swim = swim;
         state.MoveSpeedCap = options.MoveSpeed;
         state.RenewedMs = now;
         state.LeaseMs = Lease(options, state);
@@ -525,7 +551,12 @@ internal static partial class PlayerbotMotion
             return;
         }
 
-        if (!turned && !entering && age < HeartbeatIntervalMs) return;
+        // Entering or leaving swimmable water changes the bot's speed: re-anchor there at once (a client sends MSG_MOVE_START_SWIM /
+        // MSG_MOVE_STOP_SWIM as it crosses), so the next step is walked from here at the new speed and the position does not jump.
+        // The gate below only decides whether to look closer: per bot per tick it costs the liquid query of SwimHeight and the one of
+        // SwimAt (and a floor query only when the position is at the liquid surface). The packet's own swim value is decided once, on
+        // the validated position, below; both use SwimHeight, so a gate that opens is never contradicted into a repeat.
+        if (!turned && !entering && SwimAt(map, player, SwimHeight(map, player, position)) == state.Swim && age < HeartbeatIntervalMs) return;
         if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position, out string? rejectReason) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
@@ -538,7 +569,8 @@ internal static partial class PlayerbotMotion
             return;
         }
 
-        if (!Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
+        if (!SendStep(session, player, map, state, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false,
+                out valid, out bool swam, out bool swimNow))
         {
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
             AdvancePastRejectedWaypoint(route, state.Anchor);
@@ -558,7 +590,11 @@ internal static partial class PlayerbotMotion
         state.Anchor = valid;
         state.AnchorMs = now;
         state.Heading = heading;
-        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now);
+        bool walkedInWalkMode = state.Walk;
+        // The overspeed check judges the step in the swim state it was walked in (swam), not the one SendStep just stored.
+        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now, age, swam, walkedInWalkMode);
+        // After the overspeed check, which judged the step at the speed it was walked at.
+        AdoptCurrentSpeed(player, state, walkedInWalkMode, swimFlip: swimNow != swam);
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
         // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
         PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
@@ -644,8 +680,11 @@ internal static partial class PlayerbotMotion
         MotionState state = Of(player);
         state.World = session.World;
         if (state.Active || !CanMove(player)) return false;
+        // The swim state is decided here, not by SwimAt: SwimAt reads player.Transport at call time, and the transport is still attached
+        // while this packet (the one that leaves it) is built, so SwimAt would never report the water the bot steps into.
         return Send(session, player, WorldOpcode.MsgMoveHeartbeat, world, heading, walk: false, moving: false, session.World.NowMs,
-            budgeted: false, seat: new Seat(false, 0, default, 0));
+            budgeted: false, seat: new Seat(false, 0, default, 0),
+            swim: player.Map is { } m && LiquidEnvironment.IsSwimDepth(m, world.X, world.Y, world.Z, player.Locomotion.CollisionHeight));
     }
 
     private readonly record struct Seat(bool Aboard, ulong Guid, Vector3 Offset, float Orientation);
@@ -670,22 +709,29 @@ internal static partial class PlayerbotMotion
     /// </summary>
     internal static void Flush(WorldSession session, Player player, uint now)
     {
+        // Ordering hazards: Flush runs before the ack packet is built (PlayerbotMovementControl), so the stored movement block the ack
+        // carries is the one this heartbeat leaves; and RefreshSpeed reads state.Swim after Flush, so Flush must leave state.Swim (and the
+        // speed) matching the position it reported. Both hold because the step goes through SendStep, like Pump's.
         if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route || player.Map is not { } map) return;
         Pump(session, player, now);
+        // Pump already sent a packet this tick (or stopped the motion): the stored block is current.
         if (!state.Active || Age(now, state.AnchorMs) == 0) return;
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
+        bool walkedInWalkMode = state.Walk;
         if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid
-            || !Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
+            || !SendStep(session, player, map, state, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now,
+                budgeted: false, out Vector3 at, out bool swam, out bool swimNow))
         {
             state.Clear();
             return;
         }
 
         route.NextPoint = nextPoint;
-        state.Anchor = valid;
+        state.Anchor = at;
         state.AnchorMs = now;
         state.Heading = heading;
+        AdoptCurrentSpeed(player, state, walkedInWalkMode, swimFlip: swimNow != swam);
     }
 
     /// <summary>
@@ -705,7 +751,7 @@ internal static partial class PlayerbotMotion
     internal static void RefreshSpeed(Player player)
     {
         if (States.TryGetValue(player, out MotionState? state) && state.Active
-            && Speed(player, state.MoveSpeedCap, out float speed, out bool walk) && walk == state.Walk)
+            && Speed(player, state.MoveSpeedCap, state.Swim, out float speed, out bool walk) && walk == state.Walk)
             state.Speed = speed;
     }
 
@@ -719,11 +765,75 @@ internal static partial class PlayerbotMotion
     /// </para>
     /// </summary>
     internal static bool Speed(Player player, float cap, out float speed, out bool walk)
+        => Speed(player, cap, swimming: false, out speed, out walk);
+
+    /// <summary>
+    /// <see cref="Speed(Player, float, out float, out bool)"/> for a bot that is (<paramref name="swimming"/>) or is not at swim depth.
+    /// <para>
+    /// Swimming deliberately ignores the walk toggle and the MoveSpeed cap: the bot swims at its swim speed. This matches retail, where a
+    /// swimming client moves at its swim speed whatever its walk mode, and vmangos' movement anticheat tests MOVEFLAG_SWIMMING before
+    /// MOVEFLAG_WALK_MODE when it picks the speed a packet is judged at (MovementAnticheat::GetMoveTypeForMovementInfo, MovementAnticheat.cpp).
+    /// </para>
+    /// </summary>
+    internal static bool Speed(Player player, float cap, bool swimming, out float speed, out bool walk)
     {
+        // The MoveSpeed cap is not applied in water: the bot swims at its swim speed.
+        if (swimming)
+        {
+            // In swimmable water a player swims whatever it rides or runs at: the mounted and run speed auras only change the run speed
+            // (UnitSpeed), and a mount does not survive the water (AURA_INTERRUPT_UNDER_WATER_CANCELS, LiquidEnvironment.SetFlags).
+            walk = false;
+            speed = UnitSpeed.Get(player, MoveType.Swim);
+            return float.IsFinite(speed) && speed > 0;
+        }
+
         float run = UnitSpeed.Get(player, MoveType.Run);
         walk = float.IsFinite(cap) && cap < MathF.Min(run, Unit.BaseRunSpeed) - 0.001f;
         speed = walk ? UnitSpeed.Get(player, MoveType.Walk) : run;
         return float.IsFinite(speed) && speed > 0;
+    }
+
+    /// <summary>
+    /// Whether a bot at <paramref name="at"/> on <paramref name="map"/> is at swim depth, by the rule the server applies to its
+    /// environment flags (<see cref="LiquidEnvironment.IsSwimDepth(Map, float, float, float, float)"/>, vmangos
+    /// Player::UpdateTerainEnvironmentFlags). Never aboard a transport.
+    /// </summary>
+    internal static bool SwimAt(Map map, Player player, Vector3 at)
+        => player.Transport is null && (player.Movement.Flags & MovementFlags.OnTransport) == 0
+            && LiquidEnvironment.IsSwimDepth(map, at.X, at.Y, at.Z, player.Locomotion.CollisionHeight);
+
+    /// <summary>
+    /// Our <see cref="LiquidEnvironment.IsSwimDepth(Map, float, float, float, float)"/> (vmangos' HighLiquid test) is a strict
+    /// <c>level &gt; z + minSwimDepth</c>, so a unit at exactly <c>level - minSwimDepth</c> would not count as swimming; <see cref="SwimHeight"/> goes
+    /// this far below that height. A judgement call, not a reference value.
+    /// </summary>
+    internal const float SwimDepthEpsilonYards = 0.05f;
+
+    /// <summary>
+    /// How far above the liquid level a position still counts as "at the surface" for <see cref="SwimHeight"/>. A judgement call that keeps
+    /// pier and bridge decks well above the water out of it.
+    /// </summary>
+    internal const float SurfaceBandYards = 0.25f;
+
+    /// <summary>
+    /// A mesh route over deep water runs on the mesh's surface, at the liquid level, where the swim depth rule is false for a bot standing
+    /// there. vmangos places a swimming unit at <c>GetWaterLevel(x, y, z, &amp;ground) - GetMinSwimDepth()</c> and accepts that while
+    /// <c>ground &lt; z</c> (Unit.cpp:10336; GetMinSwimDepth = collision height * 0.75, Unit.h:543, "client switches to swim animation at this
+    /// depth"). So a position at or near the liquid surface (z in [level - minSwimDepth, level + <see cref="SurfaceBandYards"/>]) whose floor lies
+    /// below <c>level - minSwimDepth - </c><see cref="SwimDepthEpsilonYards"/> (no floor found counts as deep) is lowered to that height. Shallow water,
+    /// a bridge or pier deck (a floor under the point), positions already at swim depth and positions away from the water come back
+    /// unchanged. Aboard a transport the position is never changed.
+    /// </summary>
+    internal static Vector3 SwimHeight(Map map, Player player, Vector3 at)
+    {
+        if (player.Transport is not null || (player.Movement.Flags & MovementFlags.OnTransport) != 0) return at;
+        if (map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) == LiquidStatus.NoWater) return at;
+        float minSwimDepth = player.Locomotion.CollisionHeight * 0.75f;
+        if (at.Z < liquid.Level - minSwimDepth || at.Z > liquid.Level + SurfaceBandYards) return at;
+        float swimZ = liquid.Level - minSwimDepth - SwimDepthEpsilonYards;
+        float floor = map.Collision.GetHeight(at.X, at.Y, at.Z);
+        if (float.IsFinite(floor) && floor > TerrainTile.InvalidHeight && floor >= swimZ) return at;
+        return new Vector3(at.X, at.Y, swimZ);
     }
 
     /// <summary>
@@ -804,9 +914,53 @@ internal static partial class PlayerbotMotion
     {
         PlayerbotRoute? route = state.Route;
         state.Clear();
-        if (Send(session, player, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now, budgeted: false)
-            && route is not null)
+        // The stop agrees with the heartbeats before it: at swim depth, with the swim state decided on that position (SendStep).
+        bool stopped = player.Map is { } stopMap
+            ? SendStep(session, player, stopMap, state, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now,
+                budgeted: false, out _, out _, out _)
+            : Send(session, player, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now, budgeted: false);
+        if (stopped && route is not null)
             route.NextPoint = nextPoint;
+    }
+
+    /// <summary>
+    /// One route step (a heartbeat, a start or a stop) at <paramref name="validated"/>: put at swim depth first (<see cref="SwimHeight"/>,
+    /// returned as <paramref name="at"/>), its swim state decided once on that position (<paramref name="swimNow"/>; <paramref name="swam"/>
+    /// is the state the step was walked in). A moving heartbeat whose swim state flips is MSG_MOVE_START_SWIM / MSG_MOVE_STOP_SWIM, as a
+    /// client sends at the crossing. On success state.Swim is the new state, which RefreshSpeed and the next step read.
+    /// <para>
+    /// SwimHeight and SwimAt read player.Transport when they are called: a caller whose packet changes the transport state (a step off a
+    /// ship) must not come through here; <see cref="SendStepOff"/> passes its swim state explicitly instead.
+    /// </para>
+    /// </summary>
+    private static bool SendStep(WorldSession session, Player player, Map map, MotionState state, WorldOpcode opcode, Vector3 validated,
+        float heading, bool walk, bool moving, uint now, bool budgeted, out Vector3 at, out bool swam, out bool swimNow)
+    {
+        at = SwimHeight(map, player, validated);
+        swimNow = SwimAt(map, player, at);
+        swam = state.Swim;
+        // Only a heartbeat becomes the crossing opcode: a fresh start stays MSG_MOVE_START_FORWARD (Follow seeds state.Swim so it never
+        // flips) and a stop stays MSG_MOVE_STOP.
+        if (moving && swimNow != swam && opcode == WorldOpcode.MsgMoveHeartbeat)
+            opcode = swimNow ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
+        if (!Send(session, player, opcode, at, heading, walk, moving, now, budgeted, swim: swimNow)) return false;
+        state.Swim = swimNow;
+        return true;
+    }
+
+    /// <summary>
+    /// A client always moves at its current speed (a mount gone at swim depth or after a dismount, a swim speed left behind on the shore):
+    /// the next step is walked at it. The walk mode is not changed here by a changed cap alone (Follow decides it, as before); it is adopted
+    /// when the swim state flipped (<paramref name="swimFlip"/>), so that leaving the water always drops the swim speed even if the cap now
+    /// asks for walking.
+    /// </summary>
+    private static void AdoptCurrentSpeed(Player player, MotionState state, bool walkedInWalkMode, bool swimFlip)
+    {
+        if (Speed(player, state.MoveSpeedCap, state.Swim, out float currentSpeed, out bool currentWalk) && (currentWalk == walkedInWalkMode || swimFlip))
+        {
+            state.Speed = currentSpeed;
+            state.Walk = currentWalk;
+        }
     }
 
     /// <summary>
@@ -815,7 +969,8 @@ internal static partial class PlayerbotMotion
     /// server stored it.
     /// </summary>
     private static bool Send(WorldSession session, Player player, WorldOpcode opcode, Vector3 position, float heading,
-        bool walk, bool moving, uint now, bool budgeted, MovementFlags extra = MovementFlags.None, uint fallTime = 0, Seat? seat = null)
+        bool walk, bool moving, uint now, bool budgeted, MovementFlags extra = MovementFlags.None, uint fallTime = 0, Seat? seat = null,
+        bool? swim = null)
     {
         MovementInfo movement = player.Movement;
         movement.Flags &= ~(MovementFlags.MaskMoving | MovementFlags.SplineEnabled | MovementFlags.WalkMode
@@ -823,6 +978,13 @@ internal static partial class PlayerbotMotion
         if (moving) movement.Flags |= MovementFlags.Forward;
         if (walk) movement.Flags |= MovementFlags.WalkMode;
         movement.Flags |= extra;
+        // MOVEFLAG_SWIMMING follows the position of every packet (MaskMoving does not include it, so a stale one would survive onto land).
+        // A caller that already decided the swim state of the packet passes it (swim); the others get the rule at the packet's position.
+        // A falling, jumping or aboard packet never carries it.
+        movement.Flags &= ~MovementFlags.Swimming;
+        if (seat is not { Aboard: true } && (movement.Flags & (MovementFlags.FallingFar | MovementFlags.Jumping)) == 0
+            && player.Map is { } swimMap && (swim ?? SwimAt(swimMap, player, position)))
+            movement.Flags |= MovementFlags.Swimming;
         if (seat is { } place)
         {
             if (place.Aboard) movement.Flags |= MovementFlags.OnTransport;
@@ -854,9 +1016,11 @@ internal static partial class PlayerbotMotion
         {
             if (packets)
             {
-                var writer = new PacketWriter(64);
+                // One writer per bot, reset each step; the session copies the span into its reused exact-length buffer (no array per step).
+                PacketWriter writer = state.Writer ??= new PacketWriter(64);
+                writer.Reset();
                 movement.Write(writer);
-                sent = session.TryManagedAction(opcode, writer.ToArray());
+                sent = session.TryManagedActionSpan(opcode, writer.AsSpan());
             }
             else
             {
@@ -926,7 +1090,11 @@ internal static partial class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
         => Validate(map, route, fromPoint, toPoint, from, candidate, out _);
 
-    private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
+    /// <summary>
+    /// <see cref="Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3)"/> with the reason a step was refused. Internal only so the
+    /// tests can read that reason; the mover itself calls it from this class.
+    /// </summary>
+    internal static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
         out string? rejectReason)
     {
         rejectReason = null;
@@ -956,6 +1124,7 @@ internal static partial class PlayerbotMotion
         if (navigated)
         {
             float best = float.NaN;
+            bool legMeshFloor = false;
             foreach (float raise in MeshFloorProbes)
             {
                 float floor = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, raise, maxCeilingZ);
@@ -979,13 +1148,23 @@ internal static partial class PlayerbotMotion
                         && route.MeshPoints is not null
                         && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
                     {
-                        rejectReason = "NoGroundSupport";
-                        return null;
+                        // The leg's chord hangs over a drop, but the mesh it was planned on may still have a polygon here within the
+                        // leg's own heights (a steep ramp, a switchback, a tunnel floor the model probe misses): stand on it. A real
+                        // cliff has no polygon there and is still refused.
+                        if (!TryMeshFloorOnLeg(map, route, toPoint, from, candidate, out float meshFloor))
+                        {
+                            rejectReason = "NoGroundSupport";
+                            return null;
+                        }
+
+                        best = meshFloor;
+                        legMeshFloor = true;
                     }
                 }
             }
 
             Vector3 resolved = float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            bool resolvedSwapped = false; // the line-of-sight fallback below replaced the floor found above
             if (map.Collision.LineOfSight is { Enabled: true } los
                 && (resolved.Z != rawCandidate.Z || MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards))
             {
@@ -998,11 +1177,13 @@ internal static partial class PlayerbotMotion
                         && los.IsInLineOfSight(map.MapId, fromChest, candidate with { Z = candidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = candidate;
+                        resolvedSwapped = true;
                     }
                     else if (rawCandidate.Z != resolved.Z
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = rawCandidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = rawCandidate;
+                        resolvedSwapped = true;
                     }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true)
@@ -1010,6 +1191,7 @@ internal static partial class PlayerbotMotion
                     {
                         // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
+                        resolvedSwapped = true;
                     }
                     else if (hasMeshSurface && float.IsNaN(best) && resolved.Z > from.Z
                         && MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
@@ -1031,8 +1213,41 @@ internal static partial class PlayerbotMotion
                 }
             }
 
+            // The leg's mesh floor stands only as found: the line-of-sight fallback above must not swap it back for the chord over the
+            // drop (or the bot's own height), which the old refusal covered.
+            if (legMeshFloor && resolvedSwapped)
+            {
+                rejectReason = "NoGroundSupport";
+                return null;
+            }
+
             if (map.Collision.ClassifyUnderMap(resolved.X, resolved.Y, resolved.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
                 && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
+            {
+                // Under the terrain with no model or mesh floor in the under-map window: a mesh polygon within the leg's own heights
+                // (a WMO cave or tunnel below the terrain, the chord of a steep leg inside it) is the floor the route was planned on.
+                if (!TryMeshFloorOnLeg(map, route, toPoint, from, resolved, out float meshFloor))
+                {
+                    rejectReason = "NoGroundSupport";
+                    return null;
+                }
+
+                Vector3 raised = resolved with { Z = meshFloor + 0.05f };
+                if (map.Collision.LineOfSight is { Enabled: true } raisedLos
+                    && !raisedLos.IsInLineOfSight(map.MapId, new Vector3(from.X, from.Y, from.Z + PlayerbotMoveCheck.ChestYards),
+                        raised with { Z = raised.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true)
+                    && !PlayerbotMotionAnomalies.StaysOnMesh(map, from, raised))
+                {
+                    rejectReason = "NoGroundSupport";
+                    return null;
+                }
+
+                resolved = raised;
+                legMeshFloor = true;
+            }
+
+            // One floor rule with the airwalk judge: a point stood on the leg's mesh floor is returned only if the judge agrees.
+            if (legMeshFloor && !PlayerbotMotionAnomalies.StandsOnFloor(map.Collision, resolved))
             {
                 rejectReason = "NoGroundSupport";
                 return null;
@@ -1066,6 +1281,35 @@ internal static partial class PlayerbotMotion
     {
         float floor = ResolveWalkFloor(map, x, y, z, 0f, z + 1.25f);
         return ValidHeight(floor) && z - floor <= PlayerbotMoveCheck.DirectStepMaxStepUpYards;
+    }
+
+    /// <summary>How far above and below the leg's own heights a mesh polygon still counts as the leg's floor (<see cref="TryMeshFloorOnLeg"/>).</summary>
+    internal const float MeshLegFloorSlackYards = 2f;
+
+    /// <summary>
+    /// Whether the navigation mesh has a polygon straight under or over <paramref name="at"/> whose surface lies within the leg's own
+    /// height range: from <paramref name="from"/> to the corner at <paramref name="toPoint"/>, widened by
+    /// <see cref="MeshLegFloorSlackYards"/> (<see cref="MapCollision.TryGetMeshFloor"/>, searched symmetrically about the point's own
+    /// height clamped into that range, so the polygon nearest to it wins), and no more than <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>
+    /// from the point unless the mesh walk from <paramref name="from"/> reaches it (<see cref="PlayerbotMotionAnomalies.StaysOnMesh"/>). The
+    /// mesh-route ground check asks this before it refuses a point for <c>NoGroundSupport</c>: the leg is a chord between corners, so
+    /// on a steep leg or inside a model below the terrain the point can lie far from every model floor while the mesh it was planned on
+    /// has a polygon right there. False when the map has no mesh, the tile is not loaded, or no polygon lies in that range.
+    /// </summary>
+    private static bool TryMeshFloorOnLeg(Map map, PlayerbotRoute route, int toPoint, Vector3 from, Vector3 at, out float height)
+    {
+        height = 0f;
+        if (route.Points.Count == 0 || !at.IsFinite()) return false;
+        float legEndZ = route.Points[Math.Clamp(toPoint, 0, route.Points.Count - 1)].Z;
+        float low = MathF.Min(from.Z, legEndZ) - MeshLegFloorSlackYards;
+        float high = MathF.Max(from.Z, legEndZ) + MeshLegFloorSlackYards;
+        if (!float.IsFinite(low) || !float.IsFinite(high)) return false;
+        float z = Math.Clamp(at.Z, low, high);
+        float d = MathF.Max(z - low, high - z);
+        if (!map.Collision.TryGetMeshFloor(at.X, at.Y, z, d, d, out height) || height < low || height > high) return false;
+        // A step the walk can take, or a polygon the mesh walk from the start reaches: never a drop to the bottom of the leg.
+        return MathF.Abs(height - at.Z) <= PlayerbotMoveCheck.DirectStepMaxDrapeYards
+            || PlayerbotMotionAnomalies.StaysOnMesh(map, from, at with { Z = height + 0.05f });
     }
 
     private static string MoveModeOf(PlayerbotRoute route, int fromPoint, int toPoint)

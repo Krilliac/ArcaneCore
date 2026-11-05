@@ -26,8 +26,31 @@ public sealed class ClusterNodeConfigChecksTests
     }
 
     [Fact]
-    public void MapWorker_WithWorkerMode_IsValid()
-        => Assert.Empty(Run(("Cluster:Node:Role", "MapWorker"), ("Cluster:Worker:Enabled", "true")));
+    public void MapWorker_WithWorkerMode_AndFencing_IsValid()
+        => Assert.Empty(Run(("Cluster:Node:Role", "MapWorker"), ("Cluster:Worker:Enabled", "true"), ("Cluster:Fencing:Enabled", "true")));
+
+    [Fact]
+    public void MapWorker_WithoutFencing_IsRefused()
+    {
+        ConfigIssue issue = Assert.Single(Run(("Cluster:Node:Role", "MapWorker"), ("Cluster:Worker:Enabled", "true")));
+
+        Assert.Equal(ConfigSeverity.Error, issue.Severity);
+        Assert.Equal("Cluster:Fencing:Enabled", issue.Key);
+    }
+
+    [Fact]
+    public void MapWorker_OnSqlite_IsRefused()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Database:Characters:Provider"] = "Sqlite",
+            ["Database:Characters:ConnectionString"] = "Data Source=characters.db",
+            ["Cluster:Node:Role"] = "MapWorker",
+            ["Cluster:Fencing:Enabled"] = "true",
+        }).Build();
+
+        Assert.Contains(new ClusterSqliteConfigChecks().Check(configuration), i => i.Severity == ConfigSeverity.Error && i.Key == "Cluster:Node:Role");
+    }
 
     [Theory]
     [InlineData("Social", "AutoBroadcast")]

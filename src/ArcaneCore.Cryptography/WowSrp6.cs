@@ -10,7 +10,7 @@ namespace ArcaneCore.Cryptography;
 ///
 /// Verified against:
 ///   * vmangos  src/shared/Crypto/Authentication/SRP6.cpp  (N, g=7, k=3, B, u, S,
-///              interleave, M1, M2 — the authoritative vanilla reference, Charter §4)
+///              interleave, M1, M2 — the authoritative vanilla reference)
 ///   * gtker/wow_srp  src/srp_internal.rs                  (independent cross-check)
 ///
 /// Byte-order rules confirmed from both references:
@@ -49,7 +49,7 @@ public static class WowSrp6
 
     /// <summary>
     /// SHA-1( UPPER(username) ":" UPPER(password) ) — the inner credentials hash.
-    /// Username and password are uppercased before hashing (Charter §3).
+    /// Username and password are uppercased before hashing.
     /// </summary>
     public static byte[] CredentialsHash(string username, string password)
     {

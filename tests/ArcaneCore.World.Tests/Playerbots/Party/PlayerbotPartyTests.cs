@@ -123,7 +123,7 @@ public sealed class PlayerbotPartyTests
     }
 
     [Fact]
-    public async Task HumanToBotTrade_MasterTradeIsAccepted_AndStrangerTradeIsIgnored()
+    public async Task HumanToBotTrade_MasterTradeIsAccepted_AndAStrangersIntakeSpendsNoActionBudget()
     {
         await using WorldTestHost host = PartyTestHost.Start(
             options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone,

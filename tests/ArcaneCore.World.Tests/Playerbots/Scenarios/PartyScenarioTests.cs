@@ -28,7 +28,9 @@ public sealed class PartyScenarioTests
 
     private const string MasterName = "Partymaster";
 
+    // Timing: step 13 waits up to 30 s of wall time for the bot to follow; a loaded host exceeds it (flake ledger 2026-10-29).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task PartyMaster_TheBotJoinsFollowsFightsRollsHoldsReportsAndEntersTheDungeonWithItsMaster()
     {
         await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(Configure);

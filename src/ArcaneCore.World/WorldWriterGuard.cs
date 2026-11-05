@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,11 @@ namespace ArcaneCore.World;
 /// A standby world is built with <c>deferUntilPromotion</c>: <see cref="Acquire"/> takes nothing and <see cref="AcquireForPromotion"/> does.
 /// Thread-safe; <see cref="Acquire"/> and <see cref="Dispose"/> may be called from any thread.
 /// <para>
+/// With <c>Cluster:Fencing:Scope=Worker</c> the guard takes the lock of this worker's shard (<see cref="CharacterDatabaseWriterLock.TryAcquireShard"/>) instead of the realm lock, so several workers
+/// of one database coexist and the same shard twice is refused. A worker never holds the realm lock: <see cref="ProbeRealmFree"/> is how it checks, after its durable claim, that no Combined world holds it
+/// (design _wf/writer-lock-DESIGN.md section 1). Holding the shard lock is also the liveness proof for reclaiming the shard's row after a crash (<see cref="HoldsLock"/>).
+/// </para>
+/// <para>
 /// A MariaDB/MySQL/PostgreSQL lock can be lost while the world runs (the session died, the server dropped it). The loss is logged Critical, <see cref="LockPath"/> is null while it lasts, and the
 /// lock tries to take itself back on every health check (logged as a warning when it works). If the retake finds the lock held by a session other than this process's own earlier one, another
 /// world writes the database: the guard trips the <see cref="CharacterDatabaseWriterFence"/> first, then logs Critical, records a fault, sets the failure exit code, asks the host for an orderly stop
@@ -28,7 +34,8 @@ namespace ArcaneCore.World;
 /// </para>
 /// </summary>
 public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions = null, ILogger<WorldWriterGuard>? logger = null, bool deferUntilPromotion = false,
-    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null, CharacterDatabaseWriterFence? fence = null) : IDisposable
+    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null, CharacterDatabaseWriterFence? fence = null,
+    IOptions<CharacterFencingOptions>? fencingOptions = null, IOptions<Cluster.Gateway.GatewayWorkerOptions>? workerOptions = null) : IDisposable
 {
     private readonly object _gate = new();
     private volatile CharacterDatabaseWriterLock? _lock; // written under the gate, read lock-free by LockPath
@@ -38,6 +45,45 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
     public string? LockPath
     {
         get => _lock is { IsLost: false } held ? held.Path : null; // no gate: Acquire holds it across the connection to the server
+    }
+
+    /// <summary>True when this guard locks a worker shard (<c>Cluster:Fencing:Scope=Worker</c>) rather than the realm.</summary>
+    public bool IsWorkerScope => fencingOptions?.Value.Scope == CharacterFencingScope.Worker;
+
+    /// <summary>The worker shard this guard locks; null in Realm scope. Throws <see cref="WorkerScopeConfigurationException"/> for a shard id that is not valid.</summary>
+    public string? Shard
+    {
+        get
+        {
+            if (fencingOptions?.Value is not { Scope: CharacterFencingScope.Worker } fencing) return null;
+            return fencing.ResolveScope(workerOptions?.Value.NodeId ?? string.Empty)[Data.Characters.Ownership.CharacterOwnershipScopes.WorkerPrefix.Length..];
+        }
+    }
+
+    /// <summary>True while the lock is held and not lost: the proof, for a shard, that no other process of that shard is alive.</summary>
+    public bool HoldsLock => _lock is { IsLost: false };
+
+    /// <summary>
+    /// Whether the realm lock is free right now, without keeping it (a Worker-scope claim is followed by this probe: a holder is a Combined world, and the worker backs out).
+    /// True when there are no database options or the database has no lock. An unreachable server propagates the driver's <see cref="System.Data.Common.DbException"/>.
+    /// </summary>
+    public bool ProbeRealmFree()
+        => databaseOptions?.Value is not { } options || CharacterDatabaseWriterLock.ProbeRealmFree(options.Resolve(DatabaseComponent.Characters));
+
+    /// <summary>
+    /// Whether the advisory lock of the worker scope <paramref name="workerScope"/> (<c>worker:&lt;shard&gt;</c>) is free right now, without keeping it: the login-time reap's liveness proof
+    /// (design _wf/writer-lock-DESIGN.md section 5.4; <see cref="CharacterClaimService"/>). False for a scope that is not a valid worker scope, so it is never reaped. True when there are no database
+    /// options or the database has no lock. An unreachable server propagates the driver's <see cref="System.Data.Common.DbException"/>. Synchronous, one short round trip.
+    /// </summary>
+    public bool ProbeShardFree(string workerScope)
+    {
+        ArgumentNullException.ThrowIfNull(workerScope);
+        if (!CharacterOwnershipScopes.IsWorker(workerScope))
+            return false;
+        string shard = workerScope[CharacterOwnershipScopes.WorkerPrefix.Length..];
+        if (!CharacterDatabaseWriterLock.IsValidShardId(shard))
+            return false;
+        return databaseOptions?.Value is not { } options || CharacterDatabaseWriterLock.ProbeShardFree(options.Resolve(DatabaseComponent.Characters), shard);
     }
 
     /// <summary>
@@ -57,7 +103,18 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
         lock (_gate)
         {
             if (_lock is not null || databaseOptions?.Value is not { } options) return false;
-            _lock = CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters), OnLockLost, lockHealthInterval, OnLockRecovered, OnLockConflict, OnLockRetakeBlocked);
+            DatabaseConnectionOptions characters = options.Resolve(DatabaseComponent.Characters);
+            if (Shard is { } shard)
+            {
+                if (characters.Provider == DatabaseProvider.Sqlite && fencingOptions?.Value.AllowSqliteWorkerScope != true)
+                    throw new WorkerScopeConfigurationException("Cluster:Fencing:Scope=Worker needs a PostgreSQL or MariaDB characters database; SQLite is allowed only with Cluster:Fencing:AllowSqliteWorkerScope (in-process tests)");
+                _lock = CharacterDatabaseWriterLock.TryAcquireShard(characters, shard, OnLockLost, lockHealthInterval, OnLockRecovered, OnLockConflict, OnLockRetakeBlocked);
+            }
+            else
+            {
+                _lock = CharacterDatabaseWriterLock.TryAcquire(characters, OnLockLost, lockHealthInterval, OnLockRecovered, OnLockConflict, OnLockRetakeBlocked);
+            }
+
             if (_lock is null) return false;
             logger?.LogInformation("Holding the characters database writer lock {LockPath}", _lock.Path);
             return true;

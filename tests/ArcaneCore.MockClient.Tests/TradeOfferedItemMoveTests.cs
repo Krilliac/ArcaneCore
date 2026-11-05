@@ -198,7 +198,6 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(5u, await ReceiverCountAsync(rig));
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task SplitOfAnotherStack_WhileSomethingIsOffered_StillWorks()
     {
@@ -210,7 +209,13 @@ public sealed class TradeOfferedItemMoveTests
         await AcceptAsync(rig);
 
         await rig.Sender.SendAsync(WorldOpcode.CmsgSplitItem, [InventorySlots.Bag0, otherSlot, InventorySlots.Bag0, free, 6], rig.Token);
-        await SyncAsync(rig);
+        // The split is a legal change, so the proof is its own effect read on the world thread (a world-queue round trip per poll), not the
+        // scam-prevention bounce of a second accept: that bounce depends on the trade clock staying inside one second.
+        while (!await rig.Server.World.InvokeAsync(() =>
+            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.Inventory.GetItem(InventorySlots.Bag0, free) is not null).WaitAsync(rig.Token))
+        {
+            await Task.Delay(5, rig.Token);
+        }
 
         await rig.Server.World.InvokeAsync(() =>
         {
@@ -647,6 +652,9 @@ public sealed class TradeOfferedItemMoveTests
         await ReadStatusAsync(rig.Receiver!, TradeStatus.OpenWindow, rig.Token);
         await rig.Sender.SendAsync(WorldOpcode.CmsgSetTradeItem, [0, InventorySlots.Bag0, slot], rig.Token);
         await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgTradeStatusExtended, rig.Token);
+        // A new item is a real change, so the sender is sent one BACK_TO_TRADE of its own (TradeNegotiated). Taking it here leaves SyncAsync's
+        // wait to be satisfied only by the bounce of its own accept; a leftover one would end that wait before the earlier opcode ran.
+        await ReadStatusAsync(rig.Sender, TradeStatus.BackToTrade, rig.Token);
     }
 
     /// <summary>The sender accepts first (after the anti-scam delay); the recipient is told.</summary>

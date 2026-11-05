@@ -149,4 +149,64 @@ public sealed class WorldClockTests
         Assert.Throws<InvalidOperationException>(() => world.UseSteppedClock());
         Assert.Equal(WorldClockMode.Manual, world.Clock.Mode);
     }
+
+    private static readonly DateTime WallAnchor = new(2027, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void RealClock_WallTimeSource_AnchorsGameUtc()
+    {
+        var wall = new WallSource(WallAnchor);
+        var clock = new WorldClock(Stopwatch.StartNew(), wall.Read);
+
+        Assert.True(Math.Abs((clock.UtcNow.UtcDateTime - WallAnchor).TotalMilliseconds) < 1000);
+    }
+
+    [Fact]
+    public void RealClock_SystemClockJumpingForward_ReAnchorsAtTheNextDriftCheck()
+    {
+        var wall = new WallSource(WallAnchor);
+        var clock = new WorldClock(Stopwatch.StartNew(), wall.Read);
+        Thread.Sleep(1100); // the drift check runs once a second of stopwatch time
+        wall.Ticks += TimeSpan.FromHours(1).Ticks;
+
+        clock.BeginTick(0);
+
+        // game UTC is the jumped system clock again, to within the stopwatch time since the source was read
+        double offByMs = (clock.UtcNow.UtcDateTime - new DateTime(wall.Ticks, DateTimeKind.Utc)).TotalMilliseconds;
+        Assert.True(Math.Abs(offByMs) < 1000, $"off by {offByMs} ms");
+    }
+
+    [Fact]
+    public void RealClock_SystemClockJumpingBack_IsSlewed_NotStepped()
+    {
+        var wall = new WallSource(WallAnchor);
+        var clock = new WorldClock(Stopwatch.StartNew(), wall.Read);
+        Thread.Sleep(1100);
+        wall.Ticks -= TimeSpan.FromHours(1).Ticks;
+
+        clock.BeginTick(0);
+
+        // at most a tenth of the elapsed time is taken back: game UTC still reads about WallAnchor + elapsed, nowhere near the hour-old source
+        long elapsedMs = clock.ElapsedMs;
+        double aheadOfAnchorMs = (clock.UtcNow.UtcDateTime - WallAnchor).TotalMilliseconds;
+        Assert.InRange(aheadOfAnchorMs, elapsedMs * 0.9 - 5, elapsedMs + 5);
+        Assert.True(clock.UtcNow.UtcDateTime > new DateTime(wall.Ticks, DateTimeKind.Utc) + TimeSpan.FromMinutes(59));
+    }
+
+    [Fact]
+    public void WallTimeSource_Replaced_ReAnchorsAndFeedsManualClockWithoutAPinnedUtc()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.Clock.UseWallTimeSource(new WallSource(WallAnchor).Read);
+        world.UseManualClockFrom(startAtMs: 0);
+
+        Assert.Equal(new DateTimeOffset(WallAnchor), world.Clock.UtcNow);
+    }
+
+    private sealed class WallSource(DateTime start)
+    {
+        public long Ticks = start.Ticks;
+
+        public DateTime Read() => new(Volatile.Read(ref Ticks), DateTimeKind.Utc);
+    }
 }

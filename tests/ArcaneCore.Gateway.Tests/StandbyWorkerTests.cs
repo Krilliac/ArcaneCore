@@ -325,7 +325,7 @@ public sealed class StandbyWorkerTests
     {
         ["Cluster:Worker:Enabled"] = "true",
         ["Cluster:Worker:Standby"] = standby ? "true" : "false",
-        ["Cluster:Worker:Port"] = "0",
+        ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
         ["Cluster:Worker:LinkSecret"] = Secret,
     };
 
@@ -344,7 +344,7 @@ public sealed class StandbyWorkerTests
             ? services.GetRequiredService<GatewayWorkerEndpoint>()
             : new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = ArcaneCore.TestSupport.LoopbackPorts.Next(), LinkSecret = Secret }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<ArcaneCore.World.Handlers.OpcodeTable>(),
                 server.World,
@@ -352,18 +352,25 @@ public sealed class StandbyWorkerTests
                 services.GetRequiredService<ILoggerFactory>(),
                 admission);
         await endpoint.StartAsync(token);
+        // A worker-mode server holds a Warden manifest verifier, so the gateway must prove the same posture (realm and Warden options) or its sessions are refused.
+        int realmId = services.GetService<IOptions<GatewayWorkerOptions>>()?.Value.RealmId ?? new GatewayWorkerOptions().RealmId;
+        var warden = new GatewayWarden(
+            realmId,
+            services.GetService<IOptions<ArcaneCore.World.Warden.WardenOptions>>()?.Value ?? new ArcaneCore.World.Warden.WardenOptions(),
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<GatewayWarden>());
         var gateway = new GatewayServer(
             server.Services.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new GatewayOptions
             {
                 BindAddress = IPAddress.Loopback.ToString(),
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = IPAddress.Loopback.ToString(),
                 WorkerPort = endpoint.Host!.BoundEndPoint.Port,
                 LinkSecret = Secret,
                 LinkRetryDelay = TimeSpan.FromMilliseconds(100),
             }),
-            server.Services.GetRequiredService<ILoggerFactory>());
+            server.Services.GetRequiredService<ILoggerFactory>(),
+            warden: warden);
         await gateway.StartAsync(token);
         await gateway.WaitForLinkAsync(token);
         return new Linked(endpoint, gateway);

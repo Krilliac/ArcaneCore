@@ -50,6 +50,27 @@ public sealed class GatewaySessionLinkTests
     }
 
     [Fact]
+    public async Task GatewayReceiveStamps_ReachTheSessionOnTheWorkerClock_WithTheirSpacingIntact()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        var acceptor = new FakeAcceptor();
+        await using Harness h = await Harness.StartAsync(acceptor, cts.Token);
+        Assert.True((await h.Client.OpenAsync(Request(1), new RecordingSink(), cts.Token)).Accepted);
+        FakeSession session = Assert.Single(acceptor.Sessions);
+
+        // Two packets the gateway received 500 ms apart, long enough ago that the translated times are not pulled back to "now".
+        uint now = (uint)Environment.TickCount64;
+        Assert.True(h.Client.SendClientPacket(1, WorldOpcode.MsgMoveHeartbeat, [1], receivedMs: now - 5_000));
+        Assert.True(h.Client.SendClientPacket(1, WorldOpcode.MsgMoveHeartbeat, [2], receivedMs: now - 4_500));
+        await WaitUntilAsync(() => session.Stamps.Count == 2, cts.Token);
+
+        uint[] stamps = session.Stamps.ToArray();
+        Assert.Equal(500u, unchecked(stamps[1] - stamps[0]));
+        // Gateway and worker share this process's clock here, so the offset is the (small) handshake delay: the translated time sits at or just after the stamp.
+        Assert.InRange(unchecked(stamps[0] - (now - 5_000)), 0u, 3_000u);
+    }
+
+    [Fact]
     public async Task ReplayedOrOlderSequence_WrongAccount_AndWrongEpoch_AreDroppedAndCounted()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -157,7 +178,7 @@ public sealed class GatewaySessionLinkTests
         // An empty secret's proof is HMAC("", nonce): any local process could compute it, register as a gateway and open a session
         // for any account. Worker mode refuses to start with it on every bind address, and so does the gateway.
         ArgumentException worker = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkHost(
-            Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, secret, new IPEndPoint(IPAddress.Loopback, 0)));
+            Manifest(ClusterRole.Worker), new FakeAcceptor(), () => 1, secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next())));
         Assert.Contains("Cluster:Worker:LinkSecret", worker.Message, StringComparison.Ordinal);
         ArgumentException gateway = Assert.Throws<ArgumentException>(() => new GatewaySessionLinkClient(
             Manifest(ClusterRole.Gateway), new IPEndPoint(IPAddress.Loopback, 1), secret));
@@ -216,17 +237,16 @@ public sealed class GatewaySessionLinkTests
     public async Task ServerPacketReplays_AndForeignEpochs_AreDroppedByTheGateway()
     {
         using var cts = new CancellationTokenSource(Deadline);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), (IPEndPoint)listener.LocalEndpoint, Secret);
         Task connect = client.ConnectAsync(cts.Token);
         using TcpClient raw = await listener.AcceptTcpClientAsync(cts.Token);
         await using var worker = new GatewayLinkChannel(raw);
-        worker.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkChallenge, new byte[GatewaySessionWire.NonceBytes]));
-        Assert.Equal((byte)GatewayWorkerFrameType.LinkProof, (await worker.ReadFrameAsync(cts.Token))![0]);
-        Assert.Equal((byte)GatewayWorkerFrameType.HelloRegister, (await worker.ReadFrameAsync(cts.Token))![0]);
+        await LinkIntegrityTests.FakeWorkerHandshakeAsync(worker, Secret, cts.Token);
         worker.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(true, string.Empty));
         await connect;
+        Assert.Equal((byte)GatewayWorkerFrameType.LinkClock, (await worker.ReadFrameAsync(cts.Token))![0]); // the clock reading follows the admission
 
         var sink = new RecordingSink();
         Task<GatewaySessionOpenReply> open = client.OpenAsync(Request(1), sink, cts.Token);
@@ -286,7 +306,7 @@ public sealed class GatewaySessionLinkTests
 
     private static GatewaySessionLinkHost StartHost(IGatewaySessionAcceptor acceptor)
     {
-        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0));
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()));
         host.Start();
         return host;
     }
@@ -390,7 +410,15 @@ public sealed class GatewaySessionLinkTests
             }
         }
 
+        public ConcurrentQueue<uint> Stamps { get; } = new();
+
         public void Deliver(WorldOpcode opcode, byte[] payload) => Delivered.Enqueue((opcode, payload));
+
+        public void Deliver(WorldOpcode opcode, byte[] payload, uint receivedMs)
+        {
+            Stamps.Enqueue(receivedMs);
+            Deliver(opcode, payload);
+        }
 
         public void CloseFromGateway(ClusterSessionDetachReason reason) => ClosedBy = reason;
     }

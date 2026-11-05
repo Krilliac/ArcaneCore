@@ -24,7 +24,22 @@ public interface ILfgGroups
 
     /// <summary>The class of a member (online or not; vmangos ObjectMgr::GetPlayerClassByGUID), 0 when unknown.</summary>
     Class ClassOf(ObjectGuid guid);
+
+    /// <summary>
+    /// Add a member who is served by another worker (cluster queue on its holder; the group authority adds the guid, no <see cref="Player"/> exists
+    /// here). The default refuses, which keeps a queue without remote members unchanged.
+    /// </summary>
+    bool AddRemoteMember(Group group, ObjectGuid member) => false;
+
+    /// <summary>A new party of two players of whom at least one is served by another worker; null when it cannot be formed (the default).</summary>
+    Group? CreateRemoteGroup(ObjectGuid leader, ObjectGuid member) => null;
 }
+
+/// <summary>
+/// How the queue speaks to a queued player served by another worker (holder to worker, over the peer link): one packet for that player. Must not
+/// block: it is called on the holder's world thread; the receiving worker sends the packet on its own world thread.
+/// </summary>
+public delegate void LfgRemoteSend(WorldOpcode opcode, byte[] payload);
 
 /// <summary>
 /// The meeting stone queue (vmangos LFGMgr and LFGQueue, LFG/LFGMgr.cpp and LFG/LFGQueue.cpp; the group hooks of Group::AddMember, RemoveMember and
@@ -81,7 +96,11 @@ public sealed class LfgQueue(ILfgGroups groups)
         public int PlayerCount { get; set; }
     }
 
+    /// <summary>A player served by another worker: what the queue needs of him (his team and class, the way to send him packets).</summary>
+    private sealed record RemoteSeat(Team Team, Class Class, LfgRemoteSend Send);
+
     private readonly SortedDictionary<ulong, PlayerEntry> _players = [];
+    private readonly Dictionary<ObjectGuid, RemoteSeat> _remote = [];
     private readonly SortedDictionary<uint, GroupEntry> _groups = [];
     private readonly Dictionary<ObjectGuid, uint> _playerArea = [];
     private readonly Dictionary<uint, uint> _groupArea = [];
@@ -107,28 +126,75 @@ public sealed class LfgQueue(ILfgGroups groups)
     public void Join(Player player, uint areaId)
     {
         ArgumentNullException.ThrowIfNull(player);
-        Group? group = groups.GroupOf(player.Guid);
+        JoinCore(player.Guid, player.Team, player.Class, areaId, (opcode, payload) => player.Session.Send(opcode, payload));
+    }
+
+    /// <summary>
+    /// <see cref="Join(Player, uint)"/> for a player served by another worker (the worker forwarded CMSG_MEETINGSTONE_JOIN after its own checks). The
+    /// queue keeps <paramref name="send"/> to answer him until he logs out (<see cref="OnRemoteLoggingOut"/>).
+    /// </summary>
+    public void JoinRemote(ObjectGuid player, Team team, Class playerClass, uint areaId, LfgRemoteSend send)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        _remote[player] = new RemoteSeat(team, playerClass, send);
+        JoinCore(player, team, playerClass, areaId, send);
+    }
+
+    private void JoinCore(ObjectGuid guid, Team team, Class playerClass, uint areaId, LfgRemoteSend reply)
+    {
+        Group? group = groups.GroupOf(guid);
         if (group is not null)
         {
-            if (!group.IsLeader(player.Guid))
+            if (!group.IsLeader(guid))
             {
                 return;
             }
 
-            var entry = new GroupEntry { Group = group, Team = player.Team, AreaId = areaId, GroupTimerMs = GroupReminderMs };
+            var entry = new GroupEntry { Group = group, Team = team, AreaId = areaId, GroupTimerMs = GroupReminderMs };
             ApplyGroupRoles(group, entry);
             _groupArea[group.Id] = areaId;
             _groups[group.Id] = entry;
-            groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(areaId, MeetingStoneStatus.JoinedQueue));
+            BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(areaId, MeetingStoneStatus.JoinedQueue));
             return;
         }
 
-        _players[player.Guid.Value] = new PlayerEntry
+        _players[guid.Value] = new PlayerEntry
         {
-            Team = player.Team, AreaId = areaId, Class = player.Class, Roles = LfgRules.RolesOf(player.Class),
+            Team = team, AreaId = areaId, Class = playerClass, Roles = LfgRules.RolesOf(playerClass),
         };
-        _playerArea[player.Guid] = areaId;
-        player.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(areaId, MeetingStoneStatus.JoinedQueue));
+        _playerArea[guid] = areaId;
+        reply(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(areaId, MeetingStoneStatus.JoinedQueue));
+    }
+
+    /// <summary>The reply path of a player: his local session when he is online here, else the sender of his remote seat, else null.</summary>
+    private LfgRemoteSend? ReplyTo(ObjectGuid guid)
+    {
+        if (groups.FindOnlinePlayer(guid) is { } player)
+        {
+            return (opcode, payload) => player.Session.Send(opcode, payload);
+        }
+
+        return _remote.TryGetValue(guid, out RemoteSeat? seat) ? seat.Send : null;
+    }
+
+    private void Notify(ObjectGuid guid, WorldOpcode opcode, byte[] payload) => ReplyTo(guid)?.Invoke(opcode, payload);
+
+    /// <summary>The party broadcast of the group authority (online members of this worker), then the members served by other workers.</summary>
+    private void BroadcastGroup(Group group, WorldOpcode opcode, byte[] payload)
+    {
+        groups.Broadcast(group, opcode, payload);
+        if (_remote.Count == 0)
+        {
+            return;
+        }
+
+        foreach (GroupMemberSlot slot in group.Members)
+        {
+            if (_remote.TryGetValue(slot.Guid, out RemoteSeat? seat) && groups.FindOnlinePlayer(slot.Guid) is null)
+            {
+                seat.Send(opcode, payload);
+            }
+        }
     }
 
     /// <summary>
@@ -139,21 +205,35 @@ public sealed class LfgQueue(ILfgGroups groups)
     public void Leave(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (groups.GroupOf(player.Guid) is { } group)
+        LeaveCore(player.Guid, (opcode, payload) => player.Session.Send(opcode, payload));
+    }
+
+    /// <summary><see cref="Leave(Player)"/> for a player served by another worker; the answers go through his seat.</summary>
+    public void LeaveRemote(ObjectGuid player)
+    {
+        if (_remote.TryGetValue(player, out RemoteSeat? seat))
         {
-            if (group.IsLeader(player.Guid) && GroupAreaOf(group) != 0)
+            LeaveCore(player, seat.Send);
+        }
+    }
+
+    private void LeaveCore(ObjectGuid guid, LfgRemoteSend reply)
+    {
+        if (groups.GroupOf(guid) is { } group)
+        {
+            if (group.IsLeader(guid) && GroupAreaOf(group) != 0)
             {
                 RemoveGroup(group, systemLeave: false);
             }
             else
             {
-                player.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
+                reply(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
             }
 
             return;
         }
 
-        RemovePlayer(player.Guid, systemLeave: false);
+        RemovePlayer(guid, systemLeave: false);
     }
 
     /// <summary>
@@ -164,9 +244,23 @@ public sealed class LfgQueue(ILfgGroups groups)
     public void Info(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        uint area = groups.GroupOf(player.Guid) is { } group ? GroupAreaOf(group)
-            : IsPlayerQueued(player.Guid) ? PlayerAreaOf(player.Guid) : 0;
-        player.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue,
+        InfoCore(player.Guid, (opcode, payload) => player.Session.Send(opcode, payload));
+    }
+
+    /// <summary><see cref="Info(Player)"/> for a player served by another worker.</summary>
+    public void InfoRemote(ObjectGuid player)
+    {
+        if (_remote.TryGetValue(player, out RemoteSeat? seat))
+        {
+            InfoCore(player, seat.Send);
+        }
+    }
+
+    private void InfoCore(ObjectGuid guid, LfgRemoteSend reply)
+    {
+        uint area = groups.GroupOf(guid) is { } group ? GroupAreaOf(group)
+            : IsPlayerQueued(guid) ? PlayerAreaOf(guid) : 0;
+        reply(WorldOpcode.SmsgMeetingstoneSetqueue,
             MeetingStonePackets.SetQueue(area, area != 0 ? MeetingStoneStatus.JoinedQueue : MeetingStoneStatus.None));
     }
 
@@ -175,6 +269,13 @@ public sealed class LfgQueue(ILfgGroups groups)
     {
         ArgumentNullException.ThrowIfNull(player);
         RemovePlayer(player.Guid, systemLeave: true);
+    }
+
+    /// <summary>A player served by another worker logged out: he leaves the solo queue silently (as <see cref="OnLoggingOut"/>) and the queue forgets his seat.</summary>
+    public void OnRemoteLoggingOut(ObjectGuid player)
+    {
+        RemovePlayer(player, systemLeave: true);
+        _remote.Remove(player);
     }
 
     // --- group hooks --------------------------------------------------------------------------
@@ -236,22 +337,31 @@ public sealed class LfgQueue(ILfgGroups groups)
 
         bool leftGroup = false;
         Player? player = groups.FindOnlinePlayer(member);
-        if (player is not null)
+        LfgRemoteSend? reply = ReplyTo(member);
+        if (reply is not null)
         {
             if (kicked)
             {
-                groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.PartyMemberRemovedPartyRemoved));
+                BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.PartyMemberRemovedPartyRemoved));
                 leftGroup = true;
                 RemoveGroup(group, systemLeave: false);
-                player.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(area, MeetingStoneStatus.LookingForNewPartyInQueue));
-                Join(player, area);
+                reply(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(area, MeetingStoneStatus.LookingForNewPartyInQueue));
+                if (player is not null)
+                {
+                    Join(player, area);
+                }
+                else
+                {
+                    RemoteSeat seat = _remote[member];
+                    JoinCore(member, seat.Team, seat.Class, area, reply);
+                }
             }
             else
             {
-                player.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
+                reply(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
                 if (!leaderChanged)
                 {
-                    groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(area, MeetingStoneStatus.PartyMemberLeftLfg));
+                    BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(area, MeetingStoneStatus.PartyMemberLeftLfg));
                 }
             }
         }
@@ -277,7 +387,7 @@ public sealed class LfgQueue(ILfgGroups groups)
             return;
         }
 
-        groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
+        BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
         _groups.Remove(group.Id);
         _groupArea.Remove(group.Id);
     }
@@ -359,7 +469,7 @@ public sealed class LfgQueue(ILfgGroups groups)
             if (queued.GroupTimerMs <= diff)
             {
                 queued.GroupTimerMs = GroupReminderMs;
-                groups.Broadcast(queued.Group, WorldOpcode.SmsgMeetingstoneInProgress, []);
+                BroadcastGroup(queued.Group, WorldOpcode.SmsgMeetingstoneInProgress, []);
             }
             else
             {
@@ -394,15 +504,19 @@ public sealed class LfgQueue(ILfgGroups groups)
         uint area = leaderEntry.AreaId;
         RemovePlayer(leaderGuid, systemLeave: true);
         RemovePlayer(memberGuid, systemLeave: true);
-        if (groups.FindOnlinePlayer(leaderGuid) is not { } leader || groups.FindOnlinePlayer(memberGuid) is not { } member)
+        LfgRemoteSend? leaderReply = ReplyTo(leaderGuid);
+        if (leaderReply is null || ReplyTo(memberGuid) is null)
         {
             return;
         }
 
-        leader.Session.Send(WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(memberGuid));
-        if (groups.CreateGroup(leader, member) is not null)
+        leaderReply(WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(memberGuid));
+        Group? formed = groups.FindOnlinePlayer(leaderGuid) is { } leader && groups.FindOnlinePlayer(memberGuid) is { } member
+            ? groups.CreateGroup(leader, member)
+            : groups.CreateRemoteGroup(leaderGuid, memberGuid);
+        if (formed is not null)
         {
-            Join(leader, area);
+            JoinCore(leaderGuid, leaderEntry.Team, leaderEntry.Class, area, leaderReply);
         }
     }
 
@@ -463,7 +577,8 @@ public sealed class LfgQueue(ILfgGroups groups)
         // The role is only taken when the player actually joins. A pending invite or an existing
         // party makes AddMember fail (Group::AddMember / GROUP_LFG); committing the slot anyway
         // counted a member the party does not have and could complete it one short.
-        if (groups.FindOnlinePlayer(playerGuid) is not { } player)
+        Player? player = groups.FindOnlinePlayer(playerGuid);
+        if (player is null && !_remote.ContainsKey(playerGuid))
         {
             queued.AvailableRoles = openRoles;
             queued.DpsCount = openDps;
@@ -475,7 +590,7 @@ public sealed class LfgQueue(ILfgGroups groups)
         _queueAdding = true;
         try
         {
-            added = groups.AddMember(queued.Group, player);
+            added = player is not null ? groups.AddMember(queued.Group, player) : groups.AddRemoteMember(queued.Group, playerGuid);
         }
         finally
         {
@@ -491,7 +606,7 @@ public sealed class LfgQueue(ILfgGroups groups)
         }
 
         RemovePlayer(playerGuid, systemLeave: true);
-        groups.Broadcast(queued.Group, WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(playerGuid));
+        BroadcastGroup(queued.Group, WorldOpcode.SmsgMeetingstoneMemberAdded, MeetingStonePackets.MemberAdded(playerGuid));
         return true;
     }
 
@@ -587,7 +702,7 @@ public sealed class LfgQueue(ILfgGroups groups)
 
         if (!systemLeave)
         {
-            groups.FindOnlinePlayer(guid)?.Session.Send(WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.LeaveQueue));
+            Notify(guid, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.LeaveQueue));
             _playerArea.Remove(guid);
         }
     }
@@ -605,12 +720,12 @@ public sealed class LfgQueue(ILfgGroups groups)
 
         if (!systemLeave)
         {
-            groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.LeaveQueue));
+            BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.LeaveQueue));
         }
         else
         {
-            groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneComplete, []);
-            groups.Broadcast(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
+            BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneComplete, []);
+            BroadcastGroup(group, WorldOpcode.SmsgMeetingstoneSetqueue, MeetingStonePackets.SetQueue(0, MeetingStoneStatus.None));
         }
 
         _groupArea.Remove(group.Id);

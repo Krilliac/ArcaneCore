@@ -14,7 +14,7 @@ public static class DbUpgradeExitCodes
     /// <summary>An unexpected failure (a bug, or an input the tool did not anticipate); the message says what.</summary>
     public const int Failure = 1;
 
-    /// <summary>Bad command line or missing configuration: unknown command or option, missing value, no connection string.</summary>
+    /// <summary>Bad command line or missing configuration: unknown command or option, missing value, no connection string. Also a server that refused the credentials or the database name (restarting cannot fix it).</summary>
     public const int Usage = 2;
 
     /// <summary><c>status</c> or <c>plan</c>: an upgrade is pending (a normal report, not an error; <c>--no-fail-on-pending</c> turns it into 0).</summary>
@@ -26,15 +26,15 @@ public static class DbUpgradeExitCodes
     /// <summary><c>check</c>, or the check after <c>upgrade</c>: the database differs from the model.</summary>
     public const int Drift = 5;
 
-    /// <summary>The database server could not be reached or refused the connection (the message is scrubbed of secrets).</summary>
+    /// <summary>The database server could not be reached or a transient connection failure occurred (the message is scrubbed of secrets); a refusal of credentials or database name is <see cref="Usage"/>.</summary>
     public const int Unreachable = 6;
 
-    /// <summary>The wait for another process's schema lock ran out.</summary>
+    /// <summary>The wait for another process's schema lock ran out, or the database server or SQLite reported a lock wait, deadlock or busy database.</summary>
     public const int LockTimeout = 7;
 
     /// <summary><c>upgrade</c> with pending steps and no confirmed backup (or a backup that could not be made); nothing was changed.</summary>
     public const int BackupNotConfirmed = 8;
 
-    /// <summary><c>copy</c>: the rows were copied but a table differs from its source (row count or content); the component's copy was rolled back and its target is as it was.</summary>
+    /// <summary><c>copy</c>: the rows were copied but a table differs from its source (row count or content); the component's copy was rolled back and its target is as it was. <c>verify</c>: a table differs between the two databases (nothing is written).</summary>
     public const int CopyVerifyFailed = 9;
 }

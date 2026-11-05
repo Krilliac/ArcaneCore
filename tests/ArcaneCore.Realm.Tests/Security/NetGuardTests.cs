@@ -1,7 +1,7 @@
 using System.Net;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Net;
-using Microsoft.Extensions.Logging;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Realm.Tests.Security;
@@ -195,22 +195,5 @@ public sealed class NetGuardTests
         clock[0] += 10_000;
         guard.ReportFrameTimeout("1.2.3.4:5");
         Assert.Contains("(99 more since the last line)", log.Messages[2], StringComparison.Ordinal);
-    }
-
-    internal sealed class CapturingLogger : ILogger
-    {
-        public List<string> Messages { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (Messages)
-            {
-                Messages.Add(formatter(state, exception));
-            }
-        }
     }
 }

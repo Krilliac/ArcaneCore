@@ -1,3 +1,5 @@
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
@@ -5,6 +7,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +34,14 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     private GameEventStatusWriter? _writer;
     private readonly object _disabledGate = new();
     private Task _disabledWrites = Task.CompletedTask;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
+
+    /// <summary>
+    /// Whether this node makes the durable game-event writes (the running set and the <c>.event enable/disable</c> flag): always on a node with no lease keeper (Combined, tests), on a clustered node
+    /// only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState"/> lease (not released, not lost). Every node still runs the events in memory
+    /// (their spawns and quests belong to the maps each node owns); a non-holder only reads the stored state (writer-lock design section 4, row 9; Q10).
+    /// </summary>
+    public bool HoldsWorldStateLease => _leaseKeeper is not { } keeper || keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState);
 
     /// <summary>The running service (null before the feature is attached). With the feature off it exists but never starts an event.</summary>
     public GameEventService? Service => _service;
@@ -51,6 +62,7 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        _leaseKeeper = services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
         _hooks = WorldStateHooks.For(world);
         services.GetService<IConfiguration>()?.GetSection(GameEventOptions.SectionName).Bind(_hooks.GameEventSettings);
         // Disabled: the tables are still loaded (spawns listed in them stay out of the world, as in vmangos while no event runs),
@@ -95,7 +107,7 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             }
         }
 
-        _writer = hasStatusStore ? new GameEventStatusWriter(services, logger) : null;
+        _writer = hasStatusStore ? new GameEventStatusWriter(services, logger, () => HoldsWorldStateLease) : null;
         UseContent(content, active, _writer);
     }
 
@@ -130,6 +142,11 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             service.AddListener(listener);
         }
 
+        service.SetMailSender(new GameEventMailDelivery(
+            () => _world?.OnlinePlayers ?? [],
+            () => services.GetService<IScriptMailSink>(),
+            QuestRewarded,
+            logger));
         _service = service;
         _initialiseWith = options.Enabled ? activeAtShutdown : null;
         _elapsedMs = 0;
@@ -181,6 +198,10 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     }
 
     private readonly List<IGameEventListener> _listeners = [];
+
+    private bool QuestRewarded(Player player, uint questId)
+        => services.GetService<QuestNpcFeature>()?.Services.StateOf(player) is { } state
+            && state.Quests.Get(questId) is { Rewarded: true };
 
     /// <summary>What loading <paramref name="content"/> now would give (dialect, definitions, the issues found), without touching the running service.</summary>
     public GameEventLoadResult Preview(GameEventContent content)
@@ -251,6 +272,12 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             {
                 try
                 {
+                    if (!HoldsWorldStateLease)
+                    {
+                        logger.LogInformation("game event {EventId} disabled flag not stored: this node does not hold the worldstate lease (the flag holds in memory until restart)", eventId);
+                        return;
+                    }
+
                     using IServiceScope scope = services.CreateScope();
                     if (scope.ServiceProvider.GetService<IGameEventDataStore>() is { } store)
                     {
@@ -291,10 +318,56 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
 }
 
 /// <summary>
+/// Delivers <c>game_event_mail</c> rows to the online characters (vmangos <c>SendEventMails</c>, GameEventMgr.cpp:1038-1061: a mass mail of
+/// <c>MailDraft(mailTemplateId)</c> from creature <c>senderEntry</c> to the characters whose race bit <c>1 &lt;&lt; (race - 1)</c> is in the
+/// row's race mask, and with a quest only to those who finished it). The letter goes through the <see cref="IScriptMailSink"/> (the
+/// server-mail pipeline the DB script SEND_MAIL step uses): template, no extra money, no extra delay. Characters that are offline when
+/// the event starts are not mailed (vmangos' mass mail also reaches them from the database; this tree has no offline sender). With no
+/// sink registered the row is reported once and skipped. World thread.
+/// </summary>
+public sealed class GameEventMailDelivery(
+    Func<IEnumerable<Player>> online, Func<IScriptMailSink?> sink, Func<Player, uint, bool> questRewarded, ILogger logger) : IGameEventMailSender
+{
+    private bool _reportedNoSink;
+
+    public void Send(int signedEvent, GameEventMailRecord mail)
+    {
+        ArgumentNullException.ThrowIfNull(mail);
+        if (sink() is not { } mailer)
+        {
+            if (!_reportedNoSink)
+            {
+                _reportedNoSink = true;
+                logger.LogWarning("game event {Event} has mail rows but no mail service is registered; they are not delivered", signedEvent);
+            }
+
+            return;
+        }
+
+        foreach (Player player in online().ToArray())
+        {
+            int race = (int)player.Race;
+            if (race is < 1 or > 32 || (mail.RaceMask & (1u << (race - 1))) == 0)
+            {
+                continue;
+            }
+
+            if (mail.Quest != 0 && !questRewarded(player, mail.Quest))
+            {
+                continue;
+            }
+
+            mailer.Send(player, mail.SenderEntry, mail.MailTemplateId, 0, 0);
+        }
+    }
+}
+
+/// <summary>
 /// Writes the set of running events to <see cref="IGameEventStatusStore"/> off the world thread: the latest set wins, writes never
 /// overlap, a failure is logged and retained for the next change (or the shutdown flush) and never reaches the world thread.
+/// With <c>mayWrite</c> returning false (a clustered node that does not hold the worldstate lease) nothing is written and the set is dropped, not retained: the holder owns the stored set.
 /// </summary>
-internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger logger) : IGameEventStatusSink
+internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger logger, Func<bool>? mayWrite = null) : IGameEventStatusSink
 {
     private readonly object _gate = new();
     private IReadOnlyCollection<ushort>? _pending;
@@ -368,6 +441,11 @@ internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger l
 
     private async Task<bool> WriteAsync(IReadOnlyCollection<ushort> set)
     {
+        if (mayWrite is not null && !mayWrite())
+        {
+            return true; // not the worldstate holder: the stored set is the holder's to write
+        }
+
         try
         {
             using IServiceScope scope = services.CreateScope();

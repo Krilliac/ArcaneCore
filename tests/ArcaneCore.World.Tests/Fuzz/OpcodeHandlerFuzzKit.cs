@@ -555,11 +555,17 @@ internal sealed class HandlerFuzzStats(WorldOpcode opcode, string kind)
 
     public int Recoveries { get; set; }
 
+    /// <summary>Recoveries caused by a kick on an opcode in the kick allowlist; they do not count toward the recovery cap.</summary>
+    public int AllowlistedKickRecoveries { get; set; }
+
     public bool RecoveryCapped { get; set; }
 
     public int TransfersCompleted { get; set; }
 
     public int TransfersStuck { get; set; }
+
+    /// <summary>Session cases whose handler returned a task that was not yet complete (it continued after an await).</summary>
+    public int Suspended { get; set; }
 
     public double Millis { get; set; }
 
@@ -881,13 +887,11 @@ internal static class HandlerFuzzKit
     };
 
     /// <summary>
-    /// Opcodes allowed to run out of recoveries (the fuzz kicked the primary more than three times). Any other capped opcode is a finding,
-    /// because the rest of its cases were skipped.
+    /// Opcodes allowed to run out of recoveries (the fuzz replaced the primary more than three times). Any other capped opcode is a finding,
+    /// because the rest of its cases were skipped. Recoveries caused by a kick on a <see cref="KickAllowlist"/> opcode (every over-long guild
+    /// text disconnects the sender) do not count toward the cap, so no opcode needs an entry here today.
     /// </summary>
-    internal static readonly IReadOnlyDictionary<WorldOpcode, string> RecoveryCapAllowlist = new Dictionary<WorldOpcode, string>
-    {
-        [WorldOpcode.CmsgGuildMotd] = "guild over-length text kick (GuildManager.RejectOversized): every over-long MOTD disconnects the sender",
-    };
+    internal static readonly IReadOnlyDictionary<WorldOpcode, string> RecoveryCapAllowlist = new Dictionary<WorldOpcode, string>();
 
     /// <summary>Every break name <see cref="CheckPlayer"/> can emit (the invariant tests show that each one fires).</summary>
     internal static readonly string[] AllBreakNames =

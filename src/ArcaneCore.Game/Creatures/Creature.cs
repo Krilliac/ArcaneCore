@@ -571,6 +571,17 @@ public sealed partial class Creature : Unit, ICombatCreature
     internal bool IgnoreTemplateResistances { get; set; }
 
     /// <summary>
+    /// Makes this creature a hunter's permanent pet by kind (vmangos GetPetType() == HUNTER_PET): it stops carrying the beast's template
+    /// resistances, whoever owns or controls it. The key is the pet's own kind, set by the spawn of a persistent hunter pet, and not the owner's
+    /// class at the call site; warlock demons and other summons never call it and keep their template resistances.
+    /// </summary>
+    internal void MarkHunterPetKind()
+    {
+        IgnoreTemplateResistances = true;
+        ApplyCreateResistances();
+    }
+
+    /// <summary>
     /// The create resistance of every magic school (vmangos Creature::UpdateEntry, Creature.cpp:606-611); holy stays 0 in the field
     /// (CreatureTemplate.ResistanceOf), and a negative template value is a vulnerability. Applied as the change from the value last written,
     /// not as an overwrite: this also runs on a live creature (UpdateEntry, a game event override) whose resistance auras have already moved the
@@ -749,7 +760,18 @@ public sealed record CreatureSpline(
         float t = DurationMs == 0 ? 1f : (float)ElapsedMs(clockMs) / DurationMs;
         (_, int segment) = Locate(t);
         IReadOnlyList<Vector3> points = Points;
-        return [.. points.Skip(segment)];
+        if (segment >= points.Count)
+        {
+            return [];
+        }
+
+        var remaining = new Vector3[points.Count - segment];
+        for (int i = 0; i < remaining.Length; i++)
+        {
+            remaining[i] = points[segment + i];
+        }
+
+        return remaining;
     }
 
     private (Vector3 Position, int Segment) Locate(float t)
@@ -773,32 +795,61 @@ public sealed record CreatureSpline(
             return (Vector3.Lerp(start, points[0], t), 0, HeadingBetween(start, points[0], fallbackOrientation));
         }
 
+        SplineLengths lengths = LengthsOf(start, points);
+        float target = lengths.Cumulative[^1] * t;
+
+        // Walk the cached leg lengths in order, subtracting one leg at a time exactly as the uncached code did, so the float
+        // remainder (and therefore the leg picked at leg boundaries and zero-length trailing legs) is bit-identical.
+        int lo = 0;
+        while (lo < points.Count - 1 && target > lengths.Segment[lo])
+        {
+            target -= lengths.Segment[lo];
+            lo++;
+        }
+
+        Vector3 previous = lo == 0 ? start : points[lo - 1];
+        float segment = lengths.Segment[lo];
+        float f = segment <= 0 ? 1f : Math.Clamp(target / segment, 0f, 1f);
+        float segHeading = HeadingBetween(previous, points[lo], fallbackOrientation);
+        float blended = BlendCornerHeading(start, points, lo, segment, f, segHeading);
+        return (Vector3.Lerp(previous, points[lo], f), lo, blended);
+    }
+
+    /// <summary>Per-leg and running lengths of a multi-point path, computed once (Path, Start are init-only) and then immutable.</summary>
+    private sealed class SplineLengths(float[] segment, float[] cumulative)
+    {
+        public float[] Segment { get; } = segment;
+
+        public float[] Cumulative { get; } = cumulative;
+    }
+
+    // Not part of the spline's value: Path and Start are init-only, so do not use `with` to change them after a locate (the copy would keep this cache).
+    private SplineLengths? _lengths;
+
+    // Splines are read from the ungated wander pass and from gated stages: two threads may both build the cache from the same
+    // immutable inputs, and either result is correct, so publish one fully built object by reference (no lock, no torn state).
+    private SplineLengths LengthsOf(Vector3 start, IReadOnlyList<Vector3> points)
+    {
+        SplineLengths? cached = Volatile.Read(ref _lengths);
+        if (cached is not null)
+        {
+            return cached;
+        }
+
+        var segment = new float[points.Count];
+        var cumulative = new float[points.Count];
         float total = 0;
         Vector3 previous = start;
         for (int i = 0; i < points.Count; i++)
         {
-            total += Vector3.Distance(previous, points[i]);
+            segment[i] = Vector3.Distance(previous, points[i]);
+            total += segment[i];
+            cumulative[i] = total;
             previous = points[i];
         }
 
-        float target = total * t;
-        previous = start;
-        for (int i = 0; i < points.Count; i++)
-        {
-            float segment = Vector3.Distance(previous, points[i]);
-            if (target <= segment || i == points.Count - 1)
-            {
-                float f = segment <= 0 ? 1f : Math.Clamp(target / segment, 0f, 1f);
-                float segHeading = HeadingBetween(previous, points[i], fallbackOrientation);
-                float blended = BlendCornerHeading(start, points, i, segment, f, segHeading);
-                return (Vector3.Lerp(previous, points[i], f), i, blended);
-            }
-
-            target -= segment;
-            previous = points[i];
-        }
-
-        return (points[^1], points.Count - 1, EndOrientation(fallbackOrientation));
+        var built = new SplineLengths(segment, cumulative);
+        return Interlocked.CompareExchange(ref _lengths, built, null) ?? built;
     }
 
     private static float BlendCornerHeading(

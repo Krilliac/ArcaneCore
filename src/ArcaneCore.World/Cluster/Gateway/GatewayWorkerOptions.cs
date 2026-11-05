@@ -1,3 +1,6 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 
 namespace ArcaneCore.World.Cluster.Gateway;
@@ -19,6 +22,7 @@ public sealed class GatewayWorkerOptions
     public bool Standby { get; set; }
 
     /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("an IPv4 or IPv6 address such as 127.0.0.1 or ::1 (host names are not resolved)")]
     public string BindAddress { get; set; } = "127.0.0.1";
 
     /// <summary>Port of the gateway listener; must equal the gateway's Gateway:WorkerPort.</summary>
@@ -33,24 +37,34 @@ public sealed class GatewayWorkerOptions
     /// <summary>Realm id both ends of the link must agree on.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>Content revision both ends of the link must agree on (an operator label; nothing reads it from the data).</summary>
-    public string ContentRevision { get; set; } = "dev";
+    /// <summary>`true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused.</summary>
+    public bool VersionsFromDatabase { get; set; } = true;
 
-    /// <summary>Characters schema version both ends must agree on (an operator label, not read from the database).</summary>
-    public int CharactersSchemaVersion { get; set; } = 1;
+    /// <summary>Content revision label both ends of the link must agree on; an override, used only while <see cref="VersionsFromDatabase"/> is false.</summary>
+    public string ContentRevision { get; set; } = GatewayManifestVersions.ContentRevisionFor(WorldDbContext.Schema.CurrentVersion);
 
-    /// <summary>World schema version both ends must agree on (an operator label, not read from the database).</summary>
-    public int WorldSchemaVersion { get; set; } = 1;
+    /// <summary>Characters schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
+    public int CharactersSchemaVersion { get; set; } = CharacterDbContext.Schema.CurrentVersion;
 
-    /// <summary>The manifest this worker admits gateways against.</summary>
-    public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
-        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);
-}
+    /// <summary>World schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
+    public int WorldSchemaVersion { get; set; } = WorldDbContext.Schema.CurrentVersion;
 
-/// <summary>Builds the <see cref="ClusterNodeManifest"/> both ends of a gateway link advertise.</summary>
-public static class GatewayLinkManifest
-{
-    public static ClusterNodeManifest Create(
-        ClusterRole role, string nodeId, Guid incarnation, int realmId, string contentRevision, int charactersSchemaVersion, int worldSchemaVersion)
-        => new(realmId, nodeId, incarnation, role, ClusterNodeManifest.CurrentContractVersion, charactersSchemaVersion, worldSchemaVersion, contentRevision);
+    /// <summary>The maps this worker owns, as a list of ids and inclusive ranges (<c>0,1,30-40</c>; separators comma, semicolon or space). Empty, the default, owns every map, which keeps the combined behaviour. With a list, the world never creates or enters a map outside it (login, teleport, spawn, bot travel refuse cleanly until redirects and far transfers to the owning worker exist), and the list is announced in the link manifest. Lists of different workers must not overlap (the supervisor's Processes:*:Maps check).</summary>
+    public string OwnedMaps { get; set; } = string.Empty;
+
+    /// <summary>With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty.</summary>
+    public bool AllowInstanceMaps { get; set; } = true;
+
+    /// <summary>The manifest this worker admits gateways against, advertising the option labels.</summary>
+    public ClusterNodeManifest ToManifest(Guid incarnation)
+        => ToManifest(incarnation, new GatewayManifestVersions(CharactersSchemaVersion, WorldSchemaVersion, ContentRevision));
+
+    /// <summary>The manifest this worker admits gateways against, advertising <paramref name="versions"/> (see <see cref="GatewayManifestVersions"/>).</summary>
+    public ClusterNodeManifest ToManifest(Guid incarnation, GatewayManifestVersions versions) => GatewayLinkManifest.Create(
+        ClusterRole.Worker, NodeId, incarnation, RealmId, versions.ContentRevision, versions.CharactersSchemaVersion, versions.WorldSchemaVersion,
+        TryGetOwnership(out MapOwnership ownership, out _) ? ownership.ToListText() : OwnedMaps.Trim(), AllowInstanceMaps);
+
+    /// <summary>Parses <see cref="OwnedMaps"/> and <see cref="AllowInstanceMaps"/>; false with <paramref name="error"/> when the list is malformed.</summary>
+    public bool TryGetOwnership(out MapOwnership ownership, out string? error)
+        => MapOwnership.TryParse(OwnedMaps, AllowInstanceMaps, out ownership, out error);
 }

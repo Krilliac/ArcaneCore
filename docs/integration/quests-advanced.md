@@ -115,8 +115,10 @@ characters schema change, hence no `ICharacterDataCleanup` (the reward rows live
 Local runs are SQLite only. The provider theories (`TestDatabases.AvailableProviders`) of `QuestAutoCompleteRewardStoreTests` and
 `QuestAdvancedSchemaTests` therefore ran on SQLite here and on MariaDB/PostgreSQL only on hosted CI. They are written against real
 provider semantics: the insert-if-missing read under serializable isolation takes next-key locks on MariaDB and may raise a
-serialization failure (40001) on PostgreSQL, which the settlement's reconcile path (`ReadRewardOutcomeAsync`, now aware of the
-virtual row) absorbs because one settlement per character runs at a time; the upgrade test drops the two columns and sets the version
+serialization failure (40001) on PostgreSQL. The reward store retries that attempt itself (`EfCharacterQuestRewardStore`: four
+attempts in all, 10-50 ms apart, the whole attempt including the fenced transaction begin, SQLSTATE 40001 and 40P01 only); when
+the attempts run out, or a retry does not fit the settlement budget, the settlement's reconcile path (`ReadRewardOutcomeAsync`, now
+aware of the virtual row) absorbs it because one settlement per character runs at a time; the upgrade test drops the two columns and sets the version
 row back, so it covers the partially-applied restart on MariaDB (non-transactional, implicitly committing DDL) and the transactional
 PostgreSQL case alike.
 

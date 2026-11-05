@@ -307,7 +307,7 @@ public sealed class PlayerbotQaAggregatorTests
     public void ConcurrentIngest_KeepsExactCounts()
     {
         PlayerbotQaAggregator aggregator = New();
-        Parallel.For(0, 8, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
         {
             for (int i = 0; i < 250; i++) aggregator.Ingest(QaData.Stall(Guid.NewGuid(), 0, 0, quest: (uint)(i % 5) + 1), NoQaContentFacts.Instance, QaData.T0);
         });

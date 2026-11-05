@@ -37,7 +37,7 @@ jobs:
 
     name: test (${{ matrix.suite }}${{ matrix.batch != '0' && ', spell batching' || '' }})
 
-    # The data-layer tests run against every supported engine (charter §2 + ROADMAP):
+    # The data-layer tests run against every supported engine (see the ROADMAP decisions):
     # SQLite in-process, MariaDB and PostgreSQL as service containers.
     services:
       mariadb:

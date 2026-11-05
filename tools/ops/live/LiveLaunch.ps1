@@ -283,10 +283,26 @@ function Get-LivePortOwner {
     return 0
 }
 
+function Test-LiveCommandLineHasToken {
+    <# .SYNOPSIS  True when -CommandLine contains -Token as a whole white-space separated word (a longer word that merely starts with it, such as --A=worker:EK2 for --A=worker:EK, does not count). #>
+    param([AllowNull()][string]$CommandLine, [Parameter(Mandatory)][string]$Token)
+    if ([string]::IsNullOrEmpty($CommandLine)) { return $false }
+    return $CommandLine -match ('(^|\s)' + [regex]::Escape($Token) + '(\s|$)')
+}
+
 function Find-LiveChildProcess {
-    <# .SYNOPSIS  The live direct child of -ParentPid whose image is -ImageName (for example ArcaneCore.World.exe), or $null (Windows: CIM). #>
-    param([Parameter(Mandatory)][int]$ParentPid, [Parameter(Mandatory)][string]$ImageName)
-    $row = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentPid AND Name='$ImageName'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    <#
+    .SYNOPSIS
+      The live direct child of -ParentPid whose image is -ImageName (for example ArcaneCore.World.exe), or $null (Windows: CIM).
+    .DESCRIPTION
+      Several children of one supervisor can share an image (the split topology runs a World per slot and a standby per world). -ArgumentToken
+      picks the one whose command line carries that exact word (for example --Cluster:Worker:NodeId=standby:EK, which is unique per world child);
+      without it the first child of that image is returned, which is right only where the supervisor has a single child of the image.
+    #>
+    param([Parameter(Mandatory)][int]$ParentPid, [Parameter(Mandatory)][string]$ImageName, [string]$ArgumentToken = '')
+    $rows = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentPid AND Name='$ImageName'" -ErrorAction SilentlyContinue)
+    if ($ArgumentToken) { $rows = @($rows | Where-Object { Test-LiveCommandLineHasToken -CommandLine $_.CommandLine -Token $ArgumentToken }) }
+    $row = $rows | Select-Object -First 1
     if (-not $row) { return $null }
     return Get-Process -Id ([int]$row.ProcessId) -ErrorAction SilentlyContinue
 }
@@ -304,6 +320,7 @@ function Wait-LiveDaemonUp {
       -FollowRelaunch is for a child of the cluster supervisor: one that exits while it starts is relaunched by the supervisor, so the wait
       continues for the image's next process (a child of -ParentPid again) within -TimeoutSec instead of throwing; -WatchPid (the
       supervisor) going away still stops it. Without the switch (a daemon this script started itself) an early exit throws.
+      -ArgumentToken names the child among several of the same image (see Find-LiveChildProcess); it is passed on only when given.
     #>
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -313,13 +330,16 @@ function Wait-LiveDaemonUp {
         [int]$TimeoutSec = 600,
         [int]$WatchPid = 0,
         [int]$SettleSeconds = 3,
+        [string]$ArgumentToken = '',
         [switch]$FollowRelaunch
     )
+    $find = @{ ParentPid = $ParentPid; ImageName = $ImageName }
+    if ($ArgumentToken) { $find.ArgumentToken = $ArgumentToken }
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
     $seen = $null
     $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
     while ($true) {
-        $child = Find-LiveChildProcess -ParentPid $ParentPid -ImageName $ImageName
+        $child = Find-LiveChildProcess @find
         if ($child) {
             $seen = $child
             if ($Port -eq 0 -or (Get-LivePortOwner -Port $Port) -eq $child.Id) {

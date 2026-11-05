@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters.Talents;
 using ArcaneCore.Game.Talents;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -41,6 +42,11 @@ public sealed class TalentPersistence : IAsyncDisposable
         _scopes = scopes;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
+
+    private const string QueueName = "TalentPersistence";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
 
     /// <summary>Writes queued and not yet finished.</summary>
     public int PendingWrites => _writes.Reader.Count;
@@ -103,6 +109,11 @@ public sealed class TalentPersistence : IAsyncDisposable
     /// <summary>The respec economy changed (queued).</summary>
     public void SaveRespec(int characterId, RespecState state)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         var stored = new CharacterTalentState(state.Multiplier, state.TimeUnix);
         lock (_lock)
         {
@@ -115,6 +126,11 @@ public sealed class TalentPersistence : IAsyncDisposable
     /// <summary>A spell was disabled or re-enabled (queued).</summary>
     public void SetDisabled(int characterId, uint spellId, bool disabled)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         lock (_lock)
         {
             Desired desired = Of(characterId);
@@ -131,6 +147,11 @@ public sealed class TalentPersistence : IAsyncDisposable
     /// <summary>Drop a deleted character's state (cache and, conditionally, the rows).</summary>
     public void DeleteCharacter(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         lock (_lock)
         {
             _desired.Remove(characterId);
@@ -189,6 +210,7 @@ public sealed class TalentPersistence : IAsyncDisposable
             await _writer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(_logger, QueueName);
         if (_terminalFailure is { } terminal)
         {
             throw new InvalidOperationException("TalentPersistence stopped with a terminal ownership failure", terminal);
@@ -206,6 +228,7 @@ public sealed class TalentPersistence : IAsyncDisposable
         int[] failed;
         lock (_lock)
         {
+            _failed.RemoveWhere(id => CharacterRetirementRegistry.Retired(Retirement, id)); // moved to another world: dropped, so it counts as drained
             failed = [.. _failed];
         }
 
@@ -218,6 +241,11 @@ public sealed class TalentPersistence : IAsyncDisposable
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<ICharacterTalentStore>() is not { } store)
         {
+            // Nothing can be written, but the failed set must not vanish silently: report it once, with the characters whose talent state is lost.
+            _logger.LogFault("writequeue.talent-shutdown-no-store",
+                new InvalidOperationException("no ICharacterTalentStore could be resolved at shutdown"),
+                "Talent shutdown reconcile skipped, no store available; unwritten talent state of {Count} character(s): {CharacterIds}",
+                failed.Length, string.Join(',', failed));
             return;
         }
 
@@ -268,6 +296,12 @@ public sealed class TalentPersistence : IAsyncDisposable
         HashSet<uint>? disabled;
         lock (_lock)
         {
+            if (CharacterRetirementRegistry.Retired(Retirement, characterId))
+            {
+                _failed.Remove(characterId); // moved to another world: nothing to reconcile
+                return;
+            }
+
             if (_terminalFailure is { } terminal)
             {
                 throw new InvalidOperationException($"talent state writes for character {characterId} are not durable", terminal);
@@ -369,6 +403,17 @@ public sealed class TalentPersistence : IAsyncDisposable
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 try
                 {
+                    if (pending.CharacterId is { } retiredId && CharacterRetirementRegistry.Drops(Retirement, QueueName, retiredId))
+                    {
+                        lock (_lock)
+                        {
+                            _failed.Remove(retiredId);
+                        }
+
+                        pending.Done?.TrySetResult(); // retired since it was queued: dropped, so it counts as drained
+                        continue;
+                    }
+
                     lock (_lock)
                     {
                         if (_terminalFailure is { } terminal && pending.CharacterId is not null)
@@ -391,6 +436,15 @@ public sealed class TalentPersistence : IAsyncDisposable
                     }
 
                     await pending.Write(store).ConfigureAwait(false);
+                    pending.Done?.TrySetResult();
+                }
+                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.Drops(Retirement, QueueName, movedId))
+                {
+                    lock (_lock)
+                    {
+                        _failed.Remove(movedId); // refused because the character moved to another world: counted, neither logged nor terminal
+                    }
+
                     pending.Done?.TrySetResult();
                 }
                 catch (CharacterOwnershipRejectedException ex)

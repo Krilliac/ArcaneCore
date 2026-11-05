@@ -650,11 +650,15 @@ the real gateway, the mock client). Four steps: fencing, the decision store, sta
 - **Drain protocol.** `WorldHandoffCoordinator` with `LocalWorldHandoffSource` (A: close admission, park the simulation
   thread at a tick boundary after capturing every online player's save through the settlement path, then flush every
   per-character queue through `CharacterPersistenceBarrier`), `StandbyWorldHandoffTarget` (B: `WorldHost.PromoteAsync`)
-  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A first and
+  and `GatewayWorldHandoffRouter` (`GatewayServer.HoldSessionsForHandoff` at the freeze, then
+`GatewayServer.RetargetWorkerSeamlessAsync`: B adopts each in-world character, the client sees a synthesized
+`SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, the held input follows; a client whose move fails is disconnected). Abort before the takeover resumes A first and
   then journals the abort, so a failed journal write leaves A running and the handoff open (pre-commit) for
-  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (10).
+  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (11).
 
-Known limits of what is built (from the review of the groundwork; none is fixed yet):
+The production hosting that drives these participants over the gateway link is described right after this list ("Production hosting over the
+gateway link"); it is opt-in, and the first limit below (in process only) holds only while its keys are off. Known limits of the groundwork as
+reviewed (the one about a crashed B after the takeover and the one-coordinator assumption are still open unless the text after the list says otherwise):
 
 - **In process only.** The production participants (`LocalWorldHandoffSource`, `StandbyWorldHandoffTarget`,
   `GatewayWorldHandoffRouter`) have no DI registration and there is no cross-process control channel. In the real
@@ -675,15 +679,70 @@ Known limits of what is built (from the review of the groundwork; none is fixed 
   `StopAdmissionsAsync` can log in during the freeze; its writes on A are later fenced.
 - **The standby's link manifest incarnation** is a fresh `Guid`, not the host's `Incarnation`, so it never matches the
   incarnation the takeover hands the ownership to.
-- **`RetargetWorkerAsync` retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
+- **The worker retarget retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
   then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
 
 Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
-entities), gateway input buffering and PING answering during the freeze, one link per worker and a per-session reroute
-with synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` (clients on A are disconnected and log in again), the
+entities), gateway PING answering during the freeze (input is held, up to 256 packets per client), a real-client run of the
+seamless reroute (the world port ACK ordering and a passenger's transport form are unverified), the
 operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes
 (its late writes are refused by the fence), Warden on the gateway, the forced spell-state save that only
 `PlayerLoggingOut` runs, and real-client or MariaDB/PostgreSQL runs. The freeze length is not measured.
+
+#### Production hosting over the gateway link (opt-in; design `_wf/handoff-control-DESIGN.md`, commits C1 to C16)
+
+The gateway is the single coordinator of both kinds of move: the whole-World handoff of a worker slot and the per-player transfer between
+workers. It is a separate process from every world, so the coordinators it hosts call the worlds over the gateway session link
+(after admission, every frame carries the link MAC).
+
+- **Control channel.** Frames 28 to 32 of the gateway link (`ControlRequest`, `ControlReply`, `ControlSubmit`, `ControlSubmitReply`,
+  `ControlNotice`; frames 24 to 27 are unchanged) carry one request per verb. Handoff verbs: `Describe`, `Warm`, `StopAdmissions`, `Freeze`,
+  `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
+  `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
+  once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
+  120 s `Promote`). The link contract version is 5, so a gateway and its workers upgrade together.
+- **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
+  `ResumeSource` is refused once the row is Committed; `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
+  its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
+  only the abort and roll-forward verbs are repeated, by recovery.
+- **Opt-in keys, all `false` by default:** `Cluster:Worker:Handoff:Enabled` and `Cluster:Worker:Transfers:Enabled` on a worker (it answers
+  `Disabled` for a kind that is off), `Gateway:Handoff:Enabled` and `Gateway:Transfers:Enabled` on the gateway. With them off nothing is
+  registered, the in-process coordinators and frames 24 to 27 behave as before, and a Combined or single-process world is unchanged
+  (`ClusterFarRouter` stays null, so the refusal of a teleport to an unowned map is unchanged).
+- **Handoff hosting (`Gateway:Handoff:Enabled`).** The gateway reads the characters database validate-only (a least-privilege role limited to
+  `cluster_world_handoff`, `cluster_transfer_*` and `character_ownership` is enough; credentials stay in the secret files), keeps a
+  session-less control link to the standby of each slot (`Gateway:Workers:N:StandbyNodeId`, `StandbyAddress`, `StandbyPort`), refuses to begin
+  while a worker reports more than one admitted gateway (one gateway per realm is the contract), and runs a recovery loop: before the epoch
+  takeover an interrupted handoff aborts, after it the handoff rolls forward. A frozen source with no gateway resumes itself from the journal
+  (self-heal). A relaunched source cannot reclaim its scope between the commit and the promotion (reclaim guard). The gateway keeps its held
+  clients when the source's link is lost after `Flushed`, so the client lands on the new owner.
+- **Blue/green.** After a completed handoff the retired process is relaunched by the cluster host supervisor, addressed by child name, as the
+  slot's next standby (`--Cluster:Worker:Standby=true`); the supervisor persists the swapped roles, so a supervisor restart keeps them.
+  `.cluster restart $worker` (Administrator, re-checked by the gateway against the auth database) starts this through the gateway; "started" is
+  answered at once and the verdict reaches the same client after it has moved. `.cluster handoff status [id]` reads the journal.
+  The promoted standby is the same process that was started as the standby, so the launcher gives standbys the worlds' hang timeout and hang
+  capture: the supervisor's hang watch is armed by the first world-tick beat of whichever process beats (a standby that never beats is warned
+  about once, never killed for silence). When a world that holds the supervisor `RealmId` (the lease-holder slot) is restarted as a standby, the
+  supervisor moves that `RealmId` to the slot's other worker (the one that names the same `Cluster:Fencing:Shard`), so `.server` lifecycle commands
+  for the realm are forwarded to the world that is serving. Only the supervisor's routing follows the swap: the promoted process keeps the environment
+  it was launched with (no `ARCANECORE_SUPERVISED_REALM_ID` until its next relaunch), so a lifecycle command typed on it is sent to the supervisor
+  and routed back to it.
+- **Transfer hosting (`Gateway:Transfers:Enabled`).** A worker's far-teleport router turns a teleport to a map another worker owns into a
+  `ControlSubmit` (the source must be the node of the link it arrived on, carrying the session generation it names); the gateway coordinates the
+  six stages (reserve, suspend and capture, install on the target, commit, activate, retire the source) with the unchanged
+  `PlayerTransferCoordinator`, and the client sees the retail far-teleport sequence from the target worker. A full target, a worker that sees two
+  gateways, or any refusal leaves the player where it was and says so (a generic line; internal reasons never reach the client). Recovery with no
+  sessions completes Committed transfers and aborts PreCommit ones. A handoff and a transfer of one slot exclude each other.
+- **Running it.** `tools/ops/live/start-cluster.ps1 -Topology Split -Standby` adds one standby per world and the handoff keys,
+  `-Transfers` the transfer keys (see [gateway.md](../areas/gateway.md#handoff-and-transfers-over-the-control-channel-opt-in)). Both are off by
+  default and the default launch is unchanged.
+- **Tests.** The control wire, the worker service, both remote participant sets, the gateway hosting and the operator restart are covered by
+  in-process tests over real link pairs (SQLite journal, fake world participants); the PostgreSQL end to end scenarios are in
+  `tests/ArcaneCore.Cluster.E2E.Tests/ClusterControlChannelScenarioTests.cs` (skipped without `ARCANECORE_TEST_POSTGRES`).
+- **Still open.** A target that dies after the commit needs a manual takeover (rebinding a committed move to a restarted target is not built);
+  the journal stage writes are not compare-and-swap, so a recovery racing a live run on MariaDB or PostgreSQL could lose an update; the hold budgets
+  (256 packets for a handoff, 256 packets or 256 KiB for a transfer) kick a client when `Promote`, `Suspend` or `Activate` is slow; a real-client run
+  of the cross-process path has not been made; MariaDB and PostgreSQL are verified only on hosted CI and in the PostgreSQL end to end scenarios.
 
 ## 6. Tier 4: edit and continue stays dev-only
 

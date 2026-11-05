@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 7 | `account`, `realmlist` |
-| `characters` | 68 | `characters` |
-| `world` | 66 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 74 | `characters` |
+| `world` | 67 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -95,6 +95,12 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 66 | `Characters.Playerbots.PlayerbotTradeRecordDataModule` | creates `playerbot_trade_record` | yes |
 | 67 | `Characters.Cluster.RealmAuthorityLeaseDataModule` | creates `realm_authority_lease` | yes |
 | 68 | `GameObjects.GameObjectRespawnDataModule` | creates `gameobject_respawn` | yes |
+| 69 | `Characters.CharacterAppearanceFlagsDataModule` | adds columns `characters.character_flags` | yes |
+| 70 | `Loot.LootStateRandomPropertyDataModule` | adds columns `loot_state_item.random_property_id`, `item_loot.random_property_id` | yes |
+| 71 | `Characters.Playerbots.PlayerbotTradeCounterDataModule` | creates `playerbot_trade_counter` | yes |
+| 72 | `Characters.Ownership.CharacterOwnershipShardDataModule` | adds columns `character_ownership.owned_maps`, `character_ownership.heartbeat_at_ms` | yes |
+| 73 | `Characters.Transfers.ClusterHandoffScopeDataModule` | adds columns `cluster_world_handoff.open_scope`; repairs the model's indexes of `cluster_world_handoff` | yes |
+| 74 | `Characters.Transfers.ClusterTransferTargetScopeDataModule` | adds columns `cluster_transfer_decision.target_scope` | yes |
 
 ## `world`
 
@@ -165,5 +171,6 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 64 | `World.Rules.PlayerbotLadderDataModule` | no changes |
 | 65 | `World.Creatures.DbSpellScriptDataModule` | creates `dbscripts_on_spell` |
 | 66 | `Content.Spells.SpellEffectModDataModule` | creates `spell_effect_mod` |
+| 67 | `World.Rules.PlayerbotWorldPvpGoalDataModule` | no changes |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

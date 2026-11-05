@@ -77,6 +77,7 @@ public sealed class CharacterRenameExtension : ICommandExtension
         {
             if (!await services.GetRequiredService<ICharacterRenameStore>().SetFlagAsync(id, CharacterAtLoginFlags.Rename).ConfigureAwait(false))
             {
+                context.Fail("player-not-found");
                 context.Reply(GmStrings.PlayerNotFound); // deleted meanwhile
             }
         });
@@ -98,6 +99,7 @@ public sealed class CharacterRenameExtension : ICommandExtension
             AccountSecurity? owner = await GmTargets.FindAccountSecurityAsync(services, identity.AccountId).ConfigureAwait(false);
             if (owner is null)
             {
+                context.Fail("player-not-found");
                 context.Reply(GmStrings.PlayerNotFound);
                 return;
             }
@@ -111,6 +113,7 @@ public sealed class CharacterRenameExtension : ICommandExtension
             context.Reply(string.Format(RenamePlayerGuid, GmStrings.PlayerLink(identity.Name), identity.Id));
             if (!await services.GetRequiredService<ICharacterRenameStore>().SetFlagAsync(identity.Id, CharacterAtLoginFlags.Rename).ConfigureAwait(false))
             {
+                context.Fail("player-not-found");
                 context.Reply(GmStrings.PlayerNotFound);
             }
         });

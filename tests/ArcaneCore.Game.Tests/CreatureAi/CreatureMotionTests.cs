@@ -181,7 +181,7 @@ public sealed class CreatureMotionTests
 
         spells.Casting = false;
         Run(world, 3000);
-        Assert.True(Combat.MapCombat.CanReachWithMeleeAutoAttack(wolf, player));
+        Assert.True(ArcaneCore.Game.Combat.MapCombat.CanReachWithMeleeAutoAttack(wolf, player));
     }
 
     [Fact]

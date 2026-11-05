@@ -15,8 +15,9 @@ public sealed class TradeItemUseDispatchTests
     {
         const uint spellId = 99131;
         const uint entry = 99132;
+        // Spell.dbc: an on-use spell aimed at a trade-window item carries TARGET_FLAG_ITEM (0x10), which allows TRADE_ITEM.
         using var kit = new SpellTestKit(SpellTestKit.Spell(spellId,
-            SpellTestKit.Effect(SpellEffectName.Dummy, 0)));
+            SpellTestKit.Effect(SpellEffectName.Dummy, 0)) with { Targets = 0x10 });
         (Player player, FakeSession session) = kit.AddPlayer(1);
         player.Inventory.Templates = new ItemTemplateStore([
             new ItemTemplate

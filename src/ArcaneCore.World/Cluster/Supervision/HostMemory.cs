@@ -7,6 +7,12 @@ namespace ArcaneCore.World.Cluster.Supervision;
 /// The operating system's own reading of the memory available to new processes: <c>GlobalMemoryStatusEx</c> on Windows (<c>ullAvailPhys</c>) and
 /// <c>MemAvailable</c> of <c>/proc/meminfo</c> on Linux. Stateless; callable from any thread.
 /// </summary>
+/// <remarks>
+/// Linux note: <c>/proc/meminfo</c> describes the host, not the container. Inside a cgroup with a memory limit (a container, a systemd unit with
+/// <c>MemoryMax</c>) the real headroom is <c>memory.max</c> minus <c>memory.current</c> (cgroup v2) and can be far below <c>MemAvailable</c>, so the
+/// admission check can admit a child the cgroup then kills. This class does not read the cgroup files; size <c>RequiredMemoryMb</c> for the limit or
+/// run the supervisor without one.
+/// </remarks>
 public static partial class HostMemory
 {
     /// <summary>Available physical memory in bytes, or null when this platform has no source here or the call failed.</summary>

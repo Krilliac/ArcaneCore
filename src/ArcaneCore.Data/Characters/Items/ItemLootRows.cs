@@ -1,4 +1,6 @@
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Items;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -41,6 +43,9 @@ public sealed class ItemLootRow
 
     public bool Quest { get; set; }
 
+    /// <summary>The random property rolled at generation (vmangos <c>item_loot.property</c>); 0 for none. Added by characters schema 70.</summary>
+    public int RandomPropertyId { get; set; }
+
     internal static void Configure(EntityTypeBuilder<ItemLootRow> entity)
     {
         entity.ToTable("item_loot");
@@ -50,6 +55,7 @@ public sealed class ItemLootRow
         entity.Property(r => r.ItemId).HasColumnName("item_id");
         entity.Property(r => r.Amount).HasColumnName("amount");
         entity.Property(r => r.Quest).HasColumnName("quest");
+        entity.Property(r => r.RandomPropertyId).HasColumnName("random_property_id").HasDefaultValue(0);
     }
 }
 
@@ -57,20 +63,27 @@ public sealed class ItemLootRow
 /// The orphan sweep (vmangos CharacterDatabaseCleaner::CleanOrphanedItemData, <c>RemoveOrphanedRows("item_loot", "guid", "item_instance", "guid")</c>):
 /// one set-based DELETE per table removes the loot of every item guid without an <c>item_instance</c> row. Such rows were left by builds before the
 /// escrow paths deleted loot with their items (docs/integration/wave3-followups-20261004.md F8); loot of owned and escrowed (owner 0) items stays.
+/// <para>In a cluster only the <see cref="RealmAuthorityScopes.Maintenance"/> lease holder sweeps (writer-lock design section 4, row 5): another worker may have committed loot
+/// of an item whose <c>item_instance</c> row this node has not seen. A non-holder deletes nothing and returns 0.</para>
 /// </summary>
-public sealed class EfItemLootMaintenance(CharacterDbContext db) : IItemLootMaintenance
+public sealed class EfItemLootMaintenance(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IItemLootMaintenance
 {
     public async Task<int> DeleteOrphanedLootAsync(CancellationToken cancellationToken = default)
     {
+        if (!LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Maintenance))
+        {
+            return 0;
+        }
+
         IQueryable<ItemInstanceRow> items = db.Set<ItemInstanceRow>();
-        return await CharacterWrites.InTransactionAsync(db, async () =>
+        return await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Maintenance, async () =>
         {
             int stacks = await db.Set<ItemLootRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             int states = await db.Set<ItemLootStateRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             return stacks + states;
-        }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken), cancellationToken).ConfigureAwait(false);
     }
 }
 
@@ -93,7 +106,7 @@ public static class ItemLootPersistence
         ILookup<uint, ItemLootRow> byItem = rows.ToLookup(r => r.ItemGuid);
         return states.ToDictionary(
             s => s.ItemGuid,
-            s => new ItemLootData(s.Gold, [.. byItem[s.ItemGuid].OrderBy(r => r.Slot).Select(r => new ItemLootEntry(r.Slot, r.ItemId, r.Amount, r.Quest))]));
+            s => new ItemLootData(s.Gold, [.. byItem[s.ItemGuid].OrderBy(r => r.Slot).Select(r => new ItemLootEntry(r.Slot, r.ItemId, r.Amount, r.Quest, r.RandomPropertyId))]));
     }
 
     internal static async Task StageReplaceForOwnerAsync(
@@ -294,11 +307,11 @@ public static class ItemLootPersistence
             {
                 if (have is not null && have.Remove(entry.Slot, out ItemLootRow? row))
                 {
-                    (row.ItemId, row.Amount, row.Quest) = (entry.ItemId, entry.Count, entry.IsQuest);
+                    (row.ItemId, row.Amount, row.Quest, row.RandomPropertyId) = (entry.ItemId, entry.Count, entry.IsQuest, entry.RandomPropertyId);
                 }
                 else
                 {
-                    db.Add(new ItemLootRow { ItemGuid = guid, Slot = entry.Slot, ItemId = entry.ItemId, Amount = entry.Count, Quest = entry.IsQuest });
+                    db.Add(new ItemLootRow { ItemGuid = guid, Slot = entry.Slot, ItemId = entry.ItemId, Amount = entry.Count, Quest = entry.IsQuest, RandomPropertyId = entry.RandomPropertyId });
                 }
             }
 

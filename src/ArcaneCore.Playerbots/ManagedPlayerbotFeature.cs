@@ -15,6 +15,7 @@ using ArcaneCore.World.Teleport;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -42,7 +43,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService, IMapBotThinker, IPlayerInspectReceiver
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -211,7 +212,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal (int Combat, int Main) LastLaneActions { get; private set; }
 
     /// <summary>The scale the last tick gave the first think lane's time share (tests).</summary>
-    internal double LastPriorityScale => _rotation.LastPriorityScale;
+    internal double LastPriorityScale => _mapThinkMode ? _mapPriorityScale : _rotation.LastPriorityScale;
 
     /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
     internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
@@ -310,6 +311,24 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
         services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt, () => _holidayFlavours);
+
+    private Combat.PlayerbotDefenseBoard? _defenseBoard;
+
+    /// <summary>
+    /// The call board of defense calls (<c>World:Playerbots:Pvp:Defense</c>, docs/areas/playbots-combat.md): the brains report to it from their thinks and the
+    /// social pass's "defense" lane reads it. World thread only, memory only, on the social feature's clock like <see cref="EventBoard"/>; dropped at a detach
+    /// (the next attach makes a new one) so no call outlives the brains that made it.
+    /// </summary>
+    internal Combat.PlayerbotDefenseBoard DefenseCalls
+    {
+        get
+        {
+            // A bot start builds its brain off the world thread, so the first use may race: one board wins and every caller gets it.
+            if (_defenseBoard is { } board) return board;
+            var created = new Combat.PlayerbotDefenseBoard(EventClockMs, () => _options.Pvp.Defense);
+            return Interlocked.CompareExchange(ref _defenseBoard, created, null) ?? created;
+        }
+    }
 
     private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
 
@@ -473,16 +492,18 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         ArgumentNullException.ThrowIfNull(subscriptions);
         _ = PlayerbotAnomalyHistory.Shared; // the bot anomaly history hears the anomaly ledger from now on (the core no longer touches it)
         _options.Validate();
+        // The bots read the one War Mode switch (World:WarMode:Enabled) live; Social:WarMode only tunes their memory and hunt.
+        _options.Social.WarMode.Link(ArcaneCore.Game.WorldState.WorldStateHooks.For(world).WarMode);
         // A service still running is kept, not replaced: a quiesce that failed before it stopped them is undone by a detach and
         // re-attach in one tick (FeatureHost), and a second policy engine, navigation worker or chat service would leak beside the first.
         if (_options.Policy.Enabled && _policy is null) StartPolicy();
         if (_chat is null)
         {
-            // A chat service whose stop was interrupted part way leaves its provider behind: it goes, and the chain is built afresh.
-            _chatInProcess?.Dispose();
-            _chatInProcess = null;
-            _chatClient?.Dispose();
-            _chatClient = null;
+            // A chat service whose stop was interrupted part way leaves its provider behind (StopServicesAsync takes all three chat fields before
+            // it awaits anything, so this is only a fallback): the stale objects are taken out of the fields here, on the world thread, and disposed
+            // on the thread pool, because InProcessBotChatClient.Dispose waits for a running model load and for the engine's workers (tens of seconds).
+            // A stop still running then finds the fields empty or holding the new chain, never the stale one it would dispose a second time.
+            DisposeStaleChat(Interlocked.Exchange(ref _chatInProcess, null), Interlocked.Exchange(ref _chatClient, null));
             // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
             _chatInProcess = new Chat.Inference.InProcessBotChatClient(
                 services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
@@ -536,6 +557,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 dataset => NavMeshPathfinder.CreateIndependent(dataset, ownerLogger));
         }
         if (handover is not null) RestoreHandover(handover, world);
+        _mapThinkMode = world.Options.Parallel.BotThinkPerMap;
+        if (_mapThinkMode)
+        {
+            // Bot think per map (World:Parallel:BotThinkPerMap): the prelude and the grouping before the maps, the thinks in each map's update
+            // (MapBotThinkStage), the close in Updated. The stages come off the maps when the subscriptions are undone.
+            subscriptions.Add(new MapStageRegistration(this));
+            subscriptions.OnMapUnloading(world, map => _mapStages.Remove(map));
+            subscriptions.OnWorldTick(world, BeginMapThinkTick);
+        }
+
         subscriptions.OnUpdated(world, Update);
         subscriptions.Add(BotRegistry.UseSessionPolicy(new SessionPolicy(_options)));
         subscriptions.Add(BotRegistry.UseRouteSource(new PlayerbotRouteSource())); // the map feed reads the route a bot walks (docs/areas/map-feed.md)
@@ -651,6 +682,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
         handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
         handover.Set(HandoverTradeRecords, Social.Ledger?.SnapshotAll() ?? []);
+        handover.Set(HandoverTradeCounters, ExportTradeCounters());
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -674,6 +706,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         // The festival board stops hearing game events and drops every place (the bots they belonged to are gone with their brains).
         Interlocked.Exchange(ref _eventBoard, null)?.Dispose();
+        Interlocked.Exchange(ref _defenseBoard, null);
         _subscriptions = null;
         _world = null;
     }
@@ -697,6 +730,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         RestoreMainPass(handover);
         if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
         if (Social.Ledger is { } ledger && handover.TryGet<PlayerbotTradeRecord[]>(HandoverTradeRecords, out var tradeRecords)) ledger.Load(tradeRecords);
+        if (handover.TryGet<PlayerbotTradeCounter[]>(HandoverTradeCounters, out var tradeCounters)) ImportTradeCounters(tradeCounters);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -722,14 +756,48 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
     private async Task StopServicesAsync()
     {
-        // Each field is taken before its service is stopped, so an attach running meanwhile (a quiesce the host gave up on while this
-        // ran) never ends up with two of a service. It can end up with none of one (it kept a service this then stopped) until the
+        // The three chat fields are taken together, before any await: a quiesce the host gave up on rolls back with AttachFrom on the world
+        // thread while this still runs, and an attach that finds _chat empty builds a fresh chain. Taking the provider fields only after the
+        // chat's DisposeAsync (which waits up to 5 s for its workers) let this method dispose that new chain's provider and client under the live
+        // chat, so every later in-process request answered "disposed". Taken first, what is disposed here is exactly the chain this stop began with.
+        // The policy engine and the navigation executor are taken as before: an attach in between can end up with none of those until the
         // next attach; the bot code treats a missing chat, policy or navigation worker as off.
+        Chat.PlayerbotChat? chat = Interlocked.Exchange(ref _chat, null);
+        Chat.Inference.InProcessBotChatClient? inProcess = Interlocked.Exchange(ref _chatInProcess, null);
+        Chat.HttpBotChatClient? client = Interlocked.Exchange(ref _chatClient, null);
         if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
         if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
-        if (Interlocked.Exchange(ref _chat, null) is { } chat) await chat.DisposeAsync().ConfigureAwait(false);
-        Interlocked.Exchange(ref _chatInProcess, null)?.Dispose();
-        Interlocked.Exchange(ref _chatClient, null)?.Dispose();
+        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
+        if (StopHoldForTests is { } hold) await hold().ConfigureAwait(false);
+        if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
+        inProcess?.Dispose();
+        client?.Dispose();
+    }
+
+    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the chat fields and before it disposes them (null in production).</summary>
+    internal Func<Task>? StopHoldForTests { get; set; }
+
+    /// <summary>
+    /// Dispose a chat provider chain that was left behind, off the calling (world) thread: <see cref="Chat.Inference.InProcessBotChatClient.Dispose"/> blocks
+    /// while a model load runs (up to 30 s) and then on the engine's workers. A fault is recorded, never thrown: the chain is already out of the fields.
+    /// </summary>
+    private void DisposeStaleChat(Chat.Inference.InProcessBotChatClient? inProcess, Chat.HttpBotChatClient? client)
+    {
+        if (inProcess is null && client is null) return;
+        _ = Task.Run(() =>
+        {
+            try { inProcess?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale in-process chat client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+
+            try { client?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale chat HTTP client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+        });
     }
 
     /// <summary>Test seam: hold the operation lock (as a long fleet reset, start or checkpoint does) until the result is disposed.</summary>
@@ -780,6 +848,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         };
         party.Social = Social;
         party.TradeDesk = TradeDesk;
+        party.Gifts = new BotSocial.PlayerbotTradeGifts(_options, static () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), GiftBook, entry.BotId);
         Social.Track(entry.BotId, entry.Record.CharacterId);
         var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId), SavedTradeVersion = Social.Ledger?.Version(entry.BotId) ?? 0 };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
@@ -826,11 +895,26 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
 
+    /// <summary>
+    /// Whether this node runs the realm sweeps of the bot registry (the provisioning reconcile and the orphan registry deletes at startup): always with no lease keeper (Combined, tests),
+    /// on a clustered node only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance"/> lease (writer-lock design section 4, row 7). A non-holder
+    /// reads the registry and leaves the repair to the holder. In a split cluster the holder's provisioning reconcile takes only journal rows older than <see cref="ProvisionSweepGrace"/>:
+    /// a younger row may belong to a bot another worker is creating right now.
+    /// </summary>
+    internal bool HoldsMaintenanceLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
+        services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(), ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance);
+
     public async Task StartupAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled) return;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-        await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+        bool maintenanceHolder = HoldsMaintenanceLease;
+        // In a split cluster another worker may be creating a bot right now (its journal row is pending until it completes), so the startup reconcile only takes journal rows older than
+        // ProvisionSweepGrace. The clock is DateTimeOffset.UtcNow on purpose: it is the clock EfManagedPlayerbotProvisionStore stamps CreatedUnix with. Combined has no other creator and sweeps all.
+        // Attach always runs before this: it is the AfterWorldStart hook the attach registers, so SplitScope (the world's ownership) is known here.
+        if (maintenanceHolder)
+            await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken,
+                SplitScope ? ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()) : ProvisionSweep.All, isolateRows: SplitScope).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides && _world is { } world)
@@ -856,6 +940,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+        await LoadTradeCountersAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>() is { } flavourStore)
         {
             try
@@ -888,6 +973,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         var stopped = new List<PlayerbotStatus>();
         var orphans = new HashSet<Guid>();
+        // A worker restores only the bots whose character stands on a map it owns (writer-lock design section 4, row 7, decision Q2): the bots of another worker's maps are that worker's to log in,
+        // and restoring them here too would run every bot on every worker. They still list as stopped here (the registry is shared) but are not started.
+        var otherWorkersBots = new HashSet<Guid>();
         foreach (ManagedPlayerbot bot in registered)
         {
             CharacterRecord? character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>()
@@ -895,13 +983,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (character is null)
             {
                 // A registry row whose character is gone owns nothing; leaving it would hold a MaxRegisteredBots slot for good.
-                await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
-                    .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
-                _homes.TryRemove(bot.BotId, out _);
-                await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
+                // Only the maintenance holder deletes it (the row may belong to a character another worker has not made visible yet); this node just does not restore it.
+                if (maintenanceHolder)
+                {
+                    await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
+                        .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                    _homes.TryRemove(bot.BotId, out _);
+                    await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
+                }
+
                 orphans.Add(bot.BotId);
                 continue;
             }
+            if (_world is { } ownerWorld && !ownerWorld.Owns(character.MapId))
+                otherWorkersBots.Add(bot.BotId);
             stopped.Add(new(bot.BotId, character.Name, ManagedPlayerbotState.Stopped, bot.DesiredEnabled,
                 bot.Goal, bot.TargetEntry, bot.QuestId, character.MapId, 0, bot.ErrorCode, Home: StoppedHome(bot.BotId)));
         }
@@ -912,7 +1007,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         }
         // A restore that cannot log a bot in is a fault, not an operator decision: the bot stays desired and is retried (quarantine).
         if (_options.RestoreOnStartup)
-            foreach (ManagedPlayerbot[] chunk in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId)).Take(_options.MaxBots).Chunk(32))
+            foreach (ManagedPlayerbot[] chunk in registered.Where(b => b.DesiredEnabled && !orphans.Contains(b.BotId) && !otherWorkersBots.Contains(b.BotId)).Take(_options.MaxBots).Chunk(32))
                 await Task.WhenAll(chunk.Select(bot => StartCoreAsync(bot.BotId.ToString(), null, cancellationToken, StartKind.Restore))).ConfigureAwait(false);
     }
 
@@ -998,6 +1093,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_detaching) return new(false, PlayerbotsDetaching);
         await _operations.WaitAsync(cancellationToken).ConfigureAwait(false);
         Account? spare = null;
+        Guid? createdBotId = null; // the journal row this attempt wrote, once it did (the repair after a failure covers only that)
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
@@ -1005,7 +1101,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (SplitBrainLatched) return new(false, "playerbot-split-brain"); // a checkpoint that held the lock may have latched it while this call queued
             if (_detaching) return new(false, PlayerbotsDetaching);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-            await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+            // Combined: every pending journal row is a leftover of this process. Split: another worker may be mid-create (its journal row is pending until it completes), so only the lease holder
+            // sweeps and only rows older than ProvisionSweepGrace; a non-holder leaves it to the holder.
+            if (!SplitScope) await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+            else if (HoldsMaintenanceLease)
+                await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
             // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
             // stopped bot never takes a running slot (the live stress test of 2026-10-08 found 5 stopped bots blocking creation).
@@ -1020,6 +1120,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             ICharacterStore characters = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
             if (await characters.IsNameTakenAsync(name, cancellationToken).ConfigureAwait(false)) return new(false, "name-in-use");
             Guid botId = Guid.NewGuid();
+            createdBotId = botId;
             // The empty account of a bot a fleet reset deleted is reused (the provisioning journal is for NEW accounts only).
             spare = registered is not null ? await ClaimSpareAccountAsync(scope.ServiceProvider, registered, cancellationToken).ConfigureAwait(false) : null;
             Account owner;
@@ -1085,7 +1186,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // A reused account has no provisioning journal, so what this attempt put on it is removed here (cancellation included).
             if (spare is not null) await RetireOrRequeueSpareAsync(spare).ConfigureAwait(false);
             await using AsyncServiceScope repair = scopes.CreateAsyncScope();
-            try { await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None).ConfigureAwait(false); }
+            // The repair rolls back what this attempt journaled. In a split cluster it covers only this attempt's own row (another worker's row may be in flight, and a row of a dead worker is the
+            // holder's sweep): before the journal row was written nothing is covered. Known limit (see ProvisionSweepGrace): a create that outlives the grace can be taken by the holder's sweep. Rolled
+            // back, it refuses at its completion and the holder's startup orphan sweep removes the dangling registry row; completed, the creator reports create-failed while the registry row and
+            // the live character stay (no member row), and nothing removes them.
+            try
+            {
+                await ReconcileProvisioningAsync(repair.ServiceProvider, CancellationToken.None,
+                    !SplitScope ? ProvisionSweep.All : createdBotId is { } own ? ProvisionSweep.Only(own) : ProvisionSweep.Only(Guid.Empty)).ConfigureAwait(false);
+            }
             catch (Exception failure) when (failure is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("playerbot.feature", failure);
@@ -1307,6 +1416,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
     /// <summary>The bot's fight tracker (null for an unknown bot; tests and inspection).</summary>
     internal BotSocial.PlayerbotFightSocial? FightOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? active.Fight : null;
+
+    /// <summary>
+    /// A real player inspected a playerbot (<see cref="IPlayerInspectReceiver"/>; world thread, after the reply was sent): the autonomous
+    /// bot holds still for <see cref="PlayerbotOptions.InspectHoldSeconds"/> after this request (0 turns the hold off). A paused bot, a
+    /// bot a <c>.botctl</c> controller holds, one that follows a party or runs in a group or battleground is left alone.
+    /// </summary>
+    public void Inspected(Player inspector, Player target)
+    {
+        int seconds = _options.InspectHoldSeconds;
+        if (seconds <= 0) return;
+        foreach (ActiveBot active in _active.Values)
+        {
+            if (!ReferenceEquals(active.Session.Player, target)) continue;
+            if (active.Paused || active.Controller is not null || active.PartyDriven || active.GroupDriven || active.BattlegroundDriven
+                || active.Record.State != ManagedPlayerbotState.Running) return;
+            active.Brain.HoldForInspector(inspector.Guid, unchecked(active.Session.World.NowMs + ((uint)seconds * 1000u)));
+            return;
+        }
+    }
 
     /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
@@ -1702,6 +1830,51 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal string? HeldFromCoordinators(Guid botId)
         => battlegrounds?.Holds(botId) == true ? "is queued for a battleground" : null;
 
+    /// <summary>The refusal code of a start of a bot another world worker runs (its character claim is held there): nothing was written, nothing is wrong with the bot.</summary>
+    internal const string LiveOnOtherWorker = "live-on-other-worker";
+
+    /// <summary>The error code of a start that failed (an operator or restore start: not quarantined).</summary>
+    private const string StartFailedCode = "start-failed";
+
+    /// <summary>The refusal code of a start whose live-owner check failed: nothing was written, the bot is tried again later.</summary>
+    internal const string LiveOwnerUnknown = "live-owner-unknown";
+
+    /// <summary>
+    /// True when this world owns a list of maps (a split cluster worker, <see cref="WorldRuntime.Ownership"/>). The registry rows are then shared with other workers that run other bots, and the
+    /// rules that guard a row against another worker's write apply; with nothing withheld (combined) no other writer exists and they do not.
+    /// </summary>
+    internal bool SplitScope => _world is { } world && !world.Ownership.OwnsEverything;
+
+    /// <summary>The probe in force: the registered one, else the character claim (<see cref="ClaimLiveOwnerProbe"/>). Null without a world.</summary>
+    internal IPlayerbotLiveOwnerProbe? LiveOwnerProbeFor(IServiceProvider provider)
+        => _world is { } world ? provider.GetService<IPlayerbotLiveOwnerProbe>() ?? new ClaimLiveOwnerProbe(services, world) : null;
+
+    /// <summary>
+    /// The scope of another worker that holds the character live (<see cref="IPlayerbotLiveOwnerProbe"/>), or null when none does; always null outside a split cluster. A probe that throws is
+    /// reported as failed (<c>Failed</c>) instead of propagating: a caller must neither fault the bot nor leave its row changed because the check could not be made. Cancellation propagates.
+    /// </summary>
+    private async Task<(string? Holder, bool Failed)> ProbeLiveOwnerAsync(IServiceProvider provider, int characterId, CancellationToken cancellationToken)
+    {
+        if (LiveOwnerProbeFor(provider) is not { } probe) return (null, false);
+        try
+        {
+            return (await probe.FindAsync(characterId, cancellationToken).ConfigureAwait(false), false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.live-owner-probe", ex);
+            logger.LogWarning(ex, "Playerbot live-owner check for character {CharacterId} failed ({Type}); the bot is skipped for now", characterId, ex.GetType().Name);
+            return (null, true);
+        }
+    }
+
+    /// <summary>
+    /// A start that does not count as an operator's: a population retry of a bot a refused start left Faulted. It never clears the quarantine, and a failure is recorded as any restore's
+    /// failure is (<see cref="StartKind.Restore"/>).
+    /// </summary>
+    internal Task<PlayerbotOperationResult> StartForRetryAsync(Guid botId, CancellationToken cancellationToken)
+        => StartCoreAsync(botId.ToString(), null, cancellationToken, StartKind.Restore);
+
     /// <summary>Who starts a bot: an operator (clears the quarantine), the startup restore, or a quarantine retry.</summary>
     private enum StartKind { Operator, Restore, QuarantineRetry }
 
@@ -1719,6 +1892,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         WorldSession? session = null;
         bool retained = false;
         ManagedPlayerbot? bot = null;
+        ManagedPlayerbot? beforeStart = null;
         try
         {
             if (_stopping) return new(false, "playerbots-stopping");
@@ -1742,6 +1916,22 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (owner?.Id != bot.AccountId || owner.Status != AccountStatus.Active
                 || owner.Security != AccountSecurity.Player || owner.SessionKey is not null)
                 return new(false, "owner-refused", bot.BotId);
+            // Split cluster: another worker may run this bot. Its registry row is that worker's: this start writes nothing (a changed revision drops the holder's
+            // healthy bot at its next checkpoint), faults nothing and reports nothing.
+            (string? holder, bool probeFailed) = await ProbeLiveOwnerAsync(scope.ServiceProvider, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+            if (probeFailed)
+            {
+                // Unknown whether another worker runs it: skip it this time, writing nothing (a start-failed fault here is what dropped the holder's bots).
+                return new(false, LiveOwnerUnknown, bot.BotId);
+            }
+
+            if (holder is not null)
+            {
+                logger.LogDebug("Playerbot {BotId} is live on {Holder}; not started here", bot.BotId, holder);
+                return new(false, LiveOnOtherWorker, bot.BotId);
+            }
+
+            beforeStart = bot;
             session = await NewSessionAsync(owner, bot.CharacterId, scope.ServiceProvider, cancellationToken, bot.BotId).ConfigureAwait(false);
             bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = true, State = ManagedPlayerbotState.Starting, ErrorCode = null }, cancellationToken).ConfigureAwait(false);
             var login = new PacketWriter(); login.WriteUInt64((ulong)(uint)bot.CharacterId);
@@ -1804,6 +1994,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 // after the restart. Leave the record as it is; the finally kicks the half-started session and the next start restores it.
                 logger.LogInformation("Managed playerbot {Bot} start interrupted by a stop request; its record is kept for the next start", bot?.BotId.ToString() ?? idOrName);
                 throw;
+            }
+
+            // The login was refused because another worker holds the character (it took the claim between the check above and the login): not the bot's fault.
+            // Put the row back as it was (revision-checked: a holder's newer write stands) and report nothing.
+            if (bot is { State: ManagedPlayerbotState.Starting } && beforeStart is not null && ex is InvalidOperationException { Message: "login-refused" })
+            {
+                // A probe that fails here is treated like a holder: the row goes back as it was and no fault is written (the bot is tried again later).
+                (string? racedHolder, bool racedProbeFailed) = await ProbeLiveOwnerAsync(scope.ServiceProvider, bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                if (racedHolder is not null || racedProbeFailed)
+                {
+                    try { await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false); }
+                    catch (ManagedRevisionConflictException) { }
+                    logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder ?? "(unknown, the check failed)");
+                    return new(false, racedHolder is not null ? LiveOnOtherWorker : LiveOwnerUnknown, bot.BotId);
+                }
             }
 
             if (ex is not OperationCanceledException)
@@ -2087,7 +2292,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // registered anywhere below.
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
         {
-            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, DefenseCalls = DefenseCalls, BotId = botId,
         };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
@@ -2349,7 +2554,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         uint combatIntervalMs,
         int reserve,
         ManagedActionBudget combatBudget,
-        long thinkStarted) : PlayerbotThinkRotation.IThinkLaneDriver
+        long thinkStarted,
+        Map? onlyMap,
+        bool mapMode) : PlayerbotThinkRotation.IThinkLaneDriver
     {
         public ManagedActionBudget? MainBudget;
         public int MainActions = -1;
@@ -2367,6 +2574,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         public bool Visit(int index, PlayerbotThinkRotation.ThinkLane lane)
         {
+            // A bot that left the map this pass was assigned to (a teleport since the grouping) is another map's to think for: its owner thread
+            // is not this one's. Skipped, not counted; the next tick groups it where it stands.
+            if (onlyMap is not null && !ReferenceEquals(bots[index].Session.Player?.Map, onlyMap)) return true;
             ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
                 ? combatBudget
                 : MainBudget ??= new ManagedActionBudget(MainActions = reserve + combatBudget.Remaining);
@@ -2380,7 +2590,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
             long visitStarted = Stopwatch.GetTimestamp();
-            feature.Think(bots[index], budget, index);
+            feature.Think(bots[index], budget, mapMode ? bots[index].Ordinal : index);
             double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
             if (lane == PlayerbotThinkRotation.ThinkLane.Normal) feature._thinkBudget.ObserveVisit(visitMs);
             else CombatMs += visitMs;
@@ -2399,9 +2609,44 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public double ElapsedMs() => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds;
     }
 
+    /// <summary>
+    /// The world tick's update of the bots (<see cref="WorldRuntime.Updated"/>, after the maps). With World:Parallel:BotThinkPerMap off, the whole
+    /// of it runs here, as ever: <see cref="BeginTick"/>, the serial two-lane think pass, <see cref="FinishTick"/>. With the option on, the
+    /// first part ran before the maps (<see cref="BeginMapThinkTick"/>), the thinks ran in the maps' own updates (<see cref="IMapBotThinker.ThinkBots"/>),
+    /// and this call only closes the tick (<see cref="FinishMapThinkTick"/>).
+    /// </summary>
     private void Update(uint elapsedMs)
     {
-        if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return;
+        if (_mapThinkMode)
+        {
+            FinishMapThinkTick(elapsedMs);
+            return;
+        }
+
+        MapThinkFrame frame = _frame;
+        if (!BeginTick(elapsedMs, frame)) return;
+        PrepareThinkPass(frame);
+        ActiveBot[] bots = frame.Bots;
+        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
+        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
+        ManagedActionBudget combatBudget = frame.CombatActions > 0 ? new ManagedActionBudget(frame.CombatActions) : EmptyActionBudget;
+        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
+        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
+        _rotation.Track(bots, BotIdOf);
+        var laneDriver = new TickLaneDriver(this, bots, frame.Now, frame.CombatIntervalMs, frame.Reserve, combatBudget, frame.ThinkStarted, null, false);
+        _rotation.TickLanes(bots.Length, frame.BudgetMs, _options.CombatLaneShare, ref laneDriver,
+            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, frame.StarvedBoundMs));
+        FinishTick(frame, elapsedMs, laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, laneDriver.CombatMs,
+            (frame.CombatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : frame.Reserve + combatBudget.Remaining), 0, frame.UpdateStarted);
+    }
+
+    /// <summary>
+    /// Everything of a tick before the think pass: the budget's observations, the movement pump, the party intake, the chat replies and the
+    /// group and battleground coordinators. Fills <paramref name="frame"/>; false when the feature does nothing this tick (world thread).
+    /// </summary>
+    private bool BeginTick(uint elapsedMs, MapThinkFrame frame)
+    {
+        if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return false;
         long updateStarted = Stopwatch.GetTimestamp();
         // What the world spent on everything but the bots in the last tick, smoothed: the think budget is a share of what is left.
         TickPhases lastTick = world.LastTickPhases;
@@ -2484,7 +2729,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 ActiveBot? leader = FindOrderedBot(bots, botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
-                string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
+                string? diag = groups.TakeStallDiagnostic(botId) ?? (leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null);
                 LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
             }
         }
@@ -2514,29 +2759,50 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
-        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
-        int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
-        int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
-        ManagedActionBudget combatBudget = combatActions > 0 ? new ManagedActionBudget(combatActions) : EmptyActionBudget;
-        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
-        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
-        long thinkStarted = Stopwatch.GetTimestamp();
-        double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        frame.World = world;
+        frame.Bots = bots;
+        frame.BotsVersion = botsVersion;
+        frame.Now = now;
+        frame.UpdateStarted = updateStarted;
+        return true;
+    }
+
+    /// <summary>
+    /// The numbers of this tick's think pass, from the state the prelude left: the two action budgets, the time budget and the starvation
+    /// bound (world thread). The think time measured by <see cref="MapThinkFrame.ThinkStarted"/> starts here.
+    /// </summary>
+    private void PrepareThinkPass(MapThinkFrame frame)
+    {
+        WorldRuntime world = frame.World!;
+        ActiveBot[] bots = frame.Bots;
+        frame.Reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        frame.CombatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        frame.ThinkStarted = Stopwatch.GetTimestamp();
+        double spentMs = Stopwatch.GetElapsedTime(frame.UpdateStarted).TotalMilliseconds;
         LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
-        uint starvedBoundMs = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
-        double budgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
-            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, starvedBoundMs);
-        _lastBudgetMs = budgetMs;
-        uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
-        _rotation.Track(bots, BotIdOf);
-        var laneDriver = new TickLaneDriver(this, bots, now, combatIntervalMs, reserve, combatBudget, thinkStarted);
-        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare, ref laneDriver,
-            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, starvedBoundMs));
-        _thinkBudget.ObservePriorityTick(laneDriver.CombatMs);
-        LastLaneActions = (combatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : reserve + combatBudget.Remaining);
+        frame.StarvedBoundMs = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
+        frame.BudgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, frame.StarvedBoundMs);
+        _lastBudgetMs = frame.BudgetMs;
+        frame.CombatIntervalMs = (uint)_options.CombatThinkIntervalMs;
+        frame.PriorityScale = PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, frame.StarvedBoundMs);
+    }
+
+    /// <summary>
+    /// What a tick does after its thinks, serial or per map: the budget's feedback, the cadence, the starvation reports, the policy, the
+    /// snapshot, the own-time measure and the checkpoint. <paramref name="carriedOwnMs"/> is the own time already spent outside
+    /// <paramref name="ownStarted"/>'s span (the part before the maps and the thinks inside them, with the option on; 0 serial).
+    /// </summary>
+    private void FinishTick(MapThinkFrame frame, uint elapsedMs, int thinks, bool timeLimited, bool actionLimited, double combatMs,
+        (int Combat, int Main) lanes, double carriedOwnMs, long ownStarted)
+    {
+        ActiveBot[] bots = frame.Bots;
+        uint now = frame.Now;
+        uint starvedBoundMs = frame.StarvedBoundMs;
+        _thinkBudget.ObservePriorityTick(combatMs);
+        LastLaneActions = lanes;
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
-        _cadence.EndTick(laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, budgetMs);
+        _cadence.EndTick(thinks, timeLimited, actionLimited, frame.BudgetMs);
         ReportStarvedBots(bots, now, starvedBoundMs, PlayerbotThinkStarvation.ReportBoundMs(starvedBoundMs, _reportPass.Ms));
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
@@ -2546,8 +2812,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks, budget {AvgBudgetMs:F1} ms; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
                 cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapP99Ms, cadence.GapMaxMs, cadence.CombatThinks, cadence.CombatGapP50Ms, cadence.CombatGapP95Ms,
                 cadence.ThinksPerTick, cadence.Ticks, cadence.AvgBudgetMs, cadence.TimeLimitedPct, cadence.ActionLimitedPct);
-        PublishSnapshot(bots, botsVersion, elapsedMs);
-        _lastOwnMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        PublishSnapshot(bots, frame.BotsVersion, elapsedMs);
+        _lastOwnMs = carriedOwnMs + Stopwatch.GetElapsedTime(ownStarted).TotalMilliseconds;
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         {
@@ -2556,6 +2822,173 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _checkpointMs = 0;
             _checkpoint = Task.Run(CheckpointAsync);
         }
+    }
+
+
+    // ---- Bot think per map (World:Parallel:BotThinkPerMap) -----------------------------------------------------------------------
+
+    private static readonly Func<ActiveBot, ulong> MapKeyOf = static bot => bot.Session.Player?.Map is { } map
+        ? PlayerbotThinkScheduler<ActiveBot>.MapKey(map.MapId, map.InstanceId)
+        : PlayerbotThinkScheduler<ActiveBot>.NoMapKey;
+
+    /// <summary>
+    /// The state of one tick that the pass before the maps (<see cref="BeginMapThinkTick"/>), the thinks in the maps
+    /// (<see cref="IMapBotThinker.ThinkBots"/>) and the close after them (<see cref="FinishMapThinkTick"/>) share. One instance, reused. The
+    /// inputs are written on the world thread before the maps phase and only read in it; the accumulators are written under
+    /// the feature's think gate.
+    /// </summary>
+    private sealed class MapThinkFrame
+    {
+        public WorldRuntime? World;
+        public ActiveBot[] Bots = [];
+        public int BotsVersion;
+        public uint Now;
+        public long UpdateStarted;
+        public long ThinkStarted;
+        public int Reserve;
+        public int CombatActions;
+        public double BudgetMs;
+        public uint StarvedBoundMs;
+        public uint CombatIntervalMs;
+        public double PriorityScale = 1;
+        public double PreMs;
+        public int Thinks;
+        public bool TimeLimited;
+        public bool ActionLimited;
+        public double CombatMs;
+        public double ThinkMs;
+        public int CombatAssigned;
+        public int MainAssigned;
+
+        public void ResetAccumulators()
+        {
+            Thinks = 0;
+            TimeLimited = false;
+            ActionLimited = false;
+            CombatMs = 0;
+            ThinkMs = 0;
+            CombatAssigned = 0;
+            MainAssigned = 0;
+        }
+    }
+
+    private readonly MapThinkFrame _frame = new();
+    private readonly PlayerbotThinkScheduler<ActiveBot> _mapScheduler = new(BotIdOf);
+    private readonly Dictionary<Map, MapBotThinkStage> _mapStages = [];
+    private readonly List<ulong> _unthoughtScratch = [];
+    private readonly object _mapThinkGate = new();
+    private bool _mapThinkMode;
+    private volatile bool _frameOpen;
+    private double _mapPriorityScale = 1;
+    private int _mapThinkVisits;
+    private int _fallbackThinkVisits;
+
+    /// <summary>Whether this attachment thinks per map (World:Parallel:BotThinkPerMap at attach; tests).</summary>
+    internal bool MapThinkMode => _mapThinkMode;
+
+    /// <summary>Thinks made inside a map's own update since attach (tests, metrics).</summary>
+    internal int MapThinkVisits => Volatile.Read(ref _mapThinkVisits);
+
+    /// <summary>Thinks made on the world thread after the maps for bots no map stage served (no map, a map without a stage; tests, metrics).</summary>
+    internal int FallbackThinkVisits => Volatile.Read(ref _fallbackThinkVisits);
+
+    /// <summary>
+    /// <see cref="WorldRuntime.WorldTick"/> with the option on (world thread, before the maps): the prelude of the tick, then the bots are
+    /// grouped by map for the stages that run in the maps phase.
+    /// </summary>
+    private void BeginMapThinkTick(uint elapsedMs)
+    {
+        _frameOpen = false;
+        MapThinkFrame frame = _frame;
+        if (!BeginTick(elapsedMs, frame) || frame.World is not { } world) return;
+        PrepareThinkPass(frame);
+        frame.ResetAccumulators();
+        _mapPriorityScale = frame.PriorityScale;
+        for (int i = 0; i < frame.Bots.Length; i++) frame.Bots[i].Ordinal = i;
+        EnsureMapStages(world);
+        _mapScheduler.Assign(frame.Bots, MapKeyOf);
+        frame.PreMs = Stopwatch.GetElapsedTime(frame.UpdateStarted).TotalMilliseconds;
+        _frameOpen = true;
+    }
+
+    /// <summary>
+    /// <see cref="WorldRuntime.Updated"/> with the option on (world thread, after the maps): thinks for the bots no stage served, so none is
+    /// left out, then closes the tick as the serial pass does.
+    /// </summary>
+    private void FinishMapThinkTick(uint elapsedMs)
+    {
+        if (!_frameOpen) return;
+        _frameOpen = false;
+        MapThinkFrame frame = _frame;
+        if (_stopping || _detaching || !_options.Enabled || frame.World is not { } world) return;
+        long finishStarted = Stopwatch.GetTimestamp();
+        _mapScheduler.CollectUnthought(_unthoughtScratch);
+        foreach (ulong key in _unthoughtScratch) RunMapThink(key, null, frame);
+        frame.Now = world.Clock.LiveNowMs; // the thinks stamped their own, later, times: the starvation reports compare against this one
+        FinishTick(frame, elapsedMs, frame.Thinks, frame.TimeLimited, frame.ActionLimited, frame.CombatMs,
+            (frame.CombatAssigned, frame.MainAssigned), frame.PreMs + frame.ThinkMs, finishStarted);
+    }
+
+    /// <summary>
+    /// <see cref="IMapBotThinker.ThinkBots"/>: the owner thread of <paramref name="map"/>, inside the map's update, thinks for the bots that
+    /// stand on it. A no-op outside an open tick (a stage left on a map by a detached feature).
+    /// </summary>
+    void IMapBotThinker.ThinkBots(Map map, uint diffMs)
+    {
+        if (!_frameOpen) return;
+        RunMapThink(PlayerbotThinkScheduler<ActiveBot>.MapKey(map.MapId, map.InstanceId), map, _frame);
+    }
+
+    /// <summary>
+    /// One map's think pass: its bots, its rotation (cursors kept across ticks and re-anchored by id), its head-count share of the time and
+    /// of the action budgets. <paramref name="map"/> is null for the world thread's pass over bots no stage served.
+    /// </summary>
+    private void RunMapThink(ulong key, Map? map, MapThinkFrame frame)
+    {
+        ActiveBot[] bots = _mapScheduler.BotsOf(key);
+        if (bots.Length == 0) return;
+        (int combat, int reserve) = PlayerbotThinkScheduler<ActiveBot>.ActionsShare(frame.CombatActions, frame.Reserve, bots.Length, _mapScheduler.TotalBots);
+        ManagedActionBudget combatBudget = combat > 0 ? new ManagedActionBudget(combat) : EmptyActionBudget;
+        long started = Stopwatch.GetTimestamp();
+        var driver = new TickLaneDriver(this, bots, frame.Now, frame.CombatIntervalMs, reserve, combatBudget, started, map, true);
+        _mapScheduler.ThinkMap(key, frame.BudgetMs, _options.CombatLaneShare, frame.PriorityScale, ref driver, out bool timeLimited);
+        double spentMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        lock (_mapThinkGate)
+        {
+            frame.Thinks += driver.Thinks;
+            frame.TimeLimited |= timeLimited;
+            frame.ActionLimited |= driver.ActionLimited;
+            frame.CombatMs += driver.CombatMs;
+            frame.ThinkMs += spentMs;
+            frame.CombatAssigned += combat;
+            frame.MainAssigned += driver.MainActions >= 0 ? driver.MainActions : reserve + combatBudget.Remaining;
+        }
+
+        if (map is null) Interlocked.Add(ref _fallbackThinkVisits, driver.Thinks);
+        else Interlocked.Add(ref _mapThinkVisits, driver.Thinks);
+    }
+
+    /// <summary>Attach a <see cref="MapBotThinkStage"/> to every map that has none (world thread, outside the maps phase: <see cref="Map.AddUpdater"/>).</summary>
+    private void EnsureMapStages(WorldRuntime world)
+    {
+        foreach (Map map in world.Maps)
+        {
+            if (_mapStages.ContainsKey(map)) continue;
+            if (MapBotThinkStage.AttachIfEnabled(map, world.Options.Parallel, this) is { } stage) _mapStages.Add(map, stage);
+        }
+    }
+
+    /// <summary>Take the stages off the maps (detach; world thread, outside the maps phase).</summary>
+    private void RemoveMapStages()
+    {
+        _frameOpen = false;
+        foreach (KeyValuePair<Map, MapBotThinkStage> pair in _mapStages) pair.Key.RemoveUpdater(pair.Value);
+        _mapStages.Clear();
+    }
+
+    private sealed class MapStageRegistration(ManagedPlayerbotFeature feature) : IDisposable
+    {
+        public void Dispose() => feature.RemoveMapStages();
     }
 
     /// <summary>Whether the bot is in the first think lane: alive and fighting, or dead or a ghost (world thread).</summary>
@@ -2889,7 +3322,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
                 willLogStall && report is not null ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease,
-                willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+                willLogStall ? active.Brain.StallSnapshot ?? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+            active.Brain.StallSnapshot = null;
             if (sharedLogged) active.Brain.SharedSetAside = null;
             IReadOnlyList<string> unreachable = active.Brain.TakeUnreachableReports();
             if (unreachable.Count > 0)
@@ -3184,6 +3618,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                                 FaultLedger.Shared.Record("playerbot.checkpoint", ex);
                                 logger.LogWarning(ex, "Playerbot {BotId} conflicting row could not be read ({Type})", active.Record.BotId, ex.GetType().Name);
                                 continue; // not faulted: the next checkpoint finds the same conflict and looks again
+                            }
+
+                            // A start-failed fault cannot be this worker's own: it writes one only while the bot has no active entry. It is another worker's refused start
+                            // (the character was live here), so the bot is not faulted: its row is written back as Running over the foreign fault and it stays active.
+                            if (SplitScope && stored is { State: ManagedPlayerbotState.Faulted, ErrorCode: StartFailedCode } && !active.Paused)
+                            {
+                                try
+                                {
+                                    active.Record = await PersistAsync(active.Scope.ServiceProvider,
+                                        active.Record with { Revision = stored.Revision, State = ManagedPlayerbotState.Running, ErrorCode = null, DesiredEnabled = true }, CancellationToken.None).ConfigureAwait(false);
+                                    logger.LogWarning("Playerbot {BotId} row carried a start-failed fault written by another worker; it is running here, so the row was restored", active.Record.BotId);
+                                }
+                                catch (ManagedRevisionConflictException) { } // another write came in meanwhile: the next checkpoint looks again
+                                continue;
+                            }
+
+                            // A row that differs from ours only by revision (and its update time) is the trace of another worker's refused start of this bot: it wrote Starting and put the row back.
+                            // Nothing of the bot changed, so it keeps running: take the row's revision and let the next checkpoint write what changed.
+                            if (SplitScope && !active.Paused && stored is not null
+                                && stored with { Revision = active.Record.Revision, UpdatedUnix = active.Record.UpdatedUnix } == active.Record)
+                            {
+                                active.Record = active.Record with { Revision = stored.Revision, UpdatedUnix = stored.UpdatedUnix };
+                                continue;
                             }
 
                             // Another writer owns the row (a second world process on this characters database, or an operator): the bot leaves the active set
@@ -3541,6 +3998,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
 
                 if (_warWipePending.IsEmpty) continue;
+                // The relation ledger is the maintenance holder's to write; a non-holder keeps the wipe in memory and does not retry the refused write.
+                if (!HoldsMaintenanceLease) { _warWipePending.Clear(); continue; }
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store)
                 {
@@ -3659,6 +4118,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
                     if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
+            if (!HoldsMaintenanceLease) return; // the stored ledgers are the maintenance holder's to write; the memory above is already forgotten
             if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
             foreach ((Guid botId, _) in removed)
             {
@@ -3684,8 +4144,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private async Task SaveBotRelationsAsync(ActiveBot active)
     {
+        // The bot ledgers (relations, trade records, trade counters) are the maintenance lease holder's to write (decision Q2): a node that does not hold it keeps them in memory
+        // and does not try, instead of logging a refusal at every checkpoint. The stores refuse the write regardless.
+        if (!HoldsMaintenanceLease) return;
         Guid botId = active.Record.BotId;
         await SaveBotTradeLedgerAsync(active).ConfigureAwait(false); // the trade ledger rides every relation save (stop, pause, checkpoint)
+        await SaveTradeCountersAsync().ConfigureAwait(false); // so do the desk's hourly and daily counters and the gift counts (one write for all bots, skipped when unchanged)
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;
@@ -3972,40 +4436,112 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public uint MapId;
     }
 
-    private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken)
+    /// <summary>
+    /// How old a pending provisioning journal row must be before a split cluster's sweep may take it: far longer than a create can sit between its journal commit and its completion, so a row
+    /// younger than this belongs to a create in flight on another worker. Combined mode does not use it (no other creator exists).
+    /// Known limit: a create that outlives this grace can be taken by the holder's sweep. If the sweep rolls it back (its registry row was not stored yet) the creator then refuses at its completion
+    /// and the dangling registry row is removed by the holder's startup orphan sweep. If the sweep completes its journal row (the registry row was stored) the creator reports create-failed while
+    /// the registry row and the live character stay, with no population member row: nothing removes them, the bot is simply registered and stopped.
+    /// </summary>
+    internal static readonly TimeSpan ProvisionSweepGrace = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Which pending journal rows a <see cref="ReconcileProvisioningAsync"/> may take: every row (the default, combined mode), one bot's row, or the rows created at or before a moment.
+    /// The filter applies before a row is classified (completed or to roll back): completing a young foreign row would make its creator's own completion fail.
+    /// </summary>
+    internal readonly record struct ProvisionSweep(Guid? OnlyBotId, long? CreatedAtOrBeforeUnix)
+    {
+        public static ProvisionSweep All => default;
+
+        public static ProvisionSweep Only(Guid botId) => new(botId, null);
+
+        /// <summary>The rows at least <see cref="ProvisionSweepGrace"/> old at <paramref name="nowUnix"/> (the clock the journal stamps rows with, whole seconds).</summary>
+        public static ProvisionSweep StaleAt(long nowUnix) => new(null, nowUnix - (long)ProvisionSweepGrace.TotalSeconds);
+
+        public bool Covers(ManagedPlayerbotProvision row)
+            => (OnlyBotId is null || row.BotId == OnlyBotId) && (CreatedAtOrBeforeUnix is null || row.CreatedUnix <= CreatedAtOrBeforeUnix);
+    }
+
+    /// <summary>Whole-process rate limit of <see cref="SweepStaleProvisionsAsync"/>, in milliseconds of <see cref="Environment.TickCount64"/> (tests lower it).</summary>
+    internal long ProvisionSweepIntervalMs { get; set; } = 60_000;
+
+    private long _lastProvisionSweepMs = long.MinValue;
+
+    /// <summary>
+    /// Split cluster, maintenance lease holder only: take the journal rows of dead creates (older than <see cref="ProvisionSweepGrace"/>), rate limited to one run per
+    /// <see cref="ProvisionSweepIntervalMs"/>. The population pass calls it, so a holder that never creates itself (it owns no allowed map) still cleans up what a dead worker left.
+    /// It runs under the operations lock like any create, but never waits for it: when an operation is running the sweep is skipped and the next pass tries again, so it cannot
+    /// block a pass behind a long create or deadlock with one. A failure is logged and never thrown: the pass goes on.
+    /// </summary>
+    internal async Task SweepStaleProvisionsAsync(CancellationToken cancellationToken)
+    {
+        if (!_options.Enabled || !SplitScope || !HoldsMaintenanceLease || _stopping || _detaching) return;
+        long now = Environment.TickCount64;
+        long last = Volatile.Read(ref _lastProvisionSweepMs);
+        if (last != long.MinValue && now - last < ProvisionSweepIntervalMs) return;
+        if (!await _operations.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
+        try
+        {
+            if (_stopping || _detaching) return;
+            Volatile.Write(ref _lastProvisionSweepMs, now);
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            logger.LogFault(LogLevel.Warning, "playerbot.provision-sweep", ex, "Playerbot provisioning sweep failed ({Type}: {Message}); retried on a later pass", ex.GetType().Name, ex.Message);
+        }
+        finally { _operations.Release(); }
+    }
+
+    /// <summary>
+    /// Roll back or complete the pending provisioning journal rows <paramref name="sweep"/> covers: a row whose registry row exists is completed, any other has its characters deleted and
+    /// its empty account rolled back. The default covers every row (combined mode, where every pending row is a leftover of this process).
+    /// With <paramref name="isolateRows"/> (the split cluster's stale sweeps) a row that cannot be taken (its account is gone, a character cannot be deleted) is logged and the next row is still
+    /// taken, so one dead row never blocks the rows behind it or fails a create; without it the first refusal throws, as combined mode always did.
+    /// </summary>
+    private async Task ReconcileProvisioningAsync(IServiceProvider provider, CancellationToken cancellationToken, ProvisionSweep sweep = default, bool isolateRows = false)
     {
         IManagedPlayerbotProvisionStore provisions = provider.GetRequiredService<IManagedPlayerbotProvisionStore>();
-        IReadOnlyList<ManagedPlayerbotProvision> pendingList = await provisions.LoadPendingAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ManagedPlayerbotProvision> pendingList = [.. (await provisions.LoadPendingAsync(cancellationToken).ConfigureAwait(false)).Where(sweep.Covers)];
         if (pendingList.Count == 0) return;
         ICharacterStore characters = provider.GetRequiredService<ICharacterStore>();
         IReadOnlyList<ManagedPlayerbot> registered = await provider.GetRequiredService<IManagedPlayerbotStore>().LoadAllAsync(cancellationToken).ConfigureAwait(false);
         foreach (ManagedPlayerbotProvision pending in pendingList)
         {
-            ManagedPlayerbot? completed = registered.SingleOrDefault(b => b.BotId == pending.BotId && b.AccountId == pending.AccountId && b.AccountName == pending.AccountName);
-            if (completed is not null)
-            {
-                CharacterRecord? character = await characters.GetByIdAsync(completed.CharacterId, cancellationToken).ConfigureAwait(false);
-                if (character?.AccountId != pending.AccountId || !await provisions.CompleteAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
-                    throw new InvalidOperationException("provision-reconcile-refused");
-                continue;
-            }
-            Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(pending.AccountName, cancellationToken).ConfigureAwait(false);
-            if (owner?.Id != pending.AccountId) throw new InvalidOperationException("provision-owner-refused");
-            WorldSession session = await NewSessionAsync(owner, null, provider, cancellationToken).ConfigureAwait(false);
             try
             {
-                foreach (CharacterRecord character in await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false))
-                    if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
-                        throw new InvalidOperationException("provision-character-cleanup-refused");
+                ManagedPlayerbot? completed = registered.SingleOrDefault(b => b.BotId == pending.BotId && b.AccountId == pending.AccountId && b.AccountName == pending.AccountName);
+                if (completed is not null)
+                {
+                    CharacterRecord? character = await characters.GetByIdAsync(completed.CharacterId, cancellationToken).ConfigureAwait(false);
+                    if (character?.AccountId != pending.AccountId || !await provisions.CompleteAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
+                        throw new InvalidOperationException("provision-reconcile-refused");
+                    continue;
+                }
+                Account? owner = await provider.GetRequiredService<IAccountStore>().FindByUsernameAsync(pending.AccountName, cancellationToken).ConfigureAwait(false);
+                if (owner?.Id != pending.AccountId) throw new InvalidOperationException("provision-owner-refused");
+                WorldSession session = await NewSessionAsync(owner, null, provider, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    foreach (CharacterRecord character in await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false))
+                        if (!await CharacterDeletion.TryDeleteAsync(session, (ulong)(uint)character.Id).ConfigureAwait(false))
+                            throw new InvalidOperationException("provision-character-cleanup-refused");
+                }
+                finally
+                {
+                    session.Kick("playerbot provisioning cleanup");
+                    await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                }
+                if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
+                    || !await provisions.RollbackEmptyOwnerAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
+                    throw new InvalidOperationException("provision-rollback-refused");
             }
-            finally
+            catch (Exception ex) when (isolateRows && ex is not OutOfMemoryException and not OperationCanceledException)
             {
-                session.Kick("playerbot provisioning cleanup");
-                await session.ManagedClosed.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None).ConfigureAwait(false);
+                // A row that cannot be taken stays pending and is tried again by a later sweep; the rows behind it are still taken.
+                logger.LogFault(LogLevel.Warning, "playerbot.provision-sweep", ex, "Playerbot provisioning row {BotId} could not be reconciled ({Type}: {Message}); the sweep goes on", pending.BotId, ex.GetType().Name, ex.Message);
             }
-            if ((await characters.GetByAccountAsync(pending.AccountId, cancellationToken).ConfigureAwait(false)).Count != 0
-                || !await provisions.RollbackEmptyOwnerAsync(pending.BotId, pending.AccountId, cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("provision-rollback-refused");
         }
     }
 
@@ -4080,6 +4616,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private sealed class ActiveBot(ManagedBot entry, PlayerbotBrain brain, PlayerbotPartyAI party)
     {
         public ManagedBot Entry { get; } = entry;
+
+        /// <summary>The bot's index in the id-ordered active set of the current tick (the chaos engine's bot ordinal); written on the world thread before the maps phase.</summary>
+        public int Ordinal;
 
         public ManagedPlayerbot Record
         {

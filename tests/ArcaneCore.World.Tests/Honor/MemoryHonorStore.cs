@@ -248,9 +248,16 @@ internal sealed class MemoryHonorStore : IHonorStore
     /// <summary>How many times the weekly scores were read: the last thing the weekly runner does before it waits for the week gate.</summary>
     public int ListWeeklyScoresCalls => Volatile.Read(ref _listCalls);
 
+    /// <summary>Test hook: runs when the weekly scores are read (the runner has passed its lease check and not yet applied the week).</summary>
+    public Action? OnListWeeklyScores { get; set; }
+
+    /// <summary>Test hook: runs after a week was applied.</summary>
+    public Action? OnMaintenanceApplied { get; set; }
+
     public Task<IReadOnlyList<HonorWeeklyScore>> ListWeeklyScoresAsync(uint weekBeginDay, uint weekEndDay, CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _listCalls);
+        OnListWeeklyScores?.Invoke();
         lock (_lock)
         {
             var sums = new Dictionary<int, (uint Hk, uint Dk, double Cp)>();
@@ -330,6 +337,7 @@ internal sealed class MemoryHonorStore : IHonorStore
             _maintenance = batch.NewState;
         }
 
+        OnMaintenanceApplied?.Invoke();
         return Task.CompletedTask;
     }
 }

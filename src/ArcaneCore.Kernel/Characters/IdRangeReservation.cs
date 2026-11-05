@@ -15,6 +15,26 @@ public static class IdRangeScopes
     public const string Auction = "auction";
     public const string ItemText = "item_text";
 
+    /// <summary>Pet numbers (vmangos GeneratePetNumber); realm-unique, unlike the per-character persisted key.</summary>
+    public const string Pet = "pet";
+
+    /// <summary>GM ticket ids (<c>gm_ticket.id</c>, a signed 32-bit column).</summary>
+    public const string GmTicket = "gm_ticket";
+
+    /// <summary>Guild charter petition ids (<c>petition.id</c>, a signed 32-bit column).</summary>
+    public const string Petition = "petition";
+
+    /// <summary>
+    /// Scopes added after the v61 <c>character_id_ranges</c> module shipped. They are deliberately not in <see cref="All"/>
+    /// (released modules are frozen); their rows are inserted on first reservation, or seeded by a later module.
+    /// </summary>
+    public static readonly ImmutableArray<string> Extended =
+    [
+        Pet,
+        GmTicket,
+        Petition,
+    ];
+
     /// <summary>
     /// Minimum first ID for the `"instance"` scope so dynamic dungeon/raid IDs never collide
     /// with static continent instance IDs (`0`..`100`).
@@ -48,7 +68,7 @@ public static class IdRangeScopes
 
     /// <summary>
     /// Returns the maximum valid ID for the given <paramref name="scope"/>.
-    /// Guild and Instance IDs are stored in signed 32-bit integer columns (`int.MaxValue`),
+    /// Guild, Instance, GmTicket and Petition IDs are stored in signed 32-bit integer columns (`int.MaxValue`),
     /// whereas Item, Group, Mail, Auction, and ItemText IDs span the full 32-bit unsigned range (`uint.MaxValue`).
     /// </summary>
     public static uint GetMaxId(string scope)
@@ -56,7 +76,7 @@ public static class IdRangeScopes
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         return scope switch
         {
-            Guild or Instance => (uint)int.MaxValue,
+            Guild or Instance or GmTicket or Petition => (uint)int.MaxValue,
             _ => uint.MaxValue,
         };
     }
@@ -154,6 +174,15 @@ public sealed class DurableIdBlockAllocator
     private ulong _remainingTotal;
     private Task? _prefetchTask;
     private Exception? _lastPrefetchError;
+    private readonly TimeProvider _time;
+    private long _lastExhaustedRetryStamp;
+    private bool _exhaustedRetryStarted;
+
+    /// <summary>Default minimum spacing between the retry reservations an exhausted allocator starts from <see cref="Next"/>.</summary>
+    public static readonly TimeSpan DefaultRetryBackoff = TimeSpan.FromSeconds(1);
+
+    /// <summary>Minimum time between two retry reservations started by calls that find the allocator exhausted.</summary>
+    public TimeSpan RetryBackoff { get; }
 
     public string Scope { get; }
     public uint BlockSize { get; }
@@ -165,8 +194,12 @@ public sealed class DurableIdBlockAllocator
         uint blockSize = 1024,
         uint lowWatermark = 256,
         Func<string, uint, CancellationToken, Task<IdRangeBlock>>? reserveBlockAsync = null,
-        uint? maxId = null)
+        uint? maxId = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? retryBackoff = null)
     {
+        if (retryBackoff is { } backoff && backoff < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(retryBackoff), retryBackoff, "RetryBackoff cannot be negative.");
         if (string.IsNullOrWhiteSpace(scope))
             throw new ArgumentException("Scope must be non-empty.", nameof(scope));
         if (blockSize == 0)
@@ -179,6 +212,8 @@ public sealed class DurableIdBlockAllocator
         LowWatermark = lowWatermark;
         MaxId = maxId ?? IdRangeScopes.GetMaxId(scope);
         _reserveBlockAsync = reserveBlockAsync;
+        _time = timeProvider ?? TimeProvider.System;
+        RetryBackoff = retryBackoff ?? DefaultRetryBackoff;
     }
 
     public DurableIdBlockAllocator(
@@ -186,7 +221,9 @@ public sealed class DurableIdBlockAllocator
         IIdRangeReservationStore store,
         uint blockSize = 1024,
         uint lowWatermark = 256,
-        uint? maxId = null)
+        uint? maxId = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? retryBackoff = null)
         : this(
             scope,
             blockSize,
@@ -194,7 +231,9 @@ public sealed class DurableIdBlockAllocator
             store is not null
                 ? store.ReserveBlockAsync
                 : throw new ArgumentNullException(nameof(store)),
-            maxId)
+            maxId,
+            timeProvider,
+            retryBackoff)
     {
     }
 
@@ -326,16 +365,20 @@ public sealed class DurableIdBlockAllocator
                 {
                     // Fail closed, but keep trying: without a retry the allocator could never recover after the
                     // final prefetch failed (nothing else reserves at runtime). The caller still gets the exception.
-                    if (_reserveBlockAsync is not null && (_prefetchTask is null || _prefetchTask.IsCompleted))
+                    // Retries are spaced by RetryBackoff so a caller looping on a dead store does not hammer it.
+                    if (_reserveBlockAsync is not null
+                        && (_prefetchTask is null || _prefetchTask.IsCompleted)
+                        && (!_exhaustedRetryStarted || _time.GetElapsedTime(_lastExhaustedRetryStamp) >= RetryBackoff))
                     {
+                        _exhaustedRetryStarted = true;
+                        _lastExhaustedRetryStamp = _time.GetTimestamp();
                         _prefetchTask = Task.Run(PrefetchNextBlockAsync);
                     }
 
-                    Exception? prefetchErr = _lastPrefetchError;
-                    throw new IdRangeExhaustedException(
-                        Scope,
-                        $"ID range allocator for scope '{Scope}' has no reserved IDs available (fail-closed).",
-                        prefetchErr!);
+                    string message = $"ID range allocator for scope '{Scope}' has no reserved IDs available (fail-closed).";
+                    throw _lastPrefetchError is { } prefetchErr
+                        ? new IdRangeExhaustedException(Scope, message, prefetchErr)
+                        : new IdRangeExhaustedException(Scope, message);
                 }
             }
 

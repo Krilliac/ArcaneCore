@@ -27,6 +27,7 @@ public sealed class WorldClock
     private const long DriftCheckEveryMs = 1000;
 
     private readonly Stopwatch _stopwatch;
+    private Func<DateTime> _wallTime;  // the system clock: DateTime.UtcNow in production; a test replaces it (UseWallTimeSource) before the world starts
     private long _elapsedMs;          // tick-start game ms (Manual/Stepped: the running sum; Realtime: the stopwatch snapshot)
     private long _tickNumber;
     private long _utcOffsetTicks;     // UTC ticks at game time zero, so UtcNow = offset + ElapsedMs * TicksPerMs (one field: re-anchoring is one write)
@@ -34,10 +35,22 @@ public sealed class WorldClock
     private uint _diffMs;
     private int _mode;
 
-    internal WorldClock(Stopwatch stopwatch)
+    internal WorldClock(Stopwatch stopwatch, Func<DateTime>? wallTime = null)
     {
         _stopwatch = stopwatch;
-        _utcOffsetTicks = DateTime.UtcNow.Ticks - stopwatch.ElapsedMilliseconds * TicksPerMs;
+        _wallTime = wallTime ?? (static () => DateTime.UtcNow);
+        _utcOffsetTicks = _wallTime().Ticks - stopwatch.ElapsedMilliseconds * TicksPerMs;
+    }
+
+    /// <summary>
+    /// Test seam: replace the system-clock source (<see cref="DateTime.UtcNow"/> by default) that anchors game UTC and that the real clock's drift check
+    /// compares against, and re-anchor on it now. Before the world starts only; the source must return UTC ticks.
+    /// </summary>
+    internal void UseWallTimeSource(Func<DateTime> wallTime)
+    {
+        ArgumentNullException.ThrowIfNull(wallTime);
+        _wallTime = wallTime;
+        Volatile.Write(ref _utcOffsetTicks, wallTime().Ticks - ElapsedMs * TicksPerMs);
     }
 
     /// <summary>How this clock moves; fixed before the world starts.</summary>
@@ -82,7 +95,7 @@ public sealed class WorldClock
     /// <summary>Switch to a game-driven mode starting at <paramref name="startAtMs"/> (before the world starts).</summary>
     internal void UseGameDriven(WorldClockMode mode, long startAtMs, DateTimeOffset? startUtc)
     {
-        long utcTicks = (startUtc ?? DateTimeOffset.UtcNow).UtcTicks;
+        long utcTicks = startUtc?.UtcTicks ?? _wallTime().Ticks;
         Volatile.Write(ref _utcOffsetTicks, utcTicks - startAtMs * TicksPerMs);
         Volatile.Write(ref _elapsedMs, startAtMs);
         Volatile.Write(ref _mode, (int)mode);
@@ -120,7 +133,7 @@ public sealed class WorldClock
 
         _lastDriftCheckMs = nowMs;
         long offset = Volatile.Read(ref _utcOffsetTicks);
-        long drift = DateTime.UtcNow.Ticks - (offset + nowMs * TicksPerMs);
+        long drift = _wallTime().Ticks - (offset + nowMs * TicksPerMs);
         if (drift > DriftToleranceTicks)
         {
             Volatile.Write(ref _utcOffsetTicks, offset + drift);

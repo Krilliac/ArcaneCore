@@ -14,9 +14,16 @@ public sealed partial class SpellSystem
     private const uint DismissPetId = 2641;
     private const uint TamingLessonId = 23356;
 
-    /// <summary>vmangos Spell::CheckTarget (Spell.cpp:7639-7643): an area, chain or random candidate must fit the type mask, except for an effect whose target A is the caster.</summary>
+    /// <summary>
+    /// vmangos Spell::CheckTarget (Spell.cpp:7639-7643, :7695-7697; chain :2301-2305): an area, chain or random candidate must fit the type mask,
+    /// and an ONLY_ON_PLAYER spell (AttributesEx3 bit 8) drops every non-player candidate; both exempt an effect whose target A is the caster,
+    /// the player rule also one whose target A is the script-near-caster selector.
+    /// </summary>
     private bool PassesTargetCreatureType(SpellInfo spell, SpellEffectInfo effect, Unit candidate)
-        => effect.TargetA == SpellImplicitTarget.UnitCaster || CheckTargetCreatureType(spell, candidate);
+        => effect.TargetA == SpellImplicitTarget.UnitCaster
+            || (CheckTargetCreatureType(spell, candidate)
+                && (candidate is Player || effect.TargetA == SpellImplicitTarget.UnitScriptNearCaster
+                    || !spell.HasAttribute(SpellAttributesEx3Combat.OnlyOnPlayer)));
 
     /// <summary>
     /// vmangos Spell::CheckTargetCreatureType (Spell.cpp:7577-7605), re-expressed: does <paramref name="target"/>'s creature type

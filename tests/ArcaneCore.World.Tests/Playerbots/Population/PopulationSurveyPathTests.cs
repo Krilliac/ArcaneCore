@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
@@ -19,6 +20,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Population;
 public sealed class PopulationSurveyPathTests : IDisposable
 {
     private const uint Zone = 12;
+    private const uint OtherZone = 13; // the same tile on map 1
     private readonly string _dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-survey-" + Guid.NewGuid().ToString("N"));
     private readonly TerrainManager _terrain;
     private readonly AreaTable _areas;
@@ -31,15 +33,24 @@ public sealed class PopulationSurveyPathTests : IDisposable
             GridHeight = 20f,
             AreaFlags = [.. Enumerable.Range(0, 256).Select(i => (ushort)(1000 + i))],
         }.Build());
-        var registry = new MapRegistry([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", "")]);
-        _areas = new AreaTable(Enumerable.Range(0, 256).Where(i => i % 5 != 0).Select(i =>
-            new AreaTemplate((uint)(5000 + i), 0, Zone, (uint)(1000 + i), 0, 58, "area " + i, 0, 0)), registry);
+        File.WriteAllBytes(Path.Combine(maps, TerrainTile.FileName(1, 32, 32)), new MapFileBuilder
+        {
+            GridHeight = 20f,
+            AreaFlags = [.. Enumerable.Range(0, 256).Select(i => (ushort)(1000 + i))],
+        }.Build());
+        var registry = new MapRegistry([new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+            new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", "")]);
+        _areas = new AreaTable(Enumerable.Range(0, 256).Where(i => i % 5 != 0).SelectMany(i => new[]
+        {
+            new AreaTemplate((uint)(5000 + i), 0, Zone, (uint)(1000 + i), 0, 58, "area " + i, 0, 0),
+            new AreaTemplate((uint)(7000 + i), 1, OtherZone, (uint)(1000 + i), 0, 58, "other area " + i, 0, 0),
+        }), registry);
         _terrain = new TerrainManager(_dataDir) { Areas = _areas };
     }
 
     public void Dispose() => Directory.Delete(_dataDir, recursive: true);
 
-    private static CreatureSpawn Spawn(uint guid, float x, float y, float z, uint entry = 1) => new() { Guid = guid, Entry = entry, MapId = 0, X = x, Y = y, Z = z };
+    private static CreatureSpawn Spawn(uint guid, float x, float y, float z, uint entry = 1, uint map = 0) => new() { Guid = guid, Entry = entry, MapId = map, X = x, Y = y, Z = z };
 
     private static readonly Dictionary<uint, CreatureTemplate> Templates = new()
     {
@@ -106,6 +117,24 @@ public sealed class PopulationSurveyPathTests : IDisposable
         Assert.True(poolReads >= 1, "the background thread read the tile itself"); // not vacuous: the seam counts reads on the thread that makes them
         Assert.Equal(worldReadsBefore, worldReadsAfter); // the world thread made no detached read
         Assert.True(probe.Hops >= 1);
+    }
+
+    [Fact]
+    public async Task TheSurvey_SkipsSpawnsOnMapsAnotherWorkerOwns_AndCountsTheOwnedOnes()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 0);
+        world.Host.World.Ownership = new MapOwnership([new MapOwnership.Range(0, 0)], allowInstanceMaps: false);
+        var spawns = new List<CreatureSpawn>();
+        uint guid = 1;
+        foreach ((float x, float y) in Points(withArea: true).Take(6)) spawns.Add(Spawn(guid++, x, y, 21f)); // 6 on the owned map
+        foreach ((float x, float y) in Points(withArea: true).Take(6)) spawns.Add(Spawn(guid++, x, y, 21f, map: 1)); // 6 on the other worker's map
+
+        var probe = new PlayerbotPopulationFeature.SurfaceSurveyProbe();
+        PopulationSpawnCapacity capacity = await Task.Run(() => PlayerbotPopulationFeature.SurveySurface(world.Host.World, spawns, _terrain, _areas,
+            e => Templates.GetValueOrDefault(e), Factions(), new HashSet<uint>(), probe, CancellationToken.None));
+
+        Assert.Equal(6, capacity.Fitting(Zone, Team.Alliance, 58, 58));
+        Assert.Equal(0, capacity.Fitting(OtherZone, Team.Alliance, 58, 58));
     }
 
     [Fact]

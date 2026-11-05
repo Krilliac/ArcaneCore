@@ -55,13 +55,13 @@ public sealed class ClusterNodeBridgeSwitchTests
     private static string ProbeSpec(int port) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"probe|Worker|127.0.0.1:{port}|0");
 
     [Fact]
-    public void Options_DefaultToOff_WithTheSevenLocalNodeEndpoints()
+    public void Options_DefaultToOff_WithTheFiveLocalNodeEndpoints()
     {
         var options = new ClusterNodeBridgeOptions();
 
         Assert.False(options.Enabled);
         Assert.Equal(ClusterNodeBridgeFeature.DefaultEndpointsSpec, options.Endpoints);
-        foreach (int port in new[] { 19081, 19082, 19083, 19084, 19085, 19086, 19087 })
+        foreach (int port in new[] { 19081, 19082, 19083, 19084, 19087 })
         {
             Assert.Contains($"127.0.0.1:{port}|", options.Endpoints, StringComparison.Ordinal);
         }
@@ -84,7 +84,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task Disabled_OpensNoConnection_LogsNothing_AndStartsNoTask()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         await using WorldTestHost host = WorldTestHost.Start();
@@ -144,7 +144,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task StartingAWorld_WithNodeBridgeEnabledInHostConfiguration_TurnsTheBridgeOn()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -165,7 +165,7 @@ public sealed class ClusterNodeBridgeSwitchTests
     public async Task Enabled_ConnectsToTheConfiguredEndpoints_AndReportsAnUnansweringNode()
     {
         using EndpointsEnv env = EndpointsEnv.Set(null);
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        using var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         await using WorldTestHost host = WorldTestHost.Start();

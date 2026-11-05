@@ -20,6 +20,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -58,7 +59,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        Saves = new SkillSaveCoordinator(scopes, logger);
+        Saves = new SkillSaveCoordinator(scopes, logger) { Retirement = services.GetService<CharacterRetirementRegistry>() };
     }
 
     public SkillsFeatureOptions Options { get; } = new();
@@ -115,6 +116,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         _spells.Spellbook.SpellForgotten += OnSpellForgotten;
         Saves.Start();
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += EnqueueSnapshot;
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
@@ -241,6 +243,7 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
         if (_world is { } world)
         {
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            world.PlayerTransferPreparing -= EnqueueSnapshot;
             world.MapCreated -= OnMapCreated;
             world.MapUnloading -= OnMapUnloading;
         }
@@ -274,7 +277,16 @@ public sealed class SkillsFeature : IWorldFeature, ISpellbookLoadObserver, IChar
 
     private void OnLevelChanged(Player player) => player.Skills?.UpdateSkillsForLevel();
 
-    private void OnPlayerLoggingOut(Player player) => EnqueueSnapshot(player);
+    // A retire after a committed transfer must not write: the target owns the skills now.
+    private void OnPlayerLoggingOut(Player player)
+    {
+        if (_world is { IsRetiringTransferredPlayer: true })
+        {
+            return;
+        }
+
+        EnqueueSnapshot(player);
+    }
 
     /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
     internal int TrackedMapCount => _maps.Count;

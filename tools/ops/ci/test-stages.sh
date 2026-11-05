@@ -5,10 +5,16 @@
 #                                    [--selftest] TARGET...
 #
 # TARGET is a solution, solution filter or test project, already built (dotnet test --no-build).
-#   stage main   : every target with Category!=Timing, all targets at once, test collections in parallel as usual.
+#   stage main   : every target with Category!=Timing, all targets at once, test collections in parallel as usual. A target whose
+#                  failures are plain test failures (dotnet rc 1, no timeout, no "Test Run Aborted", no build/test-setup error in the
+#                  log, every failure attributable to a "Failed <test>" line; any other rc, e.g. 124 / 137 / 255, always fails) and at most GATE_MAIN_RERUN_MAX (default 5) unique failed tests gets each of them rerun alone, serially, once.
+#                  A pass prints "FLAKY (passed on rerun): <test>" and goes to the ledger; if every failure of the target passed, the
+#                  target does not fail the gate. A test that fails its rerun too ("FAILED TWICE") fails it. More failures than the
+#                  cap is a regression, not flakiness: no reruns, the gate fails. GATE_MAIN_RERUN=off (or 0) disables main reruns.
 #   stage timing : every target with Category=Timing, serially (no parallel collections). A test that fails gets exactly one
 #                  isolated rerun: passing it prints "FLAKY (passed on rerun): <test>" and appends it to <logs>/flake-ledger.txt
-#                  (the gate still passes); failing it again fails the gate.
+#                  (the gate still passes); failing it again fails the gate. Only a plain failure (rc 1, no setup error, attributable
+#                  Failed lines) is rerun; any other rc fails the gate even if the rerun passes.
 #   all          : main, then the MockClient self-test (--selftest), then timing.
 # A run without --filter whose timing stage executes 0 tests FAILS: an empty filter must never read green. With --filter EXPR
 # (ANDed with each stage's category) the rule is instead that the stages together executed at least one test.
@@ -27,6 +33,7 @@
 #   GATE_CLASS_BUDGET_SEC (default 900) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
 #       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
 #   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
+# GATE_MAIN_RERUN (on|off|1|0, default on) and GATE_MAIN_RERUN_MAX (whole number 0..1000, default 5) are the main-stage rerun knobs.
 # GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
 # The summary lists the slowest classes and tests of a target that hit a budget.
 set -u
@@ -41,7 +48,7 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
@@ -58,14 +65,18 @@ suite_budget_min=${GATE_SUITE_BUDGET_MIN:-20}
 class_budget_sec=${GATE_CLASS_BUDGET_SEC:-900}
 long_test_sec=${GATE_LONG_TEST_SEC:-60}
 time_budgets=${GATE_TIME_BUDGETS:-on}
+main_rerun=${GATE_MAIN_RERUN:-on}
+case "$main_rerun" in on|1) main_rerun=on ;; off|0) main_rerun=off ;; *) echo "test-stages: GATE_MAIN_RERUN must be on or off, not '$main_rerun'" >&2; exit 2 ;; esac
+main_rerun_max=${GATE_MAIN_RERUN_MAX:-5}
 case "$time_budgets" in on|off) ;; *) echo "test-stages: GATE_TIME_BUDGETS must be on or off, not '$time_budgets'" >&2; exit 2 ;; esac
 minute_sec=${GATE_BUDGET_MINUTE_SEC:-60}   # test hook: the self-test shrinks a budget "minute" so it can run in seconds
-for knob in GATE_BUDGET_MINUTE_SEC=$minute_sec GATE_SUITE_BUDGET_MIN=$suite_budget_min GATE_CLASS_BUDGET_SEC=$class_budget_sec GATE_LONG_TEST_SEC=$long_test_sec; do
+for knob in GATE_BUDGET_MINUTE_SEC=$minute_sec GATE_SUITE_BUDGET_MIN=$suite_budget_min GATE_CLASS_BUDGET_SEC=$class_budget_sec GATE_LONG_TEST_SEC=$long_test_sec GATE_MAIN_RERUN_MAX=$main_rerun_max; do
   [[ "${knob#*=}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "test-stages: ${knob%%=*} must be a whole number, not '${knob#*=}'" >&2; exit 2; }
 done
 # Ranges keep every product below inside bash's 64-bit arithmetic and inside an int of VSTest's millisecond timeout.
 [ "$long_test_sec" -ge 1 ] && [ "$long_test_sec" -le 3600 ] || { echo "test-stages: GATE_LONG_TEST_SEC must be 1..3600" >&2; exit 2; }
 [ "$minute_sec" -ge 1 ] && [ "$minute_sec" -le 60 ] || { echo "test-stages: GATE_BUDGET_MINUTE_SEC must be 1..60" >&2; exit 2; }
+[ "$main_rerun_max" -le 1000 ] || { echo "test-stages: GATE_MAIN_RERUN_MAX must be at most 1000" >&2; exit 2; }
 [ "$suite_budget_min" -le 1440 ] || { echo "test-stages: GATE_SUITE_BUDGET_MIN must be at most 1440" >&2; exit 2; }
 [ "$class_budget_sec" -le 86400 ] || { echo "test-stages: GATE_CLASS_BUDGET_SEC must be at most 86400" >&2; exit 2; }
 if [ "$time_budgets" = off ]; then suite_budget_min=0 class_budget_sec=0; fi
@@ -111,6 +122,12 @@ counts() {
 # failed_names <log>: one line per "Failed <test>" result line (theory cases repeat their method), as fully qualified names.
 failed_names() {
   grep -E '^[[:space:]]+Failed [A-Za-z_]' "$1" | sed -E 's/^[[:space:]]+Failed ([^ (]+).*/\1/'
+}
+
+# setup_error <log>: succeeds when the log shows a build or test-setup error (MSBuild/compiler error, a test dll that is missing or
+# cannot be loaded), which is never a test failure: a gate must not call such a run flaky even if a rerun of one test passes.
+setup_error() {
+  grep -qE 'error MSB[0-9]+|^[[:space:]]*error( [A-Za-z]+[0-9]+)?:|The test source file .*(does not exist|was not found)|Could not find .*(testhost|\.dll|\.exe)|Could not load file or assembly' "$1"
 }
 
 # class_times <trx dir> -> "<seconds> <class>" per test class, slowest first, summed from every result's duration.
@@ -166,6 +183,7 @@ for t in "${targets[@]}"; do [ -n "$(label "$t")" ] || { echo "test-stages: targ
 a_exec=0 a_pass=0 a_fail=0 a_skip=0 b_exec=0 b_pass=0 b_fail=0 b_skip=0
 selftest_line="not run"
 rerun_n=0 rerun_pass=0 rerun_fail=0
+m_rerun_n=0 m_rerun_pass=0 m_rerun_fail=0
 flaky=()
 serial_seen=0
 
@@ -199,10 +217,43 @@ if [ "$stage" != timing ]; then
     if [ $timedout = 1 ]; then
       fail "main $t was stopped at its ${suite_budget_min}m time budget (GATE_SUITE_BUDGET_MIN): still running: ${running:-nothing reported (each under ${long_test_sec}s)}"
     fi
-    grep -q 'Test Run Aborted' "$log" && fail "main $t: test run aborted"
+    aborted=0; grep -q 'Test Run Aborted' "$log" && aborted=1
+    [ $aborted = 1 ] && fail "main $t: test run aborted"
     if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then
-      fail "main $t rc=$rc failed=$f"
       failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'
+      # One isolated rerun per failed test, only for plain failures: a timeout, an abort, a crash or kill (failures that are not
+      # attributable to "Failed <test>" lines) or a mass failure is never flakiness.
+      lines=$(failed_names "$log" | grep -c .); want=$(failed_names "$log" | sort -u | grep -c .)
+      cleared=0; why=
+      if [ "$main_rerun" = off ]; then why="reruns are off (GATE_MAIN_RERUN)"
+      elif [ $timedout = 1 ]; then why="the run was stopped at its time budget"
+      elif [ $aborted = 1 ]; then why="the test run aborted"
+      elif [ "$lines" -eq 0 ] || [ "$lines" -ne "$f" ]; then why="$f failed but $lines attributable failure lines (crash or kill?)"
+      elif [ $rc -ne 1 ]; then why="rc=$rc is not a plain test failure (rc 1), e.g. a kill, a timeout or a target that never ran"
+      elif setup_error "$log"; then why="the log shows a build or test-setup error"
+      elif [ "$want" -gt "$main_rerun_max" ]; then why="$want failed tests is over GATE_MAIN_RERUN_MAX=$main_rerun_max (a regression, not flakiness)"
+      else
+        all_passed=1; before=$m_rerun_n
+        while read -r name <&3; do
+          m_rerun_n=$((m_rerun_n + 1)); rlog=$logs/main-rerun-$m_rerun_n.log
+          echo "main: rerunning $name alone"
+          run_test "$rlog" "$logs/trx-main-rerun" "FullyQualifiedName=$name" 1 "$t"; rrc=$?
+          read -r rp rf rs < <(counts "$rlog")
+          if [ $rrc -eq 0 ] && [ "$rf" -eq 0 ] && [ $((rp + rf)) -ge 1 ]; then
+            m_rerun_pass=$((m_rerun_pass + 1)); flaky+=("$name")
+            echo "FLAKY (passed on rerun): $name"
+            printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$commit" "$t" "$name" >> "$ledger"
+          else
+            m_rerun_fail=$((m_rerun_fail + 1)); all_passed=0
+            echo "FAILED TWICE: $name (rerun rc=$rrc executed $((rp + rf)) failed $rf)"
+            fail "main $name failed its rerun too"
+          fi
+        done 3< <(failed_names "$log" | sort -u)
+        [ $((m_rerun_n - before)) -eq "$want" ] || { all_passed=0; fail "main $t: $want failed tests but $((m_rerun_n - before)) reruns"; }
+        [ $all_passed = 1 ] && cleared=1
+      fi
+      [ -n "$why" ] && echo "main $t: no rerun: $why"
+      [ $cleared = 1 ] || fail "main $t rc=$rc failed=$f"
     fi
     summary+=("    run time $((secs / 60))m$((secs % 60))s")
     # Budgets that fail the gate: not with --filter (a subset's times say nothing about the suite) and not when switched off.
@@ -230,6 +281,7 @@ if [ "$stage" != timing ]; then
     [ -z "$filter" ] && [ "$e" -eq 0 ] && fail "main $t executed 0 tests"
   done
   summary[0]="stage main (parallel, $flt): executed $a_exec (passed $a_pass, failed $a_fail), skipped $a_skip"
+  summary+=("main reruns: $m_rerun_n (passed on rerun $m_rerun_pass, failed twice $m_rerun_fail)")
 fi
 
 if [ "$selftest" = 1 ] && [ "$stage" != timing ]; then
@@ -260,6 +312,9 @@ if [ "$stage" != main ]; then
     if [ "$lines" -eq 0 ] || [ "$lines" -ne "$f" ]; then
       fail "timing $t rc=$rc with $f failed but $lines attributable failure lines (crash or kill?)"; continue
     fi
+    if [ $rc -ne 1 ] || setup_error "$log"; then
+      fail "timing $t rc=$rc with $f failed: not a plain test failure (rc 1, no build/setup error), no rerun"; continue
+    fi
     want=$(failed_names "$log" | sort -u | grep -c .); before=$rerun_n
     while read -r name <&3; do
       rerun_n=$((rerun_n + 1)); rlog=$logs/rerun-$rerun_n.log
@@ -281,9 +336,10 @@ if [ "$stage" != main ]; then
   sline="NOT confirmed in log"; [ $serial_seen = 1 ] && sline=confirmed
   summary[$bhead]="stage timing (serial, $flt): executed $b_exec (passed $b_pass, failed $b_fail), skipped $b_skip; serial: $sline"
   summary+=("timing reruns: $rerun_n (passed on rerun $rerun_pass, failed twice $rerun_fail)")
-  if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky tests (passed their rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky tests (passed their rerun): none"); fi
   [ -z "$filter" ] && [ $b_exec -eq 0 ] && fail "timing stage matched 0 tests"
 fi
+# Flaky tests of both stages (main first, then timing).
+if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky tests (passed their rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky tests (passed their rerun): none"); fi
 
 [ -n "$filter" ] && [ $((a_exec + b_exec)) -eq 0 ] && fail "filter matched 0 tests"
 

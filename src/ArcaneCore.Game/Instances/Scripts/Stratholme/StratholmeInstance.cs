@@ -27,7 +27,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         NpcRamstein = 10439, NpcBaron = 10440, NpcAcolyte = 10399,
         NpcCrystal = 10415, NpcBileAbom = 10416, NpcVenomAbom = 10417,
         NpcMindless = 11030, NpcBlackGuard = 10394, NpcYsida = 16031,
-        NpcBarthilas = 10435, NpcAurius = 10917;
+        NpcBarthilas = 10435, NpcAurius = 10917, NpcTimmy = 10808;
     public const uint SpellBaronUltimatum = 27861, SpellYsidaFreed = 27773;
 
     // stratholme.h stratholmeLocation[0] (Barthilas door run) and [1] (Barthilas teleport).
@@ -55,6 +55,9 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     private bool _ramsteinSummoned;
     private bool _announcerChosen;
     private ObjectGuid _acolyteAnnouncer;
+
+    /// <summary>Timmy the Cruel while he is in the map (m_uiTimmyGUID, instance_stratholme.cpp:243): the guardsman's death summons him.</summary>
+    public Creature? Timmy => GetSingleCreatureFromStorage(NpcTimmy);
 
     public uint BaronRunRemainingMs => _baronRunTimer;
     public uint MindlessSummoned => _mindlessCount;
@@ -224,7 +227,7 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
     {
         switch (creature.Template.Entry)
         {
-            case NpcBaron or NpcYsida or NpcBarthilas:
+            case NpcBaron or NpcYsida or NpcBarthilas or NpcTimmy:
                 StoreCreature(creature);
                 break;
             case NpcAurius:
@@ -871,9 +874,5 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         }
     }
 
-    private static float DistanceSquared(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return dx * dx + dy * dy + dz * dz;
-    }
+    private static float DistanceSquared(WorldObject a, WorldObject b) => WorldGeometry.DistanceSq3D(a, b);
 }

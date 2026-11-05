@@ -101,7 +101,7 @@ public sealed class PlayerbotRuleLadderTests
         Assert.NotSame(host, PlayerbotRuleLadder.For(other));
 
         int bad = 0;
-        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, worker =>
+        System.Threading.Tasks.Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, worker =>
         {
             // Each brain asks the shared host for its own ladder, as PlayerbotBrain does.
             BotGoalLadder ladder = PlayerbotRuleLadder.For(sp).CreateLadder((ulong)worker + 1);

@@ -214,16 +214,14 @@ public static partial class DeliberatelyInertSpells
         new(29072, R.Deprecated, WhyDeprecated, NoCore),
         new(29218, R.Deprecated, WhyDeprecated, NoCore),
         new(31466, R.Deprecated, WhyDeprecated, NoCore),
-        // TestSpell (15)
+        // TestSpell (13; 18800 and 22690 moved to CustomSpellRegistry)
         new(5581, R.TestSpell, WhyTest, NoCore),
         new(7033, R.TestSpell, WhyTest, NoCore),
         new(11593, R.TestSpell, WhyTest, NoCore),
         new(12379, R.TestSpell, WhyTest, NoCore),
         new(12565, R.TestSpell, WhyTest, NoCore),
-        new(18800, R.TestSpell, WhyTest, NoCore),
         new(21342, R.TestSpell, WhyTest, NoCore),
         new(22050, R.TestSpell, WhyTest, NoCore),
-        new(22690, R.TestSpell, WhyTest, NoCore),
         new(23387, R.TestSpell, WhyTest, NoCore),
         new(23388, R.TestSpell, WhyTest, NoCore),
         new(24401, R.TestSpell, WhyTest, NoCore),

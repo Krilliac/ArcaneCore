@@ -403,7 +403,7 @@ public sealed class LootServiceTests
         (Player alice, _) = rig.Join(1);
         (Player bob, _) = rig.Join(2, 1, 0);
         rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
-        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        rig.Loot.Conditions = (player, _, condition) => condition == 7 && ReferenceEquals(player, alice);
         Creature wolf = rig.KillWolf(alice);
         LootBag bag = rig.Loot.FindLoot(wolf.Guid)!;
         LootItem item = Assert.Single(bag.Items);
@@ -424,7 +424,7 @@ public sealed class LootServiceTests
         (Player alice, _) = rig.Join(1);
         (Player bob, _) = rig.Join(2, 1, 0);
         rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
-        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        rig.Loot.Conditions = (player, _, condition) => condition == 7 && ReferenceEquals(player, alice);
         Creature wolf = rig.KillWolf(alice);
         LootItem item = Assert.Single(rig.Loot.FindLoot(wolf.Guid)!.Items);
 

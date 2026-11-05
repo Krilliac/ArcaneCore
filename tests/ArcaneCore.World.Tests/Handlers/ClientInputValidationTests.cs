@@ -269,7 +269,7 @@ public sealed class ClientInputValidationTests
         await using var host = WorldTestHost.Start();
         var guard = new NetGuard(new NetProtectionOptions { WorldOpcodeBurst = 2, WorldOpcodeRefillPerSecond = 0, WorldPacketsPerSecond = 0, WorldFloodPacketsPerSecond = 0 },
             () => 0, () => 0, NullLogger.Instance);
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         using var stop = new CancellationTokenSource();
         Task session = Task.Run(async () =>
@@ -316,7 +316,7 @@ public sealed class ClientInputValidationTests
         byte[] key = await host.AddAccountAsync("PINGAUTH");
         var guard = new NetGuard(new NetProtectionOptions { WorldOpcodeBurst = 2, WorldOpcodeRefillPerSecond = 0, WorldPacketsPerSecond = 0, WorldFloodPacketsPerSecond = 0 },
             () => 0, () => 0, NullLogger.Instance);
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         using var stop = new CancellationTokenSource();
         Task session = Task.Run(async () =>

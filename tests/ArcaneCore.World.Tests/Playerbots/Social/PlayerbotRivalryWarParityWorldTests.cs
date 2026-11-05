@@ -5,18 +5,16 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Social;
 
 /// <summary>
-/// Parity test C of the design (7.3): nothing the war layer decides reaches a bot's normal layer through behaviour. Two real worlds get the same
+/// Parity test C of the design (7.3): the war layer only ever reads, it never writes a bot's normal layer. Two real worlds get the same
 /// characters, the same seeds and the same simulated minutes; in one War Mode is on while the lane and the reply hook run and is then switched
 /// off for the rest, in the other it is never on. Every bot's normal-layer rows (affinity, familiarity, trust, flags) must be identical at the
-/// end, whatever the war layer made the first world do.
+/// end, apart from what the war layer made another bot do TO them: with War Mode on the war layer decides toward bots as toward players, so a bot
+/// that holds a war grudge against another bot does not greet it and, with <c>RudeAtBots</c>, sends it a rude emote. The events of those emotes (or of
+/// the greetings that did not happen) land in the two bots' own normal layers like any other, so the rows between the bots are not compared.
 /// <para>
-/// A leak this catches: a lane that read the war layer toward a bot would, with <c>RudeAtBots</c> on, send a rude emote at C (C records it in its
-/// own normal layer), and a reply that read the war layer would answer differently and move a bot's memory.
-/// </para>
-/// <para>
-/// Non-vacuity: the war world sent a war-driven rude emote at the real player that the never-on world did not, and in both worlds a bot greeted
-/// another bot and a bot answered. Last-seen stamps are not compared (each world stamps them from its own real clock); an extra event still
-/// shows in affinity, familiarity or flags.
+/// Non-vacuity: the war world sent a war-driven rude emote at the real player that the never-on world did not, B (a war Rival of C) did not greet C
+/// in the war world while it did in the calm one, and in the calm world a bot answered. Last-seen stamps are not compared (each world stamps them
+/// from its own real clock); an extra event still shows in affinity, familiarity or flags.
 /// </para>
 /// </summary>
 public sealed class PlayerbotRivalryWarParityWorldTests
@@ -27,7 +25,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
 
     private sealed record Outcome(
         long StartMs, SortedDictionary<string, string> SeededRows, SortedDictionary<string, string> FinalRows,
-        List<PlayerbotRivalrySend> Sends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids, Dictionary<string, Guid> Bots);
+        List<PlayerbotRivalrySend> Sends, List<PlayerbotRivalrySend> WarPhaseSends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids, Dictionary<string, Guid> Bots);
 
     private static SortedDictionary<string, string> NormalRows(SocialWorld world, Dictionary<string, ulong> guids)
     {
@@ -51,6 +49,11 @@ public sealed class PlayerbotRivalryWarParityWorldTests
             o.Social.Rivalry.Emotes.RudeAtBots = rudeAtBots;
             o.Social.Rivalry.Emotes.FriendlyAffinity = 0;
         }, chat: true);
+        // War Mode on also turns the bots' own brains loose on a grudge (the hunt and attack on sight), on real time: a bot that has started a fight is not idle and the
+        // lane skips it, so how many passes the bots got before a fight began would decide what the test sees. This test is about the lane and the memory, so no
+        // target is ever inside either radius and the brains leave the three bots standing where they are.
+        world.Options.Social.WarMode.HuntRadiusYards = 0;
+        world.Options.Pvp.Initiate.RadiusYards = 0;
         await world.AddBotAsync("Rvpara");
         await world.AddBotAsync("Rvparb");
         await world.AddBotAsync("Rvparc", race: RivalryKit.Undead);
@@ -87,8 +90,10 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         long start = startMs ?? RivalryKit.TimeWhere(t => RivalryKit.GreetPasses(b, c, t)
             && PlayerbotRivalryRules.PickGreeting(PlayerbotStance.Neutral, PlayerbotRivalryRules.PickRoll(b, c, t)) != PlayerbotSocialEmotes.TextEmotes.Nod);
 
+        List<PlayerbotRivalrySend> warPhaseSends = [];
         for (int minute = 0; minute < WarMinutes + QuietMinutes; minute++)
         {
+            if (minute == WarMinutes) warPhaseSends = [.. RivalryKit.Lane(world).Sends]; // what the lane sent while War Mode was on (the same minutes in the calm world)
             if (warWorld && minute == WarMinutes) world.Options.Social.WarMode.Enabled = false;
             int before = RivalryKit.Lane(world).Sends.Count;
             await RivalryKit.RunAsync(world, start + minute * 60_000L);
@@ -98,7 +103,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         var heard = new List<(ulong Emoter, uint Emote, string Target)>();
         await Task.Delay(1500);
         heard.AddRange((await RivalryKit.ListenAsync(player)).Emotes);
-        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], heard, guids, new Dictionary<string, Guid>(world.Bots));
+        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], warPhaseSends, heard, guids, new Dictionary<string, Guid>(world.Bots));
     }
 
     [Theory]
@@ -117,23 +122,29 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         Assert.Contains(war.Sends, s => s.Rude && s.Target == playerGuid && !s.TargetIsBot);
         Assert.DoesNotContain(calm.Sends, s => s.Rude && s.Target == playerGuid);
 
-        // Non-vacuity, both worlds: B greeted C, and C emoted at B more often than the lane sent C's own greetings: a reply happened.
-        foreach ((string label, Outcome world) in new[] { ("war", war), ("calm", calm) })
-        {
-            ulong bTarget = world.Guids["Rvparb"], cTarget = world.Guids["Rvparc"];
-            Guid b = world.Bots["Rvparb"], c = world.Bots["Rvparc"];
-            Assert.True(world.Sends.Any(s => s.Bot == b && s.Target == cTarget && s.TargetIsBot && !s.Rude), $"{label}: B never greeted C");
-            int heardFromC = world.Heard.Count(e => e.Emoter == cTarget && e.Target == "Rvparb");
-            int sentByC = world.Sends.Count(s => s.Bot == c && s.Target == bTarget);
-            Assert.True(heardFromC > sentByC, $"{label}: C emoted at B {heardFromC} times and the lane sent {sentByC}: no bot answered");
-        }
+        // Non-vacuity, calm world: B greeted C, and C emoted at B more often than the lane sent C's own greetings: a reply happened.
+        ulong bTarget = calm.Guids["Rvparb"], cTarget = calm.Guids["Rvparc"];
+        Guid bBot = calm.Bots["Rvparb"], cBot = calm.Bots["Rvparc"];
+        Assert.True(calm.Sends.Any(s => s.Bot == bBot && s.Target == cTarget && s.TargetIsBot && !s.Rude), "calm: B never greeted C");
+        int heardFromC = calm.Heard.Count(e => e.Emoter == cTarget && e.Target == "Rvparb");
+        int sentByC = calm.Sends.Count(s => s.Bot == cBot && s.Target == bTarget);
+        Assert.True(heardFromC > sentByC, $"calm: C emoted at B {heardFromC} times and the lane sent {sentByC}: no bot answered");
 
-        // What the lane sent to bots is identical, send for send (design 7.1): the war layer decides nothing toward a bot.
-        List<(string Bot, ulong Target, uint Emote, bool Rude)> toBotsCalm = BotSends(calm), toBotsWar = BotSends(war);
-        Assert.NotEmpty(toBotsCalm);
-        Assert.Equal(toBotsCalm, toBotsWar);
+        // War world, while War Mode was on (the first WarMinutes passes; after it the normal layer decides again, where B has no relation to C and greets it like any
+        // stranger): the war layer decides toward a bot too. B holds a war grudge against C, so it never greets it, and with RudeAtBots it is rude to it.
+        Assert.DoesNotContain(war.WarPhaseSends, s => s.Bot == war.Bots["Rvparb"] && s.Target == cTarget && s.TargetIsBot && !s.Rude);
+        Assert.Equal(rudeAtBots, war.WarPhaseSends.Any(s => s.TargetIsBot && s.Rude)); // a bot sends one rude emote per ten minutes, so which of its rivals gets it is not fixed
 
-        // The assertion the test exists for.
-        Assert.Equal(calm.FinalRows, war.FinalRows);
+        // The assertion the test exists for. Toward a bot the war layer now decides what the bots do to each other (no greeting, with RudeAtBots a rude emote, and which
+        // rival gets a bot's one rude emote is not fixed), and the events of those emotes land in the normal layers of the pairs involved like any other, so the rows of the
+        // war-Rival pairs (everything with C, the bot A and B hold a war grudge against) may differ. Every other normal-layer row is identical: the rows about the real
+        // player, among them everything the war grudges of A were seeded on, and the rows between bots that are no war Rivals of each other (A and B).
+        Func<KeyValuePair<string, string>, bool> aboutThePlayer = row => row.Key.EndsWith("->Rvparp", StringComparison.Ordinal);
+        Func<KeyValuePair<string, string>, bool> compared = row => !row.Key.Contains("Rvparc", StringComparison.Ordinal);
+        Assert.Contains(calm.FinalRows, new Predicate<KeyValuePair<string, string>>(aboutThePlayer)); // non-vacuity: there is something to compare
+        Assert.Contains(war.FinalRows, new Predicate<KeyValuePair<string, string>>(aboutThePlayer));
+        Assert.Contains(calm.FinalRows, new Predicate<KeyValuePair<string, string>>(compared));
+        Assert.Equal(calm.FinalRows.Where(aboutThePlayer), war.FinalRows.Where(aboutThePlayer));
+        Assert.Equal(calm.FinalRows.Where(compared), war.FinalRows.Where(compared));
     }
 }

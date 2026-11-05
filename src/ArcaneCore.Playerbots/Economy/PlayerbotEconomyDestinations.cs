@@ -40,6 +40,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
     private readonly List<Hint> _hints = [];
     private readonly HashSet<uint> _blockedSpawns = [];
     private readonly PlayerbotEconomyWalker _walker = new(session, options);
+    private readonly PlayerbotCrowdSpread _spread = new(session, options);
     private uint _mapId = uint.MaxValue;
     private int _contentVersion = -1;
     private int _eventStamp = -1;
@@ -108,6 +109,9 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
     /// </summary>
     internal bool WalkTo(Player player, Vector3 target, uint elapsedMs) => _walker.Step(player, target, elapsedMs);
 
+    /// <summary>One step of the crowd rule at an auctioneer the bot is in reach of (<see cref="PlayerbotCrowdSpread.Step"/>): true while the bot walks to its own spot.</summary>
+    internal bool SpreadAt(Player player, NpcInfo npc, uint elapsedMs) => _spread.Step(player, npc, elapsedMs);
+
     /// <summary>
     /// One walking step towards the nearest faction auctioneer spawn on the bot's map that no live sighting covers yet. False when there is none
     /// within <see cref="RadiusYards"/>, every one is blocked or the bot cannot get there (the visit gives up).
@@ -155,6 +159,7 @@ internal sealed class PlayerbotEconomyDestinations(WorldSession session, Playerb
     internal void Clear()
     {
         _walker.Clear();
+        _spread.Clear();
         _hintSpawn = 0;
         TargetEntry = 0;
     }

@@ -108,10 +108,10 @@ internal sealed class PlayerbotHelpLane
 
     // --- the bot is free -----------------------------------------------------------------------------------------------------
 
-    /// <summary>Whether the bot may lend a hand now: its own brain drives it, it is alive, out of combat, healthy, on a free goal with no request pending.</summary>
+    /// <summary>Whether the bot may lend a hand now: its own brain drives it, it is alive, out of combat, healthy, on a free goal with no request pending and not answering a defense call (help and defense never double-book a bot).</summary>
     internal static bool IsFree(PlayerbotSocialBot bot)
     {
-        if (bot.PartyDriven || bot.GroupDriven || bot.Brain is not { PendingHelp: PlayerbotHelpKind.None } brain) return false;
+        if (bot.PartyDriven || bot.GroupDriven || bot.Brain is not { PendingHelp: PlayerbotHelpKind.None, Responding: false } brain) return false;
         Player player = bot.Player;
         if (!player.IsAlive || player.Map is null || player.Combat.IsInCombat || player.Duel is not null || player.MaxHealth == 0 || !PlayerbotHelpRules.IsFreeGoal(brain.Goal)) return false;
         (int health, int? mana) = PlayerbotPersonaFacts.Vitals(player);
@@ -146,7 +146,7 @@ internal sealed class PlayerbotHelpLane
             float helpfulness = PlayerbotTraits.For(self.Guid.Value).Helpfulness;
             bool answers = PlayerbotCallForHelp.Askable(known, affinity, rival)
                 && PlayerbotCallForHelp.Answers(self.Guid.Value, askerGuid.Value, (uint)(pass.NowMs / 15_000), helpfulness, affinity)
-                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled), GroupSizeOf(pass, self)) is not null
+                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled), GroupSizeOf(pass, self), pass.Options.WarMode.Enabled) is not null
                 && bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, asker.Guid);
             if (answers)
             {
@@ -279,7 +279,7 @@ internal sealed class PlayerbotHelpLane
         (_, int affinity, bool rival) = Feelings(recorder, bot.Id, victim.Guid.Value);
         if (rival) return false;
         Player self = bot.Player;
-        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag, GroupSizeOf(pass, self)) is null) return false;
+        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag, GroupSizeOf(pass, self), pass.Options.WarMode.Enabled) is null) return false;
         uint episode = (uint)_trouble[victim.Guid.Value].Since;
         if (!PlayerbotHelpRules.Helps(self.Guid.Value, victim.Guid.Value, episode, helpfulness, affinity)) return false;
         if (!bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, victim.Guid)) return false;

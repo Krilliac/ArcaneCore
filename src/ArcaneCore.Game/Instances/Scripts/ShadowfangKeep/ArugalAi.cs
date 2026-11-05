@@ -145,11 +145,7 @@ public sealed class ArugalVoidwalkerAi(Creature creature, ShadowfangKeepInstance
             _offering = (uint)(System?.RandomInt(4_000, 12_000) ?? 8_000);
     }
 
-    private static float DistanceSquared(Creature a, Creature b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return dx * dx + dy * dy + dz * dz;
-    }
+    private static float DistanceSquared(Creature a, Creature b) => WorldGeometry.DistanceSq3D(a, b);
 
     private void CheckGroupStatus()
     {

@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Honor;
@@ -115,7 +116,8 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         _rewards = new HonorKillRewards(
             service,
             RewardGroups.Resolver(services),
-            noPvpCredit: unit => CombatEnvironment.For(world).Auras?.HasAuraType(unit, AuraType.NoPvpCredit) ?? false);
+            noPvpCredit: unit => CombatEnvironment.For(world).Auras?.HasAuraType(unit, AuraType.NoPvpCredit) ?? false,
+            warMode: WorldStateHooks.For(world).WarMode);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
@@ -124,6 +126,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         }
 
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += OnPlayerTransferPreparing;
         _logger.LogInformation("Honor enabled: week begins on game day {Day}", WeekBeginDay);
     }
 
@@ -209,6 +212,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             world.MapCreated -= OnMapCreated;
             world.MapUnloading -= OnMapUnloading;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            world.PlayerTransferPreparing -= OnPlayerTransferPreparing;
             foreach (Map map in world.Maps)
             {
                 OnMapUnloading(map);
@@ -234,6 +238,9 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         }
     }
 
+    /// <summary>A cluster transfer's capture: the pvp flags a logout would write, queued before the capture's flush.</summary>
+    private void OnPlayerTransferPreparing(Player player) => _service?.CapturePvpFlags(player);
+
     private void OnPlayerLoggingOut(Player player)
     {
         if (_service is null)
@@ -241,12 +248,16 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             return;
         }
 
-        _service.CapturePvpFlags(player);
+        if (_world is not { IsRetiringTransferredPlayer: true }) // a retire after a committed transfer must not write the honor state
+        {
+            _service.CapturePvpFlags(player);
+        }
+
         _service.Untrack(player);
         int characterId = (int)player.Guid.Low;
-        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        if (_world is not { IsRetiringTransferredPlayer: true } && _writes is { } writes && writes.HasRetainedFailure(characterId))
         {
-            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry
+            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry (never after a transfer retire)
         }
     }
 
@@ -263,7 +274,7 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             var settings = new HonorSettings();
             services.GetService<IConfiguration>()?.GetSection(HonorSettings.SectionName).Bind(settings);
             _options = settings.ToOptions();
-            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>(), drain: services.GetService<ShutdownDrain>()?.Features);
+            _writes = new HonorWriteQueue(scopes, loggers.CreateLogger<HonorWriteQueue>(), drain: services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
             _writes.FatalFailure += ex =>
             {
                 FaultLedger.Shared.Record("honor.writes-fatal", ex);
@@ -296,7 +307,14 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
                     HonorMaintenanceState? state = store.GetMaintenanceAsync().GetAwaiter().GetResult();
                     if (state is null || state.LastDay == 0)
                     {
-                        store.SaveMaintenanceAsync(new HonorMaintenanceState(last, last + 7, false)).GetAwaiter().GetResult();
+                        // The first-start seed is a realm write: only the maintenance lease holder makes it (writer-lock design section 4, row 6). A node that is not the
+                        // holder computes the same week from the clock and leaves the row for the holder, so two nodes never both seed a different one.
+                        if (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
+                            scope.ServiceProvider.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(),
+                            ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance))
+                        {
+                            store.SaveMaintenanceAsync(new HonorMaintenanceState(last, last + 7, false)).GetAwaiter().GetResult();
+                        }
                     }
                     else
                     {

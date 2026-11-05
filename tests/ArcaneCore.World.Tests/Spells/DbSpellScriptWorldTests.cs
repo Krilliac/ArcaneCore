@@ -18,9 +18,10 @@ namespace ArcaneCore.World.Tests.Spells;
 /// <summary>
 /// The spell DB scripts end to end: the classic-db <c>dbscripts_on_spell</c> and vmangos <c>spell_scripts</c> excerpts
 /// (<see cref="DbSpellScriptRows"/>) go through the content importer into a world SQLite database, the creature store loads them, and the
-/// composed world runs a spell's script when its DUMMY or SCRIPT_EFFECT effect hits (cmangos Spell::EffectDummy / EffectScriptEffect,
-/// Spells/SpellEffects.cpp:1517-1532 and :4176-4191; vmangos Spell::EffectScriptEffect, SpellEffects.cpp:4565-4571). The scripted
-/// spells are stand-ins with the ids and the effect layout of Spell.dbc; the spells they cast are marker auras.
+/// composed world runs a spell's script when its SCRIPT_EFFECT effect hits (vmangos Spell::EffectScriptEffect, SpellEffects.cpp:4565-4571) or,
+/// as the fallback for DUMMY-only spells no code claims, its first DUMMY effect (cmangos behaviour; vmangos hard-codes those spells). The
+/// scripted spells are stand-ins with the ids and the effect layout of Spell.dbc (9096 is DUMMY); the spells they cast are marker auras.
+/// The coded-handler test re-lays 9096 as SCRIPT_EFFECT to give it a ScriptEffectRegistry entry.
 /// </summary>
 public sealed class DbSpellScriptWorldTests
 {
@@ -74,7 +75,7 @@ public sealed class DbSpellScriptWorldTests
     }
 
     [Fact]
-    public async Task RiftSpawnManifestation_Dummy_RunsItsDbScript()
+    public async Task RiftSpawnManifestation_Dummy_RunsItsDbScriptAsTheFallback()
     {
         await using WorldTestHost host = await StartAsync();
         SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
@@ -90,6 +91,38 @@ public sealed class DbSpellScriptWorldTests
 
         await host.WaitForWorldAsync(() => spells.HasAura(player, RiftSpawnBecomesVisible),
             $"dbscripts_on_spell {RiftSpawnManifestation} should cast {RiftSpawnBecomesVisible}");
+    }
+
+    [Fact]
+    public async Task ScriptEffectSpellWithACodedHandlerAndARow_RunsTheHandlerOnce_AndNotTheRow()
+    {
+        await using WorldTestHost host = await StartAsync();
+        SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+        int handlerRuns = 0;
+        await host.OnWorldAsync(() =>
+        {
+            InstallSpells(spells, RiftSpawnManifestation, SpellEffectName.ScriptEffect);
+            ScriptEffectRegistry.For(spells).Add(RiftSpawnManifestation, _ => handlerRuns++);
+        });
+        await using WorldTestClient client = await host.EnterWorldAsync("RIFTCODED", "Riftcoded");
+        Player player = await host.PlayerAsync("Riftcoded");
+
+        await host.OnWorldAsync(() =>
+        {
+            AttachScriptExecutor(host, player);
+            Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, RiftSpawnManifestation, SpellCastTargets.ForSelf(), triggered: true));
+        });
+
+        await host.WaitForWorldAsync(() => handlerRuns > 0, "the coded handler should run");
+        // A row started by the same effect would cast its marker through the executor on the world's update ticks: several round trips
+        // through the world thread stand in for a wall-clock wait.
+        for (int tick = 0; tick < 10; tick++)
+        {
+            await host.OnWorldAsync(() => { });
+        }
+
+        Assert.Equal(1, await host.OnWorldAsync(() => handlerRuns));
+        Assert.False(await host.OnWorldAsync(() => spells.HasAura(player, RiftSpawnBecomesVisible)));
     }
 
     /// <summary>
@@ -114,12 +147,12 @@ public sealed class DbSpellScriptWorldTests
     }
 
     /// <summary>The two scripted spells as Spell.dbc lays them out (effect, implicit target A) and the three marker spells they cast.</summary>
-    private static void InstallSpells(SpellSystem spells)
+    private static void InstallSpells(SpellSystem spells, uint riftId = RiftSpawnManifestation, SpellEffectName riftEffect = SpellEffectName.Dummy)
         => spells.Store = new SpellStore(
         [
             .. spells.Store.All,
             Scripted(LunarCapStormwind, SpellEffectName.ScriptEffect, SpellImplicitTarget.UnitFriend),
-            Scripted(RiftSpawnManifestation, SpellEffectName.Dummy, SpellImplicitTarget.UnitCaster),
+            Scripted(riftId, riftEffect, SpellImplicitTarget.UnitCaster),
             Marker(TeleportStormwind), Marker(PortToMoonglade), Marker(RiftSpawnBecomesVisible),
         ], [], []);
 

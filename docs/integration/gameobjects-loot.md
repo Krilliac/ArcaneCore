@@ -213,7 +213,7 @@ reconcile to Before.
 **Limits (explicit).**
 - **Slice B, item containers, was not delivered here (delivered later: `ItemLootSource`, see the area doc).** Without the `ItemLoot` collaborator `CMSG_OPEN_ITEM` on a lootable item still answers
   LootCantLootThatNow (`LootService.OpenItem`, pinned by `LootServiceTests`). It needs the vmangos
-  behaviour verified first (charter section 1.1/1.5: whether an item whose loot was generated may be traded,
+  behaviour verified first (the ground-truth and no-invented-API rules in [contributing](../guide/contributing.md#the-prime-directives): whether an item whose loot was generated may be traded,
   mailed, sold or destroyed, and whether the generated loot persists), which was not available in this
   session, plus a guid-precise container removal and a transfer guard in `PlayerInventory.CanTransferOut`.
 - **Provenance of the semantics.** The handoff requirement (store generated, remaining and consumed contents

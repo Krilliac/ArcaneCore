@@ -71,6 +71,27 @@ public sealed class ItemLootStoreTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task SaveInventory_WithLoot_RoundTripsTheRandomPropertyOfEachStack(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
+        await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+        var store = new EfItemStore(db);
+        var loot = new ItemLootData(0, [new ItemLootEntry(0, 117, 1, false, 1001), new ItemLootEntry(1, 117, 1, false), new ItemLootEntry(2, 118, 1, true, 1002)]);
+
+        await store.SaveInventoryAsync(7, new InventorySnapshot([new(0, 23, Box(100, loot: loot))]));
+        ItemLootData loaded = (await store.GetInventoryAsync(7)).Single().Item.Loot!;
+        Assert.Equal([1001, 0, 1002], loaded.Items.Select(i => i.RandomPropertyId));
+
+        // The property of a kept stack is rewritten with its row, not left stale.
+        var changed = new ItemLootData(0, [new ItemLootEntry(0, 117, 1, false, 1003), new ItemLootEntry(2, 118, 1, true, 1002)]);
+        await store.SaveInventoryAsync(7, new InventorySnapshot([new(0, 23, Box(100, loot: changed))]));
+        Assert.Equal(changed, (await store.GetInventoryAsync(7)).Single().Item.Loot);
+        Assert.NotEqual(loot, changed);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task SaveInventory_UpdatesTheLootWhenStacksAreTaken_AndClearsItWhenTheItemHasNone(DatabaseProvider provider)
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);

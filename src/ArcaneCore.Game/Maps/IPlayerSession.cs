@@ -34,6 +34,12 @@ public interface IPlayerSession
     /// </summary>
     bool IsPlayerbot => false;
 
+    /// <summary>
+    /// True once the connection is closed for good (the client left or was kicked). A player detached for a cluster transfer while its session closed is not logged out by
+    /// the close (it was in no map), so whoever puts it back must see this and log it out. Test doubles and playerbots return false. Thread-safe.
+    /// </summary>
+    bool IsDisconnected => false;
+
     /// <summary>Queue a packet for this client. Thread-safe; never blocks on the socket.</summary>
     void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 

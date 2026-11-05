@@ -24,7 +24,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 [Collection(MeterCollection)] // its raids move the process-wide world-boss meter that the other world-boss tests count
 public sealed class PlayerbotWorldBossGuardTests
 {
-    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix) => AddBotsAsync(world, prefix, 2, 3, 4);
+    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix) => AddBotsAsync(world, prefix, 2, 3, 4, parkSpares: true);
 
     private static string Key(string code) => PlayerbotGroupAnomalies.Key(code);
 

@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using System.Data;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Schema;
@@ -72,7 +74,7 @@ public sealed class ScourgeInvasionDataModule : IDataModule, ICharacterDataClean
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourgeInvasionStateStore
+public sealed class EfScourgeInvasionStateStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IScourgeInvasionStateStore
 {
     public async Task<ScourgeInvasionSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -113,6 +115,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
 
     public async Task<bool> StartAsync(CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         await using SqliteRewardWriterCoordinator.Lease writer =
             await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
@@ -136,6 +139,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         await using SqliteRewardWriterCoordinator.Lease writer =
             await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
@@ -157,6 +161,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
     public async Task<bool> NecropolisDestroyedAsync(uint zoneId, uint spawnGuid, long nowUnix, int nextAttackSeconds,
         CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         if (ScourgeInvasionCatalog.ForZone(zoneId) is null || spawnGuid == 0 || nextAttackSeconds is < 2700 or > 3600)
             throw new ArgumentOutOfRangeException(nameof(zoneId));
         await using SqliteRewardWriterCoordinator.Lease writer =
@@ -184,6 +189,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
 
     public async Task<bool> RestartZoneAsync(uint zoneId, long nowUnix, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         ScourgeInvasionZone? definition = ScourgeInvasionCatalog.ForZone(zoneId);
         if (definition is null) throw new ArgumentOutOfRangeException(nameof(zoneId));
         await using SqliteRewardWriterCoordinator.Lease writer =
@@ -210,6 +216,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
     public async Task<bool> ClaimCityAttackAsync(uint zoneId, long nowUnix, int nextAttackSeconds,
         CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         if (ScourgeInvasionCatalog.ForCity(zoneId) is null
             || nextAttackSeconds is < ScourgeInvasionCatalog.CityAttackTimerMinSeconds or > ScourgeInvasionCatalog.CityAttackTimerMaxSeconds)
             throw new ArgumentOutOfRangeException(nameof(zoneId));
@@ -232,6 +239,7 @@ public sealed class EfScourgeInvasionStateStore(CharacterDbContext db) : IScourg
     public async Task<bool> CityAttackDefeatedAsync(uint zoneId, long nowUnix, int nextAttackSeconds,
         CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         if (ScourgeInvasionCatalog.ForCity(zoneId) is null
             || nextAttackSeconds is < ScourgeInvasionCatalog.CityAttackTimerMinSeconds or > ScourgeInvasionCatalog.CityAttackTimerMaxSeconds)
             throw new ArgumentOutOfRangeException(nameof(zoneId));

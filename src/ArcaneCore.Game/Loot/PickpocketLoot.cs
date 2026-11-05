@@ -16,8 +16,9 @@ namespace ArcaneCore.Game.Loot;
 /// build 5875 (Spell.cpp:5466-5470).
 /// </summary>
 /// <remarks>
-/// Not modelled: a missed Pick Pocket breaking stealth and starting combat (vmangos Spell.cpp:1225-1243) needs the stealth and threat primitives of
-/// the rogue and combat lanes; <c>LOOT_ERROR_ALREADY_PICKPOCKETED</c> is never sent (vmangos does not send it either).
+/// A missed or resisted Pick Pocket breaks stealth and engages the target (vmangos Spell.cpp:1225-1244): that is the spell system's miss path
+/// (<c>SpellSystem.ApplyMissedTarget</c>, keyed on <see cref="SpellAttributesEx.FailureBreaksStealth"/>), not this class's. Not modelled:
+/// <c>LOOT_ERROR_ALREADY_PICKPOCKETED</c> is never sent (vmangos does not send it either).
 /// </remarks>
 public sealed class PickpocketLoot(LootService loot, Random? random = null) : ILootReleaseHandler
 {
@@ -76,7 +77,7 @@ public sealed class PickpocketLoot(LootService loot, Random? random = null) : IL
         List<Player> recipients = loot.RecipientsFor(player, creature, out _);
         if (!state.Picked)
         {
-            LootBag fresh = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients);
+            LootBag fresh = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients, lootTarget: creature);
             uint a = (uint)_random.Next(0, (creature.Level / 2) + 1);
             uint b = (uint)_random.Next(0, (player.Level / 2) + 1);
             fresh.Gold += (uint)Math.Min(10.0 * (a + b) * loot.Options.MoneyRate, LootService.MaxMoneyAmount);
@@ -87,7 +88,7 @@ public sealed class PickpocketLoot(LootService loot, Random? random = null) : IL
         else if (state.Bag is null || !state.Allowed.Contains(player.Guid))
         {
             // Not an original looter, or nothing left: only the quest items this player needs, no money (LootMgr.h:329-332 leaveOnlyQuestItems).
-            LootBag questOnly = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients);
+            LootBag questOnly = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients, lootTarget: creature);
             questOnly.KeepOnlyQuestItems();
             state.Bag = questOnly;
         }

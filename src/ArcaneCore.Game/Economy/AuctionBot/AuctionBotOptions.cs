@@ -65,6 +65,21 @@ public sealed class AuctionBotOptions
     public uint MaxRequiredLevel { get; set; } = 60;
 
     /// <summary>
+    /// Take the required level cap from the highest level of the characters online (cMaNGOS AuctionHouseBot.Level.DynamicMaxRequired, default
+    /// false). With nobody online the cap in force stays; <see cref="MaxRequiredLevel"/> is the start value.
+    /// </summary>
+    public bool DynamicMaxRequiredLevel { get; set; }
+
+    /// <summary>Minutes between refreshes of the dynamic level cap (cMaNGOS AuctionHouseBot.Level.DynamicRefreshInterval, at least 1, default 10).</summary>
+    public uint DynamicRefreshMinutes { get; set; } = 10;
+
+    /// <summary>
+    /// Highest item level of a listed item (ArcaneCore, 0-1000). 0 (the default) derives it as cMaNGOS does: no cap when the required level
+    /// cap is 60 or more, else that cap + 5.
+    /// </summary>
+    public uint MaxItemLevel { get; set; }
+
+    /// <summary>
     /// Deprecated override of the <c>auction_bot_value</c> rows (quality 0, poor): price of poor items per item class as a percent of the vendor price, 17
     /// comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). Empty (the default) takes the rows; a value overrides them
     /// and logs a warning at start. The key goes in a later release.
@@ -152,7 +167,7 @@ public sealed class AuctionBotOptions
     /// <summary>Deprecated override of the "fishing" row (fishing_loot_template); see <see cref="LootCreatureNormal"/>.</summary>
     public string LootFishing { get; set; } = string.Empty;
 
-    /// <summary>Deprecated override of the "gameobject" row (gameobject_loot_template, every table; cMaNGOS only takes chests that respawn); see <see cref="LootCreatureNormal"/>.</summary>
+    /// <summary>Deprecated override of the "gameobject" row (the gameobject_loot_template tables of objects that are spawned and respawn, as cMaNGOS); see <see cref="LootCreatureNormal"/>.</summary>
     public string LootGameobject { get; set; } = string.Empty;
 
     /// <summary>Deprecated override of the "skinning" row (skinning_loot_template); see <see cref="LootCreatureNormal"/>.</summary>
@@ -310,6 +325,13 @@ public sealed class AuctionBotOptions
         TimeMaxHours = Range(nameof(TimeMaxHours), TimeMaxHours, 1, 72, defaults.TimeMaxHours);
         BuyValuePercent = Range(nameof(BuyValuePercent), BuyValuePercent, 0, 200, defaults.BuyValuePercent);
         MaxRequiredLevel = Range(nameof(MaxRequiredLevel), MaxRequiredLevel, 1, 255, defaults.MaxRequiredLevel);
+        MaxItemLevel = Range(nameof(MaxItemLevel), MaxItemLevel, 0, 1000, defaults.MaxItemLevel);
+        if (DynamicRefreshMinutes == 0)
+        {
+            fixes.Add($"{SectionName}:{nameof(DynamicRefreshMinutes)} must be at least 1; using {defaults.DynamicRefreshMinutes}.");
+            DynamicRefreshMinutes = defaults.DynamicRefreshMinutes;
+        }
+
         StackPercentMin = Range(nameof(StackPercentMin), StackPercentMin, 0, 100, defaults.StackPercentMin);
         StackPercentMax = Range(nameof(StackPercentMax), StackPercentMax, 0, 100, defaults.StackPercentMax);
         if (UpdateIntervalSeconds == 0)

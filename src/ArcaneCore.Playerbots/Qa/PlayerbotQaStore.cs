@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace ArcaneCore.World.Playerbots.Qa;
 
 /// <summary>The create/comment times the hourly caps are counted from (they must survive a restart, or a restart loop would flood GitHub).</summary>
-internal sealed record QaLedgerState(DateTime[] CreatesUtc, DateTime[] CommentsUtc, DateTime[]? SpellCreatesUtc = null, DateTime[]? StatusEditsUtc = null);
+internal sealed record QaLedgerState(DateTime[] CreatesUtc, DateTime[] CommentsUtc, DateTime[]? SpellCreatesUtc = null, DateTime[]? StatusEditsUtc = null, DateTime[]? ServerCreatesUtc = null);
 
 /// <summary><c>qa/findings.json</c>: the format version, the bot-hash salt, the findings, the bot hashes and the publish ledger.</summary>
 internal sealed record QaStoreFile

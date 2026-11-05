@@ -1,6 +1,6 @@
 namespace ArcaneCore.Game.Creatures;
 
-/// <summary>AzerothCore SmartScriptMgr.h SMART_EVENT values that slices 1 and 2 run (the numbering is AzerothCore's, so rows port unchanged).</summary>
+/// <summary>AzerothCore SmartScriptMgr.h SMART_EVENT values that slices 1-3 run (the numbering is AzerothCore's, so rows port unchanged).</summary>
 public enum SmartEvent : byte
 {
     UpdateInCombat = 0,
@@ -16,11 +16,15 @@ public enum SmartEvent : byte
     Respawn = 11,
     FriendlyHealth = 14,
     SummonedUnit = 17,
+    RewardQuest = 20,
     ReachedHome = 21,
     ReceiveEmote = 22,
     Reset = 25,
+    MovementInform = 34,
     AiInit = 37,
+    DataSet = 38,
     AreaTriggerOnTrigger = 46,
+    TextOver = 52,
     TimedEventTriggered = 59,
     Update = 60,
     Link = 61,
@@ -54,10 +58,12 @@ public enum SmartAction : byte
     RemoveAurasFromSpell = 28,
     RandomPhase = 30,
     RandomPhaseRange = 31,
+    SetInstData = 34,
     Die = 37,
     CallForHelp = 39,
     ForceDespawn = 41,
     AttackStart = 49,
+    SummonGo = 50,
     CreateTimedEvent = 67,
     MoveToPos = 69,
     TriggerTimedEvent = 73,
@@ -108,4 +114,28 @@ public enum SmartCastFlags : uint
     Triggered = 0x002,
     AuraNotPresent = 0x020,
     ThreatListNotSingle = 0x080,
+}
+
+/// <summary>
+/// The movement-type numbering of AzerothCore's MotionMaster.h (MovementGeneratorType, :38-61), which is what SMART_EVENT_MOVEMENTINFORM's type
+/// column and the ported <c>smart_scripts</c> rows use. ArcaneCore's <see cref="MovementGeneratorType"/> follows vmangos, so the two differ.
+/// </summary>
+public static class SmartMotionTypes
+{
+    /// <summary>The AzerothCore number of <paramref name="type"/>, or null when AzerothCore has no matching generator (nothing is raised then).</summary>
+    public static uint? ToSmart(MovementGeneratorType type) => type switch
+    {
+        MovementGeneratorType.Idle => 0,
+        MovementGeneratorType.Random => 1,
+        MovementGeneratorType.Waypoint => 2,
+        MovementGeneratorType.Confused => 4,
+        MovementGeneratorType.Chase => 5,
+        MovementGeneratorType.Home => 6,
+        MovementGeneratorType.Point => 8,
+        MovementGeneratorType.Fleeing => 9,
+        MovementGeneratorType.Distract => 10,
+        MovementGeneratorType.Follow => 14,
+        MovementGeneratorType.Formation => 18,
+        _ => null,
+    };
 }

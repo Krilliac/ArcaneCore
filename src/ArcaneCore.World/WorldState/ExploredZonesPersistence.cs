@@ -20,10 +20,12 @@ namespace ArcaneCore.World.WorldState;
 /// the login instead of showing a re-explored map. With no <see cref="IExploredZonesStore"/>
 /// registered the words live in memory only.
 /// </summary>
-public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers, ShutdownDrain? drain = null)
+public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILoggerFactory loggers, ShutdownDrain? drain = null, CharacterRetirementRegistry? retirement = null)
     : IWorldFeature, ICharacterHooks, IExploredZonesSink
 {
-    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>(), drain?.Features);
+    private readonly ExploredZonesWriteQueue _writes = new(scopes, loggers.CreateLogger<ExploredZonesWriteQueue>(), drain?.Features) { Retirement = retirement };
+
+    private WorldRuntime? _world;
 
     public ExploredZonesWriteQueue Writes => _writes;
 
@@ -32,7 +34,9 @@ public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILogge
         ArgumentNullException.ThrowIfNull(world);
         _writes.Start();
         WorldStateHooks.For(world).ExploredZonesSink = this;
+        _world = world;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += Changed;
     }
 
     /// <summary>A change in the player's words: persist the current state (world thread).</summary>
@@ -44,6 +48,11 @@ public sealed class ExploredZonesPersistence(IServiceScopeFactory scopes, ILogge
 
     private void OnPlayerLoggingOut(Player player)
     {
+        if (_world is { IsRetiringTransferredPlayer: true })
+        {
+            return; // retired after a committed transfer: the target owns the row
+        }
+
         int characterId = (int)player.Guid.Low;
         _writes.Save(characterId, ExploredZonesFields.Read(player));
         if (_writes.HasRetainedFailure(characterId))

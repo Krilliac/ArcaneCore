@@ -248,7 +248,7 @@ The design's NQ0 imports eleven new tables. Only the table with a finished consu
 * **Importer.** `ConditionsDumpImporter` reads the cmangos/classic-db `conditions` INSERTs by column name through the
   existing `MySqlDumpReader`, keeps later rows over earlier ones (counted as `Replaced`), reads the `db_version`
   row text into the report so an un-updated dump is visible, rejects a bad value (non-numeric, negative unsigned,
-  flags above 255) instead of writing a zero, and **refuses the vmangos layout** (no `value3/value4` columns) because
+  flags above 255) instead of writing a zero, and **refuses the vmangos layout** (no `comments` column) because
   vmangos's type numbering differs from the cmangos numbering the evaluator implements. `WriteAsync(db, replace)` is
   atomic with the same transaction contract as the other importers (caller transaction protected by a savepoint, a
   failure restores the previous rows).
@@ -328,7 +328,7 @@ Single list of every place this lane differs from vmangos/retail. "Switch" means
   `ConditionsDumpImporter` implement one numbering (cmangos, `Conditions.h:30-82`) because the classic-db
   dataset is written in it. vmangos numbers 11, 13, 27, 35 and 51 differently, so a vmangos world database's
   `conditions` rows (and `Quest.RequiredCondition` ids that point into them) are not evaluated; the importer
-  refuses the vmangos layout (no `value3/value4` columns) instead of misreading it. Choosing a numbering per
+  refuses the vmangos layout (no `comments` column) instead of misreading it. Choosing a numbering per
   dataset (a `Conditions:Numbering` option) is not implemented; the default is therefore dataset-dependent: classic-db
   works, vmangos data does not.
 * **Game object interaction ignores the display-bounds box**: no switch, see "Slice NQ7 / Limits".

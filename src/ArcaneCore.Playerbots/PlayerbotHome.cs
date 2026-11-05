@@ -30,8 +30,10 @@ namespace ArcaneCore.World.Playerbots;
 /// top-level parent area) at that position, from the terrain's area flag (<see cref="PlayerbotZoneLookup"/>; vmangos
 /// <c>TerrainInfo::GetZoneAndAreaId</c> through <see cref="ArcaneCore.Game.Maps.Terrain.AreaTable.GetZoneAndAreaId"/>, the lookup
 /// <c>Map.GetZoneAndAreaId</c> uses). The home's zone is the zone at its centre. A position whose zone the terrain does not know
-/// (0) is outside (fail closed); a clipped home whose own centre has no known zone (<see cref="ZoneUnknown"/>) contains nothing at
-/// all, so its filters reject every creature, quest and destination until the operator re-homes it (or homes it with <c>nozone</c>).
+/// (0) is outside (fail closed); a clipped home whose own centre has no known zone (<see cref="ZoneUnknown"/>) contains nothing in
+/// the zone sense, so its creature, quest and destination filters reject everything until the operator re-homes it (or homes it with
+/// <c>nozone</c>). The wander's mesh-point fallback and zone-border deflect are the exception: with no zone to keep to they are limited by
+/// the home circle alone.
 /// </para>
 /// <para>
 /// Thread affinity: world thread only (the quest and entry caches are plain dictionaries, the zone lookup reads the terrain). The area
@@ -64,7 +66,7 @@ internal sealed class PlayerbotHomeArea
 
     /// <summary>
     /// A home; with <paramref name="zoneClipped"/> it is clipped to the zone <paramref name="zones"/> reports at the centre (no lookup,
-    /// or a centre whose zone is not known: <see cref="ZoneUnknown"/>, and the area contains nothing).
+    /// or a centre whose zone is not known: <see cref="ZoneUnknown"/>, and <see cref="InZone"/> holds for nothing).
     /// </summary>
     /// <remarks>
     /// The centre's zone is looked up on first use, not here: brains are built off the world thread too (a bot's start), and the
@@ -140,7 +142,7 @@ internal sealed class PlayerbotHomeArea
         }
     }
 
-    /// <summary>A clipped home whose centre's zone is not known: it contains nothing (fail closed).</summary>
+    /// <summary>A clipped home whose centre's zone is not known: no position is in its zone (<see cref="InZone"/> fails closed); the wander fallback is then limited by the circle alone.</summary>
     internal bool ZoneUnknown => ZoneClipped && ZoneId == 0;
 
     /// <summary>
@@ -475,6 +477,12 @@ internal sealed partial class PlayerbotHomeReturn
     private uint _lastTeleportAt;
 
     internal PlayerbotHomeState State { get; private set; }
+
+    /// <summary>
+    /// A walk-only return (the defense responders' private walker): <see cref="Update"/> never starts a tram, lift or taxi ride, and the owner never calls
+    /// <see cref="Judge"/> or <see cref="TryTeleport"/>, so a responder only ever walks.
+    /// </summary>
+    internal bool WalkOnly { get; init; }
 
     /// <summary>The two-dimensional distance to the centre at the last <see cref="Evaluate"/> (NaN off the home map).</summary>
     internal float Distance { get; private set; } = float.NaN;
@@ -915,8 +923,9 @@ internal sealed partial class PlayerbotHomeReturn
         if (_route is null)
         {
             PlayerbotRoute? walk = null;
-            if (PlayerbotTram.TryBegin(session, player, area.Centre)
-                || PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk))
+            if (!WalkOnly
+                && (PlayerbotTram.TryBegin(session, player, area.Centre)
+                    || PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk)))
             {
                 _routeStartDistance = MathF.Min(distance, _bestDistance);
                 _routePlannedDistance = walk?.Distance ?? 0f;
@@ -933,9 +942,9 @@ internal sealed partial class PlayerbotHomeReturn
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
-                if (PlayerbotElevator.IsHeldOff(session, player, area.Centre) || PlayerbotTram.IsHeldOff(session, player, area.Centre))
+                if (!WalkOnly && (PlayerbotElevator.IsHeldOff(session, player, area.Centre) || PlayerbotTram.IsHeldOff(session, player, area.Centre)))
                     return false;
-                if (player.Map is { } map && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, area.Centre, options) == TaxiTravel.Traveling)
+                if (!WalkOnly && player.Map is { } map && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, area.Centre, options) == TaxiTravel.Traveling)
                 {
                     _failures = 0;
                     _legProgressed = true;

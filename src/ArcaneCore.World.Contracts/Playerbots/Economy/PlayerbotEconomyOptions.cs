@@ -98,7 +98,7 @@ public sealed class PlayerbotEconomyOptions
     public int MaxListingsPerHour { get; set; } = 10;
 
     /// <summary>
-    /// The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a buyout counts when the house confirms it, so bots with buyouts in flight together can overshoot it by their number.
+    /// The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A buyout counts when the bot's money falls or the won item arrives (a settle that only took money counts too) and for a bid still pending when the visit aborts (outcome unknown). It is a soft limit: the limit is checked when a bot sends, so bots with buyouts in flight together can overshoot it by their number.
     /// </summary>
     public int HouseBuyoutsPerHour { get; set; } = 200;
 

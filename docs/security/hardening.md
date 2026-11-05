@@ -68,9 +68,11 @@ down sooner. `StalledWriterTests`, `WriterTeardownBoundTests`.
 * Client text goes through `LogSafe.Escape` before logging (CR/LF/ESC and format characters
   escaped, 64-character cap) to stop log forging. The log sinks also escape control and format characters themselves
   (`LogLineFormatter.AppendEscaped`); `LogSafe` still does the truncation.
+  The text sinks do not escape the backslash itself, so an escape in a log line is not proof that the message contained that character:
+  a literal `\n` and an escaped line feed read alike (a line cannot be forged either way).
 * `Realm/appsettings.json` ships `AutocreateAccounts: false` (was `true`). **Deviation from the
   WCell convenience, not from retail** (vmangos has no autocreate). README.md and
-  docs/M1_ACCEPTANCE.md describe enabling it as an opt-in dev convenience; accounts are normally
+  docs/guide/client-acceptance.md describe enabling it as an opt-in dev convenience; accounts are normally
   created with `arcane-account create`.
 
 ### Connection admission and accept-loop resilience (F7, listener half)

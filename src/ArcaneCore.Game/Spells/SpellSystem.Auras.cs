@@ -350,6 +350,14 @@ public sealed partial class SpellSystem
 
     internal void AddAuraHolder(SpellAuraHolder holder)
     {
+        if (!StackGuard.TryEnter("spell.aura-apply"))
+        {
+            // Nested aura applies too deep for the stack: this one is dropped (the fault is recorded). Marked removed, as a refused holder is below,
+            // so an area parent that registered it as a child (AreaChildren) treats the child as gone and applies it again on its next update.
+            holder.IsRemoved = true;
+            return;
+        }
+
         ValidateAuraHolder(holder, requirePositiveDuration: true);
         holder.ResolvePolarity(Store.Get);
         UnitSpellState state = GetOrCreateState(holder.Target);
@@ -976,8 +984,10 @@ public sealed partial class SpellSystem
 
     private void RemoveHolder(UnitSpellState state, SpellAuraHolder holder, AuraRemoveMode mode = AuraRemoveMode.Default)
     {
-        if (holder.IsRemoved)
+        if (holder.IsRemoved || !StackGuard.TryEnter("spell.aura-remove"))
         {
+            // Already gone, or nested removals too deep for the stack (the fault is recorded). A cut holder is not marked removed, so it stays
+            // attached and is tried again: a timed aura at its next update once its duration is out, any aura by the next explicit removal.
             return;
         }
 
@@ -1188,6 +1198,14 @@ public sealed partial class SpellSystem
         uint original = amount + resisted;
         uint absorbed = AbsorbDamage(caster, target, holder.Spell.SchoolMask(), amount, holder.Spell, periodic: true);
         amount -= absorbed;
+        // vmangos Aura::PeriodicTick runs pCaster->DealDamageMods(target, pdamage, &absorb) after the absorb step and before the procs and the log
+        // (SpellAuras.cpp:5900, :5975): a dead, taxi-flying or evading victim, or a priest caster under Spirit of Redemption, takes nothing and the
+        // log shows the whole tick absorbed. Only with a live caster: a tick whose caster is gone has no pCaster to run it.
+        if (resolvedCaster is not null && target.Map?.FindUpdater<Combat.MapCombat>() is { } mapCombat)
+        {
+            mapCombat.DealDamageMods(caster, target, ref amount, ref absorbed);
+        }
+
         if (ResolveAuraCaster(holder) is { } procCaster)
         {
             FirePeriodicDamageProcs(procCaster, target, holder.Spell, amount, original); // SpellAuras.cpp:5902-5917, before the damage

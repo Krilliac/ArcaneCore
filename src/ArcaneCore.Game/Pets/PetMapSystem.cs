@@ -319,15 +319,19 @@ public sealed class PetMapSystem : IMapUpdater
     public void OnPlayerRemoved(Map map, Player player)
     {
         // A map removal also happens on far-map transfer. Save the stable pet identity and state
-        // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal).
-        _service?.QueueCurrentPetSave(player);
+        // before the transient world GUID is destroyed (vmangos Pet::SavePetToDB before removal). A cluster transfer's detach does not: its capture
+        // (PlayerTransferPreparing) already queued the pet, and after the commit the pet row is the target's.
+        if (!map.World.IsDetachingForTransfer)
+        {
+            _service?.QueueCurrentPetSave(player);
+        }
 
         // The owner leaves the map, so its summons cannot stay (vmangos Player::RemoveFromWorld unsummons totems and the mini pet,
         // Unit::RemoveFromWorld the guardians and the pet). A far teleport has already put the pet away by then and brings it back in
         // the new map (PetTeleportFollow, vmangos UnsummonPetTemporaryIfAny); guardians and mini pets stay gone.
         foreach (Creature creature in SummonsOf(player).ToArray())
         {
-            _service?.Unsummon(creature);
+            _service?.Unsummon(creature, PetUnsummonReason.OwnerLeft);
         }
     }
 
@@ -375,7 +379,7 @@ public sealed class PetMapSystem : IMapUpdater
                 // TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN: unsummoned once out of combat; a dead one is left to its corpse.
                 if (wild.IsAlive && !wild.Combat.IsInCombat)
                 {
-                    _service?.Unsummon(wild);
+                    _service?.Unsummon(wild, PetUnsummonReason.Expired);
                 }
 
                 return;
@@ -418,7 +422,7 @@ public sealed class PetMapSystem : IMapUpdater
 
         if (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid)
         {
-            _service?.Unsummon(pet); // replaced by another pet: not the owner's current one, so not saved
+            _service?.Unsummon(pet, PetUnsummonReason.Replaced); // replaced by another pet: not the owner's current one, so not saved
             return;
         }
 
@@ -433,7 +437,7 @@ public sealed class PetMapSystem : IMapUpdater
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.OwnerDied);
             }
 
             return;
@@ -449,7 +453,7 @@ public sealed class PetMapSystem : IMapUpdater
                 {
                     _service?.QueueCurrentPetSave(player);
                 }
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.CorpseDecayed);
             }
 
             return;
@@ -462,7 +466,7 @@ public sealed class PetMapSystem : IMapUpdater
             {
                 _service?.QueueCurrentPetSave(player);
             }
-            _service?.Unsummon(pet);
+            _service?.Unsummon(pet, PetUnsummonReason.OwnerDied);
             return;
         }
 
@@ -481,7 +485,7 @@ public sealed class PetMapSystem : IMapUpdater
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.Expired);
             }
         }
     }

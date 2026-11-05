@@ -28,6 +28,8 @@ public static class PvpAreaState
     private sealed class Box
     {
         public bool Value;
+        public bool WarModeExempt;
+        public bool WarModeKnown;
     }
 
     private static readonly ConditionalWeakTable<Player, Box> s_states = new();
@@ -36,6 +38,77 @@ public static class PvpAreaState
     public static bool IsInEnforcedArea(Player player) => s_states.TryGetValue(player, out Box? box) && box.Value;
 
     internal static void Set(Player player, bool value) => s_states.GetValue(player, _ => new Box()).Value = value;
+
+    /// <summary>
+    /// Whether War Mode (<see cref="WarModeOptions"/>) leaves the player alone here: the player stands in an exempt area
+    /// (<see cref="WarModeAreas.IsExempt"/>, kept by <see cref="PvpAreaTracker"/> on every zone and area change) or on a battleground map,
+    /// where nothing changes. A player the tracker has not placed yet is not exempt here (see <see cref="IsWarModeProtected"/> for the attackers' view).
+    /// </summary>
+    public static bool IsWarModeExempt(Player player)
+        => player.Map?.Template?.IsBattleground == true || (s_states.TryGetValue(player, out Box? box) && box.WarModeExempt);
+
+    /// <summary>
+    /// Whether <see cref="PvpAreaTracker"/> has placed the player yet. War Mode forces no flag before that: a player who logs in inside a capital
+    /// would otherwise be flagged by the first combat tick, which can run before the first zone update, and keep the flag for five minutes.
+    /// </summary>
+    public static bool IsWarModeKnown(Player player) => s_states.TryGetValue(player, out Box? box) && box.WarModeKnown;
+
+    /// <summary>
+    /// Whether an attacker (a bot starting, helping or hunting) must leave the player alone: <see cref="IsWarModeExempt"/>, or the tracker has not placed the
+    /// player yet, so nobody is attacked before the zone is known. World thread.
+    /// </summary>
+    public static bool IsWarModeProtected(Player player) => IsWarModeExempt(player) || !IsWarModeKnown(player);
+
+    internal static void SetWarModeExempt(Player player, bool value)
+    {
+        Box box = s_states.GetValue(player, _ => new Box());
+        box.WarModeExempt = value;
+        box.WarModeKnown = true;
+    }
+}
+
+/// <summary>
+/// The areas War Mode never force-flags. An area is exempt when it, or its zone, is in <c>World:WarMode:ExemptAreas</c> (the neutral towns, which the 1.12.1 table
+/// flags neither Capital nor City), or when its flags (or those of its zone) include Capital or City and its owning team is
+/// the player's own team or no team; an enemy-faction capital is not exempt. An arena is exempt too, so
+/// arenas keep their own rules. The sanctuary area flag is not used: it does not exist in 1.12.1 (vmangos <c>Database/DBCEnums.h:55-64</c> lists
+/// AreaFlags only up to 0x200, mangoszero <c>Server/DBCEnums.h:51-60</c> the same), so there is no value to verify it against.
+/// </summary>
+public static class WarModeAreas
+{
+    /// <summary>
+    /// Whether a player of <paramref name="playerTeam"/> in <paramref name="area"/> (inside <paramref name="zone"/>, which may be the same entry) is in an exempt area.
+    /// An entry's own team wins; one without a team takes its zone's.
+    /// </summary>
+    public static bool IsExempt(AreaTemplate? area, AreaTemplate? zone, Team playerTeam, IReadOnlySet<uint>? exemptIds = null)
+        => IsExemptEntry(area, zone, playerTeam, exemptIds) || (!ReferenceEquals(area, zone) && IsExemptEntry(zone, zone, playerTeam, exemptIds));
+
+    private static bool IsExemptEntry(AreaTemplate? entry, AreaTemplate? zone, Team playerTeam, IReadOnlySet<uint>? exemptIds)
+    {
+        if (entry is null)
+        {
+            return false;
+        }
+
+        var flags = (AreaFlags)entry.Flags;
+        if ((flags & AreaFlags.Arena) != 0)
+        {
+            return true;
+        }
+
+        if (exemptIds is not null && (exemptIds.Contains(entry.Entry) || (zone is not null && exemptIds.Contains(zone.Entry))))
+        {
+            return true; // a listed neutral town (the 1.12.1 table flags neither Capital nor City on them)
+        }
+
+        if ((flags & (AreaFlags.Capital | AreaFlags.City)) == 0)
+        {
+            return false;
+        }
+
+        uint team = entry.Team != AreaTeams.None ? entry.Team : zone?.Team ?? AreaTeams.None;
+        return team == AreaTeams.None || team == (playerTeam == Team.Alliance ? AreaTeams.Ally : AreaTeams.Horde);
+    }
 }
 
 /// <summary>vmangos <c>Player::UpdateZone</c>' PvP part (Player.cpp:6612-6636) and the PvP part of <c>UpdateArea</c> (:6566-6580).</summary>
@@ -75,12 +148,14 @@ public sealed class PvpAreaTracker(WorldStateHooks hooks) : IPlayerLocationListe
     {
         if (zoneEntry is null)
         {
+            PvpAreaState.SetWarModeExempt(player, false); // a place the zone table cannot name is no exempt area
             return; // vmangos returned before this point for an unknown zone
         }
 
         PvpRealmMode realm = hooks.Zones.PvpRealmMode;
         bool enforced = PvpAreaRules.IsEnforced(zoneEntry.Team, (AreaFlags)zoneEntry.Flags, player.Team, realm, inBattleground: player.Map?.Template?.IsBattleground == true);
         PvpAreaState.Set(player, enforced);
+        PvpAreaState.SetWarModeExempt(player, WarModeAreas.IsExempt(hooks.Locator.Find(newArea) ?? zoneEntry, zoneEntry, player.Team, hooks.WarMode.ExemptAreaIds()));
 
         if (enforced)
         {
@@ -99,6 +174,8 @@ public sealed class PvpAreaTracker(WorldStateHooks hooks) : IPlayerLocationListe
     {
         // FFA flags are area and not zone dependent (Player::UpdateArea)
         AreaTemplate? area = hooks.Locator.Find(newArea);
+        AreaTemplate? zone = area is null ? null : area.IsZone ? area : hooks.Locator.Find(area.ZoneId);
+        PvpAreaState.SetWarModeExempt(player, WarModeAreas.IsExempt(area, zone, player.Team, hooks.WarMode.ExemptAreaIds()));
         if (area is not null && (area.Flags & (uint)AreaFlags.Arena) != 0)
         {
             if (!player.IsGameMaster)

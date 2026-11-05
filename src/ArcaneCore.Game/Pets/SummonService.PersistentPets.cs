@@ -760,11 +760,9 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
-            if (owner.Class == Class.Hunter)
-            {
-                creature.IgnoreTemplateResistances = true; // a tamed beast loses its innate resistances (Patch 1.3.0)
-                creature.ApplyCreateResistances();
-            }
+            creature.SetUInt32(UpdateFields.UnitFieldPetnumber, snapshot.PetNumber); // a permanent pet: SetPetNumber(n, true), Pet.cpp:262
+            // A persistent pet is a HUNTER_PET by kind: a tamed beast loses its innate resistances (Patch 1.3.0), keyed on the pet and not the owner's class.
+            creature.MarkHunterPetKind();
 
             if (creature.Summon.Charm is { } initCharm)
             {
@@ -791,7 +789,15 @@ public sealed partial class SummonService
                 ? Math.Clamp(snapshot.Health, 1u, creature.MaxHealth)
                 : Math.Min(snapshot.Health, creature.MaxHealth);
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(snapshot.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
-            creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
+            if (owner.Class == Class.Hunter)
+            {
+                // Pet.cpp:382-384: happiness bar (max 1 050 000), Focus power type, 100 focus.
+                PetPower.InitHunterPet(creature, snapshot.Happiness);
+            }
+            else
+            {
+                creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
+            }
             if (creature.Summon.Charm is { } reactCharm)
             {
                 reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
@@ -863,8 +869,7 @@ public sealed partial class SummonService
         AttachPetAi(pet);
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
-        owner.Session.Send(WorldOpcode.SmsgPetSpells,
-            PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+        SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         if (_spells is { } auraSpells)
         {

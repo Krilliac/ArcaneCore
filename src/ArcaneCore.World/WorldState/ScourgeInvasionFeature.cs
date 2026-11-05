@@ -31,6 +31,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private readonly List<StoreOp> _ops = [];
     private readonly Dictionary<uint, (int SpawnIndex, uint Entry)> _unsummonedCityAttacks = [];
     private OffThreadStoreWork? _store;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
     private Func<Func<Task>, Task>? _offload;
     private ScourgeInvasionState? _intendedState;
     private bool _refreshDue;
@@ -67,6 +68,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
     }
 
+    /// <summary>
+    /// Whether this node makes the durable invasion writes (start and stop, Necropolis deaths, zone restarts, city attack claims): always with no lease keeper (Combined, tests), on a clustered node
+    /// only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState"/> lease. A non-holder keeps running the invasion in memory from the stored state it reloads (writer-lock design section 2b; decision Q10).
+    /// </summary>
+    internal bool HoldsWorldStateLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_leaseKeeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState);
+
     /// <summary>The single-flight store runner (null before <see cref="Attach"/>); tests read its job count.</summary>
     internal OffThreadStoreWork? StoreWork => _store;
 
@@ -80,6 +87,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (_offload is not null) _store.Offload = _offload;
         using (IServiceScope scope = scopes.CreateScope())
         {
+            _leaseKeeper = scope.ServiceProvider.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
             if (scope.ServiceProvider.GetService<IScourgeInvasionStateStore>() is { } store)
             {
                 _hasStore = true;
@@ -304,9 +312,19 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             && Snapshot.Remaining(zoneId) > 0
             && _events?.IsActiveEvent(zone.EventId) == true;
 
-    internal void OnNecropolisDied(Creature creature)
+    internal void OnNecropolisDied(Creature creature, CreatureMapSystem? system)
     {
         if (!_hasStore || creature.Entry != ScourgeInvasionCatalog.NecropolisHealth) return;
+        // NecropolisHealthAI::JustDied (scourge_invasion.cpp:402-405, :449-457): the Necropolis (16401) and its objects are taken down and
+        // the Health unit leaves the world; none of them comes back until the zone's next attack spawns them again. The delay lets this
+        // death hook finish before the unit's corpse goes. Order: the 10-year respawn row is stored here, the kill row only queued below;
+        // after a crash between the two the Health spawn stays dead without a recorded kill, which a zone restart repairs. Divergence:
+        // vmangos removes the Health unit only when a Necropolis is found in range (SpellHitTarget); the port always removes it.
+        if (system is not null)
+        {
+            system.RemoveWithoutRespawn(creature, 1);
+            TearDownNecropolis(system, creature.X, creature.Y, creature.Z);
+        }
         uint? zoneId = creature.Spawn is { } spawn && _spawnZoneByGuid.TryGetValue(spawn.Guid, out uint mapped)
             ? mapped : creature.Map is { } map ? map.GetZoneAndAreaId(creature.X, creature.Y, creature.Z).ZoneId : null;
         if (zoneId is not { } zone || ScourgeInvasionCatalog.ForZone(zone) is null || creature.Spawn is not { } known)
@@ -315,6 +333,42 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         _pendingDeaths.TryAdd((zone, known.Guid), Random.Next(2700, 3601));
         _wake = true;
         TryLaunch();
+    }
+
+    /// <summary>vmangos ATTACK_DISTANCE (ObjectDefines.h:25): how far from the Health unit its Necropolis, and from that its objects, are searched.</summary>
+    private const float TeardownRange = 5f;
+
+    /// <summary>
+    /// The Despawner effect on a destroyed Necropolis (28349; scourge_invasion.cpp:148-157, :449-457): the Necropolis creature (16401) within
+    /// range of the Health unit's position is removed without respawn, and so are the necropolis objects (181154, 181215, 181223, 181373,
+    /// 181374) within range of it. An object is removed from the world rather than despawned: a despawn would bring it back after its
+    /// respawn time and store that time for the next restart, while the zone's event spawns it again when the next attack starts.
+    /// </summary>
+    private static void TearDownNecropolis(CreatureMapSystem creatures, float x, float y, float z)
+    {
+        CreatureSpawn? site = creatures.Content.GetSpawns(creatures.Map.MapId, ScourgeInvasionCatalog.Necropolis)
+            .Where(spawn => DistanceSquared(x, y, z, spawn.X, spawn.Y, spawn.Z) <= TeardownRange * TeardownRange)
+            .MinBy(spawn => DistanceSquared(x, y, z, spawn.X, spawn.Y, spawn.Z));
+        if (site is null) return;
+        foreach (Creature necropolis in creatures.Creatures.Where(c => c.Spawn?.Guid == site.Guid).ToArray())
+            creatures.RemoveWithoutRespawn(necropolis);
+        if (creatures.Map.FindUpdater<GameObjectMapSystem>() is not { } objects) return;
+        foreach (GameObject go in objects.GameObjects.Where(o => ScourgeInvasionCatalog.NecropolisObjects.Contains(o.Entry)
+                     && DistanceSquared(site.X, site.Y, site.Z, o.X, o.Y, o.Z) <= TeardownRange * TeardownRange).ToArray())
+            objects.Remove(go);
+    }
+
+    /// <summary>
+    /// Every Necropolis the saved state counts as destroyed stays torn down: the Necropolis creature and objects of its Health spawn are
+    /// removed again when a grid load or an event refresh brought them back (a restart, a player returning to an unloaded grid).
+    /// </summary>
+    private void EnforceTeardowns()
+    {
+        IReadOnlySet<uint> destroyed = Snapshot.DestroyedSpawnGuids;
+        if (destroyed.Count == 0) return;
+        foreach (CreatureMapSystem creatures in _healthSystems)
+            foreach (CreatureSpawn spawn in creatures.Content.GetSpawns(creatures.Map.MapId, ScourgeInvasionCatalog.NecropolisHealth))
+                if (destroyed.Contains(spawn.Guid)) TearDownNecropolis(creatures, spawn.X, spawn.Y, spawn.Z);
     }
 
     /// <summary>
@@ -433,7 +487,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     {
         using IServiceScope scope = scopes.CreateScope();
         IScourgeInvasionStateStore store = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>();
-        foreach (StoreOp op in ops)
+        // Only the worldstate holder writes: a non-holder drops its queued writes (the holder's stored state is the truth it reloads below) and keeps its pending deaths for when it holds the lease.
+        bool mayWrite = HoldsWorldStateLease;
+        foreach (StoreOp op in mayWrite ? ops : [])
         {
             try
             {
@@ -450,7 +506,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
         try
         {
-            foreach ((uint zone, uint guid, int next) in deaths)
+            foreach ((uint zone, uint guid, int next) in mayWrite ? deaths : [])
             {
                 await store.NecropolisDestroyedAsync(zone, guid, now, next).ConfigureAwait(false);
                 result.FlushedDeaths.Add((zone, guid));
@@ -466,7 +522,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
         ScourgeInvasionSnapshot snapshot = await store.LoadAsync().ConfigureAwait(false);
         result.Snapshot = snapshot;
-        if (!full) return;
+        if (!full || !mayWrite) return;
         if (snapshot.State == ScourgeInvasionState.Enabled && snapshot.BattlesWon < 150)
         {
             foreach (ScourgeInvasionZoneProgress zone in snapshot.Zones.OrderBy(z => z.NextAttackUnix))
@@ -514,6 +570,16 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
                 FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"publish-world-states error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("scourge-invasion.publish-world-states", ex, "could not publish Scourge invasion world states");
+            }
+            try
+            {
+                EnforceTeardowns();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("world-event.scourge-invasion", ex);
+                AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "scourge-invasion", $"enforce-teardowns error={ex.GetType().Name}: {ex.Message}");
+                logger.LogFault("scourge-invasion.enforce-teardowns", ex, "could not keep destroyed Scourge Necropolises torn down");
             }
         }
         // A start or stop queued after this job began is not in its snapshot: driving event 17 from it would undo the
@@ -657,6 +723,6 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
             else if (spell.Id == ScourgeInvasionCatalog.ZapNecropolis && ++_zaps >= 3)
                 System?.KillCreature(Me);
         }
-        public override void OnDeath(Unit? killer) => feature.OnNecropolisDied(Me);
+        public override void OnDeath(Unit? killer) => feature.OnNecropolisDied(Me, System);
     }
 }

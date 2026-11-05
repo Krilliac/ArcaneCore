@@ -129,6 +129,10 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
                 return LadderStep.Return;
 
             case PlayerbotLadderRung.ClassUpkeep:
+                // A bot carrying the Silithyst flag, or already on its way to a geyser, goes on with the run ahead of the upkeep (a fight still comes
+                // first); the seek of a new run is on the opportunities rung below.
+                PlayerbotThinkProbe.Phase("world pvp");
+                if (TakeWorldPvp(player, interval, mayBegin: false)) return LadderStep.Return;
                 // Class upkeep between fights (forms, buffs on the bot and its group, the pet, heals, stealth before a pull),
                 // vmangos UpdateOutOfCombatAI_<Class>; the creature the bot is closing in on is its pull target.
                 PlayerbotThinkProbe.Phase("class upkeep");
@@ -213,8 +217,10 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
 
             case PlayerbotLadderRung.Opportunities:
                 PlayerbotThinkProbe.Phase("opportunities");
-                if (!TakeOpportunity(player, interval, out bool opportunityPull)) return LadderStep.Continue;
-                return opportunityPull ? LadderStep.Pull : LadderStep.Return;
+                if (TakeOpportunity(player, interval, out bool opportunityPull)) return opportunityPull ? LadderStep.Pull : LadderStep.Return;
+                // Beside the opportunities: the seek of a Silithyst run (PlayerbotWorldPvpObjectives).
+                PlayerbotThinkProbe.Phase("world pvp seek");
+                return TakeWorldPvp(player, interval, mayBegin: true) ? LadderStep.Return : LadderStep.Continue;
 
             case PlayerbotLadderRung.Trainers:
                 PlayerbotThinkProbe.Phase("trainers");

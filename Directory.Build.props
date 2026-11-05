@@ -1,6 +1,6 @@
 <Project>
 
-  <!-- Repo-wide build settings (Charter §2: nullable enabled, warnings-as-errors). -->
+  <!-- Repo-wide build settings (nullable enabled, warnings-as-errors; docs/guide/contributing.md). -->
   <PropertyGroup>
     <!-- .NET 11 (net11.0) runtime + C# 15 (LangVersion preview). EF Core/Extensions packages
          stay on 9.0.0 because the Pomelo MySQL/MariaDB provider (primary engine)

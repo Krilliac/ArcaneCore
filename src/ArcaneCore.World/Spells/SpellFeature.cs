@@ -22,6 +22,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Teleport;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
@@ -106,6 +107,11 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             // Features attach alphabetically: TeleportFeature attaches after this feature.
             // Resolve its singleton now, but defer accessing its service until a spell lands.
             TeleportFeature teleports = scope.ServiceProvider.GetRequiredService<TeleportFeature>();
+
+            // The characters a whole-World handoff moved to another process: both writers drop their writes silently (set before either writes).
+            CharacterRetirementRegistry? retirement = scope.ServiceProvider.GetService<CharacterRetirementRegistry>();
+            Spellbook.Retirement = retirement;
+            State.Retirement = retirement;
 
             // Seams owned by other areas: combat rules and groups (social area, attached later, so
             // its manager is resolved per query). Line of sight comes from map.Collision (vmap-los).
@@ -202,6 +208,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += OnPlayerTransferPreparing;
         world.MapCreated += SubscribeCombat;
         world.MapUnloading += UnsubscribeCombat;
         world.Updated += OnWorldUpdated;
@@ -302,6 +309,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
             _world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            _world.PlayerTransferPreparing -= OnPlayerTransferPreparing;
             _world.MapCreated -= SubscribeCombat;
             _world.MapUnloading -= UnsubscribeCombat;
             _world.Updated -= OnWorldUpdated;
@@ -318,6 +326,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
 
         await State.FlushAsync().ConfigureAwait(false);
+        State.LogDroppedAtStop();
         await Spellbook.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -495,6 +504,20 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             _staged.Remove(player);
         }
 
+        // A retire after a committed transfer must not write: the target owns the cooldowns and auras now.
+        if (_world is not { IsRetiringTransferredPlayer: true })
+        {
+            SaveSpellState(player);
+        }
+
+        System.RemoveUnit(player);
+    }
+
+    /// <summary>A cluster transfer's capture: the cooldowns and auras a logout would write, queued before the capture's flush.</summary>
+    private void OnPlayerTransferPreparing(Player player) => SaveSpellState(player);
+
+    private void SaveSpellState(Player player)
+    {
         try
         {
             State.Save(SpellbookCache.CharacterId(player), System.CaptureState(player, UnixNowMs));
@@ -504,8 +527,6 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.logout-capture", ex);
             _logger.LogError(ex, "Capturing the spell state of {Player} failed", player.Guid);
         }
-
-        System.RemoveUnit(player);
     }
 
     /// <summary>

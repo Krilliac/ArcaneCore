@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using System.Data;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Quests;
@@ -58,7 +60,7 @@ public sealed class WarEffortDataModule : IDataModule, ICharacterDataCleanup
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortStateStore
+public sealed class EfWarEffortStateStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IWarEffortStateStore
 {
     public async Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -96,6 +98,7 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
 
     public async Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         if (!Enum.IsDefined(phase) || phaseEndsAtUnix < 0)
             throw new ArgumentOutOfRangeException(nameof(phase));
         await using SqliteRewardWriterCoordinator.Lease writer =
@@ -117,6 +120,7 @@ public sealed class EfWarEffortStateStore(CharacterDbContext db) : IWarEffortSta
 
     public async Task<bool> MarkBossKilledAsync(int bossIndex, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         if (bossIndex is < 0 or > 2) throw new ArgumentOutOfRangeException(nameof(bossIndex));
         await using SqliteRewardWriterCoordinator.Lease writer =
             await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);

@@ -2,7 +2,7 @@ namespace ArcaneCore.Kernel.Realms;
 
 /// <summary>
 /// Persistence seam for the realm list. Abstracted for the same clustering reason as
-/// <see cref="Accounts.IAccountStore"/> (Charter §5).
+/// <see cref="Accounts.IAccountStore"/>.
 /// </summary>
 public interface IRealmStore
 {

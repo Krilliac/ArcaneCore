@@ -29,6 +29,9 @@ public sealed class LootStateItemRow
     public bool IsQuest { get; set; }
     public bool IsPerPlayer { get; set; }
     public bool IsLooted { get; set; }
+
+    /// <summary>The random property id rolled at generation (1.12 has no suffixes); 0 none. Characters schema 70.</summary>
+    public int RandomPropertyId { get; set; }
 }
 
 /// <summary>
@@ -114,6 +117,7 @@ public sealed class LootStateDataModule : IDataModule, ICharacterDataCleanup
             entity.Property(r => r.IsQuest).HasColumnName("is_quest");
             entity.Property(r => r.IsPerPlayer).HasColumnName("is_per_player");
             entity.Property(r => r.IsLooted).HasColumnName("is_looted");
+            entity.Property(r => r.RandomPropertyId).HasColumnName("random_property_id").HasDefaultValue(0);
         });
 
         modelBuilder.Entity<LootStatePlayerRow>(entity =>

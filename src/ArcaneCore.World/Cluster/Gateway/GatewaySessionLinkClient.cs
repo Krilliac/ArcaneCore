@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
@@ -25,6 +27,15 @@ public interface IGatewaySessionSink
 
     /// <summary>The worker closed the session, or the link was lost. Called at most once, never before <see cref="OnOpened"/>.</summary>
     void OnClosed(ClusterSessionDetachReason reason);
+
+    /// <summary>
+    /// The worker asked to move the session to the owner of a map (login redirect). Return true to take it over: the link then keeps the session
+    /// registered but silent (its packets and its close are no longer delivered to this sink) and the sink must end it with
+    /// <see cref="GatewaySessionLinkClient.CloseSession"/> once the target worker has taken the session. Return false to refuse: the link then
+    /// closes the session as <see cref="OnClosed"/> with <see cref="ClusterSessionDetachReason.WorkerClosed"/>. Called from the link's receive loop; must not block.
+    /// The default refuses.
+    /// </summary>
+    bool OnRedirect(GatewaySessionRedirect redirect) => false;
 }
 
 /// <summary>
@@ -42,7 +53,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<long, ClientSession> _sessions = new();
     private readonly ConcurrentDictionary<long, ClientSession> _pendingOpens = new();
-    private readonly TaskCompletionSource<(bool Accepted, string Reason)> _helloAck = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<(bool Accepted, string Reason, string OwnedMaps, bool AllowInstanceMaps)> _helloAck = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     private readonly Lock _openGate = new();
@@ -51,8 +62,13 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private long _nextRequestId;
     private long _droppedServerPackets;
     private volatile bool _registered;
+    private volatile string _workerOwnedMaps = string.Empty;
+    private volatile bool _workerAllowsInstanceMaps = true;
+    private readonly GatewayWardenPosture? _wardenPosture;
 
-    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null)
+    /// <param name="wardenPosture">The gateway's Warden posture, sent to the worker right after admission and before any session opens. A worker that
+    /// enforces a Warden posture refuses sessions on a link that sent none or a different one.</param>
+    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null, GatewayWardenPosture? wardenPosture = null)
     {
         ArgumentNullException.ThrowIfNull(gatewayManifest);
         ArgumentNullException.ThrowIfNull(workerEndPoint);
@@ -67,7 +83,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _worker = workerEndPoint;
         _linkSecret = linkSecret;
         _logger = logger ?? NullLogger.Instance;
+        _wardenPosture = wardenPosture;
     }
+
+    /// <summary>The worker endpoint this link connects to.</summary>
+    public IPEndPoint WorkerEndPoint => _worker;
 
     /// <summary>True from a successful <see cref="ConnectAsync"/> until the link ends.</summary>
     public bool IsConnected => _registered && _channel is { IsOpen: true };
@@ -104,14 +124,33 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         // The receive loop runs before anything is awaited from the worker (CLUSTERING_DESIGN.md §4.4): the challenge,
         // the proof and the registration are all answered from it.
         _receive = Task.Run(ReceiveLoopAsync, CancellationToken.None);
-        (bool accepted, string reason) = await _helloAck.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        (bool accepted, string reason, string ownedMaps, bool allowInstanceMaps) = await _helloAck.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (!accepted)
         {
             throw new InvalidOperationException($"worker refused the gateway link: {reason}");
         }
 
+        // The clock reading goes first: the worker derives the offset it translates every client packet's receive stamp with.
+        if (!_channel.TryEnqueue(GatewaySessionWire.EncodeLinkClock((uint)Clock.Milliseconds())))
+        {
+            throw new InvalidOperationException("the worker link closed before the link clock could be sent");
+        }
+
+        if (_wardenPosture is { } posture && !_channel.TryEnqueue(GatewaySessionWire.EncodeWardenPosture(posture)))
+        {
+            throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
+        }
+
+        _workerOwnedMaps = ownedMaps;
+        _workerAllowsInstanceMaps = allowInstanceMaps;
         _registered = true;
     }
+
+    /// <summary>The map list the worker announced in its HelloAck (<c>Cluster:Worker:OwnedMaps</c> text such as <c>0,1,30-40</c>); empty (also before registration, or from a worker that sent none) means it owns every map.</summary>
+    public string WorkerOwnedMaps => _workerOwnedMaps;
+
+    /// <summary>Whether the worker announced that it also runs instance copies of maps outside its list (true until it says otherwise).</summary>
+    public bool WorkerAllowsInstanceMaps => _workerAllowsInstanceMaps;
 
     /// <summary>
     /// Ask the worker to open a session whose generation the caller already chose. Accepted: <see cref="IGatewaySessionSink.OnOpened"/>
@@ -131,11 +170,38 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     /// opens leave on the link in generation order however many clients log in at once: the worker refuses an open whose generation
     /// is not above the last one it saw. Both callbacks run under that lock: keep them short and non-blocking.
     /// </summary>
-    public async Task<GatewaySessionOpenReply> OpenAsync(
+    public Task<GatewaySessionOpenReply> OpenAsync(
         Func<long> nextGeneration, Func<long, GatewaySessionOpenRequest> requestFor, IGatewaySessionSink sink, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(nextGeneration);
         ArgumentNullException.ThrowIfNull(requestFor);
+        return OpenCoreAsync(nextGeneration, generation =>
+        {
+            GatewaySessionOpenRequest request = requestFor(generation);
+            return (request, new Func<long, byte[]>(requestId => GatewaySessionWire.EncodeOpen(requestId, request)));
+        }, sink, cancellationToken);
+    }
+
+    /// <summary>
+    /// The second half of a login redirect: ask this worker (the map owner) to open the session the gateway moved off the login worker, with the
+    /// buffered CMSG_PLAYER_LOGIN. Generation allocation, ordering, the reply and the sink behave exactly as in
+    /// <see cref="OpenAsync(Func{long}, Func{long, GatewaySessionOpenRequest}, IGatewaySessionSink, CancellationToken)"/>; the worker delivers the login packet to the new session itself,
+    /// so the client sees the login answers only after the reply. <paramref name="requestFor"/> runs under the same lock as there.
+    /// </summary>
+    public Task<GatewaySessionOpenReply> AdoptAsync(
+        Func<long> nextGeneration, Func<long, GatewaySessionAdoptRequest> requestFor, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestFor);
+        return OpenCoreAsync(nextGeneration, generation =>
+        {
+            GatewaySessionAdoptRequest adopt = requestFor(generation);
+            return (adopt.Open, new Func<long, byte[]>(requestId => GatewaySessionWire.EncodeAdopt(requestId, adopt)));
+        }, sink, cancellationToken);
+    }
+
+    private async Task<GatewaySessionOpenReply> OpenCoreAsync(
+        Func<long> nextGeneration, Func<long, (GatewaySessionOpenRequest Request, Func<long, byte[]> Frame)> build, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nextGeneration);
         ArgumentNullException.ThrowIfNull(sink);
         GatewayLinkChannel channel = _channel ?? throw new InvalidOperationException("not connected");
         GatewaySessionOpenRequest request;
@@ -144,7 +210,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         lock (_openGate)
         {
             long generation = nextGeneration();
-            request = requestFor(generation);
+            Func<long, byte[]> frame;
+            (request, frame) = build(generation);
             if (request.SessionGeneration != generation)
             {
                 throw new InvalidOperationException($"the open request carries generation {request.SessionGeneration}, not the allocated {generation}");
@@ -158,7 +225,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
 
             _pendingOpens[requestId] = session;
-            if (!channel.TryEnqueue(GatewaySessionWire.EncodeOpen(requestId, request)))
+            if (!channel.TryEnqueue(frame(requestId)))
             {
                 _pendingOpens.TryRemove(requestId, out _);
                 _sessions.TryRemove(generation, out _);
@@ -178,8 +245,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         }
     }
 
-    /// <summary>Forward one client opcode. False when the session is not open or the link is down.</summary>
-    public bool SendClientPacket(long sessionGeneration, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    /// <summary>
+    /// Forward one client opcode. False when the session is not open or the link is down. <paramref name="receivedMs"/> is the gateway
+    /// clock reading (<see cref="Clock.Milliseconds"/>, low 32 bits) when the client packet arrived; null stamps the moment of this call.
+    /// </summary>
+    public bool SendClientPacket(long sessionGeneration, WorldOpcode opcode, ReadOnlySpan<byte> payload, uint? receivedMs = null)
     {
         if (_channel is not { } channel || !_sessions.TryGetValue(sessionGeneration, out ClientSession? session))
         {
@@ -193,15 +263,41 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                 return false;
             }
 
-            byte[] frame = GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, session.Generation, session.AccountId, 0,
-                session.Epoch, ++session.OutboundSequence, (uint)opcode, payload);
+            byte[] frame = GatewaySessionWire.EncodeClientPacket(session.Generation, session.AccountId, 0,
+                session.Epoch, ++session.OutboundSequence, (uint)opcode, payload, receivedMs ?? (uint)Clock.Milliseconds());
             return channel.TryEnqueue(frame);
+        }
+    }
+
+    /// <summary>
+    /// Tell the worker of a Warden verdict about an open session (the gateway runs Warden; the worker applies the penalty). The frame
+    /// carries the session's own generation, account and owner epoch, and the account id as the verdict key (the gateway has no
+    /// character). False when the session is not open or the link is down; the frame follows every packet already queued.
+    /// </summary>
+    public bool SendWardenVerdict(long sessionGeneration, ushort checkId, ClusterWardenAction action, string reason, GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        ArgumentNullException.ThrowIfNull(posture);
+        if (_channel is not { } channel || !_sessions.TryGetValue(sessionGeneration, out ClientSession? session))
+        {
+            return false;
+        }
+
+        lock (session.Gate)
+        {
+            if (!session.IsOpen)
+            {
+                return false;
+            }
+
+            var verdict = new ClusterWardenVerdict(session.Generation, session.Epoch, session.AccountId, (ulong)session.AccountId, reason, action, checkId);
+            return channel.TryEnqueue(GatewaySessionWire.EncodeWardenVerdict(verdict, posture));
         }
     }
 
     /// <summary>Test seam: send an envelope exactly as given (sequence, epoch, account), bypassing the session's own counters.</summary>
     internal bool SendRawClientPacket(ClusterSessionPacket packet) =>
-        _channel is { } channel && channel.TryEnqueue(GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, packet));
+        _channel is { } channel && channel.TryEnqueue(GatewaySessionWire.EncodeClientPacket(packet, (uint)Clock.Milliseconds()));
 
     /// <summary>The client went away (or was superseded): tell the worker. The sink is not called.</summary>
     public void CloseSession(long sessionGeneration, ClusterSessionDetachReason reason)
@@ -222,6 +318,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         GatewayLinkChannel channel = _channel!;
+        byte[]? listenerNonce = null;
+        byte[]? connectorNonce = null;
+        bool secured = false;
         try
         {
             while (channel.IsOpen)
@@ -234,21 +333,73 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
 
                 var type = (GatewayWorkerFrameType)frame[0];
                 ReadOnlyMemory<byte> body = frame.AsMemory(1);
+                if (!secured && type is not (GatewayWorkerFrameType.LinkChallenge or GatewayWorkerFrameType.LinkProof or GatewayWorkerFrameType.HelloAck))
+                {
+                    throw new InvalidDataException($"frame {type} from a worker that has not proved the link secret");
+                }
+
                 switch (type)
                 {
                     case GatewayWorkerFrameType.LinkChallenge:
-                        byte[] nonce = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkChallenge");
-                        channel.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkProof, GatewaySessionWire.ComputeProof(_linkSecret, nonce)));
+                        if (listenerNonce is not null)
+                        {
+                            throw new InvalidDataException("a second LinkChallenge frame");
+                        }
+
+                        // Answer with the proof and our own nonce; the registration waits until the worker has proved itself back.
+                        listenerNonce = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkChallenge");
+                        connectorNonce = RandomNumberGenerator.GetBytes(GatewaySessionWire.NonceBytes);
+                        channel.TryEnqueue(LinkAuth.Frame((byte)GatewayWorkerFrameType.LinkProof, GatewaySessionWire.ComputeProof(_linkSecret, listenerNonce), connectorNonce));
+                        break;
+                    case GatewayWorkerFrameType.LinkProof:
+                        if (listenerNonce is null || connectorNonce is null || secured)
+                        {
+                            throw new InvalidDataException("unexpected LinkProof frame from a worker");
+                        }
+
+                        byte[] serverProof = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkProof");
+                        if (!CryptographicOperations.FixedTimeEquals(serverProof, LinkAuth.ComputeServerProof(_linkSecret, listenerNonce, connectorNonce)))
+                        {
+                            throw new InvalidDataException("the worker failed the link proof (its link secret differs, or it is not the worker)");
+                        }
+
+                        LinkKeys keys = LinkAuth.DeriveKeys(_linkSecret, listenerNonce, connectorNonce);
+                        channel.ActivateReceiveKey(keys.ServerToClient);
+                        channel.EnqueueSendKey(keys.ClientToServer);
+                        secured = true;
                         channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloRegisterFrame(_manifest));
                         break;
                     case GatewayWorkerFrameType.HelloAck:
-                        _helloAck.TrySetResult(DecodeHelloAck(body.Span));
+                        var ack = DecodeHelloAck(body.Span);
+                        if (ack.Accepted && !secured)
+                        {
+                            throw new InvalidDataException("HelloAck accepted before the worker proved the link secret");
+                        }
+
+                        _helloAck.TrySetResult(ack);
                         break;
                     case GatewayWorkerFrameType.SessionOpenReply:
                         OnOpenReply(body.Span);
                         break;
                     case GatewayWorkerFrameType.SessionServerPacket:
                         OnServerPacket(body);
+                        break;
+                    case GatewayWorkerFrameType.SessionRedirect:
+                        OnRedirect(GatewaySessionWire.DecodeRedirect(body.Span));
+                        break;
+                    case GatewayWorkerFrameType.WorkerStatus:
+                        OnWorkerStatus(GatewaySessionWire.DecodeWorkerStatus(body.Span));
+                        break;
+                    case GatewayWorkerFrameType.TransferStage:
+                    case GatewayWorkerFrameType.TransferCancel:
+                    case GatewayWorkerFrameType.TransferCommit:
+                        OnTransferControl(GatewayTransferWire.DecodeControl(type, body.Span));
+                        break;
+                    case GatewayWorkerFrameType.ControlReply:
+                        OnControlReply(ClusterControlWire.DecodeReply(body.Span));
+                        break;
+                    case GatewayWorkerFrameType.ControlSubmit:
+                        OnControlSubmit(ClusterControlWire.DecodeSubmit(body.Span));
                         break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
@@ -279,7 +430,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         {
             channel.Close();
             _registered = false;
-            _helloAck.TrySetResult((false, "the worker closed the link"));
+            _helloAck.TrySetResult((false, "the worker closed the link", string.Empty, true));
             foreach (ClientSession pending in _pendingOpens.Values)
             {
                 pending.Opened.TrySetResult(GatewaySessionOpenReply.Refuse(AuthResponseCode.Unavailable, "the worker link closed"));
@@ -295,6 +446,106 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
 
             _ended.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every WorkerStatus frame (realm liveness, docs/ops/realm-liveness.md section 7). Handlers must not block and
+    /// must not throw; one that throws is logged and the link goes on. Set before <see cref="ConnectAsync"/> so the first report is not missed.
+    /// </summary>
+    public Action<WorkerStatusReport>? WorkerStatusReceived { get; set; }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every cross-worker transfer control frame (<see cref="GatewayTransferWire"/>). The handler must not block and
+    /// must not throw; it answers with <see cref="SendTransferAck"/>. Without a handler the frame is ignored (the worker's coordinator then times out).
+    /// </summary>
+    public Action<GatewayTransferControl>? TransferControlReceived { get; set; }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlReply"/> frame (the worker's answer to a <see cref="SendControlRequest"/>).
+    /// The handler must not block and must not throw. Without a handler the reply is ignored.
+    /// </summary>
+    public Action<ControlReply>? ControlReplyReceived { get; set; }
+
+    /// <summary>Sends one control request to the worker (contract 5). False when the link is down. The reply arrives on <see cref="ControlReplyReceived"/>.</summary>
+    public bool SendControlRequest(ControlRequest request) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeRequest(request));
+
+    /// <summary>
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation, design section 2.3). An event so that the
+    /// operator-restart handler (body kind 1) and the transfer handler (body kind 2) can both listen: each answers with <see cref="SendControlSubmitReply"/> only for the body kind it owns.
+    /// Handlers must not block and must not throw; one that throws is logged and answered with a refusal. With no handler at all the worker is answered with a refusal here,
+    /// so its request never waits for a reply that cannot come.
+    /// </summary>
+    public event Action<ControlSubmit>? ControlSubmitReceived;
+
+    /// <summary>Answers a <see cref="ControlSubmit"/> to the worker. False when the link is down.</summary>
+    public bool SendControlSubmitReply(ControlSubmitReply reply) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeSubmitReply(reply));
+
+    /// <summary>Tells the worker the outcome of an operation it submitted, or text for an operator (contract 5). False when the link is down.</summary>
+    public bool SendControlNotice(ControlNotice notice) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeNotice(notice));
+
+    /// <summary>Whether the client session with this generation is open on this link.</summary>
+    public bool HasSession(long sessionGeneration) => _sessions.ContainsKey(sessionGeneration);
+
+    private void OnControlSubmit(ControlSubmit submit)
+    {
+        if (ControlSubmitReceived is not { } handler)
+        {
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway link takes no control submits (its handoff and transfer hosting is off)", ControlReasonCode.NotHosted));
+            return;
+        }
+
+        try
+        {
+            handler(submit);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control submit handler failed", _worker);
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request", ControlReasonCode.GatewayFailure));
+        }
+    }
+
+    private void OnControlReply(ControlReply reply)
+    {
+        try
+        {
+            ControlReplyReceived?.Invoke(reply);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control reply handler failed", _worker);
+        }
+    }
+
+    /// <summary>Answers a transfer control frame to the worker. False when the link is down.</summary>
+    public bool SendTransferAck(GatewayTransferAck ack) =>
+        _channel is { } channel && channel.TryEnqueue(GatewayTransferWire.EncodeAck(ack));
+
+    private void OnTransferControl(GatewayTransferControl control)
+    {
+        try
+        {
+            TransferControlReceived?.Invoke(control);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the transfer control handler failed", _worker);
+        }
+    }
+
+    private void OnWorkerStatus(WorkerStatusReport report)
+    {
+        try
+        {
+            WorkerStatusReceived?.Invoke(report);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the worker status handler failed", _worker);
         }
     }
 
@@ -339,6 +590,58 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         session.Opened.TrySetResult(reply);
     }
 
+    /// <summary>
+    /// The worker asks to move an open session to another worker. A session that is not open, or whose account does not match, is ignored (counted as a
+    /// dropped packet would be). The sink decides: when it takes the redirect the session turns silent and stays registered until the sink closes it;
+    /// otherwise it is closed here as the worker closing it.
+    /// </summary>
+    private void OnRedirect(GatewaySessionRedirect redirect)
+    {
+        if (!_sessions.TryGetValue(redirect.SessionGeneration, out ClientSession? session) || session.AccountId != redirect.AccountId)
+        {
+            _logger.LogWarning("Worker link to {Worker}: redirect for unknown session (generation {Generation}, account {Account}); ignored", _worker, redirect.SessionGeneration, redirect.AccountId);
+            return;
+        }
+
+        bool taken = false;
+        lock (session.Gate)
+        {
+            if (!session.IsOpen || session.IsClosed || session.Redirected)
+            {
+                return;
+            }
+
+            session.Redirected = true;
+        }
+
+        try
+        {
+            taken = session.Sink.OnRedirect(redirect);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.gateway-client", ex);
+            AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=redirect error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
+            _logger.LogFault("cluster.transport", ex, "Gateway session {Generation}: the redirect handler failed", session.Generation);
+        }
+
+        if (!taken)
+        {
+            lock (session.Gate)
+            {
+                session.Redirected = false;
+            }
+
+            if (_sessions.TryRemove(new KeyValuePair<long, ClientSession>(session.Generation, session)))
+            {
+                // The worker keeps a session that asked for a redirect open (LinkSession.TryRedirect), so a refused redirect must tell it to close
+                // the session; otherwise its LinkSession and WorldSession stay at the character screen until the link drops.
+                _channel?.TryEnqueue(GatewaySessionWire.EncodeClose(session.Generation, session.AccountId, ClusterSessionDetachReason.ClientDisconnect));
+                NotifyClosed(session, ClusterSessionDetachReason.WorkerClosed);
+            }
+        }
+    }
+
     private void OnServerPacket(ReadOnlyMemory<byte> body)
     {
         ClusterSessionPacket packet = GatewaySessionWire.DecodePacket(body);
@@ -347,7 +650,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             bool accept;
             lock (session.Gate)
             {
-                accept = session.IsOpen && !session.IsClosed && packet.AccountId == session.AccountId && packet.OwnerEpoch == session.Epoch
+                accept = session.IsOpen && !session.IsClosed && !session.Redirected && packet.AccountId == session.AccountId && packet.OwnerEpoch == session.Epoch
                     && packet.Sequence > session.LastInboundSequence;
                 if (accept)
                 {
@@ -376,7 +679,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         bool wasOpen;
         lock (session.Gate)
         {
-            wasOpen = session.IsOpen && !session.IsClosed;
+            // A redirected session belongs to the sink's hand-over now: its end (the worker's close, a lost link) is not the client's end.
+            wasOpen = session.IsOpen && !session.IsClosed && !session.Redirected;
             session.IsClosed = true;
         }
 
@@ -395,7 +699,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         }
     }
 
-    private static (bool Accepted, string Reason) DecodeHelloAck(ReadOnlySpan<byte> span)
+    private static (bool Accepted, string Reason, string OwnedMaps, bool AllowInstanceMaps) DecodeHelloAck(ReadOnlySpan<byte> span)
     {
         if (span.Length < 5)
         {
@@ -408,7 +712,32 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             throw new InvalidDataException($"invalid HelloAck reason length ({length})");
         }
 
-        return (span[0] != 0, Encoding.UTF8.GetString(span.Slice(5, length)));
+        string reason = Encoding.UTF8.GetString(span.Slice(5, length));
+
+        // The tail appended by the map routing change; an ack from an older worker ends after the reason and reads as "owns every map".
+        string ownedMaps = string.Empty;
+        bool allowInstanceMaps = true;
+        int offset = 5 + length;
+        if (offset < span.Length)
+        {
+            if (span.Length - offset < 5)
+            {
+                throw new InvalidDataException($"truncated HelloAck map tail ({span.Length - offset} B)");
+            }
+
+            int ownedLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
+            offset += 4;
+            if (ownedLength < 0 || ownedLength > span.Length - offset - 1)
+            {
+                throw new InvalidDataException($"invalid HelloAck owned map length ({ownedLength})");
+            }
+
+            ownedMaps = Encoding.UTF8.GetString(span.Slice(offset, ownedLength));
+            offset += ownedLength;
+            allowInstanceMaps = span[offset] != 0;
+        }
+
+        return (span[0] != 0, reason, ownedMaps, allowInstanceMaps);
     }
 
     public async ValueTask DisposeAsync()
@@ -438,5 +767,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         public long LastInboundSequence;
         public bool IsOpen;
         public bool IsClosed;
+
+        /// <summary>The worker asked to move the session and the sink took it over; the session is silent until the sink closes it.</summary>
+        public bool Redirected;
     }
 }

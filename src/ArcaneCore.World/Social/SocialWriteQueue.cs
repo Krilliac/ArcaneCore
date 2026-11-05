@@ -155,6 +155,14 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>How often retained writes are retried by a background sweep while any exist (one attempt per key, stopping at the first locked one; tests shorten it).</summary>
     public TimeSpan RetainedRetryInterval { get; init; } = TimeSpan.FromSeconds(30);
 
+    private const string QueueName = "SocialWriteQueue";
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
+    /// <summary>True for the writes keyed by a character id (the key's first part): a friend or ignore row, and the character purges. Guild and petition writes belong to no one character.</summary>
+    private static bool IsCharacterKind(KeyKind kind) => kind is KeyKind.Row or KeyKind.Purge or KeyKind.PetitionPurge;
+
     /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
 
@@ -187,6 +195,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// </summary>
     public bool TrySetSocial(int characterId, int otherId, SocialFlags flags)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return true; // the character belongs to another world now: dropped silently, not a refusal the caller should report
+        }
+
         var key = new Key(KeyKind.Row, characterId, otherId);
         bool accepted = true;
         bool reportStopped = false;
@@ -319,6 +332,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// </summary>
     public void PurgeCharacter(int characterId)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued
+        }
+
         lock (_gate)
         {
             _epoch++;
@@ -457,6 +475,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(_logger, QueueName);
         string[] left;
         Exception? first;
         Exception? terminal;
@@ -957,6 +976,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
     /// <summary>Apply one key's value to the store. Null on success; otherwise the last failure.</summary>
     private async Task<Exception?> TryWriteAsync(Key key, Payload value, int attempts, WriteAttemptCount? made = null)
     {
+        if (IsCharacterKind(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+        {
+            return null; // retired since it was queued (or retained): dropped, which the caller records as drained
+        }
+
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
@@ -1033,6 +1057,10 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
 
                 progress.Succeeded();
                 return null;
+            }
+            catch (CharacterOwnershipRejectedException) when (IsCharacterKind(key.Kind) && CharacterRetirementRegistry.Drops(Retirement, QueueName, key.A))
+            {
+                return null; // refused because the character moved to another world: counted, neither logged nor terminal
             }
             catch (CharacterOwnershipRejectedException ex)
             {

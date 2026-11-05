@@ -43,6 +43,7 @@ public sealed class PersistentPetWorldTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // GC reachability: collection timing under a loaded box
     public async Task ALoginThatNeverEntersTheWorld_DoesNotPinItsPlayer()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>

@@ -1,7 +1,16 @@
+using System.Collections.Concurrent;
 using System.Net;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Lifecycle;
+using ArcaneCore.World.Warden;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -15,6 +24,12 @@ namespace ArcaneCore.World.Cluster.Gateway;
 /// The worker-mode listener (Cluster:Worker): a <see cref="GatewaySessionLinkHost"/> whose sessions are
 /// <see cref="RemoteWorldSession"/>s of this world. Registered after <see cref="WorldServer"/>, so it starts after the world
 /// host and stops (closing every gateway-backed session and waiting for it) before the world host drains its stores.
+/// <para>
+/// With a <paramref name="wardenVerifier"/> (registered by <see cref="GatewayWorkerServiceCollectionExtensions.AddGatewayWorker"/>) the
+/// gateway owns Warden for its sessions: it sends WardenVerdict frames, the link host checks each against the verifier, and an accepted
+/// verdict is applied here (Kick disconnects the session, Ban also bans the account through <see cref="IBanStore"/> for
+/// <see cref="WardenOptions.BanSeconds"/>; Log needs nothing: the host logged it).
+/// </para>
 /// </summary>
 public sealed class GatewayWorkerEndpoint(
     IServiceScopeFactory scopes,
@@ -24,8 +39,25 @@ public sealed class GatewayWorkerEndpoint(
     WorldRuntime world,
     SessionRegistry registry,
     ILoggerFactory loggers,
-    WorkerAdmission? admission = null) : IHostedService, IAsyncDisposable
+    WorkerAdmission? admission = null,
+    IOptions<WardenOptions>? wardenOptions = null,
+    GatewayWardenManifestVerifier? wardenVerifier = null,
+    ServerLifecycleFeature? lifecycle = null,
+    WorldLoginAdmission? loginAdmission = null,
+    IServiceProvider? rootServices = null) : IHostedService, IAsyncDisposable
 {
+    private static readonly TimeSpan PendingBanStopWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>How often the worker reports its liveness to every admitted gateway link (also sent once on admission). The gateway's offline threshold is 60 s.</summary>
+    internal static readonly TimeSpan StatusInterval = TimeSpan.FromSeconds(5);
+
+    private readonly CancellationTokenSource _statusStop = new();
+    private Task _statusLoop = Task.CompletedTask;
+    private Action<ShutdownMask, bool>? _countdownHandler;
+    private int _countdown;                                // written by the world thread, read by the status loop: 0 none, 1 restart, 2 shutdown
+
+    // Ban writes still running; StopAsync waits (bounded) so a ban accepted just before shutdown is not abandoned with the process.
+    private readonly ConcurrentDictionary<Task, int> _pendingBans = new();
     private GatewaySessionLinkHost? _host;
 
     /// <summary>The acceptor of the running listener (null before start): its open sessions.</summary>
@@ -37,27 +69,127 @@ public sealed class GatewayWorkerEndpoint(
     /// <summary>The running link host (null before start).</summary>
     public GatewaySessionLinkHost? Host => _host;
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    /// <summary>The node incarnation the running link advertises in its manifest (<see cref="Guid.Empty"/> before start).</summary>
+    internal Guid LinkIncarnation { get; private set; }
+
+    /// <summary>
+    /// The incarnation the link advertises: the <see cref="WorldHost.Incarnation"/> of this process (the one a handoff's epoch takeover hands the characters
+    /// ownership to, so a standby is addressed by the same id on the link and in the ownership row), else the ownership token's incarnation, else a random one
+    /// (a hand-built endpoint without a world host).
+    /// </summary>
+    internal static Guid ResolveLinkIncarnation(WorldHost? worldHost, Guid? ownershipIncarnation)
+        => worldHost?.Incarnation ?? ownershipIncarnation ?? Guid.NewGuid();
+
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         GatewayWorkerOptions config = options.Value;
+        GatewayManifestVersions versions;
+        if (config.VersionsFromDatabase)
+        {
+            // Fail closed: an unreadable or in-progress version throws here and the host does not start a link it cannot vouch for.
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            versions = await GatewayManifestVersions.ReadAsync(
+                config, scope.ServiceProvider.GetRequiredService<CharacterDbContext>(), scope.ServiceProvider.GetRequiredService<WorldDbContext>(),
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            versions = GatewayManifestVersions.Resolve(config, null, null);
+        }
+
         ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
         Acceptor = new WorldGatewaySessionAcceptor(scopes, opcodes, world, registry, sessionOptions.Value, loggers, admission);
         // Owner epoch: the fenced ownership token's epoch when fencing holds one, else 1 (unfenced single node), as the
         // readiness probe reports it. A change after a takeover makes every older packet stale.
+        // The world host is registered as an IHostedService only; by now every hosted service exists, so the lookup creates nothing.
+        WorldHost? worldHost = rootServices?.GetServices<IHostedService>().OfType<WorldHost>().FirstOrDefault();
+        LinkIncarnation = ResolveLinkIncarnation(worldHost, world.CharacterOwnership?.Incarnation);
         _host = new GatewaySessionLinkHost(
-            config.ToManifest(world.CharacterOwnership?.Incarnation ?? Guid.NewGuid()),
+            config.ToManifest(LinkIncarnation, versions),
             Acceptor,
             () => world.CharacterOwnership is { Epoch: > 0 } token ? token.Epoch : 1,
             config.LinkSecret,
             new IPEndPoint(IPAddress.Parse(config.BindAddress), config.Port),
-            logger);
+            logger,
+            wardenVerifier,
+            wardenVerifier is null ? null : ApplyWardenVerdict,
+            BuildStatus);
+        // Opt-in control channel (Cluster:Worker:Handoff / Transfers:Enabled): registered only when a key is on, so a worker without one answers every control request Disabled.
+        // Resolved here, not in the constructor: building it looks up the world host among the hosted services, which would loop through this endpoint.
+        // The self-heal decorates the control service (C11, design section 3.5); it is registered exactly when the control service is.
+        _host.ControlHandler = (IGatewayControlHandler?)rootServices?.GetService<Control.WorkerSelfHealService>() ?? rootServices?.GetService<Control.WorkerControlService>();
+        // The far-teleport router (Cluster:Worker:Transfers:Enabled, non-empty OwnedMaps) receives the gateway's answers to its transfer requests and the outcome notices; null otherwise.
+        _host.SubmitSink = rootServices?.GetService<Transfer.ClusterFarTeleportFeature>()?.Router;
+        rootServices?.GetService<Control.ClusterRestartRelay>()?.Attach(_host, Acceptor ?? throw new InvalidOperationException("the session acceptor was not created"));
         _host.Start();
+        if (lifecycle is not null && _countdownHandler is null)
+        {
+            _countdownHandler = OnCountdownChanged;
+            lifecycle.CountdownChanged += _countdownHandler;
+        }
+
+        GatewaySessionLinkHost running = _host;
+        _statusLoop = Task.Run(() => RunStatusLoopAsync(running, _statusStop.Token), CancellationToken.None);
         logger.LogInformation("Worker mode: gateway link listening on {Endpoint}", _host.BoundEndPoint);
-        return Task.CompletedTask;
+        logger.LogInformation(
+            "Worker mode: advertising characters schema {CharactersSchema}, world schema {WorldSchema}, content revision {ContentRevision} (from {Source}); the gateway's Gateway:* labels must equal them",
+            versions.CharactersSchemaVersion, versions.WorldSchemaVersion, versions.ContentRevision, config.VersionsFromDatabase ? "the databases" : "the Cluster:Worker labels");
+    }
+
+    /// <summary>
+    /// This worker's liveness as the gateway's realm writer reads it: the world loop's tick counter (a volatile read), the registered sessions, the
+    /// player limit in force and the standby and countdown state. Allocation-free and lock-free; callable from any thread.
+    /// </summary>
+    internal WorkerStatusReport BuildStatus()
+    {
+        WorkerStatusFlags flags = WorkerStatusFlags.None;
+        if (admission is { ClosedReason: WorkerAdmission.StandbyReason })
+        {
+            flags |= WorkerStatusFlags.Standby;
+        }
+
+        switch (Volatile.Read(ref _countdown))
+        {
+            case 1:
+                flags |= WorkerStatusFlags.Restarting;
+                break;
+            case 2:
+                flags |= WorkerStatusFlags.ShuttingDown;
+                break;
+        }
+
+        return new WorkerStatusReport(world.TicksStarted, registry.Count, loginAdmission?.AmountLimit ?? 0, flags);
+    }
+
+    private void OnCountdownChanged(ShutdownMask mask, bool pending)
+        => Volatile.Write(ref _countdown, !pending ? 0 : mask.HasFlag(ShutdownMask.Restart) ? 1 : 2);
+
+    private async Task RunStatusLoopAsync(GatewaySessionLinkHost host, CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(StatusInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            {
+                host.BroadcastWorkerStatus();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopping
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (lifecycle is not null && _countdownHandler is not null)
+        {
+            lifecycle.CountdownChanged -= _countdownHandler;
+            _countdownHandler = null;
+        }
+
+        await _statusStop.CancelAsync().ConfigureAwait(false);
+        await _statusLoop.ConfigureAwait(false);
         // Clear the field before disposing so the second call (DisposeAsync after the host's StopAsync) is a no-op
         // for the link host even when the first disposal threw.
         GatewaySessionLinkHost? host = _host;
@@ -66,6 +198,77 @@ public sealed class GatewayWorkerEndpoint(
         await StopInOrderAsync(
             host is null ? null : host.DisposeAsync,
             acceptor is null ? null : acceptor.StopAsync).ConfigureAwait(false);
+        Task[] bans = [.. _pendingBans.Keys];
+        if (bans.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(bans).WaitAsync(PendingBanStopWait, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+            {
+                loggers.CreateLogger<GatewayWorkerEndpoint>().LogWarning("{Count} Warden ban write(s) still pending at stop; the ban(s) may be lost", bans.Length);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies a verdict the link host accepted (on the link's receive loop; never blocks). The session is the one the verdict names by
+    /// generation and account; a session that is already gone needs nothing. Kick and Ban disconnect it at once (a banned client must not
+    /// keep sending opcodes while the ban commits); the ban write runs off this thread.
+    /// </summary>
+    private void ApplyWardenVerdict(long generation, ClusterWardenVerdict verdict)
+    {
+        ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
+        RemoteWorldSession? remote = null;
+        if (Acceptor?.Sessions.TryGetValue(generation, out remote) != true || remote is null || remote.Session.AccountId != verdict.AccountId)
+        {
+            logger.LogInformation("Warden verdict for generation {Generation} (account {Account}) has no open session; nothing to apply", generation, verdict.AccountId);
+            return;
+        }
+
+        WorldSession session = remote.Session;
+        logger.LogWarning("Warden (gateway): account {Account} ({AccountId}): {Reason}; action {Action}", session.AccountName, session.AccountId, verdict.Reason, verdict.Action);
+        switch (verdict.Action)
+        {
+            case ClusterWardenAction.Kick:
+                session.Kick("Warden: " + verdict.Reason);
+                break;
+            case ClusterWardenAction.Ban:
+                session.Kick("Warden: " + verdict.Reason);
+                StartBan(session.AccountId, verdict.Reason);
+                break;
+        }
+    }
+
+    private void StartBan(int accountId, string reason)
+    {
+        Task write = Task.Run(() => BanAsync(accountId, reason)); // BanAsync records its own failures and never throws
+        _pendingBans.TryAdd(write, accountId);
+        _ = write.ContinueWith(static (done, state) => ((ConcurrentDictionary<Task, int>)state!).TryRemove(done, out _), _pendingBans,
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task BanAsync(int accountId, string reason)
+    {
+        ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<IBanStore>() is not { } bans)
+            {
+                logger.LogWarning("Warden: ban of account {Account} skipped: no ban store", accountId);
+                return;
+            }
+
+            long seconds = (wardenOptions?.Value ?? new WardenOptions()).BanSeconds;
+            await bans.BanAccountAsync(new BanRequest(accountId, seconds, $"Warden: {reason}", WardenFeature.BanAuthor)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            AnomalyLedger.Shared.Report("warden", "check-fault", $"account {accountId}", $"ban error={ex.GetType().Name}: {ex.Message}");
+            logger.LogFault("warden.ban", ex, "Warden: ban of account {Account} failed", accountId);
+        }
     }
 
     /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws. If both throw, both exceptions are kept (AggregateException).</summary>
@@ -126,6 +329,10 @@ public static class GatewayWorkerServiceCollectionExtensions
             services.PostConfigure<Clustering.CharacterFencingOptions>(fencing => fencing.RequiredByWorkerMode = true);
             bool standby = section.GetValue<bool>(nameof(GatewayWorkerOptions.Standby));
             services.AddSingleton(new WorkerAdmission(standby ? WorkerAdmission.StandbyReason : null));
+            // The gateway runs Warden for the sessions it forwards; the worker verifies its verdicts against the manifest it derives from the same options.
+            services.AddSingleton(sp => new GatewayWardenManifestVerifier(GatewayWardenManifestVerifier.BuildManifest(
+                sp.GetRequiredService<IOptions<GatewayWorkerOptions>>().Value.RealmId,
+                sp.GetService<IOptions<WardenOptions>>()?.Value ?? new WardenOptions())));
             if (standby)
             {
                 AddStandby(services);
@@ -133,6 +340,7 @@ public static class GatewayWorkerServiceCollectionExtensions
 
             services.AddSingleton<GatewayWorkerEndpoint>();
             services.AddHostedService(sp => sp.GetRequiredService<GatewayWorkerEndpoint>());
+            Transfer.WorkerTransferHosting.AddWorkerControl(services, configuration); // Cluster:Worker:Handoff / Transfers: the control channel's worker end, both keys off by default
         }
 
         return services;
@@ -148,11 +356,14 @@ public static class GatewayWorkerServiceCollectionExtensions
     {
         services.PostConfigure<Data.DatabaseOptions>(database => database.Upgrade.ValidateOnly = true);
         services.RemoveAll<WorldWriterGuard>();
-        // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it.
+        // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it
+        // (the realm lock, or in Worker scope the shard lock of the worker it replaces: the standby sets Cluster:Fencing:Shard explicitly, see CharacterFencingOptions.ValidateWorkerScope).
         services.AddSingleton(sp => new WorldWriterGuard(sp.GetService<Microsoft.Extensions.Options.IOptions<Data.DatabaseOptions>>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true,
             lifetime: sp.GetService<IHostApplicationLifetime>(), drain: sp.GetService<ArcaneCore.World.Persistence.ShutdownDrain>(),
-            fence: sp.GetService<ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterFence>())); // a promoted standby must be able to stop itself on a take-over
+            fence: sp.GetService<ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterFence>(), // a promoted standby must be able to stop itself on a take-over
+            fencingOptions: sp.GetService<Microsoft.Extensions.Options.IOptions<Clustering.CharacterFencingOptions>>(), // Scope=Worker: promotion takes the shard lock, not the realm lock
+            workerOptions: sp.GetService<Microsoft.Extensions.Options.IOptions<GatewayWorkerOptions>>()));
         ServiceDescriptor? listener = services.LastOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer));
         if (listener is not null)
         {

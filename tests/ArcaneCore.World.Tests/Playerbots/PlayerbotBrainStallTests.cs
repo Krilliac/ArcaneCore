@@ -172,6 +172,7 @@ public sealed class PlayerbotBrainStallTests
         Assert.True(walked, $"the lingering bot moved only {distance:F2} yd (goal {world.Brain.Goal})");
     }
 
+    // Timing: the think budget is wall-clock (PlayerbotThinkProbe.MsSince), so a loaded host spends it before the bot fights (flake ledger #32).
     /// <summary>
     /// Cluster 2, the target the bot cannot hurt (bot QA #697, #700, #862, #834: goal=Combat stalls, moving:no dest:none, phase combat, the
     /// same target entry again within minutes): the creature the bot fights stands in melee range but soft-evades (it cannot reach the bot,
@@ -180,6 +181,7 @@ public sealed class PlayerbotBrainStallTests
     /// <see cref="PlayerbotBrain.FightNoProgressMs"/> the bot sets it aside, and for about a respawn (<see cref="PlayerbotBrain.StalledTargetMs"/>).
     /// </summary>
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ATargetTheBotCannotHurt_IsSetAside_AndNotTakenBackSoon()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);

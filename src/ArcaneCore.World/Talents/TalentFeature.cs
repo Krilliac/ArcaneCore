@@ -19,6 +19,7 @@ using ArcaneCore.World.Npc;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.Configuration;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -52,7 +53,7 @@ public sealed partial class TalentFeature : IWorldFeature, ICharacterHooks, IAsy
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _scopes = scopes;
-        Persistence = new TalentPersistence(scopes, logger);
+        Persistence = new TalentPersistence(scopes, logger) { Retirement = services.GetService<CharacterRetirementRegistry>() };
     }
 
     public TalentOptions Options { get; } = new();

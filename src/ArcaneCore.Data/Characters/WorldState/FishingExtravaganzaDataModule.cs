@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +42,7 @@ public sealed class FishingExtravaganzaDataModule : IDataModule, ICharacterDataC
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfFishingExtravaganzaStore(CharacterDbContext db) : IFishingExtravaganzaStore
+public sealed class EfFishingExtravaganzaStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IFishingExtravaganzaStore
 {
     public async Task<FishingExtravaganzaState?> LoadAsync(CancellationToken cancellationToken = default)
         => await db.Set<FishingExtravaganzaRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken) is { } row
@@ -49,6 +51,7 @@ public sealed class EfFishingExtravaganzaStore(CharacterDbContext db) : IFishing
 
     public async Task SaveAsync(FishingExtravaganzaState state, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         FishingExtravaganzaRow? row = await db.Set<FishingExtravaganzaRow>().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken);
         if (row is null) db.Add(row = new FishingExtravaganzaRow { Id = 1 });
         row.AnnounceBegin = state.AnnounceBegin;

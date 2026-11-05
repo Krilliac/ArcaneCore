@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Persistence;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -156,6 +157,13 @@ public sealed class SupervisedProcessConfig
     public IReadOnlyList<uint> MapAssignments { get; set; } = [];
 
     /// <summary>
+    /// The maps this worker owns as ids and inclusive ranges (<c>0,1,30-40</c>), the same syntax as the child's <c>Cluster:Worker:OwnedMaps</c>
+    /// (pass it there in <see cref="Arguments"/>; the supervisor only checks it). Empty means no assignment here. Worker children's lists, and
+    /// their <see cref="MapAssignments"/>, must not overlap: a map has one owner. Only worker-role entries are compared.
+    /// </summary>
+    public string Maps { get; set; } = string.Empty;
+
+    /// <summary>
     /// Position in the start sequence (default 0): processes start in ascending order, ties broken by the configuration key
     /// (ordinal), and drain in the reverse. Needed because configuration binding returns keys sorted, not in file order;
     /// for example give <c>realm</c> 0, <c>gateway</c> 1 and the workers 2. Also decides which process is denied first when admission runs out.
@@ -295,13 +303,27 @@ public sealed class ClusterSupervisorOptions
     /// <summary>Where hang captures (stack reports and dumps) are written (default <c>logs/supervisor-captures</c>); relative to the working directory.</summary>
     public string HangCaptureDirectory { get; set; } = "logs/supervisor-captures";
 
+    /// <summary>
+    /// Where the supervisor records the children it owns (name, role, pid, start time; default <c>logs/supervisor-children.json</c>, relative to the working directory;
+    /// empty turns the record off). A restarted supervisor reads it to adopt or terminate children a crashed predecessor left running.
+    /// </summary>
+    public string ChildStateFile { get; set; } = "logs/supervisor-children.json";
+
+    /// <summary>
+    /// Seconds the supervisor waits, before it launches the next <see cref="SupervisedProcessConfig.StartOrder"/> group, for every child of the group it just launched to send its first
+    /// <c>alive</c> heartbeat (default 0: do not wait; 0 to 3600). A child that exits first, or a group still silent after this long, stops the wait with a warning and the start goes on. A split
+    /// topology sets it so the schema-DDL holder is up before the validate-only worlds check the schema. Needs children that heartbeat to the supervisor (<c>Ops:Watchdog</c> on).
+    /// </summary>
+    public int StartGroupReadySeconds { get; set; }
+
     /// <summary>The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600).</summary>
     public int HangCaptureTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
-    /// How long a child that announced <c>dumping</c> (its own crash dump, <c>Diagnostics:CrashDump</c>) is exempt from the hang timeout and from a hang
-    /// capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above
-    /// three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c>.
+    /// The cap on how long a child that announced <c>dumping</c> (its own crash dump, <c>Diagnostics:CrashDump</c>) is exempt from the hang timeout and
+    /// from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600).
+    /// The exemption is <c>min(announced max + 60, this)</c>: the child's own <c>max=</c> from its authenticated line, bounded by this value. Keep it
+    /// above three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c> plus a minute, or the cap cuts a long dump short.
     /// </summary>
     public int DumpGraceSeconds { get; set; } = 420;
 
@@ -385,6 +407,8 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:RestartDelayMs must be 0 to {SupervisedProcessConfig.MaxDrainTimeoutMs} (was {RestartDelayMs}).");
         if (DumpGraceSeconds is < 1 or > 3600)
             problems.Add($"{section}:DumpGraceSeconds must be 1 to 3600 (was {DumpGraceSeconds}).");
+        if (StartGroupReadySeconds is < 0 or > 3600)
+            problems.Add($"{section}:StartGroupReadySeconds must be 0 to 3600 (was {StartGroupReadySeconds}).");
         if (HangCaptureTimeoutSeconds is < 1 or > 3600)
             problems.Add($"{section}:HangCaptureTimeoutSeconds must be 1 to 3600 (was {HangCaptureTimeoutSeconds}).");
         if (Processes.Values.Any(p => p.HangCapture != SupervisedHangCaptureMode.None) && string.IsNullOrWhiteSpace(HangCaptureDirectory))
@@ -393,6 +417,7 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:StackCaptureTool must name the dotnet-stack executable when a process has HangCapture Stacks.");
 
         var mapOwners = new Dictionary<uint, string>();
+        var rangeOwners = new List<(MapOwnership.Range Range, string Key, bool FromMaps)>();
         var realmOwners = new Dictionary<int, string>();
         var nameOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig config) in Processes)
@@ -444,8 +469,29 @@ public sealed class ClusterSupervisorOptions
             if (!string.IsNullOrWhiteSpace(config.Role) && !SupervisedRoles.IsKnown(config.Role))
                 problems.Add($"{section}:Processes:{key}:Role '{config.Role}' is not one of combined, realm, gateway, worker, social, coordinator, supervisor.");
 
+            bool mapsParsed = MapOwnership.TryParseRanges(config.Maps, out IReadOnlyList<MapOwnership.Range> mapRanges, out string? mapsError);
+            if (!mapsParsed)
+                problems.Add($"{section}:Processes:{key}:Maps is not a map list: {mapsError}.");
+
             if (string.Equals(config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
             {
+                var mine = new List<(MapOwnership.Range Range, bool FromMaps)>();
+                mine.AddRange(mapRanges.Select(r => (r, true)));
+                mine.AddRange(config.MapAssignments.Select(m => (new MapOwnership.Range(m, m), false)));
+                foreach ((MapOwnership.Range range, bool fromMaps) in mine)
+                {
+                    foreach ((MapOwnership.Range other, string otherKey, bool otherFromMaps) in rangeOwners)
+                    {
+                        // Two MapAssignments lists are reported by the per-map check below; every overlap that involves a Maps range is reported here.
+                        if ((fromMaps || otherFromMaps) && !string.Equals(otherKey, key, StringComparison.Ordinal) && range.Overlaps(other))
+                        {
+                            problems.Add($"{section}:Processes:{key}:{(fromMaps ? "Maps" : "MapAssignments")} lists {range}, which overlaps {other} of '{otherKey}'; a map must have one owner.");
+                        }
+                    }
+                }
+
+                rangeOwners.AddRange(mine.Select(m => (m.Range, key, m.FromMaps)));
+
                 foreach (uint mapId in config.MapAssignments)
                 {
                     if (mapOwners.TryGetValue(mapId, out string? owner))

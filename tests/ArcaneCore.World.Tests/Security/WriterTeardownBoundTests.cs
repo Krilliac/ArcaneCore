@@ -44,7 +44,7 @@ public sealed class WriterTeardownBoundTests
     private static async Task<(Task Run, WorldSession Session, TcpClient Client)> StartOverLoopbackAsync(
         WorldTestHost host, WorldSessionOptions options)
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         listener.Start();
         try
         {

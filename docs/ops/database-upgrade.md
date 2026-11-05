@@ -93,14 +93,14 @@ database older than the baseline reaches it through `arcane-db upgrade` are in [
 |---|---|---|
 | 0 | ok: current, upgraded, or drift clean | upgrade: yes |
 | 1 | unexpected failure (a bug, or an input the tool did not anticipate) | maybe: read the message |
-| 2 | usage or configuration: unknown command or option, missing value, no connection string | no |
+| 2 | usage or configuration: unknown command or option, missing value, no connection string; the server refused the credentials or the database name (SQLSTATE 28xxx, 3D000, MySQL/MariaDB error 1049): restarting never helps | no |
 | 3 | `status`, `plan`: an upgrade is pending (a normal report; `--no-fail-on-pending` makes it 0 for `set -e` scripts) | no |
 | 4 | refused: database newer than the code, unknown state, blocker (duplicate rows, conflicting index, mismatching table), other sessions connected; the world daemon also exits 4 when another world process holds the characters database writer lock (`<database>.world.lock`) or the lock file cannot be created | no |
 | 5 | drift: the database differs from the model (`check`, or the check at the end of `upgrade`); for `dbc`, a DBC with another layout or a world id no DBC row has | no |
-| 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
-| 7 | the wait for another process's schema lock ran out | no |
+| 6 | the database server could not be reached (connection-level or transient failure; message scrubbed): supervisors may restart | no |
+| 7 | a lock wait ran out: another process's schema lock, a server lock wait timeout (MySQL/MariaDB 1205, PostgreSQL 55P03), a deadlock or serialization failure (40001, 40P01), or a busy SQLite database: retry once the other process is done | no |
 | 8 | `upgrade` with pending steps and no confirmed backup, or a backup that could not be made | no |
-| 9 | `copy`: a table differed from its source when read back through the model column types (row count or a value); the component's copy was rolled back and its target is as it was (PostgreSQL key counters unchanged: `setval` runs only after every table verified); with `--component all` earlier components stay committed and the message names them | no |
+| 9 | `verify`: a table differs between the source and the target (nothing is written). `copy`: a table differed from its source when read back through the model column types (row count or a value); the component's copy was rolled back and its target is as it was (PostgreSQL key counters unchanged: `setval` runs only after every table verified); with `--component all` earlier components stay committed and the message names them | no |
 
 These differ from the content importer's codes (`arcane-content-importer`: 3 wrong source schema, 4 database error,
 5 repository path, 6 verify); each tool lists its own in `--help`.
@@ -119,6 +119,8 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `dbc` | read-only client data check: every file of the DBC directory against its vmangos, ArcaneCore or WoWDBDefs layout, then the world database's spell, map, area, faction, display ... ids that no DBC row has, then the client DBCs' own references into each other (a diagnostic that never sets exit 5; `clientReferences` in `--json`) (docs/areas/client-data.md); `--json` |
 | `dbc dump <file.dbc>` | read-only named record dump of one build-5875 DBC; uses generated signedness, needs `--dbc-dir` or `ClientData:DbcDirectory`, and does not open a database |
 | `copy` | move a component's rows to another database, typically SQLite to PostgreSQL or MariaDB (see "Moving from SQLite to PostgreSQL or MariaDB"); refuses before writing anything, creates the target schema, copies, resets key counters, verifies and runs `check` on the target |
+| `backup` | write a verified consistent copy (`VACUUM INTO`, then `integrity_check`) of each selected component's SQLite database as `<component>.db` in `--backup-dir`; never overwrites; refuses a server engine and a directory inside a git work tree that is not ignored |
+| `verify` | read-only comparison of each component of the configured `Database` section (the source) with the target database (same target settings as `copy`): per table the row count and an order-independent digest of every value read through the model column types; a table or model column missing on either side is a difference; exit 9 when any table differs |
 
 | Option | Applies to | Meaning |
 |---|---|---|
@@ -128,13 +130,13 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `--no-fail-on-pending` | status, plan | exit 0 when only an upgrade is pending |
 | `--apply` | migrate-codex | migrate; without it `migrate-codex` is a read-only dry run |
 | `--confirm-backup` | upgrade, migrate-codex | you hold a backup of every database that has pending steps |
-| `--backup-dir <directory>` | upgrade, migrate-codex | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`) |
+| `--backup-dir <directory>` | upgrade, migrate-codex, backup | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`); required by `backup`, which writes `<component>.db` into it |
 | `--allow-active-sessions` | upgrade, migrate-codex, copy | do not refuse when other sessions are connected to the database |
 | `--lock-timeout <seconds>` | upgrade, migrate-codex, copy | wait for another process's schema lock (default 60) |
 | `--dbc-dir <directory>` | dbc | the build-5875 DBC directory; default `ClientData:DbcDirectory` of the configuration |
 | `--out <directory>` | export-updates | the update root to write; required |
-| `--source-provider <engine>`, `--source-connection <string>` | copy | name the source instead of the configured `Database` section: `sqlite`, `mariadb`, `mysql` or `postgresql`; one component only |
-| `--target-provider <engine>`, `--target-connection <string>` | copy | the target database; one component only. Without them the target comes from ARCANE_DB_TARGET_PROVIDER and ARCANE_DB_TARGET_AUTH_CONNECTION, ARCANE_DB_TARGET_CHARACTERS_CONNECTION, ARCANE_DB_TARGET_WORLD_CONNECTION (ARCANE_DB_TARGET_CONNECTION for a single component) |
+| `--source-provider <engine>`, `--source-connection <string>` | copy, verify | name the source instead of the configured `Database` section: `sqlite`, `mariadb`, `mysql` or `postgresql`; one component only |
+| `--target-provider <engine>`, `--target-connection <string>` | copy, verify | the target database; one component only. Without them the target comes from ARCANE_DB_TARGET_PROVIDER and ARCANE_DB_TARGET_AUTH_CONNECTION, ARCANE_DB_TARGET_CHARACTERS_CONNECTION, ARCANE_DB_TARGET_WORLD_CONNECTION (ARCANE_DB_TARGET_CONNECTION for a single component) |
 | `--replace` | copy | empty the target component's tables first; without it a target that holds rows is refused |
 
 `status`, `plan`, `check` and `migrate-codex` without `--apply` open SQLite read-only and never create a file. All
@@ -148,7 +150,7 @@ The source is never changed (SQLite is opened read-only). Run it once per realm 
 
 1. **Stop every daemon** (`authd`, `worldd`, tools). `copy` refuses a SQLite characters file that a world process owns (it takes the same
    `<database>.world.lock` sidecar for the length of the copy) and, on a server engine, other connected sessions (counted at the preflight and again right
-   before each component's first write). A SQLite **auth or world** file has no such lock: the realm and world daemons hold no lock or PID marker on it, so
+   before each component's first write). On the characters database it also refuses while an ownership row is active, while a worker shard lock is held (a SQLite worker's `<database>.world.<hash>.lock` sidecar), or when an ownership row names a worker scope that is not a valid shard id (that lock cannot be checked); the check creates no sidecar file. A SQLite **auth or world** file has no such lock: the realm and world daemons hold no lock or PID marker on it, so
    the tool cannot see a daemon that is using it. Stopping them is on you.
 2. **Back up the SQLite files** (`arcane-db backup-info`; with `--backup-dir` `upgrade` writes a verified copy). The copy does not modify them, but you
    will keep them until the new install has run for a while.
@@ -215,6 +217,22 @@ Limits, stated plainly:
 - A table that references itself, or a foreign-key cycle, is refused (none exists today); a value the target type cannot hold (an integer outside the
   target column's range, text that is not a number in a numeric column) fails the copy and names the table, column and primary key of the row; the copy is
   one pass over a stopped realm, not a replication.
+
+### Cutover of the live realm to PostgreSQL 16
+
+`tools/ops/live/pg-cutover.ps1` wraps the `copy` procedure above for the live realm (auth, characters and world) and adds a backup, an independent check and a rollback. It never starts a daemon and the downtime window is the operator's call. It needs `arcane-db` of this build (the `backup`, `copy`, `verify`, `status` and `check` commands), a reachable PostgreSQL 16 server with empty UTF8 databases (`arcane_auth`, `arcane_characters`, `arcane_world`) and a role that may create tables.
+
+The script loads no database driver: every database access is an `arcane-db` run on the repository's own runtime. It starts `arcane-db` with the live profile as its working directory and the profile's `appsettings.json` as `--config`, so a relative `Data Source=auth.db` names the same file as for the daemons (which also start in the profile). The SQLite files that Rollback restores are found with the precedence `arcane-db` and the daemons use: the `appsettings.json` beside `arcane-db`, then the profile's, then `Database__*` environment variables, the component's own `ConnectionString` before `Database:ConnectionString`.
+
+Secrets come only from a JSON file in the user profile (default `.arcanecore/pg-cutover.json` under the profile directory, or the path in `ARCANECORE_PG_SECRET_FILE`, or `-SecretFile`) with the keys `Host`, `Port`, `Username`, `Password` and optionally `AuthDatabase`, `CharactersDatabase`, `WorldDatabase`, `SslMode`. The file is read and checked before `arcane-db` is started. The script builds connection strings in memory, hands them to `arcane-db` through the child process environment only and scrubs the password from its output; no argument carries a secret.
+
+1. `pg-cutover.ps1 -Plan` prints every step and the resolved locations and touches nothing; an incomplete secret file only shows as `not read in -Plan`.
+2. Stop every daemon and tool. Backup: `-Step Backup -BackupDir <dir> -Confirm` runs `arcane-db backup` (a consistent `VACUUM INTO` copy of each SQLite file with `integrity_check`), compares each copy with its source with `arcane-db verify` and records SHA-256 hashes in `manifest.json`.
+3. Copy: `-Step Copy -BackupDir <dir> -Confirm` refuses without the verified manifest, then runs `arcane-db copy --component all` (add `-Replace` to re-run). World content travels with the world component. If `creature_template` is empty in the source, `Verify` warns; fill it with `arcane-content-importer --provider postgresql --connection-string <target>` (the importers accept PostgreSQL, see [content import](../areas/content-import.md)).
+4. Verify: `-Step Verify` runs `arcane-db verify` for each component against its PostgreSQL database: per table the row count and an order-independent digest of every value, read through the model column types (so a Guid or a timestamp is the same value on both engines). Exit 0 means all tables match; exit 1 lists each differing table (a dropped row changes the count and the digest). It reads the model's tables; a table or column that is missing on either side is reported as a difference.
+5. Check: `-Step Check` runs `arcane-db status` and `arcane-db check` against the target. Start the daemons with `Database:Upgrade:Policy` set to `Never` so the schema initializers only validate.
+6. Switch: `-Step Switch` prints the `Database:Auth`, `Database:Characters` and `Database:World` provider (`PostgreSql`) and connection string settings (password masked) to apply, as environment variables, to the realm, world, gateway and tools.
+7. Rollback: `-Step Rollback -BackupDir <dir>` checks the backup against its manifest and prints the revert (remove the overrides, SQLite settings apply again); with `-Confirm` it restores the SQLite files, keeping the replaced ones as `.pre-rollback-<stamp>`. Changes made on PostgreSQL after the switch are not in the SQLite files; copy them back first with `arcane-db copy` from PostgreSQL to SQLite and `--replace` if they matter.
 
 ### Databases created by the Codex line
 
@@ -292,14 +310,14 @@ do: they refuse to start on a database that lacks migrations and make the operat
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
-| `Database:Upgrade:Policy` | `Always`, `CreateOnly`, `Never` | `Always` | `Always`: create and upgrade. `CreateOnly`: create an empty database, resume an interrupted create, **refuse to adopt or upgrade** an existing one. `Never`: verify only, create nothing, not even a missing database (the retail behaviour) |
+| `Database:Upgrade:Policy` | `Always`, `CreateOnly`, `Never` | `Always` | `Always`: create and upgrade. `CreateOnly`: create an empty database, resume an interrupted create, **refuse to adopt or upgrade** an existing one. `Never`: verify only, create and seed nothing, not even a missing database (the retail behaviour) |
 | `Database:Upgrade:LockTimeoutSeconds` | 1 to 86400 | 60 | how long a start waits for another process's schema work |
 | `Database:Upgrade:ValidateOnly` | `true`, `false` | `false` | `true`: validate-only serving mode; verify that every component's schema is at the exact current version with all registered module tables present, executing zero DDL and zero seed inserts |
 
 A refused start prints one line (`database schema refused: ...`, passwords removed) and exits 4 (7 for a lock timeout)
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
 (or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
-under the component schema lock (and skipped in validate-only mode).
+under the component schema lock (and skipped entirely under `Policy=Never` and under `ValidateOnly`: neither runs DDL or seed inserts).
 
 The content importer (`arcane-content-importer`) does not read `Database:Upgrade`; it has its own gate. `refresh` refuses a world whose schema is behind the importer's unless `--migrate` is given. `import`, `import-dbc`, `import-map-dbc`, `proc-events` and `spell-threat` use the same gate in its `CreateOnly` form: they still create a database that holds no schema, but refuse to upgrade an existing one (exit 3, nothing written) unless `--migrate` is given. Production worlds migrate through `arcane-db upgrade`; pass `--migrate` only for a throwaway or staging world.
 

@@ -475,6 +475,110 @@ public sealed class PlayerbotCombatAnomalyTests
         finally { cap.Dispose(); }
     }
 
+    [Fact]
+    public async Task ACombatFlagResetEveryFewSeconds_IsNotReportedAsPhantomCombat()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            // The flag is re-set every 3 seconds for 60 seconds (exceeding PhantomMs 45 s total elapsed).
+            for (uint nowMs = 1000; nowMs <= 60_000; nowMs += 3000)
+            {
+                player.Map!.Combat.SetInCombatState(player, 3_600_000);
+                watch.Look(player, nowMs);
+            }
+
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), cap.Describe());
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ACombatFlagClearedAndSetAgainBetweenLooks_IsNotReportedAsPhantomCombat()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            // The flag is cleared and set again by the same setter between every look for 60 s, with no attacker.
+            for (uint nowMs = 1000; nowMs <= 60_000; nowMs += 3000)
+            {
+                MapCombat.ClearInCombat(player);
+                player.Map!.Combat.SetInCombatState(player, 3_600_000, caller: "SameSetter", via: "SameVia");
+                watch.Look(player, nowMs);
+            }
+
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), cap.Describe());
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ASingleCombatSet_PastThresholdWithNoAttacker_IsReportedAndNamesSetter()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            using AnomalyCapture cap = PlayerbotAnomalies.CaptureFor(player);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            player.Map!.Combat.SetInCombatState(player, 3_600_000, caller: "AssistPropagation", via: "SetInCombatWithAssisted");
+
+            watch.Look(player, 1000);
+            watch.Look(player, 1000 + PlayerbotPhantomCombatWatch.PhantomMs - 1);
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), "not yet at threshold: " + cap.Describe());
+
+            watch.Look(player, 1000 + PlayerbotPhantomCombatWatch.PhantomMs);
+            Assert.True(cap.Any(Key("combat", "phantom-combat")), "must report once threshold reached: " + cap.Describe());
+
+            AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == Key("combat", "phantom-combat"));
+            Assert.Contains("AssistPropagation", notice.Detail);
+            Assert.Contains("SetInCombatWithAssisted", notice.Detail);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ACombatFlagRepeatedlySetWithNoOpponent_ReportsCombatNeverLeftAtTwoMinutes_AndNoPhantomCombat()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            string botSubject = PlayerbotAnomalies.SubjectOf(player);
+            string mapSubject = MapCombat.SubjectOf(player);
+            using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subject == botSubject || n.Subject == mapSubject);
+
+            var watch = new PlayerbotPhantomCombatWatch();
+            // Loops for at least 125 s (126 s: 126 * 1000 ms) refreshing combat with no opponent. A frame is charged at most one sweep interval plus MaxChargedFrameMs (2 s),
+            // so the world advances in 1 s frames: a 3 s frame would charge 2 s and the 120 s budget would not be crossed in this loop.
+            // Bot watch ignores repeated sets, while Game-side MapCombat catches it at 120 s as combat/combat-never-left.
+            MapCombat combat = player.Map!.Combat;
+            for (uint nowMs = 1000; nowMs <= 126_000; nowMs += 1000)
+            {
+                combat.SetInCombatState(player, 3_600_000, caller: "HandOffCaller", via: "HandOffVia");
+                combat.Update(1000);
+                watch.Look(player, nowMs);
+            }
+
+            Assert.False(cap.Any(Key("combat", "phantom-combat")), cap.Describe());
+            Assert.False(cap.Any("combat/phantom-combat"), cap.Describe());
+            Assert.Equal(1, cap.Count("combat/combat-never-left"));
+
+            AnomalyNotice notice = Assert.Single(cap.Notices, n => n.Key == "combat/combat-never-left");
+            Assert.Contains("set by HandOffCaller", notice.Detail);
+            return true;
+        });
+    }
+
     // --- risk/retreat-loop ---------------------------------------------------------------------------------------------------
 
     [Fact]

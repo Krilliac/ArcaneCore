@@ -1140,7 +1140,7 @@ public sealed class McpOverRealCommandsTests
 /// <summary>A one-connection HTTP server that answers the first request with a fixed response (an answer a real Atlas never gives).</summary>
 internal sealed class CannedHttpServer : IAsyncDisposable
 {
-    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly TcpListener _listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _serving;
     private string _request = string.Empty;

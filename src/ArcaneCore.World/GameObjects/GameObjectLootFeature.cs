@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Content.Transports;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -189,6 +190,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         foreach (uint mapId in Content.MapsWithSpawns)
         {
+            if (!world.Owns(mapId))
+            {
+                continue; // a map another worker owns (Cluster:Worker:OwnedMaps) spawns there
+            }
+
             GetOrCreateSystem(mapId);
         }
     }
@@ -251,6 +257,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             Groups = _socialGroups ??= new SocialGroups(services),
             // LootMgr.cpp:370-377 evaluates each row's condition against the viewer (resolved at use time, fails closed without the feature).
             Conditions = (_lootConditions ??= new LootConditions(services)).IsSatisfied,
+            // The group pre-filter reads the team and player-free conditions of the table loaded now (LootMgr.cpp:403-433).
+            ConditionRules = _lootConditions!.Rules,
             CreatureOptions = CreatureFeature?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
@@ -376,16 +384,19 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
     /// <c>IsPlayerMeetToCondition(conditionId, player, map, lootTarget, CONDITION_FROM_LOOT)</c>) through the
     /// <see cref="ConditionFeature"/>, resolved at use time: it attaches before this feature (type-name order) but may rebuild
     /// its evaluator later (<see cref="ConditionFeature.RefreshCollaborators"/>), and it forwards to the current one. Without
-    /// the feature every conditioned row fails closed, like a missing condition row in cmangos. The loot source is not passed
-    /// (<see cref="LootService.Conditions"/> has no source parameter), so source-side condition types read "no source".
+    /// the feature every conditioned row fails closed, like a missing condition row in cmangos. The loot target
+    /// (<see cref="LootService.Conditions"/>' source parameter: the creature, game object or a corpse owner's player) is the condition's source,
+    /// so <c>SwapTargets</c> rows and source-side types see it; a loot without an object reads "no source".
     /// World thread; one lookup per conditioned row at generation, nothing per tick.
     /// </summary>
     private sealed class LootConditions(IServiceProvider services)
     {
         private ConditionFeature? _conditions;
 
-        public bool IsSatisfied(Player player, uint conditionId)
-            => (_conditions ??= services.GetService<ConditionFeature>())?.IsSatisfied(conditionId, player, null) ?? false;
+        public bool IsSatisfied(Player player, WorldObject? source, uint conditionId)
+            => (_conditions ??= services.GetService<ConditionFeature>())?.IsSatisfiedWithSource(conditionId, player, source) ?? false;
+
+        public ConditionEvaluator? Rules() => ((IConditionTableEvaluator?)(_conditions ??= services.GetService<ConditionFeature>()))?.Current;
     }
 
     private sealed class SocialGroups(IServiceProvider services) : ILootGroups

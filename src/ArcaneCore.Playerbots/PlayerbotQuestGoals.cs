@@ -25,6 +25,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotQuestTripFeasibility _trip = new();
+    private readonly PlayerbotCrowdSpread _spread = new(session, options);
 
     internal int TripEvaluations => _trip.Evaluations;
     private PlayerbotRoute? _route;
@@ -86,6 +87,82 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private const int MaxQuestFallbackNodeBudget = 8_192;
     private static readonly long MaxQuestPhaseBudgetTicks = System.Diagnostics.Stopwatch.Frequency * 25 / 1_000;
     private static readonly long MaxQuestProbeQueryTicks = System.Diagnostics.Stopwatch.Frequency * 20 / 1_000;
+    private readonly StarterScan _starterScan = new();
+
+    /// <summary>
+    /// The resumable part of the quests phase (audit cid 43: one think spent 1,184 ms in it). The starter search judges each visible giver's
+    /// quests (<see cref="PlayerbotWorldDestinations.MayTakeQuest"/>, a trip-feasibility path query each) until the phase budget
+    /// (<see cref="IsQuestNavigationBudgetExhausted"/>) is spent. It used to start over from the first giver every think, so the givers after
+    /// the budget's reach were never judged while the first ones' answers were computed again and again. Now a quest judged "not taken" is
+    /// remembered here, the next think skips it and carries on with the quests not yet judged, and each think judges at least one
+    /// (<see cref="StarterScan.MayJudge"/>), so the search always finishes. Nothing is remembered once a quest is chosen, the search ends without
+    /// running out of budget, or after <see cref="StarterScan.MaxAgeMs"/>: the inputs (level, log, suspensions) have moved on by then.
+    /// <para>Thread affinity: the world thread (the bot's think). State: one set of (giver, quest) pairs, bounded by the quests of the visible givers, cleared at each pass end.</para>
+    /// </summary>
+    internal sealed class StarterScan
+    {
+        /// <summary>How long judged quests are remembered (world milliseconds).</summary>
+        internal const uint MaxAgeMs = 10_000;
+
+        private readonly HashSet<(ObjectGuid Giver, uint Quest)> _judged = [];
+        private uint _begunAt;
+
+        /// <summary>Quests judged by this think so far.</summary>
+        internal int Evaluated { get; private set; }
+
+        /// <summary>Whether this think's search stopped for want of budget before it had looked at every giver and quest.</summary>
+        internal bool Cut { get; private set; }
+
+        /// <summary>Whether a judged quest wanted room in a full log (so a skipped one still asks for it).</summary>
+        internal bool RoomWanted { get; private set; }
+
+        /// <summary>Quests remembered as judged.</summary>
+        internal int JudgedCount => _judged.Count;
+
+        /// <summary>A think's search begins: forget what is older than <see cref="MaxAgeMs"/>.</summary>
+        internal void BeginThink(uint now)
+        {
+            Evaluated = 0;
+            Cut = false;
+            if (_judged.Count != 0 && unchecked(now - _begunAt) > MaxAgeMs) Reset();
+        }
+
+        internal bool IsJudged(ObjectGuid giver, uint quest) => _judged.Contains((giver, quest));
+
+        /// <summary>The quest was judged and is not taken: later thinks of this pass skip it.</summary>
+        internal void Judged(ObjectGuid giver, uint quest, uint now, bool roomWanted)
+        {
+            if (_judged.Count == 0) _begunAt = now;
+            _judged.Add((giver, quest));
+            RoomWanted |= roomWanted;
+        }
+
+        /// <summary>A judgement is about to be made: false (and the search is cut) when the budget is spent, except for the first of a think, which is always allowed.</summary>
+        internal bool MayJudge(bool budgetSpent)
+        {
+            if (budgetSpent && Evaluated > 0)
+            {
+                Cut = true;
+                return false;
+            }
+
+            Evaluated++;
+            return true;
+        }
+
+        /// <summary>The pass is over (a quest was chosen, or every quest was judged): the next one starts from the beginning.</summary>
+        internal void Reset()
+        {
+            _judged.Clear();
+            RoomWanted = false;
+        }
+
+        /// <summary>This think's end: the pass is over unless the budget cut the search short.</summary>
+        internal void EndThink(bool chosen)
+        {
+            if (chosen || !Cut) Reset();
+        }
+    }
     private readonly Dictionary<(uint QuestId, uint Entry), (uint Progress, string Reason)> _reportedNoProgressEpisodes = [];
     private readonly HashSet<(uint QuestId, uint EnderEntry, string Code)> _reportedTurnInRefusals = [];
 
@@ -353,6 +430,49 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         return true;
     }
 
+    /// <summary>Minimum milliseconds between two grey-quest abandons of one bot (<see cref="TryShedGreyQuest"/>).</summary>
+    internal const uint GreyShedIntervalMs = 5_000;
+
+    private uint _nextGreyShedMs;
+
+    /// <summary>
+    /// The lowest-level incomplete quest in the log that is grey for the player (<see cref="IsGrey"/>), skipping refused ones; zero when none.
+    /// A complete (not yet rewarded) grey quest is kept for its turn-in, and a failed one is the full-log shed's business.
+    /// </summary>
+    internal static uint GreyQuestToDrop(Player player, QuestNpcServices services, PlayerNpcState state, Func<uint, bool>? skip = null)
+    {
+        uint best = 0;
+        int bestLevel = int.MaxValue;
+        for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
+        {
+            uint id = state.Quests.SlotQuestId(slot);
+            if (id == 0 || skip?.Invoke(id) == true || state.Quests.Get(id) is not { Status: QuestStatus.Incomplete, Rewarded: false }
+                || services.Quests.Get(id) is not { } quest || !IsGrey(player, quest)) continue;
+            if (quest.QuestLevel < bestLevel || (quest.QuestLevel == bestLevel && id < best)) { best = id; bestLevel = quest.QuestLevel; }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// "Skip and drop if quests become greyed" (<see cref="PlayerbotOptions.DropGreyQuests"/>): out of combat and alive, abandons one incomplete
+    /// grey quest per <see cref="GreyShedIntervalMs"/> through the client abandon packet, free log slot or not, then sets it aside so it is not
+    /// retaken from a giver in sight. A refused abandon is also set aside, so the packet is not sent on every think. True when a packet was sent.
+    /// </summary>
+    private bool TryShedGreyQuest(Player player, QuestNpcServices services, PlayerNpcState state, uint now)
+    {
+        if (!_options.DropGreyQuests || player.Combat.IsInCombat || !player.IsAlive
+            || unchecked((int)(_nextGreyShedMs - now)) > 0) return false;
+        uint id = GreyQuestToDrop(player, services, state, IsRefused);
+        if (id == 0) return false;
+        int slot = state.Quests.FindSlot(id);
+        if (slot < 0 || slot >= QuestConstants.MaxQuestLogSize
+            || !_session.TryManagedAction(WorldOpcode.CmsgQuestlogRemoveQuest, [(byte)slot])) return false;
+        _nextGreyShedMs = unchecked(now + GreyShedIntervalMs);
+        Refuse(id, now);
+        return true;
+    }
+
     /// <summary>
     /// A full log sheds one low-value quest (<see cref="LowValueQuestToShed"/>) through the ordinary client abandon packet (vmangos
     /// <c>WorldSession::HandleQuestLogRemoveQuest</c>), so the slot, source item and persistence follow a player's path. A refused
@@ -466,7 +586,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 if (_stage == Stage.AcceptDetails && packet.Opcode == WorldOpcode.SmsgQuestgiverQuestDetails)
                 {
                     _stage = Stage.Accept;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
                 else if (_stage == Stage.CompleteResponse && packet.Opcode == WorldOpcode.SmsgQuestgiverRequestItems)
@@ -478,13 +598,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                         return false;
                     }
                     _stage = Stage.RewardRequest;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
                 else if ((_stage is Stage.CompleteResponse or Stage.RewardOffer) && packet.Opcode == WorldOpcode.SmsgQuestgiverOfferReward)
                 {
                     _stage = Stage.RewardChoice;
-                    _stageDeadline = unchecked(now + 15_000);
+                    _stageDeadline = unchecked(now + StageTimeoutMs());
                     confirmed = true;
                 }
             }
@@ -539,9 +659,10 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             return true;
 
         if (_stage == Stage.None && TryShedUnkillableQuest(player, services, state, now)) return true;
+        if (_stage == Stage.None && TryShedGreyQuest(player, services, state, now)) return true;
 
         long phaseStartTicks = PlayerbotThinkProbe.Timestamp();
-        QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks);
+        QuestTarget? target = FindResumableCandidate(player, services, state, phaseStartTicks, now);
         if (target is null && _roomWanted && _stage == Stage.None && TryMakeRoomInFullLog(player, services, state, now))
             return true;
         if (target is null)
@@ -590,6 +711,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         _route = null;
         _approachFailCount = 0;
+        // Bots that reach a giver the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+        if (_spread.Step(player, target.Npc, elapsedMs))
+        {
+            Goal = PlayerbotGoalKind.Quest;
+            return true;
+        }
+
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
 
@@ -812,6 +940,30 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
     }
 
+    /// <summary>One think's resumable starter search: <see cref="StarterScan"/> is begun and ended around <see cref="FindCandidate(Player, QuestNpcServices, PlayerNpcState, bool, long, bool)"/>.</summary>
+    private QuestTarget? FindResumableCandidate(Player player, QuestNpcServices services, PlayerNpcState state, long phaseStartTicks, uint now)
+    {
+        _starterScan.BeginThink(now);
+        QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks, resumable: true);
+        _starterScan.EndThink(target is not null);
+        return target;
+    }
+
+    /// <summary>
+    /// One think of the quests phase's resumable starter search as <see cref="Update"/> runs it, without the exchange that follows: the id of the
+    /// quest the search chose (0: none this think). <paramref name="phaseStartTicks"/> is the phase's start on the think clock
+    /// (<see cref="PlayerbotThinkProbe.Timestamp"/>), so a caller can start the phase with its budget already spent. Thread affinity: the world thread.
+    /// </summary>
+    internal uint FindStarterThink(Player player, long phaseStartTicks)
+    {
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        return services?.StateOf(player) is { Loaded: true } state
+            ? FindResumableCandidate(player, services, state, phaseStartTicks, _session.World.NowMs)?.Quest.Id ?? 0 : 0;
+    }
+
+    /// <summary>The resumable starter search's memory (read by tests).</summary>
+    internal StarterScan Scan => _starterScan;
+
     private QuestTarget? FindCandidate(Player player)
     {
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
@@ -819,7 +971,8 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             ? FindCandidate(player, services, state, refreshBagSpace: true, phaseStartTicks: PlayerbotThinkProbe.Timestamp()) : null;
     }
 
-    private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state, bool refreshBagSpace = true, long phaseStartTicks = 0)
+    private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state, bool refreshBagSpace = true, long phaseStartTicks = 0,
+        bool resumable = false)
     {
         if (refreshBagSpace)
             RefreshBagSpaceWait(player, services, state);
@@ -896,8 +1049,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
             if (entrySuspended || (returning && !withinReach))
                 continue;
-            if (_stage == Stage.None && IsQuestNavigationBudgetExhausted(phaseStartTicks))
+            // A budget spent before this giver is looked at: its quests wait for the next think (resumable, which still judges one quest per
+            // think so the search finishes) or are skipped (as ever).
+            if (_stage == Stage.None && IsQuestNavigationBudgetExhausted(phaseStartTicks) && !(resumable && _starterScan.Evaluated == 0))
+            {
+                if (resumable) _starterScan.MayJudge(budgetSpent: true);
                 continue;
+            }
 
             foreach (uint id in services.StartersOf(npc))
             {
@@ -911,21 +1069,33 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 // Mid-exchange the quest was already chosen: only the journal is asked again, as before.
                 if (_stage == Stage.None)
                 {
+                    if (resumable && _starterScan.IsJudged(npc.Guid, id))
+                    {
+                        _roomWanted |= _starterScan.RoomWanted;
+                        continue;
+                    }
                     if (!hasFreeSlot && (_roomWanted || IsGrey(player, quest)))
+                        continue;
+                    if (_options.DropGreyQuests && IsGrey(player, quest))
                         continue;
                     if (hasFreeSlot && !SourceItemFits(player, quest))
                         continue;
-                    if (IsQuestNavigationBudgetExhausted(phaseStartTicks))
+                    bool budgetSpent = IsQuestNavigationBudgetExhausted(phaseStartTicks);
+                    if (resumable ? !_starterScan.MayJudge(budgetSpent) : budgetSpent)
                         break;
                     if (!PlayerbotWorldDestinations.MayTakeQuest(player, services, state, content, loot, Home,
                             Home?.Contains(player.Map?.MapId ?? player.MapId, npc.X, npc.Y, npc.Z) ?? true, quest, _trip,
                             Home is null ? _options.MaxDeliveryYards : 0))
+                    {
+                        if (resumable) _starterScan.Judged(npc.Guid, id, _session.World.NowMs, roomWanted: false);
                         continue;
+                    }
                     // A full log is refused by the server (SMSG_QUESTLOG_FULL; GitHub #786): the giver is not asked. A quest worth
                     // taking (not grey) is what a full log makes room for (Update, TryMakeRoomInFullLog); a grey one is skipped.
                     if (!hasFreeSlot)
                     {
                         if (!IsGrey(player, quest)) _roomWanted = true;
+                        // Not remembered as judged: this is the quest the room is made for, and a later think of the pass must see it again once a slot is free.
                         continue;
                     }
                 }
@@ -1069,6 +1239,9 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             if (status.Status != QuestStatus.Incomplete || services.Quests.Get(questId) is not { IsActive: true } quest)
                 continue;
             if (Suspensions?.IsQuestSuspended(questId, now) == true)
+                continue;
+            // A grey quest still in the log (drop rate-limited or refused) is not hunted for: its objectives give next to no experience.
+            if (_options.DropGreyQuests && IsGrey(player, quest))
                 continue;
             for (int index = 0; index < quest.ReqCreatureOrGOId.Count; index++)
             {
@@ -1892,11 +2065,26 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         _refused[questId] = unchecked(now + RefusedQuestMs);
     }
 
+    /// <summary>
+    /// How long a bot waits in the current turn-in stage: 15 s, or in <see cref="Stage.RewardConfirmation"/> (the wait for the server's
+    /// settlement of the reward) longer when the settlement can take longer. A reward settlement may use
+    /// <see cref="QuestNpcOptions.SettlementBudget"/> plus the 5 s reconcile that follows an abandoned one (<c>ReadRewardOutcomeAsync</c>), and a
+    /// bot that gave up inside that window would refuse a turn-in the server is still about to settle. 5 s of slack is added on top.
+    /// </summary>
+    private uint StageTimeoutMs()
+    {
+        if (_stage != Stage.RewardConfirmation)
+            return 15_000;
+        QuestNpcOptions? quest = _session.Services.GetService<QuestNpcFeature>()?.Services?.Options;
+        double settleSeconds = quest is null ? 0 : quest.SettlementBudget.TotalSeconds + 5 + 5;
+        return (uint)Math.Max(15_000, Math.Min(settleSeconds * 1000, 600_000));
+    }
+
     private void ArmStage(QuestTarget target)
     {
         _stageNpc = target.Npc.Guid;
         _stageQuest = target.Quest.Id;
-        _stageDeadline = unchecked(_session.World.NowMs + 15_000);
+        _stageDeadline = unchecked(_session.World.NowMs + StageTimeoutMs());
     }
 
     private void ClearStage()

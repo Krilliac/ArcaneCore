@@ -41,7 +41,7 @@ public static partial class ContentImporterCli
     /// tables, <c>exploration_basexp</c> and <c>game_weather</c>, <c>areatrigger_tavern</c>, <c>transports</c>, <c>spell_proc_event</c> (build
     /// 5875, cooldown unit from the dump's classic-db revision unless given), the relay DB scripts, the quest, gossip and event DB scripts and
     /// <c>script_waypoint</c> (world 42; the script ids of the <c>quest_template</c> and <c>gossip_menu</c> rows the world has are set, and the
-    /// gossip options that run a script are added when missing), <c>areatrigger_template</c> from
+    /// gossip options that run a script are added when missing), <c>points_of_interest</c> (the gossip map markers), <c>areatrigger_template</c> from
     /// <c>AreaTrigger.dbc</c>, and <c>taxi_nodes</c> / <c>taxi_path</c> from <c>TaxiNodes.dbc</c> / <c>TaxiPath.dbc</c>. The ships' own
     /// <c>gameobject_template</c> rows (type 15) are written as the dump has them; every other object template is left alone. With
     /// <c>Map.dbc</c> and <c>AreaTable.dbc</c> in <c>--dbc-dir</c> it also replaces <c>map_template</c> (every map, the dungeon columns from
@@ -304,6 +304,9 @@ public static partial class ContentImporterCli
             warnings.Add("npc_vendor_template: the world's shared vendor stock is left as it is, and creature_template.VendorTemplateId is not refreshed either");
         }
 
+        // points_of_interest (the gossip map markers): a copy missing a column, or a row outside the map, is named here; the rest is written.
+        warnings.AddRange(gossip.BuildReport().Diagnostics.Where(d => d.StartsWith("points_of_interest", StringComparison.Ordinal)));
+
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         void Count(string table, long rows, bool present)
         {
@@ -332,9 +335,10 @@ public static partial class ContentImporterCli
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
-        Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityTable);
+        Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityRows);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         Count(NpcTextBroadcastDataModule.Table, gossip.BuildReport().TextBroadcasts, gossip.SawTextBroadcastTable);
+        Count("points_of_interest", gossip.BuildReport().PointsOfInterest, gossip.BuildReport().PointsOfInterest > 0);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
         Count("creature_movement_template (script_waypoint, waypoint_path)", scriptDevPoints, scriptDevPoints > 0);
@@ -467,7 +471,7 @@ public static partial class ContentImporterCli
                     }
 
                     (int immunityRows, int immunityTemplates) = await relays.RefreshImmunitiesAsync(db, token).ConfigureAwait(false);
-                    if (relays.HasImmunityTable)
+                    if (relays.HasImmunityRows)
                     {
                         counts[CreatureImmunityDataModule.ImmunityTable] = immunityRows;
                     }
@@ -497,6 +501,7 @@ public static partial class ContentImporterCli
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
                     await gossip.RefreshTextBroadcastsAsync(db, token).ConfigureAwait(false);
+                    await gossip.RefreshPointsOfInterestAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
                     {
                         await db.Set<SpellProcEventRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);

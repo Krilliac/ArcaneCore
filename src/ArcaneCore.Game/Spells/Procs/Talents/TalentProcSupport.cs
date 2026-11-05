@@ -83,18 +83,14 @@ internal static class TalentProcSupport
     /// <summary>vmangos WorldObject::IsWithinDistInMap (3D): the centres within the range plus both bounding radii.</summary>
     private static bool IsWithinDistance(Unit a, Unit b, float range)
     {
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        float reach = range + a.BoundingRadius + b.BoundingRadius;
-        return (dx * dx) + (dy * dy) + (dz * dz) <= reach * reach;
+        return WorldGeometry.IsWithinDist(a, b, range, inclusive: true, addRadii: true, MapCheck.None);
     }
 
     /// <summary>
     /// vmangos Unit::CanAttackWithoutEnablingPvP (Unit.cpp:9985-9993): a player-controlled target is only fair game when the attacking player is
     /// PvP-flagged, both are free-for-all flagged, or they duel.
     /// </summary>
-    private static bool CanAttackWithoutEnablingPvP(Unit attacker, Unit target)
+    internal static bool CanAttackWithoutEnablingPvP(Unit attacker, Unit target)
     {
         if (target.GetCharmerOrOwnerPlayerOrSelf() is not { } attacked || attacker.GetCharmerOrOwnerPlayerOrSelf() is not { } player)
         {

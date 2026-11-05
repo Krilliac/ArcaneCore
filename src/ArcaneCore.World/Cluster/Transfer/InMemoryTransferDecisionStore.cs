@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Cluster.Transfer;
 /// atomic single-owner epoch handoff at <see cref="PlayerTransferStage.CommitDecision"/> and forbids
 /// post-commit aborts.
 /// </summary>
-public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
+public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITransferJournalScan
 {
     private readonly object _sync = new();
     private readonly Dictionary<Guid, TransferDecisionRecord> _decisions = [];
@@ -136,6 +136,34 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
     }
 
     /// <inheritdoc />
+    public Task<TransferDecisionRecord> RebindTargetInstanceAsync(
+        Guid transferId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (current.TargetInstanceId == targetInstanceId)
+            {
+                return Task.FromResult(current);
+            }
+
+            if (current.DecisionState != PlayerTransferDecisionState.PreCommit || current.CurrentStage != PlayerTransferStage.Reserve)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot rebind the target instance of transfer '{transferId}' in state {current.DecisionState} at stage {current.CurrentStage}; only a pre-commit Reserve may.");
+            }
+
+            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
+            TransferDecisionRecord updated = current with { TargetInstanceId = targetInstanceId, UpdatedAtUtcMs = _clockUtcMs() };
+            _decisions[transferId] = updated;
+            return Task.FromResult(updated);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(
         Guid transferId,
         PlayerTransferStage nextStage,
@@ -201,7 +229,8 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
     public Task<TransferDecisionRecord> CommitDecisionAsync(
         Guid transferId,
         Guid targetIncarnation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? targetScope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (targetIncarnation == Guid.Empty)
@@ -236,7 +265,7 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
             EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
 
             var targetToken = new CharacterOwnershipToken(
-                Scope: current.SourceOwnershipToken.Scope,
+                Scope: targetScope ?? current.SourceOwnershipToken.Scope,
                 Epoch: checked(current.SourceOwnershipToken.Epoch + 1),
                 Incarnation: targetIncarnation);
 
@@ -253,6 +282,39 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
 
             _decisions[transferId] = committed;
             return Task.FromResult(committed);
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>Without ownership rows the store cannot ask which incarnation owns the scope, so it trusts the caller (the coordinator reads it from the target)
+    /// and moves the token to the next epoch under <paramref name="targetIncarnation"/>, fencing the committed token out.</remarks>
+    public Task<TransferDecisionRecord> RebindCommittedTargetAsync(
+        Guid transferId,
+        Guid targetIncarnation,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (targetIncarnation == Guid.Empty)
+            throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
+
+        lock (_sync)
+        {
+            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (current.DecisionState != PlayerTransferDecisionState.Committed || current.TargetOwnershipToken is not { } committedToken)
+            {
+                throw new InvalidOperationException(
+                    $"Transfer '{transferId}' cannot rebind its target from state {current.DecisionState}; only a committed transfer may.");
+            }
+
+            if (committedToken.Incarnation == targetIncarnation)
+                return Task.FromResult(current);
+
+            EnsureOwnershipMatchesLocked(current.CharacterGuid, committedToken);
+            var rebound = new CharacterOwnershipToken(committedToken.Scope, checked(committedToken.Epoch + 1), targetIncarnation);
+            _activeOwnership[current.CharacterGuid] = rebound;
+            TransferDecisionRecord updated = current with { TargetOwnershipToken = rebound, UpdatedAtUtcMs = _clockUtcMs() };
+            _decisions[transferId] = updated;
+            return Task.FromResult(updated);
         }
     }
 
@@ -355,6 +417,22 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
                 .Where(d =>
                     d.CharacterGuid == characterGuid &&
                     d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
+                .OrderBy(d => d.UpdatedAtUtcMs)
+                .ToArray();
+
+            return Task.FromResult(list);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_sync)
+        {
+            IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
+                .Where(d => d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
                 .OrderBy(d => d.UpdatedAtUtcMs)
                 .ToArray();
 

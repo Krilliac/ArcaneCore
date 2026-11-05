@@ -1314,6 +1314,13 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     private PathResult FindPath(NavMesh mesh, uint mapId, Vector3 start, Vector3 end, PathOptions options)
     {
+        // The search itself is iterative (a heap-backed open list), but a caller can reach it from deep inside a script or spell relay; with the stack nearly gone
+        // the query is dropped and answered as no path, one fault recorded, instead of overflowing the process.
+        if (!StackGuard.TryEnter("nav.find-path"))
+        {
+            return PathResult.StraightLine(start, end, PathType.NoPath);
+        }
+
         Vector3 startRc = NavMeshFormat.ToRecast(start);
         Vector3 endRc = NavMeshFormat.ToRecast(end);
         if (!mesh.HaveTileAt(startRc) || !mesh.HaveTileAt(endRc))

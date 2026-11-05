@@ -45,6 +45,14 @@ internal sealed class WardenModuleProfile
     /// </summary>
     public const byte OpTiming = 0x57, OpMemory = 0xF3, OpPageA = 0xBF, OpPageB = 0xB2, OpDriver = 0x71, OpMpq = 0x98, OpLua = 0x8B, OpModule = 0xD9;
 
+    /// <summary>
+    /// API_CHECK (vmangos WindowsHookScan). The module's opcode table, in vmangos WindowsScanType order, is the nine bytes at offset 8 of its
+    /// challenge/response file (vmangos WardenModule.cpp reads memoryRead, pageScanCheck, then opcodes[9]): F3 D9 BF B2 98 8B 7E 71 57 for
+    /// module 79C0768D (mangos-classic warden_modules/79C0768D657977D697E10BAD956CCED1.cr), which also confirms every opcode above.
+    /// TrinityCore/AzerothCore Warden.h names the same value PROC_CHECK (0x7E).
+    /// </summary>
+    public const byte OpApiHook = 0x7E;
+
     /// <summary>The byte the module answers for "found" in page and driver scans (vmangos WardenScan.hpp PatternFound / Found = 0x4A).</summary>
     public const byte Found = 0x4A;
 

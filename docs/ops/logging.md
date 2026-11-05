@@ -6,7 +6,7 @@ both daemons, selectable from configuration, with a colour console, a plain cons
 is either text or JSON lines (`Logging:ArcaneCore:Format`). A daemon never writes two log files. Per-category minimum levels stay where they were (`Logging:LogLevel`). `LogSafe` (CWE-117 escaping of
 client-controlled text, plus truncation) is unchanged and still the caller's job where truncation is wanted; the sinks themselves escape control and
 format characters (C0/C1 controls, U+2028/U+2029, bidi overrides, zero-width characters and the byte order mark) as visible `\uXXXX` escapes through
-`LogLineFormatter.AppendEscaped` (text and console sinks) or the same `LogLineFormatter.NeedsEscape` test inside `JsonLineFormatter.WriteString` (JSON sink, which also escapes `"` and `\`), so no message can forge a line or reorder the log text.
+`LogLineFormatter.AppendEscaped` (text and console sinks) or the same `LogLineFormatter.NeedsEscape` test inside `JsonLineFormatter.WriteString` (JSON sink, which also escapes `"` and `\`), so no message can forge a line or reorder the log text. The escaping is one way: a backslash in a message is written as it is in the text and console sinks (and as `\` in JSON), so there a literal `\n` typed by a caller and an escaped line feed look the same; the escapes make a line readable and unforgeable, they are not a reversible encoding.
 
 No third-party package is used. Serilog or NLog would have given the file and JSON sinks for free, but the repo has no
 third-party logging or resilience dependency and the hot-path requirement (no per-event allocation on the world thread)
@@ -168,7 +168,7 @@ values, anything else its invariant string. Both formats cap a line at 256 KiB c
 cannot pin memory per event. The text format marks the cut (` ...[truncated]`, with colour a reset first, then the
 newline). A cut JSON record cannot be closed in place, so it is replaced by a short valid record: `ts`, `level`,
 `category`, `eventId`/`eventName` when present, the `message` (first 1024 characters, with ` ...[truncated]` appended only
-when the message itself was cut) and `exceptionType` (the exception's type name) when there was an exception; `template`,
+when the message itself was cut) and `exceptionType` (the exception's full type name, namespace included) when there was an exception; `template`,
 `props`, `scopes` and the exception text are dropped. If even that does not fit, the line is `{"truncated":true}`.
 Rolled segments are ordered by date, then by roll number as a number, so retention keeps the newest after roll 999.
 

@@ -418,11 +418,12 @@ internal static class PlayerbotNavigation
 
     /// <summary><see cref="TryPlanToward"/> with the tri-state answer of <see cref="PlanExact"/>.</summary>
     internal static PlanOutcome PlanToward(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
-        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false)
+        out PlayerbotRoute? route, bool completedQuestReturn = false, bool friendlyTownEnder = false,
+        PlayerbotRoutePlanWatch.Policy? watchPolicy = null)
     {
         using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
         long mark = PendingMark;
-        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now), mark, ref wait, now, ref route);
+        return Outcome(TryPlanToward(player, goal, options, out route, completedQuestReturn, friendlyTownEnder, now, watchPolicy), mark, ref wait, now, ref route);
     }
 
     /// <summary>
@@ -442,7 +443,17 @@ internal static class PlayerbotNavigation
     /// </summary>
     internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
         out PlayerbotRoute? route)
+        => PlanWander(player, destination, options, ref wait, now, out route, out _);
+
+    /// <summary>
+    /// <see cref="PlanWander(Player, Vector3, PlayerbotOptions, ref TileWait, uint, out PlayerbotRoute?)"/> that also says why a refusal was
+    /// made: <paramref name="shortfall"/> is true when the mesh had a route but it stopped more than <see cref="WanderMaxShortfallYards"/>
+    /// short of the ray's end (a wall or slope), false for a refusal by the path query itself (and for any other outcome).
+    /// </summary>
+    internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route, out bool shortfall)
     {
+        shortfall = false;
         if (player.Map is { } wanderMap && destination.IsFinite())
         {
             destination = new FloorProbe(wanderMap, PlayerbotMotion.CurrentPosition(player)).Near(destination);
@@ -455,10 +466,47 @@ internal static class PlayerbotNavigation
             && player.Map is { } map && OnWalkableMesh(map, PlayerbotMotion.CurrentPosition(player)))
         {
             route = null;
+            shortfall = true;
             return PlanOutcome.Refused;
         }
 
         return outcome;
+    }
+
+    /// <summary>
+    /// The walking region graph's component (steep slopes excluded) of the place at <paramref name="point"/>: the cheap lookup
+    /// <see cref="IsUnreachableOnFoot"/> makes (<c>RegionAt</c> and <c>ComponentOf</c>, no path search). When no region lies at the point's own
+    /// height the ground under it is tried, as <see cref="PlanWander"/> snaps its end. -1 when the graph is not built, the map has none, or the
+    /// place is on no region. World thread.
+    /// </summary>
+    internal static int ComponentAt(Player player, Vector3 point)
+    {
+        if (!point.IsFinite() || player.Map is not { } map || map.Collision.Pathfinder is not NavMeshPathfinder nav
+            || nav.RegionGraph(map.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is not { } graph)
+            return -1;
+        int region = nav.RegionAt(graph, point, WalkingLocate);
+        if (region < 0)
+        {
+            float surface = map.Collision.GetHeight(point.X, point.Y, point.Z + 20f);
+            if (!InvalidHeight(surface) && MathF.Abs(surface - point.Z) > 2f && MathF.Abs(surface - point.Z) <= 25f)
+                region = nav.RegionAt(graph, point with { Z = surface }, WalkingLocate);
+        }
+
+        return graph.ComponentOf(region);
+    }
+
+    /// <summary>
+    /// <see cref="RegionLeg"/> as a tri-state plan: one leg of the region graph's way from the bot to <paramref name="goal"/> (a place in
+    /// another region), <see cref="PlanOutcome.Pending"/> while a tile or path job is awaited, <see cref="PlanOutcome.Refused"/> when the
+    /// graph does not decide or no leg plans.
+    /// </summary>
+    internal static PlanOutcome PlanRegionLeg(Player player, Vector3 goal, PlayerbotOptions options, ref TileWait wait, uint now,
+        out PlayerbotRoute? route)
+    {
+        using PlayerbotPathJobs.DeferrableScope deferrable = PlayerbotPathJobs.Deferrable();
+        long mark = PendingMark;
+        bool planned = RegionLeg(player, goal, options, out route, completedQuestReturn: false, friendlyTownEnder: false) is true;
+        return Outcome(planned, mark, ref wait, now, ref route);
     }
 
     private static PlanOutcome Outcome(bool planned, long mark, ref TileWait wait, uint now, ref PlayerbotRoute? route)
@@ -546,11 +594,12 @@ internal static class PlayerbotNavigation
     /// </para>
     /// </summary>
     internal static bool TryPlanToward(Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? route,
-        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null)
+        bool completedQuestReturn = false, bool friendlyTownEnder = false, uint? nowMs = null,
+        PlayerbotRoutePlanWatch.Policy? watchPolicy = null)
     {
         Vector3 origin = PlayerbotMotion.CurrentPosition(player);
         if (nowMs is { } watchNow && origin.IsFinite() && goal.IsFinite()
-            && PlayerbotRoutePlanWatch.ShouldRefuse(player, origin, goal, watchNow))
+            && PlayerbotRoutePlanWatch.ShouldRefuse(player, origin, goal, watchNow, watchPolicy))
         {
             route = null;
             return false;
@@ -578,7 +627,7 @@ internal static class PlayerbotNavigation
             || (!routed && (t_nonPathRefusal || ((PlayerbotThinkProbe.Active?.Refused ?? 0) > probeRefusedBefore)));
         if (nowMs is { } recordNow && !inconclusive && origin.IsFinite() && goal.IsFinite())
         {
-            PlayerbotRoutePlanWatch.RecordOutcome(player, origin, goal, routed, route, recordNow);
+            PlayerbotRoutePlanWatch.RecordOutcome(player, origin, goal, routed, route, recordNow, watchPolicy);
         }
 
         // The outcome check (PlayerbotNavigationAnomalies): a pending tile read or a deferred async plan is no verdict, the rest is.
@@ -1723,6 +1772,41 @@ internal static class PlayerbotNavigation
         return npc.IsFriendlyTo(self) || self.IsFriendlyTo(npc);
     }
 
+    /// <summary>
+    /// Whether any step along the leg from <paramref name="from"/> to <paramref name="to"/> hangs in the air without ground
+    /// support, testing the floor under the chord as <see cref="PlayerbotMotion.Validate"/> does so the planner never plans a cliff fall the
+    /// mover will refuse. The mover brings a step down onto the floor under it from as high as <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>
+    /// (a drape: a chord over a hollow, a bot a few yards above the ground) and refuses only a deeper drop, so that is the bound here; the
+    /// smaller <see cref="PlayerbotMotionAnomalies.AirwalkYards"/> refused Ironwander's slope, whose start already hangs seven yards above the floor.
+    /// </summary>
+    internal static bool IsSteepEscapeFall(Player player, Map map, PlayerbotOptions options, Vector3 from, Vector3 to)
+    {
+        Vector2 legFlat = Flat(to) - Flat(from);
+        float legDist = legFlat.Length();
+        if (legDist <= 0.05f) return false;
+
+        float speed = PlayerbotMotion.Speed(player, options.MoveSpeed, out float s, out _) ? s : Unit.BaseRunSpeed;
+        float step = MathF.Max(speed * (PlayerbotMotion.HeartbeatIntervalMs / 1000f), 2f);
+
+        Vector3 stepFrom = from;
+        for (float walked = MathF.Min(step, legDist); ; walked += step)
+        {
+            float along = MathF.Min(walked, legDist);
+            Vector3 candidate = from + ((to - from) * (along / legDist));
+            if (!candidate.IsFinite()) return true;
+
+            float maxCeilingZ = MathF.Max(stepFrom.Z, candidate.Z) + 1.25f;
+            float directFloor = PlayerbotMotion.ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
+            if (PlayerbotMotion.ValidHeight(directFloor) && candidate.Z - directFloor > PlayerbotMoveCheck.DirectStepMaxDrapeYards)
+                return true;
+
+            if (along >= legDist) break;
+            stepFrom = candidate;
+        }
+
+        return false;
+    }
+
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
     private const int SteepEscapeCorners = 16;
 
@@ -1732,7 +1816,8 @@ internal static class PlayerbotNavigation
     /// three yards of it (no path), or only the patch's own edge (a partial path that never closes). The way off is the mesh's own
     /// path with the steep polygons allowed, cut at its first corner on walkable ground from which the ordinary query is a route,
     /// and only while no corner leads more than <see cref="SteepEscapeClimbYards"/> above the bot: a player slides down a slope it
-    /// cannot walk up. A destination off the walkable mesh from walkable ground gets no route, as before.
+    /// cannot walk up, but not one it falls down (<see cref="IsSteepEscapeFall"/>; a refused escape falls through to
+    /// <see cref="FromBeside"/> as any other). A destination off the walkable mesh from walkable ground gets no route, as before.
     /// <para>
     /// Live 2026-10-09: Ironwander (a warrior, level 7) stood on the mountainside north of Coldridge Valley at -5605.6, 155.8, 453.3,
     /// seven yards above the slope's floor, for over two hours. Every route from there answered no path, so every goal failed before
@@ -1753,6 +1838,9 @@ internal static class PlayerbotNavigation
         {
             Vector3 point = steep.Points[index];
             if (!point.IsFinite() || point.Z > start.Z + SteepEscapeClimbYards) return false;
+            // A fall is not a slide (#1501): the motion check refuses a walk through the air, so a route down a cliff face was planned,
+            // refused at its first step and planned again, 78 483 times.
+            if (IsSteepEscapeFall(player, map, options, steep.Points[index - 1], point)) return false;
             distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;

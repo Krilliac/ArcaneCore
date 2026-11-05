@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
@@ -323,6 +324,50 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 _exhaustedReported.Remove(characterId);
             }
         }
+    }
+
+    /// <summary>
+    /// The characters in <paramref name="characterIds"/> now belong to another world (a whole-World handoff passed its point of no return): every write this
+    /// queue could still attempt for them would be refused by the characters fence, so their waiting and retained snapshots are dropped and later ones are
+    /// skipped silently (the same suppression as <see cref="QuarantineCharacter"/>, without the staff announcement), and the queue shuts down cleanly instead
+    /// of entering terminal failure. Characters not named here are untouched: a character this world still owns keeps every write. One informational line
+    /// says how many characters and snapshots were dropped. Idempotent per character; there is no way back (do not <see cref="ResumeCharacter"/> them).
+    /// Returns the number of waiting or retained snapshots dropped. Any thread.
+    /// </summary>
+    public int RetireCharacters(IReadOnlyCollection<int> characterIds)
+    {
+        ArgumentNullException.ThrowIfNull(characterIds);
+        int characters = 0;
+        int dropped = 0;
+        lock (_gate)
+        {
+            foreach (int id in characterIds)
+            {
+                if (!_quarantined.Add(id))
+                {
+                    continue;
+                }
+
+                characters++;
+                _quarantineAnnounced.Add(id); // the refused snapshots of a retired character are expected: nothing to tell the staff
+                bool waiting = _slots.TryGetValue(id, out Slot? slot) && slot.State is not null; // dropped by the consumer when it reaches the slot
+                bool retained = _failed.Remove(id);
+                _exhaustedReported.Remove(id);
+                if (waiting || retained)
+                {
+                    dropped++;
+                }
+            }
+        }
+
+        if (characters > 0)
+        {
+            _logger.LogInformation(
+                "{Characters} character(s) now belong to another world after the handoff; {Dropped} waiting or retained snapshot(s) were dropped and later ones are skipped",
+                characters, dropped);
+        }
+
+        return dropped;
     }
 
     /// <summary>
@@ -762,7 +807,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-                await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                using (CharacterWriteClaim.Use(state.Id)) // checked by the write fence in Worker scope only (design _wf/writer-lock-DESIGN.md C5)
+                {
+                    await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                }
+
                 progress.Succeeded();
                 int previousStreak;
                 lock (_gate)
@@ -794,6 +843,28 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                         $"character {state.Id}",
                         $"queue=CharacterSaveQueue character={state.Id} elapsedMs={(long)writeElapsed.TotalMilliseconds} thresholdMs={(long)SlowSaveThreshold.TotalMilliseconds}",
                         AnomalySeverity.Info);
+                }
+
+                return false;
+            }
+            catch (CharacterClaimRejectedException ex)
+            {
+                // Another world holds the character now, or nobody does (its claim moved with a transfer or was released): the snapshot is durably refused
+                // and superseded, so it is dropped rather than retained, which would retry it forever. Routine for one character, never a queue fault.
+                FaultLedger.Shared.Record("writequeue.character-claim", ex);
+                lock (_gate)
+                {
+                    if (_failed.TryGetValue(state.Id, out FailedSave? parked) && ReferenceEquals(parked.State, state))
+                    {
+                        _failed.Remove(state.Id);
+                        _exhaustedReported.Remove(state.Id);
+                    }
+                }
+
+                _logger.LogWarning("character {Id} snapshot dropped: {Reason}", state.Id, ex.Message);
+                if (trustedSettlement)
+                {
+                    throw; // a settlement is never told it was saved when nothing was written
                 }
 
                 return false;

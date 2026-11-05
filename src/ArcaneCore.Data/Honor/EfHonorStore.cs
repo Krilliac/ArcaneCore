@@ -1,5 +1,7 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Honor;
 using Microsoft.EntityFrameworkCore;
 
@@ -16,7 +18,11 @@ namespace ArcaneCore.Data.Honor;
 /// Test seam: awaited after the last statement of <see cref="ApplyMaintenanceAsync"/> and before it commits, so
 /// a test can fail the transaction at its end. Null in production.
 /// </param>
-public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, Task>? beforeCommit = null) : IHonorStore
+/// <param name="leaseFences">
+/// The node's lease fence source, or null (Combined, tests). The weekly maintenance write (<c>StoredHk +=</c> is not idempotent) and the maintenance state are the
+/// <see cref="RealmAuthorityScopes.Maintenance"/> lease holder's: a non-holder is refused, and the holder's batch is verified against the lease row inside its transaction.
+/// </param>
+public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, Task>? beforeCommit = null, IRealmLeaseFenceSource? leaseFences = null) : IHonorStore
 {
     // Keeps IN (...) lists well below every provider's parameter limit.
     private const int ChunkSize = 500;
@@ -143,6 +149,7 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     public async Task SaveMaintenanceAsync(HonorMaintenanceState state, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(state);
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance);
         try
         {
             await StageMaintenanceAsync(state, cancellationToken).ConfigureAwait(false);
@@ -226,9 +233,16 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     public async Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Maintenance);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // A takeover between the runner's check and this write is caught here, in the transaction that would double count the week.
+            if (leaseFences?.FenceFor(RealmAuthorityScopes.Maintenance) is { } fence)
+            {
+                await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            }
+
             // FlushRankPoints starts by clearing every standing (HonorMgr.cpp:243).
             await db.Set<CharacterHonorRow>().Where(r => r.Standing > 0)
                 .ExecuteUpdateAsync(s => s.SetProperty(r => r.Standing, 0u), cancellationToken).ConfigureAwait(false);

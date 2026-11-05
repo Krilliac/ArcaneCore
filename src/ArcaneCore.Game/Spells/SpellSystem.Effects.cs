@@ -159,7 +159,7 @@ public sealed partial class SpellSystem
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
-        [SpellEffectName.Dummy] = StartDbSpellScript, // no generic behaviour: scripts hook it, else the spell's DB script (SpellSystem.DbSpellScripts.cs)
+        [SpellEffectName.Dummy] = EffectDummy, // no generic behaviour (scripts hook it); the spell's DB script is the fallback when no code claims the spell (SpellSystem.DbSpellScripts.cs)
         [SpellEffectName.SendEvent] = EffectSendEvent,
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,
@@ -522,12 +522,24 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// vmangos Spell::EffectLearnSpell: players learn EffectTriggerSpell (Player::LearnSpell →
-    /// SMSG_LEARNED_SPELL); pets are the pet area's.
+    /// SMSG_LEARNED_SPELL). A non-player target with a player caster (Warlock Grimoires target the pet) goes to the LEARN_PET_SPELL handler
+    /// (vmangos SpellEffects.cpp:2440-2444 calls EffectLearnPetSpell, which reads the caster's pet and the same EffectTriggerSpell); the pet
+    /// area registers that handler, so without it nothing happens.
     /// </summary>
     private void EffectLearnSpell(SpellEffectContext context)
     {
         uint spellId = context.Effect.TriggerSpell;
-        if (context.Target is not Player player || Store.Get(spellId) is null)
+        if (context.Target is not Player player)
+        {
+            if (context.Caster is Player && EffectHandlers.TryGetValue(SpellEffectName.LearnPetSpell, out SpellEffectHandler? petHandler))
+            {
+                petHandler(context);
+            }
+
+            return;
+        }
+
+        if (Store.Get(spellId) is null)
         {
             return;
         }

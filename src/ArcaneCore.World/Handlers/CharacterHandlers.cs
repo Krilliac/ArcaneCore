@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Transfers;
 using ArcaneCore.Data.Content.Names;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
@@ -29,6 +30,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 {
     /// <summary>How long a login waits for the same character's previous session to leave the world.</summary>
     private static readonly TimeSpan DuplicateLoginWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DuplicateLoginPoll = TimeSpan.FromMilliseconds(100);
 
     /// <summary>The most characters the client can list (it cannot handle values larger than 10).</summary>
     private const int MaxListedCharacters = 10;
@@ -74,7 +76,19 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         // The at-login rename flag becomes CHARACTER_FLAG_RENAME, so the client prompts for a new name (Player::BuildEnumData).
-        IReadOnlyDictionary<int, uint> flags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
+        IReadOnlyDictionary<int, uint> renameFlags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
+
+        // The stored hide-helm/hide-cloak bits join the enum flags word, as vmangos Player::BuildEnumData sends characters.character_flags
+        // (Player.cpp:1682-1683, 0e3ff01) and cmangos maps the stored PLAYER_FLAGS hide bits to char_flags (Player.cpp:1748-1754, ff53dfc).
+        var flags = new Dictionary<int, uint>(renameFlags);
+        foreach (CharacterRecord record in list)
+        {
+            uint hidden = record.CharacterFlags & CharacterAppearanceFlags.Mask;
+            if (hidden != 0)
+            {
+                flags[record.Id] = flags.GetValueOrDefault(record.Id) | hidden;
+            }
+        }
 
         session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment, flags));
         await RealmCharacterCounts.RefreshAsync(session, owned).ConfigureAwait(false); // repairs a count that drifted; a no-op write when it did not
@@ -323,6 +337,15 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // A map another worker owns (Cluster:Worker:OwnedMaps): hand the session to the gateway, which re-opens it on the owner with this login packet.
+        // Before the character is loaded, claimed or put anywhere, so the fenced claim happens only on the target worker.
+        if (session.IsRemote && !session.World.Owns(character.MapId, 0) && session.TryRedirectRemote(character.MapId, 0))
+        {
+            session.Logger.LogInformation("[{Endpoint}] character {Guid} is saved on map {Map}, owned by another worker; redirecting the session",
+                session.RemoteEndpoint, character.Id, character.MapId);
+            return;
+        }
+
         var guid = ObjectGuid.Player((uint)character.Id);
         if (!await WaitUntilOfflineAsync(session.World, guid).ConfigureAwait(false))
         {
@@ -387,12 +410,116 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
-        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
+        // Worker fencing scope: the per-character claim (cluster_transfer_owner) must be this worker's before the character is attached, or the write fence refuses every
+        // claim-checked save of it. A live owner elsewhere or a transfer in flight refuses the login; a dead shard's claim is taken over (with the login-time reap,
+        // Cluster:Fencing:ReapDeadOwners). Realm scope claims nothing. Released again at logout (CharacterClaimFeature) or, below, when this login does not enter the world.
+        long claimTicket = 0; // this login's claim ticket (0: nothing claimed); a newer login's claim invalidates this login's releases
+        // Resolved here, while the session's scope is alive: EnterWorld and the release run later on the world thread, after a disconnect may have ended the scope.
+        CharacterClaimService? claimService = session.Services.GetService<CharacterClaimService>();
+        if (claimService is { } claims)
         {
-            Home = home,
-            CharacterOwnership = session.World.CharacterOwnership,
-        };
+            // A live owner on another worker is, behind the gateway, usually a session of this account that is being replaced there: the gateway closed it for this
+            // login, but its logout (the save that writes the map it is on, then the claim release) has not finished, so the record read above can still name a
+            // map this worker owns. Wait for it as for a duplicate here (WaitUntilOfflineAsync), re-reading the record: once it names another worker's map the
+            // session moves there, once the claim is released this worker claims.
+            DateTime claimDeadline = DateTime.UtcNow + DuplicateLoginWait;
+            int refusals = 0;
+            while (true)
+            {
+                if (session.IsDisconnected)
+                {
+                    return; // the client left while this login waited: nothing is claimed, nobody to answer
+                }
+
+                CharacterClaimResult claim;
+                try
+                {
+                    // Only the first refusal is a warning: the ones after it are the expected wait for the replaced session's logout.
+                    (claim, claimTicket) = await claims.ClaimWithTicketAsync(character.Id, session.World.CharacterOwnership, quietRefusal: refusals > 0).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("handler.char-login-claim", ex);
+                    AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"claim error={ex.GetType().Name}: {ex.Message}");
+                    session.Logger.LogError(ex, "[{Endpoint}] could not claim character {Guid}", session.RemoteEndpoint, character.Id);
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                    return;
+                }
+
+                if (CharacterClaimService.Admits(claim))
+                {
+                    break;
+                }
+
+                refusals++;
+                if (claim.Outcome != CharacterClaimOutcome.RefusedLiveOwner || !session.IsRemote || DateTime.UtcNow >= claimDeadline)
+                {
+                    if (refusals > 1)
+                    {
+                        session.Logger.LogWarning("[{Endpoint}] character {Guid} login refused after {Attempts} claim attempts waiting for its previous owner: {Outcome}",
+                            session.RemoteEndpoint, character.Id, refusals, claim.Outcome);
+                    }
+
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(
+                        claim.Outcome == CharacterClaimOutcome.RefusedLiveOwner ? CharResult.CharLoginDuplicateCharacter : CharResult.CharLoginFailed));
+                    return;
+                }
+
+                await Task.Delay(DuplicateLoginPoll).ConfigureAwait(false);
+                if (await RereadForLoginAsync(session, characters, character.Id).ConfigureAwait(false) is not { } current)
+                {
+                    return; // answered, or the client is gone
+                }
+
+                if (TryRedirectToOwner(session, current))
+                {
+                    return;
+                }
+
+                character = current;
+            }
+
+            // A claim was taken (Worker scope): the record read before it may predate the previous owner's final save, which was durable before that owner's claim was
+            // released (CharacterClaimService.ScheduleRelease) and so before this claim was admitted. The player is built only from a record read after the claim; the checks made
+            // on the older record are made again, and the claim is given back when the login does not go on here.
+            if (claimTicket != 0)
+            {
+                CharacterRecord? fresh = await RereadForLoginAsync(session, characters, character.Id).ConfigureAwait(false);
+                if (fresh is null)
+                {
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                    return;
+                }
+
+                if (TryRedirectToOwner(session, fresh))
+                {
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                    return;
+                }
+
+                character = fresh;
+            }
+        }
+
+        Player player;
+        try
+        {
+            IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
+            player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
+            {
+                Home = home,
+                CharacterOwnership = session.World.CharacterOwnership,
+            };
+        }
+        catch
+        {
+            // A ticket that never reached a player would stay "newest" and make the older login's release skip: stop counting it.
+            claimService?.AbandonTicket(character.Id, claimTicket);
+            throw;
+        }
+
+        if (claimTicket != 0)
+            claimService?.BindTicket(player, claimTicket); // the logout release finds it through the player
 
         // Per-character data owned by features (vmangos Player::LoadFromDB: inventory, spells,
         // quest status …). The player is not yet visible to the world thread. Fail closed.
@@ -417,11 +544,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"load error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
             return;
         }
 
         if (!session.TryBeginLogin())
         {
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
             return;
         }
 
@@ -430,21 +559,96 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             LoginPackets.BuildAccountDataMd5(session.Settings),
             LoginPackets.BuildTutorialFlags(session.Settings.Tutorials));
         WorldRuntime world = session.World;
-        world.Post(() => EnterWorld(session, world, character, player, account));
+        CharacterSaveQueue? saveQueue = session.Services.GetService<CharacterSaveQueue>();
+        QuestNpcFeature? questFeature = session.Services.GetService<QuestNpcFeature>();
+        world.Post(() => EnterWorld(session, world, character, player, account, claimService, saveQueue, questFeature));
     }
 
+    /// <summary>
+    /// Reads the character again for a login that waited (session task). Null when the login must stop: the record is gone or belongs to another account (answered
+    /// <see cref="CharResult.CharLoginNoCharacter"/>), the read failed (answered <see cref="CharResult.CharLoginFailed"/>), or the client disconnected (no answer; its scope
+    /// may already be disposed, which is why a failing read never escapes the handler).
+    /// </summary>
+    private static async Task<CharacterRecord?> RereadForLoginAsync(WorldSession session, ICharacterStore characters, int characterId)
+    {
+        if (session.IsDisconnected)
+        {
+            return null;
+        }
+
+        CharacterRecord? current;
+        try
+        {
+            current = await characters.GetByIdAsync(characterId).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (session.IsDisconnected)
+            {
+                return null;
+            }
+
+            FaultLedger.Shared.Record("handler.char-login-reread", ex);
+            session.Logger.LogError(ex, "[{Endpoint}] could not read character {Guid} again for its login", session.RemoteEndpoint, characterId);
+            session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            return null;
+        }
+
+        if (session.IsDisconnected)
+        {
+            return null;
+        }
+
+        if (current is null || current.AccountId != session.AccountId)
+        {
+            session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginNoCharacter));
+            return null;
+        }
+
+        return current;
+    }
+
+    /// <summary>True when <paramref name="character"/> is saved on a map another worker owns and the session was handed to the gateway for it (remote sessions only).</summary>
+    private static bool TryRedirectToOwner(WorldSession session, CharacterRecord character)
+    {
+        if (!session.IsRemote || session.World.Owns(character.MapId, 0) || !session.TryRedirectRemote(character.MapId, 0))
+        {
+            return false;
+        }
+
+        session.Logger.LogInformation("[{Endpoint}] character {Guid} was saved on map {Map} by its previous session on another worker; redirecting the session",
+            session.RemoteEndpoint, character.Id, character.MapId);
+        return true;
+    }
+
+    /// <summary>
+    /// A login that claimed the character but never put it into the world: the logout path will not run, so release the claim (a no-op when none was taken). Releases only what this login
+    /// claimed: <paramref name="claimTicket"/> is this login's ticket, and a newer login's claim (a session replacement) makes the release a no-op.
+    /// </summary>
+    private static void ReleaseUnenteredClaim(WorldSession session, CharacterClaimService? claims, int characterId, long claimTicket)
+        => claims?.ScheduleRelease(characterId, session.World.CharacterOwnership, () => session.World.IsOnline(ObjectGuid.Player((uint)characterId)), claimTicket);
+
+    private static long ClaimTicketOf(CharacterClaimService? claims, Player player)
+        => claims?.TicketOf(player) ?? 0;
+
     /// <summary>World thread: send the login sequence and put the player into its map.</summary>
-    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account)
+    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account, CharacterClaimService? claims,
+        CharacterSaveQueue? saveQueue, QuestNpcFeature? questFeature)
     {
         if (world.IsOnline(player.Guid))
         {
             session.AbortLogin();
+            // The character is online under an older login that keeps its claim: this login's ticket must not invalidate that login's release.
+            if (claims is { } duplicateClaims)
+                duplicateClaims.AbandonTicket(character.Id, duplicateClaims.TicketOf(player), session.World.CharacterOwnership,
+                    () => session.World.IsOnline(ObjectGuid.Player((uint)character.Id)));
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginDuplicateCharacter));
             return;
         }
 
         if (!session.TryEnterWorld(player))
         {
+            ReleaseUnenteredClaim(session, claims, character.Id, ClaimTicketOf(claims, player));
             return; // the client disconnected while the character loaded
         }
 
@@ -466,10 +670,11 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"resolve map error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not resolve the login map of '{Name}'", session.RemoteEndpoint, player.Name);
             session.Kick("login map could not be resolved");
+            ReleaseUnenteredClaim(session, claims, character.Id, ClaimTicketOf(claims, player)); // never added to the world, so the logout path will not release it
             return;
         }
 
-        LoginSequence.SendLoginPackets(session, world, player, account.DataMd5);
+        LoginSequence.SendLoginPackets(session, world, map, player, account.DataMd5);
         LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, account.TutorialFlags);
 
         try
@@ -483,6 +688,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"add to world error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not add '{Name}' to the world", session.RemoteEndpoint, player.Name);
             session.Kick();
+            ReleaseUnenteredClaim(session, claims, character.Id, ClaimTicketOf(claims, player)); // never added to the world, so the logout path will not release it
             return;
         }
 
@@ -492,8 +698,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // end of login, so a client that sees itself in the world can rely on its saves having
         // resumed. This runs on the world thread, so no state capture can interleave. The save
         // consumer may write the resumed slot at once, but the slot is empty at this point.
-        session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(character.Id);
-        session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(character.Id);
+        saveQueue?.ResumeCharacter(character.Id);
+        questFeature?.Persistence.ResumeCharacter(character.Id);
         LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);
@@ -510,7 +716,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                 return false;
             }
 
-            await Task.Delay(100).ConfigureAwait(false);
+            await Task.Delay(DuplicateLoginPoll).ConfigureAwait(false);
         }
 
         return true;

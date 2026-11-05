@@ -175,7 +175,7 @@ public sealed class GatewayFuzzAndExceptionTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Gateway:BindAddress"] = "127.0.0.1",
-                ["Gateway:Port"] = "0",
+                ["Gateway:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["Gateway:WorkerAddress"] = "127.0.0.1",
                 ["Gateway:WorkerPort"] = "8095",
                 ["Gateway:LinkSecret"] = ValidSecret,
@@ -189,6 +189,38 @@ public sealed class GatewayFuzzAndExceptionTests
         IHostedService hosted = provider.GetRequiredService<IHostedService>();
         Assert.Same(server, hosted);
         Assert.Equal(new IPEndPoint(IPAddress.Loopback, 8095), server.WorkerEndPoint);
+    }
+
+    [Fact]
+    public void AddGateway_ValidConfiguration_RegistersSupervisedChildDrain()
+    {
+        var services = new ServiceCollection();
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Gateway:BindAddress"] = "127.0.0.1",
+                ["Gateway:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Gateway:WorkerAddress"] = "127.0.0.1",
+                ["Gateway:WorkerPort"] = "8095",
+                ["Gateway:LinkSecret"] = ValidSecret,
+            })
+            .Build();
+        services.AddGateway(configuration);
+        services.AddSingleton<IHostApplicationLifetime, TestLifetime>();
+        using ServiceProvider provider = services.BuildServiceProvider();
+
+        // The supervisor drains a child by writing "drain" to its stdin; without this hosted service the gateway ignored it and was killed after the drain timeout.
+        Assert.Contains(provider.GetServices<IHostedService>(), s => s is ArcaneCore.Kernel.Ops.ServerConsole.SupervisedChildDrain);
+    }
+
+    private sealed class TestLifetime : IHostApplicationLifetime
+    {
+        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public void StopApplication()
+        {
+        }
     }
 
     [Fact]
@@ -245,7 +277,7 @@ public sealed class GatewayFuzzAndExceptionTests
             Options.Create(new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 LinkSecret = secret,
             }),
             NullLoggerFactory.Instance);
@@ -264,7 +296,7 @@ public sealed class GatewayFuzzAndExceptionTests
             var opts = new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = "127.0.0.1",
                 WorkerPort = 8095,
                 LinkSecret = ValidSecret,
@@ -514,7 +546,7 @@ public sealed class GatewayFuzzAndExceptionTests
         Assert.Throws<ArgumentException>("request", () => GatewaySessionWire.EncodeOpen(1, new GatewaySessionOpenRequest(1, 1, overlong, 5875, "127.0.0.1:1")));
         Assert.Throws<ArgumentException>("request", () => GatewaySessionWire.EncodeOpen(1, new GatewaySessionOpenRequest(1, 1, "ALICE", 5875, overlong)));
 
-        using (var listener = new TcpListener(IPAddress.Loopback, 0))
+        using (var listener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener())
         {
             listener.Start();
             using var clientSide = new TcpClient();
@@ -562,7 +594,7 @@ public sealed class GatewayFuzzAndExceptionTests
     {
         await using var worker = new WorkerRig();
         worker.Start();
-        ClusterNodeManifest gatewayManifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-1", Guid.NewGuid(), 1, "dev", 1, 1);
+        ClusterNodeManifest gatewayManifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-1", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
 
         await using var client = new GatewaySessionLinkClient(gatewayManifest, worker.Host.BoundEndPoint, ValidSecret, NullLogger.Instance);
         await client.ConnectAsync(CancellationToken.None);
@@ -930,7 +962,7 @@ public sealed class GatewayFuzzAndExceptionTests
 
         byte[] sampleNonce = new byte[GatewaySessionWire.NonceBytes];
         rng.NextBytes(sampleNonce);
-        ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-fuzz", Guid.NewGuid(), 1, "dev", 1, 1);
+        ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
 
         byte[][] validBodies =
         [
@@ -1443,7 +1475,7 @@ public sealed class GatewayFuzzAndExceptionTests
             }
             else
             {
-                using var tempListener = new TcpListener(IPAddress.Loopback, 0);
+                using var tempListener = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
                 tempListener.Start();
                 workerPort = ((IPEndPoint)tempListener.LocalEndpoint).Port;
                 tempListener.Stop();
@@ -1455,7 +1487,7 @@ public sealed class GatewayFuzzAndExceptionTests
             var gatewayOptions = new GatewayOptions
             {
                 BindAddress = "127.0.0.1",
-                Port = 0,
+                Port = ArcaneCore.TestSupport.LoopbackPorts.Next(),
                 WorkerAddress = "127.0.0.1",
                 WorkerPort = workerPort,
                 LinkSecret = ValidSecret,
@@ -1514,8 +1546,8 @@ public sealed class GatewayFuzzAndExceptionTests
 
         public WorkerRig()
         {
-            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, "dev", 1, 1);
-            Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, 0), NullLogger.Instance);
+            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
+            Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, ArcaneCore.TestSupport.LoopbackPorts.Next()), NullLogger.Instance);
         }
 
         public GatewaySessionLinkHost Host { get; }

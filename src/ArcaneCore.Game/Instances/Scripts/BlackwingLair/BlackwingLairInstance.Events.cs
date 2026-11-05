@@ -124,7 +124,8 @@ public sealed partial class BlackwingLairInstance
         // vmangos instance_blackwing_lair.cpp GOHello_go_orb_of_domination: a player still under Mind Exhaustion (23958, one minute) cannot
         // take Razorgore again; otherwise the use exhausts the player's mind first, then possesses him.
         if (Instance.FindUpdater<CreatureMapSystem>()?.HasAura(player, MindExhaustion) == true) return true;
-        CastPlayerTargetSpell?.Invoke(player, MindExhaustion, player.Guid);
+        // The orb possesses only once the exhaustion is on the player: a failed Mind Exhaustion cast must not grant free Razorgore control.
+        if (CastPlayerTargetSpell?.Invoke(player, MindExhaustion, player.Guid) != true) return true;
         CastPlayerTargetSpell?.Invoke(player, 19832, razorgore.Guid);
         return true;
     }

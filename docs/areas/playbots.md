@@ -35,6 +35,7 @@ the budget and the share of ticks that ended on the time or action budget (the s
 
 **Pass-derived bounds.** The feature measures that pass (`PlayerbotMainPass`: a smoothed estimate, quick to rise and slow to fall and so biased above the mean, of the gaps between two main-lane thinks of one bot; combat-lane gaps are not counted; a gap over 120 s counts as 120 s, so the report bound tops out at 180 s, the intended absolute backstop) and two things follow it, neither feeding back into the budget:
 - *Motion lease.* A route is walked for `max(4 s, 8 x ThinkIntervalMs, 3 x the bot's smoothed think gap)`, the gap term capped at `PlayerbotMotion.LeaseCapMs(pass) = clamp(1.5 x pass, 15 s, 120 s)`. A bot with no gap of its own yet (fresh login or re-add: its first think skips the gap measure) is taken to wait one full pass, so its gap term is `min(3 x pass, cap)`: the cap itself once the pass is over 5 s (a 15 s lease at an 8 s pass, 30 s at 20 s). Before this the cap was a fixed 15 s, under the real gap, and bots stopped mid-road (`bot-motion/lease-expired-midroute`).
+- *Motion speed.* A bot's heartbeats advance at its current speed: swim speed (`Unit.BaseSwimSpeed`, 4.72 yd/s) while it is at swim depth (`LiquidEnvironment.IsSwimDepth`, the rule behind `EnvironmentFlags.HighLiquid`), run (or mounted run) speed on land. Crossing the shore sends `MSG_MOVE_START_SWIM` / `MSG_MOVE_STOP_SWIM` at once; every packet carries `MOVEFLAG_SWIMMING` exactly when its position is at swim depth, except falling, jumping and aboard-a-transport packets, which never do. A mesh route over deep water runs on the surface; its positions are lowered to just inside swim depth (`PlayerbotMotion.SwimHeight`, after vmangos Unit.cpp:10336; the 0.05 yd margin is a judgement call). The `MoveSpeed` cap is not applied in water. A step faster than 1.05 x the speed the bot is entitled to is reported as `bot-motion/overspeed` (Warning).
 - *think-starved.* A bot silent for longer than `max(ThinkStarvedGapMs, 1.5 x pass)` (`PlayerbotThinkStarvation.ReportBoundMs`; 3 x `ThinkStarvedGapMs` until a pass is measured; 10 s default, 0 = off) is reported once per episode as the `cadence/think-starved` anomaly, so it flags a bot that fell behind the rotation, not a rotation that is slow for every bot. The budget floor and the combat lane's yield (`PriorityScale`) keep the unraised bound.
 
 A world stall longer than 120 s (a pause, a long GC, a debugger stop) is not one sample: every bot's first think after the stall measures the stall, so the whole first pass afterwards feeds capped 120 s samples (the cap above, one per bot) and the estimate rises quickly toward 120 s (`RiseWindow` 8). That is why it holds near 120 s for about one pass: leases run at the 120 s cap and the think-starved bound sits near 180 s. Once that pass is over, normal gaps pull it down at the slow rate (`Window` 64, `PlayerbotThinkBudget`), which halves the excess in about 44 samples. How fast it recovers afterwards depends on the population: well under one pass at 1000 bots, several passes below about 64 bots. It is the smoothing at work, not a pass that really took two minutes.
@@ -93,7 +94,7 @@ reagents (moving to a nearby forge or anvil when `RequiresSpellFocus` demands on
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
-live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
+live; `.playerbot groups`): `docs/areas/playbots-groups.md` (its approach-point choice and the 30 s refused-walk bailout are described there).
 
 A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
 manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
@@ -174,6 +175,8 @@ file's last write time) with game time, as it already ran the death clock: befor
 its game time about 30 times faster, so a replay in December would have turned Winter Veil on for an October snapshot. It waits for each
 step's quest reward writes (on the fast clock a bot's 15-second exchange deadline ran out while the write was on its way, and the reward
 counted as refused) and prints each bot's quests taken, rewarded and still open.
+
+Grey quests (skip and drop). `World:Playerbots:DropGreyQuests` (on by default, live) abandons a quest that has turned grey for the bot: its level is above 0 and at or below `ExperienceFormulas.GrayLevel` of the bot's level (`PlayerbotQuestGoals.IsGrey`). Outside combat and alive, `TryShedGreyQuest` sends the ordinary client packet `CMSG_QUESTLOG_REMOVE_QUEST` for the lowest-level INCOMPLETE grey quest (`GreyQuestToDrop`), free log slot or not, at most one per think and one per `GreyShedIntervalMs` (5 s) per bot, then sets it aside like every other shed (a refused abandon is set aside too, so the packet is not repeated). A COMPLETE but unrewarded grey quest is kept for its turn-in; the distant-return rule above still applies to it. While the option is on, a grey quest still in the log (drop rate-limited or refused) gives no hunt objective (`PlayerbotQuestGoals.Pick`, which feeds the grind `preferredEntry`) and a grey quest at a giver is not taken even with a free slot. Off: grey quests stay until a full log sheds one (`LowValueQuestToShed`: failed first, then the lowest grey incomplete) and are hunted as before.
 
 For an unhomed bot, `World:Playerbots:MaxDeliveryYards` (1200 by default, 0 disables the distance limit) compares
 the quest giver with the nearest same-map ender. A proven longer trip is skipped at visible pickup and offscreen travel.
@@ -278,6 +281,7 @@ which is exact and needs no path search.
   for the cell's backoff since its last stall (10, 30, then 60 minutes from the second stall, read against the world clock at each ask; the first stall is recorded but is no pin yet; a cell whose backoff ended an hour ago starts again; from the third stall a replaced navigation dataset frees it),
   `GiveUpStalledGoal` escalates the stalled target entry's suspension (`SuspendEntryEscalating`, doubling up to `MaxSuspendMs` = 80 minutes) and marks
   repeated quest stalls unreachable (the escalating mark above), and `EscapeIsland` treats the pinned bot as an island escape, teleporting it home or to its bind point.
+  Limit (audit cid 44, live 2026-10): 53 bots dead-end-pinned one placement point and no world pin formed. The root cause is not found and no fix for it is shipped: it needs a runtime repro of that spot. The two rules that stop a pin becoming a world pin are `CanShareDeadEndPin` (area flags: capital, city, town, instanced map) and the cut-region exemption (`IsCutRegion` / `PinRefuses`, `PlayerbotBrain.DeadEndPinShareBlock`); which of them held the 53 bots back, or whether the ledger (`PlayerbotSharedPins.BotsToShare` different bots) was simply never reached, cannot be told from the code alone, and whether `IsCutRegion` wrongly exempts a region that is a dead end only for that point is open. What ships instead is diagnostics: a bot's own pin that is not shared reports `world-dead-end-pin-unshared` naming the refusing rule, and a pin that waits on the ledger reports `world-dead-end-pin-pending` (no ledger, or bots still needed). The next live occurrence should be read from those two anomaly kinds first.
 - **Timbermaw Hold tunnel** (issues #1478 and #1479; map 1, 6627,-2024 to 7020,-2140, the only Felwood to Winterspring walk; live 2026-10-25: 622 anomaly lines from 244 bots in a day).
   - *Goal points on the cave floor.* `PlayerbotNavigation.GroundNear` puts a retreat goal (`PlayerbotRetreat.OnGround`) and an inward explore leg end (`PlayerbotBrain.InwardLeg`) on the floor
     nearest the bot's own height: it probes from 2 yards above the bot, then from 20 (`GroundProbeLowYards`, `GroundProbeHighYards`), drops floors more than `GroundMaxDeltaYards` (30) from the bot and floors the walking region graph puts on no region
@@ -349,7 +353,19 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 `SteepEscapeClimbYards` (1.5) above the bot (`PlayerbotSteepGroundTests`; on the real terrain
 `FromIronwandersSlope_TheBotWalksDownToTheIceClawBear`). The stall watch also gives the goal up again after every further stall bound
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
-and logged once.
+and logged once. Kills the bot had loot rights to count as progress (`Fingerprint.Kills`, once per death; a respawn of the same creature is a new
+kill): a level-capped bot with full bags killing a no-coin beast at its spawn is not stalled (bot QA #1465). Kills alone keep the stall
+clock reset for `KillProgressBounds` (3) stall bounds since another field changed or the bot moved; after that a kill loop stalls like any
+other (the death-loop watch counts only the bot's own deaths and does not guard it). The stall's diagnostic snapshot is
+taken at the start of `GiveUpStalledGoal` (`StallSnapshot`), before the give-up stops the bot and the same think plans a new leg.
+Explore holds for a pending candidate plan until the first think after `ExplorePendingMaxMs` (10 s) has passed, and traces `explore-pending` (then the short wander leg
+runs). The wander leg turns away from rays that end in another walking-graph component than the bot's own (up to 6 headings), traces each
+refusal streak as `wander-refused:<no-path|shortfall|advance|component>` (first and every fifth), and after 8 refusals inside one 10-yard
+cell takes one region-graph leg (only with the optional think budget) toward the ground it last wandered from on this map and instance, else
+its home's centre, when that place is at least 30 yd away and in the bot's own walking component (a count is dropped when the bot leaves
+the cell, changes map or is away from wandering for 30 s). A candidate held pending past the bound has its cell set aside (bot QA #1464).
+
+After two refused wander legs in a row, `TryWanderToMeshPoint` replaces the ray with a point the map's mesh says is reachable (`IMeshPointQuery.TryGetRandomPointAround`, up to 4 samples per think, only with the optional think budget): the point is planned exactly and walked (traced `wander-mesh-point`), and the shortfall rule of rays does not apply to it. The sample must keep the home's limits (`PlayerbotBrain.OutsideHomeLimits`): at most `ExploreRadius` from the centre, except that a bot already beyond `ExploreRadius` (a pocket outside the circle) may take points nearer the centre than itself; and, for a zone-clipped home, in the home's zone, except a clipped home whose own centre has no known zone (`zone=unknown`), which is limited by the circle alone, as its walk home is (before, such a home refused every sample and every deflected leg). A run in which no sample gave a leg (not one cut short by the think budget) backs the fallback off for 10 s, doubling per empty run in a row up to 80 s (`WanderMeshBackoffMs`); a leg taken resets it.
 
 **Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
 (3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at
@@ -1003,11 +1019,13 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   (`TravelJourney.SpentCopper`), and a portal leg begun again after a fight asks the mage it already paid, without a second trade. Costs: a walk is the straight line times 1.3 at 7 yards a second; a flight the walks to the departure node and from
   the landing node plus the hops at 32 yards a second, its fare the undiscounted path price; a boat or zeppelin its round trip (`period`), free;
   the hearthstone and a Teleport 15 s; a portal 25 s plus the fee. Two walks never follow each other; the hearthstone and each Teleport are
-  used at most once. Ties: fewer legs, then less copper.
+  used at most once; a ship is never taken straight back the way it came (the same entry with the ends reversed, right after). Ties: fewer legs,
+  then less copper.
 - **Facts** (`PlayerbotTravel.BuildFacts`, from the bot's real state): faction, level, money; the hearthstone when it is ready (switch on,
   carried, off cooldown); the bot's own Teleports (spell known, rune carried, off cooldown); the portals of listed mages of its faction within
   `MageServiceRadiusYards` on its map; the ship routes the bot may ride (faction, the Boats and Zeppelins switches, a route with a backed-off
-  dock left out). Two places are walkable when they are on one map and, where the map's walking region graph answers, in one walkable
+  dock left out). Two places are walkable when they are on one map, not separated by the water of Teldrassil (`PopulationTownProgression.SeparatedByWater`,
+  whatever the mesh has loaded: the mainland never walks to Teldrassil) and, where the map's walking region graph answers, in one walkable
   component (the check `IsUnreachableOnFoot` makes); a place the graph cannot place (no navmesh, the graph or a tile not read yet, a point
   at sea such as a port, a small fragment) counts as joined, and the walk's own failure then replans. A flight needs a known departure node
   within `MaxWalkToMasterYards` of the stretch's start, a stretch of at least `MinRouteYards`, and a known landing node the fare to which fits
@@ -1016,7 +1034,10 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   `PlayerbotHearthstone.Drive`, `PlayerbotMageService.Drive` (the bot's own mage leg), `PlayerbotMageService.DriveMage` (a mage serving the
   board), then the journey. A leg driver that answers Traveling owns the bot that think (no stall judged, no target held). The journey walks
   its walk legs itself and only begins the others on their drivers. A walk right before a boat, zeppelin or portal leg ends within 100 yards
-  of that leg's start (the next driver walks the last yards to its dock or mage). Within 10 yards of the goal the journey has arrived. A fight
+  of that leg's start (the next driver walks the last yards to its dock or mage). A bot that stands on the dock floor (within 40 yards of the resolved floor and 8 of
+  its height) within 48 yards of the port when the plans to the floor are refused counts as docked (`ShipTrip.DockReach`). After a plan that
+  found no route, the same destination (map and 64-yard cell) is not planned again for 10 s (`JourneyPlanCooldownMs`; the GM command plans
+  at once). Within 10 yards of the goal the journey has arrived. A fight
   makes the journey yield (the brain fights) until it is over, except aboard a ship; a fight before the bot is aboard (on the way to the
   dock, waiting for the ship, on the gangway) drops that ship leg, a fight during a hearthstone or Teleport cast cancels the cast (not a
   teleport already begun), and the journey begins the leg again afterwards. Between two legs (never in the middle of one) a bot below 45%
@@ -1058,6 +1079,10 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   (true), `MageServiceRadiusYards` (150, 10..1000), `MageServiceFeeCopper` (0, 0..100000), `MaxTravelSpendCopper` (10000, 0..10000000),
   `TransitBackoffSeconds` (60, 10..3600), `TransitBackoffMaxSeconds` (300, 10..86400, not below `TransitBackoffSeconds`). Flight paths:
   `World:Playerbots:Taxi:Enabled` (true).
+- **Landing guard.** A same-map portal whose volume lies within 8 yards of the edge of where a bot landed or logged in (Teldrassil: the exit of
+  trigger 527 at Rut'theran is 3.9 yards outside the volume of 542, the portal back up) is not taken by a walk that merely passes it
+  (`PlayerbotTriggerTracker.IsGuarded`), until the bot has walked more than 8 yards clear of it. A journey's trigger leg and a ghost's walk into a
+  portal ask for their trigger on purpose (`PlayerbotAreaTriggers.Want`, 5 s, renewed at each think) and take it at once.
 - **Anomaly codes.** `travel`: `leg-failed`, `overdue`. `ship`: `ship-missing`, `never-docked`, `board-refused`, `left-ship`, `wrong-map`,
   `ride-overdue`, `disembark-refused`, `dock-unreachable`, `route-bad-data`. `hearth`: `no-hearthstone`, `on-cooldown`, `use-refused`,
   `cast-interrupted`, `not-arrived`, `services-unavailable`. `mage`: `teleport-cast-refused`, `cast-interrupted`, `not-arrived`,
@@ -1122,7 +1147,7 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
 * **Staying inside.** "Inside" means inside the circle and, for a clipped home, in its zone. Goal selection ignores creatures outside the area (`IsSkipped`; a
   bot still fights back against whatever attacks it), new quests are taken only from a giver inside the area and only if every creature that ends the quest
   and every creature it asks to kill has a spawn inside (`QuestInside`), the destinations of the world walks (quest givers, enders, kill spawns) are the
-  ones inside, and an exploring bot inside `ExploreRadius` whose next leg would cross a clipped home's zone border deflects along the boundary (`ZoneBorderDeflectDegrees`, `DeflectZoneBorderLeg`: ±35°, ±65°, ±95°, ±125° from its heading) before falling back to the centre.
+  ones inside, and an exploring bot inside `ExploreRadius` whose next leg would cross a clipped home's zone border deflects along the boundary (`BorderDeflectDegrees`, `DeflectZoneBorderLeg`: +45°, -45°, +90°, -90°, +135°, -135° from its heading, the first pair chosen by the refusal count and the sign flipped when the leg's spread is negative) before falling back to the centre.
 * **Walking home.** A bot on the home map outside the radius, or inside it but out of a clipped home's zone (a bot that wandered over to Raven Hill), with
   no errand, drops its intent and walks to the centre through the ordinary route planner
   (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the

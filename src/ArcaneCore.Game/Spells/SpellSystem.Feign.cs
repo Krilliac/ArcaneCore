@@ -25,6 +25,25 @@ public sealed partial class SpellSystem
     private readonly ConditionalWeakTable<SpellAura, object> _feignSucceeded = new();
 
     /// <summary>
+    /// Creatures holding the UNIT_STATE_FEIGN_DEATH of Permanent Feign Death (29266, vmangos SpellAuras.cpp:2103-2112 calls Unit::SetFeignDeath on a creature).
+    /// The state is on the unit, not on an aura object, because the aura is a dummy one. World thread.
+    /// </summary>
+    private readonly ConditionalWeakTable<Unit, object> _creatureFeignState = new();
+
+    /// <summary>Set or clear the UNIT_STATE_FEIGN_DEATH of a creature feigning death through Permanent Feign Death (see <see cref="SetCreatureFeignDeath"/>).</summary>
+    private void SetCreatureFeignState(Unit unit, bool feigning)
+    {
+        if (feigning)
+        {
+            _creatureFeignState.AddOrUpdate(unit, _creatureFeignState);
+        }
+        else
+        {
+            _creatureFeignState.Remove(unit);
+        }
+    }
+
+    /// <summary>
     /// vmangos Unit::IsFeigningDeathSuccessfully: the unit is alive and holds a Feign Death aura that
     /// was not resisted. Creature AI (target validity, aggro), movement and the player interaction
     /// handlers read this (docs/integration/hunter.md).
@@ -35,6 +54,11 @@ public sealed partial class SpellSystem
         if (!unit.IsAlive)
         {
             return false;
+        }
+
+        if (_creatureFeignState.TryGetValue(unit, out _))
+        {
+            return true;
         }
 
         foreach (SpellAuraHolder holder in GetAuras(unit))
@@ -166,16 +190,7 @@ public sealed partial class SpellSystem
     /// <summary>vmangos WorldObject::IsWithinDistInMap: same map, 3D distance below the limit plus both bounding radii.</summary>
     private static bool IsWithinDistInMap(Unit a, Unit b, float distance)
     {
-        if (!ReferenceEquals(a.Map, b.Map))
-        {
-            return false;
-        }
-
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        float max = distance + a.BoundingRadius + b.BoundingRadius;
-        return (dx * dx) + (dy * dy) + (dz * dz) < max * max;
+        return WorldGeometry.IsWithinDist(a, b, distance, inclusive: false, addRadii: true, MapCheck.Ref);
     }
 
     /// <summary>

@@ -1,26 +1,66 @@
 # Contributing
 
-The rules for changing ArcaneCore. The binding statement of intent is the [charter](../../ARCANECORE_CHARTER.md); this page is the practical side of it.
-The sections that name commands, types and variables are checked against the code by tests, so they cannot drift.
+The rules for changing ArcaneCore. This page is the binding statement of the project's working rules (it took over from the build charter, see [Retired rules](#retired-rules)), and it is also the practical side:
+build and test commands, seams, schema modules and hygiene. The sections that name commands, types and variables are checked against the code by tests, so they cannot drift.
 
 ## The prime directives
 
-From charter section 1, in short (read the charter for the full text):
+These are non-negotiable and override anything else on this page.
 
-1. **Ground truth over generation.** Verify every protocol detail against a real reference before writing it, and cite which reference confirmed it.
-2. **Incremental and gated.** One milestone at a time; no scaffolding of later milestones.
-3. **Verified against a real client.** A milestone is only done when it passes against an actual 1.12.1 (5875) client. Automated tests alone do not make an area "verified".
-4. **Complete within scope, absent outside it.** No TODOs, stubs or placeholders in delivered scope; what is not delivered is written down as a limit.
-5. **No invented API surface.** Never fabricate a method, packet field, opcode number or DBC column; read a reference or ask.
+1. **Ground truth over generation.** Verify every protocol detail (an opcode value, a struct layout, a field order, a hash construction) against a real reference before writing it, and cite in a comment *which* reference confirmed it.
+   If it cannot be verified, stop and ask; never guess. When two references disagree, prefer the one a real 1.12.1 client agrees with, and note the discrepancy in a comment (the recorded cases are in
+   [protocol decisions](../areas/protocol-decisions.md)).
+2. **Verified against a real client.** Automated tests make an area *implemented*, not *accepted*. An area is client-accepted only when it has been run against an actual 1.12.1 (build 5875) client
+   ([real-client acceptance](client-acceptance.md)). Do not describe an area as accepted, verified or done on the strength of a build or a test you wrote.
+3. **Complete within scope, absent outside it.** Inside the change being made there are no TODOs, stubs, placeholders or "implement later" comments: finish it. What the change does not deliver is written down as a limit
+   (an area page's limits section, or the roadmap), not left as dead code.
+4. **No invented API surface.** Never fabricate a method signature, packet field, opcode number or DBC column. An unknown detail is a blocker to resolve by reading a reference or asking, never by plausible-looking invention.
 
-The standing direction on top of the charter: match retail 1.12.1 as closely as possible, mechanics and data, verified against the real references. A deliberate deviation
-sits behind a configuration option that **defaults to retail**, and its option summary says what retail does.
+The standing direction on top of these: match retail 1.12.1 as closely as possible, mechanics and data, verified against the real references. A deliberate deviation
+sits behind a configuration option that **defaults to retail**, and its option summary says what retail does. Server-side observation (scoring, telemetry, diagnostics) needs no gate. Never change the wire format, opcode values or
+packet field order in a refactor: pin the packet builders with golden byte tests first.
+
+## Technical baseline
+
+- **Runtime and language:** C# / .NET 11 (`global.json`, `Directory.Build.props`). Nullable is enabled and warnings are errors; match the `.editorconfig` at the repository root.
+- **Target protocol:** WoW 1.12.1, client build 5875, and nothing newer. Opcodes, update fields and packet shapes are build-specific; values from later expansions are wrong and silently desync or disconnect the client.
+  Pull exact indices and DBC layouts from references and never carry values over from a later core.
+- **Databases:** MariaDB is the primary engine; MySQL, PostgreSQL 16 and SQLite are also supported through the provider abstraction (EF Core).
+- **Processes:** the logon/realm daemon and the world daemon are separate processes (TCP 3724 and 8085 by default), with an optional client-socket gateway in front of world workers ([gateway](../areas/gateway.md)).
+  Components talk through the seams in [integration/seams.md](../integration/seams.md), never by reaching across layers.
 
 ## References and citations
 
-The reference projects (vmangos first, then mangos-classic, wow_messages for packet and update-field layouts, classic-db for data, the vmangos wiki) are GPL and read-only: use them to verify, re-express
-the behaviour in your own code, and never copy their code or data into this repository. Cite the file and line next to every formula, table and packet you add. The
-[repo hygiene guard](#repository-hygiene) enforces the data half of that rule.
+The reference projects are **GPL and read-only**. ArcaneCore is GPL-3.0 ([LICENSE](../../LICENSE)) but stays its own implementation by choice: read a reference for behaviour and exact values, re-express the behaviour in your own code,
+and never copy its code or data into this repository (not even a table). Cite the file and line next to every formula, table and packet you add. The [repo hygiene guard](#repository-hygiene) enforces the data half of that rule.
+Local clones of the references live outside this repository.
+
+| Reference | Use |
+|---|---|
+| vmangos/core | Primary vanilla behaviour and protocol reference; excellent auth and world socket reference |
+| cmangos/mangos-classic | Closest maintained vanilla reference for 1.12.x; cross-check |
+| mangoszero/server | Additional vanilla cross-check |
+| cmangos/classic-db | World content source for the importer (never committed) |
+| gtker/wow_messages, gtker/wow_srp | Machine-readable packet, opcode and update-field definitions and SRP6 known-answer vectors; permissive licence, so the source for generated tables |
+| wowdev.wiki | Neutral protocol, opcode and format documentation |
+| EmberEmu/Ember | Clean modern C++ vanilla auth daemon |
+| WCell | C#/.NET architecture idioms; the auto-create-on-login mechanism |
+| MangosSharp, mangosvb | .NET lineage patterns (clustering restoration, ported fixes); design input only |
+| WoWWiki archive (patch 1.12.1) and Wowhead Classic | Patch notes, historical mechanics and dated observations; see the source-version policy below |
+
+The full catalogue with client versions, licences and roles (including AscEmu, TrinityCore, ArcEmu, Worldforge and Noggit, which inform design or tooling only) is the
+[roadmap reference set](../ROADMAP.md#reference-set-extended-2026-10-02-and-2026-10-04-at-the-developers-request). **WotLK-era references never supply 1.12.1 wire values.**
+
+**Source-version policy for wiki and Wowhead facts.** Identify the patch or expansion, the page id and the date, and name a supporting vanilla reference. Evolving wiki pages and Wowhead comments may include TBC, WotLK, Classic Era,
+Hardcore, Season of Discovery or PTR behaviour, and none of that establishes original build-5875 values. Cross-check mechanics against the 5875 client and data or the vanilla references before implementing; page comments alone never
+establish protocol fields or authoritative values.
+
+## Retired rules
+
+The project's earlier build charter (`ARCANECORE_CHARTER.md`) was removed on 2026-11-04. Its live rules are the sections above. The rest was retired as obsolete: the strictly gated milestone plan (M1 to M6 and the
+`MILESTONE_Mx.md` completion notes, long since relaxed by the owner and replaced by the [roadmap](../ROADMAP.md)), the instruction to ignore earlier reconstructions, the list of what the developer supplied, and the amendment log.
+Git history keeps the old text: `git log --follow -- ARCANECORE_CHARTER.md`. The same applies to the retired milestone and acceptance pages (`MILESTONE_*.md`, `docs/M*_ACCEPTANCE.md`); what they recorded that still holds is in
+[protocol decisions](../areas/protocol-decisions.md), [real-client acceptance](client-acceptance.md), the [mock client](../areas/mock-client.md) and [quests-npc](../areas/quests-npc.md).
 
 ## Layout
 
@@ -63,7 +103,7 @@ The test step leaves those out (`Category!=Timing`), and the next step (`tools/o
 own, serially, with no parallel test collections. A timing test that fails gets exactly one isolated rerun: if it passes, the step passes
 but prints `FLAKY (passed on rerun): <test>` and records it in `timing-logs/flake-ledger.txt` (uploaded as the `timing-gate-*`
 artifact); if it fails again, the step fails. A timing stage that runs 0 tests also fails, so a lost tag or a broken filter cannot read
-green. A flaky test is still a bug to fix, not a pass: the ledger is the list to work from. Node CI (`tools/ops/ci/node-ci.ps1`) runs the
+green. The main stage of `test-stages.sh` (used by node CI only; the hosted `ci.yml` main steps and `full-suite-gate.ps1` call `dotnet test` directly) does the same for a target with at most `GATE_MAIN_RERUN_MAX` (default 5) plain test failures: each failed test is rerun once alone, a pass is `FLAKY`, a second failure, a timeout, an abort, a kill (any dotnet exit code but 1), a build/setup error or a mass failure fails the gate (`GATE_MAIN_RERUN=off` disables it). A flaky test is still a bug to fix, not a pass: the ledger is the list to work from. Node CI (`tools/ops/ci/node-ci.ps1`) runs the
 same two stages with the same script.
 
 ### Package lock files

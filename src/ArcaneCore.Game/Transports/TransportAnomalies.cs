@@ -18,7 +18,7 @@ internal enum TransportAnomalyLatch
 internal static class TransportAnomalies
 {
     /// <summary>The ledger subject for a player: its name and decimal low GUID.</summary>
-    public static string PlayerSubject(Player player) => $"player {player.Name} (guid {player.Guid.Low})";
+    public static string PlayerSubject(Player player) => $"player (guid {player.Guid.Low})";
 
     /// <summary>Sets <paramref name="latch"/> and returns true when it was clear; returns false (changing nothing) when this episode was already reported.</summary>
     public static bool TryLatch(LocomotionState state, TransportAnomalyLatch latch)

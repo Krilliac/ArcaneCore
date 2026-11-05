@@ -50,6 +50,13 @@ public sealed class CharacterRecord
     /// <summary>Unix seconds of the last save (vmangos characters.logout_time); the drunk value sobers from it at login.</summary>
     public long LogoutTime { get; set; }
 
+    /// <summary>
+    /// The CHARACTER_FLAG_* word of vmangos characters.character_flags (Player.h:298-299; saved at Player.cpp:16339-16340,
+    /// restored to PLAYER_FLAGS at Player.cpp:14678-14681, sent in SMSG_CHAR_ENUM at Player.cpp:1682-1683, vmangos 0e3ff01).
+    /// Only HIDE_HELM (0x400) and HIDE_CLOAK (0x800) are owned here; the rename, PvP and ghost bits are not stored in it yet.
+    /// </summary>
+    public uint CharacterFlags { get; set; }
+
     /// <summary>Hearthstone bind point (SMSG_BINDPOINTUPDATE). Defaults to the start position.</summary>
     public uint HomeMapId { get; set; }
 
@@ -76,9 +83,3 @@ public sealed class CharacterRecord
 
     public float TransportOrientation { get; set; }
 }
-
-/// <summary>One action-bar slot: packed as action | type &lt;&lt; 24 on the wire (vmangos ACTION_BUTTON_*).</summary>
-public sealed record ActionButton(byte Button, uint Action, byte Type);
-
-/// <summary>The identity fields of a character, for name queries and /who of offline players.</summary>
-public sealed record CharacterIdentity(int Id, int AccountId, string Name, byte Race, byte Gender, byte Class, byte Level = 1, uint ZoneId = 0);

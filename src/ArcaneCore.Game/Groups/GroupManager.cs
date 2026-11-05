@@ -22,6 +22,10 @@ public sealed partial class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, Group> _memberOf = [];
     private readonly Dictionary<ObjectGuid, Group> _invitedTo = [];
     private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _sentStats = [];
+    // The second buffer of each member's double-buffered snapshot: refilled in place each stats pass, then swapped with the sent one.
+    private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _spareStats = [];
+    private readonly HashSet<Group> _leaderPassSeen = [];
+    private readonly List<Group> _leaderPassGroups = [];
     private readonly HashSet<ObjectGuid> _pendingPetName = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingAuras = [];
@@ -33,7 +37,10 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
-    private uint AllocateGroupId()
+    /// <summary>When true (Worker mode) a group id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    internal uint AllocateGroupId()
     {
         if (IdBlockAllocator is { } allocator)
         {
@@ -41,6 +48,13 @@ public sealed partial class GroupManager(SocialContext context)
             if (allocated >= _nextId && allocated < uint.MaxValue)
                 _nextId = allocated + 1;
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Group,
+                $"Group id allocator for scope '{IdRangeScopes.Group}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (_nextId == 0)
@@ -211,6 +225,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void Invite(Player inviter, string name)
     {
+        if (TryForward(inviter, CommandOf(inviter, GroupCommandKind.Invite, targetName: name))) return;
         Player? target = name.Length == 0 ? null : context.World.FindOnlinePlayer(name);
         if (target is null)
         {
@@ -296,6 +311,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void Accept(Player player)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Accept))) return;
         if (GetInvite(player.Guid) is not { } group || group.IsLeader(player.Guid))
         {
             return;
@@ -330,6 +346,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_DECLINE (vmangos HandleGroupDeclineOpcode): uninvite, then SMSG_GROUP_DECLINE to the leader.</summary>
     public void Decline(Player player)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Decline))) return;
         if (GetInvite(player.Guid) is not { } group)
         {
             return;
@@ -393,6 +410,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void UninviteByName(Player player, string name)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Kick, targetName: name))) return;
         if (name.Length == 0 || name == player.Name || GetGroup(player.Guid) is not { } group)
         {
             return;
@@ -432,6 +450,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_UNINVITE_GUID (vmangos HandleGroupUninviteGuidOpcode).</summary>
     public void UninviteByGuid(Player player, ObjectGuid guid)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Kick, targetGuid: guid.Value))) return;
         if (guid == player.Guid)
         {
             return;
@@ -463,6 +482,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_DISBAND = leave (vmangos HandleGroupDisbandOpcode): PARTY_OP_LEAVE result with the own name, then remove.</summary>
     public void Leave(Player player)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Leave))) return;
         if (GetGroup(player.Guid) is not { } group || group.IsBattlegroundGroup)
         {
             // vmangos HandleGroupDisbandOpcode: a battleground raid cannot be left, only the battleground.
@@ -476,6 +496,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_SET_LEADER (vmangos HandleGroupSetLeaderOpcode → Group::ChangeLeader).</summary>
     public void SetLeader(Player player, ObjectGuid target)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.SetLeader, targetGuid: target.Value))) return;
         if (GetGroup(player.Guid) is not { } group || target == player.Guid || !group.IsLeader(player.Guid)
             || context.World.FindOnlinePlayer(target) is null || group.Find(target) is not { } slot)
         {
@@ -490,6 +511,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_ASSISTANT_LEADER (vmangos HandleGroupAssistantLeaderOpcode → Group::SetAssistant, raids only).</summary>
     public void SetAssistant(Player player, ObjectGuid target, bool assistant)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.SetAssistant, targetGuid: target.Value, value: assistant ? 1u : 0u))) return;
         if (GetGroup(player.Guid) is not { IsRaid: true } group || target == player.Guid || !group.IsLeader(player.Guid)
             || context.World.FindOnlinePlayer(target) is null || group.Find(target) is not { } slot)
         {
@@ -512,6 +534,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void SetLootMethod(Player player, uint method, ObjectGuid master, uint threshold)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.SetLootMethod, value: method, value2: threshold, master: master.Value))) return;
         if (method > (uint)LootMethod.NeedBeforeGreed || threshold is < Group.MinLootThreshold or > Group.MaxLootThreshold
             || GroupForPartyRules(player.Guid) is not { } group || !group.IsLeader(player.Guid))
         {
@@ -541,6 +564,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_RAID_CONVERT (vmangos HandleGroupRaidConvertOpcode): leader, at least two members.</summary>
     public void ConvertToRaid(Player player)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.ConvertToRaid))) return;
         if (GetGroup(player.Guid) is not { } group || group.IsRaid || !group.IsLeader(player.Guid)
             || group.MemberCount < Group.MinMemberCount)
         {
@@ -555,6 +579,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_CHANGE_SUB_GROUP (vmangos HandleGroupChangeSubGroupOpcode → ChangeMembersGroup).</summary>
     public void ChangeSubGroup(Player player, string name, byte subGroup)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.ChangeSubGroup, targetName: name, value: subGroup))) return;
         if (subGroup >= Group.MaxRaidSubGroups || GetGroup(player.Guid) is not { IsRaid: true } group
             || !group.IsLeaderOrAssistant(player.Guid) || !group.HasFreeSlotSubGroup(subGroup)
             || group.FindByName(name) is not { } slot || slot.SubGroup == subGroup)
@@ -569,6 +594,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// <summary>CMSG_GROUP_SWAP_SUB_GROUP (vmangos HandleGroupSwapSubGroupOpcode → SwapMembersGroup).</summary>
     public void SwapSubGroup(Player player, string name, string otherName)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.SwapSubGroup, targetName: name, otherName: otherName))) return;
         if (GetGroup(player.Guid) is not { IsRaid: true } group || !group.IsLeaderOrAssistant(player.Guid)
             || group.FindByName(name) is not { } a || group.FindByName(otherName) is not { } b || a.SubGroup == b.SubGroup)
         {
@@ -588,6 +614,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void ReadyCheck(Player player, byte? answer)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.ReadyCheck, value: answer is null ? 0u : 1u + answer.Value))) return;
         if (GetGroup(player.Guid) is not { } group)
         {
             return;
@@ -664,6 +691,11 @@ public sealed partial class GroupManager(SocialContext context)
             return;
         }
 
+        if (TryForward(player, CommandOf(player, GroupCommandKind.TargetIcon, targetGuid: target.Value, value: icon)))
+        {
+            return;
+        }
+
         SetTargetIcon(group, icon, target);
     }
 
@@ -672,7 +704,9 @@ public sealed partial class GroupManager(SocialContext context)
     {
         if (GetGroup(player.Guid) is { } group)
         {
-            Broadcast(group, WorldOpcode.MsgMinimapPing, GroupPackets.BuildMinimapPing(player.Guid, x, y), ignore: player.Guid);
+            byte[] ping = GroupPackets.BuildMinimapPing(player.Guid, x, y);
+            Broadcast(group, WorldOpcode.MsgMinimapPing, ping, ignore: player.Guid);
+            RelayToOtherWorkers(player, WorldOpcode.MsgMinimapPing, ping);
         }
     }
 
@@ -689,6 +723,7 @@ public sealed partial class GroupManager(SocialContext context)
         if (GetGroup(player.Guid) is { } group)
         {
             Broadcast(group, WorldOpcode.MsgRandomRoll, packet);
+            RelayToOtherWorkers(player, WorldOpcode.MsgRandomRoll, packet);
         }
         else
         {
@@ -749,6 +784,7 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void OnLoggedIn(Player player)
     {
+        if (TryForward(player, CommandOf(player, GroupCommandKind.Login))) { UpdateLeaderFlag(player); return; }
         UpdateLeaderFlag(player);
         if (GetGroup(player.Guid) is not { } group)
         {
@@ -779,11 +815,32 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public void OnLoggingOut(Player player)
     {
+        if (Authority is not null && GetGroup(player.Guid) is not { IsBattlegroundGroup: true })
+        {
+            // The holder drops the invites and shows the member offline; this worker forgets its mirror when no other member of the group is here.
+            Authority.Forward(CommandOf(player, GroupCommandKind.Logout));
+            // The holder's InviteCancelled event can be lost when the presence logout beats this command, so drop the local invite mirror here.
+            _invitedTo.Remove(player.Guid);
+            Group? mirrored = GetGroup(player.Guid);
+            _pendingPetName.Remove(player.Guid);
+            _pendingPetAuras.Remove(player.Guid);
+            _pendingAuras.Remove(player.Guid);
+            _sentStats.Remove(player.Guid);
+            _spareStats.Remove(player.Guid);
+            if (mirrored is not null && !mirrored.Members.Any(m => m.Guid != player.Guid && context.World.FindOnlinePlayer(m.Guid) is not null))
+            {
+                DropReplica(mirrored);
+            }
+
+            return;
+        }
+
         UninviteFromGroup(player.Guid);
         _pendingPetName.Remove(player.Guid);
         _pendingPetAuras.Remove(player.Guid);
         _pendingAuras.Remove(player.Guid);
         _sentStats.Remove(player.Guid);
+        _spareStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
             if (group.IsLeader(player.Guid))
@@ -809,10 +866,22 @@ public sealed partial class GroupManager(SocialContext context)
                 continue;
             }
 
-            GroupMemberStatsSnapshot now = GroupMemberStatsSnapshot.Capture(player);
+            // Double buffer: fill the spare in place, diff against the sent one, then swap. SendStatsOutOfRange builds its
+            // packet from both and keeps neither, so the next pass may overwrite the buffer that becomes the spare.
+            if (!_spareStats.Remove(guid, out GroupMemberStatsSnapshot? now))
+            {
+                now = new GroupMemberStatsSnapshot();
+            }
+
+            now.CaptureFrom(player);
             GroupMemberStatsSnapshot? before = _sentStats.GetValueOrDefault(guid);
             GroupUpdateFlags changed = before is null ? GroupUpdateFlags.Full : now.Diff(before);
             _sentStats[guid] = now;
+            if (before is not null)
+            {
+                _spareStats[guid] = before;
+            }
+
             // A marked pet rename or visible pet aura slot forces its bit even when the snapshot diff alone would not (a rename
             // back to the same text, or a slot that changed and changed back inside one pass); the aura lists themselves are
             // written as the snapshot delta, so a forced bit with nothing changed carries an empty mask.
@@ -856,8 +925,26 @@ public sealed partial class GroupManager(SocialContext context)
         }
 
         long now = UnixSecondsClock();
-        foreach (Group group in _memberOf.Values.Distinct().ToArray())
+        _leaderPassSeen.Clear();
+        _leaderPassGroups.Clear();
+        foreach (Group candidate in _memberOf.Values)
         {
+            // A group mirrored from the holder is not decided here: the leader may well be online on another worker. The holder runs the pass (GroupAuthority.UpdateOfflineLeaders).
+            if (Authority is not null && _replicaById.TryGetValue(candidate.Id, out Group? mirrored) && ReferenceEquals(mirrored, candidate))
+            {
+                continue;
+            }
+
+            if (_leaderPassSeen.Add(candidate))
+            {
+                _leaderPassGroups.Add(candidate);
+            }
+        }
+
+        // Iterate a copy: ChooseLeader and SendUpdate may change membership.
+        for (int i = 0; i < _leaderPassGroups.Count; i++)
+        {
+            Group group = _leaderPassGroups[i];
             if (context.World.FindOnlinePlayer(group.LeaderGuid) is not null)
             {
                 group.LeaderLastOnlineUnixSeconds = now;
@@ -960,6 +1047,7 @@ public sealed partial class GroupManager(SocialContext context)
 
             // vmangos: SetGroupUpdateFlag(GROUP_UPDATE_FULL) — the new member's stats go out.
             _sentStats.Remove(guid);
+            _spareStats.Remove(guid);
         }
 
         MemberAdded?.Invoke(group, guid);
@@ -996,6 +1084,7 @@ public sealed partial class GroupManager(SocialContext context)
         _pendingPetAuras.Remove(guid);
         _pendingAuras.Remove(guid);
         _sentStats.Remove(guid);
+        _spareStats.Remove(guid);
         bool leaderChanged = group.LeaderGuid == guid;
         if (leaderChanged)
         {
@@ -1045,6 +1134,7 @@ public sealed partial class GroupManager(SocialContext context)
             _pendingPetAuras.Remove(guid);
             _pendingAuras.Remove(guid);
             _sentStats.Remove(guid);
+            _spareStats.Remove(guid);
             if (context.World.FindOnlinePlayer(guid) is { } player)
             {
                 if (!hideDestroy)
@@ -1162,6 +1252,12 @@ public sealed partial class GroupManager(SocialContext context)
 
             packet ??= GroupPackets.BuildPartyMemberStats(stats, mask, previous, forced);
             mate.Session.Send(WorldOpcode.SmsgPartyMemberStats, packet);
+        }
+
+        // Members on other workers get the same packet through the holder (every online member of this group that is not on this worker).
+        if (Authority is not null)
+        {
+            RelayToOtherWorkers(player, WorldOpcode.SmsgPartyMemberStats, packet ?? GroupPackets.BuildPartyMemberStats(stats, mask, previous, forced));
         }
     }
 

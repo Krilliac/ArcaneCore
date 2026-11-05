@@ -108,6 +108,9 @@ public sealed partial class CharmInfo
     /// <summary>vmangos Pet::m_trainingPoints: minus the training points spent, plus those earned (shown through UNIT_TRAINING_POINTS).</summary>
     public int TrainingPoints { get; internal set; }
 
+    /// <summary>vmangos Pet::m_focusTimer: milliseconds to the next focus regeneration (4 s period).</summary>
+    internal int FocusTimerMs { get; set; } = PetPower.FocusPeriodMs;
+
     /// <summary>vmangos Pet::m_happinessTimer: milliseconds to the next happiness loss (7.5 s period).</summary>
     internal int HappinessTimerMs { get; set; } = SummonService.HappinessPeriodMs;
 
@@ -127,6 +130,12 @@ public sealed partial class CharmInfo
     public CommandState CommandState { get; internal set; } = CommandState.Follow;
 
     public ReactState ReactState { get; internal set; }
+
+    /// <summary>
+    /// The faction template the unit had when a charm or possession took it (vmangos SpellAuras.cpp:3240 origFactionTemplate, stored by
+    /// SetOriginalFactionTemplate at :3271): a summon's is its owner's, not its template's. Null while the unit is not charmed.
+    /// </summary>
+    public uint? OriginalFactionTemplate { get; internal set; }
 
     /// <summary>vmangos Pet::IsEnabled: false greys the pet's bar out (a mounted owner); the packets then carry 0x8.</summary>
     public bool Enabled { get; internal set; } = true;

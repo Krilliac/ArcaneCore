@@ -286,8 +286,20 @@ internal sealed class HostRig : IAsyncDisposable
     public static async Task<HostRig> StartAsync(AtlasServerOptions? options = null, IWebAssets? assets = null, bool renderer = true, bool maps = true, AtlasPaths? paths = null, Action<AtlasContext>? register = null, ILoggerFactory? loggers = null)
     {
         HostRig rig = Create(headless: false, renderer, maps, paths, register, loggers);
-        AtlasServerOptions chosen = (options ?? new AtlasServerOptions()) with { Port = 0, Assets = assets ?? options?.Assets ?? new FakeAssets() };
-        rig.Server = await AtlasServer.StartAsync(rig.Context, chosen);
+        AtlasServerOptions chosen = (options ?? new AtlasServerOptions()) with { Assets = assets ?? options?.Assets ?? new FakeAssets() };
+        // A fixed port from the loopback test range (not bind(0): the kernel's ephemeral range is small and shared on busy CI nodes); a port taken meanwhile is retried on the next one.
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                rig.Server = await AtlasServer.StartAsync(rig.Context, chosen with { Port = ArcaneCore.TestSupport.LoopbackPorts.Next() });
+                break;
+            }
+            catch (IOException) when (attempt < 10)
+            {
+            }
+        }
+
         rig.Http.BaseAddress = rig.Server.BaseAddress;
         rig.Http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", rig.Server.Token);
         rig.Anonymous.BaseAddress = rig.Server.BaseAddress;

@@ -66,6 +66,9 @@ public sealed class CastAction : EventAiActionHandler
     public const int Triggered = 0x02;
     public const int AuraNotPresent = 0x20;
 
+    /// <summary>cmangos CAST_MAIN_SPELL: marks the creature's main spell (<see cref="CreatureEventAI.IsMainSpell"/>); not a cast option.</summary>
+    public const int MainSpell = 0x100;
+
     public override byte ActionType => (byte)EventAiActionType.Cast;
 
     public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
@@ -97,7 +100,9 @@ public sealed class CastAction : EventAiActionHandler
             system.InterruptCast(context.Me);
         }
 
-        return system.CastSpell(context.Me, (uint)action.Param1, target, (flags & Triggered) != 0) == CreatureCastResult.Ok;
+        CreatureCastResult result = system.CastSpell(context.Me, (uint)action.Param1, target, (flags & Triggered) != 0);
+        context.Ai.HandleMainSpellCastResult((uint)action.Param1, result);
+        return result == CreatureCastResult.Ok;
     }
 }
 

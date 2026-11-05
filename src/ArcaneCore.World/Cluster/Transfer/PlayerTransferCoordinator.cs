@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 
@@ -26,6 +27,9 @@ public interface ITransferSourceWorker
         string abortReason,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Whether this worker holds a frozen player of <paramref name="characterGuid"/>. True when it cannot tell (a remote proxy): the worker's self-heal then asks for the retire anyway.</summary>
+    bool HoldsClaim(ulong characterGuid) => true;
+
     /// <summary>Stage 6 / Post-commit roll-forward: permanently retires the frozen player entity from the source worker.</summary>
     Task RetireSourcePlayerAsync(
         Guid transferId,
@@ -34,12 +38,27 @@ public interface ITransferSourceWorker
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>The target's answer to stage 1: whether the slot is reserved, and the instance id the transfer enters (the requested one, or the one the target allocated for an instance-0 request).</summary>
+public readonly record struct TransferSlotReservation(bool Reserved, uint InstanceId);
+
 /// <summary>Target worker participant contract for cross-worker player handoff.</summary>
 public interface ITransferTargetWorker
 {
     WorkerNodeId WorkerId { get; }
 
     Guid Incarnation { get; }
+
+    /// <summary>
+    /// The characters-ownership scope this worker claims under (<c>worker:&lt;shard&gt;</c> in Worker fencing scope), which the coordinator commits the
+    /// character's claim to (design _wf/writer-lock-DESIGN.md section 1b). Null (the default) keeps the source token's scope: the realm-wide 'world' scope.
+    /// </summary>
+    string? OwnershipScope => null;
+
+    /// <summary>
+    /// The incarnation the target runs under right now, asked of the target itself when it can be (a remote target describes itself again); the default is the cached <see cref="Incarnation"/>.
+    /// Roll-forward compares it with a committed token's incarnation to find a target that restarted after the commit (design _wf/handoff-control-DESIGN.md, follow-up C18).
+    /// </summary>
+    Task<Guid> CurrentIncarnationAsync(CancellationToken cancellationToken = default) => Task.FromResult(Incarnation);
 
     /// <summary>Stage 1: reserves a target slot on the destination worker for `(targetMapId, targetInstanceId)`.</summary>
     Task<bool> TryReserveSlotAsync(
@@ -48,6 +67,22 @@ public interface ITransferTargetWorker
         uint targetMapId,
         uint targetInstanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stage 1 with the instance the target bound (design _wf/handoff-control-DESIGN.md, orchestrator decision Q8): when the request names instance 0 for an instanced map, the target allocates and binds an
+    /// instance and answers its id; every other request is answered with the requested id unchanged. The default calls <see cref="TryReserveSlotAsync"/> and echoes the requested id, so a target that
+    /// allocates nothing needs no override.
+    /// </summary>
+    async Task<TransferSlotReservation> ReserveSlotAsync(
+        Guid transferId,
+        ulong characterGuid,
+        uint targetMapId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        bool reserved = await TryReserveSlotAsync(transferId, characterGuid, targetMapId, targetInstanceId, cancellationToken).ConfigureAwait(false);
+        return new TransferSlotReservation(reserved, targetInstanceId);
+    }
 
     /// <summary>Stage 3: installs the passive shadow entity from the bundle without starting world ticks or durable writes.</summary>
     Task InstallPassiveShadowAsync(
@@ -117,7 +152,11 @@ public sealed record PlayerTransferRequest(
     uint TargetInstanceId,
     TransferPosition TargetPosition,
     CharacterOwnershipToken SourceOwnershipToken,
-    WorkerNodeId? ExplicitTargetWorkerId = null);
+    WorkerNodeId? ExplicitTargetWorkerId = null)
+{
+    /// <summary>The player keeps the transport it stands on (the retail <c>TELE_TO_NOT_LEAVE_TRANSPORT</c> option), set from the submit's <c>ControlTransferOptions.NotLeaveTransport</c>.</summary>
+    public bool NotLeaveTransport { get; init; }
+}
 
 /// <summary>Outcome of a coordinated transfer or recovery operation.</summary>
 public sealed record PlayerTransferOutcome(
@@ -209,8 +248,10 @@ public sealed class PlayerTransferCoordinator
         TransferDecisionRecord record = await _decisionStore.CommitDecisionAsync(
             request.TransferId,
             targetWorker.Incarnation,
-            cancellationToken);
+            cancellationToken,
+            targetWorker.OwnershipScope);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.CommitDecision, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.CommitDecision, record, cancellationToken);
@@ -308,14 +349,17 @@ public sealed class PlayerTransferCoordinator
             request.SourceOwnershipToken,
             cancellationToken);
 
-        bool reserved = await targetWorker.TryReserveSlotAsync(
+        TransferSlotReservation reservation = await targetWorker.ReserveSlotAsync(
             request.TransferId,
             request.CharacterGuid,
             request.TargetMapId,
             request.TargetInstanceId,
             cancellationToken);
 
-        if (!reserved)
+        // Q8: the instance the target bound is the one every later stage names; the captured bundle (journalled at stage 2) carries it.
+        uint targetInstanceId = reservation.InstanceId;
+
+        if (!reservation.Reserved)
         {
             TransferDecisionRecord aborted = await AbortInternalAsync(record, "target-reserve-rejected", cancellationToken);
             return new PlayerTransferOutcome(
@@ -327,6 +371,14 @@ public sealed class PlayerTransferCoordinator
                 DecisionRecord: aborted);
         }
 
+        if (targetInstanceId != record.TargetInstanceId)
+        {
+            // Journal the id the target allocated, so the durable row (which recovery and the gateway read) and the bundle captured next name the same instance. A failure here
+            // leaves a Reserve-stage record, which recovery aborts (and the abort discards the target's reservation).
+            record = await _decisionStore.RebindTargetInstanceAsync(request.TransferId, targetInstanceId, cancellationToken);
+        }
+
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.Reserve, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.Reserve, record, cancellationToken);
@@ -341,7 +393,7 @@ public sealed class PlayerTransferCoordinator
             request.CharacterGuid,
             targetWorkerId,
             request.TargetMapId,
-            request.TargetInstanceId,
+            targetInstanceId,
             request.TargetPosition,
             cancellationToken);
 
@@ -362,12 +414,20 @@ public sealed class PlayerTransferCoordinator
                 DecisionRecord: aborted);
         }
 
+        // The source worker captured the player without knowing the teleport's options: stamp the stay-aboard intent here, so the journalled bundle and the
+        // bundle the target installs (both carry this JSON) tell the target whether the player keeps its transport seat.
+        if (request.NotLeaveTransport && !bundle.NotLeaveTransport)
+        {
+            bundle = bundle with { NotLeaveTransport = true };
+        }
+
         record = await _decisionStore.AdvancePreCommitStageAsync(
             request.TransferId,
             PlayerTransferStage.SuspendAndCapture,
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.SuspendAndCapture, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.SuspendAndCapture, record, cancellationToken);
@@ -384,6 +444,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.InstallPassive, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.InstallPassive, record, cancellationToken);
@@ -400,7 +461,7 @@ public sealed class PlayerTransferCoordinator
             request.SourceWorkerId,
             targetWorkerId,
             request.TargetMapId,
-            request.TargetInstanceId,
+            targetInstanceId,
             request.TargetPosition,
             cancellationToken);
 
@@ -410,6 +471,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.StageWorldPort, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.StageWorldPort, record, cancellationToken);
@@ -502,16 +564,27 @@ public sealed class PlayerTransferCoordinator
             record.SourceOwnershipToken,
             cancellationToken);
 
+        // Stage 6 is only half done here: the source is retired, the target is not yet active.
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.ActivateAndRetire, cancellationToken);
+
+        // A target that restarted after the commit runs under a new incarnation, and the committed token still names the dead one, which the
+        // restarted target refuses (it only hands out tokens of its own incarnation). Move the commit to the live incarnation of the same worker
+        // scope first (design _wf/handoff-control-DESIGN.md, follow-up C18); the store proves that incarnation owns the scope.
+        PlayerTransferBundle bundle = record.CapturedBundle;
+        record = await RebindToRestartedTargetAsync(record, targetWorker, cancellationToken);
+        CharacterOwnershipToken targetToken = record.TargetOwnershipToken
+            ?? throw new InvalidOperationException($"Transfer '{transferId}' lost its target token while rebinding.");
+
         // 2. Ensure target passive state exists (in case target worker restarted after CommitDecision) and activate it.
         await targetWorker.InstallPassiveShadowAsync(
             record.TransferId,
-            record.CapturedBundle,
+            bundle,
             cancellationToken);
 
         await targetWorker.ActivateTargetPlayerAsync(
             record.TransferId,
-            record.CapturedBundle,
-            record.TargetOwnershipToken,
+            bundle,
+            targetToken,
             cancellationToken);
 
         // 3. Switch gateway routing to the target worker under the new ownership token.
@@ -520,11 +593,33 @@ public sealed class PlayerTransferCoordinator
             record.CharacterGuid,
             record.SessionGeneration,
             record.TargetWorkerId,
-            record.TargetOwnershipToken,
+            targetToken,
             cancellationToken);
 
         // 4. Mark durable decision Completed.
         return await _decisionStore.MarkCompletedAsync(record.TransferId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Rebinds a committed transfer to its target's live incarnation when the target restarted after the commit. Only a token in the target's own worker
+    /// scope is rebound (a realm-wide token is not tied to one process); a target that does not know its incarnation yet (<see cref="Guid.Empty"/>) is left
+    /// alone, and activation then fails and is retried by recovery.
+    /// </summary>
+    private async Task<TransferDecisionRecord> RebindToRestartedTargetAsync(TransferDecisionRecord record, ITransferTargetWorker targetWorker, CancellationToken cancellationToken)
+    {
+        CharacterOwnershipToken committed = record.TargetOwnershipToken!;
+        if (targetWorker.OwnershipScope is not { } scope ||
+            !CharacterOwnershipScopes.IsWorker(scope) ||
+            !string.Equals(committed.Scope, scope, StringComparison.Ordinal))
+        {
+            return record;
+        }
+
+        Guid live = await targetWorker.CurrentIncarnationAsync(cancellationToken);
+        if (live == Guid.Empty || live == committed.Incarnation)
+            return record;
+
+        return await _decisionStore.RebindCommittedTargetAsync(record.TransferId, live, cancellationToken);
     }
 
     /// <summary>
@@ -606,5 +701,58 @@ public sealed class PlayerTransferCoordinator
             throw new InvalidOperationException($"Target worker '{workerId}' is not registered with PlayerTransferCoordinator.");
 
         return worker;
+    }
+}
+
+/// <summary>
+/// Test-only stage hold for the crash-mid-transfer scenarios (S6c). A no-op in production: it acts only when the process environment carries
+/// <see cref="HoldStageVariable"/> (a <see cref="PlayerTransferStage"/> name) and <see cref="DirectoryVariable"/> (an existing directory), which only the
+/// cluster E2E fixture sets, and only on the gateway it launches. When the coordinator first reaches the named stage it writes the marker file
+/// <c>reached-&lt;Stage&gt;</c> in that directory and waits until the file <c>release</c> appears there (or the token is cancelled, or <see cref="MaximumHold"/> passes),
+/// so the test can kill a process at exactly that stage. The hold fires once per process; later passes (recovery) are not held.
+/// Thread safety: the once-only latch is an interlocked flag; the settings are read once at type initialisation and immutable. Production cost: one null check.
+/// </summary>
+internal static class TransferStageProbe
+{
+    internal const string HoldStageVariable = "ARCANECORE_TEST_TRANSFER_HOLD_STAGE";
+    internal const string DirectoryVariable = "ARCANECORE_TEST_TRANSFER_HOLD_DIR";
+    internal const string ReleaseFileName = "release";
+
+    private static readonly TimeSpan MaximumHold = TimeSpan.FromMinutes(4);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly PlayerTransferStage? HoldStage = ReadStage();
+    private static readonly string? HoldDirectory = HoldStage is null ? null : Environment.GetEnvironmentVariable(DirectoryVariable);
+    private static int _fired;
+
+    internal static string MarkerFileName(PlayerTransferStage stage) => "reached-" + stage;
+
+    internal static Task ReachedAsync(PlayerTransferStage stage, CancellationToken cancellationToken)
+    {
+        if (HoldStage is null || HoldStage.Value != stage || string.IsNullOrEmpty(HoldDirectory))
+            return Task.CompletedTask;
+
+        return HoldAsync(stage, HoldDirectory, cancellationToken);
+    }
+
+    private static async Task HoldAsync(PlayerTransferStage stage, string directory, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _fired, 1) != 0)
+            return;
+
+        string marker = Path.Combine(directory, MarkerFileName(stage));
+        string temporary = marker + ".tmp";
+        await File.WriteAllTextAsync(temporary, stage.ToString(), cancellationToken).ConfigureAwait(false);
+        File.Move(temporary, marker, overwrite: true);
+
+        string release = Path.Combine(directory, ReleaseFileName);
+        DateTime deadline = DateTime.UtcNow + MaximumHold;
+        while (!File.Exists(release) && DateTime.UtcNow < deadline)
+            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static PlayerTransferStage? ReadStage()
+    {
+        string? name = Environment.GetEnvironmentVariable(HoldStageVariable);
+        return !string.IsNullOrWhiteSpace(name) && Enum.TryParse(name, ignoreCase: false, out PlayerTransferStage stage) ? stage : null;
     }
 }

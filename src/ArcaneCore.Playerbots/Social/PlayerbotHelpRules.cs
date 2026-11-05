@@ -3,6 +3,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots.Combat;
 using static ArcaneCore.World.Playerbots.PlayerbotGeometry;
@@ -112,14 +113,15 @@ internal static class PlayerbotHelpRules
     internal static bool MayFlag(Player bot, bool warMode) => warMode || IsPvpFlagged(bot);
 
     /// <summary>
-    /// The creature among the victim's attackers a helping bot takes: the nearest to the bot that is alive, on its map, one the combat hooks let it
-    /// attack, and (when it would flag the bot) only if <paramref name="mayFlag"/>. Players are never taken: the brain's targets are creatures.
+    /// The attacker among the victim's attackers a helping bot takes: the nearest to the bot that is alive, on its map, one the combat hooks let it
+    /// attack, and (when it would flag the bot) only if <paramref name="mayFlag"/>. A creature, or a player or bot of the other faction that is
+    /// PvP-flagged that struck the victim first with War Mode off (<c>MapCombat.StruckFirst</c>: never one that only fights back; with <paramref name="warMode"/> on, any such attacker), wherever War Mode is on or off, and never one standing in a War Mode exempt area (<see cref="PvpAreaState.IsWarModeProtected"/>).
     /// Null when there is none.
     /// </summary>
-    internal static Creature? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize)
+    internal static Unit? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize, bool warMode = false)
     {
         if (bot.Map is not { } map) return null;
-        Creature? best = null;
+        Unit? best = null;
         float bestYards = float.MaxValue;
         Consider(victim.Combat.Attackers);
         Consider(victim.Combat.ThreatenedBy);
@@ -130,14 +132,26 @@ internal static class PlayerbotHelpRules
             if (units.Count == 0) return;
             foreach (Unit unit in units)
             {
-                if (unit is not Creature { IsAlive: true, IsInWorld: true } creature || !ReferenceEquals(creature.Map, map)) continue;
-                if (WouldFlag(creature) && !mayFlag) continue;
-                if (!Winnable(bot.Level, creature.Level, creature.Template.Rank is 1 or 2 or 3, groupSize)) continue;
-                if (!map.Combat.Hooks.CanAttack(bot, creature)) continue;
-                float yards = Distance(bot, creature);
+                if (unit is Player enemy)
+                {
+                    if (!enemy.IsAlive || !enemy.IsInWorld || !ReferenceEquals(enemy.Map, map) || enemy.Team == bot.Team || !IsPvpFlagged(enemy)) continue;
+                    if (!mayFlag || PvpAreaState.IsWarModeProtected(enemy)) continue;
+                    // War Mode off: only the aggressor is taken on (an enemy who merely fights back a same-faction player's attack is a defender). War Mode on: any enemy attacker.
+                    if (!warMode && !map.Combat.StruckFirst(enemy, victim)) continue;
+                    if (!Winnable(bot.Level, enemy.Level, false, groupSize)) continue;
+                }
+                else
+                {
+                    if (unit is not Creature { IsAlive: true, IsInWorld: true } creature || !ReferenceEquals(creature.Map, map)) continue;
+                    if (WouldFlag(creature) && !mayFlag) continue;
+                    if (!Winnable(bot.Level, creature.Level, creature.Template.Rank is 1 or 2 or 3, groupSize)) continue;
+                }
+
+                if (!map.Combat.Hooks.CanAttack(bot, unit)) continue;
+                float yards = Distance(bot, unit);
                 if (yards < bestYards)
                 {
-                    best = creature;
+                    best = unit;
                     bestYards = yards;
                 }
             }

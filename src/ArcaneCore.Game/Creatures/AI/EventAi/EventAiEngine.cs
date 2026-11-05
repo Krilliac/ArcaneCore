@@ -369,6 +369,18 @@ public sealed class EventAiEngine
             return;
         }
 
+        if (!StackGuard.TryEnter("eventai.process"))
+        {
+            // An EventAI chain too deep for the stack: drop the queued holders so none stays InProgress for good.
+            foreach (EventAiHolder holder in ready)
+            {
+                holder.InProgress = false;
+            }
+
+            ready.Clear();
+            return;
+        }
+
         // An action that throws must not leave the depth raised or the queued holders InProgress: CheckEvent rejects an
         // InProgress holder for good, and the caller swallows the exception. (cmangos has no exceptions to unwind.)
         _depth++;

@@ -46,8 +46,12 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
         return Task.FromResult(false);
     }
 
+    /// <summary>The last state passed to <see cref="SaveStateAsync"/>, or null.</summary>
+    public CharacterState? LastState { get; private set; }
+
     public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
+        LastState = state;
         if (SaveOverride is { } overrideSave)
             return overrideSave(state);
         if (_characters.TryGetValue(state.Id, out CharacterRecord? c))
@@ -65,6 +69,7 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
                 c.LevelPlayedTime = state.LevelPlayedTime;
                 c.Money = state.Money;
                 c.ActionBarToggles = state.ActionBarToggles;
+                c.CharacterFlags = (c.CharacterFlags & ~CharacterAppearanceFlags.Mask) | (state.CharacterFlags & CharacterAppearanceFlags.Mask);
                 TransportSeat seat = state.Transport ?? default;
                 (c.TransportGuid, c.TransportX, c.TransportY, c.TransportZ, c.TransportOrientation) = (seat.Guid, seat.X, seat.Y, seat.Z, seat.Orientation);
                 if (state.Home is { } home)

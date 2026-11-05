@@ -118,6 +118,9 @@ internal sealed class PlayerbotSocialPass(
     /// <summary>The world's festival board (the events lane and the event remark); null without one.</summary>
     internal PlayerbotWorldEventBoard? Events { get; init; }
 
+    /// <summary>The call board of defense calls (the "defense" lane); null without one.</summary>
+    internal ArcaneCore.World.Playerbots.Combat.PlayerbotDefenseBoard? DefenseCalls { get; init; }
+
     /// <summary>The bots' social memory seam (friend and ignore lists, guild invitations by affinity); null without one.</summary>
     internal PlayerbotSocialRecorder? Recorder { get; init; }
 
@@ -239,6 +242,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotRivalryLane _rivalry = new(new PlayerbotRivalryOptOut());
+    private readonly PlayerbotDefenseLane _defense = new();
+    private readonly PlayerbotInviteOptOut _inviteOptOut = new();
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
     private readonly PlayerbotMoodLane _mood = new();
@@ -302,8 +307,14 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     /// <summary>The cross-faction rivalry lane (tests and status).</summary>
     internal PlayerbotRivalryLane Rivalry => _rivalry;
 
+    /// <summary>The defense call announce lane (tests, status).</summary>
+    internal PlayerbotDefenseLane Defense => _defense;
+
     /// <summary>The one server-wide store of "rivals off" choices, read by the lane and by every bot's party AI.</summary>
     internal PlayerbotRivalryOptOut RivalryOptOut => _rivalry.OptOut;
+
+    /// <summary>The one server-wide store of "invites off" choices, read by the group coordinator, the guild invitations and every bot's party AI.</summary>
+    internal PlayerbotInviteOptOut InviteOptOut => _inviteOptOut;
 
     /// <summary>Answering calls for help and the trouble scan (<see cref="PlayerbotHelpLane"/>).</summary>
     internal PlayerbotHelpLane Help => _help;
@@ -362,6 +373,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         // The kill talk asks the group coordinator's frozen world-boss snapshot (any thread) and names the zone a catalogued boss fell in.
         _chat.IsWorldBossEntry = _conversations.IsWorldBossEntry = IsWorldBossEntry;
         _chat.ZoneOf = _conversations.ZoneOf = ZoneNameOf;
+        WireInviteOptOut(_groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>());
     }
 
     /// <summary>Whether <paramref name="entry"/> is in the group coordinator's world-boss catalogue (read from the map threads: a volatile snapshot).</summary>
@@ -540,6 +552,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
             Events = bots?.EventBoard,
+            DefenseCalls = bots?.DefenseCalls,
         };
     }
 
@@ -654,6 +667,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
+            DefenseCalls = bots?.DefenseCalls,
             Whole = whole,
         };
     }
@@ -790,7 +804,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private static readonly string[] LaneNames =
     [
         "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
-        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "rivalry", "prune",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "defense", "rivalry", "prune",
     ];
 
     /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
@@ -823,7 +837,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 case 15: _worldChatter.Run(pass); break;
                 case 16: _voice.Run(pass); break;
                 case 17: Events.Run(pass); break;
-                case 18: _rivalry.Run(pass); break;
+                case 18: _defense.Run(pass); break;
+                case 19: _rivalry.Run(pass); break;
                 default: _membership.Prune(pass); break;
             }
         }
@@ -883,9 +898,17 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _channels.Run(_channelBotsScratch, pass.Social.Channels, ArcaneCore.Game.Maps.Templates.WorldMaps.Of(pass.World).Areas, chat.SpeechOptions, pass.NowMs);
     }
 
+    /// <summary>Hand the "invites off" store to the places that send an unsolicited invitation: the group coordinator and the guild membership lane.</summary>
+    private void WireInviteOptOut(PlayerbotGroupCoordinator? groups)
+    {
+        _membership.InviteOptOut = _inviteOptOut;
+        if (groups is not null) groups.InviteOptOut = _inviteOptOut;
+    }
+
     private List<PlayerbotSocialBot> Gather(ManagedPlayerbotFeature bots)
     {
         PlayerbotGroupCoordinator? groups = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>();
+        WireInviteOptOut(groups);
         bots.GatherSocialBots(groups, _socialBotsScratch);
         return _socialBotsScratch;
     }

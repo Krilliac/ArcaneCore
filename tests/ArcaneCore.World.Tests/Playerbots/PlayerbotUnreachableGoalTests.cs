@@ -59,6 +59,26 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         Assert.Fail("the spawn is never told unreachable");
     }
 
+    /// <summary>
+    /// Plans toward <paramref name="goal"/> like a think (no walk is started) until no tile on the way is still being read. The unreachable
+    /// verdict needs only the region graph; a reachable sibling's route also needs its tiles, and a first <c>Update</c> that met one
+    /// still loading answers <see cref="PlayerbotWorldDestinations.WaitingForTiles"/> and moves nothing.
+    /// </summary>
+    private static async Task WaitUntilPlannableAsync(SyntheticNavWorld world, Vector3 goal)
+    {
+        var options = new PlayerbotOptions { Enabled = true };
+        var wait = new TileWait();
+        for (int think = 0; think < 200; think++)
+        {
+            PlanOutcome outcome = await world.Host.OnWorldAsync(() =>
+                PlayerbotNavigation.PlanToward(world.Player, goal, options, ref wait, world.Host.World.NowMs, out _));
+            if (outcome != PlanOutcome.Pending) return;
+            await world.Host.World.AdvanceClockAsync(50);
+        }
+
+        Assert.Fail("the tiles toward the reachable spawn are never ready");
+    }
+
     // The content's creatures really spawn in the synthetic world and stand in sight; none counts as the bot's target, so the walk is what is decided.
     private static PlayerbotWorldDestinations DestinationsOf(SyntheticNavWorld world)
         => new(world.Session, new PlayerbotOptions { Enabled = true }) { Suspensions = new PlayerbotSuspensions(), Untakeable = (_, _) => true };
@@ -69,6 +89,7 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn, ReachableSpawn));
         await world.PlaceAsync(Start);
         await WaitUntilUnreachableAsync(world);
+        await WaitUntilPlannableAsync(world, ReachableSpawn);
         PlayerbotWorldDestinations destinations = DestinationsOf(world);
         float before = world.Player.Y;
         bool moved = await world.Host.OnWorldAsync(() =>

@@ -2,7 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
-using Microsoft.Extensions.Logging;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Spells;
@@ -18,20 +18,6 @@ public sealed class SpellCastPipelineCharacterisationTests
     private const uint FaultEnemySpell = 995102;
 
     private sealed class CastProbeFault(string message) : Exception(message);
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state)
-            where TState : notnull
-            => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
-    }
 
     private static SpellInfo Costed() => SpellTestKit.Spell(CostedHeal, SpellTestKit.Effect(SpellEffectName.Heal, 20)) with
     {
@@ -118,7 +104,7 @@ public sealed class SpellCastPipelineCharacterisationTests
         // PR #1325 merged the cast-site and script-fault sites into one "spell.script" site: both records land there.
         long spellFaults = FaultLedger.Shared.Snapshot().Where(s => s.Site == "spell.script" && s.ExceptionType == type).Sum(s => s.Count);
         Assert.True(spellFaults >= 2, $"expected both spell.script records, got {spellFaults}");
-        string line = Assert.Single(logger.Lines, l => l.Contains("Spell script fault in Cast (", StringComparison.Ordinal));
+        string line = Assert.Single(logger.Messages, l => l.Contains("Spell script fault in Cast (", StringComparison.Ordinal));
         Assert.Contains($"SpellId={FaultSelfSpell}, SpellName=Spell {FaultSelfSpell}, Caster={who}, Target={who}", line, StringComparison.Ordinal);
         Assert.Null(system.GetState(player.Guid)?.CurrentCast);
         Assert.Single(SpellTestKit.Packets(session, WorldOpcode.SmsgSpellGo)); // the fault came after SMSG_SPELL_GO, not before

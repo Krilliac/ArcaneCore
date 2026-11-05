@@ -43,6 +43,9 @@ namespace ArcaneCore.World.Playerbots;
 /// the packet said). Warning. Failure path only.</description></item>
 /// <item><term>start-blocked</term><description>a route could not be started: its first stretch is not walkable. Warning.</description></item>
 /// <item><term>route-blocked</term><description>a route being walked is no longer walkable ahead; the bot stopped. Warning.</description></item>
+/// <item><term>overspeed</term><description>a heartbeat step of at least <see cref="OverspeedMinAgeMs"/> covered more than
+/// <see cref="OverspeedFactor"/> times the flat distance the speed the bot is entitled to allows (<see cref="PlayerbotMotion.Speed"/> for
+/// the bot now, in the swim state the step was walked in). Warning. A compare per heartbeat.</description></item>
 /// </list>
 /// Nothing is checked while <see cref="WorldSession.IsInChaosProbe"/>. Thread affinity: world thread; a <see cref="MotionWatch"/> belongs to one bot.
 /// </summary>
@@ -91,6 +94,12 @@ internal static class PlayerbotMotionAnomalies
     /// <summary>Walking that ends this near where the window began is not progress.</summary>
     internal const float StuckYards = 1f;
 
+    /// <summary>A step shorter than this is not judged for its speed (a few ms of rounding is a large ratio).</summary>
+    internal const uint OverspeedMinAgeMs = 200;
+
+    /// <summary>A step covering more than this times the entitled speed is an overspeed.</summary>
+    internal const float OverspeedFactor = 1.05f;
+
     /// <summary>Segments shorter than this are not tested for a crossing.</summary>
     internal const float MinSegmentYards = 0.5f;
 
@@ -123,12 +132,13 @@ internal static class PlayerbotMotionAnomalies
         MoveRejected,
         StartBlocked,
         RouteBlocked,
+        Overspeed,
     }
 
     private static readonly string[] Names =
     [
         "airwalk", "under-map", "wall-crossed", "door-crossed", "position-jump", "non-finite-position", "lease-expired-midroute",
-        "stuck", "move-rejected", "start-blocked", "route-blocked",
+        "stuck", "move-rejected", "start-blocked", "route-blocked", "overspeed",
     ];
 
     /// <summary>The normalised ledger key of <paramref name="code"/> (tests).</summary>
@@ -296,13 +306,35 @@ internal static class PlayerbotMotionAnomalies
     /// now for <paramref name="nextPoint"/>): the stuck check every heartbeat, the ground and crossing checks once per sample.
     /// </summary>
     internal static void AfterHeartbeat(WorldSession session, Player player, Map map, PlayerbotMotion.MotionState state,
-        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now)
+        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now, uint ageMs = 0, bool swam = false, bool walkMode = false)
     {
         MotionWatch watch = state.Watch;
         CheckStuck(session, player, watch, route, to, now);
+        CheckOverspeed(session, player, state, from, to, ageMs, swam, walkMode, now);
         if (!watch.SampleDue(now) || session.IsInChaosProbe) return;
         CheckGround(player, map, watch, to, now);
         CheckCrossing(player, map, watch, route, fromNext, nextPoint, from, to, now);
+    }
+
+    /// <summary>
+    /// The step from <paramref name="from"/> to <paramref name="to"/> took <paramref name="ageMs"/> and was walked in the swim state
+    /// <paramref name="swam"/> and the walk mode <paramref name="walkMode"/>: more than <see cref="OverspeedFactor"/> times the bot's
+    /// current swim speed (swimming), walk speed (walk mode) or run speed is reported. The motion state's own speed is not the yardstick
+    /// (a fault in it is what this finds).
+    /// </summary>
+    internal static void CheckOverspeed(WorldSession session, Player player, PlayerbotMotion.MotionState state, Vector3 from, Vector3 to,
+        uint ageMs, bool swam, bool walkMode, uint now)
+    {
+        if (ageMs < OverspeedMinAgeMs || session.IsInChaosProbe) return;
+        float expected = UnitSpeed.Get(player, swam ? MoveType.Swim : walkMode ? MoveType.Walk : MoveType.Run);
+        if (!float.IsFinite(expected) || expected <= 0) return;
+        float travelled = Vector2.Distance(new Vector2(from.X, from.Y), new Vector2(to.X, to.Y));
+        float actual = travelled / (ageMs / 1000f);
+        if (!(actual > OverspeedFactor * expected) || !state.Watch.Due(Code.Overspeed, now)) return;
+        Emit(player, Code.Overspeed,
+            string.Create(CultureInfo.InvariantCulture,
+                $"moved {actual:F2} yd/s, expected {expected:F2} yd/s (motion speed {state.Speed:F2}, run speed {UnitSpeed.Get(player, MoveType.Run):F2}, mounted {UnitSpeed.IsMounted(player)}, swimming {swam}, walk {walkMode}), {travelled:F2} yd in {ageMs} ms"),
+            AnomalySeverity.Warning);
     }
 
     /// <summary>Heartbeats went on for <see cref="StuckWindowMs"/> and the bot is where the window began.</summary>
@@ -390,12 +422,27 @@ internal static class PlayerbotMotionAnomalies
         return floor;
     }
 
+    /// <summary>
+    /// The one floor rule shared by the airwalk judge (<see cref="CheckGround"/>), the login floor fix and the mover's mesh-floor
+    /// paths (<see cref="PlayerbotMotion.Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3, out string?)"/>): the floor under
+    /// <paramref name="at"/> (<see cref="FloorUnder"/>) and the verdict on it (<see cref="JudgeGround"/>). A point the mover returns
+    /// from a mesh floor passes this, so the judge never convicts it.
+    /// </summary>
+    internal static GroundVerdict JudgeFloor(MapCollision collision, Vector3 at, out float floor, out UnderMapVerdict underMap)
+    {
+        floor = FloorUnder(collision, at);
+        return JudgeGround(at, floor, collision.LineOfSight.Enabled, collision, out underMap);
+    }
+
+    /// <summary>Whether <paramref name="at"/> passes the shared floor rule (<see cref="JudgeFloor"/> is <see cref="GroundVerdict.Ok"/>).</summary>
+    internal static bool StandsOnFloor(MapCollision collision, Vector3 at)
+        => JudgeFloor(collision, at, out _, out _) == GroundVerdict.Ok;
+
     /// <summary>One sampled ground check at <paramref name="at"/>, where a heartbeat just put the bot.</summary>
     internal static void CheckGround(Player player, Map map, MotionWatch watch, Vector3 at, uint now)
     {
         if ((player.Movement.Flags & NotWalking) != 0 || player.Locomotion.ActiveSpline is not null || !at.IsFinite()) return;
-        float floor = FloorUnder(map.Collision, at);
-        GroundVerdict verdict = JudgeGround(at, floor, map.Collision.LineOfSight.Enabled, map.Collision, out UnderMapVerdict underMap);
+        GroundVerdict verdict = JudgeFloor(map.Collision, at, out float floor, out UnderMapVerdict underMap);
         if (verdict == GroundVerdict.Ok)
         {
             watch.EndPlace(Code.UnderMap);

@@ -93,7 +93,9 @@ internal static class PlayerbotCombatView
             {
                 if (slot.Guid == player.Guid) continue;
                 grouped = true;
-                if (map.FindObject(slot.Guid) is Player member && member.IsInWorld)
+                // A charmed member is not assistable (vmangos Unit::IsFriendlyTo/CanAssist treat a charmed unit by its charmer), so a heal or buff
+                // aimed at it would be refused and put that spell into PlayerbotCombatSpells.RefusalBackoffMs. It stays out of the party view.
+                if (map.FindObject(slot.Guid) is Player member && member.IsInWorld && member.CharmerGuid.IsEmpty)
                 {
                     units[member.Guid] = member;
                     party.Add(Describe(system, player, member, groups));
@@ -226,6 +228,7 @@ internal static class PlayerbotCombatView
             IsRooted = system.IsRooted(player),
             IsSlowed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModDecreaseSpeed)),
             IsStealthed = ownAuras.Any(h => !h.IsRemoved && h.HasAura(AuraType.ModStealth)),
+            NoStealth = player.ZoneId == ArcaneCore.Game.OutdoorPvP.SilithusCatalog.SilithusZone && HasHolder(ownAuras, Events.PlayerbotWorldPvpObjectives.SilithystFlag),
             WearsShield = offHand?.Template is { Class: ItemClassArmor, SubClass: SubClassShield },
             Pet = petStatus,
             PetUnit = petView,
@@ -508,6 +511,13 @@ internal static class PlayerbotCombatView
         if (ranged?.Template is not { Class: ItemClassWeapon } template || template.SubClass is SubClassWand or 16) return true;
         uint ammo = player.Inventory.AmmoId;
         return ammo != 0 && player.Inventory.GetItemCount(ammo) > 0;
+    }
+
+    private static bool HasHolder(IReadOnlyList<SpellAuraHolder> holders, uint spellId)
+    {
+        for (int i = 0; i < holders.Count; i++)
+            if (!holders[i].IsRemoved && holders[i].Spell.Id == spellId) return true;
+        return false;
     }
 
     private static int ComboPoints(WorldSession session, Player player)

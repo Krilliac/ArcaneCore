@@ -431,6 +431,8 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             return false;
         }
 
+        // Bots that reach the auctioneer the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+        if (_destinations.SpreadAt(player, seen.Npc, elapsedMs)) return true;
         if (!PlayerbotMovementControl.Stop(session, player)) return true;
         _destinations.Clear();
         _auctioneer = seen.Npc.Guid;
@@ -489,6 +491,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             return true;
         }
 
+        ObservePrices(page.Rows);
         PlayerbotListingPlan? plan = PlayerbotEconomyPlanner.PlanListing(item, page.Rows, player.Guid.Value, _house!, economy.Options.AuctionDepositMin,
             economy.Options.AuctionRateDeposit, economy.Options.AuctionRateCut, PlayerbotEconomyPlanner.Remaining(Budget, _spent),
             options.Economy.ListMarkupPercentFor(item.Template.Quality));
@@ -609,7 +612,10 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             if (!session.TryManagedAction(WorldOpcode.CmsgAuctionListItems, search)) return Failed();
             IReadOnlyList<ManagedSessionPacket> replies = session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
             if (replies.Count > 0 && TryDecode(() => PlayerbotEconomyWire.DecodeAuctionList(replies[^1].Payload), out PlayerbotAuctionPage? page) && page is not null)
+            {
                 _scan.AddRange(page.Rows);
+                ObservePrices(page.Rows);
+            }
             _scanStep++;
             return true;
         }
@@ -796,7 +802,10 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
                 if (!session.TryManagedAction(WorldOpcode.CmsgAuctionListItems, search)) return Failed();
                 IReadOnlyList<ManagedSessionPacket> replies = session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
                 if (replies.Count > 0 && TryDecode(() => PlayerbotEconomyWire.DecodeAuctionList(replies[^1].Payload), out PlayerbotAuctionPage? page) && page is not null)
+                {
                     _reagentScan.AddRange(page.Rows);
+                    ObservePrices(page.Rows);
+                }
             }
 
             _reagentSearches++;
@@ -1195,6 +1204,10 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     private bool IsCasting(Player player)
         => session.Services.GetService<SpellFeature>()?.System.GetState(player.Guid)?.CurrentCast is
             { State: SpellCastState.Preparing or SpellCastState.Casting };
+
+    /// <summary>Hands the rows of an auction list to the trade price book (<see cref="ManagedPlayerbotFeature.DealPrices"/>), when the playerbot feature runs.</summary>
+    private void ObservePrices(IReadOnlyList<PlayerbotAuctionRow> rows)
+        => session.Services.GetService<ManagedPlayerbotFeature>()?.DealPrices.Book.Observe(rows);
 
     private bool Failed()
     {

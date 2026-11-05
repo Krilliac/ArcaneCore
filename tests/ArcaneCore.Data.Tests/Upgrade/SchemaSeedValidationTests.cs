@@ -32,6 +32,19 @@ public sealed class SchemaSeedValidationTests
         SchemaDefinition accepted = Definition(seed);
         Assert.NotNull(SchemaChangeDecider.ReadModel(db, accepted));
 
+        // The model's HasData row also carries the nullable owned_maps / heartbeat_at_ms columns a later step adds; the frozen
+        // 5-column seed omits them and IsDeclaredSeed accepts them as null only because that step declares them with AddColumnChange.
+        // Spelling the two columns out is accepted too.
+        EnsureRowChange eightColumns = seed with { Values = new Dictionary<string, object?>(seed.Values) { ["owned_maps"] = null, ["heartbeat_at_ms"] = null } };
+        Assert.NotNull(SchemaChangeDecider.ReadModel(db, Definition(eightColumns)));
+
+        // A null-valued column the seed omits is NOT accepted when no step of the definition adds that column.
+        Assert.Throws<InvalidOperationException>(() => SchemaChangeDecider.ReadModel(db, Definition(seed, includeShardStep: false)));
+
+        // A column the seed omits whose HasData value is not null is rejected (epoch is 0 in the model's row, not null).
+        EnsureRowChange omitsEpoch = seed with { Values = seed.Values.Where(v => v.Key != "epoch").ToDictionary(v => v.Key, v => v.Value) };
+        Assert.Throws<InvalidOperationException>(() => SchemaChangeDecider.ReadModel(db, Definition(omitsEpoch)));
+
         EnsureRowChange wrongValue = seed with { Values = new Dictionary<string, object?>(seed.Values) { ["epoch"] = 1L } };
         Assert.Throws<InvalidOperationException>(() => SchemaChangeDecider.ReadModel(db, Definition(wrongValue)));
 
@@ -40,15 +53,21 @@ public sealed class SchemaSeedValidationTests
     }
 
     // The model is the whole characters model, so every seeded row it declares (the ownership row and the realm authority lease scopes) must be declared by a step.
-    private static SchemaDefinition Definition(EnsureRowChange seed) => new()
+    private static SchemaDefinition Definition(EnsureRowChange seed, bool includeShardStep = true)
     {
-        Component = "characters",
-        CurrentVersion = RealmAuthorityLeaseDataModule.Version,
-        Version1Tables = ["characters"],
-        Steps =
+        List<SchemaStep> steps =
         [
             new SchemaStep(CharacterOwnershipDataModule.Version, [seed]),
             new SchemaStep(RealmAuthorityLeaseDataModule.Version, [.. new RealmAuthorityLeaseDataModule().SchemaChanges.OfType<EnsureRowChange>()]),
-        ],
-    };
+        ];
+        if (includeShardStep)
+            steps.Add(new SchemaStep(CharacterOwnershipShardDataModule.Version, [.. new CharacterOwnershipShardDataModule().SchemaChanges.OfType<AddColumnChange>()]));
+        return new SchemaDefinition
+        {
+            Component = "characters",
+            CurrentVersion = steps[^1].Version,
+            Version1Tables = ["characters"],
+            Steps = steps,
+        };
+    }
 }

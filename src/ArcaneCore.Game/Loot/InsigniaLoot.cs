@@ -88,7 +88,8 @@ public sealed class InsigniaLoot(LootService loot, Random? random = null)
     private LootBag Create(Corpse bones, Player looter, Player? victim)
     {
         uint refLoot = victim is not null ? RefLootOf?.Invoke(victim) ?? 0 : 0;
-        LootBag bag = loot.Generate(bones.Guid, LootSourceKind.Bones, LootType.Insignia, LootTableKind.Reference, refLoot, [looter]);
+        LootBag bag = loot.Generate(bones.Guid, LootSourceKind.Bones, LootType.Insignia, LootTableKind.Reference, refLoot, [looter],
+            lootTarget: (WorldObject?)victim ?? bones); // Loot::GetLootTarget: a corpse's owner when online (LootMgr.cpp:819-824)
         bag.Recipients.Clear(); // ALL_PERMISSION: "Everyone can loot"
         if (victim is not null)
         {
@@ -102,11 +103,7 @@ public sealed class InsigniaLoot(LootService loot, Random? random = null)
         return bag;
     }
 
-    private static float Distance(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-    }
+    private static float Distance(WorldObject a, WorldObject b) => WorldGeometry.CenterDistance3D(a, b);
 
     /// <summary>vmangos DoLootRelease for bones: once looted out, the loot is cleared and the bones lose CORPSE_DYNFLAG_LOOTABLE.</summary>
     private sealed class BonesRelease(LootService loot, Corpse bones) : ILootReleaseHandler

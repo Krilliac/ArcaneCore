@@ -250,12 +250,19 @@ public sealed class RuleEvaluator(Random random)
 
     /// <summary>
     /// Start <paramref name="list"/> for the subject of <paramref name="context"/> (the <c>start_rule_list</c> action): its actions up to the
-    /// first delay run now, the rest is parked. False when the nesting limit was reached.
+    /// first delay run now, the rest is parked. False when the nesting limit was reached or the calling thread is low on stack (both count in <c>DepthLimited</c>; the stack case also records a fault under <c>rules.start-list</c>).
     /// </summary>
     public bool StartList(in RuleActionContext context, CompiledRuleList list)
     {
         ArgumentNullException.ThrowIfNull(list);
         if (context.Depth >= MaxListDepth)
+        {
+            Interlocked.Increment(ref Counters.DepthLimited);
+            return false;
+        }
+
+        // The depth cap bounds one firing's nesting; the guard covers a host that calls in with little stack left (a bot pass deep in another relay).
+        if (!StackGuard.TryEnter("rules.start-list"))
         {
             Interlocked.Increment(ref Counters.DepthLimited);
             return false;

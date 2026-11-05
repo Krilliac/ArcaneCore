@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -96,6 +97,12 @@ public sealed partial class LootService : IViewerFieldFilter
     /// <summary>Item templates (display ids, party-loot and lootable flags). Unknown items are not generated.</summary>
     public IItemTemplateStore? Items { get; set; }
 
+    /// <summary>
+    /// The random property source loot items roll from at generation (<see cref="LootItem.RandomPropertyId"/>). Null falls back to the first
+    /// recipient's inventory source (<see cref="PlayerInventory.RandomProperties"/>, set at login), then to no property.
+    /// </summary>
+    public IItemRandomPropertySource? RandomProperties { get; set; }
+
     // vmangos LootStoreItem::Roll(rate) (LootMgr.cpp:256-268): Rate.Drop.Item.Referenced for a reference row, else the quality rate of the
     // item, 1 when the item is unknown ("pProto && rate ? ... : 1.0f"). Read from the shared options at every roll.
     private float DropRate(LootStoreRow row)
@@ -113,8 +120,17 @@ public sealed partial class LootService : IViewerFieldFilter
     /// Evaluates a loot row's condition_id for one recipient (the world daemon wires the conditions feature here,
     /// <c>GameObjectLootFeature</c>); null (no conditions area) skips conditioned rows, as a missing row does in cmangos.
     /// A conditioned item is restricted to the recipients who satisfy it (see docs/areas/loot-conditions-chest-gold.md).
+    /// The <see cref="WorldObject"/> is the loot target (vmangos LootItem::AllowedForPlayer lootTarget, LootMgr.cpp:370-373): the creature,
+    /// game object or, for a player's corpse, its owner; it is the condition's source, so <see cref="ConditionFlags.SwapTargets"/> rows
+    /// test it. Null when the loot has no object (an item, a fishing cast).
     /// </summary>
-    public Func<Player, uint, bool>? Conditions { get; set; }
+    public Func<Player, WorldObject?, uint, bool>? Conditions { get; set; }
+
+    /// <summary>
+    /// The conditions table the loot groups' team pre-filter reads (resolved at use time; the world daemon wires the conditions feature
+    /// here). Null (or a null result) turns the pre-filter off: groups then pick blind and the per-viewer <see cref="Conditions"/> decides.
+    /// </summary>
+    public Func<ConditionEvaluator?>? ConditionRules { get; set; }
 
     /// <summary>
     /// The durable store of chest loot in dungeon instances. Without it (or without a live logical
@@ -145,8 +161,9 @@ public sealed partial class LootService : IViewerFieldFilter
     /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
     /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
     /// </param>
+    /// <param name="lootTarget">The object the loot comes from, handed to the conditions as their source (vmangos Loot::GetLootTarget, LootMgr.cpp:816-827).</param>
     public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
-        bool zeroEntryIsATable = false)
+        bool zeroEntryIsATable = false, WorldObject? lootTarget = null)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         var bag = new LootBag(source, kind, type);
@@ -162,17 +179,17 @@ public sealed partial class LootService : IViewerFieldFilter
 
         var normal = new List<(RolledLoot Roll, ItemTemplate Template, List<Player>? Allowed)>();
         var quest = new List<(RolledLoot Roll, ItemTemplate Template, List<Player> Needing)>();
-        foreach (RolledLoot roll in Generator.Roll(table, entry))
+        Func<Player, WorldObject?, uint, bool>? evaluator = Conditions;
+        foreach (RolledLoot roll in Generator.Roll(table, entry, TeamFilter(recipients)))
         {
             if (Items?.Find(roll.ItemId) is not { } template)
             {
                 continue; // vmangos drops rows with unknown items at load
             }
 
-            Func<Player, uint, bool>? evaluator = Conditions;
             List<Player>? allowed = roll.ConditionId == 0 && roll.ReferenceConditions.Count == 0 ? null
-                : evaluator is null ? [] : [.. recipients.Where(p => (roll.ConditionId == 0 || evaluator(p, roll.ConditionId))
-                    && roll.ReferenceConditions.All(conditionId => evaluator(p, conditionId)))];
+                : evaluator is null ? [] : [.. recipients.Where(p => (roll.ConditionId == 0 || evaluator(p, lootTarget, roll.ConditionId))
+                    && roll.ReferenceConditions.All(conditionId => evaluator(p, lootTarget, conditionId)))];
             if (allowed is { Count: 0 })
             {
                 continue;
@@ -193,10 +210,23 @@ public sealed partial class LootService : IViewerFieldFilter
             }
         }
 
+        IItemRandomPropertySource? properties = null;
+        if (normal.Count > 0 || quest.Count > 0)
+        {
+            properties = RandomProperties;
+            for (int i = 0; properties is null && i < recipients.Count; i++)
+            {
+                properties = recipients[i].Inventory.RandomProperties;
+            }
+        }
+
         byte slot = 0;
         foreach ((RolledLoot roll, ItemTemplate template, List<Player>? allowed) in normal)
         {
-            var item = new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId);
+            var item = new LootItem(slot++, roll.ItemId, roll.Count, false, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId)
+            {
+                RandomPropertyId = properties?.Generate(template) ?? 0, // LootItem ctor: Item::GenerateItemRandomPropertyId (LootMgr.cpp:343-344)
+            };
             if (allowed is not null)
             {
                 foreach (Player player in allowed)
@@ -210,7 +240,10 @@ public sealed partial class LootService : IViewerFieldFilter
 
         foreach ((RolledLoot roll, ItemTemplate template, List<Player> needing) in quest)
         {
-            var item = new LootItem(slot++, roll.ItemId, roll.Count, true, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId);
+            var item = new LootItem(slot++, roll.ItemId, roll.Count, true, (template.Flags & ItemFlagPartyLoot) != 0, template.DisplayId)
+            {
+                RandomPropertyId = properties?.Generate(template) ?? 0,
+            };
             foreach (Player p in needing)
             {
                 item.AllowedLooters.Add(p.Guid);
@@ -225,6 +258,65 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         return bag;
+    }
+
+    /// <summary>
+    /// The group pre-filter (vmangos LootStoreItem::AllowedForTeam, LootMgr.cpp:403-433, as LootGroup::Roll uses it). The loot team is
+    /// cross-faction when the recipients are of both factions (or none), else their faction. A row is refused when its condition is missing,
+    /// is a team condition for the other faction (a cross-faction loot team allows every team row), or can be decided without a player and
+    /// is not met. Player-dependent conditions (quest, skill, item, level...) are not pre-decided: such a row keeps its share of the roll
+    /// and the per-viewer <see cref="Conditions"/> check hides it later, as in vmangos. Only the row's own condition counts; the reference
+    /// rows' conditions are not looked at. Null when no conditions table is wired (<see cref="ConditionRules"/>): groups then pick blind.
+    /// </summary>
+    private LootRowFilter? TeamFilter(IReadOnlyList<Player> recipients)
+    {
+        if (ConditionRules?.Invoke() is not { } rules)
+        {
+            return null;
+        }
+
+        bool alliance = false;
+        bool horde = false;
+        foreach (Player player in recipients)
+        {
+            if (player.Team == Team.Alliance)
+            {
+                alliance = true;
+            }
+            else
+            {
+                horde = true;
+            }
+        }
+
+        Team? lootTeam = alliance == horde ? null : alliance ? Team.Alliance : Team.Horde;
+        return (row, _) =>
+        {
+            if (row.ConditionId == 0)
+            {
+                return true;
+            }
+
+            if (rules.Table.Find(row.ConditionId) is null)
+            {
+                return false;
+            }
+
+            if (rules.TeamOf(row.ConditionId) is { } conditionTeam)
+            {
+                if (lootTeam is null)
+                {
+                    return true;
+                }
+
+                if (conditionTeam != lootTeam)
+                {
+                    return false;
+                }
+            }
+
+            return !rules.CanBeUsedWithoutPlayer(row.ConditionId) || rules.EvaluateWithoutSubjects(row.ConditionId) != false;
+        };
     }
 
     /// <summary>
@@ -477,7 +569,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         CreatureLootInfo? info = Content.FindCreature(creature.Entry);
         List<Player> recipients = RecipientsFor(player, creature, out Group? group, tappedGroup);
-        LootBag bag = Generate(creature.Guid, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, info?.LootId ?? 0, recipients);
+        LootBag bag = Generate(creature.Guid, LootSourceKind.Creature, LootType.Corpse, LootTableKind.Creature, info?.LootId ?? 0, recipients, lootTarget: creature);
         if (info is not null && info.MaxGold > 0)
         {
             // vmangos Loot::GenerateMoneyLoot (LootMgr.cpp:735-746), including the 8-bit shifted boss range.
@@ -581,7 +673,7 @@ public sealed partial class LootService : IViewerFieldFilter
 
         creature.UnitFlags &= ~UnitFlags.Skinnable;
         creature.LootedForSkin = true;
-        LootBag bag = Generate(creature.Guid, LootSourceKind.Skinning, LootType.Skinning, LootTableKind.Skinning, info.SkinningLootId, [player]);
+        LootBag bag = Generate(creature.Guid, LootSourceKind.Skinning, LootType.Skinning, LootTableKind.Skinning, info.SkinningLootId, [player], lootTarget: creature);
         _bags[creature.Guid] = (creature, bag);
         if (!bag.IsEmpty)
         {
@@ -607,7 +699,7 @@ public sealed partial class LootService : IViewerFieldFilter
             List<Player> recipients = RecipientsFor(player, go, out Group? group);
             LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject,
                 go.Type == GameObjectType.FishingNode ? LootType.Fishing : LootType.Corpse,
-                LootTableKind.GameObject, lootId, recipients);
+                LootTableKind.GameObject, lootId, recipients, lootTarget: go);
             fresh.Gold = Math.Min(LootMoneyRules.GenerateForGameObject(go.Template, lootId, Options.MoneyRate, _random), MaxMoneyAmount);
             CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
             Group? looterGroup = UsesGroupLootRules(go) ? group : null;
@@ -716,7 +808,7 @@ public sealed partial class LootService : IViewerFieldFilter
         // group's round-robin position only moves when the generation committed. No money: the durable record has no
         // place for it yet (LootBag.ToRecord refuses a bag with gold), so a stored chest pays nothing (docs/areas/loot-conditions-chest-gold.md).
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
-        LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients);
+        LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients, lootTarget: go);
         fresh.DurableKey = key;
         CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
@@ -840,7 +932,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return RefuseTake(player, item);
         }
 
-        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count)],
+        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count, RandomPropertyId: item.RandomPropertyId)],
             out InventoryRewardStage? stage, out _);
         if (staged != InventoryResult.Ok || stage is null)
         {
@@ -1189,7 +1281,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return InventoryResult.AlreadyLooted;
         }
 
-        InventoryResult result = recipient.Inventory.AddItem(item.ItemId, item.Count, out _, received: false, created: false, showInChat: true);
+        InventoryResult result = recipient.Inventory.AddLootItem(item.ItemId, item.Count, item.RandomPropertyId, out _);
         if (result != InventoryResult.Ok)
         {
             return result;

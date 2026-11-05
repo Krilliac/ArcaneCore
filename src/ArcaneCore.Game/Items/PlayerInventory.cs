@@ -57,6 +57,15 @@ public sealed partial class PlayerInventory
     /// <summary>The player, or null for an offline inventory.</summary>
     public Player? Player { get; }
 
+    /// <summary>
+    /// Moves on every change of what the inventory holds and where: a store or removal in an own slot (equipment, bags, bank, keyring, buyback), a store or
+    /// removal inside a bag, and a load. Bumped in the lowest-level slot writers so no caller can change the layout without it. Consumers (the enchantment
+    /// timer sweep) compare it with the value they last saw. Thread affinity: the owning world thread.
+    /// </summary>
+    internal uint LayoutVersion { get; private set; }
+
+    internal void BumpLayout() => LayoutVersion = unchecked(LayoutVersion + 1);
+
     public ObjectGuid OwnerGuid => _ownerGuid;
 
     public Race Race => Player?.Race ?? _race;
@@ -303,6 +312,7 @@ public sealed partial class PlayerInventory
         }
 
         _loaded = true;
+        BumpLayout();
     }
 
     /// <summary>

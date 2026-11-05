@@ -32,7 +32,11 @@ namespace ArcaneCore.World.Playerbots;
 /// <para>
 /// A bot that arrives inside a volume without walking into it (a teleport, a login, a scenario placement) does not fire it: the
 /// first position seen on a map only sets what the bot is inside. That keeps a bot landing at a dungeon exit, beside the entrance
-/// box, from bouncing straight back in.
+/// box, from bouncing straight back in. A same-map portal the bot lands beside (Teldrassil: the Darnassus exit of trigger 527 at
+/// Rut'theran lies 3.9 yards outside the volume of trigger 542, the portal back up) is held back the same way
+/// (<see cref="PlayerbotTriggerTracker.IsGuarded"/>): the bot does not take it until it has walked <see cref="PlayerbotTriggerTracker.GuardYards"/>
+/// clear of its volume or a walk to that very trigger asked for it (<see cref="Want"/>), so an errand along the landing does not bounce the bot
+/// back up the tree.
 /// </para>
 /// <para>
 /// The triggers of each map are cached per <see cref="WorldMaps"/> in a coarse grid (<see cref="PlayerbotTriggerIndex"/>), rebuilt
@@ -146,6 +150,22 @@ internal static class PlayerbotAreaTriggers
         Trackers.GetValue(player, _ => new PlayerbotTriggerTracker()).TeleportTarget = targetMap;
     }
 
+    /// <summary>
+    /// A walk to <paramref name="trigger"/> on purpose (a journey's trigger leg, a ghost's walk into a portal): the bot may take it even
+    /// while it is held back as a landing guard (<see cref="PlayerbotTriggerTracker.IsGuarded"/>), for the next
+    /// <see cref="WantMs"/> of world time; each think of the walk renews it.
+    /// </summary>
+    internal static void Want(Player player, uint trigger, uint nowMs)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        PlayerbotTriggerTracker tracker = TrackerOf(player);
+        tracker.WantedTrigger = trigger;
+        tracker.WantedUntilMs = unchecked(nowMs + WantMs);
+    }
+
+    /// <summary>How long a <see cref="Want"/> holds without a renewal.</summary>
+    internal const uint WantMs = 5000;
+
     /// <summary>The one map whose teleports the bot may take besides its AllowedMaps (<see cref="AllowTeleportsTo"/>), or null.</summary>
     internal static uint? TeleportTargetOf(Player player)
         => Trackers.TryGetValue(player, out PlayerbotTriggerTracker? tracker) ? tracker.TeleportTarget : null;
@@ -239,6 +259,10 @@ internal static class PlayerbotAreaTriggers
             // The handler may teleport the bot away; a far teleport leaves the map, so stop reporting on this one.
             if (!ReferenceEquals(player.Map, map) || !player.IsInWorld) break;
             AreaTriggerTeleport? teleport = maps.FindAreaTriggerTeleport(trigger);
+            // A same-map portal beside where the bot landed: not walked into on purpose, so the walk past it is not a trip through it.
+            if (teleport is not null && teleport.TargetMap == map.MapId && tracker.IsGuarded(trigger)
+                && !tracker.IsWanted(trigger, session.World.NowMs))
+                continue;
             if (!MayTake(maps, player, tracker, trigger))
             {
                 if (teleport is not null && !session.IsInChaosProbe)
@@ -395,8 +419,32 @@ internal sealed class PlayerbotTriggerTracker
     private IReadOnlyCollection<AreaTriggerTemplate>? _nearSource;
     private long _nearCellKey = long.MinValue;
     private IReadOnlyList<AreaTriggerTemplate> _nearTriggers = [];
+    private readonly Dictionary<uint, AreaTriggerTemplate> _guarded = [];
+    private readonly List<uint> _released = [];
+
+    /// <summary>
+    /// How far beyond its edge a volume still holds back a bot that landed beside it: the server's own 5-yard lag tolerance
+    /// (vmangos MiscHandler.cpp HandleAreaTriggerOpcode) plus a margin for the walk's first steps.
+    /// </summary>
+    internal const float GuardYards = 8f;
 
     internal IReadOnlyCollection<uint> Inside => _inside;
+
+    /// <summary>The trigger a walk is heading for on purpose (<see cref="PlayerbotAreaTriggers.Want"/>), or null.</summary>
+    internal uint? WantedTrigger { get; set; }
+
+    /// <summary>World time until which <see cref="WantedTrigger"/> holds.</summary>
+    internal uint WantedUntilMs { get; set; }
+
+    /// <summary>
+    /// Whether <paramref name="trigger"/> was just outside the volume of the position the bot landed at (the first position on a map, or after
+    /// <see cref="Forget"/>), within <see cref="GuardYards"/> of its edge, and the bot has not since walked farther than that from it.
+    /// </summary>
+    internal bool IsGuarded(uint trigger) => _guarded.ContainsKey(trigger);
+
+    /// <summary>Whether a walk asked for <paramref name="trigger"/> and not longer ago than <see cref="PlayerbotAreaTriggers.WantMs"/>.</summary>
+    internal bool IsWanted(uint trigger, uint nowMs)
+        => WantedTrigger == trigger && unchecked((int)(WantedUntilMs - nowMs)) > 0;
 
     /// <summary>The bot's <see cref="PlayerbotOptions.AllowedMaps"/> (set when a route starts); null: none known yet.</summary>
     internal uint[]? AllowedMaps { get; set; }
@@ -417,6 +465,7 @@ internal sealed class PlayerbotTriggerTracker
         _map = null;
         _nearMap = null;
         _inside.Clear();
+        _guarded.Clear();
     }
 
     internal WorldMaps MapsOf(WorldRuntime world)
@@ -465,6 +514,7 @@ internal sealed class PlayerbotTriggerTracker
         {
             _map = map;
             _inside.Clear();
+            _guarded.Clear();
         }
 
         _entered.Clear();
@@ -477,10 +527,43 @@ internal sealed class PlayerbotTriggerTracker
             if (!_inside.Contains(trigger.Id) && fire && !first) _entered.Add(trigger.Id);
         }
 
+        if (first) GuardNeighbours(mapId, position, triggers);
+        else if (_guarded.Count > 0) ReleaseGuards(position);
+
         (_inside, _next) = (_next, _inside);
         if (_entered.Count == 0) return [];
         _entered.Sort();
         return [.. _entered];
+    }
+
+    /// <summary>Hold back the volumes of <paramref name="triggers"/> that lie just outside <paramref name="position"/> (the bot's landing).</summary>
+    private void GuardNeighbours(uint mapId, Vector3 position, IReadOnlyList<AreaTriggerTemplate> triggers)
+    {
+        for (int i = 0; i < triggers.Count; i++)
+        {
+            AreaTriggerTemplate trigger = triggers[i];
+            if (trigger.MapId == mapId && !Contains(trigger, mapId, position) && FlatGap(trigger, position) <= GuardYards)
+                _guarded[trigger.Id] = trigger;
+        }
+    }
+
+    /// <summary>Drop the guards whose volume the bot has walked <see cref="GuardYards"/> clear of.</summary>
+    private void ReleaseGuards(Vector3 position)
+    {
+        _released.Clear();
+        foreach ((uint id, AreaTriggerTemplate trigger) in _guarded)
+        {
+            if (FlatGap(trigger, position) > GuardYards) _released.Add(id);
+        }
+
+        for (int i = 0; i < _released.Count; i++) _guarded.Remove(_released[i]);
+    }
+
+    /// <summary>The flat distance from <paramref name="position"/> to the edge of the trigger's bounding circle (negative inside it).</summary>
+    private static float FlatGap(AreaTriggerTemplate trigger, Vector3 position)
+    {
+        float dx = position.X - trigger.X, dy = position.Y - trigger.Y;
+        return MathF.Sqrt((dx * dx) + (dy * dy)) - PlayerbotTriggerIndex.BoundingRadius(trigger);
     }
 
     /// <summary>

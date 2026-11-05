@@ -167,6 +167,16 @@ public sealed partial class WorldRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// The stack the world thread is created with: 16 MiB, against the platform default of 1 to 8 MiB. Every recursive relay of the tick (spell chains, procs, auras,
+    /// scripts, rule lists, pathing) is guarded by <c>StackGuard</c> or a depth cap, but a guard only drops the nested action when the stack runs low; a larger stack
+    /// lets legitimate nesting finish before that happens. Address space is reserved, pages are committed only when touched.
+    /// </summary>
+    public const int WorldThreadStackBytes = 16 * 1024 * 1024;
+
+    /// <summary>The stack size the world thread is (or will be) created with, in bytes (<see cref="WorldThreadStackBytes"/>); readable on any thread.</summary>
+    public int ConfiguredStackBytes => WorldThreadStackBytes;
+
     /// <summary>Start the world thread.</summary>
     public void Start()
     {
@@ -182,7 +192,7 @@ public sealed partial class WorldRuntime : IDisposable
 
         _stopped = false;
         Scripts.Freeze();
-        _thread = new Thread(Run) { IsBackground = true, Name = "world" };
+        _thread = new Thread(Run, WorldThreadStackBytes) { IsBackground = true, Name = "world" };
         _thread.Start();
     }
 
@@ -313,6 +323,45 @@ public sealed partial class WorldRuntime : IDisposable
         }
     }
 
+    private MapOwnership _ownership = MapOwnership.All;
+
+    /// <summary>
+    /// The maps this process owns (Cluster:Worker:OwnedMaps). <see cref="MapOwnership.All"/>, the default, is the combined behaviour. A map outside
+    /// the set is never created here: <see cref="GetMap(uint, uint)"/> throws <see cref="MapNotOwnedException"/> and <see cref="TryGetMap"/> answers
+    /// <see cref="MapAccessResult.NotOwned"/>, which the login path (kick, until a redirect exists) and the teleport path (refusal, until a far
+    /// transfer exists) turn into a clean refusal. Set before <see cref="Start"/>; maps that already exist stay reachable.
+    /// </summary>
+    public MapOwnership Ownership
+    {
+        get => Volatile.Read(ref _ownership);
+        set => Volatile.Write(ref _ownership, value ?? throw new ArgumentNullException(nameof(value)));
+    }
+
+    /// <summary>Whether this process owns the map copy (see <see cref="Ownership"/>); safe from any thread.</summary>
+    public bool Owns(uint mapId, uint instanceId = 0) => Ownership.Owns(mapId, instanceId);
+
+    /// <summary>
+    /// <see cref="GetMap(uint, uint)"/> that refuses instead of throwing when the map is not owned here (world thread).
+    /// <paramref name="map"/> is null unless the result is <see cref="MapAccessResult.Granted"/>.
+    /// </summary>
+    public MapAccessResult TryGetMap(uint mapId, uint instanceId, out Map? map)
+    {
+        if (FindMap(mapId, instanceId) is { } existing)
+        {
+            map = existing;
+            return MapAccessResult.Granted;
+        }
+
+        if (!Owns(mapId, instanceId))
+        {
+            map = null;
+            return MapAccessResult.NotOwned;
+        }
+
+        map = GetMap(mapId, instanceId);
+        return MapAccessResult.Granted;
+    }
+
     /// <summary>
     /// The map with the given id (instance 0: continents and other shared maps), created on
     /// first use with its default per-map systems (<see cref="DefaultMapUpdaters"/>; world thread).
@@ -333,6 +382,11 @@ public sealed partial class WorldRuntime : IDisposable
 
         if (!_maps.TryGetValue((mapId, instanceId), out Map? map))
         {
+            if (!Owns(mapId, instanceId))
+            {
+                throw new MapNotOwnedException(mapId, instanceId);
+            }
+
             map = new Map(mapId, instanceId, this, _logger);
             DefaultMapUpdaters.AttachTo(map, this);
             _maps[(mapId, instanceId)] = map;
@@ -365,6 +419,11 @@ public sealed partial class WorldRuntime : IDisposable
             {
                 return map;
             }
+        }
+
+        if (!Owns(mapId, instanceId))
+        {
+            throw new MapNotOwnedException(mapId, instanceId);
         }
 
         map = new Map(mapId, instanceId, this, _logger);
@@ -439,6 +498,28 @@ public sealed partial class WorldRuntime : IDisposable
         map.AddPlayer(player);
     }
 
+    /// <summary>
+    /// Put a transferred player into the online registry without a map (world thread), as a player is while a far teleport loads: the
+    /// cluster transfer target registers the shadow here, sends the loading screen (<c>TeleportService.BeginClusterArrival</c>) and the map
+    /// add follows the client's MSG_MOVE_WORLDPORT_ACK. A disconnect in between takes the normal logout path (<see cref="RemovePlayer"/>
+    /// saves the player at its arrival position). Throws when the guid is already online.
+    /// </summary>
+    public void RegisterPlayerForTransferArrival(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.CharacterOwnership is null && CharacterOwnership is { } ownership)
+            player.CharacterOwnership = ownership;
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        _onlineByName[player.Name] = player;
+        _autosaveRescan = true;
+        player.StartPlayedTime(NowMs);
+        player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
+    }
+
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
     public void RemovePlayer(Player player)
     {
@@ -459,6 +540,102 @@ public sealed partial class WorldRuntime : IDisposable
         _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
         _autosaveDue.Remove(player.Guid); // a later login starts a new timer
+    }
+
+    /// <summary>
+    /// Take a player out of its map and the online registry for a cluster transfer (world thread), without the logout path: no
+    /// <see cref="PlayerLoggingOut"/>, no <c>OnLogout</c> script hook and no snapshot is queued (the transfer saves under its own hold). The
+    /// player object keeps all its feature state, so <see cref="AddPlayer"/> after an aborted transfer brings it back whole. Returns false
+    /// when <paramref name="player"/> is not the online entity of its guid.
+    /// </summary>
+    public bool DetachPlayerForTransfer(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!_online.TryGetValue(player.Guid, out Player? current) || !ReferenceEquals(current, player))
+        {
+            return false;
+        }
+
+        // The map's removal hooks run as for any map leave, except that they queue no write: the transfer's capture already queued what logout would
+        // (PlayerTransferPreparing) and flushes it under its hold, and a target that detaches a shadow whose arrival failed does not own the character.
+        IsDetachingForTransfer = true;
+        try
+        {
+            player.Map?.RemovePlayer(player);
+        }
+        finally
+        {
+            IsDetachingForTransfer = false;
+        }
+
+        _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
+        _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
+        _autosaveDue.Remove(player.Guid);
+        return true;
+    }
+
+    /// <summary>
+    /// True only while <see cref="DetachPlayerForTransfer"/> takes the player out of its map (world thread). A map-removal hook that would persist the leaving
+    /// player's state (the current pet's save) skips the write then: the transfer's capture queued it already.
+    /// </summary>
+    public bool IsDetachingForTransfer { get; private set; }
+
+    /// <summary>
+    /// Put a player taken out by <see cref="DetachPlayerForTransfer"/> back into its map and the online registry after an aborted transfer
+    /// (world thread). Unlike <see cref="AddPlayer"/> this is not a login: the played-time clock keeps running from the session start, and the
+    /// instance bind / enter-limiter record of a login are not repeated. <paramref name="map"/> is the map to re-enter.
+    /// </summary>
+    public void ReattachPlayerAfterTransferAbort(Player player, Map map)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        _onlineByName[player.Name] = player;
+        _autosaveRescan = true; // its autosave timer restarts at the next autosave scan
+        map.AddPlayer(player);
+    }
+
+    /// <summary>
+    /// Run the logout-side teardown for a player detached by <see cref="DetachPlayerForTransfer"/> whose transfer committed (world thread):
+    /// raises <see cref="PlayerLoggingOut"/> (with <see cref="IsRetiringTransferredPlayer"/> set, so persisting handlers only forget) so every
+    /// feature forgets the guid, and the <c>OnLogout</c> script hook. No snapshot and no feature write is queued
+    /// (the transfer's settlement save is the last write) and the entity is already out of the map and registry. Returns false, doing
+    /// nothing, when <paramref name="player"/> is online (it was never detached or has been re-added).
+    /// </summary>
+    public bool RetireDetachedPlayer(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
+        {
+            return false;
+        }
+
+        IsRetiringTransferredPlayer = true;
+        try
+        {
+            Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        }
+        finally
+        {
+            IsRetiringTransferredPlayer = false;
+        }
+
+        Scripts.Player.OnLogout(player);
+        return true;
+    }
+
+    /// <summary>
+    /// Ask every persisting feature to queue the dirty state it would queue on logout (world thread, player still in its map): the capture of a
+    /// cluster transfer calls this before it snapshots the character and flushes. See <see cref="PlayerTransferPreparing"/>.
+    /// </summary>
+    public void RaisePlayerTransferPreparing(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Raise(PlayerTransferPreparing, player, nameof(PlayerTransferPreparing));
     }
 
     /// <summary>

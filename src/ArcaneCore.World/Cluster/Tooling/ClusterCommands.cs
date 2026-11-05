@@ -11,7 +11,9 @@ using ArcaneCore.Kernel.Cluster.Tooling;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Cluster.Supervision;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Commands;
@@ -48,7 +50,7 @@ public sealed class ClusterCommands : ICommandGroup
         new ChatCommand(
             "cluster",
             AccountSecurity.GameMaster,
-            "Syntax: .cluster [status|node|routes|nodes|leases|social|diag]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
+            "Syntax: .cluster [status|node|routes|nodes|leases|social|diag|restart|handoff]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
             RootOrStatus,
             Children:
             [
@@ -87,6 +89,24 @@ public sealed class ClusterCommands : ICommandGroup
                     AccountSecurity.Administrator,
                     "Syntax: .cluster diag\nRun the deterministic cluster diagnostics collector and rollback-readiness check for this realm. The schema versions it checks are this build's (the versions its databases are composed at), not the version rows read from the databases; pending transfers are the transfer store's unresolved (PreCommit or Committed) count across all characters, and read 0 when no store is registered.",
                     Diag),
+                new ChatCommand(
+                    "restart",
+                    AccountSecurity.Administrator,
+                    "Syntax: .cluster restart $worker\nDrain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing. On a gateway-coordinated cluster the request goes to the gateway, which answers 'started' at once and sends the verdict to your session (also after it moved to the new world); the operation id it prints is the journal key for '.cluster handoff status'.",
+                    Restart),
+                new ChatCommand(
+                    "handoff",
+                    AccountSecurity.GameMaster,
+                    "Syntax: .cluster handoff status [$operationId]\nShow the whole-World handoffs the journal has not resolved, or one handoff by its operation id (stage, decision, abort reason). Works from the console too.",
+                    HandoffRoot,
+                    Children:
+                    [
+                        new ChatCommand(
+                            "status",
+                            AccountSecurity.GameMaster,
+                            "Syntax: .cluster handoff status [$operationId]\nShow the unresolved whole-World handoffs of the journal, or the one with the given operation id.",
+                            HandoffStatus),
+                    ]),
             ]),
     ];
 
@@ -153,7 +173,280 @@ public sealed class ClusterCommands : ICommandGroup
             return Diag(context, rest);
         }
 
+        if ("restart".Equals(sub, StringComparison.OrdinalIgnoreCase))
+        {
+            if (context.Security < AccountSecurity.Administrator)
+            {
+                context.Reply(GmStrings.CommandUnavailable);
+                return true;
+            }
+
+            return Restart(context, rest);
+        }
+
+        if ("handoff".Equals(sub, StringComparison.OrdinalIgnoreCase))
+        {
+            int inner = rest.IndexOf(' ');
+            string verb = inner < 0 ? rest : rest[..inner];
+            return "status".Equals(verb, StringComparison.OrdinalIgnoreCase)
+                && HandoffStatus(context, inner < 0 ? string.Empty : rest[(inner + 1)..].Trim());
+        }
+
         return false;
+    }
+
+    /// <summary><c>.cluster handoff</c> without a sub-command: not handled (the table prints the syntax).</summary>
+    internal static bool HandoffRoot(CommandContext context, string args) => false;
+
+    /// <summary>
+    /// <c>.cluster handoff status [$operationId]</c>: read the whole-World handoff journal (<see cref="IWorldHandoffStore"/>). This is how a console operator, or anyone whose session
+    /// did not receive the verdict notice, reads how a restart ended. The journal read runs off the world thread.
+    /// </summary>
+    internal static bool HandoffStatus(CommandContext context, string args)
+    {
+        string text = args.Trim();
+        Guid wanted = Guid.Empty;
+        if (text.Length != 0 && !Guid.TryParse(text, out wanted))
+        {
+            return false;
+        }
+
+        IServiceProvider services = context.Session.Services;
+        if (services.GetService<IWorldHandoffStore>() is not { } store)
+        {
+            context.Reply("No whole-World handoff journal is available on this node.");
+            return true;
+        }
+
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        IDisposable hold = context.Defer();
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            try
+            {
+                reply = await FormatHandoffStatusAsync(store, wanted, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.handoff-status", ex, "cluster handoff status could not read the journal");
+                reply = "The handoff journal could not be read; see the log.";
+            }
+
+            await DeliverLaterAsync(context, hold, reply, logger).ConfigureAwait(false);
+        });
+        return true;
+    }
+
+    internal static async Task<string> FormatHandoffStatusAsync(IWorldHandoffStore store, Guid wanted, CancellationToken cancellationToken)
+    {
+        if (wanted != Guid.Empty)
+        {
+            WorldHandoffRecord? record = await store.GetAsync(wanted, cancellationToken).ConfigureAwait(false);
+            return record is null ? $"No handoff {wanted:D} in the journal." : FormatHandoff(record);
+        }
+
+        IReadOnlyList<WorldHandoffRecord> open = await store.GetUnresolvedAsync(cancellationToken).ConfigureAwait(false);
+        return open.Count == 0
+            ? "No unresolved whole-World handoff in the journal."
+            : string.Join('\n', open.Select(FormatHandoff));
+    }
+
+    private static string FormatHandoff(WorldHandoffRecord r) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"Handoff {r.HandoffId:D}: {r.SourceWorkerId} -> {r.TargetWorkerId} | stage={r.Stage} | decision={r.DecisionState}{(string.IsNullOrEmpty(r.AbortReason) ? string.Empty : " | abort=" + r.AbortReason)}");
+
+    /// <summary>
+    /// Delivers a reply that was produced off the world thread: the console prints it directly, a player gets it on the issuing world thread (giving up after
+    /// <see cref="RestartReplyPostTimeout"/> when that world was retired). Always releases <paramref name="hold"/>; never throws.
+    /// </summary>
+    private static async Task DeliverLaterAsync(CommandContext context, IDisposable hold, string reply, ILogger? logger)
+    {
+        try
+        {
+            if (context.IsConsole)
+            {
+                try
+                {
+                    context.Reply(reply);
+                }
+                finally
+                {
+                    hold.Dispose();
+                }
+            }
+            else
+            {
+                await ReplyOnWorldThreadOrGiveUpAsync(context.World, hold, () => context.Reply(reply), logger).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger?.LogFault("cluster.operator-restart-post", ex, "a cluster command could not deliver its reply");
+        }
+    }
+
+    /// <summary>
+    /// <c>.cluster restart</c> through the relay to the gateway (design section 3.4): "started" (or the gateway's refusal) is replied as soon as the gateway answered, while the world
+    /// thread still runs; the verdict comes later as a notice on the operator's session, on whichever worker then carries it.
+    /// </summary>
+    private static bool RestartViaRelay(CommandContext context, IClusterRestartRelay relay, string worker, IServiceProvider services)
+    {
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        CancellationToken lifetime = services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+        AccountSecurity security = context.Security;
+        IDisposable hold = context.Defer();
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            try
+            {
+                ClusterRestartSubmission submission = await relay.SubmitRestartAsync(context.Session, security, worker, lifetime).ConfigureAwait(false);
+                reply = submission.Accepted
+                    ? $"Cluster restart of '{worker}' started (operation {submission.OperationId:D}). The result will be sent to you here; '.cluster handoff status {submission.OperationId:D}' reads the journal."
+                    : $"Cluster restart was not started: {submission.Reason}";
+            }
+            catch (OperationCanceledException)
+            {
+                reply = "Cluster restart was cancelled; nothing was changed.";
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.operator-restart", ex, "cluster restart could not be sent to the gateway");
+                reply = "Cluster restart failed unexpectedly; see the log.";
+            }
+
+            await DeliverLaterAsync(context, hold, reply, logger).ConfigureAwait(false);
+        });
+        return true;
+    }
+
+    /// <summary>
+    /// <c>.cluster restart $worker</c>: hand the worker's players off (sessions survive), then ask the supervisor to restart it
+    /// (<see cref="ClusterRestartOrchestration"/>). The handoff runs on the thread pool; the command stays open until the result was replied on the world thread.
+    /// </summary>
+    internal static bool Restart(CommandContext context, string args)
+    {
+        string worker = args.Trim();
+        if (worker.Length == 0 || worker.Any(char.IsWhiteSpace))
+        {
+            return false;
+        }
+
+        if (context.Security < AccountSecurity.Administrator)
+        {
+            context.Reply(GmStrings.CommandUnavailable);
+            return true;
+        }
+
+        IServiceProvider services = context.Session.Services;
+        if (!context.IsConsole && services.GetService<IClusterRestartRelay>() is { } relay)
+        {
+            return RestartViaRelay(context, relay, worker, services);
+        }
+
+        if (services.GetService<ClusterRestartOrchestration>() is not { } orchestration)
+        {
+            context.Reply("Cluster restart is unavailable: this node has no worker handoff driver and supervisor link configured; nothing was done.");
+            return true;
+        }
+
+        WorldRuntime world = context.World;
+        AccountSecurity security = context.Security;
+        string invoker = context.InvokerName;
+        ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
+        // Host-stopping token, not context.Lifetime: that is the RA connection's lifetime, and a dropped connection after the epoch-takeover commit
+        // would cancel the roll-forward and leave the handoff committed but unfinished.
+        CancellationToken lifetime = services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+        IDisposable hold = context.Defer();
+        _ = Task.Run(async () =>
+        {
+            string reply;
+            try
+            {
+                ClusterRestartResult result = await orchestration.RunAsync(security, invoker, worker, lifetime).ConfigureAwait(false);
+                reply = result.Message;
+            }
+            catch (OperationCanceledException)
+            {
+                // Only reachable before the handoff's epoch takeover (the coordinator ignores the token afterwards), so nothing changed.
+                reply = "Cluster restart was cancelled before the handoff committed; nothing was changed.";
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.operator-restart", ex, "cluster restart could not run");
+                reply = "Cluster restart failed unexpectedly; see the log.";
+            }
+
+            try
+            {
+                if (context.IsConsole)
+                {
+                    // The console and RA print through their own output, not the world thread. The issuing world may be retired by now (its simulation
+                    // thread stays parked after a handoff), so a post to it would never run and the operator would never see the verdict.
+                    try
+                    {
+                        context.Reply(reply);
+                    }
+                    finally
+                    {
+                        hold.Dispose();
+                    }
+                }
+                else
+                {
+                    await ReplyOnWorldThreadOrGiveUpAsync(world, hold, () => context.Reply(reply), logger).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger?.LogFault("cluster.operator-restart-post", ex, "cluster restart could not deliver its reply");
+            }
+        });
+        return true;
+    }
+
+    /// <summary>How long a restart's final reply waits for the issuing world thread before giving up (a retired world never runs it).</summary>
+    private static readonly TimeSpan RestartReplyPostTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Post <paramref name="reply"/> to the world thread and wait for it to run. A world that was handed off stays parked, so the post may never run: after
+    /// <see cref="RestartReplyPostTimeout"/> the hold is released and the verdict is logged (the player's session has moved to the new world, which has no copy of this command).
+    /// </summary>
+    private static async Task ReplyOnWorldThreadOrGiveUpAsync(WorldRuntime world, IDisposable hold, Action reply, ILogger? logger)
+    {
+        var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            world.Post(() =>
+            {
+                try
+                {
+                    reply();
+                }
+                finally
+                {
+                    hold.Dispose();
+                    ran.TrySetResult();
+                }
+            });
+        }
+        catch
+        {
+            hold.Dispose();
+            throw;
+        }
+
+        try
+        {
+            await ran.Task.WaitAsync(RestartReplyPostTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger?.LogWarning("Cluster restart: the issuing world did not run the reply within {Seconds} s (it was probably handed off and retired); the operator's reply was not delivered", RestartReplyPostTimeout.TotalSeconds);
+            hold.Dispose();
+        }
     }
 
     /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say instead of a node list while the node bridge is switched off.</summary>
@@ -539,7 +832,7 @@ public sealed class ClusterCommands : ICommandGroup
 
         context.Reply(string.Create(
             c,
-            $"Realm presence: online={online.Length} ({online.Length - botNames.Count} human, {botNames.Count} bots) | knownCharacters={charDir?.Count ?? 0} | directoryEntries={directory?.Count ?? online.Length}"));
+            $"Realm presence: online={online.Length} ({online.Length - botNames.Count} human, {botNames.Count} bots) | knownCharacters={charDir?.Count ?? 0} | directoryEntries={DirectoryEntryCount(directory, online.Length)}"));
         context.Reply(string.Create(
             c,
             $"Worker presence breakdown: {DefaultWorkerEasternKingdoms}={ek} | {DefaultWorkerKalimdor}={kal} | {DefaultWorkerInstances}={inst}"));
@@ -547,6 +840,20 @@ public sealed class ClusterCommands : ICommandGroup
             c,
             $"Social authority: router={(router is not null ? router.GetType().Name : "local-world")} | pendingSocialWrites={socialFeature?.PendingWrites ?? 0}"));
         return true;
+    }
+
+    /// <summary>
+    /// The realm directory size for the world thread without blocking: a <see cref="LeaseRoutedPresence"/> that does not hold the Social lease would make a network round trip
+    /// to the holder, so it reports <paramref name="fallback"/> (this node's online count) instead.
+    /// </summary>
+    internal static int DirectoryEntryCount(IRealmPresenceDirectory? directory, int fallback)
+    {
+        if (directory is LeaseRoutedPresence routed)
+        {
+            return routed.TryGetLocalCount(out int count) ? count : fallback;
+        }
+
+        return directory?.Count ?? fallback;
     }
 
     internal static bool Diag(CommandContext context, string args)
@@ -911,7 +1218,7 @@ public sealed class ClusterArcaneCommands : ICommandExtension
         new ChatCommand(
             "cluster",
             AccountSecurity.GameMaster,
-            "Syntax: .arcane cluster [status|node|routes|nodes|leases|social|diag]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
+            "Syntax: .arcane cluster [status|node|routes|nodes|leases|social|diag|restart]\nInspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics.",
             ClusterCommands.DispatchFromArcane),
     ];
 }

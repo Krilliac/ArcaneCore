@@ -25,7 +25,7 @@ Both daemons initialise their databases through `DatabaseStartup.InitializeAsync
 | Code | Name | Meaning |
 |---|---|---|
 | 4 | `Refused` | Refused: the database is newer than the code, in an unknown state, blocked (duplicate rows, conflicting index, mismatching table) or has other sessions; nothing was changed. The world daemon also exits with it when another world process holds the characters database writer lock (the `.world.lock` file beside it, or the MariaDB/MySQL/PostgreSQL advisory lock for the characters database name), or when that lock file cannot be created at all (permissions, a full disk). |
-| 7 | `LockTimeout` | The wait for another process's schema lock ran out. |
+| 7 | `LockTimeout` | The wait for another process's schema lock ran out, or the database server or SQLite reported a lock wait, deadlock or busy database. |
 
 ## `arcane-db`
 

@@ -46,7 +46,23 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     private WorldRuntime? _world;
     private PlayerbotQaFaultFeed? _faultFeed;
     private PlayerbotQaAnomalyFeed? _anomalyFeed;
+    private PlayerbotQaFirstChanceWatch? _firstChance;
     private System.Diagnostics.Metrics.Meter? _findingsMeter;
+    private readonly object _healthGate = new();
+    private Func<(long Overruns, long Hangs)?>? _tickHealth;
+    private bool _healthSeen;
+    private long _seenOverruns;
+    private long _seenHangs;
+    private DateTime _starvedUntilUtc = DateTime.MinValue;
+    private readonly Queue<(DateTime AtUtc, long Count)> _recentOverruns = new();
+    private DateTime _lastDiscountLogUtc = DateTime.MinValue;
+    private long _discountedStalls;
+
+    /// <summary>Overruns within <see cref="PlayerbotQaOptions.StallStarvationSeconds"/> that make the host count as starved: a lone slow frame on a busy host does not.</summary>
+    internal const int StarvationOverruns = 10;
+
+    /// <summary>The least time between two log lines about discounted stalls.</summary>
+    private static readonly TimeSpan DiscountLogInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -62,6 +78,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
     /// <summary>Test seam: the invariant failure source the server-fault feed polls (default: <see cref="Invariant.Failures"/> when using the host's fault ledger).</summary>
     internal Func<IReadOnlyList<InvariantFailure>>? InvariantSource { get; init; }
+
+    /// <summary>Test seam: the tick monitor's running counts of overruns and completed hangs, null while it is not ticking (default: the container's <see cref="ArcaneCore.Kernel.Ops.Watchdog.TickMonitor"/>, when enabled).</summary>
+    internal Func<(long Overruns, long Hangs)?>? TickHealthSource { get; init; }
+
+    /// <summary>Stall and set-aside signals dropped because the host was starved when they were folded (<see cref="PlayerbotQaOptions.StallStarvationSeconds"/>).</summary>
+    internal long DiscountedStalls => Interlocked.Read(ref _discountedStalls);
 
     /// <summary>Test seam: the clock of the passes, the age-out and the publisher (default: the system clock).</summary>
     internal TimeProvider Time { get; init; } = TimeProvider.System;
@@ -126,6 +148,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         _bus = null;
         _faultFeed = null;
         _anomalyFeed = null;
+        _firstChance = null;
         _findingsMeter = null;
         _facts = NoQaContentFacts.Instance;
         _options = new();
@@ -149,7 +172,8 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         if (registry is not null && services.GetService<IPlayerbotQaSink>() is { Enabled: true } hangSink)
         {
             int warmupMinutes = services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.TickHangWarmupMinutes ?? 5;
-            subscriptions.Add(registry.UseHangSink(new QaHangSink(hangSink, TimeSpan.FromMinutes(warmupMinutes))));
+            bool worldHang = services.GetService<IOptions<PlayerbotQaOptions>>()?.Value.Faults.WorldHangEnabled ?? true;
+            subscriptions.Add(registry.UseHangSink(new QaHangSink(hangSink, TimeSpan.FromMinutes(warmupMinutes), worldHang)));
         }
 
         _bus = services.GetService<PlayerbotQaSignalBus>();
@@ -163,6 +187,14 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
         if (!options.Enabled) return;
         _options = options;
+        lock (_healthGate)
+        {
+            _tickHealth = TickHealthSource ?? MonitorHealth(services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>());
+            _healthSeen = false;
+            _starvedUntilUtc = DateTime.MinValue;
+            _recentOverruns.Clear();
+        }
+
         if (StartedUtc == DateTime.MaxValue) StartedUtc = Now; // an attach after a detach keeps the process's first
         _directory = Path.GetFullPath(Path.Combine(services.GetService<IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, options.Directory));
         _store = new PlayerbotQaStore(_directory, _log);
@@ -182,7 +214,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
         var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log, Build);
         _facts = new PlayerbotQaContentFacts(services);
-        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build);
+        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build, startedUtc: StartedUtc);
         if (saved is not null)
         {
             int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones, saved.Builds, saved.EvictedBuilds), Now);
@@ -222,6 +254,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
 
         if (anomalyLedger is not null) _anomalyFeed = new PlayerbotQaAnomalyFeed(anomalyLedger);
+        if (_bus is not null)
+        {
+            // The crash hooks' exception stream, as objects: repeated first-chance exceptions, and unobserved/unhandled ones the ledger did not record.
+            _firstChance = new PlayerbotQaFirstChanceWatch(_bus, options.Faults, Time);
+            subscriptions.Add(FaultObservers.Add(_firstChance));
+        }
         if (services.GetService<SpellFeature>() is { } spells)
         {
             // Spell signals come straight from the spell system's observer seam, never from a log line (docs/areas/playbots-qa.md).
@@ -264,6 +302,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     {
         try
         {
+            _firstChance?.Flush();
             Drain();
             PollServerFaults();
             PollAnomalies();
@@ -305,10 +344,21 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             batch.Clear();
             moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
+            // The monitor is read on every pass, signals or not, so each overrun is stamped near when it happened (not at the next signal).
+            bool hostStarved = HostStarved(now);
+            bool starved = hostStarved && batch.Count > 0;
+            long discountedBefore = Interlocked.Read(ref _discountedStalls);
             foreach (QaSignal signal in batch)
             {
                 try
                 {
+                    // A stall is judged by the world time that passed, and a starved host gives each bot few ticks in it: that is the host, not the bot.
+                    if (starved && signal.Kind is QaSignalKind.Stall or QaSignalKind.SharedSetAside)
+                    {
+                        Interlocked.Increment(ref _discountedStalls);
+                        continue;
+                    }
+
                     if (Aggregator.Ingest(signal, _facts, now) is not null && !signal.FromCoverage) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -319,10 +369,73 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
                 }
             }
 
+            long discounted = Interlocked.Read(ref _discountedStalls) - discountedBefore;
+            if (discounted > 0) ReportDiscounted(discounted, now);
             total += moved;
         }
         while (moved > 0);
         return total;
+    }
+
+    /// <summary>Make the suppression visible: the meter counts every dropped signal, and a warning (at most one per <see cref="DiscountLogInterval"/>) says how many so far.</summary>
+    private void ReportDiscounted(long discounted, DateTime now)
+    {
+        if (PlayerbotQaMeters.DiscountedStalls.Enabled) PlayerbotQaMeters.DiscountedStalls.Add(discounted);
+        bool log;
+        lock (_healthGate)
+        {
+            log = now - _lastDiscountLogUtc >= DiscountLogInterval;
+            if (log) _lastDiscountLogUtc = now;
+        }
+
+        if (log)
+        {
+            _log.LogWarning("Bot QA dropped {Batch} stall/set-aside signal(s) because the host is starved (tick overruns or hangs within {Seconds} s); {Total} dropped since start. World:Playerbots:Qa:StallStarvationSeconds = 0 turns this off",
+                discounted, _options.StallStarvationSeconds, Interlocked.Read(ref _discountedStalls));
+        }
+    }
+
+    /// <summary>The counts of the world tick monitor, or null (no monitor, a disabled one, or one that has not started ticking).</summary>
+    private static Func<(long Overruns, long Hangs)?>? MonitorHealth(ArcaneCore.Kernel.Ops.Watchdog.TickMonitor? monitor)
+    {
+        if (monitor is not { Enabled: true }) return null;
+        return () =>
+        {
+            if (monitor.BudgetMicros >= long.MaxValue) return null;
+            return (monitor.Overruns, monitor.HangsCompleted);
+        };
+    }
+
+    /// <summary>
+    /// Whether the host is starved: the tick monitor counted a completed hang within the last <see cref="PlayerbotQaOptions.StallStarvationSeconds"/>, or at least
+    /// <see cref="StarvationOverruns"/> overruns within it (one slow frame on a loaded host is routine and is not starvation). The first look only takes the
+    /// baseline. Overruns are credited to the look that sees them. Safe to call from any thread.
+    /// </summary>
+    private bool HostStarved(DateTime now)
+    {
+        int window = _options.StallStarvationSeconds;
+        lock (_healthGate)
+        {
+            if (window <= 0 || _tickHealth is null) return false;
+            if (_tickHealth() is { } reading)
+            {
+                if (_healthSeen)
+                {
+                    if (reading.Hangs > _seenHangs) _starvedUntilUtc = now.AddSeconds(window);
+                    if (reading.Overruns > _seenOverruns) _recentOverruns.Enqueue((now, reading.Overruns - _seenOverruns));
+                }
+
+                _seenOverruns = reading.Overruns;
+                _seenHangs = reading.Hangs;
+                _healthSeen = true;
+            }
+
+            DateTime oldest = now.AddSeconds(-window);
+            while (_recentOverruns.Count > 0 && _recentOverruns.Peek().AtUtc < oldest) _recentOverruns.Dequeue();
+            long overruns = 0;
+            foreach ((DateTime _, long count) in _recentOverruns) overruns += count;
+            return overruns >= StarvationOverruns || now <= _starvedUntilUtc;
+        }
     }
 
     /// <summary>
@@ -387,6 +500,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     internal void RunPass(CancellationToken cancellationToken)
     {
         if (Aggregator is null || _publisher is null) return;
+        _firstChance?.Flush();
         Drain();
         PollServerFaults();
         PollAnomalies();
@@ -550,10 +664,38 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
     }
 
+    /// <summary>The goal and exception type of the world-hang fault (subject <c>server: world-hang</c>).</summary>
+    internal const string WorldHangGoal = "server";
+
+    internal const string WorldHangType = "world-hang";
+
+    /// <summary>
+    /// The fault of a hung world tick: identified by the world thread's top <c>ArcaneCore</c> frames and nothing else (a longer hang at the same place is the same finding),
+    /// the tick's length in the diagnostic text only.
+    /// </summary>
+    internal static QaSignal WorldHangSignal(long tickMs, IReadOnlyList<string> frames, DateTime atUtc) => new()
+    {
+        Kind = QaSignalKind.ServerFault,
+        AtUtc = atUtc,
+        FaultId = FaultLedger.HashSignature("world-hang|" + string.Join("|", frames)),
+        Goal = WorldHangGoal,
+        ExceptionType = WorldHangType,
+        Reason = WorldHangType,
+        Detail = string.Join(" > ", frames),
+        Diag = string.Create(System.Globalization.CultureInfo.InvariantCulture, $"world tick running {tickMs} ms; the world thread was in {string.Join(" <- ", frames)}"),
+        Message = string.Empty,
+        Occurrences = 1,
+    };
+
     /// <summary>The tick watchdog's hang seam over the QA sink (watchdog thread; never throws past the sink's own contract).</summary>
-    private sealed class QaHangSink(IPlayerbotQaSink sink, TimeSpan warmup) : IBotTickHangSink
+    private sealed class QaHangSink(IPlayerbotQaSink sink, TimeSpan warmup, bool worldHang = true) : IBotTickHangSink
     {
         public TimeSpan Warmup => warmup;
+
+        public void ReportHangStack(long tickMs, IReadOnlyList<string> worldFrames)
+        {
+            if (worldHang && sink.Enabled && worldFrames.Count > 0) sink.Report(WorldHangSignal(tickMs, worldFrames, DateTime.UtcNow));
+        }
 
         public void ReportHang(string phase, string work, string message, long occurrences)
         {

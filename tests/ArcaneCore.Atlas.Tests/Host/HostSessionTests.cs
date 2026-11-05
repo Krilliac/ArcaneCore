@@ -508,7 +508,7 @@ public sealed class CliSessionTests
     public async Task Url_MakesNoNetworkCall_SoItWorksForAnInstanceNobodyListensOn()
     {
         using var cli = new CliRig();
-        var closed = new TcpListener(IPAddress.Loopback, 0);
+        var closed = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
         closed.Start();
         int port = ((IPEndPoint)closed.LocalEndpoint).Port;
         closed.Stop();

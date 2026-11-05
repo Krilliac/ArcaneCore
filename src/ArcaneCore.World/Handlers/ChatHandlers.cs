@@ -6,11 +6,16 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Channels;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -42,6 +47,12 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
     /// <summary>classic-db mangos_string 806 (vmangos LANG_NOT_LEARNED_LANGUAGE), sent as SMSG_NOTIFICATION.</summary>
     private const string LanguageNotLearned = "You don't know that language";
+
+    /// <summary>Most entries asked of realm presence for one cross-worker /who (the reply must fit one peer-link frame); the list shown is cut to <see cref="WhoMaxEntries"/>.</summary>
+    private const int RemoteWhoCandidates = 256;
+
+    /// <summary>What the cross-worker /who reply needs of the asker, captured on the world thread.</summary>
+    private readonly record struct AskerWho(AccountSecurity Security, Team Team, uint Zone, uint Map, uint Instance);
 
     public void Register(OpcodeTable table)
     {
@@ -113,7 +124,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                     return;
                 }
 
-                OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message));
+                OfferAndForward(session, player, chat, new ClientChatMessage(type, language, target, message));
             }
 
             return;
@@ -229,7 +240,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        if (OfferToFeatures(session, player, new ClientChatMessage(type, language, target, message)))
+        if (OfferAndForward(session, player, chat, new ClientChatMessage(type, language, target, message)))
         {
             return;
         }
@@ -274,26 +285,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 break;
 
             case ChatType.Afk:
-                // vmangos: no AFK in combat; a message sets the reply, an empty one (or going
-                // AFK) toggles; going AFK ends DND.
-                if ((player.UnitFlags & UnitFlags.InCombat) != 0)
-                {
-                    break;
-                }
-
-                if (message.Length > 0 || !player.IsAfk)
-                {
-                    player.AfkMessage = message;
-                }
-
-                if (message.Length == 0 || !player.IsAfk)
-                {
-                    if (player.ToggleAfk() && player.IsDnd)
-                    {
-                        player.ToggleDnd();
-                    }
-                }
-
+                ApplyAfkChat(player, message, session.Services.GetService<BattlegroundFeature>());
                 break;
 
             case ChatType.Dnd:
@@ -314,6 +306,37 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
             default:
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The ChatType.Afk path of CMSG_MESSAGECHAT, after the text was sanitised. vmangos: no AFK in combat; a message sets the reply, an
+    /// empty one (or going AFK) toggles; going AFK ends DND. Going AFK also runs the battleground leave sequence
+    /// (vmangos Player::ToggleAFK, Player.cpp:1742-1743: an AFK player is not allowed in a battleground; deserter rules included).
+    /// </summary>
+    internal static void ApplyAfkChat(Player player, string message, BattlegroundFeature? battlegrounds)
+    {
+        if ((player.UnitFlags & UnitFlags.InCombat) != 0)
+        {
+            return;
+        }
+
+        if (message.Length > 0 || !player.IsAfk)
+        {
+            player.AfkMessage = message;
+        }
+
+        if (message.Length == 0 || !player.IsAfk)
+        {
+            if (player.ToggleAfk())
+            {
+                if (player.IsDnd)
+                {
+                    player.ToggleDnd();
+                }
+
+                battlegrounds?.OnPlayerWentAfk(player);
+            }
         }
     }
 
@@ -375,6 +398,132 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
+    /// <see cref="OfferToFeatures"/>, then, for a line the features served locally, the same line to the members on other workers (<see cref="ChatFeature.Cluster"/>, null in a
+    /// single-worker realm: nothing changes there). Local recipients were served by the feature; the routing never applies a frame to the worker that built it.
+    /// </summary>
+    private static bool OfferAndForward(WorldSession session, Player player, ChatFeature chat, ClientChatMessage message)
+    {
+        if (message.Type == ChatType.Channel && chat.Cluster is { } holderView && holderView.IsSpeakerBarred(message.Target, player.Guid.Value))
+        {
+            // Muted (or banned) at the holder: not heard locally either, with the retail muted notice (the router refuses the cross-worker leg).
+            session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.Muted, message.Target));
+            return true;
+        }
+
+        if (!OfferToFeatures(session, player, message))
+        {
+            return false;
+        }
+
+        if (chat.Cluster is { } cluster && session.Services.GetService<SocialFeature>()?.Context is { } social)
+        {
+            ForwardToCluster(session, player, cluster, social, message);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// The cross-worker leg of party, raid, guild, officer and channel chat. The speaker's right to speak is checked with the local rules first (group role, guild rank,
+    /// channel mute and moderation), so a line the local feature refused is not sent on. Group and guild lines are addressed by the id presence publishes for the speaker.
+    /// </summary>
+    private static void ForwardToCluster(WorldSession session, Player player, ClusterChatRouting cluster, SocialContext social, ClientChatMessage message)
+    {
+        var sender = new ClusterChatSender(player.Guid.Value, player.Name, player.AccountId);
+        var frame = new ClusterChatFrame { SenderGuid = player.Guid.Value, SenderTeam = (byte)player.Team, SenderSecurity = (byte)player.Security };
+        switch (message.Type)
+        {
+            case ChatType.Party or ChatType.Raid or ChatType.RaidLeader or ChatType.RaidWarning:
+            {
+                if (social.Groups.GetGroup(player.Guid) is not { } group || group.Find(player.Guid) is not { } slot)
+                {
+                    return;
+                }
+
+                bool allowed = message.Type switch
+                {
+                    ChatType.Party => true,
+                    ChatType.Raid => group.IsRaid,
+                    ChatType.RaidLeader => group.IsRaid && group.IsLeader(player.Guid),
+                    _ => group.IsRaid && group.IsLeaderOrAssistant(player.Guid),
+                };
+                if (!allowed)
+                {
+                    return;
+                }
+
+                Language language = HeardLanguage(session, player, message.Language, social.Options.AllowTwoSideGroup);
+                cluster.SendToGroup(sender, (int)group.Id, frame with
+                {
+                    Kind = ClusterChatFrameKind.Group,
+                    SubGroup = message.Type == ChatType.Party ? slot.SubGroup : ClusterChatFrame.NoSubGroup,
+                    Packets = [new ClusterChatPacket(WorldOpcode.SmsgMessagechat, ChatPackets.BuildMessage(message.Type, language, player.Guid, message.Text, player.ChatTag))],
+                });
+                break;
+            }
+
+            case ChatType.Guild or ChatType.Officer:
+            {
+                bool officer = message.Type == ChatType.Officer;
+                if (social.Guilds.GetGuildOf(player) is not { } guild || guild.Find(player.Guid.Low) is not { } member
+                    || !guild.HasRight(member.Rank, officer ? GuildRights.OfficerChatSpeak : GuildRights.GuildChatSpeak))
+                {
+                    return;
+                }
+
+                Language language = HeardLanguage(session, player, message.Language, social.Options.AllowTwoSideGuild);
+                cluster.SendToGuild(sender, guild.Id, frame with
+                {
+                    Kind = officer ? ClusterChatFrameKind.Officer : ClusterChatFrameKind.Guild,
+                    Packets = [new ClusterChatPacket(WorldOpcode.SmsgMessagechat, ChatPackets.BuildMessage(message.Type, language, player.Guid, message.Text, player.ChatTag))],
+                });
+                break;
+            }
+
+            case ChatType.Channel:
+            {
+                if (social.Channels.Find(player.Team, message.Target) is not { } channel || !channel.IsOn(player.Guid))
+                {
+                    return;
+                }
+
+                ChannelMemberFlags flags = channel.FlagsOf(player.Guid);
+                bool moderator = (flags & ChannelMemberFlags.Moderator) != 0;
+                if ((flags & ChannelMemberFlags.Muted) != 0 || (channel.Moderate && !moderator && player.Security < AccountSecurity.GameMaster))
+                {
+                    return;
+                }
+
+                // Channel.Say: the spoken language is Universal on a cross-faction channel; the honor rank is the speaker's (0 while honor is disabled).
+                Language spoken = social.Options.AllowTwoSideChannel ? Language.Universal : message.Language;
+                byte rank = ArcaneCore.Game.Honor.HonorHooks.For(session.World).InternalRank?.Invoke(player) ?? 0;
+                cluster.SendToChannel(sender, channel.Name, frame with
+                {
+                    Kind = ClusterChatFrameKind.Channel,
+                    Channel = channel.Name,
+                    IgnoreExempt = moderator,
+                    Packets = [new ClusterChatPacket(WorldOpcode.SmsgMessagechat, ChannelPackets.BuildChannelMessage(channel.Name, spoken, player.Guid, message.Text, player.ChatTag, rank))],
+                });
+                break;
+            }
+        }
+    }
+
+    /// <summary>Mirror of the private <c>SocialFeature.HeardLanguage</c>: a cross-faction group or guild speaks Universal unless a language aura forces the tongue.</summary>
+    private static Language HeardLanguage(WorldSession session, Player player, Language spoken, bool crossFaction)
+    {
+        if (spoken == Language.Addon || !crossFaction)
+        {
+            return spoken;
+        }
+
+        return session.Services.GetService<SpellFeature>()?.System is { } spells
+            && ChatLanguageQueries.ModLanguageOverride(spells, player) is not null
+                ? spoken
+                : Language.Universal;
+    }
+
+    /// <summary>
     /// vmangos ChatHandler::ParseCommands for a player: '.'/'!' commands run unless the account
     /// is a plain player and player commands are disabled. A recognised command (or an unknown
     /// one, which gets "no such command") is consumed and never shown as chat.
@@ -414,6 +563,28 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     {
         string name = CharacterNames.Normalize(targetName);
         Player? receiver = name.Length == 0 ? null : session.World.FindOnlinePlayer(name);
+        if (receiver is null && chat.Cluster is { } cluster && name.Length > 0)
+        {
+            // Not on this worker: another worker may have it. The lookup, the whisper rules at the receiver and the answer (inform line, auto-reply,
+            // refusal) run asynchronously through the routing; "not found" is answered here when no worker has the name online.
+            string? muteNotice = sender.Security == AccountSecurity.Player ? chat.MuteNotice(sender) : null;
+            cluster.SendWhisper(
+                new ClusterChatSender(sender.Guid.Value, sender.Name, sender.AccountId),
+                name,
+                new ClusterChatFrame
+                {
+                    Kind = ClusterChatFrameKind.Whisper,
+                    SenderGuid = sender.Guid.Value,
+                    SenderTeam = (byte)sender.Team,
+                    SenderSecurity = (byte)sender.Security,
+                    MuteNotice = muteNotice,
+                    Text = message,
+                    ChatTag = (byte)sender.ChatTag,
+                },
+                () => session.Send(WorldOpcode.SmsgChatPlayerNotFound, ChatPackets.BuildPlayerNotFound(name)));
+            return;
+        }
+
         // A plain player cannot see a staff member who does not accept its whispers (vmangos
         // ChatHandler.cpp:411: the same "player not found" notice as for an offline target).
         if (receiver is null
@@ -617,6 +788,22 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>
+    /// Whether a player of another worker (a realm presence entry) is listed for an asker: a plain player does not see the other faction (unless <c>AllowTwoSide.WhoList</c>) nor staff
+    /// above <c>GmLevelInWhoList</c>, and a GM who is invisible (<c>.gm visible off</c>) is hidden from askers of lower security, the same rules the local list applies to local players
+    /// (vmangos WhoListClientQueryTask, Player::IsVisibleGloballyFor).
+    /// </summary>
+    internal static bool RemoteWhoVisible(RealmPresenceEntry other, AccountSecurity askerSecurity, Team askerTeam, WorldRuntimeOptions options)
+    {
+        if (askerSecurity == AccountSecurity.Player
+            && ((TeamRules.TeamOf((Race)other.Race) != askerTeam && !options.AllowTwoSideWhoList) || (AccountSecurity)other.Security > options.GmLevelInWhoList))
+        {
+            return false;
+        }
+
+        return !other.GmInvisible || askerSecurity >= (AccountSecurity)other.Security;
+    }
+
+    /// <summary>
     /// CMSG_WHO: u32 min level, u32 max level, CString name, CString guild, u32 race mask,
     /// u32 class mask, u32 zone count (≤ 10) + zones, u32 string count (≤ 4) + strings
     /// (vmangos Misc::Who, gtker cmsg_who). Filtering follows vmangos WhoListClientQueryTask: the zone
@@ -728,6 +915,52 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
         // The online total is reported only when the list was truncated (vmangos).
         int online = session.World.OnlinePlayerCount;
+        // Cluster: the players of other workers come from realm presence, asynchronously (the list below answers when that is not wanted or not possible). Presence entries carry
+        // the account security and the GM visibility, so the same GmLevelInWhoList, faction and GM-visibility rules as for local players apply to every asker (RemoteWhoVisible).
+        if (entries.Count < WhoMaxEntries
+            && session.Services.GetService<ChatFeature>()?.Cluster is { } cluster)
+        {
+            AskerWho asker = new(session.Security, player.Team, player.ZoneId, askerMap, askerInstance);
+            var filter = new RealmWhoFilter(
+                (byte)Math.Min(levelMin, byte.MaxValue), (byte)Math.Min(levelMax, byte.MaxValue), classMask, raceMask, null, null, RemoteWhoCandidates);
+            cluster.QueryWho(filter, (remote, realmOnline) =>
+            {
+                var merged = new List<WhoEntry>(entries);
+                var seen = new HashSet<string>(entries.Select(static e => e.Name), StringComparer.OrdinalIgnoreCase);
+                foreach (RealmPresenceEntry other in remote)
+                {
+                    if (merged.Count == WhoMaxEntries)
+                    {
+                        break;
+                    }
+
+                    if (string.Equals(other.WorkerId, cluster.WorkerId, StringComparison.Ordinal)
+                        || !RemoteWhoVisible(other, asker.Security, asker.Team, options)
+                        || !seen.Add(other.CharacterName))
+                    {
+                        continue;
+                    }
+
+                    string remoteName = other.CharacterName.ToLowerInvariant();
+                    string remoteGuild = (other.GuildName ?? string.Empty).ToLowerInvariant();
+                    string remoteArea = areas.GetById(other.ZoneId)?.Name.ToLowerInvariant() ?? string.Empty;
+                    if ((playerName.Length > 0 && !remoteName.Contains(playerName, StringComparison.Ordinal))
+                        || (guildName.Length > 0 && !remoteGuild.Contains(guildName, StringComparison.Ordinal))
+                        || !WhoRules.ZoneFilterShows(zones, asker.Zone, asker.Map, asker.Instance, other.ZoneId, other.MapId, 0)
+                        || !WhoRules.MatchesSearchStrings(strings, remoteName, remoteGuild, remoteArea))
+                    {
+                        continue;
+                    }
+
+                    merged.Add(new WhoEntry(other.CharacterName, other.GuildName ?? string.Empty, other.Level, other.Class, other.Race, other.ZoneId));
+                }
+
+                int total = Math.Max(online, realmOnline);
+                session.Send(WorldOpcode.SmsgWho, MiscPackets.BuildWho(merged, (uint)(total > WhoMaxEntries ? total : merged.Count)));
+            });
+            return;
+        }
+
         uint onlineCount = (uint)(online > WhoMaxEntries ? online : entries.Count);
         session.Send(WorldOpcode.SmsgWho, MiscPackets.BuildWho(entries, onlineCount));
     }
