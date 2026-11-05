@@ -18,6 +18,9 @@ public sealed class PassiveAuraStackingTests : IDisposable
     private const uint PolymorphPig = 28272;
     private const uint FamilyMage = 3;
     private const uint FamilyWarrior = 4;
+    private const uint FamilyHunter = 9;
+    private const uint RapidFire = 3045;
+    private const uint CryptstalkerBonus = 28755;
 
     private static SpellInfo Passive(uint id, int amount) =>
         Spell(id, Effect(SpellEffectName.ApplyAura, amount, aura: AuraType.Dummy)) with
@@ -26,6 +29,28 @@ public sealed class PassiveAuraStackingTests : IDisposable
             SpellFamilyName = FamilyWarrior,
             SpellVisual = 1,
             Attributes = SpellAttributes.Passive,
+            Duration = new SpellDuration(-1, 0, -1),
+        };
+
+    // The active self buff and a same-named passive set bonus of the same family: no rank of each other (other flags, icon, visual).
+    private static SpellInfo RapidFireSpell() =>
+        Spell(RapidFire, Effect(SpellEffectName.ApplyAura, 40, aura: AuraType.Dummy)) with
+        {
+            Name = "Rapid Fire",
+            SpellFamilyName = FamilyHunter,
+            SpellFamilyFlags = 0x20,
+            SpellIconId = 537,
+            SpellVisual = 3301,
+            Duration = new SpellDuration(15_000, 0, 15_000),
+        };
+
+    private static SpellInfo SetBonusSpell() =>
+        Spell(CryptstalkerBonus, Effect(SpellEffectName.ApplyAura, 4000, aura: AuraType.Dummy)) with
+        {
+            Name = "Rapid Fire",
+            SpellFamilyName = FamilyHunter,
+            SpellIconId = 1,
+            Attributes = SpellAttributes.Passive | SpellAttributes.DoNotDisplay,
             Duration = new SpellDuration(-1, 0, -1),
         };
 
@@ -51,7 +76,9 @@ public sealed class PassiveAuraStackingTests : IDisposable
             Passive(Toughness1, 10),
             Passive(Toughness2, 20),
             Polymorph(PolymorphSheep, "Polymorph", SpellAttributes.DoNotDisplay),
-            Polymorph(PolymorphPig, "Polymorph: Pig", SpellAttributes.None));
+            Polymorph(PolymorphPig, "Polymorph: Pig", SpellAttributes.None),
+            RapidFireSpell(),
+            SetBonusSpell());
         (_caster, _) = _kit.AddPlayer(1, 0, 0);
         (_target, _) = _kit.AddPlayer(2, 3, 0);
         (_otherCaster, _) = _kit.AddPlayer(3, -2, 0);
@@ -90,5 +117,27 @@ public sealed class PassiveAuraStackingTests : IDisposable
 
         Assert.True(_kit.System.HasAura(_target, PolymorphSheep));
         Assert.True(_kit.System.HasAura(_target, PolymorphPig));
+    }
+
+    [Fact]
+    public void AnActiveSelfBuff_WithAWeakerFirstEffect_IsNotRefusedBySameNamedSetBonus()
+    {
+        Assert.True(_kit.System.AddAura(_caster, CryptstalkerBonus, permanent: true, caster: _caster));
+
+        Assert.True(_kit.System.AddAura(_caster, RapidFire, caster: _caster));
+
+        Assert.True(_kit.System.HasAura(_caster, CryptstalkerBonus));
+        Assert.True(_kit.System.HasAura(_caster, RapidFire));
+    }
+
+    [Fact]
+    public void ASameNamedSetBonus_IsNotRefusedByTheActiveBuffAlreadyOnTheCaster()
+    {
+        Assert.True(_kit.System.AddAura(_caster, RapidFire, caster: _caster));
+
+        Assert.True(_kit.System.AddAura(_caster, CryptstalkerBonus, permanent: true, caster: _caster));
+
+        Assert.True(_kit.System.HasAura(_caster, RapidFire));
+        Assert.True(_kit.System.HasAura(_caster, CryptstalkerBonus));
     }
 }

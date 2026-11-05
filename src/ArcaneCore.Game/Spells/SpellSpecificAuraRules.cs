@@ -22,7 +22,8 @@ namespace ArcaneCore.Game.Spells;
 /// (<c>SpellSystem.RestoreAuras</c>), so the rules also settle saved auras.
 /// LIMITS: the elixir specifics (the <c>spell_elixir</c> table), the database <c>spell_group</c> stack rules and the generic
 /// <c>IsNoStackSpellDueToSpell</c> fallback (:3554-3572) are not modelled; the rank chain is the spell family and name
-/// (<see cref="SpellSpecifics.IsSameChain"/>), so a generic family heal over time is in no chain. Thread affinity: the map thread that owns the
+/// (<see cref="SpellSpecifics.IsSameChain"/>), and the passive and heal over time rules also need the generic field check of
+/// IsRankSpellDueToSpell (<see cref="SpellSpecifics.IsRankOf"/>); the spell_chain table is not loaded, so a generic family heal over time is in no chain. Thread affinity: the map thread that owns the
 /// target, like every holder event.
 /// </summary>
 public sealed class SpellSpecificAuraRules
@@ -91,8 +92,13 @@ public sealed class SpellSpecificAuraRules
             }
 
             bool sameCaster = holder.CasterGuid == other.CasterGuid;
-            bool sameChain = SpellSpecifics.IsSameChain(spell, otherSpell);
-            if (IsPassiveOrHidden(otherSpell))
+            bool otherPassive = IsPassiveOrHidden(otherSpell);
+            if (specific == SpellSpecific.Normal && !healOverTime && !otherPassive)
+            {
+                continue; // nothing below applies to a plain spell against a plain holder
+            }
+
+            if (otherPassive)
             {
                 // Unit.cpp:3433-3453: a passive or hidden holder only meets the same caster (or a party area aura on either side), and then only
                 // its own rank chain; the weaker new rank is refused, a stronger one goes on to the checks below.
@@ -101,9 +107,9 @@ public sealed class SpellSpecificAuraRules
                     continue;
                 }
 
-                if (!sameChain)
+                if (!SpellSpecifics.IsRankOf(spell, otherSpell))
                 {
-                    continue;
+                    continue; // IsRankSpellDueToSpell: a same-named spell with other flags, icon, visual or aura is no rank (Unit.cpp:3433-3453)
                 }
 
                 if (SpellSpecifics.CompareAuraRanks(spell, otherSpell) < 0)
@@ -115,7 +121,7 @@ public sealed class SpellSpecificAuraRules
             SpellSpecific otherSpecific = SpellSpecifics.Of(otherSpell);
 
             // Unit.cpp:3498-3500: heals over time of one chain are single per target, whatever the caster.
-            bool perTarget = SpellSpecifics.IsSinglePerTarget(specific, otherSpecific) || (healOverTime && sameChain);
+            bool perTarget = SpellSpecifics.IsSinglePerTarget(specific, otherSpecific) || (healOverTime && SpellSpecifics.IsRankOf(spell, otherSpell));
             if (perTarget || (SpellSpecifics.IsSinglePerTargetPerCaster(specific, otherSpecific) && sameCaster))
             {
                 if (specific is SpellSpecific.Snare or SpellSpecific.NegativeHaste && !SpellSpecifics.IsAtLeastAsStrong(spell, otherSpell))
@@ -123,7 +129,7 @@ public sealed class SpellSpecificAuraRules
                     return true; // cannot remove a stronger snare or haste debuff
                 }
 
-                if (sameChain && SpellSpecifics.CompareAuraRanks(spell, otherSpell) < 0)
+                if (SpellSpecifics.IsSameChain(spell, otherSpell) && SpellSpecifics.CompareAuraRanks(spell, otherSpell) < 0)
                 {
                     return true; // cannot remove higher rank
                 }
@@ -132,7 +138,7 @@ public sealed class SpellSpecificAuraRules
                 continue;
             }
 
-            if (SpellSpecifics.IsSingleRanksPerTarget(specific, otherSpecific) && !sameCaster && sameChain)
+            if (SpellSpecifics.IsSingleRanksPerTarget(specific, otherSpecific) && !sameCaster && SpellSpecifics.IsSameChain(spell, otherSpell))
             {
                 if (SpellSpecifics.CompareAuraRanks(spell, otherSpell) < 0)
                 {
@@ -185,6 +191,7 @@ public sealed class SpellSpecificAuraRules
 
         return false;
     }
+
     private static void AddLoser(ref List<SpellAuraHolder>? losers, SpellAuraHolder other, bool collect)
     {
         if (collect)
