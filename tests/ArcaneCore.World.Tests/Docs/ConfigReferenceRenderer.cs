@@ -1,4 +1,5 @@
 using System.Text;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.World.Reload;
 
 namespace ArcaneCore.World.Tests.Docs;
@@ -83,6 +84,12 @@ internal static class ConfigReferenceRenderer
             sb.Append("- [`").Append(section).Append("`](#").Append(Anchor(section)).Append(")\n");
         }
 
+        bool hasElementFields = entries.Any(e => e.ElementFields is { Count: > 0 });
+        if (hasElementFields)
+        {
+            sb.Append("- [List and map element fields](#list-and-map-element-fields)\n");
+        }
+
         sb.Append("- [Keys read by name](#keys-read-by-name)\n- [Aliases and framework sections](#aliases-and-framework-sections)\n\n");
 
         foreach (string section in sections)
@@ -98,6 +105,11 @@ internal static class ConfigReferenceRenderer
             sb.Append('\n');
         }
 
+        if (hasElementFields)
+        {
+            RenderElementFields(sb, entries);
+        }
+
         sb.Append("## Keys read by name\n\n");
         sb.Append("These keys are read directly rather than through an options class.\n\n| Key | Type | Default | Meaning |\n|---|---|---|---|\n");
         foreach (AdHocKey key in adHoc.OrderBy(k => k.Path, StringComparer.Ordinal))
@@ -111,8 +123,32 @@ internal static class ConfigReferenceRenderer
             sb.Append("- `").Append(alias.Key).Append("`: ").Append(alias.Value).Append('\n');
         }
 
-        sb.Append("- `Logging` and `HostOptions` (`ShutdownTimeout`) belong to the .NET host, not to ArcaneCore; see the .NET documentation for their keys.\n");
+        sb.Append("- `Logging` (for example `Logging:LogLevel:<category>`) and `HostOptions` (`HostOptions:ShutdownTimeout`) belong to the .NET host, not to ArcaneCore; see the .NET documentation for their keys. "
+            + "The checks accept every key below them and never report one as unknown; `Logging:ArcaneCore` is not part of this and is documented above.\n");
+        sb.Append("- `hostBuilder:reloadConfigOnChange` is a .NET host key that ArcaneCore reads when it attaches the `.conf` file: `true` (the default when unset or unparsable) makes a running daemon watch `world.conf`, `realm.conf` or `gateway.conf` and pick up an edit, ")
+            .Append("`false` reads the file once at start. It also governs the `appsettings*.json` files.\n");
         return sb.ToString();
+    }
+
+    /// <summary>The fields of one entry of every list or map option whose entries are groups of keys (a key table cannot show them: it has one row per option).</summary>
+    private static void RenderElementFields(StringBuilder sb, IReadOnlyList<ConfigEntry> entries)
+    {
+        sb.Append("## List and map element fields\n\n");
+        sb.Append("These options hold entries that are themselves groups of keys. A list entry is numbered (`Key:0:Field`, `Key:1:Field`, ...), a map entry is named (`Key:name:Field`); in a `.conf` file the separator is a dot (`Key.0.Field = value`). ");
+        sb.Append("A field that is not written keeps the default shown here.\n\n");
+        foreach (ConfigEntry entry in entries.Where(e => e.ElementFields is { Count: > 0 }).OrderBy(e => e.Path, StringComparer.Ordinal))
+        {
+            string selector = entry.Kind == ConfKey.Map ? "<name>" : "<index>";
+            sb.Append("### `").Append(entry.Path).Append("`\n\n");
+            sb.Append("`").Append(entry.TypeText).Append("`: each entry sets `").Append(entry.Path).Append(':').Append(selector).Append(":<Field>`.\n\n");
+            sb.Append("| Field | Type | Default | Meaning |\n|---|---|---|---|\n");
+            foreach (ConfigElementField field in entry.ElementFields!)
+            {
+                sb.Append("| `").Append(field.Name).Append("` | `").Append(field.TypeText).Append("` | ").Append(Code(field.Default)).Append(" | ").Append(field.Meaning).Append(" |\n");
+            }
+
+            sb.Append('\n');
+        }
     }
 
     private static string Code(string value) => value.Contains('|', StringComparison.Ordinal) ? "`" + value.Replace("|", "\\|", StringComparison.Ordinal) + "`" : "`" + value + "`";
