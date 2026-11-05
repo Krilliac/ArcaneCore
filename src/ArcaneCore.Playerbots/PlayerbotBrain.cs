@@ -353,6 +353,19 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Thinks that reached the explore's own wander plan, past the town idle (tests, inspection).</summary>
     internal int ExploreWanderPlans { get; private set; }
 
+    /// <summary>How long (ms of explore thinks) a bot may hold an accepted walk without leaving <see cref="ExploreInPlaceYards"/> before the walk is refused.</summary>
+    internal const uint ExploreInPlaceMs = 8_000;
+
+    /// <summary>How far (yards) the bot must have moved off where an accepted explore walk found it to count as walking.</summary>
+    internal const float ExploreInPlaceYards = 2f;
+
+    /// <summary>Explore walks given up because the bot's route was in hand and accepted but the bot did not move (tests, inspection).</summary>
+    internal int ExploreInPlaceGiveUps { get; private set; }
+
+    /// <summary>Whether the explore cell at (<paramref name="x"/>, <paramref name="y"/>) on <paramref name="mapId"/> is blocked for the atlas search (tests, inspection).</summary>
+    internal bool IsExploreCellBlocked(uint mapId, float x, float y)
+        => _exploreBlockedCells.ContainsKey((mapId, ArcaneCore.World.Bots.PlayerbotExploreAtlas.CellOf(x), ArcaneCore.World.Bots.PlayerbotExploreAtlas.CellOf(y)));
+
     /// <summary>The last <see cref="PlayerbotThinkProbe"/> phase seen while this brain was updating.</summary>
     internal string LastThinkPhase { get; private set; } = "start";
 
@@ -1372,6 +1385,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _lootOpened = false;
             if (_target is null)
             {
+                // No errand claimed this think (an errand that does returns; the ladder is skipped in combat and a step that pulls a target
+                // leaves it with one of its own), so a Vendor, Train or Mount label still held is last think's: it would stay through a wait for
+                // tiles below and the stall watch would report an errand that is not under way (bot QA #1487: Vendor/0 stalls with phase
+                // grind-destinations and no destination).
+                ClearStaleErrandLabel();
                 uint huntEntry = _quests.PreferredCreatureEntry != 0 ? _quests.PreferredCreatureEntry : materialDropper;
                 if (HasOptionalThinkBudget(15.0) && GrindPlanDue(huntEntry))
                 {
@@ -1833,6 +1851,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled inside a world dead-end pin within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} and leaving"));
         }
+        PlayerbotGoalKind stalledGoal = _goal;
+        bool leftArea = false;
         StallReturnQuest = _goal == PlayerbotGoalKind.Quest && QuestId != 0 && QuestId == _quests.ReturnQuest ? QuestId : 0;
         StallOutsideHome = _home is { } home && !home.Contains(player);
         if (shareable && !StallOutsideHome && shared?.Report(_goal, TargetEntry, QuestId, player.Guid.Value, now, player.MapId,
@@ -1856,6 +1876,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             case PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather:
                 if (deadEndPin) _suspensions.SuspendEntryEscalating(TargetEntry, now);
                 else _suspensions.SuspendEntry(TargetEntry, now);
+                // An errand given up is over: left as it was, an errand that named no entry (target 0, which the set-aside above cannot
+                // hold) stayed the goal and stalled again under the same label (bot QA #1487).
+                _goal = PlayerbotGoalKind.Explore;
                 break;
             case PlayerbotGoalKind.Grind or PlayerbotGoalKind.Combat or PlayerbotGoalKind.Loot:
                 // The creature the bot stalled on is skipped for about a respawn (StalledTargetMs), not the 30 seconds of a refused chase:
@@ -1891,7 +1914,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (!responding) _homeReturn.MarkBlocked(now);
                 break;
             case PlayerbotGoalKind.Explore:
+                // A wander leg has no candidate: block the cell the bot stands in, or the next search and leg go to the same ground (#1488).
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);
+                else BlockExploreCellAt(player.MapId, player.X, player.Y);
                 _exploreRefusals = Math.Max(_exploreRefusals, 3);
                 _exploreRefusalTraced = false; // the refusals after the give-up are a new episode and are traced
                 if (TargetEntry != 0)
@@ -1902,7 +1927,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (_home is null && IsUnderLevelledForArea(player))
                 {
                     uint leftZone = player.ZoneId;
-                    if (TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true)) RememberEscapedZone(leftZone); // among creatures too strong for it
+                    if (TryTeleportToBindPoint(player, "stalled exploring where nothing fits its level", urgent: false, safety: true))
+                    {
+                        RememberEscapedZone(leftZone); // among creatures too strong for it
+                        leftArea = true;
+                    }
                 }
                 break;
             case PlayerbotGoalKind.WorldPvp:
@@ -1922,6 +1951,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 _exploreRefusals = 3;
                 _exploreRefusalTraced = false;
                 break;
+        }
+
+        // The other way round: a bot too strong for everything near it has nothing to do there, and a give-up changes nothing about that
+        // (live 2026-10-25, bot QA #1487: level 60 bots without a home in the Valley of Trials). A home keeps its bot under the home's own rules.
+        // First its hearthstone to its bind point, when that has creatures of its level (no stone, no trip: safety false); when the bind
+        // point cannot help (the bot is bound beside here, as every new character is at its start, or the bind point holds nothing for its
+        // level either) or the stone is not ready, a journey to the nearest ground the explore atlas lists for its level (TryJourneyToFittingGround).
+        if (!leftArea && _home is null
+            && stalledGoal is PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Explore
+            && HasNothingForLevelHere(player, out PlayerbotExploreAtlas? barrenAtlas))
+        {
+            uint leftFrom = player.ZoneId;
+            if (BindPointHasGroundForLevel(player, barrenAtlas)
+                && TryTeleportToBindPoint(player, "stalled where nothing is left for its level", urgent: false, safety: false))
+                RememberEscapedZone(leftFrom);
+            else if (TryJourneyToFittingGround(player, barrenAtlas))
+                RememberEscapedZone(leftFrom);
         }
 
         if (_goal != PlayerbotGoalKind.Quest && QuestId != 0)
@@ -2032,7 +2078,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// lists no creature for its level within <see cref="StrandedExploreRings"/> rings on its map, yet creatures more than
     /// <see cref="StrandedLevelMargin"/> levels above it stand there (live 2026-10-12, bot QA #286 and others: level 7 to 8 bots in
     /// Silverpine and Dun Morogh among level 10 to 14 creatures, the nearest fit over 1000 yards away). An over-levelled bot in a low zone or
-    /// a city has nothing to fight either, but nothing here is too strong for it, so it is left to wander. Not when the bot is already
+    /// a city has nothing to fight either, but nothing here is too strong for it: it is not stranded in this sense (when <see cref="HasNothingForLevelHere"/> holds, a stalled goal sends it
+    /// to its bind point or on a <see cref="TryJourneyToFittingGround"/> instead). Not when the bot is already
     /// at its bind point, or the bind point is stranded for the bot's level too (the teleport would only move it to the same trouble).
     /// </summary>
     private bool IsUnderLevelledForArea(Player player)
@@ -2054,6 +2101,89 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return !atlas.HasIndexedMap(bind.MapId)
             || atlas.HasCellNear(bind.MapId, player.Level, new(bind.X, bind.Y, bind.Z), StrandedExploreRings)
             || !atlas.HasStrongerNear(bind.MapId, player.Level, new(bind.X, bind.Y, bind.Z), StrandedExploreRings, StrandedLevelMargin);
+    }
+
+    /// <summary>
+    /// Whether the explore atlas lists no creature for the bot's level within <see cref="StrandedExploreRings"/> rings of it on its map and
+    /// none more than <see cref="StrandedLevelMargin"/> levels above it: the bot is not <see cref="IsUnderLevelledForArea"/>, it is too
+    /// strong for what the area holds (a low zone) or in a place with nothing to fight (a city). <paramref name="atlas"/> is the atlas then.
+    /// </summary>
+    private bool HasNothingForLevelHere(Player player, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out PlayerbotExploreAtlas? atlas)
+    {
+        atlas = _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.ExploreAtlas;
+        if (atlas is null || !atlas.HasIndexedMap(player.MapId)) return false;
+        var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        return !atlas.HasCellNear(player.MapId, player.Level, here, StrandedExploreRings)
+            && !atlas.HasStrongerNear(player.MapId, player.Level, here, StrandedExploreRings, StrandedLevelMargin);
+    }
+
+    /// <summary>
+    /// Whether the bot's bind point would help an over-levelled bot: it is set, not within <see cref="BindArrivedYards"/> of the bot (the
+    /// trip would change nothing), and the atlas lists creatures of the bot's level within <see cref="StrandedExploreRings"/> rings of it.
+    /// </summary>
+    private static bool BindPointHasGroundForLevel(Player player, PlayerbotExploreAtlas atlas)
+    {
+        HomeBind bind = player.Home;
+        if (bind == default) return false;
+        if (bind.MapId == player.MapId)
+        {
+            float dx = bind.X - player.X, dy = bind.Y - player.Y;
+            if (dx * dx + dy * dy <= BindArrivedYards * BindArrivedYards) return false;
+        }
+
+        return atlas.HasIndexedMap(bind.MapId)
+            && atlas.HasCellNear(bind.MapId, player.Level, new(bind.X, bind.Y, bind.Z), StrandedExploreRings);
+    }
+
+    private int _fitJourneyFailures;
+    private uint _fitJourneyRetryAt;
+
+    /// <summary>
+    /// An over-levelled bot with no home whose bind point cannot help (<see cref="BindPointHasGroundForLevel"/>) is sent to the nearest
+    /// ground the explore atlas lists for its level on its map (<see cref="PlayerbotExploreAtlas.Find"/>, cells set aside for refused
+    /// walks skipped), as a player would go: a journey through the travel seam (<see cref="IPlayerbotTravel.TryBegin"/>: flight path,
+    /// zeppelin, hearthstone or walk, whichever the planner finds), which the brain drives from the next think (live 2026-10-25, bot QA #1487:
+    /// level 60 bots bound at the Valley of Trials start, where the stall point is inside <see cref="BindArrivedYards"/> of the bind point
+    /// and the bind point holds only level 1 to 5 creatures). Not when dead, in combat, in a duel, a group or a battleground, with travel off,
+    /// or while a refused journey is waiting (<see cref="PlayerbotTravelOptions.BackoffMs"/>, doubling per failure; the refused cell is set
+    /// aside so the retry aims elsewhere). True when a journey is under way. World thread; runs on a stall give-up only.
+    /// </summary>
+    private bool TryJourneyToFittingGround(Player player, PlayerbotExploreAtlas atlas)
+    {
+        if (!_options.Travel.Enabled || _session.Services.GetService<IPlayerbotTravel>() is not { } travel) return false;
+        if (!player.IsAlive || player.Combat.IsInCombat || player.Duel is not null || player.Map is not { } map || map.Template is { IsBattleground: true }) return false;
+        if (_session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not null) return false;
+        uint now = _session.World.NowMs;
+        if (travel.IsTraveling(player)) return true;
+        if (_fitJourneyFailures > 0 && unchecked((int)(_fitJourneyRetryAt - now)) > 0) return false;
+        uint mapId = player.MapId;
+        // The same eligibility the explore search applies (attackable faction, spawn gate present, home, hazards, strong hazard beside it):
+        // a cell whose creatures the bot cannot attack or that is gated out is not worth a journey, and once there nothing would send it on.
+        if (_session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content is not { } content
+            || !PrepareExploreFilters(player, content, atlas, mapId, now)) return false;
+        _exploreEligibleFilter ??= ExploreEligible;
+        _exploreFactionFilter ??= ExploreAttackableFaction;
+        _exploreThreatFilter ??= ExploreHostileFaction;
+        PlayerbotExploreAtlas.Candidate? site = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
+            (x, y) => _exploreBlockedCells.ContainsKey((mapId, x, y)), out _, _exploreFactionFilter);
+        if (site is not { } chosen) return false;
+        var to = new System.Numerics.Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z);
+        ILogger? logger = _session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotBrain>();
+        if (travel.TryBegin(_session, player, mapId, to, out string? why) && travel.IsTraveling(player))
+        {
+            _fitJourneyFailures = 0;
+            _goal = PlayerbotGoalKind.Explore;
+            logger?.LogInformation(
+                "Playerbot {Bot} level {Level} stalled where nothing is left for its level at ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: travels to ({TX:F1}, {TY:F1}, {TZ:F1})",
+                player.Name, player.Level, player.X, player.Y, player.Z, mapId, to.X, to.Y, to.Z);
+            return true;
+        }
+
+        BlockExploreCellKey((mapId, chosen.CellX, chosen.CellY));
+        _fitJourneyRetryAt = unchecked(now + _options.Travel.BackoffMs(++_fitJourneyFailures));
+        logger?.LogDebug("Playerbot {Bot} level {Level} cannot travel to ground for its level at ({TX:F1}, {TY:F1}) map {Map}: {Why}",
+            player.Name, player.Level, to.X, to.Y, mapId, why);
+        return false;
     }
 
     /// <summary>
@@ -3074,6 +3204,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return true;
     }
 
+    /// <summary>
+    /// A Vendor, Train or Mount label held past the think that set it is dropped to Explore with no target entry: the errand is not under
+    /// way, and the stall watch must not report one. Any other goal is left alone.
+    /// </summary>
+    internal void ClearStaleErrandLabel()
+    {
+        if (_goal is not (PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount)) return;
+        _goal = PlayerbotGoalKind.Explore;
+        TargetEntry = 0;
+    }
+
     private void Explore(Player player, uint elapsedMs)
     {
         _goal = PlayerbotGoalKind.Explore;
@@ -3096,12 +3237,27 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (ExploreMovementPaused(player, elapsedMs)) return;
             if (!PlayerbotNavigation.TryAdvance(_session, _route, _options, elapsedMs, _session.World.NowMs))
             {
+                _exploreInPlaceActive = false;
                 if (!_route.Complete && _exploreCandidate is { } refused) BlockExploreCell(refused);
                 AbandonRoute();
+            }
+            else if (ExploreWalkStandsStill(player, elapsedMs))
+            {
+                // TryAdvance accepts a walk the motion never carries out (bot QA #1488: two bots on a Winterspring slope at the same point
+                // for two minutes, "moving" towards a spot 18 yards away): after ExploreInPlaceMs of it the walk is refused like a rejected one.
+                ExploreInPlaceGiveUps++;
+                _trace.Record(_session.World.NowMs, "explore-in-place");
+                if (_exploreCandidate is { } stuck) BlockExploreCell(stuck);
+                else BlockExploreCellAt(player.MapId, player.X, player.Y);
+                _exploreRefusals++;
+                AbandonRoute();
+                PlayerbotMovementControl.Stop(_session, player);
             }
             else ChainWanderLeg(player, elapsedMs);
             return;
         }
+
+        _exploreInPlaceActive = false;
 
         if (player.Map is null) return;
         // The think's optional path budget (PlayerbotThinkProbe.HasOptionalPlanBudget) may already be spent by the planners before this
@@ -3746,10 +3902,61 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         return true;
     }
 
+    private bool _exploreInPlaceActive;
+    private System.Numerics.Vector3 _exploreInPlaceAnchor;
+    private uint _exploreInPlaceMs;
+
+    /// <summary>
+    /// Whether the explore walk in hand has held the bot within <see cref="ExploreInPlaceYards"/> of one point for
+    /// <see cref="ExploreInPlaceMs"/> of explore thinks (the walk is accepted every think but the bot does not move). The time is the
+    /// thinks' own elapsed time, so the think gap does not matter; a pause (a stun, a root, a fall) never reaches here
+    /// (<see cref="ExploreMovementPaused"/>). No allocation: a vector, a counter and a flag.
+    /// <para>
+    /// The position compared is the one the bot holds (<c>player.X/Y/Z</c>, set by each validated movement packet; the stall watch and the QA
+    /// diagnostics read the same), not <see cref="PlayerbotMotion.CurrentPosition"/>: that projects the route forward by the speed times the
+    /// age of the last heartbeat, and a heartbeat that validates back onto the frozen point re-anchors there every 500 ms, so each think's
+    /// projection landed up to 3.5 yards ahead of the frozen point and the 2 yard bound reset on every think. The stored position is the
+    /// position every observer sees, so it is the one that says whether the bot moved.
+    /// </para>
+    /// </summary>
+    internal bool ExploreWalkStandsStill(Player player, uint elapsedMs)
+    {
+        var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+        if (!_exploreInPlaceActive
+            || System.Numerics.Vector3.DistanceSquared(here, _exploreInPlaceAnchor) > ExploreInPlaceYards * ExploreInPlaceYards)
+        {
+            _exploreInPlaceActive = true;
+            _exploreInPlaceAnchor = here;
+            _exploreInPlaceMs = 0;
+            return false;
+        }
+
+        _exploreInPlaceMs = _exploreInPlaceMs > uint.MaxValue - elapsedMs ? uint.MaxValue : _exploreInPlaceMs + elapsedMs;
+        if (_exploreInPlaceMs < ExploreInPlaceMs) return false;
+        _exploreInPlaceActive = false;
+        return true;
+    }
+
     private void BlockExploreCell(PlayerbotExploreAtlas.Candidate candidate)
     {
         // A cell has no visible killable target, or its route was refused. Let respawns and path changes make it eligible again.
-        var key = (candidate.Spawn.MapId, candidate.CellX, candidate.CellY);
+        BlockExploreCellKey((candidate.Spawn.MapId, candidate.CellX, candidate.CellY));
+        _exploreCandidate = null;
+        _exploreBestDistSq = float.PositiveInfinity;
+        _exploreAim.Reset();
+        TargetEntry = 0;
+    }
+
+    /// <summary>
+    /// Block the explore cell that holds (<paramref name="x"/>, <paramref name="y"/>) for the cooldown a refused candidate's cell has. A wander
+    /// leg given up for a stall holds no candidate, so its cell is the one the bot stands in: the atlas search then skips it and the next
+    /// target lies outside it (bot QA #1488).
+    /// </summary>
+    private void BlockExploreCellAt(uint mapId, float x, float y)
+        => BlockExploreCellKey((mapId, PlayerbotExploreAtlas.CellOf(x), PlayerbotExploreAtlas.CellOf(y)));
+
+    private void BlockExploreCellKey((uint Map, int X, int Y) key)
+    {
         if (_exploreBlockedCells.Count >= 64 && !_exploreBlockedCells.ContainsKey(key))
         {
             (uint Map, int X, int Y) oldest = default;
@@ -3757,10 +3964,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreBlockedCells.Remove(oldest);
         }
         _exploreBlockedCells[key] = unchecked(_session.World.NowMs + 180_000u);
-        _exploreCandidate = null;
-        _exploreBestDistSq = float.PositiveInfinity;
-        _exploreAim.Reset();
-        TargetEntry = 0;
     }
 
     private float _exploreBestDistSq = float.PositiveInfinity;
@@ -3770,6 +3973,37 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         => elapsedMs == 0 || _session.ManagedBudget is { Remaining: <= 0 }
             || (player.Movement.Flags & (MovementFlags.Root | MovementFlags.Jumping | MovementFlags.FallingFar)) != 0
             || PlayerbotMotion.ControlLost(player); // a pause: no refusal, no abandoned route, no blocked cell
+
+    /// <summary>
+    /// Fills the state the explore filters (<see cref="ExploreEligible"/>, <see cref="ExploreAttackableFaction"/>, <see cref="ExploreHostileFaction"/>)
+    /// read: the bot, its faction rows and reputation source, home, active hazards and the map. False when no faction row for the bot is known
+    /// (nothing can be judged). World thread.
+    /// </summary>
+    private bool PrepareExploreFilters(Player player, CreatureContent content, PlayerbotExploreAtlas atlas, uint mapId, uint now)
+    {
+        FactionTemplateCatalog? factions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.FactionTemplates;
+        if (factions is not { Count: > 0 }) factions = _session.Services.GetService<FactionTemplateCatalog>();
+        if (factions is not { Count: > 0 })
+        {
+            CombatHooks hooks = CombatHooks.For(_session.World);
+            while (hooks is ArcaneCore.Game.Reputation.ReputationCombatHooks reputation) hooks = reputation.Fallback;
+            factions = (hooks as FactionCombatHooks)?.Factions;
+        }
+        FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
+        if (self is null) return false;
+        _exploreSearchPlayer = player;
+        _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
+        _exploreSearchContent = content;
+        _exploreSearchAtlas = atlas;
+        _exploreSearchFactions = factions;
+        _exploreSearchSelf = self;
+        _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
+            as ArcaneCore.Game.Reputation.INpcReactionSource;
+        _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
+        _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
+        _exploreSearchMap = mapId;
+        return true;
+    }
 
     private bool TryExploreSpawns(Player player, uint elapsedMs)
     {
@@ -3838,27 +4072,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (_exploreCandidate is null)
         {
             if (unchecked((int)(_exploreSearchAfter - now)) > 0) return false;
-            FactionTemplateCatalog? factions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.FactionTemplates;
-            if (factions is not { Count: > 0 }) factions = _session.Services.GetService<FactionTemplateCatalog>();
-            if (factions is not { Count: > 0 })
-            {
-                CombatHooks hooks = CombatHooks.For(_session.World);
-                while (hooks is ArcaneCore.Game.Reputation.ReputationCombatHooks reputation) hooks = reputation.Fallback;
-                factions = (hooks as FactionCombatHooks)?.Factions;
-            }
-            FactionTemplateRecord? self = factions?.Find(player.FactionTemplate);
-            if (self is null) return false;
-            _exploreSearchPlayer = player;
-            _exploreSearchSkipIndoor = ExploreSkipsIndoor(player);
-            _exploreSearchContent = content;
-            _exploreSearchAtlas = atlas;
-            _exploreSearchFactions = factions;
-            _exploreSearchSelf = self;
-            _exploreSearchReactions = _session.Services.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.Services.Deps.Reputation
-                as ArcaneCore.Game.Reputation.INpcReactionSource;
-            _exploreSearchHome = _home is { MapId: var homeMap } && homeMap == mapId ? _home : null;
-            _exploreSearchHazards = _options.Risk.Enabled ? Risk.Hazards.Active(mapId, now) : [];
-            _exploreSearchMap = mapId;
+            if (!PrepareExploreFilters(player, content, atlas, mapId, now)) return false;
             _exploreEligibleFilter ??= ExploreEligible;
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
