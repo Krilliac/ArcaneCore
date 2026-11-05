@@ -161,14 +161,22 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             await reload.ConfigureAwait(false);
         }
 
-        // The table stays closed, not open: a command arriving now (the peer link may still be up, whatever the stop order) must not land on a table that was never loaded. Held commands were acked to their senders, so they are lost here.
-        int lost = _authority?.CloseHeldTable() ?? 0;
-        if (lost > 0)
+        // The world thread no longer runs (IWorldFeature.StopAsync), so nothing else replays or syncs from here on.
+        if (_holding)
         {
-            _logger.LogWarning("Stopping before the group table was loaded: {Count} held group commands are lost", lost);
+            // The table is loaded and a replay may be under way: the rest of the backlog runs now, whole, so the final write below has it.
+            ReplayHeldCommands(int.MaxValue);
+        }
+        else
+        {
+            // Never loaded here. The table stays closed, not open: a command arriving now (the peer link may still be up, whatever the stop order) must not land on it. Held commands were acked to their senders, so they are lost.
+            int lost = _authority?.CloseHeldTable() ?? 0;
+            if (lost > 0)
+            {
+                _logger.LogWarning("Stopping before the group table was loaded: {Count} held group commands are lost", lost);
+            }
         }
 
-        // The world thread no longer runs (IWorldFeature.StopAsync), so the group table is quiet.
         Sync();
         await Writes.StopAsync().ConfigureAwait(false);
     }
@@ -183,7 +191,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     {
         if (_replaying)
         {
-            ReplayHeldCommands();
+            ReplayHeldCommands(ReplayBatch);
         }
 
         long now = _clock.GetUtcNow().ToUnixTimeSeconds();
@@ -207,7 +215,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         if (_authority is { } authority)
         {
             // Not the holder (yet): the table is held from attach and the holder writes. A holder never turns into a non-holder on a running node: a lost lease keeps its token in the keeper and stops the process
-            // (RealmAuthorityLeaseKeeper.Lose), and the leases are only given back after the features have stopped. So the hold is lifted only by an install; a stop closes the table instead (StopAsync).
+            // (RealmAuthorityLeaseKeeper.Lose), and the leases are only given back after the features have stopped. So the hold is lifted only by an install; a stop closes a table that was never loaded (StopAsync).
             if (!HoldsSocial())
             {
                 return;
@@ -342,14 +350,14 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         _logger.LogInformation(
             "Social lease gained: {Restored} groups loaded from storage ({Dropped} dropped); {Held} held commands to run, {Evicted} pushed out of the hold by its cap",
             result.Restored.Count, result.Dropped.Count, authority.HeldCommandCount, authority.CommandsEvictedWhileHeld);
-        ReplayHeldCommands();
+        ReplayHeldCommands(ReplayBatch);
     }
 
-    /// <summary>World thread: the next batch of held commands. Commands arriving meanwhile queue behind the backlog, so the order holds; the hold ends with the last one.</summary>
-    private void ReplayHeldCommands()
+    /// <summary>World thread, or the stop once that thread has ended: the next held commands, at most <paramref name="maxCommands"/>. Commands arriving meanwhile queue behind the backlog, so the order holds; the hold ends with the last one.</summary>
+    private void ReplayHeldCommands(int maxCommands)
     {
         GroupAuthority authority = _authority!;
-        _replayFailed += authority.ReleaseHeldCommands(ReplayBatch);
+        _replayFailed += authority.ReleaseHeldCommands(maxCommands);
         if (authority.HeldCommandCount == 0)
         {
             _replaying = false;

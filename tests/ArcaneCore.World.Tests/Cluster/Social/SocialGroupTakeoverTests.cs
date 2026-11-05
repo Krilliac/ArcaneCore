@@ -237,6 +237,48 @@ public sealed class SocialGroupTakeoverTests
     }
 
     [Fact]
+    public async Task A_stop_with_a_replay_under_way_runs_the_rest_of_the_backlog_and_writes_it()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.Rows.Seed(Group(1, 1, 2));
+        rig.Characters.HoldReads();
+        rig.TakeOver();
+        await rig.OnWorld(() =>
+        {
+            rig.Persistence.SyncNow();
+            return true;
+        });
+        await rig.Characters.ReadHeld.WaitAsync(Budget);
+
+        // Each failed invite leaves one event, so the event count says how many ran. 4096 commands: four batches, and no more than the worker's event queue keeps.
+        var invite = new GroupCommand(GroupCommandKind.Invite, ObjectGuid.Player(1).Value, "Char1", 0, false, TargetName: "Nobody");
+        int invites = (4 * SocialGroupPersistenceFeature.ReplayBatch) - 1;
+        for (int i = 0; i < invites; i++)
+        {
+            rig.Holder.Groups.Execute("worker-c", invite);
+        }
+
+        rig.Holder.Groups.Execute("worker-c", Loot(LootMethod.RoundRobin)); // the last of the backlog
+
+        Task parked = rig.ParkWorldOnceLoaded();
+        rig.Characters.ReleaseReads();
+        await parked.WaitAsync(Budget);
+        await rig.StopParkedWorldAsync();
+        Assert.True(rig.Persistence.AuthorityLoaded);
+        Assert.True(rig.Holder.Groups.HeldCommandCount > 0, "the world stopped with no backlog left, so this test proves nothing");
+
+        await rig.Persistence.StopAsync();
+
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
+        Assert.Equal(invites, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Equal((byte)LootMethod.RoundRobin, Assert.Single(rig.Holder.Groups.Snapshots()).LootMethod);
+        Assert.Equal((byte)LootMethod.RoundRobin, rig.Rows.Group(1)!.LootMethod); // the final write has it
+
+        rig.Holder.Groups.Execute("worker-c", invite); // a loaded table was not closed
+        Assert.Equal(0, rig.Holder.Groups.CommandsRefusedAfterClose);
+    }
+
+    [Fact]
     public async Task A_failed_directory_read_installs_nothing_and_is_tried_again()
     {
         await using Rig rig = await Rig.CreateAsync();
@@ -315,6 +357,7 @@ public sealed class SocialGroupTakeoverTests
         private readonly ManualTimeProvider _time;
         private readonly ServiceProvider _services;
         private readonly ManualResetEventSlim _worldGate = new(true);
+        private readonly ManualResetEventSlim _parkGate = new(true);
         private bool _worldDisposed;
 
         private Rig(ManualTimeProvider time, RealmAuthorityLeaseKeeper keeper, GroupRows rows, IdentityRows characters, CharacterDirectory directory, PresenceHolderService holder, ServiceProvider services)
@@ -382,7 +425,7 @@ public sealed class SocialGroupTakeoverTests
                 .AddSingleton<ICharacterStore>(characters)
                 .AddSingleton(keeper)
                 .AddSingleton(holder)
-                .AddSingleton(new ClusterGroupRouting(new LeaseRoutedPresence(holder, () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null, () => null), "worker-a"))
+                .AddSingleton(new ClusterGroupRouting(new LeaseRoutedPresence(holder, () => keeper.Holds(RealmAuthorityScopes.Social), () => null), "worker-a"))
                 .AddSingleton(provider => new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance))
                 .AddSingleton(provider => new SocialFeature(directory, provider.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance, services: provider))
                 .BuildServiceProvider();
@@ -437,6 +480,34 @@ public sealed class SocialGroupTakeoverTests
             }
         }
 
+        /// <summary>Parks the world thread at the end of the first tick that sees the table loaded, with a replay still under way. The task completes when it is parked.</summary>
+        public Task ParkWorldOnceLoaded()
+        {
+            var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _parkGate.Reset();
+            void Park(uint diffMs)
+            {
+                if (Persistence.AuthorityLoaded)
+                {
+                    World.Updated -= Park;
+                    parked.TrySetResult();
+                    _parkGate.Wait(Budget);
+                }
+            }
+
+            World.Updated += Park;
+            return parked.Task;
+        }
+
+        /// <summary>Ends the parked world thread with no further tick: the stop is under way before it wakes, so the replay stays where it was.</summary>
+        public async Task StopParkedWorldAsync()
+        {
+            Task stopping = Task.Run(World.Stop);
+            await Task.Delay(100);
+            _parkGate.Set();
+            await stopping.WaitAsync(Budget);
+        }
+
         /// <summary>The world stops, then the group feature stops, as the host does it.</summary>
         public async Task StopPersistenceAsync()
         {
@@ -457,6 +528,7 @@ public sealed class SocialGroupTakeoverTests
         public async ValueTask DisposeAsync()
         {
             _worldGate.Set();
+            _parkGate.Set();
             DisposeWorld();
             await Persistence.StopAsync();
             await Social.StopAsync();

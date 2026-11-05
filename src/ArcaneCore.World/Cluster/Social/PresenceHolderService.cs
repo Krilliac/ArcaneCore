@@ -70,7 +70,8 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
 
     /// <summary>
     /// Whether group requests from peers are served here. A node can run the peer listener without the Social lease (it holds Economy, or the lease went), and a command acked here would sit in a table that may never be loaded,
-    /// so <see cref="PresenceWireCodec"/> answers such a request "not the holder" and the sender keeps the command.
+    /// so <see cref="PresenceWireCodec"/> answers such a request "not the holder" and the sender keeps the command. In production this is <see cref="RealmAuthorityLeaseKeeper.Holds"/>, so it turns false as soon as the keeper knows of a loss;
+    /// until the old holder's next renewal tick it cannot know that another node took the lease, and it still takes commands.
     /// </summary>
     public bool HoldsSocial => holdsSocial is null || holdsSocial();
 

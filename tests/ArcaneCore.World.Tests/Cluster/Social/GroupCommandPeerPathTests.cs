@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Social;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Peer;
 using ArcaneCore.World.Cluster.Social;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -221,6 +222,52 @@ public sealed class GroupCommandPeerPathTests : IAsyncLifetime
 
         Assert.Equal(0, SubGroupOf(1));
         Assert.Equal(0, _routing.SendFailed);
+    }
+
+    [Fact]
+    public async Task With_the_production_wiring_a_node_that_lost_the_lease_takes_no_command_although_it_keeps_the_token()
+    {
+        var time = new ManualTimeProvider(new DateTimeOffset(2026, 11, 5, 12, 0, 0, TimeSpan.Zero));
+        var leases = new InMemoryRealmAuthorityLeaseStore();
+        var incarnation = Guid.NewGuid();
+        await using var keeper = new RealmAuthorityLeaseKeeper(leases,
+            Microsoft.Extensions.Options.Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10 }),
+            Microsoft.Extensions.Options.Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = "node-d" }),
+            NullLogger<RealmAuthorityLeaseKeeper>.Instance, null, time, _ => { });
+        await keeper.AcquireAtStartAsync(incarnation, CancellationToken.None);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(keeper);
+        services.AddClusterPresence();
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        PresenceHolderService holder = provider.GetRequiredService<PresenceHolderService>();
+        LeaseRoutedPresence routed = provider.GetRequiredService<LeaseRoutedPresence>();
+        byte[] command = PresenceWireCodec.EncodeRequest(PresenceOp.GroupCommand, w =>
+        {
+            w.Write("node-a");
+            GroupWireCodec.WriteCommand(w, new GroupCommand(GroupCommandKind.Invite, ObjectGuid.Player(1).Value, "Alice", 0, false, TargetName: "Nobody"));
+        });
+        byte[] drain = PresenceWireCodec.EncodeRequest(PresenceOp.GroupDrain, w => w.Write("node-a"));
+
+        Assert.True(routed.IsAuthorityReachable);
+        PresenceWireCodec.OpenReply(holder.Handle(command)).Dispose(); // the live holder takes it
+        int pending = holder.Groups.PendingFor("node-a");
+        Assert.True(pending > 0);
+
+        long token = keeper.TokenFor(RealmAuthorityScopes.Social)!.Value;
+        leases.TryRelease(RealmAuthorityScopes.Social, "node-d", incarnation, token);
+        Assert.Equal(AuthorityLeaseOutcome.Granted, leases.TryAcquire(RealmAuthorityScopes.Social, "node-e", Guid.NewGuid(), Hour, time.GetUtcNow()).Outcome);
+        time.Advance(TimeSpan.FromSeconds(10)); // the renewal tick finds the loss
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Social));
+        Assert.Equal(token, keeper.TokenFor(RealmAuthorityScopes.Social));
+
+        Assert.Throws<PresenceNotHolderException>(() => PresenceWireCodec.OpenReply(holder.Handle(command)));
+        Assert.Throws<PresenceNotHolderException>(() => PresenceWireCodec.OpenReply(holder.Handle(drain)));
+        holder.Groups.HoldForReload();
+        Assert.Throws<PresenceNotHolderException>(() => PresenceWireCodec.OpenReply(holder.Handle(command)));
+        Assert.Equal(0, holder.Groups.HeldCommandCount);
+        Assert.Equal(pending, holder.Groups.PendingFor("node-a"));
+        Assert.False(routed.IsAuthorityReachable); // this node's own commands wait for the real holder too
     }
 
     [Fact]

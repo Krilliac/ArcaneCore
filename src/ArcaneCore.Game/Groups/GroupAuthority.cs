@@ -320,8 +320,9 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
-    /// The node is stopping with the table still held, so it will never be loaded here: the held commands are lost (the count is returned for the caller to log) and from now on nothing is applied to this table:
+    /// The node is stopping and this table was never loaded, so it never will be here: the held commands are lost (the count is returned for the caller to log) and from now on nothing is applied to this table:
     /// <see cref="TryExecute"/> answers false and <see cref="Execute"/> drops and counts (<see cref="CommandsRefusedAfterClose"/>). Works in any stop order: it does not matter whether the peer link is still up. A table that is not held is left as it is. Idempotent.
+    /// Not for a loaded table with a replay under way: those commands belong on it, so the caller runs them with <see cref="ReleaseHeldCommands"/>.
     /// </summary>
     public int CloseHeldTable()
     {
