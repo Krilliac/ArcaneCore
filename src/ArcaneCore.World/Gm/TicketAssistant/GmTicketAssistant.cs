@@ -133,7 +133,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         lock (_gate)
         {
             return new TicketAssistantStatus(_enabled, _handled.Count, _fixed, _answered, _escalated, _needsHuman.Count,
-                services.GetService<ITicketAssistantModel>() is { Available: true });
+                _options.UseModel && services.GetService<ITicketAssistantModel>() is { Available: true });
         }
     }
 
@@ -360,7 +360,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         try
         {
             string? text = await model.DraftAnswerAsync(ticketText, Faq(), timeout.Token).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(text) ? null : ScreenDraft(AuditCommands.CleanReason(text), Faq());
+            // Screened before the 255-character cut of CleanReason, so an overlong draft is refused rather than silently truncated.
+            return string.IsNullOrWhiteSpace(text) || ScreenDraft(text.Trim(), Faq()) is not { } screened ? null : AuditCommands.CleanReason(screened);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -376,13 +377,17 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     /// <summary>The longest drafted answer sent to a player (the model is told 200; this is the code-side bound).</summary>
     internal const int MaxDraftLength = 300;
 
-    private static readonly Regex DraftCommandPattern = new(@"(?<![\w.])\.[A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+    // A command prefix of the command table ('.' or '!') at the start of a word.
+    private static readonly Regex DraftCommandPattern = new(@"(?<![\w.!])[.!][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+
+    // A bare domain ("name.example"), which the "://" and "www." checks miss.
+    private static readonly Regex DraftDomainPattern = new(@"\b[A-Za-z0-9-]+\.(?:com|net|org|info|biz|io|gg|tv|me|co|cc|ly|to|xyz|top|club|online|site|ru|cn|de|uk|us|eu|fr|nl|pl|tk|ml|ga|cf|gq|app|dev|link|live|shop|store|tech)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
 
     /// <summary>
     /// The code-side check of a model-drafted answer, which is the one model-written text a player sees and which closes the ticket
     /// (prompt injection through the ticket text can steer it). Null, so the ticket is left to a GM, when the draft is longer than
     /// <see cref="MaxDraftLength"/>, carries a client escape (<c>|</c>: colour, item or quest link), a link (<c>://</c>, <c>www.</c>), or
-    /// names a dot command the <paramref name="faq"/> does not contain. Pure.
+    /// a bare domain, or names a dot or bang command the <paramref name="faq"/> does not contain. Pure.
     /// </summary>
     internal static string? ScreenDraft(string draft, string faq)
     {
@@ -396,6 +401,11 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
         try
         {
+            if (DraftDomainPattern.IsMatch(draft))
+            {
+                return null;
+            }
+
             foreach (Match command in DraftCommandPattern.Matches(draft))
             {
                 if (!faq.Contains(command.Value, StringComparison.OrdinalIgnoreCase))
@@ -452,8 +462,8 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     {
         CharacterIdentity? identity = IdentityOf(ticket);
         string name = identity?.Name ?? "#" + ticket.CharacterId.ToString(CultureInfo.InvariantCulture);
-        string? quest = QuestNote(ticket.Text, null);
         player = identity is null ? null : _world?.FindOnlinePlayer(identity.Name);
+        string? quest = QuestNote(ticket.Text, player);
         if (player is null)
         {
             return new TicketFacts(false, identity?.AccountId ?? 0, name, ticket.MapId, ticket.X, ticket.Y, ticket.Z, false, false, identity?.Level ?? 0,
@@ -470,18 +480,11 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;
         bool stale = watch.StaleSince != 0 && now - watch.StaleSince >= _options.StaleCombatSeconds;
         TicketSignal? signal = Evidence.Recent(player.Guid.Low, _options.SignalWindowSeconds);
-        // A death under the map: the body is unreleased, the signal came no later than the first sight of the death, and it names the body's place.
-        bool atDeath = signal is not null && !player.IsAlive && !ghost && watch.DeadSince != 0 && signal.AtUnix <= watch.DeadSince
-            && TicketEvidenceLog.TryPositionOf(signal.Detail, out float sx, out float sy)
-            && ((sx - player.X) * (sx - player.X)) + ((sy - player.Y) * (sy - player.Y)) <= SignalBodyRadius * SignalBodyRadius;
         return new TicketFacts(
             true, player.AccountId, player.Name, player.MapId, player.X, player.Y, player.Z, player.IsAlive, ghost, player.Level,
             watch.DeadSince == 0 ? 0 : now - watch.DeadSince, now - watch.MovedAt, player.Combat.IsInCombat || player.Duel is not null, stale, blocked,
-            signal, QuestNote(ticket.Text, player), atDeath);
+            signal, quest);
     }
-
-    /// <summary>How far, in yards, a position signal may be from the body for a resurrection in place.</summary>
-    public const float SignalBodyRadius = 30f;
 
     private static readonly Regex QuestIdPattern = new(@"\b\d{1,6}\b", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
@@ -607,30 +610,6 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
         switch (action)
         {
-            case TicketAction.Tele:
-            {
-                if (!player.IsAlive)
-                {
-                    if ((player.Flags & PlayerFlags.Ghost) == 0)
-                    {
-                        return (false, "dead and not released; no teleport");
-                    }
-
-                    return services.GetService<GraveyardFeature>()?.Service is { } graveyards && graveyards.RepopAtGraveyard(player)
-                        ? (true, "sent to the nearest graveyard")
-                        : (false, "no graveyard");
-                }
-
-                if (player.Combat.IsInCombat || player.Duel is not null)
-                {
-                    return (false, "in combat or a duel; no teleport");
-                }
-
-                return services.GetService<TeleportFeature>()?.TeleportsIfAttached is { } teleports && teleports.TeleportToHomebind(player)
-                    ? (true, "sent to the bind point")
-                    : (false, "teleport failed");
-            }
-
             case TicketAction.Unstuck:
                 return UnstuckCommands.TryApply(services, player, out string reply)
                     ? (true, reply.StartsWith(UnstuckCommands.Dead, StringComparison.Ordinal) ? "unstuck: ghost sent to the graveyard" : "unstuck: Undying Soul cast")
@@ -638,9 +617,6 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
             case TicketAction.Revive:
                 return Revive(player);
-
-            case TicketAction.ReviveInPlace:
-                return map.Combat.ResurrectBySpiritGuide(player) ? (true, "resurrected in place, no sickness") : (false, "resurrection refused");
 
             case TicketAction.ClearCombat:
                 map.Combat.CombatStop(player);
@@ -713,20 +689,13 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
                 text = answer!;
                 close = true;
                 break;
-            case TicketAction.Tele:
-                text = "I saw you fall through the world and moved you to " + (step.Facts.Alive ? "your bind point" : "the nearest graveyard") + ". If you are still stuck, file a new ticket.";
-                close = true;
-                break;
             case TicketAction.Unstuck:
                 text = "I saw you have not moved for a while and used the unstuck function for you. " + (step.Facts.Alive ? "You will die when the buff ends (do not enter combat or cast), and can then release to a graveyard." : "You were sent to the nearest graveyard.");
                 close = true;
                 break;
             case TicketAction.Revive:
-                text = "I resurrected you and sent you to the graveyard. You have resurrection sickness for a while and your gear took damage, as at a spirit healer.";
-                close = true;
-                break;
-            case TicketAction.ReviveInPlace:
-                text = "The server saw you under the map before you died, so I resurrected you where your body lies, without sickness.";
+                text = (step.Detail.Contains("sent to", StringComparison.Ordinal) ? "I resurrected you and sent you to the graveyard. " : "I resurrected you. ")
+                    + "You have resurrection sickness for a while and your gear took damage, as at a spirit healer.";
                 close = true;
                 break;
             case TicketAction.ClearCombat:

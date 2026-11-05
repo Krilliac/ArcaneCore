@@ -9,17 +9,11 @@ namespace ArcaneCore.World.Gm.TicketAssistant;
 /// </summary>
 public static class TicketPolicy
 {
-    /// <summary>Evidence of <see cref="TicketAction.Tele"/>: the server itself saw the author under the terrain floor, recently. (Not a fall: its duration includes the time the client reports.)</summary>
-    public const string EvidencePositionSignal = "position-signal";
-
     /// <summary>Evidence of <see cref="TicketAction.Unstuck"/>: the author has not moved for the configured time.</summary>
     public const string EvidenceIdle = "idle";
 
     /// <summary>Evidence of <see cref="TicketAction.Revive"/>: a ghost for the configured time.</summary>
     public const string EvidenceDeadLong = "dead-long";
-
-    /// <summary>Evidence of <see cref="TicketAction.ReviveInPlace"/>: dead and unreleased for the configured time, after a position signal at the body (a death under the map).</summary>
-    public const string EvidenceServerCausedDeath = "server-caused-death";
 
     /// <summary>Evidence of <see cref="TicketAction.ClearCombat"/>: in combat, with no attacker, victim or threat, for the configured time.</summary>
     public const string EvidenceStaleCombat = "stale-combat";
@@ -45,13 +39,10 @@ public static class TicketPolicy
                     return new TicketDecision(TicketAction.ClearCombat, EvidenceStaleCombat);
                 }
 
-                // Teleporting is an escape: never in a fight or a duel; the dead are only moved once they are ghosts.
-                if (facts.PositionSignal is not null && !facts.InCombat && (facts.Alive || facts.Ghost))
-                {
-                    return new TicketDecision(TicketAction.Tele, EvidencePositionSignal);
-                }
-
-                if (facts.Alive || facts.Ghost)
+                // A below-terrain report is the client's own movement packet as the server applied it (AntiCheat defaults to Log), so one crafted
+                // packet can produce it. It is shown to the GM with the ticket (TicketFacts.Describe) and never allows a teleport or a resurrection.
+                // Never mid-fight or mid-duel (the unstuck path is an escape).
+                if ((facts.Alive || facts.Ghost) && !facts.InCombat)
                 {
                     return facts.IdleSeconds >= options.StuckIdleSeconds
                         ? new TicketDecision(TicketAction.Unstuck, EvidenceIdle)
@@ -63,11 +54,6 @@ public static class TicketPolicy
                 if (!facts.Online || facts.Alive || facts.Blocked || facts.DeadSeconds < options.DeadSeconds)
                 {
                     return none;
-                }
-
-                if (facts.SignalAtDeath && !facts.Ghost)
-                {
-                    return new TicketDecision(TicketAction.ReviveInPlace, EvidenceServerCausedDeath);
                 }
 
                 return facts.Ghost ? new TicketDecision(TicketAction.Revive, EvidenceDeadLong) : none;

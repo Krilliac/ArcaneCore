@@ -242,29 +242,24 @@ public sealed class GmTicketAssistantTests
     // ---- stuck ----
 
     [Fact]
-    public async Task Stuck_WithAnUndermapSignal_TeleportsTheAuthor_RespondsAndCloses()
+    public async Task Stuck_WithAnUndermapSignal_IsLeftToAGm_NobodyIsMoved_AndTheSignalIsInTheNote()
     {
         await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
         await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
         GmTicketRecord ticket = File(host, "Plainone", Stuck);
         Signal(host, "Plainone");
-        await player.CollectAsync();
 
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         Assert.NotNull(outcome);
         Assert.Equal(TicketCategory.Stuck, outcome.Category);
-        Assert.Equal(TicketAction.Tele, outcome.Action);
-        Assert.True(outcome.Performed);
-        Assert.True(outcome.Closed);
-        Assert.Null(AuditOf(host).OpenTicket(ticket.Id));
-        string[] lines = await player.CollectChatLinesAsync(2);
-        Assert.Contains(lines, l => l.Contains($"{Bot} answers your ticket", StringComparison.Ordinal) && l.Contains("moved you", StringComparison.Ordinal));
-        GmAuditEntry entry = Assert.Single(AssistantAudit(host));
-        Assert.Contains("Tele", entry.Line, StringComparison.Ordinal);
-        Assert.Contains(TicketPolicy.EvidencePositionSignal, entry.Line, StringComparison.Ordinal);
-        Assert.Contains($"ticket {ticket.Id}", entry.Line, StringComparison.Ordinal);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Performed);
+        Assert.False(outcome.Closed);
+        Assert.NotNull(AuditOf(host).OpenTicket(ticket.Id));
+        Assert.Equal((0u, -8800f, -100f), await host.PlayerStateAsync("Plainone", p => (p.MapId, p.X, p.Y)));
+        Assert.Contains("signal under-map", string.Join(' ', AssistantOf(host).NotesOf(ticket.Id)), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -291,12 +286,9 @@ public sealed class GmTicketAssistantTests
         Assert.Contains("Escalate", Assert.Single(AssistantAudit(host)).Line, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Stuck_IdleLongEnough_UsesTheUnstuckPath()
-    {
-        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel });
-        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await host.OnWorldAsync(() =>
+    // The Undying Soul spell the unstuck path casts, and a level that may use it.
+    private static Task AllowUnstuckAsync(WorldTestHost host, string name)
+        => host.OnWorldAsync(() =>
         {
             SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
             spells.Store = new SpellStore(
@@ -309,8 +301,15 @@ public sealed class GmTicketAssistantTests
                     Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Dummy, TargetA = SpellImplicitTarget.UnitCaster }],
                 },
             ], [], []);
-            host.World.FindOnlinePlayer("Plainone")!.SetUInt32(UpdateFields.UnitFieldLevel, 10);
+            host.World.FindOnlinePlayer(name)!.SetUInt32(UpdateFields.UnitFieldLevel, 10);
         });
+
+    [Fact]
+    public async Task Stuck_IdleLongEnough_UsesTheUnstuckPath()
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await AllowUnstuckAsync(host, "Plainone");
         GmTicketRecord ticket = File(host, "Plainone", Stuck);
 
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
@@ -416,7 +415,7 @@ public sealed class GmTicketAssistantTests
 
         Assert.NotNull(outcome);
         Assert.Equal(TicketCategory.Stuck, outcome.Category);
-        Assert.Equal(TicketAction.Tele, outcome.Action);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
     }
 
     // ---- dead and cannot resurrect ----
@@ -558,31 +557,15 @@ public sealed class GmTicketAssistantTests
         Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
     }
 
-    [Fact]
-    public async Task DeadCantRes_AfterAnUndermapSignalAtTheBody_ResurrectsInPlace()
+    [Theory]
+    [InlineData(-8800f, -100f)]
+    [InlineData(-5000f, 300f)]
+    public async Task DeadCantRes_AnUnreleasedBody_WithAnUndermapSignal_IsNeverRaisedInPlace(float signalX, float signalY)
     {
         await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
         await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
-        Signal(host, "Plainone", detail: BelowTerrainAt(-8800f, -100f));
-        await KillAsync(host, "Plainone");
-        GmTicketRecord ticket = File(host, "Plainone", "I fell through the world and died");
-
-        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
-
-        Assert.NotNull(outcome);
-        Assert.Equal(TicketAction.ReviveInPlace, outcome.Action);
-        Assert.True(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
-        Assert.Equal((-8800f, -100f), await host.PlayerStateAsync("Plainone", p => (p.X, p.Y)));
-    }
-
-    [Fact]
-    public async Task DeadCantRes_AnUndermapSignalFarFromTheBody_DoesNotResurrect()
-    {
-        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
-        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
-        Signal(host, "Plainone", detail: BelowTerrainAt(-5000f, 300f));
+        Signal(host, "Plainone", detail: BelowTerrainAt(signalX, signalY));
         await KillAsync(host, "Plainone");
         GmTicketRecord ticket = File(host, "Plainone", "I fell through the world and died");
 
@@ -590,33 +573,16 @@ public sealed class GmTicketAssistantTests
 
         Assert.NotNull(outcome);
         Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Performed);
         Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
-    }
-
-    [Fact]
-    public async Task DeadCantRes_ASignalHeardAfterTheDeathWasSeen_DoesNotResurrect()
-    {
-        await using WorldTestHost host = Start(model: new FakeModel { Classify = DeadModel });
-        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
-        await KillAsync(host, "Plainone");
-        GmTicketRecord first = File(host, "Plainone", "I fell through the world and died");
-        Assert.Equal(TicketAction.Escalate, (await AssistantOf(host).ProcessTicketAsync(first.Id))!.Action);
-
-        await Task.Delay(1500);
-        Signal(host, "Plainone", detail: BelowTerrainAt(-8800f, -100f));
-        GmTicketRecord second = File(host, "Plainone", "I fell through the world and died again");
-        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(second.Id);
-
-        Assert.NotNull(outcome);
-        Assert.Equal(TicketAction.Escalate, outcome.Action);
-        Assert.False(await host.PlayerStateAsync("Plainone", p => p.IsAlive));
+        Assert.NotNull(AuditOf(host).OpenTicket(ticket.Id));
     }
 
     [Theory]
     [InlineData("fall-without-landing", "durationMs=9000 fallTime=9000 pos=(-8800.00,-100.00,90.00)")]
     [InlineData("under-map", "reason=below-void-height map=0 pos=(-8800.00,-100.00,-5000.00) voidHeight=-5000")]
-    public async Task Stuck_ASignalTheClientCanProduce_IsNotEvidence(string code, string detail)
+    [InlineData("under-map", "reason=below-terrain map=0 pos=(-8800.00,-100.00,40.00) floor=95.00")]
+    public async Task Stuck_AClientReportedPositionSignal_NeverMovesTheAuthor(string code, string detail)
     {
         await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
@@ -632,7 +598,7 @@ public sealed class GmTicketAssistantTests
     }
 
     [Fact]
-    public async Task Stuck_AuthorInCombat_WithASignal_IsNotTeleported()
+    public async Task Stuck_AuthorInCombat_WithASignal_IsNotTeleportedOrCleared()
     {
         await using WorldTestHost host = Start(model: new FakeModel { Classify = StuckModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
@@ -649,7 +615,7 @@ public sealed class GmTicketAssistantTests
         TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
 
         Assert.NotNull(outcome);
-        Assert.NotEqual(TicketAction.Tele, outcome.Action);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
         Assert.False(outcome.Performed);
         Assert.Equal((0u, -8800f), await host.PlayerStateAsync("Plainone", p => (p.MapId, p.X)));
     }
@@ -860,19 +826,17 @@ public sealed class GmTicketAssistantTests
     }
 
     [Fact]
-    public async Task TheFixCooldown_StopsASecondTeleportForTheSameAccount()
+    public async Task TheFixCooldown_StopsASecondFixForTheSameAccount()
     {
-        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:ActionCooldownSeconds"] = "3600" }, new FakeModel { Classify = StuckModel });
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:ActionCooldownSeconds"] = "3600", ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel { Classify = StuckModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await host.PlaceAsync("Plainone", -8800f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Plainone");
         GmTicketAssistant assistant = AssistantOf(host);
-        Signal(host, "Plainone");
 
         TicketOutcome? first = await assistant.ProcessTicketAsync(File(host, "Plainone", Stuck).Id);
-        Signal(host, "Plainone");
         TicketOutcome? second = await assistant.ProcessTicketAsync(File(host, "Plainone", Stuck).Id);
 
-        Assert.Equal(TicketAction.Tele, first!.Action);
+        Assert.Equal(TicketAction.Unstuck, first!.Action);
         Assert.Equal(TicketAction.Escalate, second!.Action);
         Assert.Contains("cooldown", Assert.Single(assistant.NotesOf(second.TicketId)), StringComparison.Ordinal);
     }
@@ -880,15 +844,14 @@ public sealed class GmTicketAssistantTests
     [Fact]
     public async Task EveryOutcome_WritesAnAuditLine_WithTheAssistantAsActor()
     {
-        await using WorldTestHost host = Start(model: new FakeModel
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" }, new FakeModel
         {
             Classify = text => text.Contains("stuck", StringComparison.Ordinal) ? StuckModel(text) : "{\"category\":\"Other\"}",
         });
         await using WorldTestClient one = await host.EnterWorldAsync("ONE", "Playerone");
         await using WorldTestClient two = await host.EnterWorldAsync("TWO", "Playertwo");
-        await host.PlaceAsync("Playerone", -8800f, -100f, 90f);
+        await AllowUnstuckAsync(host, "Playerone");
         GmTicketRecord fixedTicket = File(host, "Playerone", Stuck);
-        Signal(host, "Playerone");
         GmTicketRecord escalated = File(host, "Playertwo", "hello");
 
         await AssistantOf(host).RunPassAsync();
@@ -896,7 +859,7 @@ public sealed class GmTicketAssistantTests
         GmAuditEntry[] entries = AssistantAudit(host);
         Assert.Equal(2, entries.Length);
         Assert.All(entries, e => Assert.Equal(0, e.AccountId));
-        Assert.Contains(entries, e => e.Line.Contains($"ticket {fixedTicket.Id} ", StringComparison.Ordinal) && e.Line.Contains("Tele", StringComparison.Ordinal));
+        Assert.Contains(entries, e => e.Line.Contains($"ticket {fixedTicket.Id} ", StringComparison.Ordinal) && e.Line.Contains("Unstuck", StringComparison.Ordinal));
         Assert.Contains(entries, e => e.Line.Contains($"ticket {escalated.Id} ", StringComparison.Ordinal) && e.Line.Contains("Escalate", StringComparison.Ordinal));
     }
 
@@ -953,6 +916,10 @@ public sealed class GmTicketAssistantTests
     [InlineData("Click |cffff0000|Hitem:1:0:0:0|h[Thing]|h|r", false)]
     [InlineData("Type .gm on to continue.", false)]
     [InlineData("Type .additem 1 1 for a gift.", false)]
+    [InlineData("Join us at evil.example.com for help.", false)]
+    [InlineData("Visit Evil.GG now.", false)]
+    [InlineData("Type !additem 1 1 for a gift.", false)]
+    [InlineData("Release your spirit. Then run back, good luck!", true)]
     public void ScreenDraft_KeepsOnlyPlainFaqBackedText(string draft, bool kept)
     {
         const string faq = "Stuck: type .unstuck. Dead: release your spirit and run to your corpse.";
@@ -965,6 +932,23 @@ public sealed class GmTicketAssistantTests
     {
         Assert.NotNull(GmTicketAssistant.ScreenDraft(new string('a', GmTicketAssistant.MaxDraftLength), "faq"));
         Assert.Null(GmTicketAssistant.ScreenDraft(new string('a', GmTicketAssistant.MaxDraftLength + 1), "faq"));
+    }
+
+    [Fact]
+    public async Task Question_AnOverlongDraft_IsRefused_NotTruncatedAndSent()
+    {
+        string draft = new('a', GmTicketAssistant.MaxDraftLength + 1);
+        var model = new FakeModel { Classify = _ => "{\"category\":\"Question\"}", Draft = _ => draft };
+        await using WorldTestHost host = Start(model: model);
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", "how do I fly?");
+
+        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+
+        Assert.NotNull(outcome);
+        Assert.Equal(TicketAction.Escalate, outcome.Action);
+        Assert.False(outcome.Closed);
+        Assert.NotNull(AuditOf(host).OpenTicket(ticket.Id));
     }
 
     [Fact]

@@ -52,7 +52,7 @@ public sealed class PlayerbotTicketAssistantModel : IWorldFeature, ITicketAssist
 
         return await chat.CompleteOnceAsync(
             ticketText,
-            text => new BotChatPrompt(ClassifyRules, string.Empty, [new BotChatTurn(true, "<ticket>" + text + "</ticket>")])
+            text => new BotChatPrompt(ClassifyRules, string.Empty, [new BotChatTurn(true, "<ticket>" + Fenced(text) + "</ticket>")])
             {
                 Workload = BotChatWorkload.Interactive,
                 ExpectsJson = true,
@@ -70,7 +70,7 @@ public sealed class PlayerbotTicketAssistantModel : IWorldFeature, ITicketAssist
 
         string? reply = await chat.CompleteOnceAsync(
             ticketText,
-            text => new BotChatPrompt(DraftRules, "FAQ:\n" + faq, [new BotChatTurn(true, "<ticket>" + text + "</ticket>")])
+            text => new BotChatPrompt(DraftRules, "FAQ:\n" + faq, [new BotChatTurn(true, "<ticket>" + Fenced(text) + "</ticket>")])
             {
                 Workload = BotChatWorkload.Interactive,
             },
@@ -78,4 +78,7 @@ public sealed class PlayerbotTicketAssistantModel : IWorldFeature, ITicketAssist
             cancellationToken).ConfigureAwait(false);
         return reply is null || reply.Contains("NO ANSWER", StringComparison.OrdinalIgnoreCase) ? null : reply;
     }
+
+    /// <summary>The ticket text with any closing tag of the fence defanged, so player text cannot end the fenced block early.</summary>
+    private static string Fenced(string text) => text.Replace("</ticket", "<\\/ticket", StringComparison.OrdinalIgnoreCase);
 }

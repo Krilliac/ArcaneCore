@@ -73,15 +73,17 @@ public sealed class TicketClassifierTests
 
     private static TicketFacts Facts(
         bool online = true, bool alive = true, bool ghost = false, long dead = 0, long idle = 0, bool stale = false, bool blocked = false,
-        TicketSignal? signal = null, bool combat = false, bool atDeath = false)
-        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale || combat, stale, blocked, signal, null, atDeath);
+        TicketSignal? signal = null, bool combat = false)
+        => new(online, 7, "Someone", 0, 0, 0, 0, alive, ghost, 20, dead, idle, stale || combat, stale, blocked, signal, null);
 
     private static readonly TicketSignal Undermap = new("under-map", 0, "x");
 
     [Fact]
-    public void Stuck_WithAPositionSignal_Teleports()
-        => Assert.Equal(new TicketDecision(TicketAction.Tele, TicketPolicy.EvidencePositionSignal),
-            TicketPolicy.Decide(TicketCategory.Stuck, Facts(signal: Undermap), Options));
+    public void Stuck_WithAPositionSignalAlone_IsLeftToAGm_TheSignalIsClientReported()
+    {
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(signal: Undermap), Options).Action);
+        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(alive: false, ghost: true, signal: Undermap), Options).Action);
+    }
 
     [Fact]
     public void Stuck_IdleLongEnough_Unsticks_AndNotBefore()
@@ -116,31 +118,19 @@ public sealed class TicketClassifierTests
     }
 
     [Fact]
-    public void DeadCantRes_AfterASignalAtTheBody_RevivesInPlace()
-        => Assert.Equal(new TicketDecision(TicketAction.ReviveInPlace, TicketPolicy.EvidenceServerCausedDeath),
-            TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 500, signal: Undermap, atDeath: true), Options));
-
-    [Fact]
-    public void DeadCantRes_ASignalNotTiedToTheDeath_OrAGhost_NeverRevivesInPlace()
+    public void DeadCantRes_AnUnreleasedBody_IsNeverRaisedInPlace_SignalOrNot()
     {
-        // An unreleased body with a signal that is not at its death: nothing is done.
         Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 500, signal: Undermap), Options).Action);
-        // A ghost is never raised where it stands, whatever the flag says: it goes the graveyard way.
-        Assert.Equal(TicketAction.Revive, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 500, signal: Undermap, atDeath: true), Options).Action);
-        // An unreleased body with no signal at all is left to release its spirit.
         Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, dead: 999), Options).Action);
     }
 
     [Fact]
-    public void Stuck_InCombatOrADuel_WithASignal_IsNeverTeleported()
-        => Assert.NotEqual(TicketAction.Tele, TicketPolicy.Decide(TicketCategory.Stuck, Facts(signal: Undermap, combat: true), Options).Action);
+    public void DeadCantRes_AGhostWithASignal_StillTakesTheGraveyardWay()
+        => Assert.Equal(TicketAction.Revive, TicketPolicy.Decide(TicketCategory.DeadCantRes, Facts(alive: false, ghost: true, dead: 500, signal: Undermap), Options).Action);
 
     [Fact]
-    public void Stuck_ADeadUnreleasedAuthor_WithASignal_IsNeverTeleported_AGhostIs()
-    {
-        Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(alive: false, signal: Undermap), Options).Action);
-        Assert.Equal(TicketAction.Tele, TicketPolicy.Decide(TicketCategory.Stuck, Facts(alive: false, ghost: true, signal: Undermap), Options).Action);
-    }
+    public void Stuck_InCombatOrADuel_IsNeverUnstuck_EvenWhenIdle()
+        => Assert.Equal(TicketAction.Escalate, TicketPolicy.Decide(TicketCategory.Stuck, Facts(combat: true, idle: 999), Options).Action);
 
     [Theory]
     [InlineData("reason=below-terrain map=0 pos=(-8800.00,-100.50,90.00) floor=95.00", true, -8800f, -100.5f)]
@@ -170,14 +160,14 @@ public sealed class TicketClassifierTests
         Assert.Equal(TicketAction.Answer, TicketPolicy.Decide(TicketCategory.Question, Facts(online: false), Options).Action);
         Assert.False(TicketPolicy.ChangesWorld(TicketAction.Answer));
         Assert.False(TicketPolicy.ChangesWorld(TicketAction.Escalate));
-        Assert.True(TicketPolicy.ChangesWorld(TicketAction.Tele));
+        Assert.True(TicketPolicy.ChangesWorld(TicketAction.Unstuck));
         Assert.True(TicketPolicy.ChangesWorld(TicketAction.Revive));
     }
 
     [Fact]
     public void TheAllowlist_HasNoActionThatGrantsAnything()
         => Assert.Equal(
-            ["Escalate", "Answer", "Tele", "Unstuck", "Revive", "ReviveInPlace", "ClearCombat"],
+            ["Escalate", "Answer", "Unstuck", "Revive", "ClearCombat"],
             Enum.GetNames<TicketAction>());
 
     [Theory]

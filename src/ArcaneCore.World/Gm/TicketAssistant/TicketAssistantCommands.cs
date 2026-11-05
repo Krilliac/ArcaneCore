@@ -37,7 +37,7 @@ public sealed class TicketAssistantCommands : ICommandExtension
         {
             case "status":
                 TicketAssistantStatus status = assistant.Status();
-                context.Reply($"Ticket assistant: {(status.Enabled ? "on" : "off")}, model {(status.ModelAvailable ? "available" : "not available (keywords only)")}.");
+                context.Reply($"Ticket assistant: {(status.Enabled ? "on" : "off")}, model {(status.ModelAvailable ? "in use" : "not in use (keywords only)")}.");
                 context.Reply($"Handled {status.Handled}: fixed {status.Fixed}, answered {status.Answered}, left to a GM {status.Escalated} ({status.NeedsHuman} still open for a human).");
                 return true;
             case "on":

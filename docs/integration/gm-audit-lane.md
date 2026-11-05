@@ -148,12 +148,12 @@ for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `Act
 | Category | Action | Evidence |
 |---|---|---|
 | Question | an FAQ answer from the model (moderated, redacted), then close | the model drafted one |
-| Stuck | teleport to the bind point (alive) or graveyard (ghost), then close | an `under-map` anomaly (`reason=below-terrain`) for the character within `SignalWindowSeconds`; never while in combat or a duel, never for an unreleased body. `fall-without-landing` and the void-height report are not accepted: a client can produce them |
 | Stuck | the `.unstuck` path, then close | no movement for `StuckIdleSeconds` |
 | Stuck | clear the combat state, then close | in combat for `StaleCombatSeconds` with no attacker, victim or threat |
 | DeadCantRes | graveyard resurrection with sickness and durability loss (the spirit healer rules, the player is moved to the graveyard), then close | a ghost for `DeadSeconds`; an unreleased body is left to release its spirit |
-| DeadCantRes | resurrection in place without sickness, then close | an unreleased body for `DeadSeconds`, with an `under-map` anomaly heard no later than the death was first seen and within 30 yards of the body |
 | anything else | "logged for a GM", an internal note (`.ticket show`), the ticket stays open | none |
+
+An `under-map` anomaly is the client's own movement packet as the server applied it (AntiCheat defaults to Log), so one crafted packet can produce it. It is shown to the GM in the ticket's note and is never evidence for a teleport or a resurrection: the assistant does not teleport an author to the bind point or resurrect anyone in place.
 
 Never given by any action: items, gold, experience, reputation, levels; never done: bans, kicks, mutes or account changes. Not delivered:
 a stuck taxi flight, transport passenger, cast, loot window or trade window reset (no clean API for the evidence), a visible persona on GM

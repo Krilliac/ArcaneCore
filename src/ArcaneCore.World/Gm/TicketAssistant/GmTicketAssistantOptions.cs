@@ -35,7 +35,7 @@ public sealed class GmTicketAssistantOptions
     /// <summary>Seconds before the same account gets another world-changing fix (teleport, unstuck, revive, combat reset) (0..86400).</summary>
     public int ActionCooldownSeconds { get; set; } = 600;
 
-    /// <summary>Seconds an anomaly signal (under the terrain floor) counts as evidence for a ticket (1..86400).</summary>
+    /// <summary>Seconds an anomaly signal (under the terrain floor, client-reported) is shown to the GM with a ticket; it never triggers an action (1..86400).</summary>
     public int SignalWindowSeconds { get; set; } = 900;
 
     /// <summary>Seconds the author must not have moved before "stuck" counts as evidence without an anomaly signal (0..86400).</summary>
