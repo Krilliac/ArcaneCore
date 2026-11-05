@@ -211,8 +211,8 @@ persisted). Fixing this needs a reserved characters migration that adds `xp` (an
   login reconcile fixes counters, but an orphaned source item stays in the inventory.
 - Repeatable "turn in without accepting" (`CanCompleteRepeatableQuest` from the
   giver's ender list) isn't implemented.
-- These remain denied: `SrcSpell`, `ReqSource*`, PartyAccept, StayAlive and the PvP
-  quest type. Timed quests keep the existing quest-log timer.
+- Timed quests keep the existing quest-log timer. A quest is withheld only when a
+  behaviour it needs has no provider (the table in [quests-advanced.md](quests-advanced.md)).
 - Area trigger relations come from config only, with no world-DB table/loader yet.
 - Gameobject-use credit is wired (see above). Quest-giver gameobjects (`gameobject_questrelation` rows are stored but not consumed by the quest area) are not.
 - The native mock-client scenario isn't extended. It still passes, but there are no
