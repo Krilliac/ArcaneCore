@@ -70,6 +70,8 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.False(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is not null, cts.Token));
 
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgInitWorldStates, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);
@@ -112,6 +114,8 @@ public sealed class GatewayCrossWorkerTeleportTests
         Assert.True(await cluster.TeleportAsync(guid, Landing));
         await client.ReadUntilAsync((ushort)WorldOpcode.SmsgNewWorld, cts.Token);
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgInitWorldStates, cts.Token);
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1, Combat.Corpse: not null }, cts.Token), cts.Token);
 
@@ -166,6 +170,8 @@ public sealed class GatewayCrossWorkerTeleportTests
         WorldFrame newWorld = await ReadPatientlyAsync(client, WorldOpcode.SmsgNewWorld, cts.Token);
         Assert.Equal(Landing.MapId, BinaryPrimitives.ReadUInt32LittleEndian(newWorld.Payload));
         await client.SendAsync((ushort)WorldOpcode.MsgMoveWorldportAck, ReadOnlyMemory<byte>.Empty, cts.Token);
+        // The journal turns Completed at the arrival registration, not when the client has loaded: wait for the arrival login packets before anything else is sent or asserted.
+        await ReadPatientlyAsync(client, WorldOpcode.SmsgInitWorldStates, cts.Token);
 
         await Cluster.WaitUntilAsync(
             async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is { Map.MapId: 1 }, cts.Token), cts.Token);

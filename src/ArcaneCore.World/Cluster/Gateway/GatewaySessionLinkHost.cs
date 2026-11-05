@@ -279,7 +279,16 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     public void Start()
     {
-        _listener.Start();
+        try
+        {
+            _listener.Start();
+        }
+        catch (SocketException ex) when (WorldPortInUseException.IsClash(ex))
+        {
+            _listener.Stop();
+            throw new WorldPortInUseException($"the gateway link port {_listener.LocalEndpoint} is already in use (another world process?)", ex);
+        }
+
         _acceptTask = Task.Run(() => AcceptLoopAsync(_stop.Token));
     }
 

@@ -1,8 +1,11 @@
 using System.Net;
+using System.Net.Sockets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -79,6 +82,76 @@ public sealed class WorldStartPortInUseTests
         {
             ExitCodes.Current = before;
         }
+    }
+
+    [Fact]
+    public async Task TheRealEarlyProbe_OnATakenPort_ReturnsAFailureExitCode_ThroughWorldStartupRunAsync()
+    {
+        int before = ExitCodes.Current;
+        var taken = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
+        taken.Start();
+        try
+        {
+            ExitCodes.Current = ExitCodes.Success;
+            int port = ((IPEndPoint)taken.LocalEndpoint).Port;
+            IHost host = new HostBuilder().ConfigureServices(services =>
+            {
+                services.AddSingleton<ICharacterStore>(new InMemoryCharacterStore());
+                services.AddSingleton(sp => new CharacterSaveQueue(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance));
+                services.AddSingleton(sp => new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, sp.GetRequiredService<CharacterSaveQueue>(), NullLogger<WorldRuntime>.Instance));
+                // The real WorldHost with its real probe (no stub, no WorldServer: ListenerExpected stands in for the registration the probe would look for).
+                services.AddSingleton<IHostedService>(sp => new WorldHost(
+                    sp.GetRequiredService<WorldRuntime>(), sp.GetRequiredService<CharacterSaveQueue>(), new CharacterDirectory(), sp.GetRequiredService<IServiceScopeFactory>(),
+                    NullLogger<WorldHost>.Instance, worldOptions: Options.Create(new WorldOptions { BindAddress = IPAddress.Loopback.ToString(), Port = port })) { ListenerExpected = true });
+            }).Build();
+
+            int code = await WorldStartup.RunAsync(host, () => Task.CompletedTask, new StringWriter(), () => ExitCodes.Current).WaitAsync(Deadline);
+
+            Assert.Equal(ExitCodes.Failure, code);
+        }
+        finally
+        {
+            taken.Stop();
+            ExitCodes.Current = before;
+        }
+    }
+
+    [Fact]
+    public async Task AGatewayLinkPortHeldByAnotherListener_RefusesTheStartAsPortInUse_NotARawSocketException()
+    {
+        var taken = ArcaneCore.TestSupport.LoopbackPorts.CreateListener();
+        taken.Start();
+        try
+        {
+            int port = ((IPEndPoint)taken.LocalEndpoint).Port;
+            await using var link = new GatewaySessionLinkHost(
+                GatewayLinkManifest.Create(ClusterRole.Worker, "worker-port-clash", Guid.NewGuid(), 1, "dev", 1, 1),
+                new NeverOpensAcceptor(), () => 1, "port-clash-secret-0123456789", new IPEndPoint(IPAddress.Loopback, port));
+
+            var failure = Assert.Throws<ArcaneCore.World.Net.WorldPortInUseException>(link.Start);
+
+            Assert.Contains(port.ToString(System.Globalization.CultureInfo.InvariantCulture), failure.Message);
+            Assert.IsType<SocketException>(failure.InnerException);
+        }
+        finally
+        {
+            taken.Stop();
+        }
+    }
+
+    [Theory]
+    [InlineData(SocketError.AddressAlreadyInUse, true)]
+    [InlineData(SocketError.AccessDenied, true)]
+    [InlineData(SocketError.AddressNotAvailable, false)]
+    [InlineData(SocketError.TooManyOpenSockets, false)]
+    [InlineData(SocketError.ConnectionReset, false)]
+    public void TheClashSet_IsOneDefinition_ForEveryBindSite(SocketError error, bool clash)
+        => Assert.Equal(clash, ArcaneCore.World.Net.WorldPortInUseException.IsClash(new SocketException((int)error)));
+
+    private sealed class NeverOpensAcceptor : IGatewaySessionAcceptor
+    {
+        public ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
+            => throw new NotSupportedException("no gateway connects in this test");
     }
 
     private sealed class Recorder : IHostedService

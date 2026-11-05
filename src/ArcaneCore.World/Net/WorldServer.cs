@@ -47,7 +47,7 @@ public sealed class WorldServer(
         {
             listener.Start();
         }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        catch (SocketException ex) when (WorldPortInUseException.IsClash(ex))
         {
             listener.Stop();
             throw new WorldPortInUseException($"the world port {config.BindAddress}:{config.Port} is already in use (another world process?)", ex);

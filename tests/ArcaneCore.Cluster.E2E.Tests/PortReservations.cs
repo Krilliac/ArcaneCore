@@ -42,12 +42,25 @@ internal sealed class PortReservations : IDisposable
             return true;
         }
 
+        string path = Path.Combine(_directory, string.Create(CultureInfo.InvariantCulture, $"port-{port}.lock"));
         FileStream held;
         try
         {
-            held = new FileStream(
-                Path.Combine(_directory, string.Create(CultureInfo.InvariantCulture, $"port-{port}.lock")),
-                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            held = Open(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The lock directory vanished after construction (a temp cleaner, a deleted run folder). That is not a held port: recreate it and retry once.
+            // If it cannot be recreated either, nothing can be reserved, so the caller's own listener probe decides (as when reservation is disabled) instead of every port counting as held.
+            try
+            {
+                Directory.CreateDirectory(_directory);
+                held = Open(path);
+            }
+            catch (Exception retry) when (retry is IOException or UnauthorizedAccessException)
+            {
+                return retry is DirectoryNotFoundException; // still no directory: nothing reservable; any other failure (a sharing violation, no permission) is a held or foreign port
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -61,6 +74,8 @@ internal sealed class PortReservations : IDisposable
 
         return true;
     }
+
+    private static FileStream Open(string path) => new(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
     public void Dispose()
     {
