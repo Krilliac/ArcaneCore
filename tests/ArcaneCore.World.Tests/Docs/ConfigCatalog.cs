@@ -170,8 +170,9 @@ internal static class ConfigCatalog
 
     /// <summary>
     /// The keys of one entry of a list or map option: the public properties the binder can set (collections too), nested groups joined with ':'.
-    /// Defaults come from a freshly constructed entry (a type without a parameterless constructor, such as a positional record, shows the
-    /// zero value the binder leaves for a key that is not written). Every field needs a summary or an override, like any other key.
+    /// Defaults come from a freshly constructed entry. A type without a parameterless constructor (a positional record) is built by the binder
+    /// through its constructor, which fails for a parameter that has no default value and no key, so such a field shows as "required"; a
+    /// parameter with a default value shows that value. Every field needs a summary or an override, like any other key.
     /// </summary>
     private static IReadOnlyList<ConfigElementField> ElementFieldsOf(
         Type? element,
@@ -194,6 +195,21 @@ internal static class ConfigCatalog
         }
 
         return fields;
+    }
+
+    /// <summary>
+    /// The constructor parameters the configuration binder fills for a class that has no parameterless constructor (by name, ignoring case), or null
+    /// when the binder uses the properties. Microsoft.Extensions.Configuration.Binder throws for a parameter that has no default value and no key.
+    /// </summary>
+    private static Dictionary<string, ParameterInfo>? ConstructorParametersOf(Type type)
+    {
+        if (type.IsValueType || type.IsAbstract || type.IsInterface || type.GetConstructor(Type.EmptyTypes) is not null)
+        {
+            return null;
+        }
+
+        ConstructorInfo? constructor = type.GetConstructors(BindingFlags.Public | BindingFlags.Instance).OrderByDescending(c => c.GetParameters().Length).FirstOrDefault();
+        return constructor?.GetParameters().Where(p => p.Name is not null).ToDictionary(p => p.Name!, StringComparer.OrdinalIgnoreCase);
     }
 
     private static object? TryInstance(Type type)
@@ -235,6 +251,7 @@ internal static class ConfigCatalog
             return;
         }
 
+        Dictionary<string, ParameterInfo>? constructorParameters = ConstructorParametersOf(type);
         foreach (PropertyInfo property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance).OrderBy(p => p.Name, StringComparer.Ordinal))
         {
             if (property.GetIndexParameters().Length > 0 || property.GetMethod?.IsPublic != true)
@@ -259,7 +276,13 @@ internal static class ConfigCatalog
                     meaning += (meaning.Length > 0 ? " " : string.Empty) + "Values: " + string.Join(", ", Enum.GetNames(propertyType).Select(n => "`" + n + "`")) + ".";
                 }
 
-                fields.Add(new ConfigElementField(name, TypeText(property.PropertyType), FormatValue(value), meaning));
+                string defaultText = FormatValue(value);
+                if (constructorParameters is not null && constructorParameters.TryGetValue(property.Name, out ParameterInfo? parameter))
+                {
+                    defaultText = parameter.HasDefaultValue ? FormatValue(parameter.DefaultValue) : "required";
+                }
+
+                fields.Add(new ConfigElementField(name, TypeText(property.PropertyType), defaultText, meaning));
                 continue;
             }
 

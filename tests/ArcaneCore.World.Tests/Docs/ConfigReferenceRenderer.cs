@@ -135,7 +135,7 @@ internal static class ConfigReferenceRenderer
     {
         sb.Append("## List and map element fields\n\n");
         sb.Append("These options hold entries that are themselves groups of keys. A list entry is numbered (`Key:0:Field`, `Key:1:Field`, ...), a map entry is named (`Key:name:Field`); in a `.conf` file the separator is a dot (`Key.0.Field = value`). ");
-        sb.Append("A field that is not written keeps the default shown here.\n\n");
+        sb.Append("A field that is not written keeps the default shown here. A field whose default reads `required` is a constructor parameter without a default value: the binder refuses the entry (the server fails to start) unless the key is written.\n\n");
         foreach (ConfigEntry entry in entries.Where(e => e.ElementFields is { Count: > 0 }).OrderBy(e => e.Path, StringComparer.Ordinal))
         {
             string selector = entry.Kind == ConfKey.Map ? "<name>" : "<index>";

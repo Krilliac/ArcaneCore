@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Reflection;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Conf;
 using Xunit;
 
@@ -383,10 +384,11 @@ public sealed class ConfigCatalogCompletenessTests
             Assert.Contains("Values: `Plain`, `Loud`.", level.Meaning, StringComparison.Ordinal);
         }
 
-        // A positional record has no parameterless constructor: its fields still appear, at the zero value the binder leaves.
+        // A positional record has no parameterless constructor: its fields still appear, and a parameter without a default value is required
+        // (the binder throws when the key is missing, it does not leave zero).
         ConfigEntry rows = result.Entries.Single(e => e.Path == "Fixture:Rows");
         Assert.Equal(new[] { "Id", "Percent" }, rows.ElementFields!.Select(f => f.Name));
-        Assert.All(rows.ElementFields!, f => Assert.Equal("0", f.Default));
+        Assert.All(rows.ElementFields!, f => Assert.Equal("required", f.Default));
 
         // A list of scalars has no entry fields.
         Assert.Null(result.Entries.Single(e => e.Path == "Fixture:Plain").ElementFields);
@@ -560,5 +562,73 @@ public sealed class ConfigCatalogCompletenessTests
         Assert.Contains("`Logging:LogLevel:<category>`", page, StringComparison.Ordinal);
         Assert.Contains("`HostOptions:ShutdownTimeout`", page, StringComparison.Ordinal);
         Assert.Contains("`hostBuilder:reloadConfigOnChange`", page, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A daemon that binds an options type must find its keys in its own .conf.dist: the type has to name that daemon in [ConfigDaemons], and so does
+    /// every catalog key below its section (the catalog decides which dist files carry a key and which daemon warns about a foreign key). The scan
+    /// covers every Configure, PostConfigure and AddOptions call under src/ArcaneCore.Gateway and src/ArcaneCore.Realm.
+    /// </summary>
+    [Theory]
+    [InlineData("src/ArcaneCore.Gateway/", ConfigDaemon.Gateway)]
+    [InlineData("src/ArcaneCore.Realm/", ConfigDaemon.Realm)]
+    public void Production_EveryOptionsTypeADaemonBinds_NamesThatDaemon_AndSoDoItsCatalogKeys(string sourceRoot, ConfigDaemon daemon)
+    {
+        var bound = new SortedSet<string>(StringComparer.Ordinal);
+        foreach ((string path, string text) in ConfigProduction.SourceFiles().Where(f => f.Path.StartsWith(sourceRoot, StringComparison.Ordinal)))
+        {
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text, @"(?:Configure|AddOptions)<(\w+)>\("))
+            {
+                bound.Add(match.Groups[1].Value);
+            }
+        }
+
+        Assert.True(bound.Count >= 2, "expected " + sourceRoot + " to bind several options types; found " + bound.Count);
+        var wrong = new List<string>();
+        IReadOnlyList<ConfigSection> sections = ConfigExceptionTable.Sections();
+        foreach (string typeName in bound)
+        {
+            ConfigSection? section = sections.SingleOrDefault(s => s.Type.Name == typeName);
+            if (section is null)
+            {
+                wrong.Add(typeName + ": bound by " + sourceRoot + " but not a catalogued section");
+                continue;
+            }
+
+            ConfigDaemon declared = section.Type.GetCustomAttributes(typeof(ArcaneCore.Kernel.Configuration.ConfigDaemonsAttribute), inherit: false)
+                .Cast<ArcaneCore.Kernel.Configuration.ConfigDaemonsAttribute>().SingleOrDefault()?.Daemons ?? ConfigDaemon.World;
+            if ((declared & daemon) == 0)
+            {
+                wrong.Add(typeName + " (" + section.Path + "): bound by " + sourceRoot + " but [ConfigDaemons] is " + declared);
+            }
+
+            // A key narrowed on purpose by a property attribute (DatabaseOptions) is the one exception: only keys that no attribute narrowed are checked, which is every key of a section whose type has no property attribute.
+            bool narrowed = section.Type.GetProperties().Any(p => p.GetCustomAttributes(typeof(ArcaneCore.Kernel.Configuration.ConfigDaemonsAttribute), inherit: false).Length > 0);
+            if (narrowed)
+            {
+                continue;
+            }
+
+            foreach (ConfigEntry entry in ConfigProduction.Catalog.Entries.Where(e => e.Path == section.Path || e.Path.StartsWith(section.Path + ":", StringComparison.Ordinal)))
+            {
+                if ((entry.Daemons & daemon) == 0)
+                {
+                    wrong.Add(entry.Path + ": read by " + daemon + " (" + typeName + ") but the catalog lists it for " + entry.Daemons);
+                }
+            }
+        }
+
+        Assert.True(wrong.Count == 0, "options a daemon binds are missing for it in the catalog:
+" + string.Join("
+", wrong));
+    }
+
+    [Fact]
+    public void Production_WardenKeys_AreListedForTheWorldAndTheGateway()
+    {
+        ConfigEntry[] warden = [.. ConfigProduction.Catalog.Entries.Where(e => e.Path == "Warden" || e.Path.StartsWith("Warden:", StringComparison.Ordinal))];
+        Assert.Contains(warden, e => e.Path == "Warden:Enabled");
+        Assert.Contains(warden, e => e.Path == "Warden:Checks");
+        Assert.All(warden, e => Assert.Equal(ConfigDaemon.World | ConfigDaemon.Gateway, e.Daemons));
     }
 }
