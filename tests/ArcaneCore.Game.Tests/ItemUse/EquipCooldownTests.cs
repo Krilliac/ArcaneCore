@@ -23,14 +23,18 @@ public sealed class EquipCooldownTests
     private const uint EquipEffectTrinket = 95_002;
     private const uint UnknownSpellTrinket = 95_003;
     private const uint CategoryTrinket = 95_004;
+    private const uint HugeCategoryTrinket = 95_005;
 
     private const uint UseSpell = 95_100;
     private const uint EquipSpell = 95_101;
     private const uint CategorySpell = 95_102;
     private const uint CategorySibling = 95_103;
+    private const uint HugeCategorySpell = 95_104;
+    private const uint HugeCategorySibling = 95_105;
     private const uint MissingSpell = 95_199;
 
     private const uint SharedCategory = 1_234;
+    private const uint HugeCategory = 1_235;
     private const uint EquipCooldownMs = 30_000;
 
     private static SpellInfo Dummy(uint id) => SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.Dummy, 0));
@@ -47,7 +51,9 @@ public sealed class EquipCooldownTests
             Dummy(UseSpell) with { RecoveryTime = 120_000 },
             Dummy(EquipSpell),
             Dummy(CategorySpell) with { Category = SharedCategory, CategoryRecoveryTime = 60_000 },
-            Dummy(CategorySibling) with { Category = SharedCategory, CategoryRecoveryTime = 60_000 });
+            Dummy(CategorySibling) with { Category = SharedCategory, CategoryRecoveryTime = 60_000 },
+            Dummy(HugeCategorySpell) with { Category = HugeCategory, CategoryRecoveryTime = uint.MaxValue },
+            Dummy(HugeCategorySibling) with { Category = HugeCategory, CategoryRecoveryTime = uint.MaxValue });
         (Player player, FakeSession session) = kit.AddPlayer(1);
         player.Inventory.Templates = new ItemTemplateStore(
         [
@@ -56,11 +62,12 @@ public sealed class EquipCooldownTests
             TrinketTemplate(EquipEffectTrinket, EquipSpell, ItemSpellTriggers.OnEquip),
             TrinketTemplate(UnknownSpellTrinket, MissingSpell, ItemSpellTriggers.OnUse),
             TrinketTemplate(CategoryTrinket, CategorySpell, ItemSpellTriggers.OnUse),
+            TrinketTemplate(HugeCategoryTrinket, HugeCategorySpell, ItemSpellTriggers.OnUse),
         ], []);
         player.Inventory.GuidAllocator = new ItemGuidAllocator();
         player.Inventory.Load([]);
         new ItemEquipSpells(kit.System).Attach(player);
-        foreach (uint entry in new[] { Trinket, FlaggedTrinket, EquipEffectTrinket, UnknownSpellTrinket, CategoryTrinket })
+        foreach (uint entry in new[] { Trinket, FlaggedTrinket, EquipEffectTrinket, UnknownSpellTrinket, CategoryTrinket, HugeCategoryTrinket })
         {
             Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out _));
         }
@@ -186,5 +193,21 @@ public sealed class EquipCooldownTests
         kit.Advance(60_000 - EquipCooldownMs);
         Assert.True(Ready(kit, player, CategorySpell));
         Assert.True(Ready(kit, player, CategorySibling));
+    }
+
+    [Fact]
+    public void HugeCategoryTime_IsCappedAtTheReasonableBound_AndStaysOnCooldown()
+    {
+        (SpellTestKit kit, Player player, _) = Create();
+        using SpellTestKit owner = kit;
+        uint equipAt = kit.Now;
+
+        Equip(player, HugeCategoryTrinket);
+
+        // uint.MaxValue added unclamped is now - 1, which the signed IsStillRunning compare reads as expired.
+        Assert.False(Ready(kit, player, HugeCategorySpell));
+        Assert.False(Ready(kit, player, HugeCategorySibling));
+        uint until = kit.System.GetState(player.Guid)!.CategoryCooldowns[HugeCategory];
+        Assert.Equal(SpellSystem.MaxReasonableCooldownMs, until - equipAt);
     }
 }

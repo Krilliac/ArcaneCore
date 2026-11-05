@@ -376,4 +376,24 @@ public static class SpellSpecifics
     public static bool IsSameChain(SpellInfo first, SpellInfo second)
         => first.SpellFamilyName != FamilyGeneric
         && first.SpellFamilyName == second.SpellFamilyName && string.Equals(first.Name, second.Name, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The strict rank test: <see cref="IsSameChain"/> and the generic field check of vmangos SpellMgr::IsRankSpellDueToSpell (SpellMgr.cpp:883-901):
+    /// the same family flags, icon, visual, first effect and first aura (and, for an ADD_FLAT_MODIFIER, the same misc value). There is no
+    /// spell_chain table here, so the name stands for the chain; an item set or talent passive that merely shares a name with another spell
+    /// (Rapid Fire and its Cryptstalker bonus, Renew and the Vestments of Faith bonus) differs in these fields and is no rank of it.
+    /// </summary>
+    public static bool IsRankOf(SpellInfo first, SpellInfo second)
+    {
+        if (!IsSameChain(first, second)
+            || first.SpellFamilyFlags != second.SpellFamilyFlags || first.SpellIconId != second.SpellIconId || first.SpellVisual != second.SpellVisual)
+        {
+            return false;
+        }
+
+        SpellEffectInfo a = first.Effects[0];
+        SpellEffectInfo b = second.Effects[0];
+        return a.Effect == b.Effect && a.AuraType == b.AuraType
+            && (a.AuraType != AuraType.AddFlatModifier || a.MiscValue == b.MiscValue);
+    }
 }

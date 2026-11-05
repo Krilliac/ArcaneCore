@@ -397,6 +397,18 @@ public sealed partial class SpellSystem
             }
         }
 
+        // vmangos Unit.cpp:3575-3576 then :3282-3305: the holders the new one replaces go before the visible slot limit is checked.
+        foreach (Action<SpellAuraHolder> displace in HolderAddDisplacements)
+        {
+            displace(holder);
+        }
+
+        if (holder.IsRemoved)
+        {
+            return; // a removal handler of a replaced holder took the new one with it
+        }
+
+        state = GetOrCreateState(holder.Target);
         if (!MakeRoomForVisibleAura(state, holder))
         {
             holder.IsSlotLimited = true;
