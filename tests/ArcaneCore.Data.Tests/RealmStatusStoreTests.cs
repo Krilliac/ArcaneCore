@@ -154,6 +154,31 @@ public sealed class RealmStatusStoreTests : IAsyncLifetime
         Assert.False(await store.SetStoppedAsync(id + 1000));
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task DeleteByAccount_RemovesEveryRealmRowOfThatAccountOnly(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        await using (AuthDbContext seed = TestContexts.Create<AuthDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(seed, AuthDbContext.Schema);
+        }
+
+        await WithCountsAsync(cs, s => s.SetCountAsync(1, 7, 2));
+        await WithCountsAsync(cs, s => s.SetCountAsync(2, 7, 5));
+        await WithCountsAsync(cs, s => s.SetCountAsync(1, 8, 9));
+
+        int removed = 0;
+        await WithCountsAsync(cs, async s => removed = await s.DeleteByAccountAsync(7));
+        int again = -1;
+        await WithCountsAsync(cs, async s => again = await s.DeleteByAccountAsync(7));
+
+        Assert.Equal(2, removed);
+        Assert.Equal(0, again);
+        Assert.Empty(await ReadCountsAsync(cs, 7));
+        Assert.Equal(9, (await ReadCountsAsync(cs, 8))[1]);
+    }
+
     private async Task<int> SeedAsync(DatabaseConnectionOptions cs, RealmEntry realm)
     {
         await using AuthDbContext seed = TestContexts.Create<AuthDbContext>(cs);

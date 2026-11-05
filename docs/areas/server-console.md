@@ -39,6 +39,7 @@ The realm has no world thread; commands run on the reader thread and open their 
 | `account create <name> <password>` | Create an account (same logic as the `arcane-account` tool). |
 | `account set-password <name> <password>` | Change a password. |
 | `account set-gmlevel <name> <0-3\|name>` | Set the GM level; applies from the account's next world login. |
+| `account delete <name>` | Arm the deletion of an account, then repeat as `account delete <name> confirm` within 60 seconds. Refused while the account has characters on any realm (this daemon cannot remove them, so deleting the account would orphan them). Removes the account row and its `realmcharacters` rows only; bans and other accounts are untouched. Irreversible. |
 | `quit`, `exit`, `shutdown` | Stop the realm daemon gracefully. |
 
 A password typed at the console is visible while typed; `arcane-account` prompts without echo. Passwords are never echoed back and are redacted from the log line.

@@ -507,6 +507,17 @@ public sealed class LogonHandshakeTests
             _counts[(realmId, accountId)] = count;
             return Task.CompletedTask;
         }
+
+        public Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+        {
+            (int Realm, int Account)[] keys = [.. _counts.Keys.Where(k => k.Account == accountId)];
+            foreach ((int Realm, int Account) key in keys)
+            {
+                _counts.Remove(key);
+            }
+
+            return Task.FromResult(keys.Length);
+        }
     }
 
     // --- request builders --------------------------------------------------------

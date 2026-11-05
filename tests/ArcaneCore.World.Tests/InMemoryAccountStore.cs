@@ -40,6 +40,9 @@ internal sealed class InMemoryAccountStore : IAccountStore, IAccountAdmin, IAcco
         return Task.FromResult(true);
     }
 
+    public Task<bool> DeleteAsync(string username, CancellationToken cancellationToken = default)
+        => Task.FromResult(_accounts.TryRemove(username.ToUpperInvariant(), out _));
+
     public Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyDictionary<int, string>>(_accounts.Values
             .Where(a => accountIds.Contains(a.Id)).ToDictionary(a => a.Id, a => a.Username));

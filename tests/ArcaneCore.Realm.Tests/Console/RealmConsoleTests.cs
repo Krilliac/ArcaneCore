@@ -83,6 +83,56 @@ public sealed class RealmConsoleTests
         }
     }
 
+    /// <summary>The admin store over the in-memory accounts: only delete is real, which is all the console command calls.</summary>
+    private sealed class FakeAdmin(InMemoryAccountStore accounts) : IAccountAdmin
+    {
+        public int Deletes { get; private set; }
+
+        public Task<bool> DeleteAsync(string username, CancellationToken cancellationToken = default)
+        {
+            Deletes++;
+            return Task.FromResult(accounts.Remove(username));
+        }
+
+        public Task<bool> SetStatusAsync(string username, AccountStatus status, int? actorAccountId = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> RevokeSessionKeyAsync(int accountId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<int, string>> GetUsernamesAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlySet<int>> FindNonActiveAsync(IReadOnlyCollection<int> accountIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class FakeCounts : IRealmCharacterCountStore
+    {
+        private readonly Dictionary<(int Realm, int Account), int> _rows = [];
+
+        public int RowsOf(int accountId) => _rows.Keys.Count(k => k.Account == accountId);
+
+        public Task<IReadOnlyDictionary<int, int>> GetCountsAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyDictionary<int, int>>(_rows.Where(r => r.Key.Account == accountId).ToDictionary(r => r.Key.Realm, r => r.Value));
+
+        public Task SetCountAsync(int realmId, int accountId, int count, CancellationToken cancellationToken = default)
+        {
+            _rows[(realmId, accountId)] = count;
+            return Task.CompletedTask;
+        }
+
+        public Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+        {
+            (int Realm, int Account)[] keys = [.. _rows.Keys.Where(k => k.Account == accountId)];
+            foreach ((int Realm, int Account) key in keys)
+            {
+                _rows.Remove(key);
+            }
+
+            return Task.FromResult(keys.Length);
+        }
+    }
+
     private sealed class Rig
     {
         public InMemoryAccountStore Accounts { get; } = new();
@@ -97,10 +147,14 @@ public sealed class RealmConsoleTests
 
         public RealmConsoleCommands Commands { get; }
 
+        public FakeCounts Counts { get; } = new();
+
         public Rig()
         {
             ServiceProvider services = new ServiceCollection()
                 .AddSingleton<IAccountStore>(Accounts)
+                .AddSingleton<IAccountAdmin>(new FakeAdmin(Accounts))
+                .AddSingleton<IRealmCharacterCountStore>(Counts)
                 .AddSingleton<IRealmStore>(new InMemoryRealmStore(Realms))
                 .BuildServiceProvider();
             Commands = new RealmConsoleCommands(services.GetRequiredService<IServiceScopeFactory>(), () => Sessions, Time, Lifetime);
@@ -251,6 +305,77 @@ public sealed class RealmConsoleTests
         }
 
         AssertVerifier((await rig.Accounts.FindByUsernameAsync("BOB"))!, "pw");
+    }
+
+    private static async Task SeedAccountAsync(Rig rig, string name, int id, params (int Realm, int Chars)[] counts)
+    {
+        await rig.Accounts.CreateAsync(new Account { Id = id, Username = name, Salt = new byte[32], Verifier = new byte[32] });
+        foreach ((int realm, int chars) in counts)
+        {
+            await rig.Counts.SetCountAsync(realm, id, chars);
+        }
+    }
+
+    [Fact]
+    public async Task RealmConsole_AccountDelete_NeedsTheSecondStep_ThenRemovesOnlyThatAccountAndItsRealmCharacterRows()
+    {
+        var rig = new Rig();
+        await SeedAccountAsync(rig, "ALICE", 5, (1, 0), (2, 0));
+        await SeedAccountAsync(rig, "BOB", 6, (1, 2));
+
+        string[] armed = await rig.RunAsync("account delete alice");
+
+        Assert.Contains("permanently deletes account 'ALICE'", Assert.Single(armed), StringComparison.Ordinal);
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("ALICE"));
+        Assert.Equal(2, rig.Counts.RowsOf(5));
+
+        Assert.Equal([Prefix + "deleted account 'ALICE'"], await rig.RunAsync("account delete alice confirm"));
+
+        Assert.Null(await rig.Accounts.FindByUsernameAsync("ALICE"));
+        Assert.Equal(0, rig.Counts.RowsOf(5));
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("BOB"));
+        Assert.Equal(1, rig.Counts.RowsOf(6));
+        Assert.Equal(2, (await rig.Counts.GetCountsAsync(6))[1]);
+    }
+
+    [Fact]
+    public async Task RealmConsole_AccountDelete_ConfirmWithoutArming_ForAnotherName_OrAfterTheWindow_DeletesNothing()
+    {
+        var rig = new Rig();
+        await SeedAccountAsync(rig, "ALICE", 5, (1, 0));
+        await SeedAccountAsync(rig, "BOB", 6, (1, 0));
+
+        Assert.Contains("no pending deletion of 'ALICE'", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
+
+        await rig.RunAsync("account delete alice");
+        Assert.Contains("no pending deletion of 'BOB'", Assert.Single(await rig.RunAsync("account delete bob confirm")), StringComparison.Ordinal);
+
+        // The failed confirm for another name disarmed the pending delete as well.
+        Assert.Contains("no pending deletion of 'ALICE'", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
+
+        await rig.RunAsync("account delete alice");
+        rig.Time.Now += RealmConsoleCommands.DeleteConfirmWindow + TimeSpan.FromSeconds(1);
+        Assert.Contains("no pending deletion of 'ALICE'", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
+
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("ALICE"));
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("BOB"));
+        Assert.Equal(1, rig.Counts.RowsOf(5));
+        Assert.Equal(1, rig.Counts.RowsOf(6));
+    }
+
+    [Fact]
+    public async Task RealmConsole_AccountDelete_IsRefusedWhileTheAccountHasCharacters_AndAnUnknownAccountIsReported()
+    {
+        var rig = new Rig();
+        await SeedAccountAsync(rig, "ALICE", 5, (1, 2), (2, 1));
+
+        Assert.Contains("still has 3 character(s)", Assert.Single(await rig.RunAsync("account delete alice")), StringComparison.Ordinal);
+        Assert.Contains("still has 3 character(s)", Assert.Single(await rig.RunAsync("account delete alice confirm")), StringComparison.Ordinal);
+        Assert.NotNull(await rig.Accounts.FindByUsernameAsync("ALICE"));
+        Assert.Equal(2, rig.Counts.RowsOf(5));
+
+        Assert.Equal([Prefix + "account 'NOBODY' does not exist"], await rig.RunAsync("account delete nobody"));
+        Assert.StartsWith(Prefix + "usage: account create", Assert.Single(await rig.RunAsync("account delete alice maybe")), StringComparison.Ordinal);
     }
 
     private static void AssertVerifier(Account account, string password)

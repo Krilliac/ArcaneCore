@@ -5,9 +5,11 @@ using System.Text;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -61,9 +63,9 @@ public sealed class PreAuthRefusalCloseTests
     {
         await using Harness h = Harness.Start();
 
-        // A control character in the username fails LogonChallengeRequest.TryParse (the malformed-challenge path).
-        byte[] name = Encoding.ASCII.GetBytes("BAD\r\nNAME");
-        await h.Client.WriteAsync(Challenge(name));
+        // A frame that passes the size window, username-length cap and locale checks but fails
+        // LogonChallengeRequest.TryParse: username_len 5 reaches past the 31-byte body (30 + 5 > 31).
+        await h.Client.WriteAsync(UnparseableChallenge());
 
         byte[] reply = new byte[3];
         using (var cts = new CancellationTokenSource(Budget))
@@ -77,12 +79,13 @@ public sealed class PreAuthRefusalCloseTests
     }
 
     [Fact]
-    public async Task MalformedChallenge_RetryOnTheSameConnectionIsNotAnswered()
+    public async Task MalformedChallenge_IsLoggedOnce_AndTheSessionEnds()
     {
         await using Harness h = Harness.Start();
-        byte[] bad = Challenge(Encoding.ASCII.GetBytes("BAD\r\nNAME"));
-        byte[] both = [.. bad, .. bad];
-        await h.Client.WriteAsync(both);
+
+        // One challenge only: a second one written after the server closed would leave unread bytes behind, and the
+        // resulting reset can discard the reply on a loaded host.
+        await h.Client.WriteAsync(UnparseableChallenge());
 
         byte[] reply = new byte[3];
         using (var cts = new CancellationTokenSource(Budget))
@@ -91,13 +94,42 @@ public sealed class PreAuthRefusalCloseTests
         }
 
         Assert.Equal((byte)AuthResult.UnknownAccount, reply[2]);
-        Assert.True(await ReadsNothingThenClosesAsync(h.Client), "the second challenge on a refused connection must not be answered");
+        Assert.True(await ReadsNothingThenClosesAsync(h.Client), "the connection must close after the refusal");
+        Assert.True(await Task.WhenAny(h.SessionTask, Task.Delay(Budget)) == h.SessionTask, "the session must end after a malformed challenge");
         Assert.Equal(1, h.Log.Count(LogLevel.Warning, "malformed logon challenge"));
+    }
+
+    [Fact]
+    public async Task RealmListBeforeAuth_ChargesTheAddressFailureBudget()
+    {
+        // Frozen clock: the budget refills with time, so a real clock would drift the exact token count.
+        var guard = new NetGuard(
+            new NetProtectionOptions { AuthFailureBurstPerIp = 5, AuthFailuresPerMinutePerIp = 1 }, () => 0, () => 0, new CapturingLogger(), clock: () => 0);
+        IpKey key = IpKey.From(IPAddress.Loopback);
+        Assert.Equal(5.0, guard.Table.TokensOf(key, RateBucket.AuthFailures));
+
+        await using Harness h = Harness.Start(guard, "127.0.0.1:50000");
+        await h.Client.WriteAsync(RealmListRequest());
+
+        Assert.True(await ReadsNothingThenClosesAsync(h.Client), "a realm list before authentication must close the connection");
+        Assert.True(await Task.WhenAny(h.SessionTask, Task.Delay(Budget)) == h.SessionTask, "the session must end");
+        Assert.Equal(4.0, guard.Table.TokensOf(key, RateBucket.AuthFailures));
     }
 
     // --- plumbing ----------------------------------------------------------------
 
     private static byte[] RealmListRequest() => [(byte)AuthCommand.RealmList, 0, 0, 0, 0];
+
+    /// <summary>
+    /// A 31-byte body (inside the 31..47 window) whose username_len of 5 reaches past the body, so the size, length-cap
+    /// and locale checks pass and <see cref="LogonChallengeRequest.TryParse"/> returns false.
+    /// </summary>
+    private static byte[] UnparseableChallenge()
+    {
+        byte[] packet = Challenge(Encoding.ASCII.GetBytes("A"));
+        packet[4 + 29] = 5; // username_len beyond the body: 30 + 5 > 31
+        return packet;
+    }
 
     private static byte[] Challenge(byte[] name)
     {
@@ -158,7 +190,7 @@ public sealed class PreAuthRefusalCloseTests
 
         public LevelLogger Log { get; }
 
-        public static Harness Start()
+        public static Harness Start(NetGuard? guard = null, string endpoint = "test")
         {
             var log = new LevelLogger();
             var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -171,7 +203,7 @@ public sealed class PreAuthRefusalCloseTests
                 await using NetworkStream s = server.GetStream();
                 var session = new LogonSession(
                     s, new InMemoryAccountStore(), new InMemoryRealmStore([]),
-                    new AuthOptions { MaxSessionDurationSeconds = 0 }, log, "test");
+                    new AuthOptions { MaxSessionDurationSeconds = 0 }, log, endpoint, banStore: null, guard);
                 try
                 {
                     await session.RunAsync(CancellationToken.None);
