@@ -64,7 +64,7 @@ public sealed partial class GameObjectMapSystem
             GameObjectSpellAction.MakeInert => MakeInert(go, caster, spellId, random),
             GameObjectSpellAction.MakeActive => SetFlag(go, GameObjectFlags.NoInteract, false),
             GameObjectSpellAction.CloseAndLock => CloseAndLock(go),
-            _ => GameObjectUseResult.Unsupported,
+            _ => Unsupported(caster, go, "spell-action", unchecked((uint)actionValue)),
         };
         if (result == GameObjectUseResult.Unsupported && _reportedSpellActions.Add((spellId, actionValue)))
         {

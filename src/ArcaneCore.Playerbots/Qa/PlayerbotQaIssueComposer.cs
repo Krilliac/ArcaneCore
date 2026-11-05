@@ -55,6 +55,7 @@ internal static partial class PlayerbotQaIssueComposer
         sb.Append("\n## Likely cause\n\n").Append(Cell(redactor.Redact(f.CauseDetail))).Append("\n\n");
         if (QaKinds.Of(f.Kind).SpellKind) AppendSpell(sb, f, redactor);
         if (f.Kind == QaSignalKind.ServerFault) AppendServerFault(sb, f, redactor);
+        if (PlayerbotQaInteractionText.Covers(f.Kind)) PlayerbotQaInteractionText.AppendSection(sb, f, redactor.Redact);
 
         sb.Append("## Evidence\n\n");
         foreach (QaSample s in f.Samples.TakeLast(MaxEvidence))
@@ -98,6 +99,7 @@ internal static partial class PlayerbotQaIssueComposer
             sb.Append(CultureInfo.InvariantCulture, $"- On a bot: select it, `.learn {f.Spell}` and `.cast {f.Spell}` (both act on the selected player); a bot of that class also casts it in its rotation.\n");
         }
 
+        if (PlayerbotQaInteractionText.Covers(f.Kind)) PlayerbotQaInteractionText.AppendReproduction(sb, f);
         if (PlayerbotQaReport.GoHint(f) is { } go) sb.Append("- Teleport to the place: `").Append(go).Append("`\n");
         if (f.Quest != 0 && f.QuestIsGoal)
         {

@@ -260,6 +260,7 @@ public sealed partial class CreatureMapSystem
         if (unknown && _reportedAi.Add($"name:{aiName}"))
         {
             _logger.LogWarning("creature_template {Entry} uses unknown AIName '{AIName}'; using the default AI", creature.Template.Entry, aiName);
+            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "ai-name", 0, aiName);
         }
 
         if (ai is CreatureEventAI eventAi && _options.EventAi.ReportUnsupported && eventAi.Unsupported.Count > 0 && _reportedAi.Add($"eventai:{creature.Template.Entry}"))
@@ -268,6 +269,7 @@ public sealed partial class CreatureMapSystem
                 creature.Template.Entry, string.Join(", ", eventAi.Unsupported));
             CreatureAnomalies.ReportScriptActionUnsupported(
                 creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
+            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "event-ai", 0, string.Join(", ", eventAi.Unsupported));
         }
 
         creature.AI = ai;

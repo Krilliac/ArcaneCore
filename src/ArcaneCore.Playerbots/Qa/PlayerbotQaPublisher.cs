@@ -24,6 +24,7 @@ internal sealed class QaLedger
     private readonly List<DateTime> _spellCreates = [];
     private readonly List<DateTime> _statusEdits = [];
     private readonly List<DateTime> _serverCreates = [];
+    private readonly Dictionary<QaSignalKind, List<DateTime>> _kindCreates = [];
 
     internal bool CanCreate(DateTime now, int max)
     {
@@ -78,6 +79,26 @@ internal sealed class QaLedger
         lock (_gate) _spellCreates.Add(now);
     }
 
+    /// <summary>Whether another issue of <paramref name="kind"/> may be created within the rolling 24 hours (<see cref="QaKindInfo.Cap"/>).</summary>
+    internal bool CanCreateKind(QaSignalKind kind, DateTime now, int max)
+    {
+        lock (_gate)
+        {
+            if (!_kindCreates.TryGetValue(kind, out List<DateTime>? times)) return max > 0;
+            times.RemoveAll(at => now - at >= TimeSpan.FromHours(24));
+            return times.Count < max;
+        }
+    }
+
+    internal void RecordKindCreate(QaSignalKind kind, DateTime now)
+    {
+        lock (_gate)
+        {
+            if (!_kindCreates.TryGetValue(kind, out List<DateTime>? times)) _kindCreates[kind] = times = [];
+            times.Add(now);
+        }
+    }
+
     internal void RecordComment(DateTime now)
     {
         lock (_gate) _comments.Add(now);
@@ -100,7 +121,11 @@ internal sealed class QaLedger
 
     internal QaLedgerState Export()
     {
-        lock (_gate) return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates], [.. _statusEdits], [.. _serverCreates]);
+        lock (_gate)
+        {
+            return new QaLedgerState([.. _creates], [.. _comments], [.. _spellCreates], [.. _statusEdits], [.. _serverCreates],
+                _kindCreates.Where(pair => pair.Value.Count > 0).ToDictionary(pair => pair.Key.ToString(), pair => pair.Value.ToArray(), StringComparer.Ordinal));
+        }
     }
 
     internal void Restore(QaLedgerState? state)
@@ -112,12 +137,18 @@ internal sealed class QaLedger
             _spellCreates.Clear();
             _statusEdits.Clear();
             _serverCreates.Clear();
+            _kindCreates.Clear();
             if (state is null) return;
             _creates.AddRange(state.CreatesUtc ?? []);
             _comments.AddRange(state.CommentsUtc ?? []);
             _spellCreates.AddRange(state.SpellCreatesUtc ?? []);
             _statusEdits.AddRange(state.StatusEditsUtc ?? []);
             _serverCreates.AddRange(state.ServerCreatesUtc ?? []);
+            foreach ((string name, DateTime[] times) in state.KindCreatesUtc ?? new Dictionary<string, DateTime[]>())
+            {
+                // A kind a newer build wrote and this one does not know is dropped (its cap does not exist here).
+                if (Enum.TryParse(name, ignoreCase: false, out QaSignalKind kind) && Enum.IsDefined(kind)) _kindCreates[kind] = [.. times ?? []];
+            }
         }
     }
 
@@ -272,6 +303,9 @@ internal sealed class PlayerbotQaPublisher
         /// <summary>Spell issues created in this pass (<see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/>).</summary>
         public int SpellCreates;
 
+        /// <summary>Issues created in this pass per kind with its own caps (<see cref="QaKindInfo.Cap"/>).</summary>
+        public Dictionary<QaSignalKind, int> KindCreates { get; } = [];
+
         public bool IncompleteLogged;
     }
 
@@ -401,6 +435,7 @@ internal sealed class PlayerbotQaPublisher
                     if (!CreateAllowed(current, now)) return true;
 
                     if (!SpellCreateAllowed(current, pass, now)) return true;
+                    if (!KindCreateAllowed(current, pass, now)) return true;
                 }
             }
             else if (current.Publication.State == QaPublicationState.Published && !commentDue && !statusDue)
@@ -451,6 +486,7 @@ internal sealed class PlayerbotQaPublisher
 
                 if (!CreateAllowed(current, now)) return true;
                 if (!SpellCreateAllowed(current, pass, now)) return true;
+                if (!KindCreateAllowed(current, pass, now)) return true;
                 QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(current, LabelsFor(current), _build, redactor);
                 QaIssueRef created = await client.CreateIssueAsync(draft.Title, draft.Body, draft.Labels, cancellationToken).ConfigureAwait(false);
                 if (QaKinds.Of(current.Kind).ServerSide) Ledger.RecordServerCreate(now);
@@ -459,6 +495,12 @@ internal sealed class PlayerbotQaPublisher
                 {
                     pass.SpellCreates++;
                     Ledger.RecordSpellCreate(now);
+                }
+
+                if (QaKinds.Of(current.Kind).Cap is not null)
+                {
+                    pass.KindCreates[current.Kind] = pass.KindCreates.GetValueOrDefault(current.Kind) + 1;
+                    Ledger.RecordKindCreate(current.Kind, now);
                 }
 
                 index.AddCreated(created, id);
@@ -780,6 +822,28 @@ internal sealed class PlayerbotQaPublisher
         if (!Ledger.CanCreateSpell(now, git.MaxSpellIssuesPerDay))
         {
             _logger.LogInformation("Bot QA: the daily spell issue cap ({Cap}) is reached; {Id} stays pending", git.MaxSpellIssuesPerDay, finding.ShortId);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// A kind's own caps (<see cref="QaKindInfo.Cap"/>) on top of the hourly one: at most <see cref="QaKindCap.PerPass"/> issues of the kind per pass and
+    /// <see cref="QaKindCap.PerDay"/> per rolling day, the day saved in the ledger so a restart loop cannot reset it. Kinds without caps are not limited.
+    /// </summary>
+    private bool KindCreateAllowed(QaFindingView finding, Pass pass, DateTime now)
+    {
+        if (QaKinds.Of(finding.Kind).Cap is not { } cap) return true;
+        if (pass.KindCreates.GetValueOrDefault(finding.Kind) >= cap.PerPass)
+        {
+            _logger.LogInformation("Bot QA: the per-pass cap of {Kind} issues ({Cap}) is reached; {Id} stays pending", finding.KindLabel, cap.PerPass, finding.ShortId);
+            return false;
+        }
+
+        if (!Ledger.CanCreateKind(finding.Kind, now, cap.PerDay))
+        {
+            _logger.LogInformation("Bot QA: the daily cap of {Kind} issues ({Cap}) is reached; {Id} stays pending", finding.KindLabel, cap.PerDay, finding.ShortId);
             return false;
         }
 

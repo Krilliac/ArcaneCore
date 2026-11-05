@@ -223,6 +223,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("{Creature} script summons missing creature_template {Entry}; skipped", summoner.Guid, entry);
+                Qa?.OnCreatureAiGap(summoner, summoner.Template.Entry, "summon", entry, "script summon");
             }
 
             return null;
@@ -310,6 +311,7 @@ public sealed partial class CreatureMapSystem
         if (_reportedEscorts.Add(creature.Template.Entry))
         {
             _logger.LogWarning("escort of creature {Entry} has no points ({Path}); it does not start", creature.Template.Entry, path);
+            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "escort", 0, path);
         }
     }
 }

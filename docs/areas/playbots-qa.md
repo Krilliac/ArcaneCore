@@ -210,6 +210,80 @@ redacted, no bot identity) and runs the publisher. `Directory` is relative to th
 file, then replace). The findings file fails closed: one that cannot be read, or that a newer version wrote, is never overwritten;
 persistence is then off for the process (one Error log, shown by `.playerbot qa`) while aggregation continues in memory.
 
+## Interaction signals: what the server refuses the bots, and what it does not implement
+
+Five kinds are reported straight to the sink (`IPlayerbotQaSink`), never through a log line, by one monitor
+(`PlayerbotQaInteractionMonitor`, a DI singleton). They come from the place the server decides, or from the reply the bot receives:
+
+* The game's decision sites call `ArcaneCore.Game.Diagnostics.IGameQaObserver` (every method a default no-op; ids and constants only,
+  so a site that does not fail costs nothing): the vendor (`QuestNpcServices.Vendor.cs`: every `SMSG_BUY_FAILED` and
+  `SMSG_SELL_ITEM` failure, a purchase that cannot be stored, the silent store failure), the trainer (unreachable, not this character's
+  trainer, spell not listed, teaching spell unknown, not GREEN, no money, teaching cast failed), the quest exchanges
+  (`SMSG_QUESTGIVER_QUEST_INVALID` and `_QUEST_FAILED` through two helpers that keep the packet, `SMSG_QUESTUPDATE_FAILED`, and the
+  silent withholding of a quest `MissingAdapters` says the server cannot support), the game objects (every
+  `GameObjectUseResult.Unsupported`: an unhandled type, a quest-giver object with no menu, a chest whose loot cannot be stored, a unit
+  use, an unsupported `ACTIVATE_OBJECT` action; and every successful player use) and the creature AI (unknown AIName, unsupported
+  EventAI parts, a summon of a missing `creature_template`, an escort with no points: next to the existing warning, once per map and
+  gap). The features pass the DI observer to `QuestNpcServices`, `GameObjectMapSystem` and `CreatureMapSystem` (a constructor argument,
+  so creatures spawned while the system is built are covered).
+* `CMSG_LOOT`: `GameObjectLootHandlers` hands a bot's refused `LootResult` to the monitor.
+* `WorldSession.TryManagedAction`: an opcode a bot sent with no world handler (none at all, or a session-task one only) is reported
+  before it is refused as before.
+* The bot's packets: `WorldSession.CaptureManagedPacket` hands every packet of a playerbot session to `IManagedPacketTap`. The tap
+  switches on the opcode and returns for all but `SMSG_QUESTUPDATE_ADD_KILL`, `SMSG_QUESTUPDATE_ADD_ITEM`, `SMSG_ITEM_PUSH_RESULT` and
+  `SMSG_INVENTORY_CHANGE_FAILURE`, allocation-free (a test measures it); the session resolves the tap once and keeps an inert one when
+  QA is off. Only packets sent on the world thread are looked at.
+* Kills: `PlayerbotQaInteractionFeature` subscribes `MapCombat.UnitKilled` of every map.
+
+Every entry first asks whether QA is on and the unit is a managed playerbot (`PlayerbotQaBots.Identify`): a real player's request is
+never reported. A script gap has no player: it is reported for the content (with the bot the creature fights, if any).
+
+| Kind | What | Key (never a place or a bot) | Threshold |
+|---|---|---|---|
+| interaction failed | a vendor, trainer, inventory or loot refusal | reason, code, creature, object, item, spell | `MinOccurrences`, `MinDistinctBots` |
+| quest broken | a refused exchange, a failed quest, a quest the server cannot support, an objective that never progresses | quest, reason, code, objective | `MinOccurrences`, `MinDistinctBots` |
+| object unsupported | a bot's use of a game object the server does not implement | object entry and type | one occurrence (bot-independent) |
+| script unsupported | a creature AI or script gap | creature entry, gap, summoned entry | one occurrence (bot-independent) |
+| opcode unhandled | a bot's opcode with no world handler | opcode | one occurrence (bot-independent) |
+
+**Expected or suspicious** (`PlayerbotQaInteractionRules`, one rule per decision site, with its protocol code). A refusal of play (no
+money, bags full, sold out, out of reach, reputation or rank too low, a spell not GREEN yet, a loot that is too far or locked, a quest
+refused for its level) is **expected**: it is reported only when the same bot gets it 5 times within 10 minutes for the same thing (the
+bots back a refused purchase, trainer or quest off for 10 minutes, so a bot that learns never gets there), and its cause is then a bot
+that does not learn. A refusal that should not happen is **suspicious** and reported at once: an item with no `item_template` row,
+a vendor that does not list the item, a buyback of an empty slot, a sale of an item the bot does not have, a trainer of another class or
+one that does not list the spell, a teaching spell missing from the spell table, **a listed, GREEN, affordable spell whose teaching cast
+fails** (the trainer cannot teach a valid spell), an inventory change on an item or slot the bot does not have or that its class can
+never use, an unsupported loot (`LootResult.Unsupported`), a turn-in refused with `DontHaveReq`, a quest the server withholds. Each
+(bot, kind, reason, ids) is reported at most once a minute. A purchase that cannot be stored is reported by the vendor site only, not a
+second time by the equip error that follows it.
+
+**An objective that never progresses.** A bot's kill of a creature that an incomplete kill objective of its log names (not on an
+instance map, where a raid group credits raid quests only), its successful use of an objective game object, or its receipt of an
+objective item (`SMSG_ITEM_PUSH_RESULT`) is one attempt of that objective; the matching quest update (`SMSG_QUESTUPDATE_ADD_KILL` with
+the entry, the object flag for an object, or `ADD_ITEM`) starts the count again. Five attempts in a row with no update are a `quest
+broken` signal (`no-progress-kill`, `-object`, `-item`): the server never credits the objective (a missing kill-credit route, a quest
+loaded without its special flags, an item check that is never called). A complete objective, a quest not in the log and a cast
+objective are never counted.
+
+The issue of an interaction kind carries an `Interaction` table (reason, quest and objective, creature, object, item, spell, the bots
+and classes), the cause with the content's names (`IQaContentFacts.CreatureName`, `GameObjectName`, `ItemName`, `QuestObjectives`:
+the objective text and each required creature, object and item with its count) and reproduction steps with this server's GM commands:
+`.go creature id <entry>` or `.npc add <entry>`, `.go object id <entry>` or `.gobject add <entry>`, `.quest add <id>` and
+`.quest status <id>`, `.additem <item>`, `.modify money`.
+
+**Their caps.** A `QaKinds` row may carry its own caps on top of the hourly one (`QaKindInfo.Cap`): interaction failed and quest broken
+2 issues a pass and 8 a rolling day, object unsupported and script unsupported 1 and 4, opcode unhandled 1 and 3. A first deploy that
+meets dozens of unsupported objects and script gaps therefore opens a few issues a day, highest severity first; the rest wait. The day
+is saved with the hourly caps (`findings.json`, ledger `KindCreatesUtc` by kind name), so a restart does not reset it.
+
+Tests: `tests/ArcaneCore.World.Tests/Playerbots/Qa/PlayerbotQaInteraction*Tests.cs` (each kind end to end through the real game services
+and the feature harness, a managed bot session in a running world, the expected/suspicious tables, the caps, real players ignored, the
+hot path allocating nothing).
+
+Not reported: the bots' own give-ups (a quest exchange that timed out in `PlayerbotQuestGoals`, a purchase or trainer the town goals
+set aside): the server-side refusal behind them is what is reported, and a give-up with no refusal is a stall.
+
 ## Reporting to GitHub
 
 Off by default. It is a three-step ladder; each step needs an explicit setting.

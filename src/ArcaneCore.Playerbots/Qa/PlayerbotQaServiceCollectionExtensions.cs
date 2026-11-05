@@ -23,6 +23,11 @@ public static class PlayerbotQaServiceCollectionExtensions
         // The direct report path (IPlayerbotQaSink): any feature reports a signal without a log line; inert while QA is disabled.
         services.TryAddSingleton<PlayerbotQaSink>();
         services.TryAddSingleton<IPlayerbotQaSink>(sp => sp.GetRequiredService<PlayerbotQaSink>());
+        // The interaction signals: the game's decision sites (IGameQaObserver), the bot sessions' packet tap and opcode gate (IManagedPacketTap) and,
+        // through PlayerbotQaInteractionFeature, the kill events all reach one monitor; it is inert while QA is disabled.
+        services.TryAddSingleton(sp => new PlayerbotQaInteractionMonitor(sp.GetRequiredService<IPlayerbotQaSink>(), sp));
+        services.TryAddSingleton<Game.Diagnostics.IGameQaObserver>(sp => sp.GetRequiredService<PlayerbotQaInteractionMonitor>());
+        services.TryAddSingleton<Net.IManagedPacketTap>(sp => sp.GetRequiredService<PlayerbotQaInteractionMonitor>());
         return services;
     }
 }

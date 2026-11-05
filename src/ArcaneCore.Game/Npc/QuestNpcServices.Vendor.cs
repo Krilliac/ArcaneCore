@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Npc;
@@ -64,6 +65,7 @@ public sealed partial class QuestNpcServices
         if (Deps.Items is not { } items || items.GetItem(itemId) is not { } proto)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(ObjectGuid.Empty, itemId, BuyResult.CantFindItem));
+            Refused(player, InteractionFailure.BuyItemTemplateMissing, (int)BuyResult.CantFindItem, vendorGuid.Entry, itemId);
             return;
         }
 
@@ -71,6 +73,7 @@ public sealed partial class QuestNpcServices
         {
             LogMissing("BuyItem", vendorGuid);
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(ObjectGuid.Empty, itemId, BuyResult.DistanceTooFar));
+            Refused(player, InteractionFailure.BuyVendorUnreachable, (int)BuyResult.DistanceTooFar, vendorGuid.Entry, itemId);
             return;
         }
 
@@ -89,6 +92,7 @@ public sealed partial class QuestNpcServices
         if (vendorItem is null)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.CantFindItem));
+            Refused(player, InteractionFailure.BuyNotSold, (int)BuyResult.CantFindItem, npc.Entry, itemId);
             return;
         }
 
@@ -96,12 +100,14 @@ public sealed partial class QuestNpcServices
         if (vendorItem.MaxCount != 0 && CurrentStock(npc.Guid, vendorItem, proto) < totalCount)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.ItemAlreadySold));
+            Refused(player, InteractionFailure.BuySoldOut, (int)BuyResult.ItemAlreadySold, npc.Entry, itemId);
             return;
         }
 
         if (!MeetsVendorReputation(player, npc, proto))
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.ReputationRequire));
+            Refused(player, InteractionFailure.BuyReputation, (int)BuyResult.ReputationRequire, npc.Entry, itemId);
             return;
         }
 
@@ -111,6 +117,7 @@ public sealed partial class QuestNpcServices
             && (Deps.Honor is not { } honor || honor.CurrentRank(player) < proto.RequiredHonorRank || player.Level < proto.RequiredLevel))
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.RankRequire));
+            Refused(player, InteractionFailure.BuyHonorRank, (int)BuyResult.RankRequire, npc.Entry, itemId);
             return;
         }
 
@@ -118,18 +125,21 @@ public sealed partial class QuestNpcServices
         if (player.Money < price)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, itemId, BuyResult.NotEnoughMoney));
+            Refused(player, InteractionFailure.BuyNoMoney, (int)BuyResult.NotEnoughMoney, npc.Entry, itemId);
             return;
         }
 
         Items.InventoryResult store = items.CanStoreNewItemAt(player, itemId, totalCount, bag, slot);
         if (store != Items.InventoryResult.Ok)
         {
+            Refused(player, InteractionFailure.BuyCannotStore, (int)store, npc.Entry, itemId); // before the equip error it explains
             items.SendEquipError(player, store, itemId);
             return;
         }
 
         if (!items.StoreNewItemAt(player, itemId, totalCount, bag, slot))
         {
+            Refused(player, InteractionFailure.BuyStoreFailed, 0, npc.Entry, itemId);
             return;
         }
 
@@ -156,12 +166,14 @@ public sealed partial class QuestNpcServices
         {
             LogMissing("SellItem", vendorGuid);
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(ObjectGuid.Empty, itemGuid, SellResult.CantFindVendor));
+            Refused(player, InteractionFailure.SellVendorUnreachable, (int)SellResult.CantFindVendor, vendorGuid.Entry, ItemEntryOf(player, itemGuid));
             return;
         }
 
         if (Deps.Items is not { } items)
         {
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(npc.Guid, itemGuid, SellResult.CantFindItem));
+            Refused(player, InteractionFailure.SellNoItemService, (int)SellResult.CantFindItem, npc.Entry, ItemEntryOf(player, itemGuid));
             return;
         }
 
@@ -169,6 +181,7 @@ public sealed partial class QuestNpcServices
         if (sale.Error is { } error)
         {
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(npc.Guid, itemGuid, error));
+            Refused(player, InteractionFailure.SellRefused, (int)error, npc.Entry, ItemEntryOf(player, itemGuid)); // a refused item is still in the bags
         }
         else if (sale.Sold)
         {
@@ -194,24 +207,28 @@ public sealed partial class QuestNpcServices
         {
             LogMissing("BuybackItem", vendorGuid);
             Send(player, WorldOpcode.SmsgSellItem, NpcPackets.SellFailed(ObjectGuid.Empty, ObjectGuid.Empty, SellResult.CantFindVendor));
+            Refused(player, InteractionFailure.BuybackVendorUnreachable, (int)SellResult.CantFindVendor, vendorGuid.Entry, 0);
             return;
         }
 
         if (slot > byte.MaxValue || Deps.Items is not { } items || items.GetBuyback(player, (byte)slot) is not { } buyback)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, 0, BuyResult.CantFindItem));
+            Refused(player, InteractionFailure.BuybackEmptySlot, (int)BuyResult.CantFindItem, npc.Entry, 0);
             return;
         }
 
         if (player.Money < buyback.Price)
         {
             Send(player, WorldOpcode.SmsgBuyFailed, NpcPackets.BuyFailed(npc.Guid, buyback.Entry, BuyResult.NotEnoughMoney));
+            Refused(player, InteractionFailure.BuybackNoMoney, (int)BuyResult.NotEnoughMoney, npc.Entry, buyback.Entry);
             return;
         }
 
         Items.InventoryResult result = items.RestoreBuyback(player, (byte)slot);
         if (result != Items.InventoryResult.Ok)
         {
+            Refused(player, InteractionFailure.BuybackCannotStore, (int)result, npc.Entry, buyback.Entry); // before the equip error it explains
             items.SendEquipError(player, result, buyback.Entry);
             return;
         }
@@ -261,6 +278,13 @@ public sealed partial class QuestNpcServices
             Flush(s);
         }
     }
+
+    /// <summary>Tell bot QA (<see cref="QuestNpcDependencies.Qa"/>) that a vendor or trainer request of <paramref name="player"/> was refused.</summary>
+    private void Refused(Player player, InteractionFailure failure, int code, uint npcEntry, uint item, uint spell = 0)
+        => Deps.Qa?.OnInteractionFailed(player, failure, code, npcEntry, item, spell);
+
+    /// <summary>The entry of the item <paramref name="itemGuid"/> in the player's bags, 0 when it is not there.</summary>
+    private static uint ItemEntryOf(Player player, ObjectGuid itemGuid) => player.Inventory.GetItemByGuid(itemGuid)?.Entry ?? 0;
 
     /// <summary>
     /// vmangos WorldSession::SendListInventory (the creature's own npc_vendor rows, then its shared npc_vendor_template rows; NpcStore merges

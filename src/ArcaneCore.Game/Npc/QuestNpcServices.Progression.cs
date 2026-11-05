@@ -166,10 +166,10 @@ public sealed partial class QuestNpcServices
             case ItemInventoryResult.Ok:
                 return true;
             case ItemInventoryResult.InventoryFull:
-                Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(quest.Id, QuestInvalidReason.InventoryFull));
+                QuestTurnInFailed(player, quest.Id, QuestInvalidReason.InventoryFull);
                 return false;
             case ItemInventoryResult.CantCarryMoreOfThis:
-                Send(player, WorldOpcode.SmsgQuestgiverQuestFailed, QuestPackets.QuestFailed(quest.Id, QuestInvalidReason.DuplicateItem));
+                QuestTurnInFailed(player, quest.Id, QuestInvalidReason.DuplicateItem);
                 return false;
             default:
                 player.Inventory.SendEquipError(result, null, null, entry: entry);

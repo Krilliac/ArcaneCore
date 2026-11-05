@@ -135,6 +135,15 @@ internal static partial class PlayerbotQaFingerprint
             QaSignalKind.ActionFault => $"fault|{s.Goal}|{s.ExceptionType}|{s.FaultCode}|{Normalise(s.Detail)}",
             QaSignalKind.Quarantine => $"quarantine|{s.FaultCode}|{Normalise(s.Detail)}",
             QaSignalKind.Disabled => $"disabled|{s.FaultCode}|{Normalise(s.Detail)}",
+            // The interaction kinds: the ids and the code the client got, never a place or a bot. A quest finding is the quest and its objective; an
+            // object one the entry and type; a script one the creature, the gap and the summoned entry; an opcode one the opcode.
+            QaSignalKind.InteractionFailed => string.Create(CultureInfo.InvariantCulture,
+                $"interact|{Token(s.Reason)}|code={s.Code}|npc={s.Npc}|go={s.GameObject}|item={s.Item}|spell={s.Spell}"),
+            QaSignalKind.QuestBroken => string.Create(CultureInfo.InvariantCulture, $"questbroken|quest={s.Quest}|{Token(s.Reason)}|code={s.Code}")
+                + (s.EffectIndex >= 0 ? string.Create(CultureInfo.InvariantCulture, $"|objective={s.EffectIndex}") : string.Empty),
+            QaSignalKind.ObjectUnsupported => string.Create(CultureInfo.InvariantCulture, $"gounsupported|go={s.GameObject}|type={s.Code}"),
+            QaSignalKind.ScriptUnsupported => string.Create(CultureInfo.InvariantCulture, $"scriptgap|entry={s.Npc}|{Token(s.Reason)}|value={s.Target}"),
+            QaSignalKind.OpcodeUnhandled => string.Create(CultureInfo.InvariantCulture, $"opcode|{s.Code}"),
             QaSignalKind.RelayDataMissing => s.Entry != 0
                 ? string.Create(CultureInfo.InvariantCulture, $"relaydata|relay={s.Relay}|{s.Detail}|path={s.PathId}|entry={s.Entry}")
                 : string.Create(CultureInfo.InvariantCulture, $"relaydata|relay={s.Relay}|{Normalise(s.Detail)}"),

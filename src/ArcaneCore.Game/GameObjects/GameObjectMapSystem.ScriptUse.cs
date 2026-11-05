@@ -49,7 +49,7 @@ public sealed partial class GameObjectMapSystem
             case GameObjectType.Goober:
                 return UseGooberByUnit(user, go);
             default:
-                return GameObjectUseResult.Unsupported;
+                return Unsupported(user, go, "unit-use");
         }
     }
 

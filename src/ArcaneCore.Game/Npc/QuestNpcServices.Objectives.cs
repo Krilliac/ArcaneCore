@@ -291,6 +291,7 @@ public sealed partial class QuestNpcServices
         }
 
         Send(state.Quests.Player, timed ? WorldOpcode.SmsgQuestupdateFailedtimer : WorldOpcode.SmsgQuestupdateFailed, QuestIdBody(questId));
+        Deps.Qa?.OnQuestRefused(state.Quests.Player, questId, Diagnostics.QuestFailure.Failed, 0, timed ? "timer" : string.Empty);
     }
 
     private IEnumerable<(Quest Quest, QuestStatusData Data, int Slot)> LoggedQuests(PlayerNpcState state)

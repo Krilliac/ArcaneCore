@@ -167,6 +167,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("{Creature} EventAI summons missing creature_template {Entry}; skipped", summoner.Guid, entry);
+                Qa?.OnCreatureAiGap(summoner, summoner.Template.Entry, "summon", entry, "EventAI summon");
             }
 
             return null;
@@ -192,6 +193,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("{Creature} script summons missing creature_template {Entry}; skipped", summoner.Guid, entry);
+                Qa?.OnCreatureAiGap(summoner, summoner.Template.Entry, "summon", entry, "script summon");
             }
 
             return null;
@@ -295,6 +297,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("instance game object summons missing creature_template {Entry}; skipped", entry);
+                Qa?.OnCreatureAiGap(null, 0, "summon", entry, "instance game object summon");
             }
 
             return null;
@@ -317,6 +320,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("instance script summons missing creature_template {Entry}; skipped", entry);
+                Qa?.OnCreatureAiGap(null, 0, "summon", entry, "instance script summon");
             }
 
             return null;

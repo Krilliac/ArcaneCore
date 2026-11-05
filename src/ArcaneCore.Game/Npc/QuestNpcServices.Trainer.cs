@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
@@ -131,9 +132,13 @@ public sealed partial class QuestNpcServices
             return;
         }
 
-        if (InteractableNpc(player, guid, NpcFlags.Trainer) is not { } npc || !IsTrainerOf(s, npc, true) || Deps.Spells is not { } spells)
+        NpcInfo? npc = InteractableNpc(player, guid, NpcFlags.Trainer);
+        if (npc is null || !IsTrainerOf(s, npc, true) || Deps.Spells is not { } spells)
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailUnavailable));
+            Refused(player, npc is null ? InteractionFailure.TrainerUnreachable
+                : Deps.Spells is null ? InteractionFailure.TrainerNoSpellService : InteractionFailure.TrainerNotForPlayer,
+                (int)TrainFailUnavailable, guid.Entry, 0, spellId);
             return;
         }
 
@@ -142,12 +147,15 @@ public sealed partial class QuestNpcServices
         if (trainerSpell is null || info is null)
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailUnavailable));
+            Refused(player, trainerSpell is null ? InteractionFailure.TrainerSpellNotListed : InteractionFailure.TrainerSpellUnknown,
+                (int)TrainFailUnavailable, npc.Entry, 0, spellId);
             return;
         }
 
         if (GetTrainerSpellState(player, trainerSpell, info) != TrainerSpellState.Green)
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailNotEnoughSkill));
+            Refused(player, InteractionFailure.TrainerSpellNotReady, (int)TrainFailNotEnoughSkill, npc.Entry, 0, spellId);
             return;
         }
 
@@ -155,6 +163,7 @@ public sealed partial class QuestNpcServices
         if (player.Money < cost)
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailNotEnoughMoney));
+            Refused(player, InteractionFailure.TrainerNoMoney, (int)TrainFailNotEnoughMoney, npc.Entry, 0, spellId);
             return;
         }
 
@@ -167,6 +176,8 @@ public sealed partial class QuestNpcServices
         else
         {
             Send(player, WorldOpcode.SmsgTrainerBuyFailed, NpcPackets.TrainerBuyFailed(guid, spellId, TrainFailUnavailable));
+            // Listed, GREEN and affordable, and still not taught: the trainer cannot teach a spell that is valid for this character.
+            Refused(player, InteractionFailure.TrainerTeachingFailed, (int)TrainFailUnavailable, npc.Entry, 0, spellId);
         }
 
         Flush(s);
