@@ -29,7 +29,8 @@ namespace ArcaneCore.Game.Spells;
 /// and the name stands for the chain, which is a little wider than the real table for heals over time: against the vmangos spell_chain rows it
 /// misses no same-chain pair but matches 37 cross-chain pairs (Renew 27606 against the Renew ranks, NPC Tranquility 21791 and 25817, Consume
 /// Shadows and Blessed Recovery ranks, the last two probably gaps in spell_chain). A holder whose aura handler is running is never removed
-/// (:3515, <see cref="SpellAura.InUse"/>), and Drain Soul style holders (CHANNEL_DEATH_ITEM, :3488) are never replaced or refused. Thread affinity: the map thread that owns the
+/// (:3515, <see cref="SpellAura.InUse"/>; only ApplyAuraModifier sets it, not the holder-level vmangos counter raised during ticks and procs), and
+/// Drain Soul style holders (CHANNEL_DEATH_ITEM, :3488) are never replaced and never refuse a new holder through the checks after the passive block. Thread affinity: the map thread that owns the
 /// target, like every holder event.
 /// </summary>
 public sealed class SpellSpecificAuraRules
@@ -236,7 +237,12 @@ public sealed class SpellSpecificAuraRules
         }
     }
 
-    /// <summary>vmangos SpellAuraHolder::IsInUse: any of its auras has its handler running.</summary>
+    /// <summary>
+    /// Approximates vmangos SpellAuraHolder::IsInUse: any of its auras has its handler running (<see cref="SpellAura.InUse"/>, set in
+    /// ApplyAuraModifier). vmangos also keeps a holder-level counter (SpellAuras.h:291) that is raised in UpdateHolder, around procs and at
+    /// Spell.cpp:5272; the repo has none, so a holder that is mid-tick or mid-proc can still be displaced here (the tick loop tolerates that,
+    /// it skips a removed holder).
+    /// </summary>
     private static bool IsInUse(SpellAuraHolder holder)
     {
         foreach (SpellAura? aura in holder.Auras)

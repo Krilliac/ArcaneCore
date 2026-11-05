@@ -58,8 +58,7 @@ same caster, removes the other holder; a weaker rank of one chain, or a weaker s
 | Well Fed, Food, Drink, Food and drink | generic family (standing cancels, regeneration auras; RETAIN_ITEM_CAST) and the priest sunfruit rows: :28-64, :92-100 | Well Fed one per target; food and drink pair as :157-176 |
 | Snare, Negative haste | a lone MOD_DECREASE_SPEED (not a daze) or a negative lone MOD_MELEE_HASTE: :163-172 | one per target, any caster; a weaker one is refused (Unit.cpp:3504-3507, SpellEntry.cpp:197-220) |
 
-LIMITS: the elixir specifics (battle, guardian, flask: vmangos reads the `spell_elixir` table) are not classified, so elixirs stack as before; the heal
-over time first-in-chain rule (Unit.cpp:3498-3500), the database `spell_group` rules and the `IsNoStackSpellDueToSpell` fallback are not modelled;
+LIMITS: the elixir specifics (battle, guardian, flask: vmangos reads the `spell_elixir` table) are not classified, so elixirs stack as before; the database `spell_group` rules and the `IsNoStackSpellDueToSpell` fallback are not modelled;
 the rank chain is the spell family and name (no `SkillLineAbility` rank table). Passive and hidden spells are not skipped: they follow
 vmangos Unit.cpp:3366-3453 (a passive spell with no aura effect stacks with everything; a passive or hidden holder only meets the same caster or
 a party area aura, and then only a rank of its own chain, by the strict `SpellSpecifics.IsRankOf`). Drain Soul style holders (CHANNEL_DEATH_ITEM)

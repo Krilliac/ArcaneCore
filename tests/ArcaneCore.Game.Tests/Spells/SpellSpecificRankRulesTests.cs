@@ -46,6 +46,7 @@ public sealed class SpellSpecificRankRulesTests
     [InlineData("flat-misc")]
     [InlineData("name")]
     [InlineData("generic-family")]
+    [InlineData("other-family")]
     public void ASingleDifferingComparison_MakesNoRank(string differs)
     {
         SpellInfo first = Ranked(1, Aura(AuraType.Dummy));
@@ -59,6 +60,7 @@ public sealed class SpellSpecificRankRulesTests
             "flat-misc" => Ranked(2, Aura(AuraType.AddFlatModifier, misc: 2)),
             "name" => Ranked(2, Aura(AuraType.Dummy)) with { Name = "Other" },
             "generic-family" => Ranked(2, Aura(AuraType.Dummy), family: 0),
+            "other-family" => Ranked(2, Aura(AuraType.Dummy), family: FamilyWarrior),
             _ => throw new ArgumentOutOfRangeException(nameof(differs)),
         };
         if (differs == "flat-misc")
@@ -182,12 +184,35 @@ public sealed class SpellSpecificRankRulesTests
         Assert.True(kit.System.HasAura(target, S2));
     }
 
-    private static SpellInfo Passive(uint id, int amount, bool withAura = true, bool withArea = false)
+    [Fact]
+    public void AHealOverTimeThatTriggersTheOther_IsNotRefusedByIt()
     {
-        var effects = new List<SpellEffectInfo>
+        SpellInfo child = Hot(S2, 10) with
         {
-            withAura ? Effect(SpellEffectName.ApplyAura, amount, aura: AuraType.Dummy) : Effect(SpellEffectName.Dummy, amount),
+            Effects = [Aura(AuraType.PeriodicHeal, 10) with { Amplitude = 3000 }, Effect(SpellEffectName.TriggerSpell, 0, trigger: S1)],
         };
+        using var kit = new SpellTestKit(Hot(S1, 20), child);
+        (Player caster, _) = kit.AddPlayer(1, 0, 0);
+        (Player other, _) = kit.AddPlayer(3, -2, 0);
+        (Player target, _) = kit.AddPlayer(2, 3, 0);
+
+        Assert.True(kit.System.AddAura(target, S1, caster: other));
+        Assert.True(kit.System.AddAura(target, S2, caster: caster));
+
+        Assert.True(kit.System.HasAura(target, S1));
+        Assert.True(kit.System.HasAura(target, S2));
+    }
+
+    private static SpellInfo Passive(uint id, int amount, bool withAura = true, bool withArea = false, bool lateAura = false)
+    {
+        // lateAura: the first effect is a Dummy effect and the aura sits in the second slot, so IsRankOf (first effect) matches a spell with no aura.
+        var effects = new List<SpellEffectInfo>();
+        if (lateAura)
+        {
+            effects.Add(Effect(SpellEffectName.Dummy, amount));
+        }
+
+        effects.Add(withAura ? Effect(SpellEffectName.ApplyAura, amount, aura: AuraType.Dummy) : Effect(SpellEffectName.Dummy, amount));
         if (withArea)
         {
             effects.Add(Effect(SpellEffectName.ApplyAreaAuraParty, 0, aura: AuraType.Dummy) with { Radius = 30 });
@@ -212,10 +237,13 @@ public sealed class SpellSpecificRankRulesTests
     [Fact]
     public void APassiveSpellWithoutAnAuraEffect_StacksWithItsStrongerRank_ButOneWithAnAuraIsRefused()
     {
-        using var kit = new SpellTestKit(Passive(S1, 20), Passive(S2, 10, withAura: false), Passive(S3, 10));
+        // All three have a Dummy first effect, so IsRankOf is true and the weaker ranks compare negative: only the no-aura early return spares S2.
+        using var kit = new SpellTestKit(Passive(S1, 20, lateAura: true), Passive(S2, 10, withAura: false), Passive(S3, 10, lateAura: true));
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
         (Player target, _) = kit.AddPlayer(2, 3, 0);
         Assert.True(kit.System.AddAura(target, S1, permanent: true, caster: caster));
+        Assert.True(SpellSpecifics.IsRankOf(kit.Store.Get(S2)!, kit.Store.Get(S1)!));
+        Assert.True(SpellSpecifics.CompareAuraRanks(kit.Store.Get(S2)!, kit.Store.Get(S1)!) < 0);
 
         Assert.False(Refused(kit, kit.Store.Get(S2)!, target, caster));
         Assert.True(Refused(kit, kit.Store.Get(S3)!, target, caster));
@@ -304,7 +332,7 @@ public sealed class SpellSpecificRankRulesTests
         Assert.True(kit.System.AddAura(victim, SerpentSting, caster: caster));
         SpellAuraHolder old = kit.System.GetAuras(victim).Single(h => h.Spell.Id == SerpentSting);
         SpellAura running = old.Auras.First(a => a is not null)!;
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/stack-rule-parent-in-use");
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/stack-rule-parent-in-use" && n.Subject == SpellSystem.FormatSpellSubject(SerpentSting));
         running.InUse = true;
 
         try

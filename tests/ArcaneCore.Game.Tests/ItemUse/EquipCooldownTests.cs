@@ -217,7 +217,8 @@ public sealed class EquipCooldownTests
     {
         (SpellTestKit kit, Player player, _) = Create();
         using SpellTestKit owner = kit;
-        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/cooldown-invalid");
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "spell/cooldown-invalid"
+            && (n.Subject == SpellSystem.FormatSpellSubject(HugeCategorySpell) || n.Subject == SpellSystem.FormatSpellSubject(UseSpell)));
 
         Equip(player, Trinket);
         Assert.False(capture.Any("spell/cooldown-invalid"), capture.Describe());
