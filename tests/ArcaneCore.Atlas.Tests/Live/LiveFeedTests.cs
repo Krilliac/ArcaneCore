@@ -897,6 +897,97 @@ public sealed class LiveFeedTests
         Assert.Equal("the server closed the connection right after hello.", pushed["detail"]!.GetValue<string>());
     }
 
+    // AfterRetire runs after the installed connection was retired and before it is detached or replaced. If the order were detach first, the
+    // connection would already be gone (IsConnected false) or its entities still there at that point; the pair below pins both.
+    [Fact]
+    public async Task AReplacementThatClosesAfterTheRetire_FindsThePreviousConnectionAlreadyRetiredAndStillInstalled()
+    {
+        string nameA = FakeFeedServer.NewName();
+        string nameB = FakeFeedServer.NewName();
+        await using var rig = new LiveRig(o => o with { PipeNameFor = pid => pid == 1 ? nameA : nameB });
+        FakeFeedServer a = rig.NewServer(nameA);
+        FakeFeedServer b = rig.NewServer(nameB);
+        await rig.ConnectAsync(pid: 1, Wire.Hello(pid: 1), a);
+        await a.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        Assert.Equal(1, rig.Feed.Store.EntityCount);
+
+        bool installedAtRetire = false;
+        int entitiesAtRetire = -1;
+        FeedSession? incoming = null;
+        rig.Feed.BeforeSwap = session => incoming = session;
+        rig.Feed.AfterRetire = () =>
+        {
+            // The new connection closes after the retire step and before the swap lock: the interleaving the closed path must survive.
+            b.Drop();
+            Assert.True(SpinWait.SpinUntil(() => !incoming!.IsOpen, FakeFeedServer.Patience));
+            installedAtRetire = rig.Feed.IsConnected;
+            entitiesAtRetire = rig.Feed.Store.EntityCount;
+        };
+
+        (FakeFeedServer _, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 2, server: b);
+        await b.AnswerHelloAsync(Wire.Hello(pid: 2));
+        _ = await FailureOf(connect);
+
+        Assert.True(installedAtRetire, "the previous connection is still installed when its entities are retired");
+        Assert.Equal(0, entitiesAtRetire);
+        Assert.False(rig.Feed.IsConnected);
+        Assert.Equal(0, rig.Feed.Store.EntityCount);
+    }
+
+    [Fact]
+    public async Task Disconnect_RetiresTheEntitiesWhileTheConnectionIsStillInstalled()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+
+        bool installedAtRetire = false;
+        int entitiesAtRetire = -1;
+        rig.Feed.AfterRetire = () =>
+        {
+            installedAtRetire = rig.Feed.IsConnected;
+            entitiesAtRetire = rig.Feed.Store.EntityCount;
+        };
+
+        CommandResult result = await rig.RunAsync("live.disconnect");
+
+        Assert.True(result.Ok, result.ErrorMessage);
+        Assert.True(installedAtRetire);
+        Assert.Equal(0, entitiesAtRetire);
+        Assert.False(rig.Feed.IsConnected);
+    }
+
+    [Fact]
+    public async Task Dispose_RetiresTheEntitiesWhileTheConnectionIsStillInstalled()
+    {
+        var rig = new LiveRig();
+        try
+        {
+            FakeFeedServer server = await rig.ConnectAsync();
+            await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+            await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+
+            bool installedAtRetire = false;
+            int entitiesAtRetire = -1;
+            rig.Feed.AfterRetire = () =>
+            {
+                installedAtRetire = rig.Feed.IsConnected;
+                entitiesAtRetire = rig.Feed.Store.EntityCount;
+            };
+
+            rig.Feed.Dispose();
+
+            Assert.True(installedAtRetire);
+            Assert.Equal(0, entitiesAtRetire);
+        }
+        finally
+        {
+            await rig.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task Disconnect_TellsTheServer_ClosesTheLine_AndForgetsTheSubscriptions()
     {

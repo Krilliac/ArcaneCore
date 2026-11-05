@@ -129,6 +129,7 @@ export async function openDevPalette({ loadCatalog, selection, lastPoint, run, o
         } else {
             specs = entry.parsed.args.filter((a) => a.kind !== 'literal').map((a) => ({ ...a, label: a.hint ? `${a.name} (${a.hint})` : a.name }));
         }
+        const chips = context();
         const rows = specs.map((spec) => {
             let control;
             if (spec.kind === 'choice') {
@@ -146,6 +147,7 @@ export async function openDevPalette({ loadCatalog, selection, lastPoint, run, o
         const submit = async () => {
             const sel = selection();
             const point = lastPoint();
+            fill(chips, ...context().childNodes);
             fill(resultBox, h('p', { class: 'muted', text: 'Running.' }));
             let descriptor;
             if (entry.kind === 'action') {
@@ -174,7 +176,7 @@ export async function openDevPalette({ loadCatalog, selection, lastPoint, run, o
                 entry.security ? h('span', { class: 'badge', text: entry.security }) : null,
                 entry.write ? h('span', { class: 'badge badge-write', text: 'write' }) : null,
                 entry.help ? h('p', { class: 'muted', text: entry.help }) : null),
-            context(), rows, tail,
+            chips, rows, tail,
             h('div', { class: 'form-actions' }, button('Back', () => showList(), { title: 'Back to the list' }), h('button', { class: 'button button-primary', type: 'submit', text: 'Run' })),
             resultBox);
         fill(body, form);
@@ -209,9 +211,12 @@ export async function openDevPalette({ loadCatalog, selection, lastPoint, run, o
             aria: { expanded: 'true', autocomplete: 'list', label: 'Search GM commands' },
         });
         const list = h('ul', { class: 'palette-list', role: 'listbox', aria: { label: 'GM commands' } });
+        const chips = context();
         let matches = [];
         let active = 0;
         const render = () => {
+            // The chips are read again with every keystroke: the target shown is the one the typed line is sent with.
+            fill(chips, ...context().childNodes);
             matches = filterEntries(entries, input.value);
             active = Math.min(active, Math.max(matches.length - 1, 0));
             fill(list, ...matches.map((m, i) => h('li', {
@@ -247,7 +252,7 @@ export async function openDevPalette({ loadCatalog, selection, lastPoint, run, o
                 }
             }
         });
-        fill(body, context(), input, list);
+        fill(body, chips, input, list);
         render();
         input.focus();
     }

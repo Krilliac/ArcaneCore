@@ -12,7 +12,7 @@ public interface IClientFileSource
 
     bool Exists(string path);
 
-    /// <summary>The file's bytes, or null when no archive has it. Throws <see cref="InvalidDataException"/> for corrupt data.</summary>
+    /// <summary>The file's bytes, or null when no archive has it. Throws <see cref="InvalidDataException"/> for corrupt data and <see cref="NotSupportedException"/> when an archive stores the file with a compression method the reader has no code for.</summary>
     byte[]? Read(string path);
 
     /// <summary>Known paths starting with <paramref name="prefix"/> (from the archives' file lists), sorted ordinally.</summary>

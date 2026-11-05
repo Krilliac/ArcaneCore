@@ -372,8 +372,10 @@ internal sealed class FeedSession : IDisposable
         FailWaiters(reason);
 
         // The reader has ended, so nothing reads the pipe again: close the client handle now instead of leaving it to the finalizer. The end
-        // of the stream does not close it, and LiveFeed's close handler does not dispose the session. It is closed before the close notice,
-        // so no sink sees an ended session still holding its handle; LiveFeed's handler reads only Id and Hello, which survive disposal.
+        // of the stream does not close it. It is closed before the close notice, so no sink sees an ended session still holding its handle.
+        // That ordering holds only for closes the reader starts here: a close started by a caller's Dispose can reach the sinks' other
+        // paths first. There are two sinks: LiveFeed's handler reads only Id and Hello (which survive disposal) and does not dispose the
+        // session, while PipeFeedConnector's Adapter forwards the notice to the public feed sink, which owns that connection's teardown.
         try
         {
             Dispose();

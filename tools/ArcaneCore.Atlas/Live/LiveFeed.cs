@@ -106,7 +106,8 @@ public sealed class LiveFeed : IDisposable
 
             // One read of IsOpen decides both the retire and the answer, so when the connection ended through the reader's close path the
             // dead connection is retired (entities emptied) before false is returned: a caller that reads IsConnected before the store never
-            // sees "disconnected" next to stale entities. A client-side disconnect or dispose detaches the session first, so a narrow window remains there.
+            // sees "disconnected" next to stale entities. A client-side disconnect, a dispose and a replacement that closed meanwhile all retire
+            // the installed connection before they detach it, so no window remains there.
             bool open = session is { IsOpen: true };
             if (!open && session is not null)
             {
@@ -119,6 +120,12 @@ public sealed class LiveFeed : IDisposable
 
     /// <summary>Test hook invoked after hello succeeds and before the session swap lock is taken.</summary>
     internal Action<FeedSession>? BeforeSwap { get; set; }
+
+    /// <summary>
+    /// Test hook invoked right after the installed connection was retired and before it is detached or replaced, on the connect, disconnect
+    /// and dispose paths alike: the connection is still installed and its entities are already gone.
+    /// </summary>
+    internal Action? AfterRetire { get; set; }
 
     /// <summary>Test hook invoked at the start of the close notice, after the session ended and before its entities are retired.</summary>
     internal Action<FeedSession>? BeforeClose { get; set; }
@@ -171,6 +178,13 @@ public sealed class LiveFeed : IDisposable
             }
 
             BeforeSwap?.Invoke(session);
+
+            // The previous connection's entities are retired while it is still installed, never after it is detached: a close of the new
+            // connection can land at any point before the swap lock below, and the closed path then detaches with nothing left to retire.
+            // Frames of the previous connection that arrive in this short gap are dropped, which the swap's own store clear would do anyway.
+            // The lock order stays _state and _apply never nested: OnFrame publishes under _apply.
+            RetireCurrent();
+            AfterRetire?.Invoke();
 
             FeedSession? previous = null;
             bool disposedMeanwhile;
@@ -255,6 +269,9 @@ public sealed class LiveFeed : IDisposable
         await _gate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
+            // Retired before it is detached: once _session is null nobody could tell which entities belong to the closing connection.
+            RetireCurrent();
+            AfterRetire?.Invoke();
             FeedSession? session = Detach();
             lock (_state)
             {
@@ -263,7 +280,6 @@ public sealed class LiveFeed : IDisposable
 
             if (session is not null)
             {
-                Retire(session.Id);
                 using var courtesy = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
                 courtesy.CancelAfter(TimeSpan.FromMilliseconds(500));
                 try
@@ -769,6 +785,8 @@ public sealed class LiveFeed : IDisposable
         }
 
         _lifetime.Cancel();
+        RetireCurrent();
+        AfterRetire?.Invoke();
         FeedSession? session = Detach();
         lock (_apply)
         {
@@ -807,6 +825,21 @@ public sealed class LiveFeed : IDisposable
             return _session is { IsOpen: true } session
                 ? session
                 : throw new CommandException(CommandException.Unavailable, $"not connected to a map feed ({_detail}); run live.connect first.");
+        }
+    }
+
+    /// <summary>Retires the installed connection (if any) without detaching it, so a later <see cref="Detach"/> never leaves its entities behind.</summary>
+    private void RetireCurrent()
+    {
+        FeedSession? current;
+        lock (_state)
+        {
+            current = _session;
+        }
+
+        if (current is not null)
+        {
+            Retire(current.Id);
         }
     }
 
