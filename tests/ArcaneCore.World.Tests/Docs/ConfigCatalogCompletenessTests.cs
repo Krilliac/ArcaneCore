@@ -618,9 +618,7 @@ public sealed class ConfigCatalogCompletenessTests
             }
         }
 
-        Assert.True(wrong.Count == 0, "options a daemon binds are missing for it in the catalog:
-" + string.Join("
-", wrong));
+        Assert.True(wrong.Count == 0, "options a daemon binds are missing for it in the catalog:\n" + string.Join("\n", wrong));
     }
 
     [Fact]
