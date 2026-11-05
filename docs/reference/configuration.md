@@ -188,6 +188,7 @@ How to read the tables:
 | `AuctionHouseBot:BuyValuePercent` | `uint` | `80` | - | The most the buyer pays, as a percent of the bot's own value of the item (cMaNGOS AuctionHouseBot.Buy.Value, 0-200, default 80). |
 | `AuctionHouseBot:DailyBuyBudgetCopper` | `uint` | `10000000` | - | Custody limit: most copper the buyer may pay out per UTC day, all houses together (MaNGOS Zero custody; 0 = the buyer never buys). |
 | `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
+| `AuctionHouseBot:DynamicIgnoreGmAccounts` | `bool` | `false` | - | With `DynamicMaxRequiredLevel`, leave characters of staff accounts (security above player) out of the highest-level count (cMaNGOS AuctionHouseBot.Level.IgnoreGmAccounts, default false). When only staff characters are online the highest of their levels is the fallback, as in cMaNGOS. |
 | `AuctionHouseBot:DynamicMaxRequiredLevel` | `bool` | `false` | - | Take the required level cap from the highest level of the characters online (cMaNGOS AuctionHouseBot.Level.DynamicMaxRequired, default false). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value. |
 | `AuctionHouseBot:DynamicRefreshMinutes` | `uint` | `10` | - | Minutes between refreshes of the dynamic level cap (cMaNGOS AuctionHouseBot.Level.DynamicRefreshInterval, at least 1, default 10). |
 | `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
@@ -689,6 +690,7 @@ How to read the tables:
 | `Gateway:Transfers:AnomalyAfter` | `TimeSpan` | `00:10:00` | - | How long a player transfer may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying). Default 10 minutes. |
 | `Gateway:Transfers:Enabled` | `bool` | `false` | - | `true` lets this gateway coordinate cross-worker player transfers and finish interrupted ones from the journal: it connects to the characters database (Database:Characters:*, schema validation only, nothing is created or upgraded) and opens a control channel to every worker. The workers must have Cluster:Worker:Transfers:Enabled on. `false`, the default, changes nothing. |
 | `Gateway:Transfers:RecoveryInterval` | `TimeSpan` | `00:00:05` | - | How often the gateway looks for unresolved player transfers in the journal and recovers them (before the commit they abort, after it they roll forward). Default 5 s. |
+| `Gateway:Transfers:TestStageHold` | `bool` | `false` | - | `true` lets the crash scenarios of the test suite hold a transfer at a stage they name in the process environment. Never set it on a real gateway: a held transfer waits up to 4 minutes. `false`, the default, ignores that environment. |
 
 ## `HotReload`
 
@@ -1661,6 +1663,9 @@ How to read the tables:
 | `World:Playerbots:Chat:InProcess:Threads` | `int` | `2` | - | Threads one reply computes on (1..16; dedicated, BelowNormal priority, never the thread pool). |
 | `World:Playerbots:Chat:InProcess:TopK` | `int` | `40` | - | Sample among the k most likely tokens (1..256). |
 | `World:Playerbots:Chat:InProcess:TopP` | `double` | `0.9` | - | Then among the smallest set holding this much probability (0.05..1). |
+| `World:Playerbots:Chat:Lfg:AnswerRepeatSeconds` | `int` | `60` | live | Seconds within which a player's repeated "inv" to the same waiting group is applied without a second reply (10..600). |
+| `World:Playerbots:Chat:Lfg:Enabled` | `bool` | `true` | live | Let any bot of a waiting group answer a whisper "inv" for the group, not only the bot that posted the call (on by default). Off: only the whisper to the poster itself is answered. |
+| `World:Playerbots:Chat:Lfg:MaxTrackedVolunteers` | `int` | `64` | live | The most (player, group) answers remembered for `AnswerRepeatSeconds` (8..512). |
 | `World:Playerbots:Chat:MaxDailySpendUsd` | `double` | `1` | live | The most estimated US dollars the priced providers may spend per UTC day (0..10000; 0 = no daily cap). The estimate counts the tokens each reply reports at the provider's price; a provider without a known price is limited by its MaxRepliesPerHour only. |
 | `World:Playerbots:Chat:MaxQueuedRequests` | `int` | `16` | live | The most replies waiting for a provider at once (1..256); a line that finds the queue full is not answered. |
 | `World:Playerbots:Chat:MemoryExchanges` | `int` | `4` | live | Earlier exchanges with the same player a bot remembers and sends with a model request (0..16). |

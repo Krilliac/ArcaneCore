@@ -1087,6 +1087,19 @@ Gateway.Transfers.Enabled = false
 #
 Gateway.Transfers.RecoveryInterval = 00:00:05
 
+#
+#    Gateway.Transfers.TestStageHold
+#        Description: true lets the crash scenarios of the test suite hold a transfer at a stage
+#                     they name in the process environment. Never set it on a real gateway: a held
+#                     transfer waits up to 4 minutes. false, the default, ignores that environment.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaytransfers
+#
+Gateway.Transfers.TestStageHold = false
+
 ###############################################################################
 # LOGGING
 ###############################################################################

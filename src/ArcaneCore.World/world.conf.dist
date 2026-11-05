@@ -757,6 +757,21 @@ AuctionHouseBot.DailyBuyBudgetCopper = 10000000
 AuctionHouseBot.DailyItemBudget = 5000
 
 #
+#    AuctionHouseBot.DynamicIgnoreGmAccounts
+#        Description: With DynamicMaxRequiredLevel, leave characters of staff accounts (security
+#                     above player) out of the highest-level count (cMaNGOS
+#                     AuctionHouseBot.Level.IgnoreGmAccounts, default false). When only staff
+#                     characters are online the highest of their levels is the fallback, as in
+#                     cMaNGOS.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#auctionhousebot
+#
+AuctionHouseBot.DynamicIgnoreGmAccounts = false
+
+#
 #    AuctionHouseBot.DynamicMaxRequiredLevel
 #        Description: Take the required level cap from the highest level of the characters online
 #                     (cMaNGOS AuctionHouseBot.Level.DynamicMaxRequired, default false). With nobody
@@ -14067,6 +14082,42 @@ World.Playerbots.Chat.InProcess.TopK = 40
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.InProcess.TopP = 0.9
+
+#
+#    World.Playerbots.Chat.Lfg.AnswerRepeatSeconds
+#        Description: Seconds within which a player's repeated "inv" to the same waiting group is
+#                     applied without a second reply (10..600).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number from 10 to 600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.AnswerRepeatSeconds = 60
+
+#
+#    World.Playerbots.Chat.Lfg.Enabled
+#        Description: Let any bot of a waiting group answer a whisper "inv" for the group, not only
+#                     the bot that posted the call (on by default). Off: only the whisper to the
+#                     poster itself is answered.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.Enabled = true
+
+#
+#    World.Playerbots.Chat.Lfg.MaxTrackedVolunteers
+#        Description: The most (player, group) answers remembered for AnswerRepeatSeconds (8..512).
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number from 8 to 512
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.MaxTrackedVolunteers = 64
 
 #
 #    World.Playerbots.Chat.MaxDailySpendUsd
