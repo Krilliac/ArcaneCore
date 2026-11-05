@@ -79,8 +79,30 @@ public sealed class SpellEffectGapTests
         Assert.True(kit.System.LearnSpell(player, CastBolt));
 
         Assert.Equal(new byte[] { (byte)InstantHeal, 0, (byte)CastBolt, 0 }, Packets(session, WorldOpcode.SmsgSupercededSpell).Single());
-        List<WorldOpcode> order = Opcodes(session);
-        Assert.True(order.IndexOf(WorldOpcode.SmsgSupercededSpell) < order.IndexOf(WorldOpcode.SmsgLearnedSpell));
+        // vmangos Player::AddSpell returns false for a superseding rank, so Player::LearnSpell sends no SMSG_LEARNED_SPELL (Player.cpp:3743,3774-3782).
+        Assert.Empty(Packets(session, WorldOpcode.SmsgLearnedSpell));
+    }
+
+    [Fact]
+    public void LearningATalentLinkedRank_WithNoRawForwardLink_SendsNoSupercededSpell_AndAnnouncesTheSpell()
+    {
+        // Pyroblast ranks 1 and 2: SkillLineAbility.dbc has forward_spellid 0 on both; only TalentAbilityRankLinks joins them in
+        // RankChains. The reference (GetSpellBookSuccessorSpellId) sees no successor, so the client keeps both ranks.
+        const uint pyroblast1 = 11366;
+        const uint pyroblast2 = 12505;
+        using var kit = new SpellTestKit();
+        kit.System.RankChains = new SpellRankChains([
+            new SkillLineAbilityRecord(1, 8, pyroblast1, 0, 0, 0, 0, 0, 0, 0),
+            new SkillLineAbilityRecord(2, 8, pyroblast2, 0, 0, 0, 0, 0, 0, 0)]);
+        Assert.Equal(pyroblast1, kit.System.RankChains.Previous(pyroblast2)); // the chain relation does link them
+        (Player player, FakeSession session) = kit.AddPlayer(1);
+        Assert.True(kit.System.LearnSpell(player, pyroblast1));
+        session.Clear();
+
+        Assert.True(kit.System.LearnSpell(player, pyroblast2));
+
+        Assert.Empty(Packets(session, WorldOpcode.SmsgSupercededSpell));
+        Assert.Single(Packets(session, WorldOpcode.SmsgLearnedSpell));
     }
 
     [Fact]
@@ -170,6 +192,29 @@ public sealed class SpellEffectGapTests
 
         Assert.Equal(10u, SpellSystem.GetPower(caster, PowerType.Rage));
         Assert.Equal(0u, SpellSystem.GetPower(target, PowerType.Rage));
+    }
+
+    [Fact]
+    public void TriggerSpell_OfDisarm6608_RealShape_DisarmsTheTarget_NotTheCaster()
+    {
+        // 25852 (effect 64 trigger spell at the unit) triggers 6608: Spell.dbc gives it one named slot (effect 6 aura, TargetA = caster, B and C empty),
+        // which fails the literal caster-source rule, so it is pinned by id (mangos-classic SpellEffects.cpp:1608-1612).
+        const uint trigger25852 = 972010, disarm = 6608;
+        using SpellTestKit kit = NewKit(
+            Spell(trigger25852, Effect(SpellEffectName.TriggerSpell, 0, SpellImplicitTarget.Unit, trigger: disarm)),
+            Spell(disarm, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModDisarm)) with
+            {
+                Duration = new SpellDuration(10000, 0, 10000),
+                SpellVisual = 1,
+            });
+        Assert.False(SpellCasterSourceTargets.IsCasterSourceTargetsOnly(kit.Store.Get(disarm)!)); // the literal rule alone would disarm the caster
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+
+        kit.System.CastSpell(caster, trigger25852, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.True(kit.System.HasAura(target, disarm));
+        Assert.False(kit.System.HasAura(caster, disarm));
     }
 
     // --- EffectTeleportUnits -----------------------------------------------------------------------------------------------------
