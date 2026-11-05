@@ -92,6 +92,14 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // An item cast of target 38 made the unit it found the cast's unit target (SelectScriptTargets, vmangos Spell.cpp:567-568), so the effects
+            // selected after this one see it as their explicit target (Dominion of Soul 16053: A38, A1, A6).
+            if (cast.CastItem is not null && selector == SpellImplicitTarget.UnitScriptNearCaster && effect.TargetA == selector
+                && units.Count == 1 && cast.Targets.Unit == units[0].Unit.Guid)
+            {
+                unitTarget = units[0].Unit;
+            }
+
             // Target A 46 beside a unit target B (an A46 / B16 effect; 17616 has that shape but no spell_script_target row, so it is refused beforehand and
             // the merge matters only for a spell with rows): vmangos FillTargetMap runs SetTargetMap for both (Spell.cpp:381-392), A's found
             // unit first and then B's list; SelectorOf names only A here, so B is selected as well and the two lists are merged.

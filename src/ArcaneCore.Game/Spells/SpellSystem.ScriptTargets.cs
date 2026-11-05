@@ -23,7 +23,7 @@ public sealed partial class SpellSystem
     /// beforehand (<see cref="ScriptLocationTargetMissing"/>); a 38 effect of a spell with no rows and no spell-specific selector fails it
     /// with BAD_TARGETS too (<see cref="HasScriptTargetWithoutRows"/>, Spell.cpp:449-460). When an item casts the spell (vmangos m_CastItem), the
     /// unit found by 38 also becomes the cast's explicit unit target (Spell.cpp:567-568: Toss Fuel on Bonfire 28806, Dominion of Soul 16053);
-    /// the later effects of the same cast keep the aim they had (a self cast stays a self cast for them, see <c>SpellCast.ScriptTargetKeptSelfAim</c>).
+    /// <c>SelectTargets</c> then hands that unit to the effects selected after the 38 effect as their explicit unit target.
     /// </summary>
     /// <para>
     /// <paramref name="cone"/> (TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60) fills the caster's frontal cone (<see cref="SpellConstants.ConeArc"/>) instead of a circle.
@@ -42,7 +42,6 @@ public sealed partial class SpellSystem
             if (cast.CastItem is not null)
             {
                 // vmangos CheckScriptTargeting: "if (m_CastItem) m_targets.setUnitTarget(unitScriptTarget)" for target 38 (Spell.cpp:567-568).
-                if (cast.Targets.Mask == SpellCastTargetFlags.Self) cast.ScriptTargetKeptSelfAim = true;
                 cast.Targets.Unit = nearestUnit.Guid;
                 cast.Targets.Mask |= SpellCastTargetFlags.Unit;
             }
@@ -159,7 +158,7 @@ public sealed partial class SpellSystem
     /// object of the nearest spell_script_target row within the effect radius (else the spell's maximum range, 200 yd for an "anywhere" range)
     /// becomes the destination. Row type 0 is a game object, 1 a living creature, 2 a dead creature, 3 a player; a valid explicit unit is preferred
     /// to the nearest one. The found object is also a target of the effect only when target A is 46 and the effect is not a persistent area aura
-    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target (carried by the caster for every effect except aura-applying ones; the carrier is no unit target, see <c>ObjectCarriers</c>). Nothing within range leaves
+    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target (carried by the caster for every effect except those <see cref="CannotBeCarried"/> names: aura, damage, heal, power and instakill effects; the carrier is no unit target, see <c>ObjectCarriers</c>). Nothing within range leaves
     /// the destination alone and selects nothing; the cast itself is refused beforehand (<c>CheckCast</c>, <see cref="ScriptLocationTargetMissing"/>).
     /// Target B 46 beside another target A only sets the destination.
     /// </summary>
