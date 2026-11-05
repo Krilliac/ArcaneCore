@@ -220,8 +220,10 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             if (crowded == PlanOutcome.Route && _visitOnSpot && _route is not null)
             {
                 _routeTarget = npc.Guid;
+                _visitNpc = npc.Guid;
                 _visitAnchor = new(player.X, player.Y, player.Z);
                 _visitStuckMs = 0;
+                _visitArmed = false;
                 toSpot = true;
             }
             else
@@ -234,6 +236,9 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         if (!inReach || toSpot)
         {
             if (player.Map is not { }) return false;
+            // A route walked to its end without the NPC becoming interactable is planned again toward the NPC's place now (a patrolling
+            // vendor has moved on); the visit's stuck clock below keeps running across that replan.
+            if (_route is { Complete: true }) _route = null;
             if (_route is null || _routeTarget != npc.Guid)
             {
                 // A plan to this NPC was refused a moment ago (after its fallbacks, 30 to 40 queries): not asked again every think.
@@ -247,9 +252,15 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     _visitRefusedUntil = unchecked(session.World.NowMs + VisitRefusedMs);
                     return TravelToRepair(player, services, elapsedMs);
                 }
+                if (_visitNpc != npc.Guid)
+                {
+                    // A new visit: its clock starts at the first think that follows the route, not at the one that planned it.
+                    _visitNpc = npc.Guid;
+                    _visitAnchor = new(player.X, player.Y, player.Z);
+                    _visitStuckMs = 0;
+                    _visitArmed = false;
+                }
                 _routeTarget = npc.Guid;
-                _visitAnchor = new(player.X, player.Y, player.Z);
-                _visitStuckMs = 0;
             }
             bool walking = true;
             // A route that was planned but is not walked (the bot never leaves its place) is given up like a refused plan; before, only the
@@ -258,6 +269,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             {
                 _route = null;
                 _routeTarget = default;
+                _visitNpc = default;
                 _visitStuckMs = 0;
                 if (inReach)
                 {
@@ -277,7 +289,11 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             if (walking)
             {
                 ClearRepairTrip();
-                if (PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs)) return true;
+                if (PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs))
+                {
+                    _visitArmed = true;
+                    return true;
+                }
                 // A walk that does not go on (it ended at the spot, or a stale route, a stop or a hazard holds it) is no reason to hold a
                 // bot that is in reach: it is dropped and the NPC is used from here, so no lower rung moves the bot away. Out of reach
                 // it is as it was.
@@ -582,11 +598,20 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// </summary>
     internal const uint VisitStuckMs = 10_000;
 
+    /// <summary>
+    /// The most one think adds to the visit's stuck clock. A think gap is 8 to 30 s with a thousand bots (<see cref="PlayerbotMotion.LeaseCapMs"/>)
+    /// and the bot walks on its lease between thinks, so a long gap is no evidence of standing still: at least
+    /// <c>VisitStuckMs / VisitTickCapMs</c> thinks that find the bot in its place are needed.
+    /// </summary>
+    internal const uint VisitTickCapMs = 2_500;
+
     /// <summary>The distance (yards) from its anchor that counts as the visiting bot moving.</summary>
     internal const float VisitProgressYards = 2f;
 
+    private ObjectGuid _visitNpc;
     private Vector3 _visitAnchor;
     private uint _visitStuckMs;
+    private bool _visitArmed;
 
     /// <summary>A visiting bot at its own spot (<see cref="PlayerbotStandSpots"/>) is this close to it (yards).</summary>
     internal const float VisitSpotArrivedYards = 1f;
@@ -662,7 +687,12 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return PlayerbotNavigation.PlanExact(player, at, options, ref _tileWait, session.World.NowMs, out route);
     }
 
-    /// <summary>Ticks the visit leg's stuck clock once per think (never while a mount step holds the bot); true once <see cref="VisitStuckMs"/> passed without the bot moving <see cref="VisitProgressYards"/>.</summary>
+    /// <summary>
+    /// Ticks the visit leg's stuck clock once per think; true once <see cref="VisitStuckMs"/> passed without the bot moving
+    /// <see cref="VisitProgressYards"/>. It does not tick on the think that planned the route (<see cref="_visitArmed"/>: not yet followed),
+    /// while a mount step, a stun, fear or confusion holds the bot, or past <see cref="VisitTickCapMs"/> of one think. Limit: a bot that
+    /// moves between two NPCs resets the clock with each (the anchor and clock are per visit), which only costs the stall watch's 120 s.
+    /// </summary>
     private bool VisitStuck(Player player, uint elapsedMs)
     {
         OpenThinkIfClockMoved(session.World.NowMs);
@@ -672,7 +702,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             _visitAnchor = here;
             _visitStuckMs = 0;
         }
-        else if (!_visitClockedThisThink && !PlayerbotMount.IsBusy(session)) _visitStuckMs += elapsedMs;
+        else if (_visitArmed && !_visitClockedThisThink && !PlayerbotMount.IsBusy(session) && !PlayerbotMotion.ControlLost(player))
+            _visitStuckMs += Math.Min(elapsedMs, VisitTickCapMs);
         _visitClockedThisThink = true;
         return _visitStuckMs >= VisitStuckMs;
     }
@@ -1290,11 +1321,32 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return player.Inventory.AllItems
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
                 || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
-            .Where(candidate => (candidate.Template.Quality <= 1 || (full && candidate.Template.Quality == 2)) && candidate.Template.SellPrice > 0
+            .Where(candidate => (candidate.Template.Quality <= 1 || (full && candidate.Template.Quality == 2 && !KeepsGreen(player, candidate.Template)))
+                && candidate.Template.SellPrice > 0
                 && !Refused(_unsellable, candidate.Guid)
                 && !IsProtected(player, candidate, services, allowUnboundBindOnEquip: full) && IsJunk(player, candidate, weights))
             .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
             .FirstOrDefault();
+    }
+
+    /// <summary>How many levels ahead of the bot a bind-on-equip green still counts as one it will wear soon (<see cref="KeepsGreen"/>).</summary>
+    internal const int GreenKeepLevels = 5;
+
+    /// <summary>
+    /// Whether a full-bag bot leaves a green (quality 2) to <see cref="FindJunk"/>'s sale alone: only bind-on-equip weapons and armor are
+    /// sold (a green bag, trade good or rune is not, nor an unbound-binding piece of gear); not while the auction economy is on (the auction
+    /// house is the outlet for a green then); not when an equipment slot it fits is empty (anything beats nothing); and not while it needs
+    /// at most <see cref="GreenKeepLevels"/> levels more than the bot has (it is worn soon). Only the bags' sale of a #1442 green is limited:
+    /// grays and whites are unchanged.
+    /// </summary>
+    private bool KeepsGreen(Player player, ItemTemplate template)
+    {
+        if (options.Economy.Enabled) return true;
+        if ((ItemClass)template.Class is not (ItemClass.Weapon or ItemClass.Armor) || template.Bonding != 2) return true;
+        if (template.RequiredLevel > player.Level && template.RequiredLevel <= player.Level + GreenKeepLevels) return true;
+        foreach (byte slot in template.AllowedEquipSlots(player.Class, canDualWield: true))
+            if (slot != InventorySlots.NullSlot && player.Inventory.GetItem(InventorySlots.Bag0, slot) is null) return true;
+        return false;
     }
 
     private static bool IsJunk(Player player, Item item, PlayerbotStatWeights weights)

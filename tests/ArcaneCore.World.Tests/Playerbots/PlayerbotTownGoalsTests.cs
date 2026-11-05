@@ -609,8 +609,12 @@ public sealed class PlayerbotTownGoalsTests
     /// #1442: a full-bag bot sells an unbound bind-on-equip green that is no upgrade for what it wears, and keeps an upgrade, a bound item, a quest
     /// item and (here) the protected filler. Returns whether a sale was wanted, the money earned and the bag counts of the probed entries.
     /// </summary>
+    /// <param name="spare">Bag slots left free (the filler stops short of a full bag).</param>
+    /// <param name="economy">The auction economy stays on (the helper turns it off by default, so the vendor is the only outlet).</param>
+    /// <param name="wearBoots">The bot wears the Armor 100 boots (false: every equipment slot is empty).</param>
+    /// <param name="brokeWithBrokenGear">The worn boots are broken and the bot has no money (a repair-money sale, not a full-bag one).</param>
     private static async Task<(bool Wanted, bool Sold, uint Money, uint[] Counts)> FullBagsOfGreensAsync(
-        ItemTemplate[] probes, uint[] boundEntries)
+        ItemTemplate[] probes, uint[] boundEntries, int spare = 0, bool economy = false, bool wearBoots = true, bool brokeWithBrokenGear = false)
     {
         var npc = new TownVendorFixture();
         var items = new ItemTestContent();
@@ -623,7 +627,9 @@ public sealed class PlayerbotTownGoalsTests
         TownVendorServices.Current.Value = npc;
         try
         {
-            await using WorldTestHost host = WorldTestHost.Start();
+            await using WorldTestHost host = brokeWithBrokenGear
+                ? WorldTestHost.Start(configureServices: services => services.AddSingleton(RepairPrices()))
+                : WorldTestHost.Start();
             WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
             try
             {
@@ -634,16 +640,20 @@ public sealed class PlayerbotTownGoalsTests
                     foreach (Item existing in player.Inventory.AllItems.Where(item => item.BagSlot == InventorySlots.Bag0
                         && item.Slot >= InventorySlots.ItemStart && item.Slot < InventorySlots.ItemEnd).ToArray())
                         player.Inventory.DestroyItem(existing.BagSlot, existing.Slot);
-                    PlayerbotEquipmentTests.EquipFromBags(player, 9600);
+                    if (wearBoots)
+                        PlayerbotEquipmentTests.EquipFromBags(player, 9600);
+                    if (brokeWithBrokenGear)
+                        player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
                     foreach (ItemTemplate probe in probes)
                         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(probe.Entry, 1, out _));
                     foreach (Item item in player.Inventory.AllItems.Where(candidate => boundEntries.Contains(candidate.Entry)))
                         item.SetBinding(true);
-                    while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
+                    while (PlayerbotTownGoals.FreeBagSlots(player) > spare)
                         Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9690, 1, out _));
-                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)NpcFlags.Vendor;
+                    Assert.Equal(spare, PlayerbotTownGoals.FreeBagSlots(player));
+                    ((Creature)player.Map!.FindObject(TownVendorFixture.Guid)!).NpcFlags = (uint)(brokeWithBrokenGear ? NpcFlags.Vendor | NpcFlags.Repair : NpcFlags.Vendor);
                     player.Money = 0;
-                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true, Economy = new() { Enabled = economy } });
                     bool wanted = goals.HasCandidate(player);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     bool sold = goals.Update(player, 1500);
@@ -666,6 +676,73 @@ public sealed class PlayerbotTownGoalsTests
         Assert.True(sold);
         Assert.Equal(0u, counts[0]);
         Assert.Equal(40u, money);
+    }
+
+    [Fact]
+    public async Task FullBags_UnboundBindOnEquipGreen_EmptyEquipmentSlot_IsKept()
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9606, armor: 1, sellPrice: 40)], [], wearBoots: false);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task BagsWithAFewFreeSlots_DoNotSellAGreen(int spare)
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9607, armor: 1, sellPrice: 40)], [], spare: spare);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    [Fact]
+    public async Task ABrokeBotWithBrokenGear_DoesNotSellAGreenForTheRepair()
+    {
+        (bool wanted, bool sold, uint money, uint[] counts) = await FullBagsOfGreensAsync(
+            [BoeGreen(9608, armor: 1, sellPrice: 40)], [], spare: 8, brokeWithBrokenGear: true);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(0u, money);
+        Assert.Equal(1u, counts[0]);
+    }
+
+    /// <summary>Item 1 of the #1553 review: only bind-on-equip weapons and armor; a green bag, trade good or rune with no binding stays.</summary>
+    [Fact]
+    public async Task FullBags_GreenBagTradeGoodAndUnboundGreenGear_AreKept()
+    {
+        ItemTemplate tradeGood = new() { Entry = 9609, Name = "Green goods", Class = (uint)ItemClass.TradeGoods, Quality = 2, Stackable = 1, SellPrice = 40 };
+        ItemTemplate bag = new() { Entry = 9610, Name = "Green bag", Class = (uint)ItemClass.Container, Quality = 2, Stackable = 1, SellPrice = 40,
+            InventoryType = (uint)InventoryType.Bag, ContainerSlots = 8, Bonding = 2 };
+        ItemTemplate noBinding = BoeGreen(9611, armor: 1, sellPrice: 40, bonding: 0);
+        ItemTemplate rune = new() { Entry = 9612, Name = "Green rune", Class = (uint)ItemClass.Consumable, Quality = 2, Stackable = 20, SellPrice = 40 };
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([tradeGood, bag, noBinding, rune], []);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.All(counts, count => Assert.Equal(1u, count));
+    }
+
+    [Fact]
+    public async Task FullBags_BindOnEquipGreenOnlyNearlyUsable_IsKeptButAFarOneIsSold()
+    {
+        (bool nearWanted, _, _, uint[] near) = await FullBagsOfGreensAsync([BoeGreen(9613, armor: 500, sellPrice: 40) with { RequiredLevel = 4 }], []);
+        Assert.False(nearWanted);
+        Assert.Equal(1u, near[0]);
+        (bool farWanted, bool farSold, _, uint[] far) = await FullBagsOfGreensAsync([BoeGreen(9614, armor: 500, sellPrice: 40) with { RequiredLevel = 40 }], []);
+        Assert.True(farWanted);
+        Assert.True(farSold);
+        Assert.Equal(0u, far[0]);
+    }
+
+    [Fact]
+    public async Task FullBags_WithTheAuctionEconomyOn_LeavesTheGreenToTheAuctionHouse()
+    {
+        (bool wanted, bool sold, _, uint[] counts) = await FullBagsOfGreensAsync([BoeGreen(9615, armor: 1, sellPrice: 40)], [], economy: true);
+        Assert.False(wanted);
+        Assert.False(sold);
+        Assert.Equal(1u, counts[0]);
     }
 
     [Fact]
@@ -1123,6 +1200,115 @@ public sealed class PlayerbotTownGoalsTests
     /// </summary>
     [Fact]
     public async Task AVisitThatNeverMakesProgress_IsGivenUpLongBeforeTheStallWatch_AndSetsTheNpcAside()
+        => await WithVisitingBot(25f, (player, goals, host, session, startX) =>
+        {
+            uint stuckMs = 0;
+            bool givenUp = false;
+            const uint stepMs = 500;
+            // 60 s of world time, half of the stall watch's 120 s: the motion is never elapsed, so the bot never leaves where it stands (no progress).
+            for (int step = 0; step < 120 && !givenUp; step++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                goals.BeginThink();
+                if (!goals.Update(player, stepMs)) givenUp = true;
+                else stuckMs += stepMs;
+            }
+
+            Assert.True(Math.Abs(player.X - startX) < 1f, "the bot moved: the test does not model a bot with no progress");
+            Assert.True(givenUp, "the visit leg held the bot for 60 s without any progress");
+            Assert.True(stuckMs <= 20_000, $"given up only after {stuckMs} ms of no progress");
+            Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs),
+                "the NPC the bot could not close on was not set aside");
+        });
+
+    /// <summary>
+    /// The think that plans the visit's route is not a think that found the bot standing still: with a thousand bots a think gap is 8 to 30 s
+    /// (<see cref="PlayerbotMotion.LeaseCapMs"/>) and the bot walks on its lease in between. A 10 s gap on the planning think, or a single long
+    /// gap on a later one, must not spend the clock (and with it set the NPC aside, escalating and persisted).
+    /// </summary>
+    [Fact]
+    public async Task ALongThinkGap_OnThePlanningThink_DoesNotAbandonTheVisit()
+        => await WithVisitingBot(25f, (player, goals, host, session, _) =>
+        {
+            session.ManagedBudget = new ManagedActionBudget(4);
+            goals.BeginThink();
+            Assert.True(goals.Update(player, 10_000), "the planning think abandoned the visit");
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the planning think set the NPC aside");
+            session.ManagedBudget = new ManagedActionBudget(4);
+            goals.BeginThink();
+            Assert.True(goals.Update(player, 30_000), "a single long gap abandoned the visit");
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "a single long gap set the NPC aside");
+        });
+
+    /// <summary>A bot that moves 2 yards or more between thinks, at realistic think gaps, is never abandoned however long the visit lasts.</summary>
+    [Fact]
+    public async Task ABotThatMovesBetweenThinks_IsNeverAbandoned_AtRealisticThinkGaps()
+        => await WithVisitingBot(60f, (player, goals, host, session, _) =>
+        {
+            float last = player.X;
+            for (int think = 0; think < 10; think++)
+            {
+                session.ManagedBudget = new ManagedActionBudget(4);
+                goals.BeginThink();
+                // The think reports a 2.5 s gap (8 s and more live); the bot's motion covers about 6 yards of it.
+                Assert.True(goals.Update(player, 2_500), $"think {think}: the walking visit was abandoned at x {player.X:F1}");
+                PlayerbotMotion.ElapseForTests(player, 800);
+                Assert.True(player.X - last >= 2f, $"think {think}: the test bot did not move 2 yards (x {last:F1} to {player.X:F1})");
+                last = player.X;
+            }
+
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "a walking bot's NPC was set aside");
+        });
+
+    /// <summary>Two Updates in one think tick the stuck clock once; a think adds at most the cap.</summary>
+    [Fact]
+    public async Task TwoUpdatesInOneThink_TickTheVisitClockOnce_AndAThinkAddsAtMostTheCap()
+        => await WithVisitingBot(25f, (player, goals, host, session, _) =>
+        {
+            Think(session, goals, player, 500, updates: 1); // plans and follows the route: armed, no tick
+            // Three thinks of two Updates (2.5 s each): ticked once, 3 x 2.5 s = 7.5 s; ticked twice it would be 15 s.
+            for (int think = 0; think < 3; think++) Think(session, goals, player, 2_500, updates: 2);
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the clock ticked twice in one think");
+            Think(session, goals, player, 2_500, updates: 1); // 10 s: abandoned
+            Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "four capped ticks did not reach the bound");
+        });
+
+    [Fact]
+    public async Task AMountStepInFlight_HoldsTheVisitClock()
+        => await WithVisitingBot(25f, (player, goals, host, session, _) =>
+        {
+            Think(session, goals, player, 500, updates: 1);
+            PlayerbotMount.For(session).CastingForTests = true;
+            for (int think = 0; think < 10; think++) Think(session, goals, player, 2_500, updates: 1);
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the clock ran during a mount cast");
+            PlayerbotMount.For(session).CastingForTests = false;
+            for (int think = 0; think < 4; think++) Think(session, goals, player, 2_500, updates: 1);
+            Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the clock did not run after the cast");
+        });
+
+    [Fact]
+    public async Task AStunnedBot_HoldsTheVisitClock()
+        => await WithVisitingBot(25f, (player, goals, host, session, _) =>
+        {
+            Think(session, goals, player, 500, updates: 1);
+            player.UnitFlags |= UnitFlags.Stunned;
+            for (int think = 0; think < 10; think++) Think(session, goals, player, 2_500, updates: 1);
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the clock ran while the bot was stunned");
+        });
+
+    private static void Think(WorldSession session, PlayerbotTownGoals goals, Player player, uint elapsedMs, int updates)
+    {
+        goals.BeginThink();
+        for (int update = 0; update < updates; update++)
+        {
+            session.ManagedBudget = new ManagedActionBudget(4);
+            goals.Update(player, elapsedMs);
+        }
+    }
+
+    /// <summary>Runs <paramref name="body"/> on the world thread with a bot <paramref name="yardsAway"/> west of a visible vendor/trainer, controller and suspensions fresh.</summary>
+    private static async Task WithVisitingBot(float yardsAway,
+        Action<Player, PlayerbotTownGoals, WorldTestHost, WorldSession, float> body)
     {
         var fixture = new TownVendorFixture();
         TownVendorServices.Current.Value = fixture;
@@ -1139,29 +1325,18 @@ public sealed class PlayerbotTownGoalsTests
                     Player player = session.Player!;
                     player.Money = 100;
                     WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
-                    player.Relocate(player.X - 25, player.Y, player.Z, player.Orientation, host.World.NowMs);
-                    float startX = player.X;
+                    player.Relocate(player.X - yardsAway, player.Y, player.Z, player.Orientation, host.World.NowMs);
+                    return true;
+                });
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "town NPC visible after the move");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
                     var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true })
                     {
                         Suspensions = new PlayerbotSuspensions(),
                     };
-                    uint stuckMs = 0;
-                    bool givenUp = false;
-                    const uint stepMs = 500;
-                    // 60 s of world time, half of the stall watch's 120 s: the motion is never elapsed, so the bot never leaves where it stands (no progress).
-                    for (int step = 0; step < 120 && !givenUp; step++)
-                    {
-                        session.ManagedBudget = new ManagedActionBudget(4);
-                        goals.BeginThink();
-                        if (!goals.Update(player, stepMs)) givenUp = true;
-                        else stuckMs += stepMs;
-                    }
-
-                    Assert.True(Math.Abs(player.X - startX) < 1f, "the bot moved: the test does not model a bot with no progress");
-                    Assert.True(givenUp, "the visit leg held the bot for 60 s without any progress");
-                    Assert.True(stuckMs <= 20_000, $"given up only after {stuckMs} ms of no progress");
-                    Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs),
-                        "the NPC the bot could not close on was not set aside");
+                    body(player, goals, host, session, player.X);
                     return true;
                 });
             }
