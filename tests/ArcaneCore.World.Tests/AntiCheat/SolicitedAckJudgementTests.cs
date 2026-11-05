@@ -272,6 +272,25 @@ public sealed class SolicitedAckJudgementTests
     }
 
     [Fact]
+    public async Task TheFirstRootAck_CarryingAMovingBlock_IsScoredAsMovingWhileRooted()
+    {
+        await using Scene scene = await StartAsync("ROOTFIRST", "Rootfirst");
+        await scene.BaselineAsync();
+        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        await Task.Delay(100);
+        scene.Time += 100;
+        uint counter = await scene.LastCounterAsync();
+        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Forward | MovementFlags.Root, 0.7f, _ => { }));
+        await scene.Client.CollectThroughBarrierAsync();
+
+        // The ack is judged before MovementControl.ApplyReal sets the server's Root flag; it is held to the root it acknowledges, so the first
+        // ack is scored, not only the packets after it.
+        Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
+    }
+
+    [Fact]
     public async Task AnUnrootAck_CarryingAMovingBlock_IsNotScoredAsMovingWhileRooted()
     {
         await using Scene scene = await StartAsync("UNROOTHONEST", "Unroothonest");
