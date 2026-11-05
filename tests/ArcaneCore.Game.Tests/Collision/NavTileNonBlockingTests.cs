@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.TestSupport;
@@ -144,7 +145,10 @@ public sealed class NavTileNonBlockingTests : IDisposable
         NavMeshPathfinder nav = Gated(); // the read is held at the gate until the pending answer is in: a read that finished between the two endpoint polls would install the tile mid-query
         // Not disposed: blockers still queued when the test ends must find it set, not disposed.
         var release = new ManualResetEventSlim();
-        int blockers = Environment.ProcessorCount * 4 + 8;
+        // More than every worker the pool has or starts with, by a margin it cannot inject in the time the read takes.
+        ThreadPool.GetMinThreads(out int minWorkers, out _);
+        int blockers = Math.Max(minWorkers, ThreadPool.ThreadCount) + Environment.ProcessorCount * 4 + 8;
+        bool probeRan = false;
         try
         {
             for (int i = 0; i < blockers; i++)
@@ -152,10 +156,14 @@ public sealed class NavTileNonBlockingTests : IDisposable
                 ThreadPool.QueueUserWorkItem(_ => release.Wait());
             }
 
+            // Queued behind every blocker and ahead of anything the read could queue: it runs only once all the blockers have a thread.
+            ThreadPool.QueueUserWorkItem(_ => Volatile.Write(ref probeRan, true));
+
             Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
             Task read = nav.PendingTileRead(0, 31, 31)!;
             _gate.Set();
             Assert.True(SpinWait.SpinUntil(() => read.IsCompleted, HangGuard), "the read did not finish while the shared pool was held busy");
+            Assert.False(Volatile.Read(ref probeRan), "the pool reached the probe before the read finished: it was not saturated, so this run proves nothing");
         }
         finally
         {
@@ -164,6 +172,179 @@ public sealed class NavTileNonBlockingTests : IDisposable
 
         Assert.Equal(1, _reads);
         Assert.Equal(0, Volatile.Read(ref _readsOnPoolThread));
+    }
+
+    [Fact]
+    public async Task AnIdleReader_ExitsAfterItsWait_AndTheNextReadStartsANewOne()
+    {
+        const int tiles = 2;
+        NavMeshPathfinder nav = Gated(tiles);
+        nav.ReaderIdleMilliseconds = 20;
+        int started = 0;
+        nav.ReaderThreadStart = start =>
+        {
+            Interlocked.Increment(ref started);
+            new Thread(start) { IsBackground = true }.Start();
+        };
+
+        for (int x = 0; x < tiles; x++)
+        {
+            Vector3 at = new((32f - x - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+            _gate.Reset(); // held until the pending answer is in, as above
+            Assert.Equal(PathType.TilesPending, nav.FindPath(0, at, at, NonBlocking).Type);
+            Assert.Equal(x + 1, Volatile.Read(ref started)); // the first reader has exited (or none existed): the read has a thread of its own
+            Task read = nav.PendingTileRead(0, x, TileRow)!;
+            _gate.Set();
+            Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+            Assert.True(SpinWait.SpinUntil(() => nav.TileReaderThreads == 0, HangGuard), "an idle reader thread did not exit");
+        }
+
+        Assert.Equal(tiles, _reads);
+        Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
+    }
+
+    [Fact]
+    public async Task AReaderThatCannotStart_WithNoOtherReader_FailsTheRead_AndLeavesNothingQueued_AndALaterReadWorks()
+    {
+        var logger = new CountingLogger();
+        NavMeshPathfinder nav = Gated(tiles: 2, logger: logger);
+        nav.ReaderThreadStart = _ => throw new OutOfMemoryException("no thread");
+        Vector3 first = new((32f - 0 - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+        Vector3 second = new((32f - 1 - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+
+        // Answered at once, so the query's second endpoint already collects the failure: not pending, logged once, the tile counts as absent.
+        Assert.NotEqual(PathType.TilesPending, nav.FindPath(0, first, first, NonBlocking).Type);
+        Assert.Equal(1, nav.TileReadsStarted);
+        Assert.Null(nav.PendingTileRead(0, 0, TileRow));
+        Assert.Equal(1, logger.Errors);
+        Assert.Equal(0, nav.TileReaderThreads);
+        Assert.Equal(0, nav.QueuedTileReads);
+        Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
+        Assert.Equal(0, _reads);
+
+        // The count was given back: a later read starts a thread as usual.
+        nav.ReaderThreadStart = null;
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, second, second, NonBlocking).Type);
+        Task read = nav.PendingTileRead(0, 1, TileRow)!;
+        _gate.Set();
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+        Assert.Equal(1, _reads);
+        Assert.Equal(1, nav.TileReaderThreads);
+    }
+
+    [Fact]
+    public async Task AReaderThatCannotStart_WhileAnotherRuns_LeavesTheReadToTheOneRunning()
+    {
+        var logger = new CountingLogger();
+        NavMeshPathfinder nav = Gated(tiles: 2, logger: logger);
+        int attempts = 0;
+        nav.ReaderThreadStart = start =>
+        {
+            if (Interlocked.Increment(ref attempts) > 1) throw new OutOfMemoryException("no thread");
+            new Thread(start) { IsBackground = true }.Start();
+        };
+        Vector3 first = new((32f - 0 - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+        Vector3 second = new((32f - 1 - 0.5f) * 533.33333f, (32f - TileRow - 0.5f) * 533.33333f, 0);
+
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, first, first, NonBlocking).Type);
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref _running) == 1, HangGuard)); // the one reader is held at the gate
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, second, second, NonBlocking).Type);
+
+        Assert.Equal(2, Volatile.Read(ref attempts));
+        Assert.Equal(1, nav.TileReaderThreads);
+        Assert.Equal(1, nav.QueuedTileReads); // queued, not failed
+        Assert.Equal(1, logger.Errors);
+        Task read = nav.PendingTileRead(0, 1, TileRow)!;
+        Assert.False(read.IsCompleted);
+
+        _gate.Set();
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+        nav.FindPath(0, second, second, NonBlocking);
+        Assert.True(nav.GetNavMesh(0)!.IsTerrainTileLoaded(1, TileRow)); // read and installed: the thread that did not start cost this read nothing
+        Assert.Equal(1, logger.Errors);
+        Assert.Equal(2, _reads);
+        Assert.Equal(0, nav.QueuedTileReads);
+    }
+
+    [Fact]
+    public async Task APollForAPrefetchStillWaitingForThePool_TakesItBack_AndReadsOnAReaderThread()
+    {
+        NavMeshPathfinder nav = Gated();
+        Func<NavMeshTile?>? queued = null;
+        var neverStarted = new TaskCompletionSource<NavMeshTile?>();
+        nav.PrefetchStart = work =>
+        {
+            queued = work;
+            return neverStarted.Task; // a pool too busy to start it
+        };
+        nav.Prefetch(0, 31, 31);
+
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
+        Assert.Equal(1, nav.TileReadsStarted);
+        Task read = nav.PendingTileRead(0, 31, 31)!;
+        _gate.Set();
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+        Assert.Equal(PathType.Normal, nav.FindPath(0, From, To, NonBlocking).Type);
+        Assert.Equal(1, _reads);
+        Assert.Equal(0, Volatile.Read(ref _readsOnPoolThread));
+
+        Assert.Null(queued!()); // when the pool does reach it, it reads nothing: the file exists, so a read would have returned the tile
+        Assert.False(nav.IsPrefetchFinished(0, 31, 31));
+    }
+
+    [Fact]
+    public void APollForAPrefetchAlreadyReading_WaitsForIt_AndTheFileIsNotReadTwice()
+    {
+        NavMeshPathfinder nav = Gated();
+        NavMeshTile? tile = null;
+        var finished = new TaskCompletionSource<NavMeshTile?>();
+        nav.PrefetchStart = work =>
+        {
+            tile = work(); // it got its thread: the read has begun, and the task stands unfinished until the test says so
+            return finished.Task;
+        };
+        nav.Prefetch(0, 31, 31);
+        Assert.NotNull(tile);
+
+        Assert.Equal(PathType.TilesPending, nav.FindPath(0, From, To, NonBlocking).Type);
+        Assert.Equal(0, nav.TileReadsStarted);
+
+        finished.SetResult(tile);
+        Assert.Equal(PathType.Normal, nav.FindPath(0, From, To, NonBlocking).Type);
+        Assert.Equal(0, nav.TileReadsStarted);
+        Assert.Equal(1, nav.PrefetchHits);
+    }
+
+    [Fact]
+    public void APrefetchCanBeClaimedOnlyWhileItWaitsForAThread()
+    {
+        var cache = new TilePrefetchCache<object>();
+        var work = new List<Func<object?>>();
+        var never = new TaskCompletionSource<object?>();
+        cache.Start = item =>
+        {
+            work.Add(item);
+            return never.Task;
+        };
+        int loads = 0;
+        object Load()
+        {
+            loads++;
+            return new object();
+        }
+
+        cache.Request(0, 1, 1, Load);
+        cache.Request(0, 2, 2, Load);
+        Assert.False(cache.TryClaimQueued(0, 3, 3)); // never asked for
+
+        Assert.NotNull(work[0]());
+        Assert.False(cache.TryClaimQueued(0, 1, 1)); // its read has begun: waited for, not read twice
+        Assert.True(cache.Contains(0, 1, 1));
+
+        Assert.True(cache.TryClaimQueued(0, 2, 2));
+        Assert.False(cache.Contains(0, 2, 2));
+        Assert.Null(work[1]());
+        Assert.Equal(1, loads);
     }
 
     /// <summary>
