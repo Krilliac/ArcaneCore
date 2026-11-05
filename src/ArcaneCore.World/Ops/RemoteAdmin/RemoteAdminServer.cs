@@ -364,7 +364,7 @@ public sealed class RemoteAdminServer : IHostedService
                     string rest = first.Length > 6 ? first[6..].Trim() : string.Empty;
                     int space = rest.IndexOf(' ');
                     who = space < 0 ? rest : rest[..space];
-                    login = space < 0 ? null : await CheckOneLineAsync(who, rest[(space + 1)..].TrimStart(), automation: true, endpoint, token).ConfigureAwait(false);
+                    login = space < 0 ? null : await CheckOneLineAsync(who, rest[(space + 1)..].TrimStart(), automation: true, endpoint, timeout.Token).ConfigureAwait(false);
                 }
                 else
                 {

@@ -458,6 +458,7 @@ public sealed class RemoteAdminServerTests
         finally
         {
             await server.StopAsync(CancellationToken.None);
+            File.Delete(path); // the token file lives in the shared temp directory: no run leaves one behind
         }
     }
 
@@ -554,11 +555,64 @@ public sealed class RemoteAdminServerTests
     [Fact]
     public void RemoteAdminAndTheWebLogin_RegisterOneSecondFactorCheckerSingleton()
     {
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
+
+        // AddRemoteAdmin alone must register the checker (one singleton): a dropped AddSecondFactorChecker would leave the RA login without its second factor.
+        var remoteOnly = new ServiceCollection();
+        remoteOnly.AddRemoteAdmin(configuration);
+        ServiceDescriptor own = Assert.Single(remoteOnly, d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));
+        Assert.Equal(ServiceLifetime.Singleton, own.Lifetime);
+
         var services = new ServiceCollection();
-        services.AddRemoteAdmin(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        services.AddRemoteAdmin(configuration);
         services.AddMapFeedWebLogin();
         ServiceDescriptor descriptor = Assert.Single(services, d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));
         Assert.Equal(ServiceLifetime.Singleton, descriptor.Lifetime);
+    }
+
+    /// <summary>An account store whose lookup by name never answers on its own: it ends only when the caller's token is cancelled.</summary>
+    public class HangingAccountStore : System.Reflection.DispatchProxy
+    {
+        protected override object? Invoke(System.Reflection.MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod!.Name != nameof(IAccountStore.FindByUsernameAsync))
+            {
+                throw new NotSupportedException(targetMethod.Name);
+            }
+
+            return Hang((CancellationToken)args![1]!);
+        }
+
+        private static async Task<Account?> Hang(CancellationToken token)
+        {
+            await Task.Delay(Timeout.Infinite, token);
+            return null;
+        }
+    }
+
+    [Fact]
+    public async Task OneLineLogin_WithAStalledAccountLookup_IsEndedByTheLoginTimeout()
+    {
+        // The one-line @login did its store lookups on the connection's token, not the login timeout's, so a stalled store held the unauthenticated
+        // connection open for good. The lookup here never answers; only the login timeout (5 s, the lowest the option allows) can end it.
+        await using WorldTestHost host = PartyTestHost.Start();
+        var services = new ServiceCollection();
+        services.AddSingleton(System.Reflection.DispatchProxy.Create<IAccountStore, HangingAccountStore>());
+        using ServiceProvider provider = services.BuildServiceProvider();
+        RemoteAdminOptions options = Options0();
+        options.LoginTimeoutSeconds = 5;
+        RemoteAdminServer server = new(Options.Create(options), provider.GetRequiredService<IServiceScopeFactory>(), host.Opcodes, host.World, host.Registry,
+            Options.Create(new WorldSessionOptions()), NullLoggerFactory.Instance);
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Login timed out; closing.", await TryLoginAsync(server, "@login RASTALLED secret"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+            File.Delete(options.AgentLoginFile);
+        }
     }
 
     /// <summary>Forwards every call to the real store and records the method name, so a test can compare the store work of two logins.</summary>

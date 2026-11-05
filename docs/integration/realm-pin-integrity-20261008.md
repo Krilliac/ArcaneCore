@@ -12,15 +12,15 @@ intake review (see "Intake" below). Nothing was pushed.
   optional 36-byte PINData and verifies fixed PIN or RFC 6238 TOTP before storing
   the world session key. Fixed PIN has priority if a legacy row has both bits.
   Behavior: vmangos `src/realmd/AuthSocket.cpp` account/IP policy 393-414,
-  challenge 497-517, PINData 578-587, factor verification 689-738,
-  `VerifyPinData` 1204-1272 and `GenerateTotpPin` 1274-1301; flag values in
+  challenge 497-517, PINData 578-587, factor verification 697-749,
+  `VerifyPinData` 1221 and `GenerateTotpPin` 1291; flag values in
   `src/realmd/AuthSocket.h` `LockFlag`. PIN hashing follows the permitted
   WowSrp import in `THIRD_PARTY_NOTICES.md`.
 - `Auth:StrictVersionCheck` defaults off. Exact build/OS/platform entries supply
   a 20-byte integrity hash; an all-zero configured hash skips checking for that
   tuple. Strict logon uses `SHA1(A || configuredHash)` and strict reconnect uses
   `SHA1(R1 || 20 zero bytes)` with no configured entry needed, per vmangos `AuthSocket::VerifyVersion` at
-  `src/realmd/AuthSocket.cpp:1433-1470` and its callers at 745 and 944.
+  `src/realmd/AuthSocket.cpp:1450-1486` and its callers at 762 and 961.
   `ClientIntegrity.GenericCheck` follows WowSrp's client-file checksum helper.
 - `arcane-account set-pin|set-totp|clear-pin|clear-totp|set-ip-lock` manages
   the account factor; the set commands accept a no-echo prompt or stdin.
