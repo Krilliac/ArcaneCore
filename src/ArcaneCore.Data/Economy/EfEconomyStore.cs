@@ -48,10 +48,11 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         cancellationToken.ThrowIfCancellationRequested();
 
         // The expiry operations (and the auction house bot's removals) are the realm's, not a character's: no participant, and they delete an auction or a letter. A clustered node
-        // that does not hold the economy lease is refused outright (writer-lock design section 2b, economy row: RequireHeld on the expiry operations), whatever its sweep thinks.
+        // that has no economy fence is refused outright (writer-lock design section 2b, economy row: RequireFence on the expiry operations); one that holds a fence but was marked lost locally is left to the commit fence below, which
+        // refuses it exactly when another node took the lease over, whatever its sweep thinks.
         if (IsRealmSweep(request))
         {
-            LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Economy);
+            LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Economy);
         }
 
         // Worker fencing scope: as the transaction begins, the write fence also proves that every participant's per-character claim is held by a live worker

@@ -116,7 +116,7 @@ public sealed class EfGroupStore(CharacterDbContext db, IRealmLeaseFenceSource? 
     public async Task SaveGroupAsync(GroupRecord group, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(group);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social); // groups are realm state the Social holder owns (writer-lock design section 2b)
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // groups are realm state the Social holder owns (writer-lock design section 2b)
         if (group.TargetIcons.Count != 8)
         {
             throw new ArgumentException("a group has eight target icons", nameof(group));
@@ -169,7 +169,7 @@ public sealed class EfGroupStore(CharacterDbContext db, IRealmLeaseFenceSource? 
 
     public async Task DeleteGroupAsync(uint groupId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         long id = groupId;
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await FenceAsync(cancellationToken).ConfigureAwait(false);

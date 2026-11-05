@@ -233,7 +233,7 @@ public sealed class EfHonorStore(CharacterDbContext db, Func<CancellationToken, 
     public async Task ApplyMaintenanceAsync(HonorMaintenanceBatch batch, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Maintenance);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         try
         {

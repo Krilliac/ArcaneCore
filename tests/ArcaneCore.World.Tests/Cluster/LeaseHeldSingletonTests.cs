@@ -178,6 +178,27 @@ public sealed class LeaseHeldSingletonTests
         Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Economy));
     }
 
+    [Fact]
+    public async Task RequireFence_WithTheRealKeeper_LetsALostButFencedLeasePassToTheCommitFence_AndRefusesAGivenBackOne()
+    {
+        Guid incarnation = Guid.NewGuid();
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(incarnation, CancellationToken.None);
+        LeaseFencedWrite.RequireFence(keeper, RealmAuthorityScopes.Maintenance);
+        LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance);
+
+        TakeMaintenanceLeaseOver(incarnation, keeper); // the renewal tick finds the loss: the keeper no longer holds anything, but keeps the old token
+
+        Assert.False(keeper.Holds(RealmAuthorityScopes.Maintenance));
+        Assert.NotNull(keeper.FenceFor(RealmAuthorityScopes.Maintenance));
+        LeaseFencedWrite.RequireFence(keeper, RealmAuthorityScopes.Maintenance); // the commit fence decides
+        Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance)); // a write with no commit check is refused
+
+        await keeper.ReleaseAllAsync();
+
+        Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireFence(keeper, RealmAuthorityScopes.Maintenance));
+    }
+
     // ---- weekly honor calculation (maintenance lease)
 
     private sealed class HonorRig(MemoryHonorStore store, ServiceProvider provider, HonorMaintenanceRunner runner) : IAsyncDisposable

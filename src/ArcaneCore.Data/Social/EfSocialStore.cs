@@ -68,7 +68,7 @@ public sealed class EfSocialStore(CharacterDbContext db, IRealmLeaseFenceSource?
     public async Task SaveGuildAsync(GuildData guild, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(guild);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social); // a guild is realm state the Social holder owns (writer-lock design section 2b; decision Q1: a non-holder is refused, never left unfenced)
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // a guild is realm state the Social holder owns (writer-lock design section 2b; decision Q1: a non-holder is refused, never left unfenced)
         await StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);
         await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
@@ -143,7 +143,7 @@ public sealed class EfSocialStore(CharacterDbContext db, IRealmLeaseFenceSource?
 
     public async Task DeleteGuildAsync(int guildId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         db.Set<GuildMemberRow>().RemoveRange(await db.Set<GuildMemberRow>().Where(m => m.GuildId == guildId).ToListAsync(cancellationToken).ConfigureAwait(false));
         db.Set<GuildRankRow>().RemoveRange(await db.Set<GuildRankRow>().Where(r => r.GuildId == guildId).ToListAsync(cancellationToken).ConfigureAwait(false));
         if (await db.Set<GuildRow>().FirstOrDefaultAsync(g => g.Id == guildId, cancellationToken).ConfigureAwait(false) is { } row)

@@ -109,7 +109,7 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
     public async Task SavePetitionAsync(PetitionData petition, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(petition);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social); // petitions are realm state the Social holder owns (ids and saves would collide across workers)
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social); // petitions are realm state the Social holder owns (ids and saves would collide across workers)
         PetitionRow? row = await db.Set<PetitionRow>().FirstOrDefaultAsync(p => p.Id == petition.Id, cancellationToken).ConfigureAwait(false);
         if (row is null)
         {
@@ -143,7 +143,7 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
 
     public async Task DeletePetitionAsync(int petitionId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         StageDelete(await FindForDeleteAsync(petitionId, cancellationToken).ConfigureAwait(false));
         await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
@@ -152,7 +152,7 @@ public sealed class EfPetitionStore(CharacterDbContext db, IRealmLeaseFenceSourc
     public async Task CompletePetitionAsync(GuildData guild, int petitionId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(guild);
-        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Social);
         try
         {
             await EfSocialStore.StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);

@@ -126,9 +126,13 @@ public sealed class RealmLeaseNotHeldException(string scope)
 /// <summary>
 /// Closes the gap between the lease keeper's fail-stop timer and the database: a realm-singleton write (economy, social, instances) verifies, inside the transaction
 /// that makes the write, that the <c>realm_authority_lease</c> row still carries the writer's fencing token, owner and incarnation, and holds that row against a takeover until the
-/// transaction ends (a row write on SQLite, whose single writer then excludes a takeover; a shared row lock on PostgreSQL and MariaDB, the way <c>CharacterOwnershipGuard</c> does).
+/// transaction ends (a row write on SQLite, whose single writer then excludes a takeover; a shared row lock on MariaDB, the way <c>CharacterOwnershipGuard</c> does; FOR KEY SHARE on PostgreSQL, which every change of authority excludes by taking FOR UPDATE first).
 /// A partitioned former holder whose lease was taken over is therefore refused at commit, whatever its clock says. The check ignores the lease expiry on purpose: an expired
 /// lease nobody has taken over yet is still the only one that could be written under, and the keeper's timer handles that case.
+/// <para>Two guards, by site: a write that verifies the lease row at commit uses <see cref="RequireFence"/> (the commit fence decides a node the keeper marked lost locally); a write with no commit check uses
+/// <see cref="RequireHeld"/>, which also refuses after a local loss. Known residual, accepted: a WAL stall that loses renewals (they commit with synchronous_commit off, see <see cref="EfRealmAuthorityLeaseStore"/>),
+/// plus a PostgreSQL crash, plus a concurrent start of another node can let that node take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
+/// <see cref="RequireHeld"/> (no commit check) can still write briefly after the takeover. Stores behind <see cref="RequireFence"/> are refused at commit.</para>
 /// <para>Stateless; every call works on the caller's context, which stays on the caller's logical call (a context is single-threaded).</para>
 /// </summary>
 public static class LeaseFencedWrite
@@ -160,10 +164,11 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// Refuses a realm-singleton write from a node that is not the scope's holder. With no <paramref name="source"/> (the Combined role, tests: nothing is clustered, so this process is
-    /// the only writer) it does nothing; with a source that reports no lease for <paramref name="scope"/> it throws <see cref="RealmLeaseNotHeldException"/>. This is the gap
-    /// <see cref="InTransactionAsync{T}"/> leaves on purpose (a non-holder's write goes through unchecked there). Call it before the write; the write itself is still verified against the lease row
-    /// by <see cref="InTransactionAsync{T}"/> or <see cref="EnsureHeldAsync"/>. Synchronous and cheap (one in-memory lookup).
+    /// Refuses a realm-singleton write from a node that is not the scope's live holder. With no <paramref name="source"/> (the Combined role, tests: nothing is clustered, so this process is
+    /// the only writer) it does nothing; with a source that does not hold the scope (<see cref="IRealmLeaseFenceSource.Holds"/>: never taken, held by another node, given back, or marked lost by the keeper)
+    /// it throws <see cref="RealmLeaseNotHeldException"/>. This is the safe default for every write that has no check of the lease row at commit: a deposed node must not write. This is the gap
+    /// <see cref="InTransactionAsync{T}"/> leaves on purpose (a non-holder's write goes through unchecked there). Stores whose write verifies the lease row in its own transaction use <see cref="RequireFence"/>.
+    /// Synchronous and cheap (one in-memory lookup).
     /// </summary>
     public static void RequireHeld(IRealmLeaseFenceSource? source, string scope)
     {
@@ -173,8 +178,21 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
+    /// <see cref="RequireHeld"/> for a write that verifies the lease row at commit (<see cref="InTransactionAsync{T}"/>, <see cref="SaveChangesAsync"/> or <see cref="EnsureHeldAsync"/> in the write's own transaction):
+    /// refuses only a node that has no fence for <paramref name="scope"/> (never taken, held by another node, given back). A keeper that marked the lease lost locally (a slow renewal round, a transient store failure)
+    /// keeps the old token in <see cref="IRealmLeaseFenceSource.FenceFor"/>, so the commit fence decides: it refuses the write exactly when another node really took the lease over and accepts it while the token is still the
+    /// row's. Never call it from a write that has no commit-time check: there nothing would stop a deposed node.
+    /// </summary>
+    public static void RequireFence(IRealmLeaseFenceSource? source, string scope)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        if (source is not null && source.FenceFor(scope) is null)
+            throw new RealmLeaseNotHeldException(scope);
+    }
+
+    /// <summary>
     /// Whether this process may make the realm-singleton writes of <paramref name="scope"/>: always with no <paramref name="source"/> (nothing is clustered), otherwise only while the source
-    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/>.
+    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder or a node that lost the lease (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/> (or <see cref="RequireFence"/> when they verify the lease row at commit).
     /// </summary>
     public static bool IsHolder(IRealmLeaseFenceSource? source, string scope)
     {
@@ -183,7 +201,7 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a non-holder (or a node that lost the lease) is refused before anything is written, and the holder's write is verified against the lease row
+    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a node that is not the holder is refused before anything is written, and the holder's write is verified against the lease row
     /// in the transaction that makes it. The one call a realm-singleton store write makes.
     /// </summary>
     public static Task<T> HeldWriteAsync<T>(
@@ -248,7 +266,11 @@ public static class LeaseFencedWrite
         string lockClause = db.Database.ProviderName switch
         {
             "Pomelo.EntityFrameworkCore.MySql" => " LOCK IN SHARE MODE",
-            "Npgsql.EntityFrameworkCore.PostgreSQL" => " FOR SHARE",
+            // FOR KEY SHARE, not FOR SHARE: it conflicts with FOR UPDATE (every change of authority, see EfRealmAuthorityLeaseStore: acquire, takeover, release) but NOT with the FOR NO KEY UPDATE of a
+            // renewal (which changes only expires_at_unix_ms), so a renewal never waits for an in-flight fenced writer's commit, and a takeover still waits for it.
+            // Why the changes of authority must lock FOR UPDATE first and not just UPDATE: their UPDATE changes no key column, so it takes only FOR NO KEY UPDATE, which does not conflict with FOR KEY SHARE; a
+            // FOR KEY SHARE locker skips waiting for an updater unless the tuple's HEAP_KEYS_UPDATED bit is set, and only a FOR UPDATE lock (or an update of a key column) sets it.
+            "Npgsql.EntityFrameworkCore.PostgreSQL" => " FOR KEY SHARE",
             _ => throw new NotSupportedException($"no lease fence lock for provider {db.Database.ProviderName}"),
         };
 
