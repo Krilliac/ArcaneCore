@@ -134,7 +134,7 @@ public sealed class PlayerbotRunWaiverAndStopWorldTests : PlayerbotRunWorldTestB
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
-        Assert.Equal(0, world.Coordinator.RunOutcomeCount(PlayerbotRunMeters.GivenUp)); // negative control: nothing counted before the stop
+        Assert.Equal(0, world.Coordinator.RunOutcomeCount(PlayerbotRunMeters.GivenUp)); // precondition on a fresh coordinator, always true: nothing counted before the stop
 
         // A GM stop, a scale-down, a shutdown or a controller taking over ends a run through Forget: not a finding about content or code.
         await world.OnWorldAsync(() =>
