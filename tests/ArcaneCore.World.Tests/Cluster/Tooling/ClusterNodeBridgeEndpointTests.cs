@@ -68,7 +68,14 @@ public sealed class ClusterNodeBridgeEndpointTests
         string instances = ClusterNodeBridgeFeature.DefaultEndpointsSpec.Split(';', StringSplitOptions.RemoveEmptyEntries)
             .Single(e => e.StartsWith("worker:instances|", StringComparison.Ordinal));
 
-        Assert.Contains(369u, instances.Split('|')[3].Split(',').Select(uint.Parse));
+        uint[] maps = [.. instances.Split('|')[3].Split(',').Select(uint.Parse)];
+
+        // 369 (Deeprun Tram) and 449/450 (the PvP barracks) are Common maps with live teleport triggers: Owns(map, 0) succeeds only for a listed map.
+        // 35 (Stormwind Vault, "<unused>" in map_template) is left out on purpose: no client path leads there.
+        Assert.Contains(369u, maps);
+        Assert.Contains(449u, maps);
+        Assert.Contains(450u, maps);
+        Assert.DoesNotContain(35u, maps);
     }
 
     [Fact]

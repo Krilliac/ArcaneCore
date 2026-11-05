@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -125,7 +126,7 @@ public sealed class BattlegroundClusterQueueTests
 
         private readonly ServiceProvider _services;
 
-        public WorkerWorld(string workerId, IBattlegroundHolderLink holder, bool allowInstanceMaps = false)
+        public WorkerWorld(string workerId, IBattlegroundHolderLink holder, bool allowInstanceMaps = false, bool configureWorker = true)
         {
             ServiceCollection collection = new();
             collection.AddLogging();
@@ -145,7 +146,10 @@ public sealed class BattlegroundClusterQueueTests
             teleport.Teleports.ClusterFarRouter = Router;
             Feature = new BattlegroundFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance);
             Feature.Attach(World);
-            Feature.ConfigureWorker(workerId, holder);
+            if (configureWorker)
+            {
+                Feature.ConfigureWorker(workerId, holder);
+            }
         }
 
         public WorldRuntime World { get; }
@@ -231,6 +235,59 @@ public sealed class BattlegroundClusterQueueTests
             Assert.Equal(8, Holder.Pump());
         }
     }
+
+    /// <summary>
+    /// Split stopgap, through the real feature (the manager's host is the cluster queue over the world host, as in production): a world that does not
+    /// own the Warsong Gulch map builds no match and does not throw <see cref="MapNotOwnedException"/> from the map it would have to create.
+    /// </summary>
+    [Fact]
+    public void AWorldWithoutInstanceMaps_BuildsNoMatch_AndDoesNotThrow()
+    {
+        using var world = new WorkerWorld(WorkerA, new NoHolder(), allowInstanceMaps: false, configureWorker: false);
+        RegisterWsg(world.Feature.Manager);
+
+        Battleground? created = null;
+        Exception? thrown = Record.Exception(() => created = world.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0));
+
+        Assert.Null(thrown);
+        Assert.Null(created);
+        Assert.Empty(world.Feature.Manager.RunningBattlegrounds);
+        Assert.Null(world.Feature.FindMatch(InstanceManager.FirstInstanceId));
+        Assert.False(world.World.Owns(WsgMap, InstanceManager.FirstInstanceId));
+    }
+
+    [Fact]
+    public void AWorldWithInstanceMaps_BuildsTheMatch()
+    {
+        using var world = new WorkerWorld(WorkerA, new NoHolder(), allowInstanceMaps: true, configureWorker: false);
+        RegisterWsg(world.Feature.Manager);
+
+        Battleground? created = world.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0);
+
+        Assert.NotNull(created);
+        Assert.NotNull(world.Feature.FindMatch(created.InstanceId));
+        Assert.True(world.World.Owns(WsgMap, created.InstanceId));
+    }
+
+    private sealed class NoHolder : IBattlegroundHolderLink
+    {
+        public void Submit(string workerId, BattlegroundCommand command)
+        {
+        }
+    }
+
+    private static void RegisterWsg(BattlegroundManager manager) => manager.RegisterTemplate(new BattlegroundTemplate
+    {
+        Type = BattlegroundType.WarsongGulch,
+        MapId = WsgMap,
+        Name = "Warsong Gulch",
+        MinPlayersPerTeam = 2,
+        MaxPlayersPerTeam = 10,
+        MinLevel = 10,
+        MaxLevel = 60,
+        AllianceStart = new BattlegroundStartLocation(1.5f, 2.5f, 3.5f, 0.5f),
+        HordeStart = new BattlegroundStartLocation(-1.5f, -2.5f, -3.5f, 1.5f),
+    });
 
     [Fact]
     public void PlayersQueuedOnTwoWorkers_AreMatchedByTheHolder_AndEachGetsTheInvite()
