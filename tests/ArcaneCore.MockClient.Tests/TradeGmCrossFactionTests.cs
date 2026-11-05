@@ -6,6 +6,8 @@ using ArcaneCore.MockClient.Hosting;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Economy;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.MockClient.Tests.EconomyMailSendParityTests;
 
@@ -52,5 +54,38 @@ public sealed class TradeGmCrossFactionTests
         byte[] invite = await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgTradeStatus, rig.Token);
         Assert.Equal((uint)TradeStatus.BeginTrade, BinaryPrimitives.ReadUInt32LittleEndian(invite));
         Assert.Equal(rig.SenderGuid, BinaryPrimitives.ReadUInt64LittleEndian(invite.AsSpan(4)));
+    }
+
+    /// <summary>The <c>GmCrossTeamTrade</c> option off is the vmangos rule: a game master is refused across teams like anyone else.</summary>
+    [Fact]
+    public async Task Trade_WithTheOtherFaction_IsRefusedForAGmWhenTheGmExemptionOptionIsOff()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        await PrepareAsync(rig, senderGm: true);
+        rig.Server.Services.GetRequiredService<EconomyFeature>().Options.GmCrossTeamTrade = false;
+
+        await rig.Sender.SendAsync(WorldOpcode.CmsgInitiateTrade, ScenarioWire.Guid(rig.ReceiverGuid), rig.Token);
+
+        byte[] reply = await rig.Sender.ReadUntilAsync(WorldOpcode.SmsgTradeStatus, rig.Token);
+        Assert.Equal((uint)TradeStatus.WrongFaction, BinaryPrimitives.ReadUInt32LittleEndian(reply));
+    }
+
+    /// <summary>The exemption tests only the initiator: a player who invites a game master of the other team is refused.</summary>
+    [Fact]
+    public async Task Trade_InitiatedByAPlayerTowardsAGmOfTheOtherFaction_IsRefused()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        await PrepareAsync(rig, senderGm: false);
+        await rig.Server.World.InvokeAsync(() =>
+        {
+            Player receiver = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.ReceiverGuid))!;
+            receiver.Flags |= PlayerFlags.Gm;
+            return true;
+        }).WaitAsync(rig.Token);
+
+        await rig.Sender.SendAsync(WorldOpcode.CmsgInitiateTrade, ScenarioWire.Guid(rig.ReceiverGuid), rig.Token);
+
+        byte[] reply = await rig.Sender.ReadUntilAsync(WorldOpcode.SmsgTradeStatus, rig.Token);
+        Assert.Equal((uint)TradeStatus.WrongFaction, BinaryPrimitives.ReadUInt32LittleEndian(reply));
     }
 }

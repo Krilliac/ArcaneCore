@@ -382,4 +382,79 @@ public sealed class GmGoBattlegroundBindingTests : GmGoBattlegroundAndInstanceTe
             });
         });
     }
+
+    /// <summary>
+    /// vmangos <c>Player::TeleportTo</c> (Player.cpp:1861-1864) refuses a battleground map to a player bound to no match, a game master
+    /// included, so <c>.go xyz</c> and a direct teleport onto the map change nothing; only <c>.goname</c> and <c>.namego</c> assign the id.
+    /// Retail wins, so there is no battleground-entry grant for a game master.
+    /// </summary>
+    [Fact]
+    public async Task GoXyzAndADirectTeleport_ToABattlegroundMap_AreRefusedForAnUnboundGm_AsInVmangos()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-go-xyz-bg-refused", async context =>
+        {
+            _ = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngxally", "Scngxhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOXYZ", "Gmgoxyz", AccountSecurity.Administrator);
+            (uint startMap, float startX, float startY) = await context.ReadAsync(() =>
+            {
+                Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                return (p.MapId, p.X, p.Y);
+            });
+
+            await gm.SayAsync($".go xyz 1500 1500 20 {Wsg}");
+            await Task.Delay(Quiet);
+            bool direct = await context.ReadAsync(() =>
+            {
+                Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                return context.Services.GetRequiredService<TeleportFeature>().Teleports.TeleportTo(p, Wsg, 1500f, 1500f, 20f, 0f);
+            });
+
+            ScenarioContext.Expect(!direct, "a direct teleport of an unbound game master onto the battleground map was accepted");
+            await context.ReadAsync(() =>
+            {
+                Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                ScenarioContext.ExpectEqual(startMap, p.MapId, "GM map after the refused teleports");
+                ScenarioContext.Expect(Math.Abs(p.X - startX) < 1f && Math.Abs(p.Y - startY) < 1f, "the GM moved");
+                ScenarioContext.Expect(Battlegrounds(context).BattlegroundOf(p.Guid) is null, "the GM was bound to a match by a command that assigns none");
+                ScenarioContext.Expect(!Battlegrounds(context).HasGmMove(p.Guid), "a GM move record exists");
+                return true;
+            });
+        });
+    }
+
+    /// <summary>
+    /// A deleted match's map closes: a game master that is still on it is sent to its entry point (vmangos <c>Map::TeleportAllPlayersTo</c>
+    /// with the battleground entry point, Map.cpp:2045-2072) before the map is asked to unload, which a map with players would refuse.
+    /// </summary>
+    [Fact]
+    public async Task AGmOnTheMapOfADeletedMatch_IsSentToItsEntryPoint_AndTheMapUnloads()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(WarsongGulchTestContent.Register);
+        await RunAsync(world, "gm-appear-bg-map-closes", async context =>
+        {
+            (_, ScenarioBot horde, Battleground match) = await context.EnterMatchAsync(
+                BattlegroundType.WarsongGulch, "Scngmally", "Scngmhorde", TimeSpan.FromMinutes(3));
+            await using ClientTap gm = await ClientTap.EnterAsync(world, "GMGOCLOSE", "Gmgoclose", AccountSecurity.Administrator);
+            (uint startMap, float startX, float startY) = await context.ReadAsync(() =>
+            {
+                Player p = context.World.FindOnlinePlayer(gm.Name)!;
+                return (p.MapId, p.X, p.Y);
+            });
+            await AppearAtAsync(context, gm, horde.Name, match);
+            ArcaneCore.Game.Maps.Map matchMap = await context.ReadAsync(() => context.World.FindOnlinePlayer(gm.Name)!.Map!);
+
+            await context.ReadAsync(() =>
+            {
+                Battlegrounds(context).OnBattlegroundDeleted(match);
+                return true;
+            });
+
+            await context.WaitUntilAsync("the GM is back at its entry point, off the closed map", () =>
+                context.World.FindOnlinePlayer(gm.Name) is { IsInWorld: true } p && p.MapId == startMap && !ReferenceEquals(p.Map, matchMap)
+                && Math.Abs(p.X - startX) < 1f && Math.Abs(p.Y - startY) < 1f);
+            await context.WaitUntilAsync("the closed map has no player left", () => matchMap.PlayerCount == 0);
+        });
+    }
 }

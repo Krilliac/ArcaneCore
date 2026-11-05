@@ -55,6 +55,13 @@ public sealed class EconomyOptions
     /// <summary>Whether players of opposite teams may trade (vmangos CONFIG_BOOL_ALLOW_TWO_SIDE_TRADE).</summary>
     public bool AllowCrossTeamTrade { get; set; }
 
+    /// <summary>
+    /// Whether a game master with GM mode on may start a trade with a player of the other team although <see cref="AllowCrossTeamTrade"/> is off
+    /// (default true). An ArcaneCore extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no such rule, so false is the
+    /// retail behaviour. Only the initiator is tested; a player who invites a game master of the other team is refused.
+    /// </summary>
+    public bool GmCrossTeamTrade { get; set; } = true;
+
     /// <summary>The Plain Letter item created by CMSG_MAIL_CREATE_TEXT_ITEM (vmangos MAIL_BODY_ITEM_TEMPLATE 8383).</summary>
     public uint LetterItemEntry { get; set; } = 8383;
 
