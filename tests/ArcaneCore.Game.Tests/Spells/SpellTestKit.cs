@@ -137,6 +137,7 @@ internal sealed class SpellTestKit : IDisposable
         Spell(Passive, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
         {
             Attributes = SpellAttributes.Passive,
+            SpellVisual = 0, // a passive is only shown (SpellAuraHolder visible slot) when it has a visual
             Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
