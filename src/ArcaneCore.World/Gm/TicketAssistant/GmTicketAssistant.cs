@@ -247,14 +247,32 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         }
 
         watch.DeadSince = player.IsAlive ? 0 : watch.DeadSince == 0 ? now : watch.DeadSince;
-        // A duel keeps a player in combat with nobody on its attacker list, and a living creature that holds the player on its threat list
-        // keeps it there too (the combat anomaly check calls that engaged): neither is stale. Limit: a periodic hostile aura from a caster that is
-        // neither an attacker nor a threat holder is not looked at, so such a player can read as stale; ClearCombat then only stops the combat
-        // state, which the aura's next tick raises again, and costs the account one action.
+        // A duel keeps a player in combat with nobody on its attacker list, and a threat holder (any entry of ThreatenedBy, which also counts a
+        // dead or out-of-range one, so this fails closed: the player escalates instead of being cleared) keeps it there too, as does a hostile
+        // periodic damage aura of another caster, whose next tick raises the combat state again: none of these is stale.
         bool stale = player.Duel is null && player.Combat.IsInCombat && player.Combat.Attackers.Count == 0 && player.Combat.Victim is null
-            && !player.Combat.HasThreatList && player.Combat.ThreatenedBy.Count == 0;
+            && !player.Combat.HasThreatList && player.Combat.ThreatenedBy.Count == 0 && !HasHostileDot(player);
         watch.StaleSince = stale ? (watch.StaleSince == 0 ? now : watch.StaleSince) : 0;
         return watch;
+    }
+
+    /// <summary>World thread: whether another caster's hostile periodic damage aura sits on the player (SpellSystem.GetAuras; evaluated only for a player that otherwise reads as stale).</summary>
+    private bool HasHostileDot(Player player)
+    {
+        if (services.GetService<SpellFeature>()?.System is not { } spells)
+        {
+            return false;
+        }
+
+        foreach (ArcaneCore.Game.Spells.SpellAuraHolder holder in spells.GetAuras(player))
+        {
+            if (!holder.IsRemoved && holder.CasterGuid != player.Guid && !holder.IsPositive && holder.HasAura(ArcaneCore.Game.Spells.AuraType.PeriodicDamage))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // ---- passes ---------------------------------------------------------------------------------
@@ -427,13 +445,14 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
     // A command prefix of the command table ('.' or '!') at the start of a word.
     private static readonly Regex DraftCommandPattern = new(@"(?<![\w.!])[.!][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
-    // A bare domain, by shape and not by a list of endings: a label, a dot (ASCII or a fullwidth or ideographic one) and at least two letters
+    // A bare domain, by shape and not by a list of endings: a label of one or more characters ("t.me", "x.com"), a dot (ASCII or a fullwidth or ideographic one) and at least two letters
     // ("name.example", "a.b.xyz"). Prose with no space after a full stop ("run.Then") matches too, which only sends the ticket to a GM.
-    private static readonly Regex DraftDomainPattern = new(@"[A-Za-z0-9-]{2,}[.\u3002\uFF0E\uFF61][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+    private static readonly Regex DraftDomainPattern = new(@"[A-Za-z0-9-]+[.\u3002\uFF0E\uFF61][A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
 
-    // A domain spelled out ("evil dot com", "evil [dot] gg", "evil (dot) com"): "dot" followed by a short word or bracketed at all. A damage-over-time
-    // sentence ("dot damage") can match, which again only sends the ticket to a GM.
-    private static readonly Regex DraftSpelledDomainPattern = new(@"(?:[\[\(\{]\s*dot\s*[\]\)\}]|\bdot\s+[a-z]{2,3}\b)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
+    // A domain spelled out ("evil dot com", "evil dot shop", "evil-dot-com", "evil [dot] gg"): "dot" as a word of its own followed, after any run of
+    // separators, by any word (no length limit and no ending list), or bracketed at all. A damage-over-time sentence ("dot damage") can match,
+    // which again only sends the ticket to a GM.
+    private static readonly Regex DraftSpelledDomainPattern = new(@"(?:[\[\(\{]\s*dot\s*[\]\)\}]|(?<![A-Za-z])dot(?![A-Za-z])[\W_]*[A-Za-z]{2,})", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(50));
 
     // A slash command of the client ("/script", "/run", "/say") at the start of a word. "and/or" and "1/2" do not match.
     private static readonly Regex DraftSlashCommandPattern = new(@"(?<![\w/])/[A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
@@ -515,7 +534,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
 
     private CharacterIdentity? IdentityOf(GmTicketRecord ticket) => services.GetRequiredService<CharacterDirectory>().Find(ticket.CharacterId);
 
-    private TicketFacts Gather(GmTicketRecord ticket, out Player? player)
+    internal TicketFacts Gather(GmTicketRecord ticket, out Player? player)
     {
         CharacterIdentity? identity = IdentityOf(ticket);
         string name = identity?.Name ?? ("#" + ticket.CharacterId.ToString(CultureInfo.InvariantCulture));
@@ -590,10 +609,10 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         return label + " is " + state.Quests.GetStatus(found.Id) + " in the author's log";
     }
 
-    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself. Null, changing nothing, when the ticket is no longer open or a human has answered it since it was picked.</summary>
+    /// <summary>World thread: facts, the allowlist, the account limits, and the fix itself. Null, changing nothing, when the ticket is no longer open or a human has answered it since it was picked (force only overrides what was seen at pick time).</summary>
     private Step? Decide(GmTicketRecord ticket, TicketClassification classification, bool force)
     {
-        if (services.GetRequiredService<GmAuditFeature>().OpenTicket(ticket.Id) is not { } current || (!force && current.Response.Length != 0))
+        if (services.GetRequiredService<GmAuditFeature>().OpenTicket(ticket.Id) is not { } current || !string.Equals(current.Response, ticket.Response, StringComparison.Ordinal))
         {
             return null;
         }
@@ -884,7 +903,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         TicketAction action = step.Decision.Action;
         // Read again: a human who answered, or a player who withdrew the ticket, since Decide must not be overwritten or answered.
         GmTicketRecord? current = audit.OpenTicket(ticket.Id);
-        bool writable = current is not null && (force || current.Response.Length == 0);
+        bool writable = current is not null && string.Equals(current.Response, ticket.Response, StringComparison.Ordinal);
         string? meanwhile = writable ? null : current is null ? "the ticket was closed or withdrawn meanwhile" : "a GM answered the ticket meanwhile";
         if (!writable && action == TicketAction.Answer)
         {

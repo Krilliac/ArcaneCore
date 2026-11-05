@@ -1173,6 +1173,16 @@ public sealed class GmTicketAssistantTests
     [InlineData("Visit evil\u3002com now.", false)]
     [InlineData("Release\u200B your spirit.", false)]
     [InlineData("Release your spirit and/or run to your corpse.", true)]
+    [InlineData("join t.me/scamchan now", false)]
+    [InlineData("visit x.com today", false)]
+    [InlineData("see t.co/abc", false)]
+    [InlineData("go to a.gg", false)]
+    [InlineData("visit evil dot shop now", false)]
+    [InlineData("visit evil dot store", false)]
+    [InlineData("evil dot online", false)]
+    [InlineData("evil-dot-com", false)]
+    [InlineData("evil_dot_com", false)]
+    [InlineData("evil DOT   community", false)]
     public void ScreenDraft_KeepsOnlyPlainFaqBackedText(string draft, bool kept)
     {
         const string faq = "Stuck: type .unstuck. Dead: release your spirit and run to your corpse.";
@@ -1434,6 +1444,44 @@ public sealed class GmTicketAssistantTests
         Assert.DoesNotContain("someone@example.com", parsed.Summary, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AForcedRun_DoesNotOverwriteAGmAnswerThatArrivesWhileTheModelThinks()
+    {
+        (WorldTestHost host, GmTicketRecord ticket) = await RaceAsync(
+            (h, t) => new FakeModel { Classify = _ => { AuditOf(h).RespondToTicket(t.Id, "A GM answered"); return StuckModel(string.Empty); } }, Stuck);
+        await using (host)
+        {
+            TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id, force: true);
+
+            Assert.Null(outcome);
+            Assert.Equal("A GM answered", AuditOf(host).OpenTicket(ticket.Id)!.Response);
+            Assert.Empty(AssistantAudit(host));
+            Assert.True(await UnstuckReadyAsync(host));
+        }
+    }
+
+    [Fact]
+    public async Task AForcedRun_DoesNotOverwriteOrCloseOnAGmAnswerThatArrivesWhileTheAnswerIsDrafted()
+    {
+        (WorldTestHost host, GmTicketRecord ticket) = await RaceAsync(
+            (h, t) => new FakeModel
+            {
+                Classify = _ => "{\"category\":\"Question\"}",
+                Draft = _ => { AuditOf(h).RespondToTicket(t.Id, "A GM answered"); return "Type .unstuck."; },
+            },
+            "how do I get unstuck?");
+        await using (host)
+        {
+            TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id, force: true);
+
+            Assert.NotNull(outcome);
+            Assert.Equal(TicketAction.Escalate, outcome.Action);
+            Assert.False(outcome.Closed);
+            Assert.Equal("A GM answered", AuditOf(host).OpenTicket(ticket.Id)!.Response);
+            Assert.Equal(0, AssistantOf(host).Status().Answered);
+        }
+    }
+
     // ---- stale combat: the clock, and the duel ----
 
     [Fact]
@@ -1457,7 +1505,7 @@ public sealed class GmTicketAssistantTests
         Assert.Equal(TicketAction.Escalate, first.Action);
         Assert.True(await host.PlayerStateAsync("Plainone", p => p.Combat.IsInCombat));
 
-        clock.Offset = TimeSpan.FromSeconds(29);
+        clock.Offset = TimeSpan.FromSeconds(10);
         Assert.Equal(TicketAction.Escalate, (await assistant.ProcessTicketAsync(ticket.Id, force: true))!.Action);
 
         clock.Offset = TimeSpan.FromSeconds(60);
@@ -1469,30 +1517,71 @@ public sealed class GmTicketAssistantTests
         Assert.False(await host.PlayerStateAsync("Plainone", p => p.Combat.IsInCombat));
     }
 
+    // Set up and read inside one world-thread callback: the map's duel tick (MapDuel.Update, which drops a duel with no arbiter flag) cannot run in between.
     [Fact]
-    public async Task ADuel_IsNeverStaleCombat_AndIsNeverUnstuck()
+    public async Task ADuel_IsNeverStaleCombat_AndAPlayerWithoutOneIs()
     {
-        var clock = new OffsetClock();
-        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StaleCombatSeconds"] = "0", ["World:GmTicketAssistant:StuckIdleSeconds"] = "0" },
-            new FakeModel { Classify = StuckModel }, clock: clock);
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StaleCombatSeconds"] = "0" }, new FakeModel { Classify = StuckModel });
         await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
-        await AllowUnstuckAsync(host, "Plainone");
+        GmTicketRecord ticket = File(host, "Plainone", Stuck);
+        GmTicketAssistant assistant = AssistantOf(host);
+
         await host.OnWorldAsync(() =>
         {
             Player author = host.World.FindOnlinePlayer("Plainone")!;
             author.Map!.Combat.SetInCombatState(author, 600_000);
             author.Duel = new DuelInfo(author, author) { StartTimeSeconds = 1 };
+
+            TicketFacts duelling = assistant.Gather(ticket, out _);
+            Assert.True(duelling.InDuel);
+            Assert.True(duelling.InCombat);
+            Assert.False(duelling.StaleCombat);
+
+            author.Duel = null;
+            TicketFacts alone = assistant.Gather(ticket, out _);
+            Assert.False(alone.InDuel);
+            Assert.True(alone.StaleCombat);
         });
+    }
+
+    private const uint HostileDot = 90_001;
+
+    [Fact]
+    public async Task AHostilePeriodicAuraOfAnotherCaster_IsNeverStaleCombat()
+    {
+        await using WorldTestHost host = Start(new() { ["World:GmTicketAssistant:StaleCombatSeconds"] = "0" }, new FakeModel { Classify = StuckModel });
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAIN", "Plainone");
+        await using WorldTestClient caster = await host.EnterWorldAsync("CASTER", "Casterone");
         GmTicketRecord ticket = File(host, "Plainone", Stuck);
-        clock.Offset = TimeSpan.FromSeconds(600);
+        GmTicketAssistant assistant = AssistantOf(host);
 
-        TicketOutcome? outcome = await AssistantOf(host).ProcessTicketAsync(ticket.Id);
+        await host.OnWorldAsync(() =>
+        {
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            spells.Store = new SpellStore(
+            [
+                .. spells.Store.All.Where(s => s.Id != HostileDot),
+                new SpellInfo
+                {
+                    Id = HostileDot, Name = "Test hostile damage over time", RangeIndex = 4, Range = new SpellRange(0, 30),
+                    Duration = new SpellDuration(600_000, 0, 600_000),
+                    Effects = [new SpellEffectInfo
+                    {
+                        Effect = SpellEffectName.ApplyAura, BasePoints = 6, BaseDice = 1, DieSides = 1,
+                        TargetA = SpellImplicitTarget.Unit, AuraType = AuraType.PeriodicDamage, Amplitude = 600_000,
+                    }, new(), new()],
+                },
+            ], [], []);
+            Player author = host.World.FindOnlinePlayer("Plainone")!;
+            Player other = host.World.FindOnlinePlayer("Casterone")!;
+            author.Map!.Combat.SetInCombatState(author, 600_000);
 
-        Assert.NotNull(outcome);
-        Assert.Equal(TicketAction.Escalate, outcome.Action);
-        Assert.False(outcome.Performed);
-        Assert.True(await UnstuckReadyAsync(host));
-        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Plainone")!.Duel = null);
+            Assert.True(assistant.Gather(ticket, out _).StaleCombat);
+
+            Assert.True(spells.AddAura(author, HostileDot, caster: other));
+            Assert.Contains(spells.GetAuras(author), h => h.Spell.Id == HostileDot && h.CasterGuid == other.Guid && !h.IsPositive);
+            Assert.False(assistant.Gather(ticket, out _).StaleCombat);
+        });
     }
 
     [Fact]
