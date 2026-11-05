@@ -27,6 +27,7 @@ namespace ArcaneCore.World.Tests.Cluster.Transfer;
 /// world's own save queue) and a gateway-backed session: the shadow load must write nothing and must not run the battleground hook, and the
 /// activation follows the retail far-teleport order (loading screen first, map add on the worldport ack).
 /// </summary>
+[Collection(SharedFaultLedgerCollection.Name)] // the fault-count assertions read the process-wide ledger: nothing may reset it meanwhile
 public sealed class WorkerTransferTargetProductionTests
 {
     private const uint BattlegroundMapId = 489; // Warsong Gulch

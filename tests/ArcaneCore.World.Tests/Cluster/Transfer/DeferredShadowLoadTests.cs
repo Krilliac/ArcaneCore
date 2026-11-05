@@ -4,12 +4,14 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -22,6 +24,7 @@ namespace ArcaneCore.World.Tests.Cluster.Transfer;
 /// real <see cref="WorldGatewaySessionAcceptor"/> exactly as the gateway link host does it. Before C9 the stage 3 install failed with "no adopted session"
 /// (see <see cref="WithoutTheDeferral_TheStageThreeInstallFailsBecauseTheSessionIsNotOpenYet"/>); with it the transfer completes.
 /// </summary>
+[Collection(SharedFaultLedgerCollection.Name)] // reads the process-wide fault ledger before and after: nothing may reset it meanwhile
 public sealed class DeferredShadowLoadTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
@@ -119,12 +122,13 @@ public sealed class DeferredShadowLoadTests
 
     /// <summary>The target as <c>WorkerTransferHosting</c> builds it: the production loader and entry, the session probe, and the acceptor's session-opened wiring.</summary>
     private static (WorkerTransferTarget Target, CountingLoader Loader) NewTarget(
-        Rig rig, bool deferred = true, int failFirstLoads = 0, bool offline = false, TimeSpan? sessionOpenGrace = null)
+        Rig rig, bool deferred = true, int failFirstLoads = 0, bool offline = false, TimeSpan? sessionOpenGrace = null, Func<Exception?>? scripted = null,
+        ILogger<WorkerTransferTarget>? logger = null)
     {
         Func<PlayerTransferBundle, WorldSession?> sessions = AdoptedSession(rig.Acceptor);
-        var loader = new CountingLoader(new CharacterHooksShadowLoader(sessions, rig.Host.WorldServices), failFirstLoads);
+        var loader = new CountingLoader(new CharacterHooksShadowLoader(sessions, rig.Host.WorldServices), failFirstLoads, scripted);
         var target = new WorkerTransferTarget(
-            Target, rig.Host.World, loader, new WorldSessionTransferEntry(rig.Host.WorldServices), sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
+            Target, rig.Host.World, loader, new WorldSessionTransferEntry(rig.Host.WorldServices), logger: logger, sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
             offlineArrival: offline ? new CharacterStoreOfflineArrival(rig.Host.WorldServices.GetRequiredService<IServiceScopeFactory>()) : null)
         {
             SessionOpenGrace = sessionOpenGrace ?? TimeSpan.FromMilliseconds(200),
@@ -255,6 +259,79 @@ public sealed class DeferredShadowLoadTests
         Assert.Equal(2, loader.Calls);
     }
 
+    private static long TargetFaultsOf(string exceptionType) => FaultLedger.Shared.Snapshot()
+        .Where(f => f.Site == "cluster.transfer-target" && f.ExceptionType.Contains(exceptionType, StringComparison.Ordinal))
+        .Sum(f => f.Count);
+
+    private sealed class DeferredLoadBroke : InvalidOperationException;
+
+    /// <summary>
+    /// A deferred shadow load (started by the session opening, observed by the continuation of OnSessionOpened) that ends because the client closed is the client leaving: it is logged at
+    /// information level and adds nothing to the fault ledger. The control in the same test is a deferred load that fails otherwise: it is counted, and warned about. The log line of either
+    /// branch is the sync point (the fault is recorded before the warning, the information line is written instead of it), so the counts are read after the continuation ran, not by timing.
+    /// </summary>
+    [Fact]
+    public async Task ADeferredLoadThatFoundTheClientClosed_IsNotCountedAsAFault_WhileAnyOtherDeferredFailureIs()
+    {
+        await using Rig rig = NewRig();
+        (int accountId, string account, CharacterRecord character) = await NewCharacterAsync(rig.Host, "DEFERRED9", "Defernine");
+        var logs = new CapturingLoggerProvider();
+        using var factory = new LoggerFactory([logs]);
+        Func<Exception> next = () => new TransferClientClosedException("the client closed", new ObjectDisposedException("scope"));
+        (WorkerTransferTarget target, CountingLoader loader) = NewTarget(rig, scripted: () => next(), logger: factory.CreateLogger<WorkerTransferTarget>());
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character);
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
+        long closedBefore = TargetFaultsOf(nameof(TransferClientClosedException));
+
+        await OpenSessionAsync(rig, accountId, account);
+        await WorldTestHost.WaitForAsync(() => Deferred(logs).Length >= 1, "the deferred load to be observed");
+
+        Assert.Equal(1, loader.Calls);
+        Assert.Empty(Deferred(logs).Where(e => e.Level >= LogLevel.Warning)); // the closed client is not warned about
+        Assert.Equal(closedBefore, TargetFaultsOf(nameof(TransferClientClosedException)));
+        Assert.False(target.HasShadow(id));
+        Assert.Equal(1, target.ReservedCount); // the failed load was forgotten: the install after the commit repeats it
+
+        // Control: the same continuation records every other failure, so the zero above can fail.
+        next = () => new DeferredLoadBroke();
+        long brokeBefore = TargetFaultsOf(nameof(DeferredLoadBroke));
+        target.OnSessionOpened(accountId);
+        await WorldTestHost.WaitForAsync(() => Deferred(logs).Any(e => e.Level == LogLevel.Warning), "the failed deferred load to be warned about");
+
+        Assert.Equal(2, loader.Calls);
+        Assert.Equal(brokeBefore + 1, TargetFaultsOf(nameof(DeferredLoadBroke)));
+        Assert.Equal(closedBefore, TargetFaultsOf(nameof(TransferClientClosedException)));
+    }
+
+    private static CapturedCategoryLog[] Deferred(CapturingLoggerProvider logs) => [.. logs.Entries.Where(e => e.Message.Contains("deferred shadow load", StringComparison.Ordinal))];
+
+    /// <summary>
+    /// The production loader on a session whose client left (the session closed and its scope was disposed): the disposed scope surfaces as <see cref="TransferClientClosedException"/> with the
+    /// disposed-scope error inside, not as a bare ObjectDisposedException that the coordinator would count as a fault.
+    /// </summary>
+    [Fact]
+    public async Task TheProductionLoader_OnASessionWhoseClientLeft_ThrowsTheClientClosedException()
+    {
+        await using Rig rig = NewRig();
+        (int accountId, string account, CharacterRecord character) = await NewCharacterAsync(rig.Host, "DEFERRED10", "Deferten");
+        await OpenSessionAsync(rig, accountId, account);
+        RemoteWorldSession remote = rig.Acceptor.Sessions.Values.Single();
+        WorldSession session = remote.Session;
+        Assert.False(session.IsDisconnected);
+
+        remote.CloseFromGateway(ClusterSessionDetachReason.ClientDisconnect);
+        await WorldTestHost.WaitForAsync(() => rig.Acceptor.Sessions.IsEmpty, "the session task to end (it disposes the session scope last)");
+        Assert.True(session.IsDisconnected);
+
+        var loader = new CharacterHooksShadowLoader(_ => session, rig.Host.WorldServices);
+        PlayerTransferBundle bundle = NewBundle(Guid.NewGuid(), accountId, character);
+        TransferClientClosedException closed = await Assert.ThrowsAsync<TransferClientClosedException>(() => loader.LoadAsync(bundle, CancellationToken.None).WaitAsync(Budget));
+
+        Assert.IsType<ObjectDisposedException>(closed.InnerException);
+    }
+
     [Fact]
     public async Task ADiscardedDeferredInstall_NeverLoads_WhenTheSessionOpensLater()
     {
@@ -379,7 +456,7 @@ public sealed class DeferredShadowLoadTests
         Assert.Equal(1, target.ReservedCount);
     }
 
-    private sealed class CountingLoader(ITransferShadowLoader inner, int failFirst) : ITransferShadowLoader
+    private sealed class CountingLoader(ITransferShadowLoader inner, int failFirst, Func<Exception?>? scripted = null) : ITransferShadowLoader
     {
         private int _calls;
 
@@ -391,6 +468,11 @@ public sealed class DeferredShadowLoadTests
             if (call <= failFirst)
             {
                 throw new InvalidOperationException("injected load failure " + call);
+            }
+
+            if (scripted?.Invoke() is { } scriptedFailure)
+            {
+                throw scriptedFailure;
             }
 
             return await inner.LoadAsync(bundle, cancellationToken).ConfigureAwait(false);
