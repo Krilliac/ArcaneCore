@@ -18,7 +18,7 @@ public sealed partial class SpellSystem
     /// suppress-target-procs attributes bypass it. With <see cref="MagnetRequiresAttackable"/> (default off,
     /// <c>SpellRules:MagnetRequiresAttackable</c>) one addition over vmangos applies, taken from
     /// mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924, <c>magnet->IsAlive() &amp;&amp; CanAttack(magnet)</c>):
-    /// a magnet the caster may not attack is skipped. vmangos and mangoszero have no such test (the default); mangos-classic applies it to every
+    /// a magnet the caster may not attack is skipped. vmangos has no such test (the default; mangoszero refuses only unattackable-flagged targets); mangos-classic applies it to every
     /// cast, here it is limited to the scope of the explicit-hostile gate in CheckCast (non-triggered casts and
     /// client-named blocks). See the Discrepancies table in docs/areas/spells.md. Charges are spent at selection, before hit
     /// resolution, including misses. The caster ownership token prevents GUID reuse from
