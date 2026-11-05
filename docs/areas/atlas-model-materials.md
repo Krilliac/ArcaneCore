@@ -1,8 +1,15 @@
 # Area: Atlas textured WMOs and static M2 doodads (lane A3)
 
-Status: pending lane A3. Part of [atlas-models](atlas-models.md).
+Status: pending lane A3 for the WMO and M2 readers; the `model` material kind itself is delivered by lane Y39 (below). Part of [atlas-models](atlas-models.md).
 
 Scope: read `MOTX`, `MOMT`, `MOTV`, `MOCV`, `MONR` and `MOBA` from WMOs and the full M2 material tables, fill the reserved layers
 `ref.wmo.tex` and `ref.m2.tex`, extend the model package to every M2 view and to WMOs, and add `model.preview` (a CPU render of one
 package). The foundation it builds on (texture store, ATG1 v2, the `generic` material, the minimal M2 package) is documented in
 [atlas-models](atlas-models.md).
+
+## Material kinds (browser, lane Y39)
+
+`materials/model.js` is a real kind: it draws through the generic program and cuts an alpha-key material that carries no `alphaRef` at 0.5 (the generic
+kind keeps everything). `materials/skinned.js` and `materials/character.js` are real kinds with the same rules; the renderer's vertex layout holds
+position, uv0 and color0 only, so skinned and character chunks draw in their bind pose until bone streams and the M2 animation tracks exist (lane Y40).
+`materials/terrain.js` is described in [atlas-terrain-textures](atlas-terrain-textures.md). The shared helper is `materials/derived.js`.

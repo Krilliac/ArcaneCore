@@ -6,11 +6,13 @@ Code: `tools/ArcaneCore.Atlas/Web/js/clientfs/`. Tests: `tests/ArcaneCore.Atlas.
 
 ## Integration status
 
-The reader is complete but not yet reachable from a page: nothing outside `js/clientfs/` imports `clientfs/index.js`, so no visitor sees the dialog until two later lanes land. Lane D2 (`PublicApi.tile` / public boot) must call `showFirstEntryDialogIfNeeded()` and `localTileProvider()`, and lane D3 (Local's settings entry) must call `openClientFilesSettings()`; both feature-detect the module until then. Merge order is D4, D1, D2, D3. Open follow-ups:
+The reader is reachable from the Local page (lane Y39). `js/clientsource.js` (`ClientFilesSource`) sits between the viewport and the host API: tile requests of layer `ref.terrain.tex` and texture keys starting `cft:` go to the reader when the host cannot answer them (the host answers NotApplicable, Missing or Rejected, or does not know the layer), every other request goes to the host untouched. The reader module (`clientfs/index.js`) is imported on first need, so a page that never asks loads none of it. The top bar has a **Client files** button that opens `openClientFilesSettings()` (Choose or Change folder, Forget folder, cache budget); with no folder chosen the button opens the first-entry dialog, and once a folder is chosen (or changed, or forgotten) the page asks again for the textured terrain tiles it holds. A textured tile requested before any folder was chosen answers NotApplicable without opening a dialog; the dialog and the Re-allow banner appear on a cache miss only when a folder choice already exists.
 
-- D2 and D3 wire the first-entry dialog into the public and Local pages (this is what makes the dialog appear on first entry).
-- `WebAssetsTests.EntryModule_ReachesEveryJavaScriptFile` carries an extra `js/clientfs/index.js` root added by D4; that test is owned by A1/D2, so D2 should take the root over (or drop it once `index.js` is imported) when it lands.
-- The "module Worker under the public CSP" test uses a header the test harness assembles (`localCsp()` plus `worker-src 'self'; frame-ancestors 'none'`) because no public listener exists on this base. Re-run it against the real header when D2 lands.
+Still open:
+
+- The public page (`js/public/`) draws a 2D chart and loads no terrain, so there is nothing for it to call `showFirstEntryDialogIfNeeded()` for; when it gets a textured view it uses `ClientFilesSource` like the Local page.
+- The "module Worker under the public CSP" test uses a header the test harness assembles (`localCsp()` plus `worker-src 'self'; frame-ancestors 'none'`) because no public listener exists on this base. Re-run it against the real header when that listener lands.
+- The terrain textures are verified on synthetic data only (see Terrain textures below); the orientation of the alpha maps against the layer textures needs a look at real 1.12.1 data before it is called accepted.
 
 ## What the visitor sees
 
@@ -30,11 +32,12 @@ Only `Data/*.MPQ`, the names of Data's sub-folders (for the locale warning) and 
 | `limits.js` | Parser limits and the typed `ClientFsError` codes. |
 | `mpq.js`, `explode.js`, `dbc.js` | MPQ v0/v1 reader (patch chain in `MpqFileSystem` load order), PKWARE explode, DBC reader. bzip2 is refused. |
 | `geometry.js`, `adt.js` | ADT terrain/liquid to ATG1, byte-identical to `ClientTerrainGeometry` + `GeometryWire`. |
+| `blp.js`, `terrain-tex.js` | BLP2 decoder (port of `BlpDecoder.cs`); MTEX/MCLY/MCAL, baked terrain textures and the `ref.terrain.tex` tile. |
 | `validate.js` | Folder checks and the PE version resource. |
 | `scope.js` | Directory handle / FileList scan. |
 | `store.js` | In-memory LRU (512 MB), OPFS cache with a byte budget, IndexedDB `atlas-client` (`handles`, `meta`). |
-| `pool.js`, `worker.js` | Worker pool (`min(4, cores - 1)`), 5 s per file and 30 s per terrain tile; a timed-out Worker is terminated, replaced and the key marked bad. |
-| `dialog.js`, `settings.js`, `index.js` | UI and the public API: `showFirstEntryDialogIfNeeded`, `openClientFilesDialog`, `openClientFilesSettings`, `clientFilesStatus`, `localTileProvider`. |
+| `pool.js`, `worker.js` | Worker pool (`min(4, cores - 1)`), operations `ping`, `validate`, `tile` and `texture`, 5 s per file and 30 s per terrain tile (a baked texture counts as a tile job); a timed-out Worker is terminated, replaced and the key marked bad. |
+| `dialog.js`, `settings.js`, `index.js` | UI and the public API: `showFirstEntryDialogIfNeeded`, `openClientFilesDialog`, `openClientFilesSettings`, `clientFilesStatus`, `localTileProvider`, `localTextureProvider`. |
 
 `localTileProvider().tile(layer, map, x, y, signal)` returns the same `{state, detail, body}` as `Api.tile`. Cache entries are keyed by logical path plus the name, size and last-modified time of every archive, so a changed archive misses. Without File System Access (Firefox, Safari) the folder comes from `<input webkitdirectory>`; `File` objects do not survive a reload, so only cached tiles load afterwards and a cache miss asks for the folder again.
 
@@ -44,19 +47,23 @@ Workers are started from `/app/js/clientfs/worker.js` (same origin), which the p
 
 Not verified against real client data in CI (the real-data tests run only with `ARCANECORE_TEST_CLIENT_DIR`): the strict archive-size check, the compression-mask census and the bzip2 refusal on real archives.
 
+## Terrain textures and BLP
+
+- `blp.js` is the port of `Textures/BlpDecoder.cs`: BLP2 type 1 (palettized with 0, 1, 4 or 8 bit alpha, DXT1, DXT3, DXT5, raw BGRA) to straight-alpha RGBA8 with the whole mip chain, listed levels used while valid, the rest generated by the same alpha-weighted box filter, and the same limits (1 to 4096 pixels a side, 64 MiB decoded). It is written to give the C# decoder's output and is checked on synthetic files of every encoding, not byte-compared with the C# decoder; every failure is a `bad-file` error.
+- `terrain-tex.js` reads MTEX, MCLY and MCAL, blends the layers of each MCNK on the CPU into a 128x128 RGBA texture (base layer, then each further layer by its 4-bit alpha map, every layer tiled 8 times across the chunk, mip level chosen so a repeat is at most a 2:1 minification) and builds the `ref.terrain.tex` tile: ATG1 version 2 with one batch and one `terrain` material per MCNK, UVs 0 to 1 across the chunk, no vertex shared between MCNKs. The baked texture of an MCNK is requested as `cft:<map>/<x>/<y>/<chunk>`, the Worker's `texture` operation returns it as an ATX1 texture, and `localTextureProvider().texture(key)` caches it in memory (96 MiB, never in OPFS). A layer whose BLP is missing or damaged draws a flat fallback colour; an MCNK with more than four layers keeps four; a layer flagged as compressed alpha (not present in 1.12.1 data) is skipped. The last two are counted in the tile's stats (`skippedLayers`).
+- Shadow maps (MCSH), the specular and height layers of later clients and texture animation are not read.
+
 ## Deferred deliverables
 
-Design D4 lists more files than this lane ships. Deferred, with owners:
+Still not in the browser reader, with the reason:
 
 | Deliverable | Reason | Owner |
 |---|---|---|
-| `clientfs/blp.js` (BLP2 decoder) | A1's C# BLP decoder is not on `main` yet; a port follows its output | follow-up lane after A1 merges |
-| terrain texture decoding (MTEX/MCLY/MCAL materials) in `adt.js` | A2 not merged | follow-up lane after A2 merges |
-| `clientfs/m2.js`, `clientfs/wmo.js` | A3 (WMO/M2 materials) not merged | follow-up lane after A3 merges |
-| animation decoding | A4 is later still | follow-up lane after A4 merges |
-| `js/assets/source.js`, `visitor.js`, `server.js` and the `assets.source()` loader lines | phase 2 seam, depends on A1-A4 | follow-up lane after A1-A4 merge |
+| `clientfs/m2.js`, `clientfs/wmo.js` | The C# readers feed the models of the host; the browser has no model draw path that needs them until attached models land | lane Y40 (attached item models) |
+| animation decoding (M2 bone tracks) | The renderer's vertex layout has no bone streams; `skinned` and `character` chunks draw in their bind pose | lane Y40 |
+| `js/assets/source.js`, `visitor.js`, `server.js` and the `assets.source()` loader lines | Replaced by `clientsource.js`, which picks the host or the reader per request | none |
 
-Shipped now: MPQ, explode, DBC, ADT heights/liquid, validation, the dialog and settings.
+Shipped: MPQ, explode, DBC, ADT heights/liquid, BLP2, terrain textures, validation, the dialog and settings, and the Local page wiring.
 
 ## Declining
 

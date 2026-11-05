@@ -634,15 +634,25 @@ test('the shared material registry has a real generic material and the lane file
     assert.equal(generic.pass({ blend: 2 }), 'blend');
     assert.equal(generic.pass({ blend: 6 }), 'blend');
     assert.deepEqual(generic.layout().map((a) => a.stream), ['position', 'uv0', 'color0']);
-    for (const kind of ['terrain', 'wmo', 'm2', 'skinned', 'character', 'nonsense']) {
-        assert.equal(materialKind(kind), generic, `${kind} draws as generic until a lane registers it`);
+    for (const kind of ['wmo', 'm2', 'nonsense']) {
+        assert.equal(materialKind(kind), generic, `${kind} has no kind of its own and draws as generic`);
     }
-    assert.deepEqual([...registry.kinds()], ['generic']);
+    for (const kind of ['terrain', 'model', 'skinned', 'character']) {
+        const impl = materialKind(kind);
+        assert.notEqual(impl, generic, `${kind} is its own implementation`);
+        assert.equal(impl.kind, kind);
+        assert.equal(impl.stub, false);
+        for (const member of ['programs', 'layout', 'bind', 'pass']) {
+            assert.equal(typeof impl[member], 'function', `${kind}.${member} is part of the impl interface`);
+        }
+    }
+    assert.deepEqual([...registry.kinds()].slice(0, 5), ['generic', 'terrain', 'model', 'skinned', 'character']);
 
     const WEB_JS = path.join(WEB, 'js', 'materials');
     for (const file of ['terrain', 'model', 'skinned', 'character']) {
         const text = fs.readFileSync(path.join(WEB_JS, `${file}.js`), 'utf8');
-        assert.match(text, /export function register\(\) \{\}/, `${file}.js is an empty register() stub`);
+        assert.doesNotMatch(text, /export function register\(\) \{\}/, `${file}.js is no longer an empty register() stub`);
+        assert.match(text, /registerMaterialKind\(/, `${file}.js registers its kind`);
     }
     const index = fs.readFileSync(path.join(WEB_JS, 'index.js'), 'utf8');
     for (const file of ['terrain', 'model', 'skinned', 'character']) {

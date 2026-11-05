@@ -7,6 +7,7 @@
 //   openClientFilesSettings()      opens the settings panel (Change folder / Forget folder / cache budget)
 //   clientFilesStatus()            -> {state, folderName, build, version, warnings, cacheBytes, cacheBudgetBytes, archiveReads, cacheHits, error}
 //   localTileProvider()            -> {tile(layer, map, x, y, signal) -> {state, detail, body}}
+//   localTextureProvider()         -> {texture(key, {signal}) -> Promise<Uint8Array>}  ATX1 bytes of a baked `cft:` terrain texture
 //
 // States: none (no choice yet), skipped, needs-permission (a stored handle waits for one click), ready, error.
 // Thread affinity: page thread only; parsing runs in the Workers of pool.js.
@@ -25,6 +26,8 @@ export const ERROR_BLOCKED = 'Your browser blocked access - click Re-allow';
 const STATES = ['Ok', 'Empty', 'Missing', 'Rejected', 'NotApplicable'];
 const CACHEABLE = new Set(['Ok', 'Empty', 'Missing']);
 const KEY_VERSION = 'tile/v1';
+const TEXTURE_KEY_VERSION = 'texture/v1';
+const TEXTURE_LRU_BYTES = 96 * 1024 * 1024;
 
 const model = {
     state: 'none',
@@ -44,6 +47,8 @@ const model = {
 };
 
 const lru = new LruCache();
+const textureLru = new LruCache(TEXTURE_LRU_BYTES); // baked terrain textures live in memory only, never in OPFS
+const textureInflight = new Map();
 const opfs = new OpfsCache(() => model.budget);
 const inflight = new Map();
 let pool = null;
@@ -329,6 +334,7 @@ async function forgetNow() {
     await dbDelete('handles', HANDLE_KEY);
     await dbDelete('meta', META_KEY);
     lru.clear();
+    textureLru.clear();
     await opfs.clear();
 }
 
@@ -546,6 +552,44 @@ export function localTileProvider() {
             const result = await raceAbort(job, signal);
             signal?.throwIfAborted?.();
             return { state: result.state, detail: result.detail, body: result.body.slice(0) };
+        },
+    };
+}
+
+/** The baked terrain textures (`cft:` keys) of the chosen folder: built in a Worker, kept in memory, shared by concurrent callers. */
+export function localTextureProvider() {
+    return {
+        async texture(key, { signal } = {}) {
+            signal?.throwIfAborted?.();
+            await init();
+            const folder = model.folder;
+            if (folder === null) {
+                // A texture follows a tile that was built from live files; without them (after a reload, cache only) it cannot be baked.
+                throw new ClientFsError('bad-file', 'The client folder is not open, so the terrain texture cannot be built.');
+            }
+            const cacheId = chainKey(`${TEXTURE_KEY_VERSION}/${key}`, folder.archives);
+            const hot = textureLru.get(cacheId);
+            if (hot !== undefined) {
+                return hot.slice();
+            }
+            let job = textureInflight.get(cacheId);
+            if (job === undefined) {
+                const started = getPool().run('texture', { archives: folder.archives, key }, { kind: 'tile', key: cacheId })
+                    .then((bytes) => {
+                        textureLru.set(cacheId, bytes, bytes.byteLength);
+                        return bytes;
+                    })
+                    .finally(() => {
+                        if (textureInflight.get(cacheId) === started) {
+                            textureInflight.delete(cacheId);
+                        }
+                    });
+                job = started;
+                textureInflight.set(cacheId, job);
+            }
+            const bytes = await raceAbort(job, signal);
+            signal?.throwIfAborted?.();
+            return bytes.slice();
         },
     };
 }

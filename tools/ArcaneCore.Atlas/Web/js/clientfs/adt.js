@@ -338,9 +338,9 @@ export function parseAdt(bytes) {
 }
 
 // ---- Geometry (AdtGeometry, ClientTerrainGeometry) -----------------------------------------------------------------
-const outer = (chunk, y, x) => Math.fround(chunk.baseHeight + chunk.mcvt[(y * STRIDE) + x]);
-const inner = (chunk, y, x) => Math.fround(chunk.baseHeight + chunk.mcvt[(y * STRIDE) + 9 + x]);
-const isHole = (chunk, y, x) => (chunk.holes & (1 << (((y >> 1) * 4) + (x >> 1)))) !== 0;
+export const outer = (chunk, y, x) => Math.fround(chunk.baseHeight + chunk.mcvt[(y * STRIDE) + x]);
+export const inner = (chunk, y, x) => Math.fround(chunk.baseHeight + chunk.mcvt[(y * STRIDE) + 9 + x]);
+export const isHole = (chunk, y, x) => (chunk.holes & (1 << (((y >> 1) * 4) + (x >> 1)))) !== 0;
 const holeSquares = (chunk) => popCount(chunk.holes) * 4;
 const visible = (layer, y, x) => layer.flags[(y * 8) + x] !== HIDDEN_SQUARE;
 const darkWater = (layer, y, x) => {
@@ -632,6 +632,48 @@ async function loadDirectory(chain) {
 const result = (state, detail, parts = []) => ({ state, detail, parts });
 
 /**
+ * Finds and reads the ADT of a tile: {path, bytes, directory}, or {failure} holding the Api.tile-shaped result ({state, detail, parts})
+ * that says why there is none (NotApplicable, Rejected or Missing). Shared by buildTile and the textured terrain builder.
+ */
+export async function locateAdt(chain, map, x, y) {
+    const fail = (state, detail) => ({ failure: result(state, detail) });
+    if (x === -1 && y === -1) {
+        return fail('NotApplicable', 'Terrain has no untiled content; the global tile only holds a WMO.');
+    }
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x > 63 || y < 0 || y > 63) {
+        return fail('Rejected', `Tile (${x}, ${y}) is outside the 64x64 grid.`);
+    }
+    let directory;
+    try {
+        directory = await loadDirectory(chain);
+    } catch (error) {
+        if (error instanceof ClientFsError && error.code === 'bad-file') {
+            return fail('Rejected', error.message);
+        }
+        throw error;
+    }
+    if (directory.problem !== null) {
+        return fail(directory.rejected ? 'Rejected' : 'Missing', directory.problem);
+    }
+    const folder = directory.maps.get(map);
+    if (folder === undefined) {
+        return fail('Missing', `Map ${map} is not in Map.dbc.`);
+    }
+    if (folder.length === 0 || /[\\/:]/.test(folder) || folder === '.' || folder === '..') {
+        return fail('Rejected', `Map directory '${folder}' is not a single folder name.`);
+    }
+    const path = `World\\Maps\\${folder}\\${folder}_${y}_${x}.adt`;
+    const bytes = await chain.read(path);
+    if (bytes === null) {
+        return fail('Missing', `${path} is not in the client files.`);
+    }
+    if (bytes.length === 0) {
+        return fail('Missing', `${path} is zero bytes long (a patch archive deleted it).`);
+    }
+    return { path, bytes, directory };
+}
+
+/**
  * Builds one tile of ref.terrain or ref.liquid from the archive chain: {state, detail, parts} with Api.tile's state names
  * (Ok | Empty | Missing | Rejected | NotApplicable) and the ATG1 chunks as parts.
  */
@@ -639,39 +681,11 @@ export async function buildTile(chain, layer, map, x, y) {
     if (layer !== LAYER_TERRAIN && layer !== LAYER_LIQUID) {
         throw new ClientFsError('unknown-layer', `The client files do not build layer '${layer}'.`);
     }
-    if (x === -1 && y === -1) {
-        return result('NotApplicable', 'Terrain has no untiled content; the global tile only holds a WMO.');
+    const found = await locateAdt(chain, map, x, y);
+    if (found.failure) {
+        return found.failure;
     }
-    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x > 63 || y < 0 || y > 63) {
-        return result('Rejected', `Tile (${x}, ${y}) is outside the 64x64 grid.`);
-    }
-    let directory;
-    try {
-        directory = await loadDirectory(chain);
-    } catch (error) {
-        if (error instanceof ClientFsError && error.code === 'bad-file') {
-            return result('Rejected', error.message);
-        }
-        throw error;
-    }
-    if (directory.problem !== null) {
-        return result(directory.rejected ? 'Rejected' : 'Missing', directory.problem);
-    }
-    const folder = directory.maps.get(map);
-    if (folder === undefined) {
-        return result('Missing', `Map ${map} is not in Map.dbc.`);
-    }
-    if (folder.length === 0 || /[\\/:]/.test(folder) || folder === '.' || folder === '..') {
-        return result('Rejected', `Map directory '${folder}' is not a single folder name.`);
-    }
-    const path = `World\\Maps\\${folder}\\${folder}_${y}_${x}.adt`;
-    const bytes = await chain.read(path);
-    if (bytes === null) {
-        return result('Missing', `${path} is not in the client files.`);
-    }
-    if (bytes.length === 0) {
-        return result('Missing', `${path} is zero bytes long (a patch archive deleted it).`);
-    }
+    const { path, bytes, directory } = found;
     const tile = { map, x, y };
     try {
         if (layer === LAYER_TERRAIN) {

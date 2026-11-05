@@ -7,6 +7,7 @@ import { PEER_CSS_COLOR, peerLabelCandidates } from './presence.js';
 import { buildLiveGeometry, pickEntity } from './live.js';
 import { describeSurface, normalizePick } from './normalize.js';
 import { computeNotices } from './notices.js';
+import { ClientFilesSource } from './clientsource.js';
 import { Renderer, RendererUnavailable } from './renderer.js';
 import { Scene } from './scene.js';
 import { TextureStore } from './materials/textures.js';
@@ -29,6 +30,13 @@ const isTexturedLayer = (id) => id.endsWith('.tex');
 export class Viewport {
     constructor(app, root) {
         this.app = app;
+        this.clientFiles = new ClientFilesSource({
+            api: app.api,
+            onChange: () => {
+                this.scene?.invalidateLayer('ref.terrain.tex');
+                this.dirty = true;
+            },
+        });
         this.root = root;
         this.canvas = h('canvas', { class: 'gl-canvas', aria: { hidden: 'true' } });
         this.labelCanvas = h('canvas', { class: 'label-canvas', aria: { hidden: 'true' } });
@@ -92,7 +100,7 @@ export class Viewport {
             });
             app.webgl = { ok: true, message: '' };
             this.#createTextures();
-            this.scene = new Scene({ api: app.api, renderer: this.renderer });
+            this.scene = new Scene({ api: this.clientFiles, renderer: this.renderer });
             this.scene.setLayerInfos(app.layers);
             app.scene = this.scene;
             this.scene.on('change', () => {
@@ -155,7 +163,7 @@ export class Viewport {
         const allowDxt = new URLSearchParams(window.location.search).get('texfmt') !== 'rgba';
         this.textureStore = new TextureStore({
             gl: this.renderer.gl,
-            fetchTexture: (key, options) => this.app.api.texture(key, options),
+            fetchTexture: (key, options) => this.clientFiles.texture(key, options),
             budgetBytes: this.app.view.textureBudgetMb * MIB,
             allowDxt,
             onChange: () => (this.dirty = true),

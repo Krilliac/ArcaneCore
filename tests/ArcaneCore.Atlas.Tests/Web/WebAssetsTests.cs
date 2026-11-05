@@ -194,7 +194,6 @@ public sealed class WebAssetsTests(ITestOutputHelper output)
         var queue = new Queue<string>();
         queue.Enqueue("js/main.js");
         queue.Enqueue("js/public/boot.js"); // the public page's own entry (public.html)
-        queue.Enqueue("js/clientfs/index.js"); // nothing imports it yet: lane D2 (PublicApi.tile) and lane D3 (Local settings entry) will; drop this root once they do
         queue.Enqueue("js/clientfs/worker.js"); // started with new Worker(), not imported
         while (queue.Count > 0)
         {
