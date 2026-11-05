@@ -126,7 +126,7 @@ public sealed class ScriptLocationTargetTests
     {
         using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
         rig.Spawn(Firecracker, 60);
-        rig.Kit.LearnSpell(rig.Caster, Firework);
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, Firework);
 
         Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.CastSpell(rig.Caster, Firework, SpellCastTargets.ForSelf(), triggered: false));
 

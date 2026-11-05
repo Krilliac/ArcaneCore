@@ -64,7 +64,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
             .Where(p => string.Equals(p.Value.Role, SupervisedRoles.Combined, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(p.Value.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(p.Value.Role, SupervisedRoles.Social, StringComparison.OrdinalIgnoreCase) // social and coordinator are labels on a World executable (ClusterNodeOptions.Validate refuses a
-                || string.Equals(p.Value.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase))) // dedicated social node), so such a child is a whole Combined world: a writer like any other
+                || string.Equals(p.Value.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase)) // dedicated social node), so such a child is a whole Combined world: a writer like any other
             .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
         bool several = worlds.Count > 1;
