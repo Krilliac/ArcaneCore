@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Rename;
+using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Character;
 using ArcaneCore.World.Gm.Core;
@@ -9,6 +12,8 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Talents;
 using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Tests.Talents;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -84,6 +89,67 @@ public sealed class GmAsyncCommandSettlementTests
         Assert.False(early, "the command settled before its asynchronous work replied: #done ok would precede the reply");
         Assert.Equal("Account NOSUCHACCT does not exist.", Assert.Single(replies));
         Assert.Equal("no-such-account", context.Failure);
+    }
+
+    [Theory]
+    [InlineData("dump.txt NoSuchChar", "player-not-found")]
+    [InlineData("sub/dump.txt Pdwadmin", "file-open-failed")]
+    public async Task APlayerDumpWrite_ThatCannotStart_ReportsTheFailure(string args, string failure)
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("PDWADMIN", "Pdwadmin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+
+        (CommandContext context, bool early, ConcurrentQueue<string> replies) = await RunAsync(host, session, "pdump write", args);
+
+        Assert.False(early);
+        Assert.Single(replies);
+        Assert.Equal(failure, context.Failure); // RA must report #done error, not #done ok
+    }
+
+    [Fact]
+    public async Task APlayerDumpWrite_WhoseFileCannotBeOpened_ReportsTheFailureFromTheWorker()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "arcane-pdump-settle-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(Path.Combine(dir, "dump.txt")); // the dump path is an existing directory, so the write cannot open it
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        try
+        {
+            await using (var db = new CharacterDbContext(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options))
+            {
+                await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+                db.Characters.Add(new CharacterRecord { AccountId = 77, Name = "Dumpme", Level = 30, Race = 1, Class = 1 });
+                await db.SaveChangesAsync();
+            }
+
+            await using var host = WorldTestHost.Start(configureServices: services =>
+            {
+                services.AddDbContext<CharacterDbContext>(o => o.UseSqlite(connection));
+                services.AddSingleton(new PlayerDumpOptions { Directory = dir });
+            });
+            await using WorldTestClient admin = await host.EnterWorldAsync("PDOADMIN", "Pdoadmin", AccountSecurity.Administrator);
+            await admin.CollectAsync();
+            WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+            int id;
+            await using (var db = new CharacterDbContext(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options))
+            {
+                id = await db.Characters.Where(c => c.Name == "Dumpme").Select(c => c.Id).SingleAsync();
+            }
+
+            host.WorldServices.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(id, 77, "Dumpme", 1, 0, 1, 30));
+
+            (CommandContext context, bool early, ConcurrentQueue<string> replies) = await RunAsync(host, session, "pdump write", "dump.txt Dumpme");
+
+            Assert.False(early, "the command settled before its asynchronous work replied: #done ok would precede the reply");
+            Assert.Equal("Failed to open file: dump.txt", Assert.Single(replies));
+            Assert.Equal("file-open-failed", context.Failure);
+        }
+        finally
+        {
+            System.IO.Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]

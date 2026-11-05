@@ -162,6 +162,10 @@ public sealed class WorldportSpike : IDisposable
         AckTimeout = ackTimeout ?? TimeSpan.FromSeconds(60);
         ObserveWindow = observeWindow ?? TimeSpan.FromSeconds(15);
         AbandonAfter = abandonAfter ?? (AckTimeout * 10);
+        if (AbandonAfter < AckTimeout)
+        {
+            throw new ArgumentOutOfRangeException(nameof(abandonAfter), abandonAfter, "A run must stay open at least as long as the ack timeout, or it is abandoned before the timeout can be reported.");
+        }
     }
 
     public TimeSpan AckTimeout { get; }

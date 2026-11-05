@@ -80,12 +80,14 @@ public sealed class PlayerDumpCommands : ICommandGroup
             : PlayerNames.TryNormalize(StripLink(who), out string name) ? directory.FindByName(name) : null;
         if (target is null)
         {
+            context.Fail("player-not-found");
             context.Reply(GmStrings.PlayerNotFound);
             return true;
         }
 
         if (ResolvePath(context, file) is not { } path)
         {
+            context.Fail("file-open-failed");
             context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
             return true;
         }
@@ -95,6 +97,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             string? dump = await new PlayerDumpWriter(services.GetRequiredService<CharacterDbContext>()).GetDumpAsync(target.Id).ConfigureAwait(false);
             if (dump is null)
             {
+                context.Fail("player-not-found");
                 ReplyLater(context, GmStrings.PlayerNotFound);
                 return;
             }
@@ -106,6 +109,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                context.Fail("file-open-failed");
                 ReplyLater(context, string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
                 return;
             }
@@ -159,6 +163,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
 
         if (ResolvePath(context, file) is not { } path)
         {
+            context.Fail("file-open-failed");
             context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
             return true;
         }

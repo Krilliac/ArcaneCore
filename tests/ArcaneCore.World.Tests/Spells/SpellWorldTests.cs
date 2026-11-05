@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Spells;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -163,6 +164,130 @@ public sealed class SpellWorldTests
 
         await gm.SendAsync(WorldOpcode.CmsgCancelAura, BitConverter.GetBytes(Renew));
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Renewer")!.GetUInt32(UpdateFields.UnitFieldAura) == 0, "aura removed");
+    }
+
+    [Fact]
+    public async Task CastSelf_NeedsASelectedUnit_ThenCastsOnIt_AndRejectsBadSyntax()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("SELFCAST", "Selfcast", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        Player self = await host.PlayerAsync("Selfcast");
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew}");
+        Assert.Equal("Select a character or creature.", (await gm.ReadChatAsync()).Text);
+        Assert.Equal(0u, self.GetUInt32(UpdateFields.UnitFieldAura));
+
+        await gm.SendAsync(WorldOpcode.CmsgSetSelection, BitConverter.GetBytes(self.Guid.Value));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Selfcast")!.Selection == self.Guid, "self selected");
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew} junk");
+        Assert.StartsWith("Syntax: .cast self", (await gm.ReadChatAsync()).Text, StringComparison.Ordinal); // the command ran and refused it
+        await gm.CollectRepliesAsync(); // the rest of the multi-line help
+        Assert.Equal(0u, self.GetUInt32(UpdateFields.UnitFieldAura)); // trailing junk is a syntax error (vmangos: only "triggered" may follow)
+
+        await gm.SendChatAsync(ChatType.Say, Language.Common, $".cast self {Renew} triggered");
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Selfcast")!.GetUInt32(UpdateFields.UnitFieldAura) == Renew, "aura from .cast self");
+    }
+
+    private static async Task<string> RunCommandAsync(WorldTestClient client, string command)
+    {
+        await client.SendChatAsync(ChatType.Say, Language.Common, command);
+        return (await client.ReadChatAsync()).Text;
+    }
+
+    private static Task SelectAsync(WorldTestHost host, string caller, string target) => host.OnWorldAsync(() =>
+        host.World.FindOnlinePlayer(caller)!.Selection = host.World.FindOnlinePlayer(target)!.Guid);
+
+    [Fact]
+    public async Task CastTarget_NeedsAVictim_ThenTheSelectedUnitCastsOnIt()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CTGM", "Ctgm", AccountSecurity.Administrator);
+        await using WorldTestClient caster = await host.EnterWorldAsync("CTCAST", "Ctcast");
+        await using WorldTestClient victim = await host.EnterWorldAsync("CTVICT", "Ctvict", race: 2);
+        await FlagForPvpAsync(host, "Ctvict");
+        await gm.CollectAsync();
+        await SelectAsync(host, "Ctgm", "Ctcast");
+        uint health = await host.PlayerStateAsync("Ctvict", p => p.Health);
+
+        Assert.Equal("The selected unit has no victim.", await RunCommandAsync(gm, $".cast target {Bolt} triggered"));
+        Assert.Equal(health, await host.PlayerStateAsync("Ctvict", p => p.Health));
+
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Ctcast")!.Combat.Victim = host.World.FindOnlinePlayer("Ctvict"));
+        Assert.Equal($"Cast spell {Bolt}.", await RunCommandAsync(gm, $".cast target {Bolt} triggered"));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Ctvict")!.Health == health - 7, "the bolt lands on the selected unit's victim");
+    }
+
+    [Fact]
+    public async Task CastBack_MakesTheSelectedUnitCastOnTheInvoker()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CBGM", "Cbgm", AccountSecurity.Administrator, race: 2);
+        await using WorldTestClient caster = await host.EnterWorldAsync("CBCAST", "Cbcast");
+        await FlagForPvpAsync(host, "Cbgm");
+        await gm.CollectAsync();
+        await SelectAsync(host, "Cbgm", "Cbcast");
+        uint health = await host.PlayerStateAsync("Cbgm", p => p.Health);
+
+        Assert.Equal($"Cast spell {Bolt}.", await RunCommandAsync(gm, $".cast back {Bolt} triggered"));
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Cbgm")!.Health == health - 7, "the selected unit's bolt lands on the invoker");
+    }
+
+    [Fact]
+    public async Task CastDist_ChecksItsArguments_AndPointInFrontFollowsTheFacing()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("CDGM", "Cdgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+
+        Assert.Equal("Spell 999999 does not exist.", await RunCommandAsync(gm, ".cast dist 999999 5"));
+        Assert.StartsWith("Syntax: .cast dist", await RunCommandAsync(gm, $".cast dist {Heal}"), StringComparison.Ordinal); // the distance is required
+        await gm.CollectRepliesAsync();
+
+        (float x, float y, float z) = SpellCommands.PointInFront(10f, 20f, 5f, 0f, 3f);
+        Assert.Equal((13f, 20f, 5f), (x, y, z));
+        (x, y, z) = SpellCommands.PointInFront(10f, 20f, 5f, MathF.PI / 2f, 4f);
+        Assert.Equal(10.0, x, 0.001);
+        Assert.Equal(24.0, y, 0.001);
+        Assert.Equal(5f, z);
+        (x, y, _) = SpellCommands.PointInFront(10f, 20f, 5f, MathF.PI, -2f);
+        Assert.Equal(12.0, x, 0.001);
+        Assert.Equal(20.0, y, 0.001);
+    }
+
+    [Fact]
+    public async Task TheCastSubcommands_RefuseAHigherSecurityPlayer_AsTheSelectionAndAsTheVictim()
+    {
+        // .cast needs level 6; mapping GameMaster to it lets a lower-security GM run the command so the target check is what is under test.
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["World:GmCommands:SecurityMap:GameMaster"] = "6",
+                ["World:GmCommands:LowerSecurity"] = "true",
+            }).Build()));
+        await using WorldTestClient gm = await host.EnterWorldAsync("LSGM", "Lsgm", AccountSecurity.GameMaster);
+        await using WorldTestClient admin = await host.EnterWorldAsync("LSADM", "Lsadm", AccountSecurity.Administrator, race: 2);
+        await using WorldTestClient other = await host.EnterWorldAsync("LSOTH", "Lsoth");
+        await FlagForPvpAsync(host, "Lsadm");
+        await gm.CollectAsync();
+        uint health = await host.PlayerStateAsync("Lsadm", p => p.Health);
+        const string refused = "You have low security level for this.";
+
+        // The higher-security player is the selection: it is neither the caster of .cast self nor the target of .cast back's selected caster.
+        await SelectAsync(host, "Lsgm", "Lsadm");
+        Assert.Equal(refused, await RunCommandAsync(gm, $".cast self {Renew} triggered"));
+        Assert.Equal(refused, await RunCommandAsync(gm, $".cast back {Bolt} triggered"));
+        Assert.Equal(0u, await host.PlayerStateAsync("Lsadm", p => p.GetUInt32(UpdateFields.UnitFieldAura)));
+
+        // The higher-security player is only the victim of the selected unit: .cast target may not land a spell on it either.
+        await SelectAsync(host, "Lsgm", "Lsoth");
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Lsoth")!.Combat.Victim = host.World.FindOnlinePlayer("Lsadm"));
+        Assert.Equal(refused, await RunCommandAsync(gm, $".cast target {Bolt} triggered"));
+        Assert.Equal(health, await host.PlayerStateAsync("Lsadm", p => p.Health));
+
+        // Control: the same selected unit and victim, once the victim is the invoker's own rank or lower, is allowed (the gate, not the setup, refused above).
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Lsoth")!.Combat.Victim = host.World.FindOnlinePlayer("Lsgm"));
+        Assert.Equal($"Cast spell {Renew}.", await RunCommandAsync(gm, $".cast target {Renew} triggered"));
     }
 
     [Fact]
