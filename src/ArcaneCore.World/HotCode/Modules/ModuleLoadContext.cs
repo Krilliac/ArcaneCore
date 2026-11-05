@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 
 namespace ArcaneCore.World.HotCode.Modules;
 
@@ -30,7 +31,16 @@ internal sealed class ModuleLoadContext(string moduleName, string directory)
             return null;
         }
 
-        return LoadFromStream(new MemoryStream(File.ReadAllBytes(file.FullName)));
+        byte[] bytes = File.ReadAllBytes(file.FullName);
+        AllowlistVerdict verdict = ModuleAllowlist.Check(allowlist, Convert.ToHexString(SHA256.HashData(bytes)));
+        if (!verdict.Allowed)
+        {
+            string reason = $"dependency '{simple}.dll' refused by the module allowlist: {verdict.Detail}";
+            Interlocked.CompareExchange(ref _refusal, reason, null);
+            throw new FileLoadException(reason, file.FullName);
+        }
+
+        return LoadFromStream(new MemoryStream(bytes));
     }
 
     private static bool IsShared(string simpleName)
