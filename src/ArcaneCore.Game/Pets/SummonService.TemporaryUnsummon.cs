@@ -9,7 +9,8 @@ namespace ArcaneCore.Game.Pets;
 
 // A pet that is put away for a while and comes back (vmangos Player::UnsummonPetTemporaryIfAny / ResummonPetTemporaryUnSummonedIfAny,
 // Player.cpp:20911-20940, and m_temporaryUnsummonedPetNumber): a far teleport, a near teleport out of the pet's reach. A dismount also
-// brings it back (Player::Unmount, SummonService.Mounts.cs).
+// brings it back (Player::Unmount, SummonService.Mounts.cs), and so does the end of a taxi flight (Player::Unmount from
+// FlightPathMovementGenerator::Finalize; NpcServicesFeature.OnFlightEnded, as a flight raises no dismount event).
 public sealed partial class SummonService
 {
     private readonly Dictionary<ObjectGuid, TemporarilyUnsummonedPet> _temporarilyUnsummoned = [];
@@ -18,7 +19,7 @@ public sealed partial class SummonService
     public bool HasTemporarilyUnsummonedPet(Player owner) => _temporarilyUnsummoned.ContainsKey(owner.Guid);
 
     /// <summary>
-    /// vmangos Player::UnsummonPetTemporaryIfAny: the player's pet is unsummoned (a hunter pet saved as current, PET_SAVE_AS_CURRENT) and,
+    /// vmangos Player::UnsummonPetTemporaryIfAny: the player's pet is unsummoned (a hunter pet or a warlock's demon saved as current, PET_SAVE_AS_CURRENT) and,
     /// when it is a controlled pet that is not a temporary summon and none is remembered yet, remembered for
     /// <see cref="ResummonTemporarilyUnsummonedPet"/>. The pet number, level, health, mana, react state, action bar and spells come back;
     /// a hunter pet comes back from its current-pet snapshot (vmangos LoadPetFromDB(current = true)). A dead pet is unsummoned but not
@@ -41,9 +42,9 @@ public sealed partial class SummonService
             _temporarilyUnsummoned[owner.Guid] = remembered;
         }
 
-        if (owner.Class == Class.Hunter)
+        if (owner.Class == Class.Hunter || IsPermanentPetFor(owner, pet))
         {
-            QueueCurrentPetSave(owner);
+            QueueCurrentPetSave(owner); // Pet::SavePetToDB(PET_SAVE_AS_CURRENT): a permanent pet's row keeps its latest state if the owner leaves while it is put away
         }
 
         Unsummon(pet, PetUnsummonReason.OwnerLeft);
@@ -168,6 +169,7 @@ public sealed partial class SummonService
             charm.SetActionBar(i, button.Action, button.Type);
         }
 
+        RestorePetCooldowns(pet, remembered.Cooldowns); // before the pet bar is built, so SMSG_PET_SPELLS carries them
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
         SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
@@ -184,7 +186,7 @@ public sealed partial class SummonService
     /// vmangos Pet::IsPermanentPetFor (Pet.cpp:2192-2202) for a SUMMON_PET: a warlock's demon is permanent (a hunter pet always is, and writes its
     /// number on its own path); every other summoned pet is not. Pure; world thread.
     /// </summary>
-    private static bool IsPermanentPetFor(Player owner, Creature pet)
+    internal static bool IsPermanentPetFor(Player owner, Creature pet)
         => owner.Class == Class.Warlock && pet.Template.CreatureType == CharmService.CreatureTypeDemon;
 
     private sealed record TemporarilyUnsummonedPet(
@@ -198,5 +200,6 @@ public sealed partial class SummonService
         IReadOnlyList<uint> ActionBar,
         IReadOnlyList<KeyValuePair<uint, ActionType>> Spells,
         string Name,
-        uint Experience);
+        uint Experience,
+        IReadOnlyList<PersistentPetCooldown>? Cooldowns = null);
 }

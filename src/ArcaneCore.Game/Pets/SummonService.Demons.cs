@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Warlock;
+using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Pets;
@@ -35,9 +36,16 @@ public sealed partial class SummonService
     /// gets the owner's faction, the spell, level stats from <c>pet_levelstats</c>, its create spells and the pet bar, and the Demonic Sacrifice buffs
     /// (override class script 2228) of the owner end.
     /// <para>
-    /// LIMITS: entry 0 (the hunter's Call Pet) is the persistent hunter pet path of <see cref="Install"/>; no demon is saved or loaded (vmangos <c>LoadPetFromDB</c> / <c>SavePetToDB</c>: a warlock gets a
-    /// fresh demon of its level each time and no saved name, level or happiness), the random pet name (<c>GeneratePetName</c>) is not generated so the pet keeps
-    /// the creature name, and the soul shard of Summon Voidwalker, Succubus and Felhunter is a reagent, not charged here.
+    /// A player first tries the demon of that entry it saved before (<c>LoadPetFromDB(player, petEntry)</c>, SpellEffects.cpp:3221; <see cref="SummonSavedDemon"/>): an
+    /// Imp keeps its name, number and spells across a dismissal, a Voidwalker swap, its death or a relog, and comes back at full health and mana (a SUMMON_PET that is not the current load, Pet.cpp:360-364, 415; a relog's current load keeps the saved health instead). Only without a saved demon is a new one made, with a generated
+    /// name (<c>ObjectMgr::GeneratePetName</c>, <see cref="PetContent.GeneratePetName"/>, SpellEffects.cpp:3293) and a new pet number. Either way it is saved as the
+    /// owner's current pet (<see cref="QueueCurrentPetSave"/>; <c>SavePetToDB</c>) and a relog brings it back (<c>SummonService.PersistentPets.cs</c>). A dismissal or a
+    /// replacement saves its final state under its entry and leaves the current slot (<see cref="AbandonSavedDemon"/>; PET_SAVE_NOT_IN_SLOT, Unit.cpp:5129-5136).
+    /// </para>
+    /// <para>
+    /// LIMITS: entry 0 (the hunter's Call Pet) is the persistent hunter pet path of <see cref="Install"/>; a demon with no <c>pet_name_generation</c> rows
+    /// for its entry keeps the creature name (vmangos then answers the creature family's pet name, and no CreatureFamily pet-name table is loaded), and the
+    /// soul shard of Summon Voidwalker, Succubus and Felhunter is a reagent, not charged here.
     /// </para>
     /// </summary>
     private void EffectSummonPet(SpellEffectContext context)
@@ -66,6 +74,11 @@ public sealed partial class SummonService
             return null;
         }
 
+        if (caster is Player summoner && FindSavedDemon(summoner, entry) is { } saved)
+        {
+            return SummonSavedDemon(summoner, saved, spellId);
+        }
+
         (float x, float y, float z) = SafeClosePoint(caster, creatures, 0.0f, PetConstants.FollowDistance, caster.Orientation + PetConstants.FollowAngle);
         uint petNumber = NextPetNumber();
         Creature pet = creatures.SpawnSummoned(template, HighGuid.Pet, creature =>
@@ -75,6 +88,12 @@ public sealed partial class SummonService
             InitPet(creature, SummonKind.Pet, caster, petNumber);
             if (caster is Player)
             {
+                // Unit::EffectSummonPet: "generate new name for summon pet" (SpellEffects.cpp:3293-3298); without name parts the creature name stays
+                if (Content.GeneratePetName(entry, _random) is { Length: > 0 } generated)
+                {
+                    creature.Summon!.Charm!.Name = generated;
+                }
+
                 // CharmInfo::SetPetNumber(petNumber, true) for a player-owned summon (SpellEffects.cpp:3269): the client's pet frame, name query and stat window need it
                 creature.SetUInt32(UpdateFields.UnitFieldPetnumber, petNumber);
             }
@@ -98,9 +117,29 @@ public sealed partial class SummonService
         {
             SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, pet.Summon!.Charm!, listSpells: true));
             RememberPetForSpiritHealer(owner, pet);
+            QueueCurrentPetSave(owner); // Pet::SavePetToDB: a warlock's demon is the current pet of character_pet and survives a relog
         }
 
         return pet;
+    }
+
+    /// <summary>
+    /// A warlock's demon that is leaving the current slot for good (dismissed, replaced by a new summon, or unsummoned with its reagents given back) saves its
+    /// final state under its entry, so summoning that entry again loads the same pet, and its current-pet row is deleted behind every save already queued, so a
+    /// relog does not bring it back (vmangos unsummons it with PET_SAVE_NOT_IN_SLOT, which keeps the row out of the slot LoadPetFromDB reads at login, Pet.cpp:495-514).
+    /// A hunter's pet and every other summon are not touched. Call before <see cref="Unsummon(Creature, PetUnsummonReason)"/> clears the owner's pet link.
+    /// </summary>
+    internal void AbandonSavedDemon(Unit owner, Creature pet)
+    {
+        if (owner is Player player && pet.Summon is { Kind: SummonKind.Pet } && pet.OwnerGuid == player.Guid && IsPermanentPetFor(player, pet))
+        {
+            if (player.PetGuid == pet.Guid)
+            {
+                QueueCurrentPetSave(player);
+            }
+
+            QueueDeletePet(player, numberStaysInUse: true);
+        }
     }
 
     /// <summary>
@@ -121,12 +160,14 @@ public sealed partial class SummonService
                 return false; // a pet in corpse state can't be unsummoned by a call pet
             }
 
+            AbandonSavedDemon(caster, old);
             Unsummon(old, PetUnsummonReason.Replaced);
             return true;
         }
 
         if (caster is Player && newEntry != 0)
         {
+            AbandonSavedDemon(caster, old);
             Unsummon(old, PetUnsummonReason.Replaced);
             return true;
         }

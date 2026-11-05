@@ -14,6 +14,13 @@ public sealed record PetLevelStats(
 public sealed record PetCreateSpells(uint Entry, IReadOnlyList<uint> Spells);
 
 /// <summary>
+/// One <c>pet_name_generation</c> row: a <see cref="Word"/> that is the first (<see cref="SecondHalf"/> false) or second half of a generated
+/// name for pets of creature <see cref="Entry"/> (vmangos <c>ObjectMgr::LoadPetNames</c>, ObjectMgr.cpp:8530-8570: the <c>half</c> column picks
+/// the list).
+/// </summary>
+public sealed record PetNamePart(uint Entry, bool SecondHalf, string Word);
+
+/// <summary>
 /// The pet tables of the world database, immutable once loaded. Level data follows vmangos
 /// <c>ObjectMgr::LoadPetLevelInfo</c> / <c>GetPetLevelInfo</c> (ObjectMgr.cpp:4406-4516): levels
 /// outside 1..<see cref="MaxLevel"/> are ignored, a creature without level 1 data is a hard error
@@ -27,11 +34,26 @@ public sealed class PetContent
 
     private readonly Dictionary<uint, PetLevelStats[]> _levelStats = [];
     private readonly Dictionary<uint, IReadOnlyList<uint>> _createSpells = [];
+    private readonly Dictionary<uint, string[]> _firstHalves = [];
+    private readonly Dictionary<uint, string[]> _secondHalves = [];
 
-    public PetContent(IEnumerable<PetLevelStats> levelStats, IEnumerable<PetCreateSpells> createSpells)
+    /// <param name="levelStats">The <c>pet_levelstats</c> rows.</param>
+    /// <param name="createSpells">The <c>petcreateinfo_spell</c> rows.</param>
+    /// <param name="nameParts">The <c>pet_name_generation</c> rows (none: no pet gets a generated name).</param>
+    public PetContent(IEnumerable<PetLevelStats> levelStats, IEnumerable<PetCreateSpells> createSpells, IEnumerable<PetNamePart>? nameParts = null)
     {
         ArgumentNullException.ThrowIfNull(levelStats);
         ArgumentNullException.ThrowIfNull(createSpells);
+        if (nameParts is not null)
+        {
+            foreach (IGrouping<(uint Entry, bool SecondHalf), PetNamePart> group in nameParts
+                         .Where(part => !string.IsNullOrEmpty(part.Word))
+                         .GroupBy(part => (part.Entry, part.SecondHalf)))
+            {
+                (group.Key.SecondHalf ? _secondHalves : _firstHalves)[group.Key.Entry] = [.. group.Select(part => part.Word)];
+            }
+        }
+
         foreach (PetLevelStats row in levelStats)
         {
             if (row.Level is < 1 or > MaxLevel)
@@ -82,6 +104,25 @@ public sealed class PetContent
 
     /// <summary>Creatures that have create spells.</summary>
     public int CreateSpellEntryCount => _createSpells.Count;
+
+    /// <summary>Creatures that have generated-name parts in both halves (the only ones <see cref="GeneratePetName"/> answers for).</summary>
+    public int NameEntryCount => _firstHalves.Keys.Count(entry => _secondHalves.ContainsKey(entry));
+
+    /// <summary>
+    /// vmangos ObjectMgr::GeneratePetName (ObjectMgr.cpp:8607-8624): a random word of the first list followed by a random word of the second list
+    /// of <paramref name="entry"/>. Null when either list is empty; vmangos then falls back to the creature family's pet name or the creature name,
+    /// and the caller keeps the creature name (no CreatureFamily pet-name table is loaded). <paramref name="random"/> is used on the calling thread only.
+    /// </summary>
+    public string? GeneratePetName(uint entry, Random random)
+    {
+        ArgumentNullException.ThrowIfNull(random);
+        if (!_firstHalves.TryGetValue(entry, out string[]? first) || !_secondHalves.TryGetValue(entry, out string[]? second))
+        {
+            return null;
+        }
+
+        return first[random.Next(first.Length)] + second[random.Next(second.Length)];
+    }
 
     /// <summary>vmangos ObjectMgr::GetPetLevelInfo: the stats of <paramref name="entry"/> at <paramref name="level"/> (capped at <see cref="MaxLevel"/>), or null.</summary>
     public PetLevelStats? FindLevelStats(uint entry, int level)

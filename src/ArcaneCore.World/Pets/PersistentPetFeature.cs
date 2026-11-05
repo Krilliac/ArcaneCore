@@ -42,6 +42,11 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadCurrentAsync(id, ct).ConfigureAwait(false);
         };
+        pets.Service.LoadDemonsPersistence = async (id, ct) =>
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().LoadDemonsAsync(id, ct).ConfigureAwait(false);
+        };
         pets.Service.LoadCallablePersistence = async (id, ct) =>
         {
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
@@ -126,7 +131,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             _ = ReloadAsync(world, player, pets);
             return;
         }
-        if (loaded.Snapshot is { } snapshot && player.Class == ArcaneCore.Game.Class.Hunter
+        if (loaded.Snapshot is { } snapshot && player.Class is ArcaneCore.Game.Class.Hunter or ArcaneCore.Game.Class.Warlock
             && player.PetGuid.IsEmpty && !player.IsQuestSettlementPending)
             pets.Service.RestoreCurrentPet(player, snapshot);
     }

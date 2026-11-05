@@ -1,6 +1,11 @@
 namespace ArcaneCore.Kernel.Characters.Pets;
 
-/// <summary>Durable hunter-pet state. The pet number is the stable identity; a world GUID is transient.</summary>
+/// <summary>
+/// Durable current-pet state of a hunter pet or a warlock demon (a character has one or the other). The pet number is the stable identity; a world GUID is transient.
+/// <paramref name="CreatedBySpell"/> is the summoning spell of a demon (vmangos character_pet.created_by_spell, Pet.cpp:580), 0 for a hunter pet; 
+/// <paramref name="ResetTalentsCost"/> and <paramref name="ResetTalentsTime"/> are the last pet untraining price (copper) and unix seconds
+/// (vmangos reset_talents_cost and reset_talents_time, Pet.cpp:582-583).
+/// </summary>
 public sealed record PersistentPetSnapshot(
     int CharacterId,
     uint PetNumber,
@@ -20,7 +25,10 @@ public sealed record PersistentPetSnapshot(
     bool RenameAllowed = true,
     byte LoyaltyLevel = 1,
     int LoyaltyPoints = 1000,
-    int TrainingPoints = 0)
+    int TrainingPoints = 0,
+    uint CreatedBySpell = 0,
+    uint ResetTalentsCost = 0,
+    long ResetTalentsTime = 0)
 {
     public static PersistentPetSnapshot Empty(int characterId, uint petNumber, uint entry, byte level)
         => new(characterId, petNumber, entry, level, 0, 1, 0, 0, 1, [], []);
@@ -41,5 +49,13 @@ public interface IPersistentPetStore
     Task SaveCurrentAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken = default);
     Task SaveDetachedAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken = default)
         => Task.FromException(new NotSupportedException("detached hunter-pet persistence is not supported by this store"));
+    /// <summary>
+    /// Every warlock demon the character has saved, one per creature entry (vmangos keeps them as character_pet rows of slot NOT_IN_SLOT or the current slot, and
+    /// <c>LoadPetFromDB(owner, petEntry)</c> reads them by entry, Pet.cpp:150-156). A store writes the demon's per-entry row together with the current row
+    /// (<see cref="SaveCurrentAsync"/>), and <see cref="DeleteAsync"/> leaves them: dismissing a demon removes only its current-pet row. Empty for a store that keeps none.
+    /// </summary>
+    Task<IReadOnlyList<PersistentPetSnapshot>> LoadDemonsAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<PersistentPetSnapshot>>(Array.Empty<PersistentPetSnapshot>());
+
     Task DeleteAsync(int characterId, CancellationToken cancellationToken = default);
 }

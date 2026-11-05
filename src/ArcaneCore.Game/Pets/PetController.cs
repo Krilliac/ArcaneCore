@@ -295,6 +295,7 @@ public sealed partial class PetController
                     break;
                 }
 
+                _summons.AbandonSavedDemon(owner, pet); // a warlock's dismissed demon is saved under its entry and leaves the current slot, so it does not come back at the next login
                 _summons.Unsummon(pet, PetUnsummonReason.Dismissed);
                 break;
         }
@@ -681,6 +682,10 @@ public sealed partial class PetController
         {
             _summons.QueueDeletePet(player);
             _summons.ForgetPetForSpiritHealer(player); // PET_SAVE_AS_DELETED: "do not rez the pet in BG"
+        }
+        else if (player.PetGuid == pet.Guid)
+        {
+            _summons.AbandonSavedDemon(player, pet); // a warlock's dismissed demon is saved under its entry and leaves the current slot, so it does not come back at the next login
         }
 
         _summons.Unsummon(pet, PetUnsummonReason.Dismissed);

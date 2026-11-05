@@ -318,6 +318,8 @@ public static class ContentTableSpecs
         // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
         new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
         new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
+        // pet_name_generation: a vmangos table (id, word, entry, half; not checked against classic-db); the halves of a demon's generated name (PetDumpImporter, ObjectMgr::LoadPetNames).
+        new("pet_name_generation", [new KeyColumn("id")], [], [], PetDumpImporter.ReadsNameColumn),
         // The world-state tables (WorldStateDumpImporter reads game_weather and exploration_basexp by name), the seven game-event tables
         // (GameEventDumpImporter, keyed as it keys its own maps), the ship periods (TransportDumpImporter; a missing build reads as 0) and
         // the inns (AreaTriggerTavernDumpImporter reads only id). Without a spec `plan` listed them as read by no importer and the scan
