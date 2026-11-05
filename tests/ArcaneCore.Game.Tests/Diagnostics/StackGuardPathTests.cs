@@ -3,11 +3,15 @@ using System.Runtime.ExceptionServices;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Rules;
+using ArcaneCore.Game.Rules.Creatures;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Rules;
+using ArcaneCore.Kernel.Rules.Creatures;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -112,6 +116,9 @@ public sealed class StackGuardPathTests
 
     [Fact]
     public void EventAiProcess_AtTheStackMargin_IsCutAndRecorded() => AssertCutAtTheMargin("eventai.process", EventAiPhase);
+
+    [Fact]
+    public void CreatureRulesProcess_AtTheStackMargin_IsCutAndRecorded() => AssertCutAtTheMargin("creature-rules.process", RuleAiPhase);
 
     [Fact]
     public void SmartAiAction_AtTheStackMargin_IsCutAndRecorded() => AssertCutAtTheMargin("smartai.action", SmartAiPhase);
@@ -331,6 +338,37 @@ public sealed class StackGuardPathTests
         var ai = (CreatureEventAI)Assert.Single(system.Creatures).AI!;
 
         return new Probe(() => ai.OnAggro(player), () => ai.Phase == 4, world);
+    }
+
+    private static Probe RuleAiPhase()
+    {
+        var rule = new RuleRecord
+        {
+            Id = 1_000_001,
+            Host = CreatureRuleIds.Host,
+            OwnerKind = CreatureRuleIds.OwnerEntry,
+            OwnerId = (int)WolfEntry,
+            EventType = CreatureRuleIds.EventAggro,
+        };
+        var action = new RuleActionRecord
+        {
+            OwnerId = rule.Id,
+            Seq = 0,
+            ActionType = CreatureRuleIds.SharedActionSetPhase,
+            Param1 = 4,
+            TargetType = CreatureRuleIds.TargetSelf,
+        };
+        RuleCatalog catalog = RuleCatalog.Build(new RuleContent { Rules = [rule], Actions = [action] }, RuleVocabulary.Default);
+        Assert.Empty(catalog.Rejected);
+        var factory = new CreatureAiFactory();
+        CreatureRuleAI.Register(factory, catalog);
+        CreatureContent content = new(
+            [Template(configure: t => t.AIName = CreatureRuleAI.AiName)], [Spawn(1, WolfEntry, 5, 0)], [], [], [], CreatureAiContent.Empty);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Factory = factory, Spells = new FakeCaster() });
+        (Player player, _) = AddPlayer(world, 1, 0, 0);
+        var ai = Assert.IsType<CreatureRuleAI>(Assert.Single(system.Creatures).AI);
+
+        return new Probe(() => ai.OnAggro(player), () => ai.Runner.Phase == 4, world);
     }
 
     private static Probe SmartAiPhase()

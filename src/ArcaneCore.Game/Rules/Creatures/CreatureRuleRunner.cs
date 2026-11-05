@@ -510,6 +510,18 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
             return;
         }
 
+        if (!StackGuard.TryEnter("creature-rules.process"))
+        {
+            // A rule chain too deep for the stack: drop the queued rules so none stays in progress for good (as the EventAI engine does).
+            foreach (int slot in ready)
+            {
+                _inProgress[slot] = false;
+            }
+
+            ready.Clear();
+            return;
+        }
+
         // An action that throws must not leave the depth raised or the queued rules in progress (as in the EventAI engine).
         _depth++;
         try

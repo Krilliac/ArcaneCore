@@ -18,6 +18,8 @@ public sealed class WorldEventHostTests
 
         public Func<ushort, bool>? OnStart { get; set; }
 
+        public Func<ushort, bool>? OnStop { get; set; }
+
         public bool StartEvent(ushort eventId)
         {
             Log.Add($"start {eventId}");
@@ -27,7 +29,7 @@ public sealed class WorldEventHostTests
         public bool StopEvent(ushort eventId)
         {
             Log.Add($"stop {eventId}");
-            return true;
+            return OnStop?.Invoke(eventId) ?? true;
         }
 
         public void Announce(string text) => Log.Add($"say {text}");
@@ -202,6 +204,7 @@ public sealed class WorldEventHostTests
     public void AnEntryReplacedDuringATick_GetsNoExtraUpdate_AndItsDelayedRunIsDropped()
     {
         // Rule 1 (event 7, on its first tick) restarts event 9; rule 2 (event 9, on start) says hello at once and bye after 100 ms.
+        // The tick visits the entries in the order they were created (event 7, then event 9: the dictionary has had no removal), so rule 1 runs before event 9's entry is reached; the test relies on that order.
         var h = new Harness(Content(
             [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 9)],
             [Act(1, WorldEventRuleIds.StartEvent, 9), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
@@ -224,6 +227,56 @@ public sealed class WorldEventHostTests
 
         Assert.Equal(["say hello", "start 9", "say hello", "say bye"], h.Control.Log);
         Assert.Equal(2, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryReplacedByItsOwnUpdateRule_GetsNoDelayedRunInThatTick_AndTheReplacementKeepsItsOwn()
+    {
+        // Event 7's Update rule restarts event 7 itself. The old entry holds a delayed "bye" that is due; it is replaced before its own update step,
+        // so it must be dropped (the second IsCurrent check of the tick), and only the replacement's "bye" is pending.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StartEvent, 7), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
+        h.Control.OnStart = id =>
+        {
+            h.Runner.OnEventChanged(id, active: true, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        Assert.Equal(["say hello"], h.Control.Log);
+
+        h.Now = 200; // the first entry's "bye" is due, but its own Update rule replaces it first
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 7", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryRemovedByItsOwnUpdateRule_IsNotUpdatedOrRemovedAgain()
+    {
+        // Event 7's Update rule stops event 7: the stop has no delayed action left, so the entry is removed inside the rule. The tick must not
+        // touch it afterwards (the second IsCurrent check), and later ticks find nothing.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StopEvent, 7), Act(2, SayAction, 1)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
     }
 
     [Fact]
