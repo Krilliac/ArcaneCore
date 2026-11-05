@@ -49,7 +49,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
     public const string DefaultEndpointsSpec =
         "worker:EK|Worker|127.0.0.1:19081|0;" +
         "worker:Kalimdor|Worker|127.0.0.1:19082|1;" +
-        "worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;" +
+        "worker:instances|Worker|127.0.0.1:19083|33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;" +
         "gateway|Gateway|127.0.0.1:19084|-;" +
         "supervisor|Supervisor|127.0.0.1:19087|-";
 

@@ -230,7 +230,7 @@ if ($split) {
         [pscustomobject]@{ Slug = 'EK'; NodeId = 'worker:EK'; Maps = @(0); AllowInstanceMaps = $false }
         [pscustomobject]@{ Slug = 'Kalimdor'; NodeId = 'worker:Kalimdor'; Maps = @(1); AllowInstanceMaps = $false }
         [pscustomobject]@{ Slug = 'instances'; NodeId = 'worker:instances'; AllowInstanceMaps = $true
-            Maps = @(33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 369, 389, 409, 429, 449, 450, 469, 489, 509, 529, 531, 533) }
+            Maps = @(33, 34, 35, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 369, 389, 409, 429, 449, 450, 469, 489, 509, 529, 531, 533) }
     )
     $portMap.Remove('World')
     for ($i = 0; $i -lt $splitWorlds.Count; $i++) {

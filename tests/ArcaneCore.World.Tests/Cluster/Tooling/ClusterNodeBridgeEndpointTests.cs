@@ -70,12 +70,12 @@ public sealed class ClusterNodeBridgeEndpointTests
 
         uint[] maps = [.. instances.Split('|')[3].Split(',').Select(uint.Parse)];
 
-        // 369 (Deeprun Tram) and 449/450 (the PvP barracks) are Common maps with live teleport triggers: Owns(map, 0) succeeds only for a listed map.
-        // 35 (Stormwind Vault, "<unused>" in map_template) is left out on purpose: no client path leads there.
+        // 369 (Deeprun Tram), 449/450 (the PvP barracks) and 35 (map_template name "<unused>StormwindPrison", reached by
+        // areatrigger_teleport 107 "Stormwind Vault Entrance") are Common maps with live teleport triggers: Owns(map, 0) succeeds only for a listed map.
+        Assert.Contains(35u, maps);
         Assert.Contains(369u, maps);
         Assert.Contains(449u, maps);
         Assert.Contains(450u, maps);
-        Assert.DoesNotContain(35u, maps);
     }
 
     [Fact]

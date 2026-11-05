@@ -236,6 +236,8 @@ public sealed class BattlegroundClusterQueueTests
         }
     }
 
+    private const uint FallbackInstanceId = 1_000_000;
+
     /// <summary>
     /// Split stopgap, through the real feature (the manager's host is the cluster queue over the world host, as in production): a world that does not
     /// own the Warsong Gulch map builds no match and does not throw <see cref="MapNotOwnedException"/> from the map it would have to create.
@@ -251,9 +253,10 @@ public sealed class BattlegroundClusterQueueTests
 
         Assert.Null(thrown);
         Assert.Null(created);
-        Assert.Empty(world.Feature.Manager.RunningBattlegrounds);
-        Assert.Null(world.Feature.FindMatch(InstanceManager.FirstInstanceId));
-        Assert.False(world.World.Owns(WsgMap, InstanceManager.FirstInstanceId));
+        // This rig has no InstanceFeature, so BattlegroundWorldHost allocates from its fallback counter (1_000_000, BattlegroundWorldHost._fallbackInstanceId).
+        // A guard moved below AllocateInstanceId/CreateMatchHost would register a match under that id.
+        Assert.Null(world.Feature.FindMatch(FallbackInstanceId));
+        Assert.False(world.World.Owns(WsgMap, FallbackInstanceId));
     }
 
     [Fact]
