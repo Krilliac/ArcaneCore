@@ -82,7 +82,7 @@ public sealed class WorkerControlService(
     WorkerControlTransfer? transfers,
     Func<WorkerControlIdentity> identity,
     ILogger? logger = null,
-    Func<WorkerPromotedParticipants>? onPromoted = null,
+    Func<WorkerNodeId?, WorkerPromotedParticipants>? onPromoted = null,
     Func<bool>? promotionCompleted = null) : IGatewayControlHandler
 {
     /// <summary>How many operations' replies and tombstones are remembered. A suspend reply holds up to 16 KiB, so the bound also bounds memory.</summary>
@@ -96,9 +96,11 @@ public sealed class WorkerControlService(
     private readonly Queue<(Guid Operation, ControlKind Kind)> _endedOrder = new();
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
     // A standby has no draining handoff source and no transfer participants (it is the handoff's target and takes no players). Promotion makes it an active worker, so the participants
-    // are built then, once, by onPromoted and swapped in under _attachGate; null once attached (or for a worker that was never a standby).
+    // are built then, once, by onPromoted and swapped in under _attachGate; null once attached (or for a worker that was never a standby). _promotedSlot is the slot the gateway's
+    // Promote named: onPromoted names the transfer participants by it, because the gateway's journal rows and verbs name a worker by slot, never by a standby's own node id.
     private readonly Lock _attachGate = new();
-    private Func<WorkerPromotedParticipants>? _onPromoted = onPromoted;
+    private Func<WorkerNodeId?, WorkerPromotedParticipants>? _onPromoted = onPromoted;
+    private WorkerNodeId? _promotedSlot;
     private WorkerControlHandoff? _handoff = handoff;
     private WorkerControlTransfer? _transfers = transfers;
 
@@ -116,7 +118,8 @@ public sealed class WorkerControlService(
 
     /// <summary>
     /// The participants now: those the service was built with, until the promotion has completed (<c>promotionCompleted</c>; without it, until the worker no longer reports Standby). The promotion
-    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds. A build that throws attaches nothing and is
+    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds, given the slot
+    /// the gateway's Promote named (null: the world was promoted without that verb, so it has no slot and answers under its own name). A build that throws attaches nothing and is
     /// retried by the next call (the request that hit it is answered Failed). Thread-safe: callers on any thread see either the standby's participants or the promoted ones, never a mix.
     /// </summary>
     private (WorkerControlHandoff? Handoff, WorkerControlTransfer? Transfers) Current()
@@ -127,7 +130,7 @@ public sealed class WorkerControlService(
             {
                 if (_onPromoted is not null)
                 {
-                    WorkerPromotedParticipants promoted = build();
+                    WorkerPromotedParticipants promoted = build(_promotedSlot);
                     _handoff = promoted.Handoff ?? _handoff;
                     _transfers = promoted.Transfers ?? _transfers;
                     Volatile.Write(ref _onPromoted, null);
@@ -308,11 +311,16 @@ public sealed class WorkerControlService(
                 return Ok(request);
             case ControlVerb.Promote:
             {
-                CharacterOwnershipToken token = ((ControlTokenArguments)request.Arguments).Token;
+                var args = (ControlPromoteArguments)request.Arguments;
                 refusal = RowNamesTarget(record, h.Target) ?? Committed(record);
-                if (refusal is null && record.TargetOwnershipToken != token)
+                if (refusal is null && record.TargetOwnershipToken != args.Token)
                 {
                     refusal = "the promotion token is not the target token the journal committed";
+                }
+
+                if (refusal is null && string.IsNullOrWhiteSpace(args.SlotNode))
+                {
+                    refusal = "the promotion names no slot";
                 }
 
                 if (refusal is not null)
@@ -320,7 +328,13 @@ public sealed class WorkerControlService(
                     return Reply(request, ControlStatus.Refused, refusal);
                 }
 
-                await h.Target!.PromoteAsync(token, ct).ConfigureAwait(false);
+                // Before the promotion runs: the attach that follows it names the transfer participants by this slot.
+                lock (_attachGate)
+                {
+                    _promotedSlot = new WorkerNodeId(args.SlotNode);
+                }
+
+                await h.Target!.PromoteAsync(args.Token, ct).ConfigureAwait(false);
                 return Ok(request);
             }
 

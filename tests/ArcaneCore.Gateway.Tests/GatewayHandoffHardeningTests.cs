@@ -96,10 +96,10 @@ public sealed class GatewayHandoffHardeningTests
         Assert.NotNull(control.Transfers);
         Assert.NotNull(control.Handoff!.Source);
 
-        // A transfer through it: this worker is the target of a journalled transfer and the real target participant reserves.
+        // A transfer through it: the journal names the target by slot, as the gateway writes it, and the real target participant reserves. PromotedStandbyTransferTests runs whole transfers through the gateway.
         CharacterOwnershipToken held = rig.B.World.CharacterOwnership!;
         Guid transferId = Guid.NewGuid();
-        await control.Transfers!.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), new WorkerNodeId(NodeB), 0, 0, 0, 0, held, cts.Token);
+        await control.Transfers!.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), new WorkerNodeId(NodeA), 0, 0, 0, 0, held, cts.Token);
         ControlReply reserved = await control.HandleAsync(
             new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Reserve, new ControlReserveArguments(4242UL, 0, 0)), new GatewayControlContext(1), cts.Token);
         Assert.Equal(ControlStatus.Ok, reserved.Status);
@@ -139,8 +139,8 @@ public sealed class GatewayHandoffHardeningTests
     }
 
     /// <summary>
-    /// A real player on the promoted standby goes through the source half of a transfer with the production participants: the journalled transfer names the promoted worker as its source,
-    /// Suspend takes the player out of the world (WorkerTransferSource runs, built by BuildTransfer for a promoted standby) and ResumeSource, the abort path, puts it back. The player
+    /// A real player on the promoted standby goes through the source half of a transfer with the production participants: the journalled transfer names the promoted worker's slot as its source,
+    /// as the gateway writes it, Suspend takes the player out of the world (WorkerTransferSource runs, built by BuildTransfer for a promoted standby) and ResumeSource, the abort path, puts it back. The player
     /// is a real gateway session, so the session acceptor the transfer side hooks is the one that carried the login.
     /// </summary>
     [Fact]
@@ -156,28 +156,64 @@ public sealed class GatewayHandoffHardeningTests
 
         // The gateway now sends new sessions to B: a real client enters B's world.
         await using ArcaneCore.MockClient.Protocol.WorldClient client = await rig.EnterAsync("PROMOTEDSRC", "Promotedsrc", cts.Token);
-        ulong guid = ArcaneCore.Game.Entities.ObjectGuid.Player((uint)rig.CharacterId).Value;
+        ulong guid = ArcaneCore.Game.ObjectGuid.Player((uint)rig.CharacterId).Value;
         ArcaneCore.Game.Maps.WorldRuntime world = rig.B.World;
-        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.Entities.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
 
-        // The journalled transfer names this worker as its source, at stage Reserve.
+        // The journalled transfer names this worker's slot as its source, at stage Reserve.
         Guid transferId = Guid.NewGuid();
         CharacterOwnershipToken held = world.CharacterOwnership!;
-        await control.Transfers.Journal.CreateReservationAsync(transferId, guid, rig.AccountId, 1, new WorkerNodeId(NodeB), new WorkerNodeId("other-worker"), 0, 0, 1, 0, held, cts.Token);
+        await control.Transfers.Journal.CreateReservationAsync(transferId, guid, rig.AccountId, 1, new WorkerNodeId(NodeA), new WorkerNodeId("other-worker"), 0, 0, 1, 0, held, cts.Token);
         ControlReply suspended = await control.HandleAsync(
             new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Suspend,
                 new ControlSuspendArguments(guid, "other-worker", 1, 0, new TransferPosition(-1196.22f, 29.0f, 176.949f, 3.1f))),
             new GatewayControlContext(1), cts.Token);
         Assert.Equal(ControlStatus.Ok, suspended.Status);
         Assert.NotEmpty(Assert.IsType<ControlSuspendPayload>(suspended.Payload).BundleJson);
-        Assert.False(await world.InvokeAsync(() => world.IsOnline(new ArcaneCore.Game.Entities.ObjectGuid(guid)), cts.Token));
+        Assert.False(await world.InvokeAsync(() => world.IsOnline(new ArcaneCore.Game.ObjectGuid(guid)), cts.Token));
 
         await control.Transfers.Journal.AbortPreCommitAsync(transferId, "test: the target never answered", cts.Token);
         ControlReply resumed = await control.HandleAsync(
             new ControlRequest(2, ControlKind.PlayerTransfer, transferId, ControlVerb.ResumeSource, new ControlReasonArguments("test: the target never answered")),
             new GatewayControlContext(1), cts.Token);
         Assert.Equal(ControlStatus.Ok, resumed.Status);
-        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.Entities.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+    }
+
+    /// <summary>
+    /// The gateway is gone after a player on the promoted standby was suspended and the journal says aborted: the worker's own self-heal finds the row, which names the slot, and puts the player back.
+    /// The self-heal is the production one (<see cref="WorkerSelfHealService.For"/>), which reads the participants the promotion attached.
+    /// </summary>
+    [Fact]
+    public async Task APromotedStandby_SelfHealsASuspendedPlayer_FromARowThatNamesItsSlot()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token, transfers: true);
+        await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+        WorkerControlService control = rig.B.Services.GetRequiredService<WorkerControlService>();
+        Assert.NotNull(control.Transfers);
+        await using WorkerSelfHealService heal = WorkerSelfHealService.For(control);
+
+        await using ArcaneCore.MockClient.Protocol.WorldClient client = await rig.EnterAsync("PROMOTEDHEAL", "Promotedheal", cts.Token);
+        ulong guid = ArcaneCore.Game.ObjectGuid.Player((uint)rig.CharacterId).Value;
+        ArcaneCore.Game.Maps.WorldRuntime world = rig.B.World;
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+
+        Guid transferId = Guid.NewGuid();
+        await control.Transfers!.Journal.CreateReservationAsync(
+            transferId, guid, rig.AccountId, 1, new WorkerNodeId(NodeA), new WorkerNodeId("other-worker"), 0, 0, 1, 0, world.CharacterOwnership!, cts.Token);
+        ControlReply suspended = await heal.HandleAsync(
+            new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Suspend,
+                new ControlSuspendArguments(guid, "other-worker", 1, 0, new TransferPosition(-1196.22f, 29.0f, 176.949f, 3.1f))),
+            new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, suspended.Status);
+        Assert.False(await world.InvokeAsync(() => world.IsOnline(new ArcaneCore.Game.ObjectGuid(guid)), cts.Token));
+
+        await control.Transfers.Journal.AbortPreCommitAsync(transferId, "test: the gateway died before the commit", cts.Token);
+
+        Assert.Equal(0, await heal.RunPassAsync(cts.Token));
+        Assert.Equal(1, heal.Healed);
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
     }
 
     [Fact]

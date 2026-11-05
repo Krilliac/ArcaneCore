@@ -506,7 +506,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
                 ?? throw new WorldHandoffUnavailableException($"the standby link of slot '{slotNode}' is down");
             Guid id = handoffId is { } chosen && chosen != Guid.Empty ? chosen : Guid.NewGuid();
             RemoteWorldHandoffSource described = await RemoteWorldHandoffSource.ConnectAsync(active, id, token).ConfigureAwait(false);
-            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, token).ConfigureAwait(false);
+            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, slot.SlotNode, token).ConfigureAwait(false);
             if (!slot.IsActive(described.WorkerId.Value) || !slot.IsStandby(target.WorkerId.Value))
             {
                 throw new InvalidOperationException(
@@ -851,7 +851,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         public async Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
         {
             LinkControlChannel channel = await RequireAsync(cancellationToken).ConfigureAwait(false);
-            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlTokenArguments(takenOver), cancellationToken).ConfigureAwait(false);
+            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlPromoteArguments(takenOver, slot.SlotNode), cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LinkControlChannel> RequireAsync(CancellationToken cancellationToken) =>

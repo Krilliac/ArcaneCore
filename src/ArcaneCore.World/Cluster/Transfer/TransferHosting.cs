@@ -85,14 +85,15 @@ public static class WorkerTransferHosting
         WorkerControlTransfer? transfer = transfersOn && !standby ? BuildTransfer(services, nodeId, host, world, loggers) : null;
 
         // A standby has neither a draining source nor transfer participants while it waits; promotion makes it an active worker, and the control service asks for them then
-        // (WorkerControlService.Current): the handoff keeps its journal and target and gains the source, and the transfer side is built as an active worker's is.
-        Func<WorkerPromotedParticipants>? onPromoted = null;
+        // (WorkerControlService.Current): the handoff keeps its journal and target and gains the source, and the transfer side is built as an active worker's is, under the slot the promotion named:
+        // the gateway names every transfer participant by slot, and this process's own node id differs from it. Handoff rows name processes, so the handoff side keeps nodeId.
+        Func<WorkerNodeId?, WorkerPromotedParticipants>? onPromoted = null;
         if (standby)
         {
             WorkerControlHandoff? standbyHandoff = handoff;
-            onPromoted = () => new WorkerPromotedParticipants(
+            onPromoted = slot => new WorkerPromotedParticipants(
                 standbyHandoff is null ? null : standbyHandoff with { Source = services.GetService<IWorldHandoffSource>() },
-                transfersOn ? BuildTransfer(services, nodeId, host, world, loggers) : null);
+                transfersOn ? BuildTransfer(services, slot ?? nodeId, host, world, loggers) : null);
         }
 
         WorkerControlIdentity Identity() => new(
@@ -108,9 +109,10 @@ public static class WorkerTransferHosting
 
     /// <summary>
     /// The transfer side of an active worker: the production source and target over this process's world, and the journal every worker reads. Null without a decision store.
-    /// Runs once per worker: at build for an active worker, at promotion for a standby.
+    /// Runs once per worker: at build for an active worker, at promotion for a standby. <paramref name="workerId"/> is the slot the participants answer under, the name the gateway's journal rows, bundles and verbs
+    /// carry: an active worker's own node id (the gateway requires it to equal the slot's), a promoted standby's slot.
     /// </summary>
-    private static WorkerControlTransfer? BuildTransfer(IServiceProvider services, WorkerNodeId nodeId, WorldHost host, WorldRuntime world, ILoggerFactory? loggers)
+    private static WorkerControlTransfer? BuildTransfer(IServiceProvider services, WorkerNodeId workerId, WorldHost host, WorldRuntime world, ILoggerFactory? loggers)
     {
         if (services.GetService<ITransferDecisionStore>() is not { } transferJournal)
         {
@@ -120,10 +122,10 @@ public static class WorkerTransferHosting
         CharacterSaveQueue saves = services.GetRequiredService<CharacterSaveQueue>();
         WorkerAdmission admission = services.GetRequiredService<WorkerAdmission>();
         var source = new WorkerTransferSource(
-            nodeId, world, new SaveQueueTransferPersistence(saves, services.GetService<CharacterPersistenceBarrier>()), new FeatureTransferPlayerProbe(services, saves),
+            workerId, world, new SaveQueueTransferPersistence(saves, services.GetService<CharacterPersistenceBarrier>()), new FeatureTransferPlayerProbe(services, saves),
             logger: loggers?.CreateLogger<WorkerTransferSource>());
         var target = new WorkerTransferTarget(
-            nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle), services), new WorldSessionTransferEntry(services), admission,
+            workerId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle), services), new WorldSessionTransferEntry(services), admission,
             MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
             instances: AllocateInstance(services),
             sessionReady: bundle => AdoptedSession(services, bundle) is not null,

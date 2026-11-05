@@ -321,7 +321,9 @@ processes with the gateway as the one coordinator (design `_wf/handoff-control-D
 | `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |
 
 Each slot's standby is named on its worker entry: `Gateway:Workers:N:StandbyNodeId` (the standby's `Cluster:Worker:NodeId`, which must differ from
-every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). The reply timeouts are
+every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). Handoff rows name processes;
+transfer rows, bundles and verbs name the slot (`Gateway:Workers:N:NodeId`) whichever process serves it, and `Promote` tells a standby the slot it now answers
+transfers under. The reply timeouts are
 `Gateway:Control:*` and the recovery cadence `Gateway:Handoff:*`. One gateway per realm is the contract: a worker reports how many gateways it has
 admitted and the coordinator refuses to begin when it is more than one. The gateway and every worker must run the same link contract version.
 

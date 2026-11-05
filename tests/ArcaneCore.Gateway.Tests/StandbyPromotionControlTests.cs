@@ -12,10 +12,12 @@ namespace ArcaneCore.Gateway.Tests;
 
 /// <summary>
 /// Y10: a standby has no draining handoff source and no transfer participants while it waits; once it is promoted its control service runs transfers and is the source of a handoff.
-/// The world is a real standby (its own container, shared databases) promoted through the real takeover, and the verbs go through the production <see cref="WorkerControlService"/>.
+/// The world is a real standby (its own container, shared databases) promoted by the Promote verb after the journal's epoch takeover, and the verbs go through the production <see cref="WorkerControlService"/>.
+/// A slot's standby has its own node id, and the gateway's transfer rows name the slot, so the rows here name <see cref="Slot"/>, which is not the standby's node id. PromotedStandbyTransferTests runs whole transfers through a gateway.
 /// </summary>
 public sealed class StandbyPromotionControlTests
 {
+    private const string Slot = "slot-a";
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(120);
 
     [Fact]
@@ -39,10 +41,24 @@ public sealed class StandbyPromotionControlTests
             new ControlRequest(1, ControlKind.PlayerTransfer, Guid.NewGuid(), ControlVerb.TargetDescribe, ControlNoArguments.Instance), new GatewayControlContext(1), cts.Token);
         Assert.Equal(ControlStatus.Refused, waiting.Status);
 
-        CharacterOwnershipToken handed = await StandbyWorkerTests.TakeOverAsync(standby, active.World.CharacterOwnership!, cts.Token);
+        // The journal's handoff up to the takeover, then the gateway's Promote: the worker learns the slot it takes over from that verb.
+        IWorldHandoffStore journal = control.Handoff.Journal;
+        Guid promotion = Guid.NewGuid();
+        await journal.BeginAsync(promotion, new WorkerNodeId("retiring-worker"), node, active.World.CharacterOwnership!, cts.Token);
+        foreach (WorldHandoffStage stage in new[] { WorldHandoffStage.Warm, WorldHandoffStage.AdmissionsStopped, WorldHandoffStage.Frozen, WorldHandoffStage.Flushed })
+        {
+            await journal.AdvancePreCommitAsync(promotion, stage, cts.Token);
+        }
+
+        WorldHandoffRecord committed = Assert.IsType<WorldHandoffRecord>(await journal.CommitEpochTakeoverAsync(promotion, host.OwnerNode, host.Incarnation, cts.Token));
+        CharacterOwnershipToken handed = Assert.IsType<CharacterOwnershipToken>(committed.TargetOwnershipToken);
         StandbyWorkerTests.ReleaseWriterLock(active);
-        await host.PromoteAsync(handed, cts.Token);
+        ControlReply promoted = await control.HandleAsync(
+            new ControlRequest(10, ControlKind.WorldHandoff, promotion, ControlVerb.Promote, new ControlPromoteArguments(handed, Slot)), new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, promoted.Status);
         Assert.False(host.IsStandby);
+        await journal.MarkReroutedAsync(promotion, cts.Token);
+        await journal.MarkRetiredAsync(promotion, cts.Token);
 
         // Promoted: the same service object now has the draining source and the transfer side.
         Assert.NotNull(control.Handoff.Source);
@@ -52,9 +68,14 @@ public sealed class StandbyPromotionControlTests
         Assert.NotNull(control.Transfers!.Target);
         Assert.NotNull(control.Transfers.Source);
 
-        // A transfer through it: this worker is the target of a journalled transfer; the reservation is made by the real target participant.
+        // The transfer side answers under the slot; handoffs keep naming this process.
+        Assert.NotEqual(Slot, node.Value);
+        Assert.Equal(Slot, control.Transfers.Target!.WorkerId.Value);
+        Assert.Equal(Slot, control.Transfers.Source!.WorkerId.Value);
+
+        // A transfer through it: this worker's slot is the target of a journalled transfer; the reservation is made by the real target participant.
         Guid transferId = Guid.NewGuid();
-        await control.Transfers.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), node, 0, 0, 0, 0, handed, cts.Token);
+        await control.Transfers.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), new WorkerNodeId(Slot), 0, 0, 0, 0, handed, cts.Token);
         ControlReply describe = await control.HandleAsync(
             new ControlRequest(2, ControlKind.PlayerTransfer, transferId, ControlVerb.TargetDescribe, ControlNoArguments.Instance), new GatewayControlContext(1), cts.Token);
         Assert.Equal(ControlStatus.Ok, describe.Status);
@@ -67,7 +88,6 @@ public sealed class StandbyPromotionControlTests
 
         // A handoff from it: the journalled handoff names this worker as its source; stop admissions and freeze run on the real source, and the resume gives the world back.
         Guid handoffId = Guid.NewGuid();
-        IWorldHandoffStore journal = control.Handoff.Journal;
         await journal.BeginAsync(handoffId, node, new WorkerNodeId("next-standby"), handed, cts.Token);
         await journal.AdvancePreCommitAsync(handoffId, WorldHandoffStage.Warm, cts.Token);
         ControlReply stopped = await Handoff(control, 4, handoffId, ControlVerb.StopAdmissions, cts.Token);
@@ -104,7 +124,7 @@ public sealed class StandbyPromotionControlTests
             transfersEnabled: false,
             transfers: null,
             identity: () => new WorkerControlIdentity(new WorkerNodeId("window-worker"), false, incarnation, "owner", "scope", Array.Empty<uint>()),
-            onPromoted: () =>
+            onPromoted: _ =>
             {
                 builds++;
                 return new WorkerPromotedParticipants(waiting with { Source = null }, null);
