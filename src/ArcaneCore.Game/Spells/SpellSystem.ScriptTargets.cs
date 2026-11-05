@@ -143,6 +143,9 @@ public sealed partial class SpellSystem
         return [(caster, 1f)]; // the caster carries the object effect through the unit-effect pipeline
     }
 
+    /// <summary>Extra yards the grid pre-filter of the 46 unit search adds beyond the caster's reach, so a large target combat reach is still a candidate (the exact check follows).</summary>
+    private const float MaxCombatReachMargin = 20f;
+
     /// <summary>The nearest listed unit or game object of the 46 search of <paramref name="effect"/> (a valid explicit unit first); both null when none is in range. Reads state only.</summary>
     private (Unit? Unit, GameObject? Object) FindScriptLocationTarget(Unit caster, SpellInfo spell, SpellEffectInfo effect, int effectIndex, Unit? explicitTarget)
     {
@@ -155,7 +158,7 @@ public sealed partial class SpellSystem
         if (radius >= 50_000f) radius = 200f; // mangos-classic CheckScriptTargeting bounds the "anywhere" range of an entry search
         // SPELLMOD_RADIUS applies to the search radius (vmangos Spell.cpp:2059-2062; the sibling game-object path does the same).
         if (radius > 0) radius = ModFloat(caster, spell, SpellModOp.Radius, radius);
-        if (radius <= 0) return (null, null);
+        if (radius < 0) return (null, null);
 
         float DistanceSquared(WorldObject target) => WorldGeometry.DistanceSq3D(target, caster);
 
@@ -167,9 +170,19 @@ public sealed partial class SpellSystem
             _ => false,
         });
 
-        Unit? chosenUnit = explicitTarget is not null && UnitListed(explicitTarget) && DistanceSquared(explicitTarget) <= radius * radius
+        // The unit search measures combat distance, as vmangos NearestUnitFitConditionInCombatRangeCheck does (Spell.cpp:539, Object.h:603-606,
+        // GetDistance with SizeFactor::CombatReach): centre distance minus both combat reaches, so a radius of 0 (28364 Damage vs. Guards: range
+        // index 1, no radius) still finds a listed unit within melee reach.
+        float casterReach = CombatReach(caster);
+        bool UnitInCombatRange(Unit unit)
+        {
+            float reach = radius + casterReach + CombatReach(unit);
+            return DistanceSquared(unit) <= reach * reach;
+        }
+
+        Unit? chosenUnit = explicitTarget is not null && UnitListed(explicitTarget) && UnitInCombatRange(explicitTarget)
             ? explicitTarget
-            : UnitsInRadius(map, caster.X, caster.Y, caster.Z, radius).Where(UnitListed)
+            : UnitsInRadius(map, caster.X, caster.Y, caster.Z, radius + casterReach + MaxCombatReachMargin).Where(unit => UnitListed(unit) && UnitInCombatRange(unit))
                 .OrderBy(DistanceSquared).ThenBy(unit => unit.Guid.Value).FirstOrDefault();
         GameObject? chosenObject = null;
         if (explicitTarget is null || chosenUnit is null || !ReferenceEquals(chosenUnit, explicitTarget))
