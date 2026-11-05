@@ -23,7 +23,7 @@ namespace ArcaneCore.World.AntiCheat;
 /// (set, delete, score with a value) need Administrator; acting on another player also follows the GM hierarchy rule
 /// (<see cref="CommandContext.CanActOn"/>). A target is a character name, or the selected player, or the invoker.
 /// <c>.anticheat set</c> changes the live options until the next <c>.reload config</c> or restart. The fork's
-/// <c>.spoof</c>/<c>test</c> simulators and its jail are not ported.
+/// <c>.spoof</c>/<c>test</c> simulators and its jail are declined (decision table in docs/areas/anticheat.md).
 /// </summary>
 public sealed class AntiCheatCommands : ICommandGroup
 {

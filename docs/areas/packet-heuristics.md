@@ -2,7 +2,7 @@
 
 Heuristic checks over the packets sessions send to the server. Each finding goes to the anomaly ledger (subsystem `packet`, code =
 the check name) and to a per-check counter; nothing else happens. **A packet is never dropped, changed, delayed, answered
-differently, kicked or banned because of a finding, and no finding feeds the [AntiCheat](anticheat.md) score or escalation.** A
+differently, kicked or banned because of a finding, and no finding feeds the [AntiCheat](anticheat.md) score or escalation unless the `FeedAntiCheatScore` option is switched on (it is off by default; see [Feeding the AntiCheat score](#feeding-the-anticheat-score)).** A
 packet that dispatched before still dispatches and one that was dropped is still dropped, identically. The feature is **on by
 default** (`World:PacketHeuristics:Enabled` = true, so a server with no `World:PacketHeuristics` section runs it); `Enabled` = false
 switches it off at startup and `.packetcheck off` at runtime. Bots and staff stay exempt by default.
@@ -48,6 +48,16 @@ with `bot ` (capped, never evicted), so findings would crowd out its own. Detail
 `ReportIntervalSeconds` (default 10); every occurrence is still counted and the next report says how many were held back. The detail is
 formatted only when a report is actually made: the reasons passed to the throttle are constants, the session state, the opcode name and every number are
 formatted inside the report, so a flood costs no allocation (asserted by `AThrottledFinding_AllocatesNothing_OnEveryReportingPath`).
+
+## Stream output
+
+Each report that reaches the ledger is also published to the `anticheat` channel of the [GM stream](../ops/gm-stream.md) (`.arcane stream on anticheat [target|near|all]`, GameMaster): `packet CODE (Player:guid) account N: text [Severity]`, or `packet CODE account N: text [Severity]` while the session has no player yet. Injected tool traffic and bot traffic carry a `tool` or `bot` marker after the code, so they do not read as the target cheating. The line has the GUID and the account id only, never a name, and no position, so it reaches `all` scopes and a `target` scope whose GM has that player selected, never `near`. It is published only for reports that went out (the throttle applies) and only while a GM follows the channel (one lock-free flag read otherwise); a publish that throws is logged and never stops the count. The movement findings of the AntiCheat manager use the same channel (see [anticheat](anticheat.md#stream-output)).
+
+## Feeding the AntiCheat score
+
+Off by default. With `FeedAntiCheatScore` on, a reported finding of a real player's traffic adds `ScoreWeight` (default 3) to that player's AntiCheat score, as violation type `Packet`. Only `shape`, `dev-opcode` and `malformed` are fed: the checks whose only honest cause is a modified client. Every check that has an honest false-positive risk in the table below never is: `wrong-state`, `unknown-opcode` and `incapacitated-action` (latency, in-flight packets, unimplemented client features), `cadence` (a client entering a crowded city bursts queries), `orphan-ack` (a late acknowledgement after a second change superseded the first) and `replay` (an opcode that legitimately repeats an identical payload). Bot, staff and tool-injected traffic is never fed. The score is requested from whatever thread reports, queued (512 at most between world ticks) and applied on the world thread, where the manager's own exemptions apply as well. One score per reported finding, so `ReportIntervalSeconds` throttles the score too.
+
+Escalation arithmetic at the defaults: one session, check and opcode reports at most once per 10 s, each adding 3, and the score decays by `AntiCheat:DecayPerSecond` (2) per second, so a repeated finding peaks at 3 and is gone in 1.5 s, well under the GM alert at 30. Only about ten distinct check and opcode pairs reporting within a second or two reach it. The default therefore records and streams findings without escalating on its own; an operator who wants an escalation sets `ScoreWeight` to the alert threshold or more (30 reaches `GmAlert` in one finding, 60 `Rubberband`, 120 `Kick`) and an `AntiCheat:Action` ceiling above `Log`. `PacketScoreFeedTests` asserts a finding at weight 30 under the real decay reaching the `GmAlert` verdict and one at the default weight staying at `Log`. The packet itself is still never touched: dispatch is unchanged, with the option on or off. Details: [anticheat](anticheat.md#packet-findings-and-the-score).
 
 ## The checks
 
@@ -135,9 +145,11 @@ packet per session per simulated 100 ms tick): the number is in the test output 
 (asserted). Per-session state is created lazily on the first checked packet and guarded by a small per-session lock; the shared counters
 are `Interlocked`.
 
-## Not in v1 (future work)
+## Movement-clock drift and possessed units
 
-Movement-clock long-term drift (the [SpeedHackDetector](anticheat.md) covers part of it), feeding findings into the AntiCheat score or
-escalation, possessed-unit checks, and the checks that were dropped as infeasible or noisy: a teleport-counter comparison beyond the
-handler's own (the counter is only known to the handler), and enum-range checks (they need the variable layouts, which the shape table
-deliberately does not model).
+Neither is a packet check. The movement-clock long-term drift is in the AntiCheat clock detector, behind its own option (off by default; [anticheat](anticheat.md#long-term-clock-drift)), and the possessed-unit movement checks already exist there ([anticheat](anticheat.md#possessed-units)).
+
+## Not done
+
+Checks dropped as infeasible or noisy: a teleport-counter comparison beyond the handler's own (the counter is only known to the handler), and
+enum-range checks (they need the variable layouts, which the shape table deliberately does not model).

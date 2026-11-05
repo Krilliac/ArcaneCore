@@ -3,7 +3,7 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// <summary>
 /// The <c>World:PacketHeuristics</c> section (docs/areas/packet-heuristics.md): report-only analysis of the packets sessions send to
 /// the server. Every finding goes to the anomaly ledger (subsystem <c>packet</c>); a packet is never dropped, changed, delayed or
-/// answered differently because of a finding, and no finding feeds the AntiCheat score. On by default (set <c>Enabled</c> to false to switch it off); <c>.packetcheck on</c> and
+/// answered differently because of a finding, and no finding feeds the AntiCheat score unless <see cref="FeedAntiCheatScore"/> is switched on (it is off by default). On by default (set <c>Enabled</c> to false to switch it off); <c>.packetcheck on</c> and
 /// <c>.packetcheck off</c> switch it at runtime until the next restart.
 /// </summary>
 public sealed class PacketHeuristicsOptions
@@ -80,6 +80,24 @@ public sealed class PacketHeuristicsOptions
     /// <summary>Report an action opcode received while the player is dead or a ghost, on a taxi flight or in a far transfer (<c>incapacitated-action</c>; a near teleport such as Blink is not one). Default true.</summary>
     public bool IncapacitatedAction { get; set; } = true;
 
+    /// <summary>
+    /// Feed the reports of real players' traffic into the AntiCheat score (so they count towards the escalation ladder of <c>AntiCheat:Action</c>).
+    /// Default false: findings stay report-only, as before. Only <c>shape</c>, <c>dev-opcode</c> and <c>malformed</c> are fed, the checks whose
+    /// only honest cause is a modified client. Every other check has an honest false-positive risk in the check table of
+    /// docs/areas/packet-heuristics.md (latency, a crowded city's query burst, a late acknowledgement, a legitimately repeated payload) and never
+    /// scores. Bot, staff and tool-injected traffic never scores; one score per reported finding, so the report throttle (one per session, check and
+    /// opcode per <c>ReportIntervalSeconds</c>) also limits the score. With the default weight and decay a single finding peaks at 3 and is gone
+    /// in 1.5 s: raise <c>ScoreWeight</c> (30 reaches the default GM alert in one finding) for it to escalate.
+    /// </summary>
+    public bool FeedAntiCheatScore { get; set; }
+
+    /// <summary>
+    /// The weight each fed finding adds to the AntiCheat score. The score decays by <c>AntiCheat:DecayPerSecond</c> (2) and escalates at 30, 60 and 120
+    /// by default, so the default weight 3 only escalates when about ten distinct check and opcode pairs report within a second or two; use 30 or more for a
+    /// single finding to alert. 1-100, default 3.
+    /// </summary>
+    public int ScoreWeight { get; set; } = 3;
+
     /// <summary>A copy (the live options are replaced whole, never edited in place).</summary>
     public PacketHeuristicsOptions Clone()
     {
@@ -97,6 +115,7 @@ public sealed class PacketHeuristicsOptions
         Range(problems, nameof(WrongStateGraceMs), WrongStateGraceMs, 0, 60_000);
         Range(problems, nameof(ReplayCount), ReplayCount, 2, 1000);
         Range(problems, nameof(ReplayWindowMs), ReplayWindowMs, 100, 60_000);
+        Range(problems, nameof(ScoreWeight), ScoreWeight, 1, 100);
         problems.AddRange(CadenceLimits.Validate());
         if (ReplayExclude is null)
         {

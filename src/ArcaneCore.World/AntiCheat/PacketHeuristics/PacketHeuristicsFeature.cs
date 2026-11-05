@@ -21,8 +21,10 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// Report-only heuristics over the packets sessions send (docs/areas/packet-heuristics.md): wrong-state, unknown-opcode, malformed, shape,
 /// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. On by default.
 /// <para>
-/// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays or alters
-/// a packet, kicks, or touches the AntiCheat score; a packet that dispatched before still dispatches and one that was dropped is still dropped.
+/// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays, alters
+/// or kicks anything. The single exception is the optional score request (<c>FeedAntiCheatScore</c>, off by default): a reported finding of
+/// a few checks is queued for the AntiCheat feature, which applies it later on the world thread and alone decides what follows. A packet that
+/// dispatched before still dispatches and one that was dropped is still dropped.
 /// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off (<c>Enabled</c> = false).
 /// </para>
 /// <para>
@@ -78,7 +80,8 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     public void Attach(ArcaneCore.Game.Maps.WorldRuntime world)
     {
         Volatile.Write(ref _world, world);
-        _logger?.LogInformation("Packet heuristics {State} (report only; .packetcheck on|off switches it)", _active ? "enabled" : "disabled");
+        _logger?.LogInformation("Packet heuristics {State} ({Mode}; .packetcheck on|off switches it)", _active ? "enabled" : "disabled",
+            Settings.FeedScore ? "reports, and feeds the AntiCheat score" : "report only");
     }
 
     /// <summary>Replaces the options (any thread). False, with the problems, when they are invalid; nothing changes then.</summary>
@@ -131,7 +134,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} (report only). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
+                $"Packet heuristics: {(settings.Enabled ? "ON" : "off")} ({(settings.FeedScore ? $"reports; AntiCheat score feed ON, weight {settings.ScoreWeight}" : "report only")}). Bots {(settings.ExemptBots ? "exempt" : "INCLUDED")}, staff {(settings.ExemptStaff ? "exempt" : "INCLUDED")}, one ledger report per session, check and opcode per {settings.ReportIntervalMs / 1000} s."),
             "check                   enabled     player        bot      staff       tool",
         };
         for (int i = 0; i < PacketChecks.Count; i++)
@@ -428,11 +431,50 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
 
             Ledger.Report(PacketChecks.Subsystem, PacketChecks.Code(check), SubjectOf(session, traffic), text, severity);
             TraceToGmStream(session, check, severity, text, traffic);
+            FeedScore(session, settings, check, traffic);
         }
 
         // Counted last: a reader that sees the count also finds the ledger report of that occurrence (when it was not held back).
         Interlocked.Increment(ref _counts[Slot(check, traffic)]);
     }
+
+    /// <summary>
+    /// Hands one reported finding of a real player to the AntiCheat score, when <c>FeedAntiCheatScore</c> is on. Only the checks whose only
+    /// honest cause is a modified client are fed: shape, malformed and dev-opcode. Everything the check table of docs/areas/packet-heuristics.md
+    /// lists with an honest false-positive risk is left out (wrong-state, unknown-opcode and incapacitated-action from latency and unimplemented
+    /// client features, cadence from a crowded city's query burst, orphan-ack from a late acknowledgement after a superseding change, replay from
+    /// an opcode that legitimately repeats a payload). Bot, staff and tool-injected traffic is never fed. The request is queued (any thread) and applied on the world thread by the AntiCheat feature,
+    /// which also applies its own exemptions. The detail is a constant, never client input. Observe only: nothing here changes the packet.
+    /// </summary>
+    private void FeedScore(WorldSession session, PacketHeuristicsSettings settings, PacketCheck check, PacketTraffic traffic)
+    {
+        if (!settings.FeedScore || traffic != PacketTraffic.Player || !IsScoredCheck(check))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_services.GetService<AntiCheatFeature>() is { } antiCheat)
+            {
+                antiCheat.EnqueuePacketFinding(session, settings.ScoreWeight, PacketChecks.ScoreDetail(check));
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (_logger is { } log)
+            {
+                log.LogFault("packet.score-feed", ex, "PacketHeuristics: score feed threw for account {Account}", session.AccountId);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("packet.score-feed", ex);
+            }
+        }
+    }
+
+    /// <summary>The checks that may feed the AntiCheat score: those a release client never trips (see <see cref="FeedScore"/>).</summary>
+    internal static bool IsScoredCheck(PacketCheck check) => check is PacketCheck.Shape or PacketCheck.DevOpcode or PacketCheck.Malformed;
 
     /// <summary>
     /// The report that just went to the ledger, to GMs following the <c>anticheat</c> channel. The subject is the session's player by GUID
