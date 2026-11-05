@@ -12,7 +12,7 @@ namespace ArcaneCore.World.GameObjects;
 /// <summary>
 /// The summoning use of a dungeon meeting stone (GAMEOBJECT_TYPE_MEETING_STONE, type 23). Not vanilla 1.12: there the stone only queues for the
 /// dungeon (CMSG_MEETINGSTONE_JOIN), and CMSG_GAMEOBJ_USE on it is refused (GameObject.cpp:1836-1841). This follows the later (TBC) summoning-stone
-/// rules and is switched by <see cref="PlayerbotSummonOptions.MeetingStones"/> (on by default; off keeps the old refusal). A group member at the
+/// rules and is switched by <see cref="PlayerbotSummonOptions.MeetingStones"/> (off by default, which keeps the retail refusal). A group member at the
 /// stone (within interaction range) with another group member beside it and one group member selected summons the selected member: alive, not in
 /// combat, not in a battleground, farther than <see cref="StoneRadiusYards"/> from the stone. The member gets the ordinary summon request toward the
 /// stone (<see cref="GameObjectSpellEffects.Offer"/>) and accepts it with CMSG_SUMMON_RESPONSE as for a warlock's summon. The LFG queue is not touched.

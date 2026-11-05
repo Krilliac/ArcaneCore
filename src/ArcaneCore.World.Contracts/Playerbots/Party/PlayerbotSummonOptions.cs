@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <c>World:Playerbots:Summon</c>: bots bring a far group member to the group (docs/areas/playbots-groups.md, Summons). A warlock bot of a group
 /// that knows Ritual of Summoning and carries a Soul Shard casts it on a member who is on another map or far away; two more group bots click the
 /// summoning portal; the member (a bot, or a real player through the ordinary summon prompt) accepts within two minutes. Where no warlock can,
-/// two bots at a dungeon meeting stone may summon the member through it (not vanilla 1.12, see <see cref="MeetingStones"/>). Every key is live:
+/// two bots at a dungeon meeting stone may summon the member through it (not vanilla 1.12, off by default, see <see cref="MeetingStones"/>). Every key is live:
 /// <c>.reload config</c> changes this object in place and a bot reads it at its next decision.
 /// </summary>
 public sealed class PlayerbotSummonOptions
@@ -15,9 +15,9 @@ public sealed class PlayerbotSummonOptions
     /// <summary>
     /// Non-vanilla: let two group members at a dungeon meeting stone summon a third (TBC summoning-stone rules; strict 1.12 meeting stones only
     /// queue for the dungeon). On the server it lets CMSG_GAMEOBJ_USE on a meeting stone, with a group member selected, send that member a
-    /// summon request; the bots use it when no warlock can summon. On by default; off keeps the stones to the queue.
+    /// summon request, for a real player as well as for a bot (no reagent, no cooldown); the bots use it when no warlock can summon. Off by default (retail: the use of a stone is refused); on is a deliberate deviation.
     /// </summary>
-    public bool MeetingStones { get; set; } = true;
+    public bool MeetingStones { get; set; }
 
     /// <summary>A member on another map, or farther than this many yards from the summoner, is summoned (50..5000).</summary>
     public float FarYards { get; set; } = 200f;

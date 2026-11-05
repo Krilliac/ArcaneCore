@@ -80,7 +80,11 @@ public sealed class PlayerbotSummonWorldTests
     }
 
     private static Task<GroupTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, bool stone = false)
-        => GroupTestWorld.StartAsync([], configure, services: services => Configure(services, stone));
+        => GroupTestWorld.StartAsync([], options =>
+        {
+            options.Summon.MeetingStones = stone; // the stone summon is off by default: the stone tests switch it on, a test's own configure may switch it off again
+            configure?.Invoke(options);
+        }, services: services => Configure(services, stone));
 
     private static void GiveShards(Player player, uint count)
     {
@@ -342,5 +346,28 @@ public sealed class PlayerbotSummonWorldTests
         await GroupAsync(world, warlock.Name, helper.Name, third.Name, far.Name);
         Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started >= 1), await world.TraceAsync());
         Assert.Equal(SummonKind.Ritual, await world.OnWorldAsync(() => world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind ?? SummonKind.Stone));
+    }
+
+    [Fact]
+    public async Task AStoneJob_WhoseSummonerLogsOutMidJob_IsDropped_AndTheHelperIsFreed()
+    {
+        await using GroupTestWorld world = await StartAsync(stone: true);
+        var userOne = await BotAsync(world, "Stonelogouta", Warrior, Camp + new Vector3(6f, 3f, 0f));
+        var userTwo = await BotAsync(world, "Stonelogoutb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        var far = await BotAsync(world, "Stonelogoutc", Warrior, FarCamp);
+        await GroupAsync(world, userOne.Name, userTwo.Name, far.Name);
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
+        string summonerName = await world.OnWorldAsync(() =>
+            world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) is not null ? userOne.Name : userTwo.Name);
+
+        await world.OnWorldAsync(() =>
+        {
+            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(summonerName)!);
+            return true;
+        });
+        Assert.Null(await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(summonerName)));
+
+        // The other bots keep thinking: any of them drops the job (its summoner is gone) instead of holding still for it until the summoner thinks again.
+        Assert.True(await world.RunUntilAsync(20_000, () => world.Bots.Summons.Active == 0), await world.TraceAsync());
     }
 }

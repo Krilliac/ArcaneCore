@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 
 /// <summary>
 /// <c>World:Playerbots:Summon</c> (<see cref="PlayerbotSummonOptions"/>, docs/areas/playbots-groups.md, Summons): the defaults (the non-vanilla meeting-stone
-/// summon is on), the ranges, and the section's place in <see cref="PlayerbotOptions"/>. The keys' registration in <c>WorldConfigKeys</c> is checked by
+/// summon is off), the ranges, and the section's place in <see cref="PlayerbotOptions"/>. The keys' registration in <c>WorldConfigKeys</c> is checked by
 /// <c>ConfigReloadTests</c>.
 /// </summary>
 public sealed class PlayerbotSummonOptionsTests

@@ -144,13 +144,14 @@ internal sealed class PlayerbotSummons
             || groups.GetGroup(player.Guid) is not { IsBattlegroundGroup: false, MemberCount: >= 2 } group
             || map.Template is { IsBattleground: true })
         {
-            Forget(player);
+            Forget(session, player);
             return false;
         }
 
         BotState state = _bots.TryGetValue(player.Guid, out BotState? known) ? known : (_bots[player.Guid] = new BotState());
         state.SeenMs = now;
         Prune(now);
+        DropStale(session, now);
 
         TryAccept(session, player, groups, state, now);
 
@@ -158,8 +159,8 @@ internal sealed class PlayerbotSummons
         if (_bySummoner.Count > 0 && HelperJob(player, groups, state, options, now) is { } helping)
             return DriveHelper(session, player, options, helping, state, elapsedMs, now);
 
-        if (unchecked((int)(now - state.NextEvalMs)) < 0) return false;
-        state.NextEvalMs = now + EvalGapMs;
+        if (state.NextEvalMs != 0 && unchecked((int)(now - state.NextEvalMs)) < 0) return false; // 0 is a fresh state, never a time to wait for
+        state.NextEvalMs = now + EvalGapMs == 0 ? 1 : now + EvalGapMs;
         return TryStart(session, player, options, groups, group, groupState, state, elapsedMs, now);
     }
 
@@ -197,7 +198,7 @@ internal sealed class PlayerbotSummons
         // The ritual first (a warlock), the meeting stone only when no warlock of the group can summon.
         SpellInfo? ritual = player.Class == Class.Warlock ? RitualOf(spells, player, state, now) : null;
         bool ritualReady = ritual is not null && CanCast(spells, player, ritual);
-        if (!ritualReady && (!options.Summon.MeetingStones || AnyWarlockCanSummon(session, spells, groups, group))) return false;
+        if (!ritualReady && (!options.Summon.MeetingStones || AnyWarlockCanSummon(session, spells, group))) return false;
 
         PlayerbotSummonOptions cfg = options.Summon;
         if (ritualReady && (player.Movement.HasFlag(MovementFlags.MaskMoving) || PlayerbotMotion.IsActive(player))) return false;
@@ -207,7 +208,7 @@ internal sealed class PlayerbotSummons
             if (target is null) return false;
             if (player.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects) return false;
             int needed = Math.Max(1, (int)(objects.FindTemplate(GameObjectMapSystem.PlayerSummoningRitualEntry)?.GetData(GameObjectMapSystem.RitualParticipantsData) ?? 3) - 1);
-            if (CountHelpers(session, player, target, groups, group, new Vector3(player.X, player.Y, player.Z), cfg.HelperYards) < needed) return false;
+            if (CountHelpers(session, player, target, group, new Vector3(player.X, player.Y, player.Z), cfg.HelperYards) < needed) return false;
             var job = new SummonJob(SummonKind.Ritual, player.Guid, target.Guid, player.MapId, now, needed);
             _bySummoner[player.Guid] = job;
             _cooldownUntil[target.Guid] = now + (uint)cfg.RetrySeconds * 1000u;
@@ -218,7 +219,7 @@ internal sealed class PlayerbotSummons
         if (player.Map?.FindUpdater<GameObjectMapSystem>() is not { } stones || FindStone(stones, player, cfg.HelperYards) is not { } stone) return false;
         Vector3 at = new(stone.X, stone.Y, stone.Z);
         Player? aimed = PickTarget(session, player, groups, group, cfg, now, anchor: at);
-        if (aimed is null || CountHelpers(session, player, aimed, groups, group, at, cfg.HelperYards) < 1) return false;
+        if (aimed is null || CountHelpers(session, player, aimed, group, at, cfg.HelperYards) < 1) return false;
         var stoneJob = new SummonJob(SummonKind.Stone, player.Guid, aimed.Guid, player.MapId, now, 1) { Anchor = stone.Guid, AnchorPosition = at };
         _bySummoner[player.Guid] = stoneJob;
         _cooldownUntil[aimed.Guid] = now + (uint)cfg.RetrySeconds * 1000u;
@@ -265,7 +266,7 @@ internal sealed class PlayerbotSummons
     }
 
     /// <summary>Group bots (not the summoner, not the target) alive, out of combat and on the summoner's map within <paramref name="yards"/> of <paramref name="at"/>.</summary>
-    private static int CountHelpers(WorldSession session, Player summoner, Player target, GroupManager groups, Group group, Vector3 at, float yards)
+    private static int CountHelpers(WorldSession session, Player summoner, Player target, Group group, Vector3 at, float yards)
     {
         int count = 0;
         foreach (GroupMemberSlot slot in group.Members)
@@ -275,7 +276,6 @@ internal sealed class PlayerbotSummons
                 && other.MapId == summoner.MapId && Vector3.Distance(new Vector3(other.X, other.Y, other.Z), at) <= yards) count++;
         }
 
-        _ = groups;
         return count;
     }
 
@@ -330,9 +330,8 @@ internal sealed class PlayerbotSummons
     }
 
     /// <summary>Whether a living warlock of the group knows the ritual and has its reagents (then the group has a better way than the stone).</summary>
-    private bool AnyWarlockCanSummon(WorldSession session, SpellFeature spells, GroupManager groups, Group group)
+    private bool AnyWarlockCanSummon(WorldSession session, SpellFeature spells, Group group)
     {
-        _ = groups;
         foreach (GroupMemberSlot slot in group.Members)
         {
             if (session.World.FindOnlinePlayer(slot.Guid) is not { IsInWorld: true, IsAlive: true, Class: Class.Warlock } warlock || !IsBot(warlock)) continue;
@@ -365,13 +364,12 @@ internal sealed class PlayerbotSummons
             return Fail(session, player, job);
 
         return job.Kind == SummonKind.Ritual
-            ? DriveRitual(session, player, options, group, job, target, elapsedMs, now)
+            ? DriveRitual(session, player, options, group, job, target, now)
             : DriveStone(session, player, options, group, job, target, state, elapsedMs, now);
     }
 
-    private bool DriveRitual(WorldSession session, Player player, PlayerbotOptions options, Group group, SummonJob job, Player target, uint elapsedMs, uint now)
+    private bool DriveRitual(WorldSession session, Player player, PlayerbotOptions options, Group group, SummonJob job, Player target, uint now)
     {
-        _ = elapsedMs;
         if (session.Services.GetService<SpellFeature>() is not { } spells || !_bots.TryGetValue(player.Guid, out BotState? state)
             || RitualOf(spells, player, state, now) is not { } spell) return Fail(session, player, job);
         if (job.Cast is null)
@@ -492,7 +490,7 @@ internal sealed class PlayerbotSummons
         if (!PlayerbotMovementControl.Stop(session, player) || player.Movement.HasFlag(MovementFlags.MaskMoving)) return true;
         if (job.Kind == SummonKind.Ritual && !anchor.Participants.Contains(player.Guid))
         {
-            // CMSG_GAMEOBJ_USE: counted once the owner channels; tried a few times a second apart, then the place is given up.
+            // CMSG_GAMEOBJ_USE: counted once the owner channels; tried up to twelve times a second apart; after that the helper keeps its place until the job ends (its time bound).
             if (job.UseTries < 12 && unchecked(now - job.LastUseMs) >= MinRetryGapMs)
             {
                 job.LastUseMs = now == 0 ? 1 : now;
@@ -527,11 +525,11 @@ internal sealed class PlayerbotSummons
         return End(summoner, job);
     }
 
-    private void Forget(Player player)
+    private void Forget(WorldSession session, Player player)
     {
         if (_bots.Count == 0 && _bySummoner.Count == 0) return;
         _bots.Remove(player.Guid);
-        if (_bySummoner.TryGetValue(player.Guid, out SummonJob? job)) _bySummoner.Remove(job.Summoner);
+        if (_bySummoner.TryGetValue(player.Guid, out SummonJob? job)) Fail(session, player, job);
         foreach (SummonJob other in _bySummoner.Values) other.Helpers.Remove(player.Guid);
     }
 
@@ -541,6 +539,28 @@ internal sealed class PlayerbotSummons
         _bySummoner.Clear();
         _farSince.Clear();
         _cooldownUntil.Clear();
+    }
+
+    /// <summary>A job outlives its own bound by this much before any bot's think drops it (the summoner's own think ends it first).</summary>
+    private const uint StaleGraceMs = 5_000;
+
+    /// <summary>
+    /// Drops the jobs whose summoner is no longer in the world (logged out, kicked) or that outlived their time bound, whoever thinks. The summoner's own
+    /// think ends a job normally; this is for a summoner that stopped reaching <see cref="Drive"/> (logged out, moved to a driver that skips it),
+    /// which would otherwise freeze the stone's helper and bar the target from every other summon.
+    /// </summary>
+    private void DropStale(WorldSession session, uint now)
+    {
+        if (_bySummoner.Count == 0) return;
+        List<ObjectGuid>? stale = null;
+        foreach (SummonJob job in _bySummoner.Values)
+        {
+            uint limit = (job.Kind == SummonKind.Ritual ? RitualMaxMs : StoneMaxMs) + StaleGraceMs;
+            if (session.World.FindOnlinePlayer(job.Summoner) is not { IsInWorld: true } || unchecked(now - job.StartMs) > limit) (stale ??= []).Add(job.Summoner);
+        }
+
+        if (stale is null) return;
+        foreach (ObjectGuid summoner in stale) _bySummoner.Remove(summoner);
     }
 
     /// <summary>Drop what has not been seen for five minutes (a bot logged out, a target long gone), once a minute.</summary>

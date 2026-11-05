@@ -38,9 +38,6 @@ internal static partial class PlayerbotDungeons
         new("Onyxia's Lair", "Ony", ["ony", "onyxia"], 60, 60, Raid: true, MapId: 249),
         new("Zul'Gurub", "ZG", ["zg", "zulgurub"], 60, 60, Raid: true, MapId: 309),
         new("Blackwing Lair", "BWL", ["bwl"], 60, 60, Raid: true, MapId: 469),
-        new("Ruins of Ahn'Qiraj", "AQ20", ["aq20", "raq", "ruins"], 60, 60, Raid: true, MapId: 509),
-        new("Temple of Ahn'Qiraj", "AQ40", ["aq40", "taq"], 60, 60, Raid: true, MapId: 531),
-        new("Naxxramas", "Naxx", ["naxx", "nax", "naxxramas"], 60, 60, Raid: true, MapId: 533),
     ];
 
     /// <summary>
@@ -63,40 +60,25 @@ internal static partial class PlayerbotDungeons
     /// The dungeon a chat line names (a token of a dungeon, whole word, any case), the one that suits <paramref name="level"/> when a
     /// token is ambiguous ("dm"); null when it names none.
     /// </summary>
-    internal static PlayerbotDungeon? Named(string text, int level) => Named(text, level, out _);
-
-    /// <summary><see cref="Named(string, int)"/>, and the token of the line that named it (<paramref name="token"/>; null when none).</summary>
-    internal static PlayerbotDungeon? Named(string text, int level, out string? token)
+    internal static PlayerbotDungeon? Named(string text, int level)
     {
-        token = null;
-        foreach ((string word, List<PlayerbotDungeon> dungeons) in Mentions(text))
-        {
-            token = word;
-            PlayerbotDungeon found = dungeons[0];
-            for (int i = 1; i < dungeons.Count; i++)
-                if (Fits(dungeons[i], level) && !Fits(found, level)) found = dungeons[i];
-            return found;
-        }
-
-        return null;
-    }
-
-    /// <summary>Every word of the line that names at least one dungeon, in order, with the dungeons it names (a word may name several: "dm").</summary>
-    internal static IEnumerable<(string Token, List<PlayerbotDungeon> Dungeons)> Mentions(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) yield break;
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        PlayerbotDungeon? found = null;
         foreach (Match word in Word().Matches(text.ToLowerInvariant()))
         {
             string token = word.Value.Replace("'", string.Empty, StringComparison.Ordinal);
-            List<PlayerbotDungeon>? named = null;
             foreach (PlayerbotDungeon dungeon in All)
-                if (dungeon.Tokens.Contains(token)) (named ??= []).Add(dungeon);
-            if (named is not null) yield return (token, named);
-        }
-    }
+            {
+                if (!dungeon.Tokens.Contains(token)) continue;
+                bool fits = level >= dungeon.MinLevel - 2 && level <= dungeon.MaxLevel + 2;
+                if (found is null || (fits && !(level >= found.MinLevel - 2 && level <= found.MaxLevel + 2))) found = dungeon;
+            }
 
-    /// <summary>Whether a dungeon is named by a token as short as the abbreviations players typed (three letters or fewer: "st", "dm", "sm", "gy").</summary>
-    internal static bool IsShortToken(string token) => token.Length <= 3;
+            if (found is not null) return found;
+        }
+
+        return found;
+    }
 
     /// <summary>Whether a bot of <paramref name="level"/> may go to <paramref name="dungeon"/> (its range, two levels of slack either side).</summary>
     internal static bool Fits(PlayerbotDungeon dungeon, int level) => !dungeon.Raid && level >= dungeon.MinLevel - 2 && level <= dungeon.MaxLevel + 2;
@@ -118,5 +100,5 @@ internal static partial class PlayerbotDungeons
         return found ? (min, max) : null;
     }
 
-    [GeneratedRegex(@"aq\d+|[a-z']+")] private static partial Regex Word();
+    [GeneratedRegex(@"[a-z']+")] private static partial Regex Word();
 }

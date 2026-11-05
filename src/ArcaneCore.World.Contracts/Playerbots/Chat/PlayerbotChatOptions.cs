@@ -178,12 +178,6 @@ public sealed class PlayerbotChatOptions
     /// </summary>
     public PlayerbotVoiceOptions Voice { get; set; } = new();
 
-    /// <summary>
-    /// <c>Lfg</c>: how bots answer a real player's group talk ("any groups for SFK?", an "inv" in a channel) from the groups they really wait for
-    /// (docs/areas/playbots.md, Bot voice).
-    /// </summary>
-    public PlayerbotLfgOptions Lfg { get; set; } = new();
-
     /// <summary>The providers in the order they are tried: the configured ones, then the built-in templates (the configured entry or a default one).</summary>
     internal IReadOnlyList<PlayerbotChatProviderOptions> EffectiveProviders()
     {
@@ -222,8 +216,6 @@ public sealed class PlayerbotChatOptions
         Conversation.Validate();
         if (Voice is null) throw new InvalidOperationException($"{section}:Voice is missing.");
         Voice.Validate();
-        if (Lfg is null) throw new InvalidOperationException($"{section}:Lfg is missing.");
-        Lfg.Validate();
     }
 
     /// <summary>Whether a model provider (anything but the built-in templates) is configured.</summary>
