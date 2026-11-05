@@ -1041,10 +1041,10 @@ public sealed partial class SpellSystem
     /// </para>
     /// </summary>
     private static bool IsNeedSendToClient(SpellCast cast)
-    {
-        SpellInfo spell = cast.Spell;
-        return spell.SpellVisual != 0 || spell.IsChanneled || spell.Speed > 0.0f || cast.IsObjectUse || (!cast.IsTriggeredByAura && !cast.IsTriggered);
-    }
+        => IsShownWhenTriggered(cast.Spell) || cast.IsObjectUse || (!cast.IsTriggeredByAura && !cast.IsTriggered);
+
+    /// <summary>The spell-level half of <see cref="IsNeedSendToClient"/>: a triggered cast of this spell is shown, because it has a visual, a channel or a missile speed.</summary>
+    private static bool IsShownWhenTriggered(SpellInfo spell) => spell.SpellVisual != 0 || spell.IsChanneled || spell.Speed > 0.0f;
 
     /// <summary>A target the hit roll missed (or was immune): the miss procs, the miss packets, the zero-damage combat start and the observers.</summary>
     private void ApplyMissedTarget(SpellCast cast, Unit target, SpellTargetEntry entry)

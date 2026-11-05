@@ -80,7 +80,7 @@ internal sealed class SpellTestServices : IWorldTestServices
 
     public static SpellContent Content() => new(
         [
-            Spell(Heal, "Test Heal", effect: 10, value: 20, targetA: 1),
+            With(Spell(Heal, "Test Heal", effect: 10, value: 20, targetA: 1), h => h.SpellVisual = 1), // .cast ... triggered reads its SMSG_SPELL_GO, which a triggered cast only sends for a visible spell
             With(Spell(Bolt, "Test Bolt", effect: 2, value: 7, targetA: 6), b =>
             {
                 b.CastingTimeIndex = 2;
