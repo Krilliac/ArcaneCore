@@ -3,6 +3,7 @@ using ArcaneCore.World.Cluster.Supervision;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -243,6 +244,114 @@ public sealed class ClusterSupervisorHostingTests
         ClusterSupervisorHosting.WriteExit(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, gone, 0, "done", null);
     }
 
+    private static string ReadSharedText(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    // The exit hooks run where nothing else flushes the queued file sink (a crash runs no ProcessExit; the provider's own ProcessExit flush runs before the hook's line is queued).
+    [Fact]
+    public async Task TheUnhandledExceptionHook_GetsItsLineToTheFileSink_WithoutAnyDisposeOrProcessExit_AndNamesNoExitCode()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-exit-hook-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string logPath = Path.Combine(dir, "supervisor.log");
+        try
+        {
+            IConfiguration config = Config(min: 1, processCount: 1, ("Logging:ArcaneCore:File:Enabled", "true"), ("Logging:ArcaneCore:File:Path", logPath));
+            await using ServiceProvider provider = Build(config, new RecordingLauncher());
+            ILogger log = provider.GetRequiredService<ILoggerFactory>().CreateLogger(ClusterSupervisorHosting.ExitLoggerName);
+            var error = new StringWriter();
+
+            ClusterSupervisorHosting.ReportUnhandledException(log, error, () => ClusterSupervisorHosting.FlushLogProviders(provider), new UnhandledExceptionEventArgs(new InvalidOperationException("boom-for-the-hook"), isTerminating: true));
+
+            string file = ReadSharedText(logPath);
+            Assert.Contains("boom-for-the-hook", file, StringComparison.Ordinal);
+            Assert.Contains("Supervisor exiting", file, StringComparison.Ordinal);
+            Assert.Contains("boom-for-the-hook", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("chosen by the runtime", error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("with code 1", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A late handle on Windows: the temp directory is not the subject of the test.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WriteExit_WithAFlush_GetsTheLineToTheFileSink_AndFlushRunsEvenWhenStderrIsGone()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-exit-flush-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string logPath = Path.Combine(dir, "supervisor.log");
+        try
+        {
+            IConfiguration config = Config(min: 1, processCount: 1, ("Logging:ArcaneCore:File:Enabled", "true"), ("Logging:ArcaneCore:File:Path", logPath));
+            await using ServiceProvider provider = Build(config, new RecordingLauncher());
+            ILogger log = provider.GetRequiredService<ILoggerFactory>().CreateLogger(ClusterSupervisorHosting.ExitLoggerName);
+            var gone = new StringWriter();
+            gone.Dispose();
+
+            ClusterSupervisorHosting.WriteExit(log, gone, 7, "process-exit-reason", null, () => ClusterSupervisorHosting.FlushLogProviders(provider));
+
+            string file = ReadSharedText(logPath);
+            Assert.Contains("process-exit-reason", file, StringComparison.Ordinal);
+            Assert.Contains("with code 7", file, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A late handle on Windows: the temp directory is not the subject of the test.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Start_WithAReserveNotBelowTheHostsMemory_ThrowsAConfigurationError_InsteadOfWaitingForever()
+    {
+        var launcher = new RecordingLauncher();
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "5000")), launcher, new SequenceProbe(10), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 4000;
+        hosted.DelayAsync = (_, _) => throw new InvalidOperationException("the supervisor waited");
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Contains("MinFreeMemoryReserveMb", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("waited", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(launcher.Launched);
+    }
+
+    [Fact]
+    public async Task Start_AMixedPlan_WhereMemoryRefusalsCannotReachTheMinimum_ThrowsInsteadOfWaiting()
+    {
+        var launcher = new RecordingLauncher();
+        // Three configured, the ceiling admits one (the others are refused for the count, not memory), minimum 2: memory cannot help.
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 2, processCount: 3, ("Cluster:Supervisor:MaxConcurrentProcesses", "1"), ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, new SequenceProbe(1_500), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        hosted.DelayAsync = (_, _) => throw new InvalidOperationException("the supervisor waited");
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Contains("MinClusterProcesses", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(launcher.Launched);
+    }
+
     // ---- a start refused for free memory waits ----
 
     private static ClusterSupervisorHostedService HostedWith(IConfiguration configuration, RecordingLauncher launcher, IClusterCapacityProbe probe, out ServiceProvider provider)
@@ -262,6 +371,7 @@ public sealed class ClusterSupervisorHostingTests
         var probe = new SequenceProbe(10, 10, 100_000, 100_000); // two plans see 10 MiB free, the third plan and the child's admission see plenty
         ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, probe, out ServiceProvider provider);
         await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
         var delays = new List<TimeSpan>();
         hosted.DelayAsync = (delay, _) =>
         {
@@ -282,6 +392,7 @@ public sealed class ClusterSupervisorHostingTests
         var launcher = new RecordingLauncher();
         ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, new SequenceProbe(10), out ServiceProvider provider);
         await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
         using var stop = new CancellationTokenSource();
         hosted.DelayAsync = (_, ct) =>
         {
@@ -304,6 +415,7 @@ public sealed class ClusterSupervisorHostingTests
         var probe = new SequenceProbe(100_000, 100_000, 10, 100_000);
         ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50")), launcher, probe, out ServiceProvider provider);
         await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
         var delays = new List<TimeSpan>();
         hosted.DelayAsync = (delay, _) =>
         {

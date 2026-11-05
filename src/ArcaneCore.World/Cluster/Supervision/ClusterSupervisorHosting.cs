@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Ops;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +13,7 @@ namespace ArcaneCore.World.Cluster.Supervision;
 
 /// <summary>
 /// Hosted face of <see cref="ClusterHostSupervisor"/> (M15.4): on start it plans the whole start, refuses (launching nothing)
-/// when fewer than <see cref="ClusterSupervisorOptions.MinClusterProcesses"/> processes would be admitted, then launches the
+/// when fewer than <see cref="ClusterSupervisorOptions.MinClusterProcesses"/> processes would be admitted (a refusal for free memory alone waits and plans again, see <see cref="MemoryRetryInterval"/>), then launches the
 /// admitted ones in start order (<see cref="SupervisedProcessConfig.StartOrder"/>, then key); on stop it drains every child and always disposes the supervisor.
 /// </summary>
 public sealed class ClusterSupervisorHostedService : IHostedService
@@ -29,6 +30,9 @@ public sealed class ClusterSupervisorHostedService : IHostedService
 
     /// <summary>The delay seam of the memory wait; tests replace it. Called from the host's start thread only.</summary>
     internal Func<TimeSpan, CancellationToken, Task> DelayAsync { get; set; } = static (delay, ct) => Task.Delay(delay, ct);
+
+    /// <summary>The memory the host can offer in MiB (physical, or the container limit), 0 when unknown; tests replace it. A reserve not below it can never be met.</summary>
+    internal Func<long> TotalMemoryMb { get; set; } = static () => GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024 * 1024);
 
     /// <summary>Why the supervisor stopped itself (below its minimum), or null when the stop came from outside (a stop signal). Read after the host has stopped.</summary>
     internal string? SelfStopReason => Volatile.Read(ref _selfStopReason);
@@ -79,10 +83,19 @@ public sealed class ClusterSupervisorHostedService : IHostedService
             // Free memory comes back (another process exits, a build finishes): a start refused for the reserve waits and plans again, instead of the supervisor
             // exiting and leaving the operator an empty exit code. Any other refusal (process count, map ownership, total allocation) is a configuration
             // error that waiting cannot cure. A stop signal ends the wait (the host cancels the start token).
-            if (!plan.Denied.Any(d => ClusterHostSupervisor.IsMemoryReserveRefusal(d.Reason)))
+            int memoryDenied = plan.Denied.Count(d => ClusterHostSupervisor.IsMemoryReserveRefusal(d.Reason));
+            if (plan.Admitted.Count + memoryDenied < _options.MinClusterProcesses)
             {
                 throw new InvalidOperationException(
-                    $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}); nothing was launched.");
+                    $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}), and free memory would not cure it; nothing was launched.");
+            }
+
+            // A reserve at or above all the memory the host (or its container limit) has can never be met: waiting would never end, so it is a configuration error too.
+            long totalMb = TotalMemoryMb();
+            if (totalMb > 0 && _options.MinFreeMemoryReserveMb >= totalMb)
+            {
+                throw new InvalidOperationException(
+                    $"Cluster:Supervisor:MinFreeMemoryReserveMb ({_options.MinFreeMemoryReserveMb} MiB) is not below the memory this host can offer ({totalMb} MiB), so no process can ever be admitted; lower it. Nothing was launched.");
             }
 
             _logger.LogWarning(
@@ -235,7 +248,7 @@ public static class ClusterSupervisorHosting
 
     /// <summary>
     /// Runs the supervisor until the host is stopped. Refuses (78) inside a supervised child, so a copied key cannot make a child
-    /// supervise again; returns 1 when the start is refused (for example below <c>MinClusterProcesses</c>), else 0. A stop signal that
+    /// supervise again; returns 1 when the start is refused (below <c>MinClusterProcesses</c> for a reason free memory cannot cure; a refusal for the memory reserve alone waits instead), else 0. A stop signal that
     /// cancels the start between two launches is a clean stop: the children already launched are drained and 0 is returned.
     /// </summary>
     public static async Task<int> RunAsync(HostApplicationBuilder builder, TextWriter error)
@@ -258,17 +271,16 @@ public static class ClusterSupervisorHosting
         // The supervisor mode never calls UseArcaneDiagnostics, so nothing else records why this process ended. Every way out writes the reason and the exit
         // code to the log and to stderr; a crash is written by the unhandled-exception hook and an outside end (console closed, SIGTERM that skips the host's
         // own handler) by the process-exit hook. A hard kill (TerminateProcess, the OOM killer) can be seen by no hook.
+        // ArcaneLoggerProvider queues its lines and flushes on ProcessExit only through its own handler, which runs before this one (it subscribed when the
+        // logger factory was built above), and a crash runs no ProcessExit at all: so every hook flushes the provider itself after its line is queued.
         int exitLogged = 0;
-        UnhandledExceptionEventHandler onUnhandled = (_, e) =>
-        {
-            Exception? crash = e.ExceptionObject as Exception;
-            WriteExit(log, error, ExitCodes.Failure, $"unhandled exception{(e.IsTerminating ? " (the runtime is terminating the process)" : string.Empty)}: {crash?.GetType().Name}: {crash?.Message}", crash);
-        };
+        Action flush = () => FlushLogProviders(host.Services);
+        UnhandledExceptionEventHandler onUnhandled = (_, e) => ReportUnhandledException(log, error, flush, e);
         EventHandler onProcessExit = (_, _) =>
         {
             if (Interlocked.Exchange(ref exitLogged, 1) == 0)
             {
-                WriteExit(log, error, Environment.ExitCode, "the process was ended from outside before the supervisor reached its own shutdown path (console closed or a termination signal); the code is Environment.ExitCode at that moment", null);
+                WriteExit(log, error, Environment.ExitCode, "the process was ended from outside before the supervisor reached its own shutdown path (console closed or a termination signal); the code is Environment.ExitCode at that moment", null, flush);
             }
         };
         AppDomain.CurrentDomain.UnhandledException += onUnhandled;
@@ -278,7 +290,7 @@ public static class ClusterSupervisorHosting
             (int code, string reason) = await RunHostAsync(host, error).ConfigureAwait(false);
             if (Interlocked.Exchange(ref exitLogged, 1) == 0)
             {
-                WriteExit(log, error, code, reason, null);
+                WriteExit(log, error, code, reason, null, flush);
             }
 
             return code;
@@ -293,19 +305,46 @@ public static class ClusterSupervisorHosting
     /// <summary>The logger category of the supervisor's exit line.</summary>
     internal const string ExitLoggerName = "ArcaneCore.Cluster.Supervisor";
 
-    /// <summary>Writes the supervisor's exit line (the exit code and why) to <paramref name="log"/> and <paramref name="error"/>; never throws.</summary>
-    internal static void WriteExit(ILogger log, TextWriter error, int code, string reason, Exception? exception)
+    /// <summary>The unhandled-exception hook: the runtime picks the exit code of a crash, so the line names none.</summary>
+    internal static void ReportUnhandledException(ILogger log, TextWriter error, Action? flush, UnhandledExceptionEventArgs e)
     {
-        string text = $"ArcaneCore.World supervisor exiting with code {code}: {reason}";
+        Exception? crash = e.ExceptionObject as Exception;
+        WriteExit(log, error, null, $"unhandled exception{(e.IsTerminating ? " (the runtime is terminating the process)" : string.Empty)}: {crash?.GetType().Name}: {crash?.Message}", crash, flush);
+    }
+
+    /// <summary>Flushes every <see cref="ArcaneLoggerProvider"/> of <paramref name="services"/> (5 s at most each); never throws.</summary>
+    internal static void FlushLogProviders(IServiceProvider services)
+    {
+        try
+        {
+            foreach (ArcaneLoggerProvider provider in services.GetServices<ILoggerProvider>().OfType<ArcaneLoggerProvider>())
+            {
+                provider.Flush(TimeSpan.FromSeconds(5));
+            }
+        }
+        catch (Exception)
+        {
+            // Runs inside a crash or exit hook: a provider or container already torn down must not turn the report into a second failure.
+        }
+    }
+
+    /// <summary>
+    /// Writes the supervisor's exit line (the exit code, or that the runtime picks it when <paramref name="code"/> is null, and why) to <paramref name="log"/> and
+    /// <paramref name="error"/>, then runs <paramref name="flush"/> so a queued log line is on disk; never throws.
+    /// </summary>
+    internal static void WriteExit(ILogger log, TextWriter error, int? code, string reason, Exception? exception, Action? flush = null)
+    {
+        string codeText = code is { } c ? $"with code {c}" : "(the exit code is chosen by the runtime)";
+        string text = $"ArcaneCore.World supervisor exiting {codeText}: {reason}";
         try
         {
             if (code == ExitCodes.Success)
             {
-                log.LogInformation("Supervisor exiting with code {ExitCode}: {Reason}", code, reason);
+                log.LogInformation("Supervisor exiting {Code}: {Reason}", codeText, reason);
             }
             else
             {
-                log.LogError(exception, "Supervisor exiting with code {ExitCode}: {Reason}", code, reason);
+                log.LogError(exception, "Supervisor exiting {Code}: {Reason}", codeText, reason);
             }
         }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or IOException)
@@ -322,6 +361,8 @@ public static class ClusterSupervisorHosting
         {
             // stderr is gone: nothing left to tell.
         }
+
+        flush?.Invoke();
     }
 
     private static async Task<(int Code, string Reason)> RunHostAsync(IHost host, TextWriter error)

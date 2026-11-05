@@ -1625,34 +1625,44 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// for the realm (<see cref="HandleLifecycleRequest"/> forwards by <c>Config.RealmId</c>) reaches the world that is serving. The slot's two children are the workers that
     /// name the same shard (<c>Cluster:Fencing:Shard</c>, which <c>tools/ops/live/start-cluster.ps1 -Standby</c> gives both): the shard is the supervisor's only knowledge of
     /// which standby stands behind which world. The moved-to child keeps the environment it was launched with (its own realm id stays 0 until its next launch); only the
-    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, or no peer without a realm id, leaves the id where it is.
-    /// The promoted peer is the active world now, so its <see cref="ManagedEntry.Standby"/> flag (and the standby argument of its next launch) is cleared with the move: left set,
+    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, no peer of the shard, or a peer that already has a realm id, leaves the id where it is.
+    /// The promoted peer is the active world now, so its <see cref="ManagedEntry.Standby"/> flag (and the standby argument of its next launch) is cleared whether or not a realm id moves (only the lease-holder slot has one): left set,
     /// two swaps of one slot persist both children as standbys and a supervisor restart then brings the slot back with no active world. Call under <c>_gate</c>.
     /// </summary>
     private void MoveRealmRoleUnderLock(ManagedEntry demoted)
     {
-        int realmId = demoted.Config.RealmId;
-        if (realmId <= 0 || !string.Equals(demoted.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(demoted.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
             return;
 
         string shard = ShardOf(demoted.Config);
         if (shard.Length == 0)
             return;
 
+        // The peer is found by shard alone: start-cluster.ps1 gives only the lease-holder world a realm id (the other slots' two children both have 0), yet the
+        // gateway swaps those slots too, so the standby flag of the promoted child must not depend on a realm id existing. A peer with no realm id is preferred
+        // for receiving the realm id.
         ManagedEntry? peer = _entries.Values
             .Where(e => !ReferenceEquals(e, demoted)
-                && e.Config.RealmId == 0
                 && string.Equals(e.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(ShardOf(e.Config), shard, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(e => e.Config.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(e => e.Config.RealmId == 0 ? 0 : 1)
+            .ThenBy(e => e.Config.Name, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         if (peer is null)
             return;
 
-        peer.Config.RealmId = realmId;
-        demoted.Config.RealmId = 0;
         SetStandbyUnderLock(peer, false);
-        _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
+        int realmId = demoted.Config.RealmId;
+        if (realmId > 0 && peer.Config.RealmId == 0)
+        {
+            peer.Config.RealmId = realmId;
+            demoted.Config.RealmId = 0;
+            _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
+        }
+        else
+        {
+            _logger.LogInformation("Supervisor cleared the standby role of {Promoted}, the world that replaces {Demoted} in shard {Shard}", peer.Config.Name, demoted.Config.Name, shard);
+        }
     }
 
     private static string ShardOf(SupervisedProcessConfig config)

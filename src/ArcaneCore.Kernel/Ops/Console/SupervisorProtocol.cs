@@ -89,7 +89,7 @@ public interface ISupervisedLifecycleRequestHandler
 /// <summary>
 /// The line protocol between the cluster host supervisor and its children (docs/CLUSTERING_DESIGN.md, M15.4), opt-in by
 /// <see cref="EnvironmentVariable"/>=1 in the child's environment. Child to supervisor, on stdout: <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt;
-/// ready|alive|stopping</c>, <c>lifecycle stopping intent=&lt;restart|shutdown|failure&gt; code=&lt;n&gt;</c> and <c>lifecycle request token=&lt;t&gt;
+/// ready|alive|stopping token=&lt;t&gt;</c> (the per-run token on every state; the supervisor treats a heartbeat without it as ordinary output), <c>lifecycle stopping intent=&lt;restart|shutdown|failure&gt; code=&lt;n&gt;</c> and <c>lifecycle request token=&lt;t&gt;
 /// realm=&lt;id&gt; action=&lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c>. Supervisor to child, on stdin: <c>drain</c>,
 /// <c>lifecycle &lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c> and <c>lifecycle result realm=&lt;id&gt;
 /// status=&lt;forwarded|unknown-realm|rejected&gt; by=&lt;account&gt;</c>. A child can also address another child by name: <c>lifecycle restart-child

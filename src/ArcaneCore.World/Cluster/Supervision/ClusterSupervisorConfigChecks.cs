@@ -52,7 +52,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     }
 
     /// <summary>
-    /// A supervisor that runs more than one world-type child (role combined or worker), or a child that sets <c>Cluster:Node:Role</c> to something but Combined, has several
+    /// A supervisor that runs more than one world-type child (role combined, worker, social or coordinator: the last two are labels on a World executable), or a child that sets <c>Cluster:Node:Role</c> to something but Combined, has several
     /// writers on one characters database: each must run with <c>Cluster:Fencing:Enabled=true</c> (an unfenced world skips <c>PrimeDurableIdAllocatorsAsync</c> and collides on the
     /// in-memory id counters), and each needs its own <c>Cluster:Fencing:OwnerNode</c> and <c>Cluster:Worker:NodeId</c>. A child's value is its command-line argument
     /// (<c>--Key=value</c>, as <c>tools/ops/live/start-cluster.ps1</c> passes them) or else the supervisor's own configuration, which the children inherit.
@@ -62,7 +62,9 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     {
         var worlds = options.Processes
             .Where(p => string.Equals(p.Value.Role, SupervisedRoles.Combined, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(p.Value.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+                || string.Equals(p.Value.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(p.Value.Role, SupervisedRoles.Social, StringComparison.OrdinalIgnoreCase) // social and coordinator are labels on a World executable (ClusterNodeOptions.Validate refuses a
+                || string.Equals(p.Value.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase))) // dedicated social node), so such a child is a whole Combined world: a writer like any other
             .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
         bool several = worlds.Count > 1;
