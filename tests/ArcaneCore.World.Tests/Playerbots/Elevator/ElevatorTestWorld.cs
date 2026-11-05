@@ -227,6 +227,26 @@ internal sealed class ElevatorTestWorld : IAsyncDisposable
         }
     }
 
+    /// <summary>The fixture's mesh with a point every yard on one side of the cliff, as a real mesh has: a route holds as many points as yards, and a query past <see cref="PathOptions.MaxPoints"/> answers the first of them (an incomplete path).</summary>
+    internal sealed class DensePathfinder : IPathfinder
+    {
+        private readonly ElevatorTestWorld.CliffPathfinder _cliff = new();
+
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            PathResult sparse = _cliff.FindPath(mapId, start, end, options);
+            if (sparse.Type != PathType.Normal || sparse.Points.Count < 2) return sparse;
+            Vector3 from = sparse.Points[0], to = sparse.Points[^1];
+            int count = Math.Max(2, (int)MathF.Ceiling(Vector3.Distance(from, to)) + 1);
+            int kept = Math.Min(count, Math.Max(2, options?.MaxPoints ?? PathOptions.DefaultMaxPoints));
+            var points = new Vector3[kept];
+            for (int i = 0; i < kept; i++) points[i] = Vector3.Lerp(from, to, i / (float)(count - 1));
+            return new PathResult(kept < count ? PathType.Incomplete : PathType.Normal, points);
+        }
+    }
+
     private sealed class ManualClockFeature : IWorldFeature
     {
         public void Attach(WorldRuntime world) => world.UseManualClock();

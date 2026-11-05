@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -104,7 +105,7 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
     /// are the client's AreaTable.dbc (5875): 17 The Barrens, 400 Thousand Needles, 484 Freewind Post (in 400), 215 Mulgore, 1638 Thunder
     /// Bluff, 85 Tirisfal Glades, 1497 Undercity. A lift without a row joins nothing and no bot is sent to it.
     /// </summary>
-    public static ElevatorRegions[] Known
+    public static ImmutableArray<ElevatorRegions> Known
     {
         get
         {
@@ -112,7 +113,7 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
             KnownBox? box = Volatile.Read(ref s_knownBox);
             if (box is null || box.Generation != active.Generation)
             {
-                box = new KnownBox(active.Generation, From(active));
+                box = new KnownBox(active.Generation, [.. From(active)]);
                 Volatile.Write(ref s_knownBox, box);
             }
 
@@ -130,7 +131,7 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
 
     private static KnownBox? s_knownBox;
 
-    private sealed record KnownBox(long Generation, ElevatorRegions[] Rows);
+    private sealed record KnownBox(long Generation, ImmutableArray<ElevatorRegions> Rows);
 
     /// <summary>True when <paramref name="at"/> on <paramref name="mapId"/> is an enclosed vault lift (<see cref="VaultLow"/>: Undercity).</summary>
     public static bool IsVaultLift(uint mapId, Vector3 at)
@@ -864,7 +865,7 @@ internal static partial class PlayerbotElevator
             if (endYards > ElevatorNetwork.NearLiftYards && endYards > botYards - ApproachProgressYards) continue;
             route.ToLiftLanding = true;
             route.LiftLanding = landing;
-            memo.LiftKey = 0;
+            memo.UntilMs = now;
             return route;
         }
 
