@@ -173,6 +173,9 @@ public sealed class SchemaStartupResilienceRunnerTests
             Assert.Equal(
                 Enumerable.Range(0, SchemaStartupResilienceTestBase.WorldFaultShards),
                 SchemaStartupResilienceTestBase.FreshCreateCases().Where(r => Equals(r[0], provider[0]) && (string)r[1] == "world").Select(r => (int)r[2]).Order());
+            Assert.Equal(
+                Enumerable.Range(0, SchemaStartupResilienceTestBase.CharactersFaultShards),
+                SchemaStartupResilienceTestBase.FreshCreateCases().Where(r => Equals(r[0], provider[0]) && (string)r[1] == "characters").Select(r => (int)r[2]).Order());
         }
     }
 

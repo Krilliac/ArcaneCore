@@ -141,8 +141,16 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     internal const int WorldFaultShards = 12;
 
     /// <summary>
+    /// How many test cases one characters fresh create is cut into, the same way as <see cref="WorldFaultShards"/>: MariaDB characters took 553 s on gate 57a1c0c21,
+    /// three quarters of the world case that was cut 12 ways, and as one case it made one share class the heaviest.
+    /// </summary>
+    internal const int CharactersFaultShards = 4;
+
+    /// <summary>
     /// Every <paramref name="slices"/>-th row of each provider's block of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/> of the block: the slices together
-    /// cover each row exactly once, and every slice carries the same number of rows of each provider (a MariaDB row costs far more than a SQLite one). All providers of a step are not in one slice: the rows of a provider block are dealt out separately.
+    /// cover each row exactly once, and every slice carries the same number of rows of each provider, within one (a MariaDB row costs far more than a SQLite one; the runner
+    /// test pins this). <see cref="UpgradeSteps"/> yields the same steps in the same order for every provider, so a step has the same position in every block: all providers of
+    /// one step land in the same slice, and a heavy step's rows stack in one class.
     /// </summary>
     public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices)
     {
@@ -164,14 +172,19 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     }
 
     /// <summary>
-    /// Every (provider, component, shard, shards) case of the interrupted-fresh-create theory: the world component is cut into <see cref="WorldFaultShards"/> shards, the others are one case.
+    /// Every (provider, component, shard, shards) case of the interrupted-fresh-create theory: the world component is cut into <see cref="WorldFaultShards"/> shards, characters into <see cref="CharactersFaultShards"/>, the others are one case.
     /// A world case is never empty (see <see cref="RunInterruptedFreshCreateAsync"/>), and a SQLite world is sharded too, so every class gets a row even when only SQLite is configured.
     /// </summary>
     public static IEnumerable<object[]> FreshCreateCases()
     {
         foreach (object[] pc in ProviderComponents())
         {
-            int shards = (string)pc[1] == "world" ? WorldFaultShards : 1;
+            int shards = (string)pc[1] switch
+            {
+                "world" => WorldFaultShards,
+                "characters" => CharactersFaultShards,
+                _ => 1,
+            };
             for (int shard = 0; shard < shards; shard++)
             {
                 yield return [pc[0], pc[1], shard, shards];

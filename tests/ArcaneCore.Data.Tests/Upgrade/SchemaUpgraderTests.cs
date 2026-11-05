@@ -218,8 +218,8 @@ public sealed class SchemaUpgraderTests : IAsyncLifetime
         int ddl = counter.Ddl;
         Assert.True(ddl > 20, $"the legacy characters upgrade issues many DDL statements, saw {ddl}");
 
-        // Every statement of the upgrade, one crash each; a handful of statements per run keeps the SQLite run short on large counts.
-        // Each crash point owns its database, so they run FaultParallelism at a time (the same shape as the startup-resilience theories); every point still runs.
+        // One crash per selected statement: the first 12, the last 12 and every fifth in between (not every statement), which keeps the run short on large counts.
+        // Each crash point owns its database, so they run FaultParallelism at a time (the same shape as the startup-resilience theories); every selected point still runs.
         int[] points = [.. Enumerable.Range(1, ddl).Where(k => k <= 12 || k >= ddl - 12 || k % 5 == 0)];
         await SchemaStartupResilienceTestBase.RunFaultsAsync(points, SchemaStartupResilienceTestBase.FaultParallelism, async k =>
         {
