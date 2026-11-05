@@ -155,14 +155,34 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     /// <summary>
     /// The movement block of an honoured solicited acknowledgement (speed, flag, root, knockback, turn rate), judged before it is stored
-    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating, HandleForceSpeedChangeAckOpcodes,
-    /// MovementHandler.cpp:489-494). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
-    /// so the block carrying it is not a forgery). Only the acknowledgement of an unroot order is exempt from the rooted-while-moving check (the client's own clock decides when it stops moving, vmangos MovementAnticheat.cpp:777-780 skips CMSG_FORCE_MOVE_UNROOT_ACK alone); every other acknowledgement, a root ack included, is checked like a movement packet.</summary>
+    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating:
+    /// HandleForceSpeedChangeAckOpcodes :492-493 speed ack, and in MovementHandler.cpp :603-604 flag ack, :697-698 root ack (HandleMoveRootAck),
+    /// :790-791 knockback ack). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
+    /// so the block carrying it is not a forgery). Only the acknowledgement of an unroot order is exempt from the rooted-while-moving check (the
+    /// client's own clock decides when it stops moving, vmangos MovementAnticheat.cpp:777-780 skips CMSG_FORCE_MOVE_UNROOT_ACK alone); every other
+    /// acknowledgement, a root ack included, is checked like a movement packet.
+    /// During a taxi flight nothing is judged: the flight relocates the player on every step, so the position checks would take the client's block as a
+    /// new baseline and last-valid position (a client-chosen rubberband target). vmangos likewise runs no cheat test on an ack while a spline is
+    /// pending (the HasPendingSplineDone gates, MovementHandler.cpp :489 speed, :589 flag, :683 root, :778 knockback).
+    /// </summary>
     public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
-        => Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
+    {
+        if (IsOnTaxi(player))
+        {
+            return;
+        }
+
+        Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
+    }
+
+    private static bool IsOnTaxi(Player player) => (player.UnitFlags & UnitFlags.TaxiFlight) != 0;
 
     /// <summary>The yards the distance budget of this player's own unit has judged since its checks were built (diagnostics, world thread).</summary>
     internal float BudgetedYardsOf(Player player) => _players.TryGetValue(player.Guid, out PlayerState? state) ? state.Checks.BudgetedYards : 0f;
+
+    /// <summary>The X of this player's rubberband target, null when it has none (diagnostics, world thread).</summary>
+    internal float? LastValidXOf(Player player)
+        => _players.TryGetValue(player.Guid, out PlayerState? state) && state.Checks.TryGetLastValid(out float x, out _, out _, out _) ? x : null;
 
     private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
@@ -182,8 +202,14 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             LatencyMs = session.LatencyMs,
             AllowedSpeed = AllowedSpeed(player),
             Alive = player.IsAlive,
-            Rooted = !(acknowledgement && opcode == WorldOpcode.CmsgForceMoveUnrootAck) && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
-            GrantedFlags = GrantedFlags(player, state) | extraGrants,
+            // An honoured root ack is judged before MovementControl.ApplyReal sets the Root flag, so the server does not hold the root yet; the order it
+            // acknowledges is what the block is held to (a client that stops on a root order never acknowledges it with a moving block). A later root or unroot order still pending
+            // exempts it, as in vmangos (MovementAnticheat.cpp:777-780 scores ROOT_MOVE only without a pending root change, after the acked order was erased).
+            // Unlike vmangos, which needs a current or last Root flag there and kicks an apply ack without the Root flag unless the client is jumping or falling
+            // (MovementHandler.cpp:719-731), the root ack need not carry Root here: a root ack with Forward scores Physics.
+            Rooted = (acknowledgement && opcode == WorldOpcode.CmsgForceMoveRootAck && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
+                || (!(acknowledgement && opcode == WorldOpcode.CmsgForceMoveUnrootAck) && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)),
+            GrantedFlags = GrantedFlags(player, state.ExplicitGrants) | extraGrants,
             ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
             Transport = ClaimOf(player, movement),
             Terrain = _options.TerrainChecks && player.Map is { } map ? TerrainFor(state, map) : null,
@@ -216,9 +242,19 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
-    /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds.</summary>
+    /// <summary>
+    /// After a block (movement or acknowledgement) was stored: the position the server now holds. During a taxi flight no block was stored
+    /// (<c>MovementHandlers.ApplyObservedAck</c>) and the position is the flight's, so the marker stays where the last judged block left it: it is the only
+    /// thing that tells the checks the flight moved the player (nothing notifies them at its end). Advanced here, a flight ending within
+    /// the stored-position tolerance of an ack would pass <see cref="MovementAntiCheat.CheckServerPosition"/> and the next block would be measured from before the flight.
+    /// </summary>
     public void AfterMovement(Player player)
     {
+        if (IsOnTaxi(player))
+        {
+            return;
+        }
+
         if (_players.TryGetValue(player.Guid, out PlayerState? state))
         {
             state.Checks.NotifyStored(player.X, player.Y, player.Z);
@@ -228,7 +264,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// <summary>
     /// A client movement block of a unit the controller possesses (a possessed creature or player), before it is stored. Judged by a
     /// second set of checks kept on the controller's state, with a fresh baseline for each new unit, against the unit's own position,
-    /// speeds and flags (the server holds the capability flags of a possessed unit itself, so none is scored). A finding scores the
+    /// speeds and flags (the server holds the capability flags of a possessed creature itself, so none is scored there; a possessed player's flags are scored against that player's own auras, pending orders and grants). A finding scores the
     /// controller, whose client sent the block, and never rubberbands (the rubberband target is the controller's own position).
     /// </summary>
     public void BeforeControlledMovement(WorldSession session, Player controller, Unit unit, WorldOpcode opcode, in MovementInfo movement)
@@ -255,7 +291,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             allowed = AllowedSpeed(unitPlayer);
             alive = unitPlayer.IsAlive;
             rooted = unitPlayer.IsRooted && unitPlayer.Movement.HasFlag(MovementFlags.Root) && !unitPlayer.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
-            granted = GrantedFlags(unitPlayer, state);
+            // The possessed player's own grants (a GM tool's Grant on the victim), not the controller's.
+            granted = GrantedFlags(unitPlayer, _players.TryGetValue(unitPlayer.Guid, out PlayerState? victimState) ? victimState.ExplicitGrants : MovementFlags.None);
             serverControlled = (unitPlayer.UnitFlags & UnitFlags.ServerControlled) != 0;
         }
         else
@@ -298,7 +335,10 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
-    /// <summary>An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline.</summary>
+    /// <summary>
+    /// An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline. A knockback acknowledged during a
+    /// taxi flight launched nothing (the flight keeps the position), so it opens no baseline and no knockback window.
+    /// </summary>
     public void OnAcknowledgement(WorldSession session, Player player, uint clientTime, bool knockback)
     {
         if (IsExempt(session, player))
@@ -309,7 +349,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         PlayerState state = StateOf(player);
         _scratch.Clear();
         state.Checks.NotifyAcknowledgement(clientTime, session.CurrentPacketReceivedMs, _scratch);
-        if (knockback)
+        if (knockback && !IsOnTaxi(player))
         {
             state.Checks.NotifyKnockback();
         }
@@ -815,9 +855,9 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// The flags the server stands behind: an aura that grants them, any order of that kind still waiting for its ack (the
     /// client may assert the flag until it has the order), and the explicit grants of <see cref="Grant"/>.
     /// </summary>
-    private static MovementFlags GrantedFlags(Player player, PlayerState state)
+    private static MovementFlags GrantedFlags(Player player, MovementFlags explicitGrants)
     {
-        MovementFlags granted = state.ExplicitGrants | MovementCheats.GrantedFlags(player);
+        MovementFlags granted = explicitGrants | MovementCheats.GrantedFlags(player);
         LocomotionState locomotion = player.Locomotion;
         if (locomotion.Auras.Has(AuraType.WaterWalk) || locomotion.Pending.HasPendingOfType(MovementChangeType.WaterWalk))
         {
