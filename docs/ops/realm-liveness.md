@@ -169,7 +169,7 @@ decide whether a clustered realm keeps a writer, so the requirements sit here ne
 **Clock skew between cluster nodes.** A lease's expiry is written from its holder's clock and judged by the next acquirer's clock. A holder renews every
 `Cluster:Node:AuthorityLeaseRenewSeconds` (10) for a TTL of `Cluster:Node:AuthorityLeaseTtlSeconds` (30), so a lease never ages past about one renewal interval, and another node sees it lapsed once its own clock runs ahead of
 the holder's by more than TTL minus renewal interval: **20 s with the defaults, less the jitter of a renewal round**. Beyond that a healthy holder is deposed: the new node takes the scope with a higher fencing token, the old holder's
-writes are refused at commit, its next renewal is refused and the keeper stops the process (fail-stop). Nothing is corrupted, but it is an outage of the holder. Therefore:
+writes behind a commit-time lease check (economy, social, instances, honor maintenance batches) are refused at commit, its next renewal is refused and the keeper stops the process (fail-stop). Stores with no commit check (the worldstate stores, the playerbot ledgers, the honor first-start state) ask only the keeper, whose answer stays true until that next renewal is refused: up to one renewal interval (10 s by default) in which the deposed node writes alongside the new holder. A skewed takeover is therefore an outage of the holder and, for those stores, a short double-writer window. Therefore:
 
 * run NTP (or chrony, or the platform's time service) on every cluster host and keep the nodes within a few seconds of each other, well under TTL minus renewal interval;
 * when raising the renewal interval (at most a third of the TTL), the skew budget shrinks; raise the TTL with it;
@@ -177,11 +177,11 @@ writes are refused at commit, its next renewal is refused and the keeper stops t
 
 **Taking over under write load.** On PostgreSQL a takeover (and a release) first takes `FOR UPDATE` on the lease row, which waits for the in-flight fenced writers of that scope (they hold `FOR KEY SHARE` until their transaction ends).
 The wait is bounded by the lease command timeout (a third of the renewal interval, at least a second), so a steady stream of fenced writers can keep a legitimate takeover waiting past it. `AcquireAtStartAsync` therefore retries
-a store or timeout failure of a scope up to `RealmAuthorityLeaseKeeper.StartAcquireAttempts` (4) times, one second apart, before the start fails; the runtime takeover pass retries on every renewal tick anyway.
+a store or timeout failure of a scope for up to `RealmAuthorityLeaseKeeper.StartAcquireAttempts` (4) attempts in total (3 retries), one second apart, before the start fails; the runtime takeover pass retries on every renewal tick anyway.
 On MariaDB and SQLite a call that another node's live lease would refuse is answered from a read-only look first and takes no write lock.
 
 **Renewals during a long WAL stall.** A renewal commits with `synchronous_commit = off`, so a slow WAL flush alone does not delay it, but if the WAL buffers fill (the stall outlasts `wal_buffers`), every commit
 waits again. Watch `pg_stat_wal.wal_buffers_full` on the PostgreSQL server: a count that keeps growing during a stall means renewals can miss their deadline and the keeper will stop the node.
 
 **Accepted limits of the fence.** A node that holds no fence at all is refused or, for a boot sweep, skips (`LeaseFencedWrite.TryBeginSweep`); a node whose keeper marked the lease lost locally lets the commit fence decide,
-and a store behind `RequireHeld` (no commit check) can still write briefly after a takeover in the WAL-stall-plus-PostgreSQL-crash case described on `LeaseFencedWrite`.
+and a store behind `RequireHeld` (no commit check) can still write briefly after a takeover, both in the WAL-stall-plus-PostgreSQL-crash case described on `LeaseFencedWrite` and after a clock-skew takeover (until its next renewal is refused, one renewal interval).

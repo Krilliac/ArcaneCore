@@ -58,10 +58,10 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
     }
 
     private sealed record Rig(
-        DatabaseConnectionOptions Connection, int Character, int OtherCharacter, IRealmLeaseFenceSource NonHolder, IRealmLeaseFenceSource Holder, IRealmLeaseFenceSource Lost);
+        DatabaseConnectionOptions Connection, int Character, int OtherCharacter, int ThirdCharacter, IRealmLeaseFenceSource NonHolder, IRealmLeaseFenceSource Holder, IRealmLeaseFenceSource Lost);
 
     /// <summary>
-    /// A characters database with two characters and a lease row per scope. The holder is node A at fencing token 1; with <paramref name="takeOver"/> node B has taken every scope over
+    /// A characters database with three characters and a lease row per scope. The holder is node A at fencing token 1; with <paramref name="takeOver"/> node B has taken every scope over
     /// (token 2), so A's source is the stale holder. The lost source carries A's fences but reports that it holds nothing, as the keeper does after a loss.
     /// </summary>
     private async Task<Rig> CreateAsync(DatabaseProvider provider, bool takeOver = false)
@@ -69,12 +69,14 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
         int character;
         int other;
+        int third;
         await using (CharacterDbContext setup = TestContexts.Create<CharacterDbContext>(connection))
         {
             await SchemaBootstrapper.EnsureAsync(setup, CharacterDbContext.Schema);
             var characters = new EfCharacterStore(setup);
             character = (await characters.CreateAsync(new CharacterRecord { AccountId = 1, Name = "Leader" })).Id;
             other = (await characters.CreateAsync(new CharacterRecord { AccountId = 1, Name = "Second" })).Id;
+            third = (await characters.CreateAsync(new CharacterRecord { AccountId = 1, Name = "Third" })).Id;
         }
 
         var services = new ServiceCollection();
@@ -96,7 +98,7 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
 
         RealmLeaseFence? Fence(string scope) => fences.TryGetValue(scope, out RealmLeaseFence f) ? f : null;
         return new Rig(
-            connection, character, other,
+            connection, character, other, third,
             new Source(_ => null, _ => false),
             new Source(Fence, scope => fences.ContainsKey(scope)),
             new Source(Fence, _ => false));
@@ -131,6 +133,7 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
     {
         int leader = rig.Character;
         int second = rig.OtherCharacter;
+        int third = rig.ThirdCharacter;
         return
         [
             // ---- 2(b) instances
@@ -281,10 +284,10 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
                 db => new EfPetitionStore(db).SavePetitionAsync(new PetitionData(2, second, 1001, "Other", [])),
                 (db, src) => new EfPetitionStore(db, src).DeletePetitionAsync(2),
                 async db => !await db.Set<PetitionRow>().AnyAsync(p => p.Id == 2)),
-            // The charter turn-in: a guild row set and the petition delete in one verified transaction. Its guild uses the second character, free by this point (the guild delete site above removed guild 2).
+            // The charter turn-in: a guild row set and the petition delete in one verified transaction. Its petition and guild use the third character, which no other site uses: the petition owner is unique, so a character another site's refused Act left a petition for would break the Seed in every denied loop.
             new("social: petition complete (guild created, petition deleted)", false, true,
-                db => new EfPetitionStore(db).SavePetitionAsync(new PetitionData(3, second, 1002, "Charter", [])),
-                (db, src) => new EfPetitionStore(db, src).CompletePetitionAsync(Guild(3, second), 3),
+                db => new EfPetitionStore(db).SavePetitionAsync(new PetitionData(3, third, 1002, "Charter", [])),
+                (db, src) => new EfPetitionStore(db, src).CompletePetitionAsync(Guild(3, third), 3),
                 async db => await db.Set<GuildRow>().AnyAsync(g => g.Id == 3) && !await db.Set<PetitionRow>().AnyAsync(p => p.Id == 3)),
             new("social: group save", false, true, Nothing,
                 (db, src) => new EfGroupStore(db, src).SaveGroupAsync(Group(1, leader)),
@@ -383,7 +386,7 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         => RunDeniedAsync(provider, rig => rig.Lost, site => site.Sweep || !site.Fenced);
 
     /// <summary>
-    /// A node whose keeper marked the lease lost locally (a slow renewal round) but whose token is still the lease row's: the sweeps skip (they ask the keeper, IsHolder), and every write is decided by the
+    /// A node whose keeper marked the lease lost locally (a slow renewal round) but whose token is still the lease row's: the sweeps skip (they ask the keeper through TryBeginSweep), and every write is decided by the
     /// commit fence alone, which accepts the still-valid token. Before 2026-11-04 RequireHeld refused these writes on the keeper's say-so and lost guild and group writes the fence would have accepted.
     /// </summary>
     [Theory]
@@ -460,6 +463,31 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
 
             await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
             Assert.False(await site.Done(check), $"{site.Name}: a write whose fence was released after the check must still be refused at commit");
+        }
+    }
+
+    /// <summary>
+    /// The gap itself: the keeper reports the scope held, then forgets its fence (ReleaseAllAsync between the two reads). A sweep that asked Holds and then read the fence a second time got null and ran with no commit check;
+    /// the five boot sweeps now go through TryBeginSweep, which reads the fence first and skips without one. Driven at every sweep site with a takeover in place, so a sweep that ran unchecked would delete its rows and fail Done.
+    /// Unproven until the integration gate runs it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Sweeps_SkipWhenTheKeeperHoldsButHasNoFence_AndNeverRunUnchecked(DatabaseProvider provider)
+    {
+        Rig rig = await CreateAsync(provider, takeOver: true);
+        var holdsButNoFence = new Source(_ => null, _ => true);
+        List<Site> sweeps = Sites(rig).Where(s => s.Sweep).ToList();
+        Assert.Equal(5, sweeps.Count);
+        foreach (Site site in sweeps)
+        {
+            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Seed(seed);
+            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Act(db, holdsButNoFence);
+
+            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
+            Assert.False(await site.Done(check), $"{site.Name}: a sweep whose scope is held but has no fence must skip, not run unchecked");
         }
     }
 
