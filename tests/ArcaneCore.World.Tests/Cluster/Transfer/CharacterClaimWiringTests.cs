@@ -92,7 +92,7 @@ public sealed class CharacterClaimWiringTests
             await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
             await WorldTestHost.WaitForAsync(() => host.Registry.Sessions.Any(s => s.State == SessionState.LoggingIn), "the session to pass TryBeginLogin");
             WorldSession session = host.Registry.Sessions.Single();
-            Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id)); // the login claimed the character before it was attached
+            Assert.Equal(a, (await rig.Store.GetActiveOwnershipAsync((ulong)id))); // the login claimed the character before it was attached
 
             await client.DisposeAsync(); // the disconnect lands between TryBeginLogin and EnterWorld
             await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session to close");
@@ -102,7 +102,7 @@ public sealed class CharacterClaimWiringTests
             gate.Set();
         }
 
-        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)id) is null, "the unentered login's claim to be released");
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the unentered login's claim to be released");
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
         ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.FaultNoticed -= watch;
         Assert.Empty(host.SessionFaults);
@@ -723,10 +723,10 @@ public sealed class CharacterClaimWiringTests
         await WorldTestHost.WaitForAsync(() => scopes.Failures >= 1, "the first poll to fail");
         await Task.Delay(300); // later polls run: the release did not end on the failure
         Assert.False(claims.DrainAsync().IsCompleted, "the release ended on a failed poll");
-        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
 
         await rig.Store.MarkCompletedAsync(transfer);
-        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)character) is null, "the received claim is released after the failed poll");
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)character)).GetAwaiter().GetResult() is null, "the received claim is released after the failed poll");
         await claims.DrainAsync();
     }
 
@@ -775,7 +775,7 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(character, b, () => false); // a later release registers its own marker: the first poll is superseded
         await claims.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
     }
 
     /// <summary>Disposing the service cancels a poll that waits for an unsettled transfer (no 60 s limit any more), and the claim stays.</summary>
@@ -800,7 +800,7 @@ public sealed class CharacterClaimWiringTests
         claims.Dispose();
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), "Dispose waited out its grace period: the poll did not observe the cancellation");
         await pending.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
     }
 
     /// <summary>A scope factory that throws from the next N scope creations, then delegates.</summary>

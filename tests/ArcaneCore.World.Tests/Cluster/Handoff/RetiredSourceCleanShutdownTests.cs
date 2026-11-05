@@ -1029,14 +1029,14 @@ public sealed class RetiredSourceCleanShutdownTests
 
         public HandoffRig(TimeSpan? busyBackoff = null)
         {
-            Store = new FencedStore(moved: 0) { Answer = state => Write(state) };
-            RestStore = new FencedRestStore(moved: 0) { Answer = id => RestAnswer(id) };
-            HonorStore = new ScriptedHonorStore { Answer = id => HonorAnswer(id) };
-            SharedStore = new ScriptedSharedStore { Answer = id => SharedAnswer(id) };
             Write = state => state.Id >= 5 ? LockedOrRefused() : null;
             RestAnswer = id => id >= 5 ? LockedOrRefused() : null;
             HonorAnswer = id => id >= 5 ? LockedOrRefused() : null;
             SharedAnswer = id => id >= 5 ? LockedOrRefused() : null;
+            Store = new FencedStore(moved: 0) { Answer = state => Write(state) };
+            RestStore = new FencedRestStore(moved: 0) { Answer = id => RestAnswer(id) };
+            HonorStore = new ScriptedHonorStore { Answer = id => HonorAnswer(id) };
+            SharedStore = new ScriptedSharedStore { Answer = id => SharedAnswer(id) };
             Journal = new HandoffJournal(OnCommitAsync);
             _services = new ServiceCollection()
                 .AddSingleton<ICharacterStore>(Store)
