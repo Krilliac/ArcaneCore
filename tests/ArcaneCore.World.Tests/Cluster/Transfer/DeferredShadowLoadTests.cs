@@ -289,15 +289,22 @@ public sealed class DeferredShadowLoadTests
         await WorldTestHost.WaitForAsync(() => Deferred(logs).Length >= 1, "the deferred load to be observed");
 
         Assert.Equal(1, loader.Calls);
-        Assert.Empty(Deferred(logs).Where(e => e.Level >= LogLevel.Warning)); // the closed client is not warned about
+        Assert.DoesNotContain(Deferred(logs), e => e.Level >= LogLevel.Warning); // the closed client is not warned about
         Assert.Equal(closedBefore, TargetFaultsOf(nameof(TransferClientClosedException)));
         Assert.False(target.HasShadow(id));
         Assert.Equal(1, target.ReservedCount); // the failed load was forgotten: the install after the commit repeats it
 
-        // Control: the same continuation records every other failure, so the zero above can fail.
+        // Control: a second transfer (own account, own deferred install) whose session opens with a script that fails otherwise. The same continuation (ObserveDeferredLoad) must record it
+        // and warn, so the zero above can fail. A re-run of OnSessionOpened for the first account would start nothing: its install request was consumed by the first load.
+        (int otherId, string otherAccount, CharacterRecord otherCharacter) = await NewCharacterAsync(rig.Host, "DEFERRED9B", "Defernineb");
+        Guid otherTransfer = Guid.NewGuid();
+        PlayerTransferBundle otherBundle = NewBundle(otherTransfer, otherId, otherCharacter);
+        Assert.True(await target.TryReserveSlotAsync(otherTransfer, otherBundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(otherTransfer, otherBundle).WaitAsync(Budget);
+        Assert.Equal(1, loader.Calls);
         next = () => new DeferredLoadBroke();
         long brokeBefore = TargetFaultsOf(nameof(DeferredLoadBroke));
-        target.OnSessionOpened(accountId);
+        await OpenSessionAsync(rig, otherId, otherAccount);
         await WorldTestHost.WaitForAsync(() => Deferred(logs).Any(e => e.Level == LogLevel.Warning), "the failed deferred load to be warned about");
 
         Assert.Equal(2, loader.Calls);
