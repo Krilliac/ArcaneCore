@@ -1184,7 +1184,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// <summary>The default for <see cref="MaxConcurrentTileReads"/> (<see cref="CollisionOptions.NavTileReadConcurrency"/>).</summary>
     public const int DefaultConcurrentTileReads = 2;
 
-    /// <summary>The most tile files read at the same time; further reads wait for a slot without holding a thread.</summary>
+    /// <summary>The most tile files read at the same time; further reads wait for a slot on their own thread.</summary>
     public int MaxConcurrentTileReads { get; }
 
     /// <summary>Held reads by tile: the read, and the sequence number of the last time a query asked for it (least recently asked is dropped first).</summary>
@@ -1297,14 +1297,17 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         return true;
     }
 
-    /// <summary>Read and parse one tile file on the pool, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
+    /// <summary>Read and parse one tile file on a dedicated thread, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
     private Task<TileRead> StartTileRead(string path)
     {
         Func<string, byte[]?>? reader = FileReader;
         SemaphoreSlim slots = _tileReadSlots;
-        return Task.Run(async () =>
+        // A dedicated thread, not the shared pool: a read the world thread polls for must finish however busy the pool is (a saturated pool
+        // injects threads slowly, and this read would sit queued behind unrelated work, as the answer stayed pending for tens of seconds).
+        // A read waiting for a slot holds its thread; at most MaxPendingTileReads are held, so at most that many wait.
+        return Task.Factory.StartNew(() =>
         {
-            await slots.WaitAsync().ConfigureAwait(false);
+            slots.Wait();
             try
             {
                 return new TileRead(TryReadTileFile(path, reader, out NavMeshTile? tile) ? tile : null, null);
@@ -1319,7 +1322,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             {
                 slots.Release();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     /// <summary>Add a tile read in the background to the navmesh (world thread), dropping its held read. False when its Detour slot is taken.</summary>
