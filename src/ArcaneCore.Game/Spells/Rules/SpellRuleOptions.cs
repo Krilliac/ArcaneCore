@@ -87,6 +87,14 @@ public sealed class SpellRuleOptions
     public bool FrostShockDiminishesAsRoot { get; init; }
 
     /// <summary>
+    /// Whether a spell redirected by a Grounding-style magnet (SPELL_MAGNET) skips a magnet the caster may not attack (an unflagged or friendly
+    /// owner's totem). Default false: vmangos SpellCaster::SelectMagnetTarget (SpellCaster.cpp:31-68) has no hostility test on the magnet
+    /// and mangoszero (Unit.cpp:3590) has none either. true reproduces mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924, CanAttack(magnet)).
+    /// Reference-core evidence only, no retail capture. Applies to non-triggered casts, creature casters included.
+    /// </summary>
+    public bool MagnetRequiresAttackable { get; init; }
+
+    /// <summary>
     /// Whether a creature nobody tapped (no damage ever called LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the
     /// warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem, SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632):
     /// false, an untapped creature gives no shard. true keeps the shard for such kills.

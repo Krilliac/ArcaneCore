@@ -50,6 +50,7 @@ public sealed class SpellRulesCoreFeature(IServiceProvider services, ILogger<Spe
         }
 
         system.ImmunityEnforcement = Options.ImmunityEnforcement;
+        system.MagnetRequiresAttackable = Options.MagnetRequiresAttackable;
         if (Options.SpellBatchWindowMs != 0)
         {
             system.SpellBatchWindowMs = Options.SpellBatchWindowMs; // 0 keeps the system's own start value (0 in a server)

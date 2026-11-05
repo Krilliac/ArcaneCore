@@ -334,6 +334,7 @@ public sealed class SpellMagnetTests
     public void ClientNamedCast_IsNotRedirectedOntoAMagnetTheCasterMayNotAttack()
     {
         using var kit = new SpellTestKit(Protect(), Attack());
+        kit.System.MagnetRequiresAttackable = true;
         var (attacker, _, victim, magnet) = AddPlayers(kit);
         ((FakeRelations)kit.System.Relations).Hostile.Add(magnet.Guid); // the magnet reads as a friend of the attacker, the victim as a foe
 
@@ -342,6 +343,21 @@ public sealed class SpellMagnetTests
         Assert.Equal(100u, magnet.Health);
         Assert.Equal(85u, victim.Health);
         Assert.True(kit.System.HasAura(victim, Protection)); // no charge was spent on the refused redirect
+    }
+
+    [Fact]
+    public void ClientNamedCast_IsRedirectedOntoAMagnetTheCasterMayNotAttack_ByDefault()
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        Assert.False(kit.System.MagnetRequiresAttackable); // vmangos SelectMagnetTarget has no hostility test on the magnet
+        var (attacker, _, victim, magnet) = AddPlayers(kit);
+        ((FakeRelations)kit.System.Relations).Hostile.Add(magnet.Guid);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), true));
+
+        Assert.Equal(85u, magnet.Health);
+        Assert.Equal(100u, victim.Health);
+        Assert.False(kit.System.HasAura(victim, Protection)); // the charge was spent
     }
 
     [Fact]
@@ -389,6 +405,7 @@ public sealed class SpellMagnetTests
     public void ClientCast_TeamTotem_IsRedirectedOnlyWhenItsOwnerIsAnUngroupedFreeForAllOpponent(bool ownerFreeForAll, bool ownerGroupedWithCaster)
     {
         using var kit = new SpellTestKit(Protect(), Attack());
+        kit.System.MagnetRequiresAttackable = true;
         Map map = kit.World.GetMap(0);
         var creatures = new CreatureMapSystem(map, CreatureTestKit.Content([CreatureTestKit.Template(CreatureTestKit.WolfEntry)], []), random: new Random(1));
         map.AddUpdater(creatures);
