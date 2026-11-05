@@ -72,7 +72,7 @@ A world that dies or hangs without saying so is not shown offline at once: the r
 `Realm:Liveness:HeartbeatStaleSeconds` (default 60; 0 turns the check off, and then a crashed world stays online until it starts again or its row is edited), and a realm shows red while a `.server restart` countdown runs; the realm list also carries
 the account's character count per realm, which the client shows as a green realm name ([realm list liveness](../ops/realm-liveness.md)). Each new
 session writes the population hint, 2 x sessions / `World:Realm:PlayerLimit` (default 100, vmangos `PlayerLimit`); the count is every session in the session registry, bot sessions included. A world with no matching row logs
-a warning and runs on; `World:Realm:Id = 0` turns the writes off. A gateway worker (`Cluster:Worker:Enabled`) does not write the row; in that
+a warning and runs on; `World:Realm:Id = 0` turns the writes off, and under the host supervisor a child labelled `social` or `coordinator` must carry `--World:Realm:Id=0` in its own arguments (the check refuses to start otherwise, exit 78). A gateway worker (`Cluster:Worker:Enabled`) does not write the row; in that
 topology the operator owns the row ([gateway](../areas/gateway.md)). If the world and logon daemons run on different hosts, keep their clocks
 synchronised (NTP): the heartbeat is compared across them.
 
