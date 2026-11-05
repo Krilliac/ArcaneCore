@@ -114,14 +114,14 @@ public sealed class GroupAuthorityTests
         Assert.Equal(LootMethod.FreeForAll, group.LootMethod);
         Assert.Equal(1, authority.HeldCommandCount);
 
-        authority.Execute("worker-a", Loot(LootMethod.MasterLoot)); // still held: it must not overtake RoundRobin
+        authority.Execute("worker-a", Loot(LootMethod.NeedBeforeGreed)); // still held: it must not overtake RoundRobin
         Assert.Equal(LootMethod.FreeForAll, group.LootMethod);
         Assert.Equal(2, authority.HeldCommandCount);
 
         Assert.Equal(0, authority.ReleaseHeldCommands(1));
         Assert.Equal(LootMethod.RoundRobin, group.LootMethod);
         Assert.Equal(0, authority.ReleaseHeldCommands(1));
-        Assert.Equal(LootMethod.MasterLoot, group.LootMethod);
+        Assert.Equal(LootMethod.NeedBeforeGreed, group.LootMethod);
         Assert.Equal(0, authority.HeldCommandCount);
 
         authority.Execute("worker-a", Loot(LootMethod.GroupLoot)); // the hold ended with the last one
