@@ -931,9 +931,13 @@ public sealed class ManagedPlayerbotLifecycleTests
         /// <summary>How many times the pending rows were loaded (every reconcile loads them once).</summary>
         public int LoadPendingCalls => Volatile.Read(ref _loadPendingCalls);
 
+        /// <summary>Runs at the start of every <see cref="LoadPendingAsync"/> with its token, before the rows are read (a test cancels or fails the reconcile from here).</summary>
+        public Action<CancellationToken>? OnLoadPending { get; set; }
+
         public Task<IReadOnlyList<ManagedPlayerbotProvision>> LoadPendingAsync(CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _loadPendingCalls);
+            OnLoadPending?.Invoke(cancellationToken);
             return Task.FromResult<IReadOnlyList<ManagedPlayerbotProvision>>(_pending.Values.OrderBy(row => row.CreatedUnix).ThenBy(row => row.BotId).ToArray());
         }
 

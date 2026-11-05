@@ -904,6 +904,52 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal bool HoldsMaintenanceLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
         services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(), ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance);
 
+    /// <summary>
+    /// Loads the festival flavours and tells the event board. A load failure keeps the plain gathering festivals; a board invalidate failure is logged on its own
+    /// (the flavours are set by then, so it must not claim they could not be loaded). <paramref name="onWorld"/> runs the board refresh on the world thread
+    /// (null = the attached world's <see cref="WorldRuntime.InvokeAsync{T}"/>, or no refresh with no world); tests pass a host that throws to reach the refresh-failure log,
+    /// which a real world cannot produce (the refresh is a counter bump and a stopped world cancels, which propagates).
+    /// </summary>
+    internal async Task LoadHolidayFlavoursAsync(ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore flavourStore, CancellationToken cancellationToken,
+        Func<Func<bool>, CancellationToken, Task>? onWorld = null)
+    {
+        Events.PlayerbotFestivalFlavours flavours;
+        try
+        {
+            flavours = new Events.PlayerbotFestivalFlavours(await flavourStore.LoadAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.social.events", ex);
+            logger.LogWarning(ex, "Playerbot festival flavours could not be loaded ({Type}); festivals run as plain gathering festivals", ex.GetType().Name);
+            return;
+        }
+
+        _holidayFlavours = flavours;
+        if (!flavours.HasDefault)
+            logger.LogWarning("holiday_flavour has no row for holiday id 0: festivals the table does not name run as plain gathering festivals without crowd emotes (the world database initializer seeds an empty table)");
+        // Festivals that started before the load pick up their flavours (the board belongs to the world thread).
+        if (onWorld is null)
+        {
+            if (_world is not { } flavourWorld) return;
+            onWorld = (work, token) => flavourWorld.InvokeAsync(work, token);
+        }
+
+        try
+        {
+            await onWorld(() =>
+            {
+                _eventBoard?.Invalidate();
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.social.events", ex);
+            logger.LogWarning(ex, "Playerbot festival flavours are loaded, but the event board could not be refreshed ({Type}); festivals that already started keep their old flavour until the next refresh", ex.GetType().Name);
+        }
+    }
+
     public async Task StartupAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled) return;
@@ -942,27 +988,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         await LoadTradeCountersAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>() is { } flavourStore)
-        {
-            try
-            {
-                var flavours = new Events.PlayerbotFestivalFlavours(await flavourStore.LoadAsync(cancellationToken).ConfigureAwait(false));
-                _holidayFlavours = flavours;
-                // Festivals that started before the load pick up their flavours (the board belongs to the world thread).
-                if (_world is { } flavourWorld)
-                    await flavourWorld.InvokeAsync(() =>
-                    {
-                        _eventBoard?.Invalidate();
-                        return true;
-                    }, cancellationToken).ConfigureAwait(false);
-                if (!flavours.HasDefault)
-                    logger.LogWarning("holiday_flavour has no row for holiday id 0: festivals the table does not name run as plain gathering festivals without crowd emotes (the world database initializer seeds an empty table)");
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
-            {
-                FaultLedger.Shared.Record("playerbot.social.events", ex);
-                logger.LogWarning(ex, "Playerbot festival flavours could not be loaded ({Type}); festivals run as plain gathering festivals", ex.GetType().Name);
-            }
-        }
+            await LoadHolidayFlavoursAsync(flavourStore, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
@@ -1104,7 +1130,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             // Combined: every pending journal row is a leftover of this process. Split: another worker may be mid-create (its journal row is pending until it completes), so only the lease holder
             // sweeps and only rows older than ProvisionSweepGrace; a non-holder leaves it to the holder.
             if (!SplitScope) await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
-            else if (HoldsMaintenanceLease)
+            else if (HoldsMaintenanceLease && TakeProvisionSweepSlot())
                 await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);
             IManagedPlayerbotStore store = scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>();
             // Registration is bounded by MaxRegisteredBots; MaxBots bounds only the bots running at once (StartCoreAsync), so a
@@ -1840,6 +1866,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal const string LiveOwnerUnknown = "live-owner-unknown";
 
     /// <summary>
+    /// The refusal code of a start whose login was refused after the live-owner check passed (another worker took the character in between, or the second check failed too). Unlike
+    /// <see cref="LiveOnOtherWorker"/> this start did write (a session, the Starting row, which is put back), so the population counts it as an attempt of a Faulted bot's bounded retries.
+    /// </summary>
+    internal const string LoginRaced = "login-raced";
+
+    /// <summary>
     /// True when this world owns a list of maps (a split cluster worker, <see cref="WorldRuntime.Ownership"/>). The registry rows are then shared with other workers that run other bots, and the
     /// rules that guard a row against another worker's write apply; with nothing withheld (combined) no other writer exists and they do not.
     /// </summary>
@@ -2007,7 +2039,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     try { await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false); }
                     catch (ManagedRevisionConflictException) { }
                     logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder ?? "(unknown, the check failed)");
-                    return new(false, racedHolder is not null ? LiveOnOtherWorker : LiveOwnerUnknown, bot.BotId);
+                    return new(false, LoginRaced, bot.BotId);
                 }
             }
 
@@ -2022,9 +2054,29 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
                 (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
-                bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
-                character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
-                PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
+                bool faultWritten = false;
+                try
+                {
+                    bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
+                    faultWritten = true;
+                }
+                catch (ManagedRevisionConflictException)
+                {
+                    // Another writer owns the row: not a fault (as in the start's outer handler); its row stands.
+                    WarnConflictOnce(bot.BotId, "start (fault row)");
+                }
+                catch (Exception persistEx) when (persistEx is not OutOfMemoryException and not OperationCanceledException)
+                {
+                    // The store refuses the fault row too (a Starting row written earlier stays as it is): the failure is reported as a failed start like any other, never thrown, so a caller that counts
+                    // attempts (the population's bounded retries) still counts it and its pass goes on.
+                    FaultLedger.Shared.Record("playerbot.lifecycle", persistEx);
+                    logger.LogWarning(persistEx, "Managed playerbot {BotId} start failed and its fault row could not be written ({Type}: {Message}); the registry row stays as it was", bot.BotId, persistEx.GetType().Name, persistEx.Message);
+                }
+                if (faultWritten)
+                {
+                    character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                    PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
+                }
             }
             if (ex is not OperationCanceledException)
             {
@@ -4470,6 +4522,19 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private long _lastProvisionSweepMs = long.MinValue;
 
     /// <summary>
+    /// Whether a split holder's create may run its stale-row sweep now: one run per <see cref="ProvisionSweepIntervalMs"/>, sharing the clock of <see cref="SweepStaleProvisionsAsync"/>, so a stale row that
+    /// cannot be deleted costs a session once per interval and not once per create. Called under the operations lock (every create holds it), so the read-then-write cannot interleave with another create.
+    /// </summary>
+    private bool TakeProvisionSweepSlot()
+    {
+        long now = Environment.TickCount64;
+        long last = Volatile.Read(ref _lastProvisionSweepMs);
+        if (last != long.MinValue && now - last < ProvisionSweepIntervalMs) return false;
+        Volatile.Write(ref _lastProvisionSweepMs, now);
+        return true;
+    }
+
+    /// <summary>
     /// Split cluster, maintenance lease holder only: take the journal rows of dead creates (older than <see cref="ProvisionSweepGrace"/>), rate limited to one run per
     /// <see cref="ProvisionSweepIntervalMs"/>. The population pass calls it, so a holder that never creates itself (it owns no allowed map) still cleans up what a dead worker left.
     /// It runs under the operations lock like any create, but never waits for it: when an operation is running the sweep is skipped and the next pass tries again, so it cannot
@@ -4477,14 +4542,14 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal async Task SweepStaleProvisionsAsync(CancellationToken cancellationToken)
     {
-        if (!_options.Enabled || !SplitScope || !HoldsMaintenanceLease || _stopping || _detaching) return;
+        if (!_options.Enabled || !SplitScope || !HoldsMaintenanceLease || _stopping || _detaching || SplitBrainLatched) return; // a latched split brain issues no playerbot writes (a rollback deletes rows and characters)
         long now = Environment.TickCount64;
         long last = Volatile.Read(ref _lastProvisionSweepMs);
         if (last != long.MinValue && now - last < ProvisionSweepIntervalMs) return;
         if (!await _operations.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
         try
         {
-            if (_stopping || _detaching) return;
+            if (_stopping || _detaching || SplitBrainLatched) return;
             Volatile.Write(ref _lastProvisionSweepMs, now);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);

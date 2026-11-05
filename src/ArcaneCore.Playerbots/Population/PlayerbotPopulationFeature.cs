@@ -1462,7 +1462,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
     /// <summary>
     /// True for the refusals of a start that did nothing to the bot (another worker runs it, the owner of it could not be told, the whole feature is busy or stopping): they do not use an attempt.
-    /// A refusal that is not here (an owner the account store refuses, a failed start) uses one, so such a bot is bounded too.
+    /// A refusal that is not here (an owner the account store refuses, a failed start, a login refused after the check passed: <see cref="ManagedPlayerbotFeature.LoginRaced"/>) uses one, so such a bot is bounded too.
     /// </summary>
     internal static bool MadeNoStartAttempt(string code)
         => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
@@ -1547,7 +1547,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             {
                 // Counted when a start was really attempted, not when the bot was picked: a refusal that did nothing to the bot (MadeNoStartAttempt) uses no attempt, any other result does
                 // (a refusal that writes nothing, such as an owner the account store refuses, included, so that bot is bounded too).
-                // A start that throws (its fault row could not be written either) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
+                // A start that throws (the feature contains a failed fault-row write, so this is a failed put-back write after a raced login refusal or an unexpected fault) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
                 // the pass (the remaining restarts and every creation), so one bot whose fault row cannot be written would hold the worker's population back at each of its attempts. In split scope
                 // (the only place a retry happens) the exception is contained: logged once, counted as a failed attempt, and the pass goes on. A cancellation and a split-brain latch still end the pass.
                 bool attempted = true;
@@ -1581,9 +1581,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 if (band >= 0) ctx.Have[band]++;
             }
             else if (result.Code == "playerbot-capacity") { capacity = true; stoppedBecause = "the running bot cap (MaxBots) is reached"; break; }
-            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown)
+            else if (result.Code is ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown or ManagedPlayerbotFeature.LoginRaced)
             {
-                // Another worker runs this bot: not a failure and nothing was written. It is left alone for a while, like a bot saved on another worker's map.
+                // Another worker runs this bot: not a failure and nothing was left written (a raced login refusal put its row back, and used an attempt of a retry: MadeNoStartAttempt). It is left alone for a while, like a bot saved on another worker's map.
                 _foreignUntilMs[member.CharacterId] = ctx.Input.ClockMs + ForeignBotMemoryMs;
                 if (band >= 0) planned[band]--; // it will not fill its band: a new bot may
             }
