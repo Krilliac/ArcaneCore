@@ -23,7 +23,7 @@ that was not a local branch with commits; no branch was empty or missing.
 | 14 | vw5-crafting-professions | yes | |
 | 15 | vw5-reputation-factions | yes | |
 | 16 | vw5-honor-pvp-ranks | yes | worktree was clean at merge time |
-| 17 | vw5-battlegrounds | yes | pure code (state machine, packets, queue); nothing constructs the manager yet |
+| 17 | vw5-battlegrounds | yes | pure code at merge (state machine, packets, queue); the rest was delivered since (see open questions) |
 | 18 | vw5-creature-movement-spawns | yes | |
 | 19 | vw5-game-events-weather | yes | worktree was clean at merge time |
 | 20 | vw5-quests-advanced | yes | |
@@ -103,10 +103,9 @@ Tips after integration: **Characters 25, World 28, Auth 3**. The lane docs that 
 ## Aura registration and crit mods
 
 No aura type is registered twice (`SpellSystem.RegisterModules` would throw; the full World and Game suites compose every module and pass).
-Aura 52 (MOD_CRIT_PERCENT) is registered by nobody: the aura lane keeps it "Referenced" (spell crit reads the total through
-`GetTotalAuraModifier`, so spell crit is wired once). The character-sheet and melee/ranged crit field (`PlayerStatSystem.UpdateCritPercentage`
-passes `flatMod = 0`) is still not wired; retail needs the weapon-dependent `_ApplyWeaponDependentAuraCritMod` path, which belongs to the
-unscheduled aura-stat ledger. Open item.
+Aura 52 (MOD_CRIT_PERCENT) was left unregistered at merge time; that has since been closed (see open questions). `CombatStatAuras` registers it, and
+`PlayerStatSystem.UpdateCritPercentage` builds the melee and ranged crit fields from `GenericCrit()` plus `WeaponCrit(...)`, which covers the
+weapon-dependent `_ApplyWeaponDependentAuraCritMod` path.
 
 ## RED proof of the cx-sec-fixes tests (mutate, run, restore)
 
@@ -135,7 +134,7 @@ Not switchable (flagged for a decision; none is default-on non-retail by intent,
 * Reputation: hardened packet length checks, kill credit by killer's group (no loot-tap primitive), forced reactions not sent by default.
 * Honor: tap model simplified, Live mode limits (documented in docs/areas/honor.md).
 * Battlegrounds: `SMSG_BATTLEFIELD_STATUS` status is a u32 (vmangos and mangos-classic) while wow_messages says u8; no winner for a premature
-  finish with no winner; only the code half is delivered (S3, S5, S6, S7 not built).
+  finish with no winner.
 * Combat: float32 attack time truncation reproduced on purpose.
 
 Config-defaulted-on behaviours worth a second look because their default is "on": `Creatures:Respawn:DrawDelayAtLoad` (true),
