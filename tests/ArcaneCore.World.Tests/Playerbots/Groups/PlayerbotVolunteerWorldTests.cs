@@ -5,6 +5,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Groups;
+using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;

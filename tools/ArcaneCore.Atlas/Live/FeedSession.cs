@@ -90,7 +90,7 @@ internal sealed class FeedSession : IDisposable
     public bool IsOpen => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _ended) == 0;
 
     /// <summary>
-    /// The client end of the pipe, so a test can watch <see cref="SafePipeHandle.IsClosed"/>. <see cref="IsOpen"/> cannot show that the handle closed: it is
+    /// The client end of the pipe, so a test can watch <c>SafePipeHandle.IsClosed</c>. <see cref="IsOpen"/> cannot show that the handle closed: it is
     /// already false once the reader ends.
     /// </summary>
     internal SafePipeHandle PipeHandle => _pipe.SafePipeHandle;
