@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
@@ -54,7 +55,7 @@ public sealed class ScriptActionUnsupportedAnomalyTests
         Assert.False(capture.Any(Key), capture.Describe());
     }
 
-    private sealed class GapRecorder(bool reporting) : Diagnostics.IGameQaObserver
+    private sealed class GapRecorder(bool reporting) : IGameQaObserver
     {
         public List<(uint Entry, string Gap, string Detail)> Gaps { get; } = [];
 

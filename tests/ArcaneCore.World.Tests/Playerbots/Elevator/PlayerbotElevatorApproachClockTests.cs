@@ -376,7 +376,8 @@ public sealed class PlayerbotElevatorApproachClockTests
         {
             await run.StepAsync();
             held = await run.World.OnWorldAsync(() => run.Field<PlayerbotRoute?>("_repairRoute") is { ToLiftLanding: true }
-                && PlayerbotElevator.TripOf(run.World.Player) is null);
+                && PlayerbotElevator.TripOf(run.World.Player) is null
+                && run.Field<PlayerbotProgressAim>("_repairAim").Landing is not null); // Retarget runs at the start of the think after the one that stored the route
         }
 
         Assert.True(held, "the repair walk never held a walk to the lift: the check proves nothing");
