@@ -69,6 +69,14 @@ public sealed class Y90CreatureScriptsTests
         }
     }
 
+    /// <summary>The shape of a passive escort faction: the enemy's faction is hostile to everyone, the escort's is hostile to nobody (forward-only reaction).</summary>
+    private sealed class OnlyTheEnemyIsHostile : ICreatureHostility
+    {
+        public bool IsHostile(Creature creature, Unit target) => creature.Template.Entry == EnemyEntry;
+
+        public bool CanAssist(Creature helper, Creature caller) => helper.FactionTemplate == caller.FactionTemplate;
+    }
+
     private sealed class Quests : IScriptQuestEvents, IEventAiQuestEvents
     {
         public bool IsQuestIncomplete(Player player, uint questId) => false;
@@ -105,7 +113,7 @@ public sealed class Y90CreatureScriptsTests
     {
         public Rig(uint entry, Action<CreatureTemplateBuilder>? configure = null, int[]? textIds = null, bool hostile = false, float x = 0f, float y = 0f,
             float z = Z, CreatureTemplate[]? extraTemplates = null, CreatureSpawn[]? extraSpawns = null, int pathLength = 0, bool creaturesAggroCreatures = true,
-            Func<CreatureTemplate, CreatureTemplate>? adjust = null, float playerOffset = 1f)
+            Func<CreatureTemplate, CreatureTemplate>? adjust = null, float playerOffset = 1f, ICreatureHostility? hostility = null)
         {
             var aiContent = new CreatureAiContent([], [.. (textIds ?? []).Select(id => new CreatureAiText(id, $"text{id}", 6, 0, 0))]);
             CreatureTemplate template = Template(entry, configure);
@@ -114,7 +122,7 @@ public sealed class Y90CreatureScriptsTests
             var services = new CreatureAiServices
             {
                 ScriptQuests = Quest, QuestEvents = Quest, Spells = Caster, ItemTemplateOf = Items,
-                Hostility = hostile ? new AlwaysHostile() : FactionCreatureHostility.Empty,
+                Hostility = hostility ?? (hostile ? new AlwaysHostile() : FactionCreatureHostility.Empty),
             };
             (World, Map, System) = CreateAiSystem(content, services, new CreatureOptions { CreatureAggroOnCreatures = creaturesAggroCreatures });
             (Player, Session) = AddPlayer(World, 1, x + playerOffset, y);
@@ -289,9 +297,13 @@ public sealed class Y90CreatureScriptsTests
         rig.Npc.UnitFlags |= UnitFlags.ImmuneToNpc;
 
         Assert.False(hooks.CanAttack(enemy, rig.Npc));
-        Assert.False(rig.System.AttackStart(enemy, rig.Npc));
-        Assert.Null(enemy.Combat.Victim);
         Assert.False(rig.System.CanAggroOnSight(enemy, rig.Npc));
+        Assert.Null(enemy.Combat.Victim);
+        // A script-forced attack is not gated by the flag (mangos-classic UnitAI::AttackStart -> Unit::Attack has no immunity check), and the fight is kept.
+        Assert.True(rig.System.AttackStart(enemy, rig.Npc));
+        Assert.Same(rig.Npc, enemy.Combat.Victim);
+        rig.World.RunTick(100);
+        Assert.Same(rig.Npc, enemy.Combat.Victim);
         // The flag is about creatures only: it does not shield him from a player (the check for that is ImmuneToPlayer).
         rig.Npc.UnitFlags &= ~UnitFlags.ImmuneToNpc;
         rig.Npc.UnitFlags |= UnitFlags.ImmuneToPlayer;
@@ -312,29 +324,50 @@ public sealed class Y90CreatureScriptsTests
 
         enemy.UnitFlags |= UnitFlags.ImmuneToPlayer;
         Assert.False(hooks.CanAttack(enemy, rig.Player), "the attacker's own immune-to-player flag stops it attacking a player");
-        Assert.False(rig.System.AttackStart(enemy, rig.Player));
+        Assert.False(rig.System.CanAggroOnSight(enemy, rig.Player));
         Assert.Null(enemy.Combat.Victim);
         Assert.False(hooks.CanAttack(rig.Player, enemy));
+        Assert.True(rig.System.AttackStart(enemy, rig.Player), "a script-forced attack is not gated by the flag");
     }
 
     [Fact]
     public void Ruul_HostileCreaturesDoNotAggroHim_WhileHeIsImmuneToNpcs()
     {
+        // The enemy stands 6 yd from Ruul, who has not walked anywhere: the same layout as the passive-escort test, where the scan does start a fight.
         using Rig rig = EnemyNextToRuul(out Creature enemy, playerOffset: 60f);
         var ai = rig.Ai<RuulSnowhoofAI>();
         ai.OnQuestAccept(rig.Player, RuulSnowhoofAI.QuestFreedomToRuul);
-        Reach(rig, 32);
-        Assert.Equal(UnitFlags.ImmuneToNpc, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
 
-        // Neither the enemy's own sight check nor the escort's aggro scan may start a fight with him.
+        // Positive baseline without the flag: the enemy may take him on and the escort's scan picks the enemy.
+        Assert.True(rig.System.CanAggroOnSight(enemy, rig.Npc));
+
+        rig.Npc.UnitFlags |= UnitFlags.ImmuneToNpc;
         Assert.False(rig.System.CanAggroOnSight(enemy, rig.Npc));
         Assert.Null(rig.System.AggroNearestHostileCreature(rig.Npc));
-        Assert.False(rig.RunUntil(() => enemy.Combat.Victim is not null, 5_000), "an immune escort is left alone");
+        Assert.False(rig.RunUntil(() => enemy.Combat.Victim is not null, 3_000), "an immune escort is left alone");
         Assert.Null(rig.Npc.Combat.Victim);
 
-        Reach(rig, 34);
-        Assert.Equal(UnitFlags.ImmuneToNpc, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
-        Assert.False(rig.System.AttackStart(enemy, rig.Npc));
+        rig.Npc.UnitFlags &= ~UnitFlags.ImmuneToNpc;
+        Assert.True(rig.System.CanAggroOnSight(enemy, rig.Npc));
+        Assert.Same(enemy, rig.System.AggroNearestHostileCreature(rig.Npc));
+        Assert.Same(rig.Npc, enemy.Combat.Victim);
+    }
+
+    [Fact]
+    public void AScriptForcedFightBetweenTwoImmuneUnits_StartsAndSurvivesTheTargetCheck()
+    {
+        using Rig rig = EnemyNextToRuul(out Creature enemy);
+        rig.Npc.UnitFlags |= UnitFlags.ImmuneToNpc | UnitFlags.ImmuneToPlayer;
+        enemy.UnitFlags |= UnitFlags.ImmuneToNpc | UnitFlags.ImmuneToPlayer; // the Qiraji of the Anachronos scene
+
+        Assert.True(rig.System.AttackStart(enemy, rig.Npc));
+        Assert.True(rig.System.AttackStart(rig.Npc, enemy));
+        Assert.Same(rig.Npc, enemy.Combat.Victim);
+        Assert.Same(enemy, rig.Npc.Combat.Victim);
+
+        rig.World.RunTick(500);
+        Assert.Same(rig.Npc, enemy.Combat.Victim);
+        Assert.Same(enemy, rig.Npc.Combat.Victim);
     }
 
     [Fact]
@@ -426,9 +459,9 @@ public sealed class Y90CreatureScriptsTests
 
     // --- assist of a player in combat, aggro of nearby enemies -------------------------------------------------
 
-    private static Rig AssistRig(bool canAssist, float enemyDistance, bool enemyFightsPlayer, out Creature enemy)
+    private static Rig AssistRig(bool canAssist, float enemyDistance, bool enemyFightsPlayer, out Creature enemy, ICreatureHostility? hostility = null)
     {
-        var rig = new Rig(RuulSnowhoofAI.Entry, hostile: true, pathLength: 36, creaturesAggroCreatures: false,
+        var rig = new Rig(RuulSnowhoofAI.Entry, hostile: true, hostility: hostility, pathLength: 36, creaturesAggroCreatures: false,
             adjust: t => canAssist ? t with { TypeFlags = CreatureMapSystem.TypeFlagCanAssist } : t,
             extraTemplates: [Hostile(EnemyEntry)], extraSpawns: [Spawn(2, EnemyEntry, enemyDistance, 0f)]);
         enemy = Assert.Single(rig.System.Creatures, c => c.Template.Entry == EnemyEntry);
@@ -448,6 +481,18 @@ public sealed class Y90CreatureScriptsTests
         var ai = rig.Ai<RuulSnowhoofAI>();
         ai.OnQuestAccept(rig.Player, RuulSnowhoofAI.QuestFreedomToRuul);
         Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+
+        ai.MoveInLineOfSight(enemy);
+
+        Assert.Same(enemy, rig.Npc.Combat.Victim);
+    }
+
+    [Fact]
+    public void TheAssist_WorksWhereOnlyTheEnemyIsHostileToTheEscort()
+    {
+        using Rig rig = AssistRig(canAssist: true, enemyDistance: 70f, enemyFightsPlayer: true, out Creature enemy, new OnlyTheEnemyIsHostile());
+        var ai = rig.Ai<RuulSnowhoofAI>();
+        ai.OnQuestAccept(rig.Player, RuulSnowhoofAI.QuestFreedomToRuul);
 
         ai.MoveInLineOfSight(enemy);
 

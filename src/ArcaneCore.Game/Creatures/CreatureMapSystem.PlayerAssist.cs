@@ -17,7 +17,9 @@ public sealed partial class CreatureMapSystem
     /// follower_ai.cpp:30-64), called from <c>UnitAI::MoveInLineOfSight</c> (AI/BaseAI/UnitAI.cpp:70-95) once the creature may initiate an attack:
     /// <paramref name="who"/>, which is fighting a player (or a unit a player owns or charms), is taken on although it is far outside the aggro
     /// radius. The caller has checked that the escort or follow is in progress. Needs the template's CAN_ASSIST type flag; refused while the
-    /// creature is stunned, confused or fleeing, when the enemy is not one it may attack, farther than <see cref="PlayerAssistRange"/> or out
+    /// creature is stunned, confused or fleeing (the reference's feign-death check is not modelled), when the enemy is not one it may attack (the
+    /// hooks' CanAttack, which for two NPCs is hostile in either direction as mangos-classic Relations.cpp CanAttack does; no forward-only
+    /// hostility test is added), farther than <see cref="PlayerAssistRange"/> or out
     /// of line of sight. A creature without a victim attacks <paramref name="who"/> through its AI; one already fighting only adds it to its
     /// threat list (<see cref="EnterCombatWithTarget"/>). Like the reference the gate before it holds: a creature that already has a victim assists
     /// only in an instanceable map. Returns true when it did.
@@ -33,7 +35,7 @@ public sealed partial class CreatureMapSystem
             || !CanInitiateAttack(creature)
             || (creature.Combat.Victim is not null && !Map.Combat.Hooks.IsInstanceable(Map.MapId))
             || !who.IsAlive || !ReferenceEquals(who.Map, Map)
-            || !Map.Combat.Hooks.CanAttack(creature, who) || !_ai.Hostility.IsHostile(creature, who)
+            || !Map.Combat.Hooks.CanAttack(creature, who)
             || WorldGeometry.DistanceSq3D(creature, who) > PlayerAssistRange * PlayerAssistRange
             || !InLineOfSight(creature, who))
         {

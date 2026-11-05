@@ -180,6 +180,11 @@ public class CombatHooks
     /// </summary>
     private static bool IsBlockedByImmuneToFlags(Unit attacker, Unit victim)
     {
+        if (t_ignoreImmuneToFlags > 0)
+        {
+            return false;
+        }
+
         if (((attacker.UnitFlags | victim.UnitFlags) & (UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc)) == 0)
         {
             return false;
@@ -188,6 +193,28 @@ public class CombatHooks
         UnitFlags victimBlocks = attacker.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
         UnitFlags attackerBlocks = victim.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
         return (victim.UnitFlags & victimBlocks) != 0 || (attacker.UnitFlags & attackerBlocks) != 0;
+    }
+
+    [ThreadStatic]
+    private static int t_ignoreImmuneToFlags;
+
+    /// <summary>
+    /// <see cref="CanAttack"/> without the ImmuneToPlayer / ImmuneToNpc clause, for a script-forced attack and for keeping a started fight.
+    /// mangos-classic <c>UnitAI::AttackStart</c> (UnitAI.cpp:283-294) goes straight to <c>Unit::Attack</c>, which has no CanAttack or immunity check
+    /// (Unit.cpp:6259), and vmangos silithus.cpp:1463-1470 fights with UNIT_FLAG_IMMUNE_TO_NPC set. On-sight, assist, target-selection and spell paths
+    /// keep using <see cref="CanAttack"/>. Runs on the calling thread only; the bypass is scoped to this call (virtual overrides are included).
+    /// </summary>
+    public bool CanAttackIgnoringImmuneToFlags(Unit attacker, Unit victim)
+    {
+        t_ignoreImmuneToFlags++;
+        try
+        {
+            return CanAttack(attacker, victim);
+        }
+        finally
+        {
+            t_ignoreImmuneToFlags--;
+        }
     }
 
     private static bool InSameGroup(Unit mapOf, Player a, Player b)
