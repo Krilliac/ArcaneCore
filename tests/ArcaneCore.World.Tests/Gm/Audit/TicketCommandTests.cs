@@ -136,6 +136,30 @@ public sealed class TicketCommandTests
     }
 
     [Fact]
+    public async Task Respond_And_Close_SendTheOnlineOwnerAGmTicketStatusUpdate_UpdatedThenClosed()
+    {
+        // mangos-classic GMTicketMgr.cpp:1018 / 1333 send SMSG_GM_TICKET_STATUS_UPDATE (u32 1 updated, 2 closed) to the author.
+        await using WorldTestHost host = Start(new Clock());
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await using WorldTestClient one = await host.EnterWorldAsync("ONE", "Playerone");
+        await one.CollectAsync();
+        await CreateAsync(one, "first problem");
+        await gm.CollectAsync();
+        await one.CollectAsync();
+
+        await ReplyAsync(gm, ".ticket respond 1 please relog");
+        byte[] updated = await one.ReadUntilAsync(WorldOpcode.SmsgGmTicketStatusUpdate);
+        Assert.Equal(GmTicketHandlers.StatusUpdateUpdated, U32(updated));
+        Assert.Equal(4, updated.Length);
+        await one.CollectAsync();
+
+        await ReplyAsync(gm, ".ticket close 1");
+        byte[] closed = await one.ReadUntilAsync(WorldOpcode.SmsgGmTicketStatusUpdate);
+        Assert.Equal(GmTicketHandlers.StatusUpdateClosed, U32(closed));
+        Assert.Equal(4, closed.Length);
+    }
+
+    [Fact]
     public async Task Respond_ToAnOfflineOwner_SavesTheAnswer_AndSaysItWasNotDelivered()
     {
         await using WorldTestHost host = Start(new Clock());

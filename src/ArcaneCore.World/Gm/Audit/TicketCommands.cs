@@ -140,6 +140,7 @@ public sealed class TicketCommands : ICommandGroup
         if (online && context.World.FindOnlinePlayer(name) is { } owner)
         {
             owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.InvokerName, answer));
+            owner.Session.Send(WorldOpcode.SmsgGmTicketStatusUpdate, GmTicketHandlers.BuildStatusUpdate(GmTicketHandlers.StatusUpdateUpdated));
             context.Reply(GmAuditStrings.ResponseSent(link));
         }
         else
@@ -173,6 +174,7 @@ public sealed class TicketCommands : ICommandGroup
                 owner.SendSystemMessage(GmAuditStrings.TicketAnswer(context.InvokerName, ticket.Response));
             }
 
+            owner.Session.Send(WorldOpcode.SmsgGmTicketStatusUpdate, GmTicketHandlers.BuildStatusUpdate(GmTicketHandlers.StatusUpdateClosed));
             owner.Session.Send(WorldOpcode.SmsgGmticketGetticket, MiscPackets.BuildNoGmTicket());
         }
 
