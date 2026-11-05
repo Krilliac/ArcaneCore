@@ -326,34 +326,85 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                     continue;
 
                 IReadOnlyList<uint> droppers = PlayerbotDropIndex.DroppersOf(loot, reagent.ItemId);
-                int limit = Math.Min(droppers.Count, MaxDropperCandidates);
-                for (int i = 0; i < limit; i++)
-                {
-                    uint dropper = droppers[i];
-                    if (Suspensions?.IsEntrySuspended(dropper, now) == true)
-                        continue;
-                    if (content.GetSpawns(player.MapId, dropper).Count == 0
-                        || content.FindTemplate(dropper) is not { Rank: 0 } template
-                        || template.MinLevel > player.Level + 2
-                        || template.MaxLevel + 8 < player.Level)
-                        continue;
-                    if (Home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && !home.HasSpawnInside(content, dropper))
-                        continue;
-                    // A dropper whose every spawn lies where no walk reaches from the bot (another landmass, an island) is a hunt that cannot start
-                    // (GitHub #1441); the next dropper of the reagent is tried instead.
-                    if (AllSpawnsUnreachable(content.GetSpawns(player.MapId, dropper), at => PlayerbotNavigation.IsUnreachableOnFoot(player, at, out _, out _)))
-                        continue;
-                    return dropper;
-                }
+                uint usable = FirstUsableDropper(player, droppers, content, now);
+                if (usable != 0)
+                    return usable;
             }
         }
 
         return 0;
     }
 
+    /// <summary>Spawns checked per dropper at most; a creature with more is kept (the answer would cost a region lookup per spawn).</summary>
+    internal const int MaxSpawnsChecked = 32;
+
+    /// <summary>How long a dropper found unreachable is not looked at again (ms): the bot may have crossed to another walking component since.</summary>
+    internal const uint UnreachableRecheckMs = 300_000;
+
+    private const int MaxUnreachableMemo = 64;
+
+    /// <summary>Droppers found unreachable, with the world clock they are looked at again (wrapping compare).</summary>
+    private readonly Dictionary<uint, uint> _unreachableUntil = [];
+
+    /// <summary>Test hook: answers "no walk reaches this point" in place of <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>. World thread.</summary>
+    internal Func<Vector3, bool>? ReachabilityProbe { get; set; }
+
+    /// <summary>
+    /// The first of <paramref name="droppers"/> (at most <see cref="MaxDropperCandidates"/>) worth hunting for the bot, or 0: not set aside, spawned on
+    /// the bot's map, an ordinary creature near the bot's level, with a spawn inside its home, and with a spawn a walk reaches. A dropper whose every
+    /// spawn is unreachable on foot (another landmass, an island; GitHub #1441) is remembered for <see cref="UnreachableRecheckMs"/>, so the think
+    /// that follows does not walk its spawns again. The reachability is <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>, which answers false
+    /// (kept) while a navigation tile near a spawn is not resident: its lookup only queues the load. World thread; no allocation.
+    /// </summary>
+    internal uint FirstUsableDropper(Player player, IReadOnlyList<uint> droppers, CreatureContent content, uint now)
+    {
+        int limit = Math.Min(droppers.Count, MaxDropperCandidates);
+        for (int i = 0; i < limit; i++)
+        {
+            uint dropper = droppers[i];
+            if (Suspensions?.IsEntrySuspended(dropper, now) == true)
+                continue;
+            IReadOnlyList<CreatureSpawn> spawns = content.GetSpawns(player.MapId, dropper);
+            if (spawns.Count == 0
+                || content.FindTemplate(dropper) is not { Rank: 0 } template
+                || template.MinLevel > player.Level + 2
+                || template.MaxLevel + 8 < player.Level)
+                continue;
+            if (Home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && !home.HasSpawnInside(content, dropper))
+                continue;
+            if (SpawnsUnreachable(player, dropper, spawns, now))
+                continue;
+            return dropper;
+        }
+
+        return 0;
+    }
+
+    private bool SpawnsUnreachable(Player player, uint dropper, IReadOnlyList<CreatureSpawn> spawns, uint now)
+    {
+        if (_unreachableUntil.TryGetValue(dropper, out uint until))
+        {
+            if (unchecked((int)(until - now)) > 0)
+                return true;
+            _unreachableUntil.Remove(dropper);
+        }
+
+        if (spawns.Count > MaxSpawnsChecked)
+            return false;
+        bool all = ReachabilityProbe is { } probe ? AllSpawnsUnreachable(spawns, probe) : AllSpawnsUnreachable(player, spawns);
+        if (all)
+        {
+            if (_unreachableUntil.Count >= MaxUnreachableMemo)
+                _unreachableUntil.Clear();
+            _unreachableUntil[dropper] = unchecked(now + UnreachableRecheckMs);
+        }
+
+        return all;
+    }
+
     /// <summary>
     /// Whether there is at least one spawn and <paramref name="unreachable"/> holds for every one of them (stops at the first reachable one).
-    /// False for no spawn: the caller has its own test for a creature that is not spawned. Pure; world thread when the predicate reads a map.
+    /// False for no spawn. Pure; world thread when the predicate reads a map.
     /// </summary>
     internal static bool AllSpawnsUnreachable(IReadOnlyList<CreatureSpawn> spawns, Func<Vector3, bool> unreachable)
     {
@@ -363,6 +414,21 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         {
             CreatureSpawn spawn = spawns[i];
             if (!unreachable(new Vector3(spawn.X, spawn.Y, spawn.Z)))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary><see cref="AllSpawnsUnreachable(IReadOnlyList{CreatureSpawn}, Func{Vector3, bool})"/> with <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/>; no closure.</summary>
+    private static bool AllSpawnsUnreachable(Player player, IReadOnlyList<CreatureSpawn> spawns)
+    {
+        if (spawns.Count == 0)
+            return false;
+        for (int i = 0; i < spawns.Count; i++)
+        {
+            CreatureSpawn spawn = spawns[i];
+            if (!PlayerbotNavigation.IsUnreachableOnFoot(player, new Vector3(spawn.X, spawn.Y, spawn.Z), out _, out _))
                 return false;
         }
 
