@@ -173,6 +173,8 @@ public sealed partial class SpellSystem
         // The unit search measures combat distance, as vmangos NearestUnitFitConditionInCombatRangeCheck does (Spell.cpp:539, Object.h:603-606,
         // GetDistance with SizeFactor::CombatReach): centre distance minus both combat reaches, so a radius of 0 (28364 Damage vs. Guards: range
         // index 1, no radius) still finds a listed unit within melee reach.
+        // Deviation: the explicit-unit check below also uses combat reach, while vmangos uses IsWithinDistInMap (bounding radius, Spell.cpp:519-533);
+        // only the choice among listed units in that band differs.
         float casterReach = CombatReach(caster);
         bool UnitInCombatRange(Unit unit)
         {

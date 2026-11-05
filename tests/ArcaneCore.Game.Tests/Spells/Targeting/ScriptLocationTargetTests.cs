@@ -152,21 +152,53 @@ public sealed class ScriptLocationTargetTests
         Assert.Contains(listed.Guid.Value, rig.SpellGoHits());
     }
 
-    [Fact]
-    public void ARadiusZeroSpell_Like28364_FindsAListedCreatureInMeleeReach_AndFailsWhenNoneIsClose()
+    /// <summary>Damage vs. Guards shape (28364): range index 1 (self only, no radius), effect A6 / B46, a row for the guard entry; guards stand at the given distances.</summary>
+    private static (PetTestKit Kit, Player Caster, FakeSession Session, Creature[] Guards) DamageVsGuardsRig(params float[] distances)
     {
-        // Damage vs. Guards: range index 1 (self only, no radius), effect A6 / B46, rows for the guard entries. vmangos searches with
-        // NearestUnitFitConditionInCombatRangeCheck (combat distance, Spell.cpp:539), so a guard in melee reach is found at radius 0.
         SpellInfo spell = Spell(DamageVsGuards, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy, targetB: (SpellImplicitTarget)Target46))
             with { StartRecoveryCategory = 0, StartRecoveryTime = 0 };
-        using var kit = new PetTestKit([spell], extraTemplates: [CreatureTestKit.Template(Guard, b => b.Faction = 14)]);
+        var kit = new PetTestKit([spell], extraTemplates: [CreatureTestKit.Template(Guard, b => b.Faction = 14)]);
         kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [], [new SpellStore.ScriptTarget(DamageVsGuards, 1, Guard, 0)]);
-        (Player caster, _) = kit.AddPlayer(1);
-        Creature touching = kit.Creatures.SummonForInstance(Guard, 1f, 0f, caster.Z, 0f)!;
-        Creature distant = kit.Creatures.SummonForInstance(Guard, 15f, 0f, caster.Z, 0f)!;
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        Creature[] guards = distances.Select(d => kit.Creatures.SummonForInstance(Guard, d, 0f, caster.Z, 0f)!).ToArray();
+        return (kit, caster, session, guards);
+    }
 
-        Assert.Equal(SpellCastResult.CastOk, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(touching.Guid)));
-        Assert.Equal(SpellCastResult.DontReport, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(distant.Guid)));
+    [Fact]
+    public void ARadiusZeroSpell_Like28364_FindsAListedCreatureInMeleeReach()
+    {
+        // vmangos searches with NearestUnitFitConditionInCombatRangeCheck (combat distance, Spell.cpp:539), so a guard in melee reach is found at radius 0.
+        (PetTestKit kit, Player caster, FakeSession session, Creature[] guards) = DamageVsGuardsRig(1f);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(guards[0].Guid)));
+
+            var reader = new PacketReader(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload);
+            reader.ReadPackedGuid();
+            reader.ReadPackedGuid();
+            reader.ReadUInt32();
+            reader.ReadUInt16();
+            int hits = reader.ReadByte();
+            for (int i = 0; i < hits; i++) reader.ReadUInt64();
+            Assert.Equal(0, (int)reader.ReadByte());
+            SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+            Assert.True(targets.HasDest);
+            Assert.Equal(guards[0].X, targets.Dest.X, 0.01f);
+            Assert.Equal(guards[0].Y, targets.Dest.Y, 0.01f);
+        }
+    }
+
+    [Fact]
+    public void ARadiusZeroSpell_Like28364_FailsWhenNoListedCreatureIsInMeleeReach()
+    {
+        // Only a guard 15 yards away: neither the explicit target nor the nearest-unit search (combat reach, radius 0) reaches it.
+        (PetTestKit kit, Player caster, FakeSession session, Creature[] guards) = DamageVsGuardsRig(15f);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.DontReport, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(guards[0].Guid)));
+
+            Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+        }
     }
 
     [Fact]
