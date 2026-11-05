@@ -305,6 +305,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
 
         _route = null;
         _routeTarget = default;
+        _visitNpc = default; // the visit ended: a later visit to this NPC starts a clock of its own
+        _visitArmed = false;
         if (!PlayerbotMovementControl.Stop(session, player)) return true;
         if (_cooldownMs != 0) return true;
         // Throttle service requests, not travel. Motion must keep progressing
@@ -1343,9 +1345,24 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     {
         if (options.Economy.Enabled) return true;
         if ((ItemClass)template.Class is not (ItemClass.Weapon or ItemClass.Armor) || template.Bonding != 2) return true;
-        if (template.RequiredLevel > player.Level && template.RequiredLevel <= player.Level + GreenKeepLevels) return true;
-        foreach (byte slot in template.AllowedEquipSlots(player.Class, canDualWield: true))
-            if (slot != InventorySlots.NullSlot && player.Inventory.GetItem(InventorySlots.Bag0, slot) is null) return true;
+        PlayerInventory inventory = player.Inventory;
+        ArcaneCore.Game.Items.InventoryResult usable = inventory.CanUseItem(template);
+        // Needs a few more levels but is otherwise the bot's to wear (class, race, skill and proficiency: the level check comes before the proficiency one, so ask it again).
+        if (usable == ArcaneCore.Game.Items.InventoryResult.CantEquipLevelI)
+        {
+            uint proficiency = template.ProficiencySkill();
+            return template.RequiredLevel <= player.Level + GreenKeepLevels
+                && (proficiency == 0 || inventory.Requirements.SkillValue(inventory, proficiency) != 0);
+        }
+
+        if (usable != ArcaneCore.Game.Items.InventoryResult.Ok) return false;
+        foreach (byte slot in template.AllowedEquipSlots(player.Class, inventory.Requirements.CanDualWield(inventory)))
+        {
+            if (slot == InventorySlots.NullSlot || slot >= InventorySlots.EquipmentEnd) continue;
+            if (slot == InventorySlots.OffHand && inventory.IsTwoHandUsed) continue;
+            if (inventory.GetItem(InventorySlots.Bag0, slot) is null) return true;
+        }
+
         return false;
     }
 

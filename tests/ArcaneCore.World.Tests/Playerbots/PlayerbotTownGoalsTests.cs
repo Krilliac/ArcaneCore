@@ -736,6 +736,18 @@ public sealed class PlayerbotTownGoalsTests
         Assert.Equal(0u, far[0]);
     }
 
+    /// <summary>An empty slot keeps only what the bot can wear: a green it can never use (a level far above it) is sold though its slot is empty.</summary>
+    [Fact]
+    public async Task FullBags_UnusableBindOnEquipGreen_EmptyEquipmentSlot_IsSold()
+    {
+        (bool wanted, bool sold, uint money, uint[] counts) = await FullBagsOfGreensAsync(
+            [BoeGreen(9616, armor: 1, sellPrice: 40) with { RequiredLevel = 40 }], [], wearBoots: false);
+        Assert.True(wanted, "an unwearable green kept for an empty slot leaves the bags full with no sell trip (#1442)");
+        Assert.True(sold);
+        Assert.Equal(0u, counts[0]);
+        Assert.Equal(40u, money);
+    }
+
     [Fact]
     public async Task FullBags_WithTheAuctionEconomyOn_LeavesTheGreenToTheAuctionHouse()
     {
@@ -1275,6 +1287,7 @@ public sealed class PlayerbotTownGoalsTests
 
     [Fact]
     public async Task AMountStepInFlight_HoldsTheVisitClock()
+        // Mounts are off so BeforeStep never reaches PlayerbotMount.Step, which would clear a test-set cast that has no real spell behind it.
         => await WithVisitingBot(25f, (player, goals, host, session, _) =>
         {
             Think(session, goals, player, 500, updates: 1);
@@ -1284,7 +1297,7 @@ public sealed class PlayerbotTownGoalsTests
             PlayerbotMount.For(session).CastingForTests = false;
             for (int think = 0; think < 4; think++) Think(session, goals, player, 2_500, updates: 1);
             Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the clock did not run after the cast");
-        });
+        }, configure: configured => configured.Mounts.Enabled = false);
 
     [Fact]
     public async Task AStunnedBot_HoldsTheVisitClock()
@@ -1308,7 +1321,7 @@ public sealed class PlayerbotTownGoalsTests
 
     /// <summary>Runs <paramref name="body"/> on the world thread with a bot <paramref name="yardsAway"/> west of a visible vendor/trainer, controller and suspensions fresh.</summary>
     private static async Task WithVisitingBot(float yardsAway,
-        Action<Player, PlayerbotTownGoals, WorldTestHost, WorldSession, float> body)
+        Action<Player, PlayerbotTownGoals, WorldTestHost, WorldSession, float> body, Action<PlayerbotOptions>? configure = null)
     {
         var fixture = new TownVendorFixture();
         TownVendorServices.Current.Value = fixture;
@@ -1332,7 +1345,9 @@ public sealed class PlayerbotTownGoalsTests
                 await host.OnWorldAsync(() =>
                 {
                     Player player = session.Player!;
-                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true })
+                    var visitOptions = new PlayerbotOptions { Enabled = true };
+                    configure?.Invoke(visitOptions);
+                    var goals = new PlayerbotTownGoals(session, visitOptions)
                     {
                         Suspensions = new PlayerbotSuspensions(),
                     };
