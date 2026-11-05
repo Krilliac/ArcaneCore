@@ -16,7 +16,7 @@ The CMaNGOS reference documents `creature_spell_list_entry`, `creature_spell_tar
 The bounded ClassicDB reference does contain actual Imp Minion 12922 EventAI rows. The row set is:
 
 ```text
-1292201, creature 12922, event 11 (aggro), action 57, params (3,20,0): Enable No Melee Mode on Aggro
+1292201, creature 12922, event 11 (the contract's label "aggro"; classic-db's event 11 is SPAWNED), action 57, params (3,20,0): Enable No Melee Mode on Aggro
 1292202, creature 12922, event 4 (aggro), chance 10, action 54: Random Say
 1292203, creature 12922, event 0 (timer in combat), flags 1025, initial 1000..2000, repeat 2000..3000,
   action 11, spell 20801, target 1 (victim), cast flags 256 (CAST_MAIN_SPELL)
@@ -78,5 +78,5 @@ timers and EventAI rows keep owning scripted casts; a creature with both runs bo
 
 Source rows are quoted in Part 1. classic-db has no spell-list row for 12922, so list wiring would not change it: its casts come from EventAI
 rows 1292201 (spawned, action 57) and 1292203 (timer in combat, action 11, cast flag 256). The base already supports action 57
-(`SetRangedModeAction`, `CreatureEventAI.SetRangedMode`) and `CreatureEventAiTests.Imp12922Shaped_*` pins the whole row set on the EventAI
+(`SetRangedModeAction`, `CreatureEventAI.SetRangedMode`) and `CreatureEventAiTests.Imp12922Shaped_*` pins the action 57 and cast rows on the EventAI
 path (written without a build or test run in the lane; unproven until the integration gate).

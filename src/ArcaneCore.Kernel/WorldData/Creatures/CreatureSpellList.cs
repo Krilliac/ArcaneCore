@@ -26,7 +26,7 @@ public enum CreatureSpellListFlags : uint
 }
 
 /// <summary>
-/// The hardcoded target ids a spell-list entry can name (cmangos <c>SpellListTargetingHardcoded</c>, ids below 100 are reserved for these).
+/// The hardcoded target ids a spell-list entry can name (cmangos <c>SpellListTargetingHardcoded</c>, ids 0 to 7; the reference seeds them as targeting rows of type Hardcoded).
 /// The host that runs a list resolves them; the scheduler only passes the id through.
 /// </summary>
 public static class CreatureSpellListTargets
@@ -40,8 +40,12 @@ public static class CreatureSpellListTargets
     public const uint FriendlyMissingBuffNoSelf = 6;
     public const uint CurrentNotAlone = 7;
 
-    /// <summary>Target ids below this are the hardcoded ones above; ids from here on name a <see cref="CreatureSpellListTargeting"/> row.</summary>
-    public const uint HardcodedMax = 100;
+    /// <summary>
+    /// Target ids below this are the hardcoded ones above, which the host resolves itself. In the reference they are ordinary
+    /// <see cref="CreatureSpellListTargeting"/> rows of type <see cref="CreatureSpellListTargetingType.Hardcoded"/> (ids 0 to 7), so a catalog
+    /// accepts rows with these ids; an entry naming one of them needs no row, while an entry naming any other id needs a row.
+    /// </summary>
+    public const uint HardcodedCount = 8;
 }
 
 /// <summary>Kind of a targeting row (cmangos <c>SpellListTargetingType</c>).</summary>
@@ -147,14 +151,15 @@ public sealed class CreatureSpellListCatalog
     private readonly Dictionary<uint, CreatureSpellList> _lists;
     private readonly Dictionary<uint, CreatureSpellListTargeting> _targeting = [];
 
-    /// <summary>Build the catalog. Throws when a list or targeting id repeats, a targeting row uses a hardcoded id, or an entry names a targeting id from 100 up that has no row.</summary>
+    /// <summary>
+    /// Build the catalog. Throws when a list or targeting id repeats, or an entry names a targeting id that has no row and is not one of the
+    /// hardcoded ids 0 to 7 (the reference requires a row for every entry target; the hardcoded ones are resolved without one here).
+    /// </summary>
     public CreatureSpellListCatalog(IEnumerable<CreatureSpellList> lists, IEnumerable<CreatureSpellListTargeting>? targeting = null)
     {
         ArgumentNullException.ThrowIfNull(lists);
         foreach (CreatureSpellListTargeting row in targeting ?? [])
         {
-            if (row.Id < CreatureSpellListTargets.HardcodedMax)
-                throw new ArgumentException($"Targeting row {row.Id} uses an id reserved for the hardcoded targets.", nameof(targeting));
             if (!_targeting.TryAdd(row.Id, row))
                 throw new ArgumentException($"Targeting row {row.Id} is defined twice.", nameof(targeting));
         }
@@ -166,7 +171,7 @@ public sealed class CreatureSpellListCatalog
                 throw new ArgumentException($"Spell list {list.Id} is defined twice.", nameof(lists));
             foreach (CreatureSpellListEntry entry in list.Entries)
             {
-                if (entry.TargetId >= CreatureSpellListTargets.HardcodedMax && !_targeting.ContainsKey(entry.TargetId))
+                if (entry.TargetId >= CreatureSpellListTargets.HardcodedCount &&!_targeting.ContainsKey(entry.TargetId))
                     throw new ArgumentException($"Spell list {list.Id} position {entry.Position} names missing targeting row {entry.TargetId}.", nameof(lists));
             }
         }
@@ -174,7 +179,7 @@ public sealed class CreatureSpellListCatalog
 
     public int Count => _lists.Count;
 
-    /// <summary>The targeting row with this id, or null (hardcoded ids below 100 have no row).</summary>
+    /// <summary>The targeting row with this id, or null (the hardcoded ids 0 to 7 have a row only when the data supplies one).</summary>
     public CreatureSpellListTargeting? FindTargeting(uint id) => _targeting.GetValueOrDefault(id);
 
     /// <summary>The list with this id, or null (an id of 0 is no list).</summary>

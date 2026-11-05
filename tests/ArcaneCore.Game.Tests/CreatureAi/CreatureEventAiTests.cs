@@ -297,7 +297,7 @@ public sealed class CreatureEventAiTests
         Assert.All(spells.Casts, c => Assert.Equal((spell, (Unit?)player, false), c));
     }
 
-    private static CreatureContent EventContent(IEnumerable<CreatureAiEvent> events,IEnumerable<CreatureAiText>? texts = null, params CreatureTemplate[] extra)
+    private static CreatureContent EventContent(IEnumerable<CreatureAiEvent> events, IEnumerable<CreatureAiText>? texts = null, params CreatureTemplate[] extra)
         => new(
             [Template(configure: t => t.AIName = CreatureAiFactory.EventAIName), .. extra],
             [Spawn(1, WolfEntry, 5, 0)], [], [], [],

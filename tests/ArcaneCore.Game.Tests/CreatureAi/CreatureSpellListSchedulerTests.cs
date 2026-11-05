@@ -122,18 +122,29 @@ public sealed class CreatureSpellListSchedulerTests
     [Fact]
     public void Catalog_TargetingRows_AreIndexed_AndEntriesMustNameExistingRows()
     {
+        // Shaped like the reference table: rows 0..7 of type Hardcoded, plus a row from 100 up.
+        List<CreatureSpellListTargeting> rows = [];
+        for (uint id = 0; id < CreatureSpellListTargets.HardcodedCount; id++)
+            rows.Add(new CreatureSpellListTargeting(id, CreatureSpellListTargetingType.Hardcoded, 0, 0, 0, 0));
         CreatureSpellListTargeting row = new(150, CreatureSpellListTargetingType.Support, 1, 2, 3, -4);
+        rows.Add(row);
+
         CreatureSpellList withTarget = List(0, 0, Entry(0, 10, target: 150));
-        CreatureSpellListCatalog catalog = new([withTarget], [row]);
+        CreatureSpellList withHardcoded = List(1, 0, Entry(0, 11, target: CreatureSpellListTargets.CurrentNotAlone));
+        CreatureSpellListCatalog catalog = new([withTarget, withHardcoded], rows);
         Assert.Same(row, catalog.FindTargeting(150));
+        Assert.Equal(CreatureSpellListTargetingType.Hardcoded, catalog.FindTargeting(CreatureSpellListTargets.CurrentNotAlone)?.Type);
         Assert.Null(catalog.FindTargeting(151));
 
+        // Ids 8..99 and 100 up need a row when an entry names them.
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([withTarget], rows.Where(r => r.Id != 150)));
         Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([withTarget]));
-        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([List(0, 0, Entry(0, 10, target: 100))], [row]));
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([List(0, 0, Entry(0, 10, target: 50))], rows));
         Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([], [row, row]));
-        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([], [row with { Id = 99 }]));
-        CreatureSpellListCatalog hardcoded = new([List(0, 0, Entry(0, 10, target: CreatureSpellListTargets.CurrentNotAlone))]);
-        Assert.Equal(1, hardcoded.Count); // hardcoded ids need no row
+        Assert.Throws<ArgumentException>(() => new CreatureSpellListCatalog([], [rows[0], rows[0]]));
+
+        // Hardcoded ids resolve without a row; a row for one is accepted too.
+        Assert.Equal(1, new CreatureSpellListCatalog([withHardcoded]).Count);
     }
 
     [Fact]
