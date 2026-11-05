@@ -1132,11 +1132,11 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
                 progress.Succeeded();
                 return null;
             }
-            catch (CharacterOwnershipRejectedException) when (DropsRefused(key))
+            catch (Exception refused) when (OwnershipRefusal.Find(refused) is not null && DropsRefused(key)) // a refusal EF wrapped counts too
             {
                 return null; // refused because this write moved to another world with the handoff: counted, neither logged nor terminal
             }
-            catch (CharacterOwnershipRejectedException ex)
+            catch (Exception wrapped) when (OwnershipRefusal.Find(wrapped) is { } ex)
             {
                 FaultLedger.Shared.Record("writequeue.social-ownership", ex);
                 FailTerminal(ex, scope.ServiceProvider);

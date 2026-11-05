@@ -241,6 +241,206 @@ public sealed class RetiredSourceCleanShutdownTests
     }
 
     /// <summary>
+    /// The takeover commits and then the commit call throws (the connection died on the reply): the journal says committed, so the coordinator rolls forward, with the real source and queues. A retained
+    /// retry of the save queue and a retained keyed write are refused in the window between the commit and the retirement; both are dropped by the seal, not terminal, and the retirement ends the rest.
+    /// </summary>
+    [Fact]
+    public async Task ACommitThatThrowsAfterItCommitted_RollsForward_AndDropsTheRefusalsOfTheSaveQueueAndAKeyedQueue()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.WhileCommitted = async () =>
+        {
+            Assert.True(rig.RestWrites.PostRetainedSweepForTest());
+            await rig.WaitForRefusalsAsync(2);
+            throw new IOException("the connection dropped after the takeover committed");
+        };
+        bool retiredBeforeTheStep = true;
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.Queue.Enqueue(State(5, 55));
+                await WorldTestHost.WaitForAsync(() => rig.Queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained after the flush");
+                rig.RestWrites.Save(5, Rest(1f));
+                await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(5), "the busy rest write of character 5 to be retained after the flush");
+            }
+            else if (stage == WorldHandoffStage.EpochTakeover)
+            {
+                retiredBeforeTheStep = rig.Queue.IsQuarantined(5);
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage); // rolled forward, not aborted
+        Assert.False(retiredBeforeTheStep);
+        Assert.Equal(2, rig.Refusals);
+        Assert.Equal(1, rig.Retirement.DroppedCount("RestWriteQueue"));
+        Assert.Null(rig.RestWrites.TerminalFailure);
+        Assert.Empty(rig.RestWrites.RetainedCharacters);
+        await rig.RestWrites.StopAsync(); // must not throw
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>The same commit that threw after it committed, for a write of no one character: nothing but the seal keeps its refusal from stopping the world, and the roll-forward retires the source.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task ACommitThatThrowsAfterItCommitted_RollsForward_AndDropsTheRefusalOfAWriteOfNoOneCharacter(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.StartSharedQueues();
+        rig.WhileCommitted = async () =>
+        {
+            Assert.True(rig.PostSharedSweep(kind));
+            await rig.WaitForRefusalsAsync(1);
+            throw new IOException("the connection dropped after the takeover committed");
+        };
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.WriteShared(kind, 5);
+                await WorldTestHost.WaitForAsync(() => rig.SharedWriteSettled(kind), "the busy write to be retained after the flush, and its queue to be idle");
+            }
+        }
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid(), AfterStage);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        Assert.Equal(1, rig.Refusals);
+        Assert.Equal(1, rig.SharedDrops(kind));
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.Empty(rig.RetainedShared(kind));
+        await rig.StopSharedAsync(kind); // must not throw
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>The other half of the same catch: a commit that fails before it changed anything leaves the journal pre-commit, so the handoff aborts, the source resumes, and a refusal is a lost ownership again.</summary>
+    [Fact]
+    public async Task ACommitThatThrowsBeforeItCommitted_AbortsTheHandoff_AndTheResumedSourceTreatsARefusalAsLost()
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.Journal.FailCommitBeforeCommitting = true;
+
+        WorldHandoffAbortedException aborted = await Assert.ThrowsAsync<WorldHandoffAbortedException>(
+            () => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(Guid.NewGuid()));
+        Assert.IsType<IOException>(aborted.InnerException);
+        Assert.Equal(WorldHandoffStage.Aborted, aborted.Record.Stage);
+
+        rig.MoveTheFence();
+        rig.Queue.Enqueue(State(5, 55));
+        await WorldTestHost.WaitForAsync(() => rig.Queue.TerminalFailure is not null, "the refused write of character 5 to stop the queue");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.StopAsync());
+        Assert.Equal(1, rig.Refusals);
+    }
+
+    /// <summary>
+    /// RecoverAsync of a handoff that committed and whose coordinator died: with a keyed write and a write of no one character both refused in the gap (dropped by the seal), the recovery's roll-forward
+    /// retires the source and the queues stop cleanly.
+    /// </summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task RecoverAsync_OfACommittedHandoff_DropsKeyedAndSharedRefusals_AndRetiresTheSource(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.StartSharedQueues();
+        Guid id = Guid.NewGuid();
+
+        async Task AfterStage(WorldHandoffStage stage, CancellationToken cancellationToken)
+        {
+            if (stage == WorldHandoffStage.Flushed)
+            {
+                rig.RestWrites.Save(5, Rest(1f));
+                await WorldTestHost.WaitForAsync(() => rig.RestWrites.RetainedCharacters.Contains(5), "the busy rest write of character 5 to be retained after the flush");
+                rig.WriteShared(kind, 5);
+                await WorldTestHost.WaitForAsync(() => rig.SharedWriteSettled(kind), "the busy write to be retained after the flush, and its queue to be idle");
+            }
+            else if (stage == WorldHandoffStage.EpochTakeover)
+            {
+                Assert.True(rig.RestWrites.PostRetainedSweepForTest());
+                Assert.True(rig.PostSharedSweep(kind));
+                await WorldTestHost.WaitForAsync(
+                    () => rig.Refusals >= 2 || rig.RestWrites.TerminalFailure is not null || rig.SharedTerminal(kind) is not null,
+                    "the fence to refuse the keyed and the shared write");
+                throw new InvalidOperationException("the coordinator died after the commit");
+            }
+        }
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RunAsync(id, AfterStage));
+        Assert.Null(rig.RestWrites.TerminalFailure);
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.True(rig.Refusals >= 2);
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RecoverAsync(id);
+
+        Assert.Equal(WorldHandoffStage.Retired, done.Stage);
+        Assert.Equal(1, rig.Retirement.DroppedCount("RestWriteQueue"));
+        Assert.Equal(1, rig.SharedDrops(kind));
+        Assert.Null(rig.RestWrites.TerminalFailure);
+        Assert.Null(rig.SharedTerminal(kind));
+        Assert.Empty(rig.RestWrites.RetainedCharacters);
+        Assert.Empty(rig.RetainedShared(kind));
+        await rig.RestWrites.StopAsync(); // must not throw
+        await rig.StopSharedAsync(kind); // must not throw
+        await rig.AssertCleanStopAsync();
+    }
+
+    /// <summary>RecoverAsync of a handoff that never committed: it resumes the source and aborts. A keyed write and a write of no one character are then refused as a lost ownership again, not dropped.</summary>
+    [Theory]
+    [InlineData(SharedWrite.InstanceRow)]
+    [InlineData(SharedWrite.Guild)]
+    [InlineData(SharedWrite.CharacterPurge)]
+    public async Task RecoverAsync_OfAHandoffThatNeverCommitted_ResumesTheSource_AndKeyedAndSharedRefusalsAreTerminalAgain(SharedWrite kind)
+    {
+        await using var rig = new HandoffRig();
+        using WorldRuntime world = rig.StartWorld();
+        using var source = rig.Source(world);
+        rig.Queue.Start();
+        rig.RestWrites.Start();
+        rig.StartSharedQueues();
+        Guid id = Guid.NewGuid();
+
+        // The coordinator died after the flush: the journal is open and pre-commit, the source frozen, flushed and sealed.
+        await rig.Journal.BeginAsync(id, source.WorkerId, new WorkerNodeId("w2"), source.Ownership);
+        await source.StopAdmissionsAsync(CancellationToken.None);
+        await source.FreezeAsync(CancellationToken.None);
+        await source.FlushAsync(CancellationToken.None);
+        await rig.Journal.AdvancePreCommitAsync(id, WorldHandoffStage.Flushed);
+
+        WorldHandoffRecord done = await new WorldHandoffCoordinator(rig.Journal, source, new PlainTarget(), new NoRouter()).RecoverAsync(id);
+
+        Assert.Equal(WorldHandoffStage.Aborted, done.Stage);
+        rig.MoveTheFence();
+        rig.RestWrites.Save(5, Rest(1f));
+        rig.WriteShared(kind, 5);
+        await WorldTestHost.WaitForAsync(() => rig.RestWrites.TerminalFailure is not null && rig.SharedTerminal(kind) is not null, "the refused keyed and shared writes to stop their queues");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.RestWrites.StopAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.StopSharedAsync(kind));
+        Assert.Equal(0, rig.Retirement.DroppedCount("RestWriteQueue"));
+        Assert.Equal(0, rig.SharedDrops(kind));
+    }
+
+    /// <summary>
     /// A keyed queue in the same window: a late write is retained, and the sweep the 30 s timer would post reaches the moved fence before the retirement. Dropped and counted; the queue stops
     /// cleanly. Without the seal this is the keyed queue's terminal failure, and the registry's per-character check cannot help: nobody named the character.
     /// </summary>
@@ -1295,8 +1495,16 @@ public sealed class RetiredSourceCleanShutdownTests
         public Task<WorldHandoffRecord> AdvancePreCommitAsync(Guid handoffId, WorldHandoffStage nextStage, CancellationToken cancellationToken = default)
             => Task.FromResult(Put(Current(handoffId) with { Stage = nextStage }));
 
+        /// <summary>The commit fails before it changes anything (the database was unreachable): the journal still says pre-commit, so the coordinator must abort.</summary>
+        public bool FailCommitBeforeCommitting { get; set; }
+
         public async Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
         {
+            if (FailCommitBeforeCommitting)
+            {
+                throw new IOException("the journal could not be reached; the takeover did not commit");
+            }
+
             WorldHandoffRecord before = Current(handoffId);
             var taken = new CharacterOwnershipToken(before.SourceOwnershipToken.Scope, before.SourceOwnershipToken.Epoch + 1, targetIncarnation);
             WorldHandoffRecord committed = Put(before with

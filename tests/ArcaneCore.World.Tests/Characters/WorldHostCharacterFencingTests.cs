@@ -254,6 +254,52 @@ public sealed class WorldHostCharacterFencingTests
         Assert.InRange(polls, 1, 12); // ~5 at 200 ms; a busy loop would be thousands
     }
 
+    /// <summary>
+    /// A claim seen while a handoff is undecided (the queue is sealed) is no reason to stop, and the watch keeps reading: once the handoff aborts and the source resumes, the same claim stops the queue.
+    /// A watch that returned on the first sighting would never see the resume.
+    /// </summary>
+    [Fact]
+    public async Task UnfencedWorld_KeepsWatchingWhileTheQueueIsSealed_AndGoesTerminalAfterTheResume()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(25));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        kit.SaveQueue.SealWrites(); // a handoff has flushed and not decided
+        kit.Ownership.Owned = true; // and a fenced world holds the database row
+        int seen = kit.Ownership.IsOwnedCalls;
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= seen + 4); // the watch read the claim several times and went on
+        Assert.False(fatal.Task.IsCompleted);
+        Assert.Null(kit.SaveQueue.TerminalFailure);
+
+        kit.SaveQueue.UnsealWrites(); // the handoff aborted, the source resumed
+        Exception failure = await fatal.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Contains("claimed by a fenced world", failure.Message);
+        Assert.Same(failure, kit.SaveQueue.TerminalFailure);
+    }
+
+    /// <summary>A retired world is done: the claim never stops its queue, and the watch ends (it reads no more).</summary>
+    [Fact]
+    public async Task UnfencedWorld_StopsWatching_OnceTheWorldIsRetired_WithoutStoppingTheQueue()
+    {
+        await using TestKit kit = TestKit.Create(enabled: false, claimWatchInterval: TimeSpan.FromMilliseconds(25));
+        var fatal = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        kit.SaveQueue.FatalFailure += error => fatal.TrySetResult(error);
+        await kit.Host.StartAsync(CancellationToken.None);
+
+        kit.SaveQueue.RetireEveryCharacter();
+        kit.Ownership.Owned = true;
+        await Task.Delay(300); // the first sighting of the claim has long happened
+        int reads = kit.Ownership.IsOwnedCalls;
+        await Task.Delay(300);
+
+        Assert.Equal(reads, kit.Ownership.IsOwnedCalls); // the watch returned: nothing reads the row any more
+        Assert.False(fatal.Task.IsCompleted);
+        Assert.Null(kit.SaveQueue.TerminalFailure);
+    }
+
     [Fact]
     public async Task FailedTerminalDrainRetainsOwnership()
     {
