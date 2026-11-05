@@ -18,7 +18,8 @@ internal static class StoreTransactionRollback
     /// Returns normally when the rollback succeeded.
     /// <para>
     /// One rollback failure is tolerated: when <paramref name="commitError"/> is a provider error that carries a SQLSTATE (the
-    /// server answered, for example a 40001 serialization failure at commit, so the provider already ended the transaction)
+    /// server answered, for example a 40001 serialization failure at commit, after which the provider may already have ended
+    /// the transaction; a statement error can instead leave it open, and then the rollback simply succeeds)
     /// and the rollback fails with an <see cref="InvalidOperationException"/> (the driver's "transaction has completed" state;
     /// an <see cref="ObjectDisposedException"/> is excluded). No driver message text is read. A lost connection or any other
     /// failure is still reported and thrown, and the tolerated case is logged at Debug when a logger is given.

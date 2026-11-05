@@ -612,15 +612,9 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
         await AssertGrantsAsync(seed, committed: true);
     }
 
-    [Fact]
+    [Upgrade.PostgresFact]
     public async Task RealPostgreSqlSerializationFailure_IsRetried_AndGrantsExactlyOnce()
     {
-        // Needs ARCANECORE_TEST_POSTGRES; with no PostgreSQL configured it has nothing to exercise (like the provider theories, which then only run SQLite).
-        if (!Providers().Any(p => p[0] is DatabaseProvider.PostgreSql))
-        {
-            return;
-        }
-
         Seed seed = await CreateAsync(DatabaseProvider.PostgreSql);
         int id = seed.Request.Before.Id;
         // Mid-attempt, a rival Serializable transaction reads the character row (which the reward writes) and inserts an

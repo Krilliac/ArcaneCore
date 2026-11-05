@@ -33,8 +33,8 @@ namespace ArcaneCore.Data.Quests;
 /// expires during the retry delay), and <c>data-quest-reward.rollback</c> if a rollback fails. A retried attempt records
 /// nothing here (Debug log only). The write-fence interceptor is separate: it reports a failure of its own check inside
 /// the transaction begin (<c>data.character-write-fence</c>), so a 40001 raised at the fence's <c>FOR SHARE</c> is
-/// reported there once per attempt even when a later attempt succeeds. Lease-acquisition cancellation and failures
-/// are not recorded by this store.
+/// reported there once per attempt even when a later attempt succeeds. Lease-acquisition cancellation is not recorded by
+/// this store; any other lease failure is recorded as <c>data-quest-reward.commit</c>.
 /// </para>
 /// Character and quest queues must be drained by the caller before invoking this store.
 /// </summary>
