@@ -8,6 +8,7 @@ using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
@@ -413,6 +414,218 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
 
         await AssertGrantsAsync(seed, committed: true);
     }
+
+    public static IEnumerable<object[]> RetryShapes()
+    {
+        foreach (object[] provider in Providers())
+        {
+            foreach (string shape in new[] { "begin", "save", "commit" })
+            {
+                yield return [provider[0], shape];
+            }
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(RetryShapes))]
+    public async Task SerializationFailureOnFirstAttempt_IsRetried_AndGrantsTheRewardExactlyOnce(DatabaseProvider provider, string shape)
+    {
+        Seed seed = await CreateAsync(provider);
+        var fault = new InjectedFault(shape, failures: 1, () => new FakeDbException("40001"));
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+            Assert.Empty(db.ChangeTracker.Entries());
+            Assert.Null(db.Database.CurrentTransaction);
+        }
+
+        Assert.Equal(2, fault.Attempts);
+        Assert.All(fault.Thrown, e => Assert.False(FaultLedger.WasRecorded(e)));
+        await AssertPersistedAsync(seed, rewarded: true);
+        // Money 100 -> 175 once: a second grant would have been refused as AlreadyRewarded or doubled.
+        Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(seed.Connection, seed.Request));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task DeadlockSqlState_IsRetriedThroughWrappers(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        var fault = new InjectedFault("save", failures: 2,
+            () => new DbUpdateException("wrapped", new AggregateException(new FakeDbException("40P01"))));
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+        }
+
+        Assert.Equal(3, fault.Attempts);
+        await AssertPersistedAsync(seed, rewarded: true);
+    }
+
+    [Theory]
+    [MemberData(nameof(RetryShapes))]
+    public async Task ExhaustedRetries_ThrowTheLastError_RecordOneFault_AndChangeNothing(DatabaseProvider provider, string shape)
+    {
+        Seed seed = await CreateAsync(provider);
+        var fault = new InjectedFault(shape, failures: int.MaxValue, () => new FakeDbException("40001"));
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            FakeDbException thrown = await Assert.ThrowsAsync<FakeDbException>(
+                () => new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+            Assert.Same(fault.Thrown[^1], thrown);
+            Assert.Empty(db.ChangeTracker.Entries());
+            Assert.Null(db.Database.CurrentTransaction);
+        }
+
+        Assert.Equal(4, fault.Attempts);
+        Assert.Single(fault.Thrown, e => FaultLedger.WasRecorded(e));
+        Assert.True(FaultLedger.WasRecorded(fault.Thrown[^1]));
+        await AssertPersistedAsync(seed, rewarded: false);
+        Assert.Equal(QuestRewardCommitResult.Committed, await CommitAsync(seed.Connection, seed.Request));
+    }
+
+    [Theory]
+    [MemberData(nameof(RetryShapes))]
+    public async Task NonRetryableFailure_IsNotRetried(DatabaseProvider provider, string shape)
+    {
+        Seed seed = await CreateAsync(provider);
+        // A unique violation (23505) and a plain exception are both outside the retry set.
+        var fault = new InjectedFault(shape, failures: int.MaxValue, () => new FakeDbException("23505"));
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            await Assert.ThrowsAsync<FakeDbException>(() => new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+        }
+
+        Assert.Equal(1, fault.Attempts);
+        Assert.True(FaultLedger.WasRecorded(fault.Thrown[0]));
+        await AssertPersistedAsync(seed, rewarded: false);
+
+        var plain = new InjectedFault(shape, failures: int.MaxValue, () => new InvalidOperationException("not a serialization failure"));
+        await using CharacterDbContext second = Context(seed.Connection, plain.Interceptors);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new EfCharacterQuestRewardStore(second).CommitAsync(seed.Request));
+        Assert.Equal(1, plain.Attempts);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task CancelledCaller_IsNotRetried(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        using var cts = new CancellationTokenSource();
+        var fault = new InjectedFault("save", failures: int.MaxValue, () => new FakeDbException("40001"));
+        fault.OnThrow = cts.Cancel;
+        await using CharacterDbContext db = Context(seed.Connection, fault.Interceptors);
+        await Assert.ThrowsAsync<FakeDbException>(() => new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request, cts.Token));
+        Assert.Equal(1, fault.Attempts);
+        await AssertPersistedAsync(seed, rewarded: false);
+    }
+
+    [Fact]
+    public async Task Rollback_OfAnAlreadyCompletedTransaction_IsTolerated_ButARealRollbackFailureIsNot()
+    {
+        var commitError = new FakeDbException("40001");
+        await StoreTransactionRollback.RollbackAfterFailureAsync(
+            new RollbackStub(new InvalidOperationException("This NpgsqlTransaction has completed; it is either committed or rolled back")),
+            commitError, "failed", _ => Assert.Fail("a completed transaction is not a rollback fault"));
+
+        Exception? reported = null;
+        var real = new InvalidOperationException("connection is broken");
+        AggregateException aggregate = await Assert.ThrowsAsync<AggregateException>(() =>
+            StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(real), commitError, "failed", e => reported = e));
+        Assert.Same(real, reported);
+        Assert.Equal([commitError, real], aggregate.InnerExceptions);
+        Assert.True(EfCharacterQuestRewardStore.IsSerializationFailure(aggregate));
+    }
+
+    private sealed class RollbackStub(Exception toThrow) : Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction
+    {
+        public Guid TransactionId { get; } = Guid.NewGuid();
+        public void Commit() { }
+        public void Rollback() => throw toThrow;
+        public Task CommitAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RollbackAsync(CancellationToken cancellationToken = default) => throw toThrow;
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeDbException(string sqlState) : DbException("injected " + sqlState)
+    {
+        public override string? SqlState => sqlState;
+    }
+
+    /// <summary>Throws from the begin, SaveChanges or commit step, the first <c>failures</c> times, counting the attempts that reach that step.</summary>
+    private sealed class InjectedFault
+    {
+        private readonly string _shape;
+        private readonly int _failures;
+        private readonly Func<Exception> _make;
+        private int _attempts;
+
+        public InjectedFault(string shape, int failures, Func<Exception> make)
+        {
+            _shape = shape;
+            _failures = failures;
+            _make = make;
+            Interceptors = [new Tx(this), new Save(this)];
+        }
+
+        public IInterceptor[] Interceptors { get; }
+
+        public List<Exception> Thrown { get; } = [];
+
+        public Action? OnThrow { get; set; }
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        private void Hit(string step)
+        {
+            if (step != _shape)
+            {
+                return;
+            }
+
+            if (Interlocked.Increment(ref _attempts) <= _failures)
+            {
+                Exception error = _make();
+                Thrown.Add(error);
+                OnThrow?.Invoke();
+                throw error;
+            }
+        }
+
+        private sealed class Tx(InjectedFault owner) : DbTransactionInterceptor
+        {
+            public override ValueTask<InterceptionResult<DbTransaction>> TransactionStartingAsync(
+                DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result,
+                CancellationToken cancellationToken = default)
+            {
+                owner.Hit("begin");
+                return ValueTask.FromResult(result);
+            }
+
+            public override ValueTask<InterceptionResult> TransactionCommittingAsync(
+                DbTransaction transaction, TransactionEventData eventData, InterceptionResult result,
+                CancellationToken cancellationToken = default)
+            {
+                owner.Hit("commit");
+                return ValueTask.FromResult(result);
+            }
+        }
+
+        private sealed class Save(InjectedFault owner) : SaveChangesInterceptor
+        {
+            public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+                DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+            {
+                owner.Hit("save");
+                return ValueTask.FromResult(result);
+            }
+        }
+    }
+
+    private static CharacterDbContext Context(DatabaseConnectionOptions connection, IInterceptor[] interceptors)
+        => new(new DbContextOptionsBuilder<CharacterDbContext>(TestContexts.Options<CharacterDbContext>(connection))
+            .AddInterceptors(interceptors).Options);
 
     private static CharacterQuestRewardRequest Granting(Seed seed) => seed.Request with
     {

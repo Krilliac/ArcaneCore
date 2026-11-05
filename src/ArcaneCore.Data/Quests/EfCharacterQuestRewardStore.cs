@@ -1,4 +1,5 @@
 using System.Data;
+using System.Data.Common;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Spells;
@@ -12,6 +13,7 @@ using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Data.Quests;
 
@@ -21,10 +23,14 @@ namespace ArcaneCore.Data.Quests;
 /// (requested with status NONE, vmangos RewardQuest) may follow earlier rewards but still only
 /// claims the exact completed row it observed, so a duplicate claim conflicts.
 /// Serializable isolation makes concurrent claims contend on the same quest history;
-/// a provider serialization failure rolls back and a retry checks the durable guard.
+/// a provider serialization failure (SQLSTATE 40001) or deadlock (40P01) rolls back that attempt, and the store
+/// retries the whole attempt (writer lease, fenced transaction begin, every read and check) up to four attempts in all,
+/// 10-50 ms apart, stopping at once when the caller cancels. Each attempt starts from a cleared change tracker and a new
+/// transaction, so the durable guard is checked again on the retry. Only after the last attempt fails is the fault
+/// recorded and the exception thrown; any other failure is thrown at once without a retry.
 /// Character and quest queues must be drained by the caller before invoking this store.
 /// </summary>
-public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharacterQuestRewardStore
+public sealed class EfCharacterQuestRewardStore(CharacterDbContext db, ILogger<EfCharacterQuestRewardStore>? logger = null) : ICharacterQuestRewardStore
 {
     public async Task<QuestRewardCommitResult> CommitAsync(
         CharacterQuestRewardRequest request, CancellationToken cancellationToken = default)
@@ -55,7 +61,80 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
             throw new InvalidOperationException("The reward carries spell or reputation grants but the character model has no such table.");
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        for (int attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var failure = new AttemptFailure();
+            try
+            {
+                return await CommitOnceAsync(request, learnedSpells, reputationAfter, failure, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (attempt < MaxAttempts && !failure.RollbackFailed
+                && !cancellationToken.IsCancellationRequested && IsSerializationFailure(error))
+            {
+                // The attempt rolled back and its transaction and tracked state are gone: the next attempt re-reads everything.
+                logger?.LogDebug(error, "Quest reward serialization failure on attempt {Attempt} of {Max}; retrying", attempt, MaxAttempts);
+                await Task.Delay(Random.Shared.Next(RetryDelayMinMs, RetryDelayMaxMs + 1), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                // Recorded once, after the last attempt (or at once for a failure that is not retried).
+                Exception original = failure.Original ?? error;
+                if (original is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("data-quest-reward.commit", original);
+                }
+
+                throw;
+            }
+        }
+    }
+
+    private const int MaxAttempts = 4;
+    private const int RetryDelayMinMs = 10;
+    private const int RetryDelayMaxMs = 50;
+
+    /// <summary>What one attempt tells the retry loop: the error that began the failure and whether the rollback itself failed.</summary>
+    private sealed class AttemptFailure
+    {
+        public Exception? Original { get; set; }
+
+        public bool RollbackFailed { get; set; }
+    }
+
+    /// <summary>
+    /// True when <paramref name="error"/>, or anything it wraps (inner exceptions, aggregate members), is a provider
+    /// serialization failure (SQLSTATE 40001) or deadlock (40P01). SQLite carries no SqlState and never matches.
+    /// </summary>
+    internal static bool IsSerializationFailure(Exception? error)
+    {
+        for (Exception? current = error; current is not null; current = current.InnerException)
+        {
+            if (current is DbException { SqlState: "40001" or "40P01" })
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate && aggregate.InnerExceptions.Any(IsSerializationFailure))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<QuestRewardCommitResult> CommitOnceAsync(
+        CharacterQuestRewardRequest request, IReadOnlyList<uint> learnedSpells, IReadOnlyList<CharacterReputationRow> reputationAfter,
+        AttemptFailure failure, CancellationToken cancellationToken)
+    {
+        // A failed earlier attempt must leave nothing behind: no tracked entity, no open transaction.
+        db.ChangeTracker.Clear();
+        if (db.Database.CurrentTransaction is not null)
+        {
+            throw new InvalidOperationException("A previous quest reward attempt left its transaction open; discard the context.");
+        }
+
         await using SqliteRewardWriterCoordinator.Lease writer =
             await SqliteRewardWriterCoordinator.AcquireAsync(db, cancellationToken).ConfigureAwait(false);
         await using var transaction = await CharacterWriteFence.BeginTransactionAsync(
@@ -239,13 +318,10 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db) : ICharac
         }
         catch (Exception rewardError)
         {
-            if (rewardError is not OperationCanceledException and not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("data-quest-reward.commit", rewardError);
-            }
-
+            failure.Original = rewardError;
             await StoreTransactionRollback.RollbackAfterFailureAsync(transaction, rewardError, "Quest reward and rollback failed; discard the context.", rollbackError =>
             {
+                failure.RollbackFailed = true;
                 if (rollbackError is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("data-quest-reward.rollback", rollbackError);

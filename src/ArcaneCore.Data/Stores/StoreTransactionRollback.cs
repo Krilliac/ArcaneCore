@@ -25,10 +25,20 @@ internal static class StoreTransactionRollback
         {
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
         }
+        catch (InvalidOperationException completed) when (IsAlreadyCompleted(completed))
+        {
+            // A failed commit can leave the provider transaction already finished (Npgsql completes it): there is
+            // nothing left to roll back, and the commit error is the one the caller rethrows.
+        }
         catch (Exception rollbackError)
         {
             reportRollbackFailure(rollbackError);
             throw new AggregateException(failureMessage, commitError, rollbackError);
         }
     }
+
+    // Npgsql: "This NpgsqlTransaction has completed; it is either committed or rolled back". Any other
+    // InvalidOperationException from a rollback is a real failure and still surfaces.
+    private static bool IsAlreadyCompleted(InvalidOperationException error)
+        => error.Message.Contains("has completed", StringComparison.Ordinal);
 }

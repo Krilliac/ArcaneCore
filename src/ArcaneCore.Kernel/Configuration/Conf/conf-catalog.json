@@ -26088,6 +26088,11 @@
           "key": "2",
           "value": "System.Net.Sockets.SocketException",
           "text": true
+        },
+        {
+          "key": "3",
+          "value": "ArcaneCore.Data.Characters.Cluster.RealmLeaseNotHeldException",
+          "text": true
         }
       ],
       "daemons": "World",
