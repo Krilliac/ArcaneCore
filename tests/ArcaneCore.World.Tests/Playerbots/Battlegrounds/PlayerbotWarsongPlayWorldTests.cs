@@ -274,8 +274,9 @@ public sealed class PlayerbotWarsongPlayWorldTests
                 $"{p.Name} loops {PlayerbotMotion.LoopCount(p)} refused [{(PlayerbotMotion.TryGetState(p, out PlayerbotMotion.MotionState? motion) ? string.Join("; ", motion.Blacklist.Select(b => b.Destination)) : "")}]")));
             int looped = await context.ReadAsync(() => allies.Sum(a => PlayerbotMotion.LoopCount(a.RequirePlayer())));
             ScenarioContext.ExpectEqual(0, looped, "objectives given up as loops: " + loops);
+            string[] idleByBot = await context.ReadAsync(() => allies.Select(a => $"{a.RequirePlayer().Name} idleThinks={coordinator.Find(a.BotId)?.AI?.IdleThinks ?? 0}").ToArray());
             int idle = await context.ReadAsync(() => allies.Sum(a => coordinator.Find(a.BotId)?.AI?.IdleThinks ?? 0));
-            ScenarioContext.ExpectEqual(0, idle, "idle thinks: " + string.Join(" | ", allies.Select(a => coordinator.Describe(a.BotId)))
+            ScenarioContext.ExpectEqual(0, idle, "idle thinks: " + string.Join(" | ", allies.Select(a => coordinator.Describe(a.BotId))) + " :: " + string.Join(", ", idleByBot)
                 + Environment.NewLine + string.Join(Environment.NewLine, captures.Select(c => c.Describe())) + Environment.NewLine + loops);
         });
     }

@@ -393,8 +393,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     }
 
     /// <summary>
-    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference: a content reload
-    /// replaces them); null before the first scan.
+    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference, so a template registered
+    /// anew counts as a change; today <c>BattlegroundFeature.RegisterTemplates</c> runs only from its <c>Install</c>, once at start); null before the first scan.
     /// </summary>
     private (int Cap, bool Raise, BattlegroundTemplate? Wsg, BattlegroundTemplate? Ab, BattlegroundTemplate? Av)? _raiseWarned;
 
@@ -403,9 +403,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>
     /// One warning when the configured <c>MaxBotsPerBattleground</c> is overridden for some type: at the first scan after the world starts
-    /// (the templates are loaded), and again whenever a <c>.reload config</c> (or a template reload) changes the cap or which types are
-    /// raised. The key compares templates by reference: a config reload that changes neither does not repeat it, but registering a new
-    /// template instance (even with the same limits) warns again while the cap stays raised.
+    /// (the templates are loaded), and again whenever a <c>.reload config</c> changes the cap or which types are
+    /// raised. The key compares templates by reference: a config reload that changes neither does not repeat it. Registering a new
+    /// template instance (even with the same limits) would warn again while the cap stays raised, but no production path does that after Install.
     /// </summary>
     private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
     {

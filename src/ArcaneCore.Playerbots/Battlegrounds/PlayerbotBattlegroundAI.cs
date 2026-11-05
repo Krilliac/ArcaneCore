@@ -503,7 +503,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         PlayerbotAnomalies.Report(player, "bg", "objective-unreachable", detail);
     }
 
-    /// <summary>The refused walk to <paramref name="goal"/> as <c>objective-unreachable</c>, once per (goal, origin) cell pair until <see cref="Release"/>.</summary>
+    /// <summary>The refused walk to <paramref name="goal"/> as <c>objective-unreachable</c>, once per (goal, origin) cell pair until <see cref="Release"/>, and at most <see cref="PlayerbotObjectiveReports.MaxReports"/> (4) pairs a match: a bot refused from more spots reports only the first four, so counts of <c>bot-bg/objective-unreachable</c> are not comparable with those from before the cap.</summary>
     private void ReportWalkRefused(Player player, Vector3 goal, string detail)
     {
         if (_session.IsInChaosProbe || !_walkRefusals.TryAdd(goal, Position(player))) return;
