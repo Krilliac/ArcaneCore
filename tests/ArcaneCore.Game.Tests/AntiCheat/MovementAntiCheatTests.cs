@@ -730,6 +730,44 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
+    public void AHeartbeatSizedSkipAfterRealSilence_OnAnHonestClock_BuysNothingBeyondRealTime_SoAStepJustOverTheNoSkipLimitStillScores()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // Ordinary heartbeat cadence: both clocks advance 505 ms, and the client sends skip(505) that the 505 ms of silence
+        // supports. Run=7, so no skip allows 7 * 1.1 * 0.505 + 2 = 5.89 yd; the old budget (real time plus the 1000 ms slack)
+        // allowed 9.78 yd. A 9.7 yd step (2.7x run) must score.
+        var skips = new List<AntiCheatFinding>();
+        client.Received += 505;
+        client.Checks.NotifyTimeSkip(505, client.Received, skips);
+        client.ClientTime += 505;
+        client.X += 9.7f;
+        Assert.True(Has(client.Send(), AntiCheatViolation.Speed));
+        Assert.Empty(skips);
+        Assert.False(Has(client.All, AntiCheatViolation.Teleport));
+    }
+
+    [Fact]
+    public void AHeartbeatSizedSkip_OnAClockThatLeftTheSilenceOut_StillMakesTheClientWhole()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // 505 ms of real silence, only 50 ms on the client's clock, a skip of 505: budget = min(50 + 505, 505) = 505 ms, so a
+        // 4.5 yd step (under 5.89 yd) is clean, while without the skip the 50 ms budget (2.4 yd) would score it.
+        var skips = new List<AntiCheatFinding>();
+        client.Received += 505;
+        client.Checks.NotifyTimeSkip(505, client.Received, skips);
+        client.ClientTime += 50;
+        client.X += 4.5f;
+        Assert.False(Has(client.Send(), AntiCheatViolation.Speed));
+        Assert.Empty(skips);
+    }
+
+    [Fact]
     public void AFastClockWithSkipsOfAtLeast250msJustUnderTheSpamCadence_StillFires()
     {
         var client = new Client();
@@ -757,7 +795,7 @@ public sealed class MovementAntiCheatTests
     }
 
     [Fact]
-    public void MaxUintSkip_GrantsNoGraceAndNoCredit()
+    public void MaxUintSkip_GrantsNoGrace()
     {
         var client = new Client();
         client.Send(WorldOpcode.MsgMoveStartForward);

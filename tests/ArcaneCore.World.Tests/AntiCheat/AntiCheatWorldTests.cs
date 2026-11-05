@@ -119,6 +119,63 @@ public sealed class AntiCheatWorldTests
         Assert.Contains(seen, s => s.Player == "Legit" && s.Finding.Type == AntiCheatViolation.Teleport);
     }
 
+    /// <summary>
+    /// A run, a 500 ms silence, then a skip of 400 ms and a 4.5 yd step (4.5 yd is clean on 450 ms of budget, a Speed finding on the
+    /// 50 ms the client clock shows). <paramref name="otherPacketAfterSilence"/> sends a non-movement world packet (CMSG_PLAYED_TIME) just
+    /// before the skip: the session stamp then makes the silence the skip is supported by near zero.
+    /// </summary>
+    private static async Task<ConcurrentQueue<(string Player, AntiCheatFinding Finding)>> SkipAfterSilenceAsync(WorldTestHost host, string account, string name, bool otherPacketAfterSilence)
+    {
+        await ApplyAsync(host, new AntiCheatOptions());
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
+        await using WorldTestClient client = await host.EnterWorldAsync(account, name);
+        Mover mover = await MoverAsync(host, client, name);
+        ulong guid = await host.PlayerStateAsync(name, p => p.Guid.Value);
+
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        for (int i = 0; i < 5; i++)
+        {
+            await mover.StepAsync(100, 0.7f);
+        }
+
+        await SettledAsync(host, name, mover);
+        Assert.Empty(seen);
+
+        await Task.Delay(500);
+        if (otherPacketAfterSilence)
+        {
+            await client.SendAsync(WorldOpcode.CmsgPlayedTime, []);
+        }
+
+        var skip = new PacketWriter(12);
+        skip.WriteUInt64(guid);
+        skip.WriteUInt32(400);
+        await client.SendAsync(WorldOpcode.CmsgMoveTimeSkipped, skip.ToArray());
+
+        mover.Time += 50;
+        mover.X += 4.5f;
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, MovementFlags.Forward);
+        await SettledAsync(host, name, mover);
+        return seen;
+    }
+
+    [Fact]
+    public async Task ASkipBackedByRealSilence_BuysTheStepItsSilenceCovers_ButNotAfterAnotherWorldPacketClosedTheSilence()
+    {
+        // Control: no packet between the last movement and the skip, so the 500 ms of silence backs the 400 ms skip.
+        await using (WorldTestHost control = WorldTestHost.Start())
+        {
+            ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = await SkipAfterSilenceAsync(control, "SKIPC", "Skipcontrol", otherPacketAfterSilence: false);
+            Assert.Empty(seen);
+        }
+
+        // Same bytes, but a stamped world packet arrived just before the skip: the silence is gone, the skip buys nothing.
+        await using WorldTestHost host = WorldTestHost.Start();
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> forged = await SkipAfterSilenceAsync(host, "SKIPF", "Skipforged", otherPacketAfterSilence: true);
+        await host.WaitForWorldAsync(() => !forged.IsEmpty, "the unbacked skip's step is scored");
+        Assert.Contains(forged, s => s.Player == "Skipforged" && s.Finding.Type == AntiCheatViolation.Speed);
+    }
+
     [Fact]
     public async Task AManagedPlayerbot_IsNeverChecked_UnlessItsExemptionIsSwitchedOff()
     {

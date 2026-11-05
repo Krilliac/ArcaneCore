@@ -100,14 +100,14 @@ checked.
 capped by `MaxTimeSkipMs` and by the arrival silence before the skip (since the previous in-world packet the world handler
 saw, or the last packet the checks saw, whichever is later; no latency slack is added), and all the supported skips of one
 ten seconds together by `BaselineGapMs`. The step that spans a skip is judged against the client's own elapsed time plus that
-supported skip, capped by the receive interval plus the latency slack, so a 1 ms skip buys about 1 ms, and a blink right after
+supported skip, capped by the receive interval alone (no latency slack), so a skip never buys more than real elapsed time and a forged skip at heartbeat cadence gains nothing over the no-skip budget, and a blink right after
 a skip is still a teleport (and never the rubberband target). The independent clock keeps its window and is credited at most
 250 ms per ten seconds across all skips (jitter: an honest stall already shows in the receive side of the pair it spans), so a
 skip cadence under the spam threshold cannot neutralise a fast clock. The silence can read longer than it was: `CMSG_PING`, a
 cancelled trade and dropped packets are not stamped. The movement and acknowledgement timestamp checks keep running with no
-grace: a stalled client's clock only moves forward. A zero skip and an impossible one change nothing. Not yet scored, pending a
+grace: a stalled client's clock only moves forward. A zero or impossible skip adds no budget or credit, but still counts toward spam. Not yet scored, pending a
 real-client capture of a stall (see [Open questions](#open-questions)): a client clock that does not reflect the skip, and a skip
-backed by up to 3 s of real silence per window (it buys that much extra step budget, no more).
+whose clock already includes the silence is not helped by a skip. A packet hold longer than `BaselineGapMs` is a free re-baseline with or without a skip (pre-existing, tracked separately).
 
 **Terrain-dependent checks** run only where the data is in memory: the terrain tile with data for liquid and floor, the
 map's vmap tile (`VMapManager`, line of sight enabled) for all three. The probe never loads a tile; no data is never a finding.

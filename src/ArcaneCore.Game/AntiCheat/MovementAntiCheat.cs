@@ -86,7 +86,6 @@ public sealed class MovementAntiCheat
 
     private bool _hasLastSeen;
     private uint _lastSeenMs;
-    private int _lastLatencyMs;
 
     public MovementAntiCheat(AntiCheatOptions options)
     {
@@ -167,7 +166,6 @@ public sealed class MovementAntiCheat
         bool airborne = (m.Flags & Airborne) != 0;
         _hasLastSeen = true;
         _lastSeenMs = now;
-        _lastLatencyMs = sample.LatencyMs;
 
         CheckFlags(sample, findings);
         CheckRoot(sample, findings);
@@ -256,12 +254,12 @@ public sealed class MovementAntiCheat
     /// <see cref="AntiCheatOptions.MaxTimeSkipMs"/> and by the arrival silence before the skip (a stalled main loop sends
     /// nothing; no latency slack is added), and all the supported skips of one ten-second window together by
     /// <see cref="AntiCheatOptions.BaselineGapMs"/>. The step that spans a skip is judged against the client's own elapsed
-    /// time plus the supported skip, capped by real elapsed time plus the latency slack: a 1 ms skip buys about 1 ms. The
+    /// time plus the supported skip, capped by the receive interval alone (no slack): the skip never buys more than real elapsed time, so a client whose clock already counts the silence gains nothing and one whose clock left it out is made whole. The
     /// independent clock is credited at most 250 ms of that per window (jitter; an honest stall already shows in the receive
     /// side of the pair it spans), so a repeating cadence cannot sustain a fast clock. The silence runs from the later of
     /// <paramref name="previousPacketReceivedMs"/> (the previous inbound packet the world handler saw, when known; a CMSG_PING
     /// or a dropped packet is not stamped, so the silence can read longer than it was) and the last packet these checks saw.
-    /// A zero or impossible skip changes nothing.
+    /// A zero or impossible skip adds no budget and no clock credit, but it still counts toward the spam threshold and advances the silence reference.
     /// The timestamp-regression checks keep running: a stalled client's clock only moves forward.
     /// </para>
     /// </summary>
@@ -530,8 +528,8 @@ public sealed class MovementAntiCheat
 
     /// <summary>
     /// Speed and teleport over one step. The budget is the client's elapsed time capped by the receive interval plus the
-    /// latency slack; the step that spans a reported time skip adds the supported skip to the client side (still capped by the
-    /// receive interval plus the slack, so a client whose clock left out a real stall is not starved).
+    /// latency slack; the step that spans a reported time skip may add the supported skip to the client side, but that sum is capped by
+    /// the receive interval alone (no slack), so a skip never buys more than real elapsed time.
     /// </summary>
     private void CheckDistance(in MovementSample sample, float allowed, float horizontal, bool airborne, long skipBudgetMs, List<AntiCheatFinding> findings)
     {
@@ -544,7 +542,7 @@ public sealed class MovementAntiCheat
 
         uint receivedDelta = unchecked(now - _lastReceived);
         long wallMs = (long)receivedDelta + Slack(sample.LatencyMs);
-        long budgetMs = Math.Min((long)clientDelta + skipBudgetMs, wallMs);
+        long budgetMs = Math.Max(Math.Min((long)clientDelta, wallMs), Math.Min((long)clientDelta + skipBudgetMs, (long)receivedDelta));
         float speed = airborne ? allowed * AirborneSpeedFactor : allowed;
         float seconds = budgetMs / 1000f;
         float teleport = Options.TeleportDistance + (speed * seconds);
