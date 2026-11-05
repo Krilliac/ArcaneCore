@@ -61,6 +61,72 @@ public sealed class ClusterSupervisorConfigChecksTests
         Assert.Contains(errors, e => e.Problem.Contains("'b'", StringComparison.Ordinal) && e.Problem.Contains("Cluster:Fencing:Enabled=true", StringComparison.Ordinal));
     }
 
+    private static bool RealmRowRefused(ConfigIssue[] errors, string key) =>
+        errors.Any(e => e.Key == $"Cluster:Supervisor:Processes:{key}:Arguments" && e.Problem.Contains("World:Realm:Id=0", StringComparison.Ordinal));
+
+    // Row 61 (fail closed): a social or coordinator label is a whole World executable, so it must not write the realm row.
+    [Theory]
+    [InlineData("social", "--Cluster:Fencing:Enabled=true", null)]
+    [InlineData("coordinator", "--Cluster:Fencing:Enabled=true", null)]
+    [InlineData("social", "--Cluster:Fencing:Enabled=true --World:Realm:Id=1", null)]
+    [InlineData("coordinator", "--Cluster:Fencing:Enabled=true --World:Realm:Id=abc", null)]
+    [InlineData("social", "--Cluster:Fencing:Enabled=true", "2")]
+    [InlineData("social", "--Cluster:Fencing:Enabled=true", "0")]
+    [InlineData("social", "--World:Realm:Id=1", "0")]
+    [InlineData("social", "--World:Realm:Id 1", "0")]
+    [InlineData("social", "--World:Realm:Id=0 /World:Realm:Id=1", "0")]
+    [InlineData("social", "--World:Realm:Id=0 --World:Realm:Id=1", null)]
+    [InlineData("coordinator", "--World:Realm:Id=-1", null)]
+    [InlineData("Coordinator", "--World:Realm:Id=2", null)]
+    public void ASocialOrCoordinatorLabelledChild_ThatCouldWriteTheRealmRow_IsRefused(string role, string arguments, string? sharedRealmId)
+    {
+        Dictionary<string, string?> values = Base();
+        if (sharedRealmId is not null)
+        {
+            values["World:Realm:Id"] = sharedRealmId;
+        }
+
+        AddWorld(values, "b", role, arguments + " --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        Assert.True(RealmRowRefused(Errors(values), "b"));
+    }
+
+    [Theory]
+    [InlineData("social", "--World:Realm:Id=0", null)]
+    [InlineData("coordinator", "--World:Realm:Id=0", null)]
+    [InlineData("Social", "--World:Realm:Id=0", null)]
+    public void ASocialOrCoordinatorLabelledChild_WithRealmIdZero_IsNotRefusedForTheRealmRow(string role, string arguments, string? sharedRealmId)
+    {
+        Dictionary<string, string?> values = Base();
+        if (sharedRealmId is not null)
+        {
+            values["World:Realm:Id"] = sharedRealmId;
+        }
+
+        AddWorld(values, "b", role, arguments + " --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        Assert.False(RealmRowRefused(Errors(values), "b"));
+    }
+
+    [Fact]
+    public void ASocialChild_WithSupervisorDisabled_IsNotRefusedForTheRealmRow()
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "b", "social", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+        values["Cluster:Supervisor:Enabled"] = "false";
+
+        Assert.False(RealmRowRefused(Errors(values), "b"));
+    }
+
+    [Fact]
+    public void ACombinedChild_IsNotRefusedForTheRealmRowLabel()
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "world", "combined", string.Empty);
+
+        Assert.False(RealmRowRefused(Errors(values), "world"));
+    }
+
     [Fact]
     public void TwoWorldChildren_WithoutFencing_AreRefused()
     {
