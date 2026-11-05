@@ -140,6 +140,7 @@ public sealed class GmStreamCommandsTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ADemotedGm_LosesTheSubscriptionsAndTheFeed_AfterTheAccountStoreRankDrops()
     {
         await using WorldTestHost host = WorldTestHost.Start();
@@ -160,7 +161,10 @@ public sealed class GmStreamCommandsTests
         Assert.Equal(AccountSecurity.GameMaster, player.Security);
         await WorldTestHost.WaitForAsync(() => stream.Subscriptions(guid).Count == 0, "the demoted GM's subscriptions to end after the stored rank is re-read");
 
+        // The session still caches GameMaster, so the GM can ask for the feed again: it must be refused and nothing delivered.
+        Assert.True(stream.Subscribe(guid, "alpha"));
         stream.Publish("alpha", "after the demotion");
+        await WorldTestHost.WaitForAsync(() => stream.Subscriptions(guid).Count == 0, "the re-subscription of a demoted GM to be ended");
         Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgMessagechat);
         Assert.False(stream.IsActive);
     }

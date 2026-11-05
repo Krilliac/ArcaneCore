@@ -19,7 +19,7 @@ namespace ArcaneCore.World.Gm.Diagnostics;
 /// transfer (<see cref="WorldRuntime.RetireDetachedPlayer"/> raises <see cref="WorldRuntime.PlayerLoggingOut"/>). A session caches its
 /// rank at login and nothing tells a live session when the account is demoted (the realm console's <c>account set-gmlevel</c> only applies at the
 /// next login), so the feature re-reads each subscribed GM's account from <see cref="IAccountStore"/> every <see cref="RankRecheckMs"/> ms,
-/// off the world thread: a subscriber whose stored rank is below <see cref="AccountSecurity.GameMaster"/> (or whose account is gone) loses every
+/// on the thread pool in a service scope of its own: a subscriber whose stored rank is below <see cref="AccountSecurity.GameMaster"/> (or whose account is gone) loses every
 /// subscription on the next tick. A demotion therefore ends the feed within about a second plus one store read, not at the next login. If the
 /// store read fails the cached rank stands and the read is retried at the next interval. Game code publishes
 /// through <see cref="WorldRuntime.GmTrace"/> (set here) and guards its decoding and formatting with <see cref="GmTraceGuard.Wants"/>;
@@ -74,7 +74,14 @@ public sealed class GmStreamFeature : IWorldFeature
         }
         else if (!_storedRank.IsEmpty)
         {
-            _storedRank.Clear();
+            // Nobody is subscribed: forget the ranks that allow the feed, but keep every demotion so a GM who re-subscribes is still refused.
+            foreach (ObjectGuid gm in _storedRank.Keys)
+            {
+                if (!IsDemotedInStore(gm))
+                {
+                    _storedRank.TryRemove(gm, out _);
+                }
+            }
         }
 
         Stream.Drain(_deliver);
@@ -88,8 +95,9 @@ public sealed class GmStreamFeature : IWorldFeature
         {
             if (IsDemotedInStore(gm))
             {
+                // The entry stays (until a later read shows the rank restored, or the GM logs out): the cached session rank is still
+                // GameMaster, so the GM can run ".arcane stream on" again, and the next tick or delivery must refuse it at once.
                 Stream.UnsubscribeAll(gm);
-                _storedRank.TryRemove(gm, out _);
             }
         }
 
@@ -100,13 +108,27 @@ public sealed class GmStreamFeature : IWorldFeature
         }
 
         _sinceRecheckMs = 0;
-        foreach (ObjectGuid gm in subscribers)
+        var toRead = new HashSet<ObjectGuid>(subscribers);
+        foreach (ObjectGuid gm in _storedRank.Keys)
+        {
+            if (IsDemotedInStore(gm))
+            {
+                toRead.Add(gm); // keep reading a demoted GM's account so a restored rank lifts the refusal
+            }
+        }
+
+        foreach (ObjectGuid gm in toRead)
         {
             if (_world?.FindOnlinePlayer(gm) is { Session: WorldSession { AccountName.Length: > 0 } session }
-                && session.Services.GetService<IAccountStore>() is { } store
+                && session.Services.GetService<IServiceScopeFactory>() is { } scopes
                 && _inFlight.TryAdd(gm, 0))
             {
-                _ = RecheckAsync(gm, session, store);
+                // Resolved here, on the world thread: the session's own scope must not be touched from the pool (it ends with the
+                // session), so the read runs in a fresh scope of its own.
+                ILogger logger = session.Logger;
+                string accountName = session.AccountName;
+                int accountId = session.AccountId;
+                _ = Task.Run(() => RecheckAsync(gm, session, scopes, logger, accountName, accountId));
             }
         }
     }
@@ -117,18 +139,25 @@ public sealed class GmStreamFeature : IWorldFeature
             && _world?.FindOnlinePlayer(gm) is { } player
             && ReferenceEquals(player.Session, stored.Session);
 
-    /// <summary>Thread pool. Reads the account's current rank and records it for the world thread; never throws.</summary>
-    private async Task RecheckAsync(ObjectGuid gm, WorldSession session, IAccountStore store)
+    /// <summary>Thread pool, own service scope; touches nothing of the session but the reference it records. Reads the account's current rank and records it for the world thread; never throws.</summary>
+    private async Task RecheckAsync(ObjectGuid gm, WorldSession session, IServiceScopeFactory scopes, ILogger logger, string accountName, int accountId)
     {
         try
         {
-            Account? account = await store.FindByUsernameAsync(session.AccountName).ConfigureAwait(false);
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            IAccountStore? store = scope.ServiceProvider.GetService<IAccountStore>();
+            if (store is null)
+            {
+                return;
+            }
+
+            Account? account = await store.FindByUsernameAsync(accountName).ConfigureAwait(false);
             _storedRank[gm] = (session, account?.Security ?? AccountSecurity.Player);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
         {
-            session.Services.GetService<ILogger<GmStreamFeature>>()?.LogFault("gm.stream-rank-recheck", ex,
-                "GM stream: re-reading the rank of account {Account} failed; the cached rank stands until the next interval", session.AccountId);
+            logger.LogFault("gm.stream-rank-recheck", ex,
+                "GM stream: re-reading the rank of account {Account} failed; the cached rank stands until the next interval", accountId);
         }
         finally
         {
@@ -156,7 +185,6 @@ public sealed class GmStreamFeature : IWorldFeature
         if (player.Security < AccountSecurity.GameMaster || IsDemotedInStore(line.Gm))
         {
             Stream.UnsubscribeAll(line.Gm); // Drain delivers outside the stream's lock, so this is safe here
-            _storedRank.TryRemove(line.Gm, out _);
             return;
         }
 
