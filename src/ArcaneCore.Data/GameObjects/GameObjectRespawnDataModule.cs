@@ -25,7 +25,8 @@ public sealed class GameObjectRespawnRow : IRespawnRow
 }
 
 /// <summary>
-/// Game object respawn times of the characters database: a restart no longer brings a looted chest or a mined node back at once. The
+/// Game object respawn times of the characters database: a restart no longer brings a looted chest or a mined node back at once, for a spawn
+/// that is not a pool or spawn-group member (pool members, which most ore nodes and chests are, are not stored). The
 /// counterpart of <see cref="Creatures.CreatureRespawnDataModule"/> (docs/areas/creature-movement-spawns.md).
 /// <para>
 /// <b>Characters version 68</b>: the next free number after realm authority leases (67). It is named once here; tests read

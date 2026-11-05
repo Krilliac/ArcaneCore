@@ -3,7 +3,9 @@
 What the realm-list screen shows for a realm, and how the world and logon daemons agree on it. The client has three
 visible things per realm: a name colour (grey and not selectable when the realm is offline, red, green, or gold), a
 population text, and a character count. This page covers the first and the last; the population is
-`World:Realm:PlayerLimit` ([installation](../guide/installation.md) section 4).
+`World:Realm:PlayerLimit` ([installation](../guide/installation.md) section 4). The population hint is 2 x sessions / `PlayerLimit`
+where sessions is every session in the session registry, playerbot sessions included, so a realm full of bots reads as busy
+(`RealmStatusFeature`, vmangos `World::AddSession_`, World.cpp:340-353).
 
 Reference: vmangos `realmd/AuthSocket.cpp:1050-1135` (`LoadRealmlistAndWriteIntoBuffer`), `shared/Common.h:149-160`
 (`RealmFlags`), `mangosd/Master.cpp:215,330`. The colours and the status text come from the client's own
