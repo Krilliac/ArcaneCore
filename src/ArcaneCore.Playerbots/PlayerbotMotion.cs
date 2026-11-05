@@ -735,10 +735,25 @@ internal static partial class PlayerbotMotion
     /// <summary>
     /// Land after <see cref="StartFall"/>: MSG_MOVE_FALL_LAND at <paramref name="landing"/> with the time the fall took, as a client
     /// sends it; the server applies vmangos' fall damage (<c>Player::HandleFall</c>). True when the bot stands there afterwards.
+    /// Into deep water the fall ends at the surface instead: a client that drops into swimmable water sends MSG_MOVE_START_SWIM at swim
+    /// depth (<see cref="FallObserver"/> ends the fall on it) and never lands on the seabed, so no fall damage is taken. When
+    /// <paramref name="landing"/> is the floor under such water, the bot is put at swim depth under the surface above it.
     /// </summary>
     internal static bool Land(WorldSession session, Player player, Vector3 landing, float heading, uint fallTimeMs)
     {
         Of(player).World = session.World;
+        if (player.Map is { } map)
+        {
+            float collisionHeight = player.Locomotion.CollisionHeight;
+            if (map.GetLiquidStatus(landing.X, landing.Y, landing.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) != LiquidStatus.NoWater
+                && LiquidEnvironment.IsSwimDepth(map, landing.X, landing.Y, landing.Z, collisionHeight))
+            {
+                float swimZ = MathF.Max(landing.Z, liquid.Level - (collisionHeight * 0.75f) - SwimDepthEpsilonYards);
+                return Send(session, player, WorldOpcode.MsgMoveStartSwim, landing with { Z = swimZ }, heading, walk: false, moving: false,
+                    session.World.NowMs, budgeted: false, swim: true);
+            }
+        }
+
         return Send(session, player, WorldOpcode.MsgMoveFallLand, landing, heading, walk: false, moving: false, session.World.NowMs,
             budgeted: false, fallTime: fallTimeMs);
     }
@@ -761,7 +776,8 @@ internal static partial class PlayerbotMotion
 
     /// <summary>
     /// Step off a transport onto <paramref name="world"/>: MSG_MOVE_HEARTBEAT without MOVEFLAG_ONTRANSPORT and without the transport block,
-    /// as a client sends once its feet leave the car. True when the server stored it.
+    /// as a client sends once its feet leave the car. Into swim depth the position is lowered to it (<see cref="SwimHeight(Map, float, Vector3)"/>)
+    /// and the packet is MSG_MOVE_START_SWIM (MSG_MOVE_STOP_SWIM when a swimming bot steps onto land, as <see cref="SendStep"/> does). True when the server stored it.
     /// </summary>
     internal static bool SendStepOff(WorldSession session, Player player, Vector3 world, float heading)
     {
@@ -781,7 +797,8 @@ internal static partial class PlayerbotMotion
             swim = LiquidEnvironment.IsSwimDepth(map, world.X, world.Y, world.Z, collisionHeight);
         }
 
-        WorldOpcode opcode = swim && (player.Movement.Flags & MovementFlags.Swimming) == 0 ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveHeartbeat;
+        bool swimming = (player.Movement.Flags & MovementFlags.Swimming) != 0;
+        WorldOpcode opcode = swim == swimming ? WorldOpcode.MsgMoveHeartbeat : swim ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
         return Send(session, player, opcode, world, heading, walk: false, moving: false, session.World.NowMs,
             budgeted: false, seat: new Seat(false, 0, default, 0), swim: swim);
     }
@@ -1383,16 +1400,27 @@ internal static partial class PlayerbotMotion
     internal const float SwimSurfaceStoreyYards = 3f;
 
     /// <summary>
-    /// Whether both heights lie in one liquid column, within <see cref="SwimSurfaceStoreyYards"/> under its surface and at most
-    /// <see cref="SurfaceBandYards"/> over it: a swimmer and the surface a mesh route runs on over deep water are one storey, however tall the
-    /// bot. A deck over the water (higher than the band) and a seabed are not.
+    /// Whether both heights lie under the same liquid surface: each within <see cref="SwimSurfaceStoreyYards"/> under its liquid level and at
+    /// most <see cref="SurfaceBandYards"/> over it, and the two levels equal within <see cref="SurfaceLevelToleranceYards"/>. A swimmer and the
+    /// surface a mesh route runs on over deep water are one storey, however tall the bot. A deck over the water (higher than the band), a
+    /// step between two liquid levels (a stepped river, a waterfall) and a floor more than <see cref="SwimSurfaceStoreyYards"/> under the
+    /// surface are not; a floor within that distance under the surface is, as a swimmer's own depth is.
     /// </summary>
     private static bool OnOneWaterSurface(Map map, Vector3 from, Vector3 to)
-        => InSurfaceBand(map, from) && InSurfaceBand(map, to);
+        => TryBand(map, from, out float fromLevel) && TryBand(map, to, out float toLevel)
+            && MathF.Abs(fromLevel - toLevel) <= SurfaceLevelToleranceYards;
 
-    private static bool InSurfaceBand(Map map, Vector3 at)
-        => map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) != LiquidStatus.NoWater
-            && at.Z >= liquid.Level - SwimSurfaceStoreyYards && at.Z <= liquid.Level + SurfaceBandYards;
+    /// <summary>How far two liquid levels may differ and still be one surface for <see cref="OnOneWaterSurface"/> (a judgement call: wave and cell-interpolation noise).</summary>
+    internal const float SurfaceLevelToleranceYards = 0.1f;
+
+    private static bool TryBand(Map map, Vector3 at, out float level)
+    {
+        level = 0f;
+        if (map.GetLiquidStatus(at.X, at.Y, at.Z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid) == LiquidStatus.NoWater
+            || at.Z < liquid.Level - SwimSurfaceStoreyYards || at.Z > liquid.Level + SurfaceBandYards) return false;
+        level = liquid.Level;
+        return true;
+    }
 
     /// <summary>The most one step of a stair may rise or fall, however long the step is (a stalled bot's step covers many yards): well under a storey (the Orgrimmar slab is 18.6 yd), over a heartbeat's rise on the Deathknell stairs (2.3 yd).</summary>
     internal const float StairStepMaxRiseYards = 3.5f;

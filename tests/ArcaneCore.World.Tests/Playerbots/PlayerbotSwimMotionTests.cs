@@ -422,6 +422,7 @@ public sealed class PlayerbotSwimMotionTests
 
                 // Control: onto the beach it does not swim.
                 Assert.True(PlayerbotMotion.SendStepOff(session, player, new Vector3(40f, Y, Ground), 0f));
+                Assert.Contains(WorldOpcode.MsgMoveStopSwim, ops);
                 Assert.False(player.Movement.HasFlag(MovementFlags.Swimming), $"the step-off onto land carries MOVEFLAG_SWIMMING ({player.Movement.Flags})");
                 Assert.False(player.Movement.HasFlag(MovementFlags.OnTransport));
                 return true;
@@ -536,6 +537,91 @@ public sealed class PlayerbotSwimMotionTests
                 return true;
             });
         }, ground: DeepGround, pathfinder: new SurfaceOnlyMesh(Surface, rayAvailable: false), blockedSight: true);
+
+    /// <summary>
+    /// A bot that drops into deep water: its landing is the seabed 18 yd under the surface (what PlayerbotFollowDrop and the elevator compute from
+    /// the collision floor). A client enters the water at swim depth and sends MSG_MOVE_START_SWIM, which ends the fall (FallObserver); it never lands
+    /// on the seabed. No MSG_MOVE_FALL_LAND, no fall damage, and the bot ends at swim depth under the surface, swimming.
+    /// </summary>
+    [Fact]
+    public async Task Land_OnTheSeabedUnderDeepWater_SendsStartSwimAtSwimDepth_WithoutAFallToTheSeabed()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Relocate(-40f, Y, Surface + 3f, 0f, host.World.NowMs);
+                Assert.True(PlayerbotMotion.StartFall(session, player, new Vector3(-40f, Y, Surface + 3f), 0f), "the fall did not start");
+                uint health = player.Health;
+                List<WorldOpcode> ops = RecordOpcodes(session);
+
+                Assert.True(PlayerbotMotion.Land(session, player, new Vector3(-40f, Y, DeepGround + 0.05f), 0f, 1500), "the landing was not stored");
+
+                Assert.Equal(WorldOpcode.MsgMoveStartSwim, Assert.Single(ops));
+                Assert.DoesNotContain(WorldOpcode.MsgMoveFallLand, ops);
+                AssertSwimmingAt(player, SwimZ(), "the landing in deep water");
+                Assert.Equal(health, player.Health);
+                return true;
+            });
+        }, ground: DeepGround);
+
+    /// <summary>Control: a landing on dry ground stays MSG_MOVE_FALL_LAND at the landing point.</summary>
+    [Fact]
+    public async Task Land_OnDryGround_StaysAFallLand()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.Relocate(40f, Y, Ground + 3f, 0f, host.World.NowMs);
+                Assert.True(PlayerbotMotion.StartFall(session, player, new Vector3(40f, Y, Ground + 3f), 0f), "the fall did not start");
+                List<WorldOpcode> ops = RecordOpcodes(session);
+
+                Assert.True(PlayerbotMotion.Land(session, player, new Vector3(40f, Y, Ground), 0f, 300), "the landing was not stored");
+
+                Assert.Equal(WorldOpcode.MsgMoveFallLand, Assert.Single(ops));
+                Assert.False(player.Movement.HasFlag(MovementFlags.Swimming), $"the landing on dry ground carries MOVEFLAG_SWIMMING ({player.Movement.Flags})");
+                return true;
+            });
+        });
+
+    /// <summary>
+    /// Validate keeps refusing a storey change that is not one water surface, with sight blocked and no mesh proof: a deck over the water
+    /// (beyond SurfaceBandYards) and a step between two liquid levels (a stepped river: the far tile's water is 6 yd higher).
+    /// </summary>
+    [Fact]
+    public async Task Validate_RefusesADeckOverTheWater()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Vector3 a = new(-40f, Y, Surface), deck = new(-39f, Y, Surface + 3f);
+                var route = new PlayerbotRoute([a, deck], 50f, navigated: true) { NextPoint = 1 };
+
+                Vector3? valid = PlayerbotMotion.Validate(player.Map!, route, 1, 1, new Vector3(-40f, Y, SwimZ()), deck, out string? reason);
+                Assert.True(valid is null, $"a deck 3 yd over the water was accepted at z={valid?.Z:F2}");
+                Assert.Equal("NoGroundSupport", reason);
+                return true;
+            });
+        }, ground: DeepGround, pathfinder: new SurfaceOnlyMesh(Surface, rayAvailable: false), blockedSight: true);
+
+    [Fact]
+    public async Task Validate_RefusesAStepBetweenTwoLiquidLevels()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Vector3 a = new(-1f, Y, Surface), upper = new(1f, Y, Surface + 6f);
+                var route = new PlayerbotRoute([a, upper], 2f, navigated: true) { NextPoint = 1 };
+
+                Vector3? valid = PlayerbotMotion.Validate(player.Map!, route, 1, 1, a, upper, out string? reason);
+                Assert.True(valid is null, $"a step from the water at {Surface} to the water at {Surface + 6f} was accepted at z={valid?.Z:F2}");
+                Assert.Equal("NoGroundSupport", reason);
+                return true;
+            });
+        }, ground: DeepGround, pathfinder: new SurfaceOnlyMesh(Surface, rayAvailable: false), blockedSight: true, landLiquid: Surface + 6f);
 
     /// <summary>A fresh start in the water is a start-forward that already swims; the next step is a plain heartbeat, never a swim transition.</summary>
     [Fact]
@@ -783,14 +869,14 @@ public sealed class PlayerbotSwimMotionTests
         return Vector2.Distance(before, new(player.X, player.Y));
     }
 
-    private static async Task RunAsync(Func<WorldTestHost, WorldSession, Task> body, float ground = Ground, IPathfinder? pathfinder = null, bool blockedSight = false, float? landGround = null)
+    private static async Task RunAsync(Func<WorldTestHost, WorldSession, Task> body, float ground = Ground, IPathfinder? pathfinder = null, bool blockedSight = false, float? landGround = null, float? landLiquid = null)
     {
         string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-swim-motion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
         try
         {
             File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), MapTileBytes(ground, Surface));
-            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(landGround ?? ground, null));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(landGround ?? ground, landLiquid));
             await using WorldTestHost host = WorldTestHost.Start(
                 configure: options => options.Maps.DataDirectory = dataDir,
                 configureServices: services => services.AddSingleton<ArcaneCore.World.Features.IWorldFeature, H1AnomalyKit.ManualClock>());

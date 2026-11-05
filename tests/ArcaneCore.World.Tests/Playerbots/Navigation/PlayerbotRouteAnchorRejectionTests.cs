@@ -229,7 +229,6 @@ public sealed class PlayerbotRouteAnchorRejectionTests
                 return (PlayerbotMotion.ConsumeLoop(player), PlayerbotMotion.IsBlacklisted(player, last), found);
             });
 
-
             Assert.Equal([1, 2, 0], counts);
             Assert.True(loopPending, "Expected the loop guard to fire at MaxRejectionsBeforeLoop route-blocked stops at one anchor.");
             Assert.True(lastBlacklisted, "Expected the third destination to be given up.");
