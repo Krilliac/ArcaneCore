@@ -616,6 +616,7 @@ public sealed class CharacterClaimWiringTests
                 record.Money = 98765;
                 record.MapId = 1;
                 (record.X, record.Y, record.Z, record.Orientation) = (1629.36f, -4373.39f, 31.25f, 3.14f);
+                (record.HomeMapId, record.HomeZoneId, record.HomeX, record.HomeY, record.HomeZ) = (1u, 14u, 1500.5f, -4400.25f, 40.75f);
             }
 
             Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
@@ -625,13 +626,14 @@ public sealed class CharacterClaimWiringTests
 
         Assert.True(reads.Fired);
         ObjectGuid guid = ObjectGuid.Player((uint)id);
-        (uint money, uint map) = await host.World.InvokeAsync(() =>
+        (uint money, uint map, HomeBind home) = await host.World.InvokeAsync(() =>
         {
             ArcaneCore.Game.Entities.Player player = host.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
-            return (player.Money, player.MapId);
+            return (player.Money, player.MapId, player.Home);
         });
         Assert.Equal(98765u, money);
         Assert.Equal(1u, map);
+        Assert.Equal(new HomeBind(1u, 14u, 1500.5f, -4400.25f, 40.75f), home); // the bind point the previous owner saved, not the one read before the claim
         Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
     }
 
@@ -801,6 +803,70 @@ public sealed class CharacterClaimWiringTests
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), "Dispose waited out its grace period: the poll did not observe the cancellation");
         await pending.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
+    }
+
+    /// <summary>
+    /// The offline arrival through the real target: the worker's token holds a committed transfer's claim, the client's session is not here, so the activation writes the position and
+    /// schedules the release of the received claim. The claim stays while the transfer is not completed and is released once it is, so a login of the character on another worker
+    /// claims it instead of being refused as a live owner's. (Without the target's scheduling, nothing would ever release it: no logout runs for a character nobody plays.)
+    /// </summary>
+    [Fact]
+    public async Task TheTargetsOfflineArrival_ReleasesTheReceivedClaim_OnceTheTransferIsCompleted()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Stranded");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        Guid transfer = await rig.CommitClaimMoveAsync(character, a, b); // committed to b, not yet completed
+        await using WorldTestHost host = rig.StartWorld(b);
+        rig.Holder.Current = b;
+        CharacterClaimService claims = host.WorldServices.GetRequiredService<CharacterClaimService>();
+        var target = new WorkerTransferTarget(
+            NodeB, host.World, new NoShadowLoader(), new NoSessionEntry(), sessionReady: _ => false,
+            offlineArrival: new CharacterStoreOfflineArrival(rig.Services.GetRequiredService<IServiceScopeFactory>()), claims: claims)
+        {
+            SessionOpenGrace = TimeSpan.FromMilliseconds(50),
+        };
+        PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(transfer, ObjectGuid.Player((uint)character).Value, NodeA, NodeB) with
+        {
+            CharacterId = character,
+            AccountId = 1,
+            NotLeaveTransport = false,
+        };
+
+        await target.ActivateTargetPlayerAsync(transfer, bundle, b).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)character)));
+        Assert.Equal(bundle.TargetMapId, (await rig.CharacterAsync(character))!.MapId); // the arrival was written
+        await Task.Delay(600); // several polls: the transfer is still in flight, so nothing is deleted
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
+        Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
+
+        await rig.Store.MarkCompletedAsync(transfer);
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)character)).GetAwaiter().GetResult() is null, "the received claim to be released");
+        await claims.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
+    }
+
+    /// <summary>A shadow loader for a target that must never load one (the offline path builds no shadow).</summary>
+    private sealed class NoShadowLoader : ITransferShadowLoader
+    {
+        public Task<ArcaneCore.Game.Entities.Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("the offline arrival loads no shadow");
+
+        public void Release(ArcaneCore.Game.Entities.Player shadow)
+        {
+        }
+    }
+
+    /// <summary>A session entry for a target that must never attach a player (the offline path has none).</summary>
+    private sealed class NoSessionEntry : ITransferSessionEntry
+    {
+        public bool TryAttach(ArcaneCore.Game.Entities.Player player) => throw new InvalidOperationException("the offline arrival attaches no player");
+
+        public void ResumeSaves(ArcaneCore.Game.Entities.Player player) => throw new InvalidOperationException("the offline arrival resumes no saves");
     }
 
     /// <summary>A scope factory that throws from the next N scope creations, then delegates.</summary>

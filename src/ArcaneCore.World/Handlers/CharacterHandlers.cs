@@ -395,13 +395,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
-        ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
-        var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
-        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
-        {
-            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
-        }
+        (RaceInfo? raceInfo, ClassInfo? classInfo, HomeBind home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
 
         if (raceInfo is null || classInfo is null || home.IsUnset)
         {
@@ -498,6 +492,24 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                 }
 
                 character = fresh;
+
+                // The checks made on the record read before the claim are made again on this one: the rename gate, the race and class data, and the bind point (the previous
+                // owner's final save may have moved it; the player's Home comes from here, not from the older record).
+                if (!await CharacterRename.MayLogInAsync(session, character).ConfigureAwait(false))
+                {
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                    return;
+                }
+
+                (raceInfo, classInfo, home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+                if (raceInfo is null || classInfo is null || home.IsUnset)
+                {
+                    session.Logger.LogError("[{Endpoint}] missing world data for character {Guid}", session.RemoteEndpoint, character.Id);
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                    return;
+                }
             }
         }
 
@@ -562,6 +574,20 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         CharacterSaveQueue? saveQueue = session.Services.GetService<CharacterSaveQueue>();
         QuestNpcFeature? questFeature = session.Services.GetService<QuestNpcFeature>();
         world.Post(() => EnterWorld(session, world, character, player, account, claimService, saveQueue, questFeature));
+    }
+
+    /// <summary>Race and class data for <paramref name="character"/>, and its bind point (the race and class start position when none is stored). Session task.</summary>
+    private static async Task<(RaceInfo? Race, ClassInfo? Class, HomeBind Home)> LoadLoginWorldDataAsync(IWorldDataStore worldData, CharacterRecord character)
+    {
+        RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
+        ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
+        var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
+        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
+        {
+            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
+        }
+
+        return (raceInfo, classInfo, home);
     }
 
     /// <summary>

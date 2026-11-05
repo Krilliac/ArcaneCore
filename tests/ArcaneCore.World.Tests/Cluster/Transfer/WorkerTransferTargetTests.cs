@@ -390,14 +390,27 @@ public sealed class WorkerTransferTargetTests : IDisposable
         Guid id = Guid.NewGuid();
         await target.TryReserveSlotAsync(id, 7, 1, 0);
         long reconnectTicket = 0;
-        _session.OnSend = () => reconnectTicket = claims.IssueTicketForReceivedClaim(7, worker); // the first packet of the arrival: the reconnect lands now
+        _session.OnSend = () =>
+        {
+            if (reconnectTicket == 0)
+                reconnectTicket = claims.IssueTicketForReceivedClaim(7, worker); // the first packet of the arrival: the reconnect lands now (once)
+        };
         _session.ThrowOnSend = true;
 
         await Assert.ThrowsAnyAsync<Exception>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), worker));
 
         Assert.True(reconnectTicket > 0, "the reconnect never ran inside the arrival");
-        Assert.Equal(1, LiveTicketCount(claims)); // the failed arrival's own ticket is gone, the reconnect's remains
+        Assert.Equal(new[] { reconnectTicket }, LiveTickets(claims)); // the failed arrival's own (older) ticket is gone, exactly the reconnect's remains
         Assert.False(target.WasActivated(id));
+    }
+
+    private static long[] LiveTickets(CharacterClaimService claims)
+    {
+        var live = (Dictionary<int, List<long>>)typeof(CharacterClaimService).GetField("_liveTickets", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!;
+        lock (typeof(CharacterClaimService).GetField("_pendingGate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!)
+        {
+            return [.. live.Values.SelectMany(tickets => tickets).Order()];
+        }
     }
 
     private static int LiveTicketCount(CharacterClaimService claims)
