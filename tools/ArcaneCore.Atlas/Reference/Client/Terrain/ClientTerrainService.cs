@@ -279,7 +279,7 @@ public sealed class ClientTerrainService
         {
             bytes = files.Read(path);
         }
-        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             _log.LogWarning("Client terrain: {Path} could not be read: {Message}", path, e.Message);
             return new WdtLoad(TileState.Rejected, $"{path} could not be read: {e.Message}", null, map, path);
@@ -314,7 +314,7 @@ public sealed class ClientTerrainService
         {
             bytes = files.Read(path);
         }
-        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
             _log.LogWarning("Client terrain: {Path} could not be read: {Message}", path, e.Message);
             return new AdtLoad(TileState.Rejected, $"{path} could not be read: {e.Message}", null, path, null);

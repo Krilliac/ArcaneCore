@@ -364,6 +364,33 @@ public sealed class LiveFeedTests
     }
 
     [Fact]
+    public async Task WhenIsConnectedTurnsFalse_TheEntityListOfTheEndedConnectionIsAlreadyEmpty()
+    {
+        // The reader marks the session ended before its close notice empties the store; a caller polling in that gap must not see
+        // "disconnected" next to the dead connection's entities. Repeated so the poll lands in the gap often.
+        for (int round = 0; round < 25; round++)
+        {
+            await using var rig = new LiveRig();
+            FakeFeedServer server = await rig.ConnectAsync();
+            await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3), Wire.Entity("2", "creature", 4, 5, 6)));
+            await Wait.UntilAsync(() => rig.Feed.Store.EntityCount == 2, "the frame is applied");
+
+            server.Drop();
+            DateTime deadline = DateTime.UtcNow + FakeFeedServer.Patience;
+            while (rig.Feed.IsConnected)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "the drop was never noticed");
+                await Task.Yield();
+            }
+
+            JsonObject status = rig.Feed.Status();
+            Assert.False(status["connected"]!.GetValue<bool>());
+            Assert.Equal(0, status["entities"]!["total"]!.GetValue<int>());
+            Assert.Equal(0, rig.Feed.Store.EntityCount);
+        }
+    }
+
+    [Fact]
     public async Task SubscribingTheSameMapAgain_ReplacesTheRememberedRequest()
     {
         await using var rig = new LiveRig();

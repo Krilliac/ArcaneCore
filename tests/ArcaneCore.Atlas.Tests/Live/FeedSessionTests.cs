@@ -106,4 +106,18 @@ public sealed class FeedSessionTests
         await c.Session.SendAsync(new JsonObject { ["op"] = "unsubscribe" }, CancellationToken.None);
         Assert.Equal("unsubscribe", (await c.Server.ReadAsync())["op"]!.GetValue<string>());
     }
+
+    [WindowsFact]
+    public async Task WhenTheServerEnds_TheClientPipeHandleIsReleasedBeforeTheCloseNotice_SoTheNameCanBeServedAgain()
+    {
+        await using Connected c = await OpenAsync(TimeSpan.FromSeconds(30));
+
+        c.Server.Drop();
+        await c.Sink.ClosedReason.Task.WaitAsync(FakeFeedServer.Patience);
+
+        // The fake server allows one instance. A client handle that outlived the reader would keep the old instance alive on Windows, and
+        // creating the next one on the same name would fail with "All pipe instances are busy".
+        await using var next = new FakeFeedServer(c.Server.PipeName);
+        Assert.False(c.Session.IsOpen);
+    }
 }

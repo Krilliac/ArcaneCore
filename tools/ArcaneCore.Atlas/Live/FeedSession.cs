@@ -363,6 +363,12 @@ internal sealed class FeedSession : IDisposable
 
         Volatile.Write(ref _ended, 1);
         FailWaiters(reason);
+
+        // The reader has ended, so nothing reads the pipe again: release the client handle now instead of leaving it to the finalizer.
+        // Windows keeps a pipe instance alive until every handle closes, so a leaked handle made the server's next instance on the
+        // same name fail with "All pipe instances are busy" and the reconnect could not happen. It is released before the close notice,
+        // so whoever sees "disconnected" can already reuse the name; the notice only reads Hello and PipeName, which survive disposal.
+        Dispose();
         _sink.Closed(this, reason);
     }
 

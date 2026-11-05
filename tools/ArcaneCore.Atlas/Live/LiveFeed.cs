@@ -98,10 +98,16 @@ public sealed class LiveFeed : IDisposable
     {
         get
         {
+            FeedSession? session;
             lock (_state)
             {
-                return _session is { IsOpen: true };
+                session = _session;
             }
+
+            // Reporting "disconnected" means the entity list is already gone: a connection that ended is retired here too, so a caller that
+            // sees false never reads entities of the dead connection in the gap before its close notice runs.
+            RetireIfEnded(session);
+            return session is { IsOpen: true };
         }
     }
 
@@ -675,6 +681,7 @@ public sealed class LiveFeed : IDisposable
             subscription = _subscription;
         }
 
+        RetireIfEnded(session);
         IReadOnlyList<MapSummary> summaries = Store.Summaries();
         var frames = new JsonArray();
         long missed = 0;
@@ -808,6 +815,15 @@ public sealed class LiveFeed : IDisposable
                 _currentId = 0;
                 Store.Clear();
             }
+        }
+    }
+
+    /// <summary>Retires <paramref name="session"/> when it has ended but its close notice has not emptied the store yet. Idempotent.</summary>
+    private void RetireIfEnded(FeedSession? session)
+    {
+        if (session is { IsOpen: false })
+        {
+            Retire(session.Id);
         }
     }
 
