@@ -232,6 +232,7 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.True(fromWaypoint > PlayerbotSiegeCommander.SiegeAnswerLeashYards);
         rig.Think();
         Assert.Null(rig.Ai.TargetUnit);
+        Assert.Equal("lead:siege-hold", rig.Ai.Step); // not chased: a chase that failed ends at fight:player:no-path with the same null target
     }), botLeads: true);
 
     /// <summary>With the step's answer spent the waiting leader only defends within WaypointYards: an attacker 20 yd from the waypoint is not targeted.</summary>
@@ -243,6 +244,7 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.True(fromWaypoint > PlayerbotSiegeCommander.WaypointYards);
         rig.Think();
         Assert.Null(rig.Ai.TargetUnit);
+        Assert.Equal("lead:siege-hold", rig.Ai.Step);
     }), botLeads: true);
 
     [Fact]
