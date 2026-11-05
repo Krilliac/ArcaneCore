@@ -289,11 +289,11 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             if (walking)
             {
                 ClearRepairTrip();
+                // The clock arms once the route was attempted, whatever the attempt returned: a route that is planned but never starts
+                // (a refused first stretch, a hazard, a stop) must still reach the give-up above. The planning think itself did not tick.
+                _visitArmed = true;
                 if (PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs))
-                {
-                    _visitArmed = true;
                     return true;
-                }
                 // A walk that does not go on (it ended at the spot, or a stale route, a stop or a hazard holds it) is no reason to hold a
                 // bot that is in reach: it is dropped and the NPC is used from here, so no lower rung moves the bot away. Out of reach
                 // it is as it was.

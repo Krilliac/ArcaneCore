@@ -1258,19 +1258,41 @@ public sealed class PlayerbotTownGoalsTests
         => await WithVisitingBot(60f, (player, goals, host, session, _) =>
         {
             float last = player.X;
-            for (int think = 0; think < 10; think++)
+            // 8 thinks of about 5.6 yards (800 ms at speed 7) is about 45 of the 56 to 58 yards to the 2 to 4 yard ring spot: the bot is still walking at the last think.
+            for (int think = 0; think < 8; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(4);
                 goals.BeginThink();
                 // The think reports a 2.5 s gap (8 s and more live); the bot's motion covers about 6 yards of it.
                 Assert.True(goals.Update(player, 2_500), $"think {think}: the walking visit was abandoned at x {player.X:F1}");
+                // This host has no managed-bot tick, and the new-route think sends START_FORWARD without pumping: elapse the motion, then pump it.
                 PlayerbotMotion.ElapseForTests(player, 800);
+                PlayerbotMotion.Pump(session, player, host.World.NowMs);
                 Assert.True(player.X - last >= 2f, $"think {think}: the test bot did not move 2 yards (x {last:F1} to {player.X:F1})");
                 last = player.X;
             }
 
             Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "a walking bot's NPC was set aside");
         });
+
+    /// <summary>
+    /// A route that is planned but never starts (TryAdvance is false from the first think) still reaches the give-up: the clock arms after the
+    /// first think that attempted the route, whatever it returned, and the planning think itself does not tick (#1476).
+    /// </summary>
+    [Fact]
+    public async Task ARouteThatNeverStarts_IsGivenUp_AndSetsTheNpcAside()
+        => await WithVisitingBot(25f, (player, goals, host, session, startX) =>
+        {
+            // MoveSpeed 0 makes PlayerbotNavigation.TryAdvance return false at every think (a route that is planned and never followed);
+            // the first think is the planning think and does not tick.
+            Think(session, goals, player, 2_500, updates: 1);
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "the planning think set the NPC aside");
+            for (int think = 0; think < 3; think++) Think(session, goals, player, 2_500, updates: 1);
+            Assert.False(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "set aside before the bound");
+            Think(session, goals, player, 2_500, updates: 1);
+            Assert.True(goals.Suspensions!.IsEntrySuspended(TownVendorFixture.Entry, host.World.NowMs), "a route that never started was not given up");
+            Assert.True(Math.Abs(player.X - startX) < 1f, "the bot moved: the test does not model a route that never starts");
+        }, configure: configured => configured.MoveSpeed = 0f);
 
     /// <summary>Two Updates in one think tick the stuck clock once; a think adds at most the cap.</summary>
     [Fact]
