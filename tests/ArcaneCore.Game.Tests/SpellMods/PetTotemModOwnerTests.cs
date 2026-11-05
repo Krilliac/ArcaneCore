@@ -143,6 +143,39 @@ public sealed class PetTotemModOwnerTests
     }
 
     [Fact]
+    public void AModOnTheOwner_DoesNotRefreshAGuardiansPassive()
+    {
+        const uint passive = 947010;
+        const uint damageMod = 947011;
+        using PetTestKit kit = new(
+        [
+            InFamily(Spell(passive, Effect(SpellEffectName.ApplyAura, 1, aura: AuraType.Dummy)) with
+            {
+                Attributes = SpellAttributes.Passive,
+                Duration = new SpellDuration(-1, 0, -1),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            }),
+            Pct(damageMod, SpellModOp.Damage, 10),
+        ]);
+        (Player owner, _) = kit.AddPlayer(1);
+        Creature pet = SummonPet(kit, owner);
+        Assert.Equal(SummonKind.Pet, pet.Summon!.Kind);
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, PetTestKit.GuardianSpell));
+        Creature guardian = Assert.Single(kit.Creatures.Creatures, c => c.Guid != pet.Guid && c.Summon?.Kind == SummonKind.Guardian);
+        kit.Spells.System.CastSpell(guardian, passive, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Spells.System.CastSpell(pet, passive, SpellCastTargets.ForSelf(), triggered: true);
+        SpellAuraHolder guardianBefore = Assert.Single(kit.Spells.System.GetAuras(guardian), h => h.Spell.Id == passive);
+        SpellAuraHolder petBefore = Assert.Single(kit.Spells.System.GetAuras(pet), h => h.Spell.Id == passive);
+
+        kit.Spells.System.LearnSpell(owner, damageMod);
+
+        // CONTROLLED_PET | CONTROLLED_TOTEMS only (SpellAuras.cpp:1075): the guardian keeps its holder, the pet gets a new one.
+        Assert.Same(guardianBefore, Assert.Single(kit.Spells.System.GetAuras(guardian), h => h.Spell.Id == passive));
+        Assert.NotSame(petBefore, Assert.Single(kit.Spells.System.GetAuras(pet), h => h.Spell.Id == passive));
+    }
+
+    [Fact]
     public void APetsCast_ReadsButNeverSpendsTheOwnersCharges()
     {
         using PetTestKit kit = new(

@@ -160,6 +160,22 @@ public sealed class SpellModChargeTests
     }
 
     [Fact]
+    public void ATriggeredCast_LeavesARangeCharge_AtItsOriginalCount()
+    {
+        (SpellTestKit kit, Player caster, Player target) = Setup(RangeShape);
+        using (kit)
+        {
+            // vmangos reaches CheckRange only for a non-triggered cast (Spell.cpp:5703-5707), so a triggered cast spends no range charge.
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+            kit.Advance(2100);
+            FlushSpellBatch(kit);
+
+            Assert.Equal(1, ModOf(kit, caster, RangeShape, SpellModOp.Range)!.Charges);
+            Assert.True(kit.System.HasAura(caster, RangeShape));
+        }
+    }
+
+    [Fact]
     public void TheFirstCheckCast_DoesNotSpendACostModCharge()
     {
         (SpellTestKit kit, Player caster, Player target) = Setup(FreeCast);

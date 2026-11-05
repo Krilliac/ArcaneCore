@@ -631,15 +631,17 @@ public sealed partial class SpellSystem
         }
 
         Unit? unitTarget = ResolveUnitTarget(caster, targets, spell);
-        // vmangos Spell::prepare (Spell.cpp:3395, :3436): the cost is read without spending mod charges, the first CheckCast spends the
-        // charges of the range, radius and jump-target mods it reads (Spell.cpp:6896, :6917, :2061-2062; a failed CheckCast restores them in
+        // vmangos Spell::prepare (Spell.cpp:3395, :3436): the cost is read without spending mod charges, the first CheckCast of a non-triggered
+        // cast spends the charges of the range, radius and jump-target mods it reads (Spell.cpp:6896, :6917, :2061-2062; a failed CheckCast restores them in
         // finish(false)), the cast time is read after it with charges ("to prevent charge counting for first CheckCast fail"), the duration
         // never. An item cast has no power cost (Spell::CheckPower and TakePower return at once for m_CastItem, Spell.cpp:5053,7050-7052).
         SpellModScope? modScope = ModEngine?.CreateScope(caster, spell);
         SpellCastResult result;
         try
         {
-            using (BeginModCheckWindow(modScope))
+            // vmangos reaches CheckRange only inside `if (!m_IsTriggeredSpell) { if (!m_triggeredByAuraSpell) ...` (Spell.cpp:5703-5707), so a
+            // triggered or aura-triggered cast opens no window and spends no range charge.
+            using (!triggered && !triggeredByAura ? BeginModCheckWindow(modScope) : default)
             {
                 result = CheckCast(state, spell, targets, unitTarget, triggered, strict: true,
                     castItem: castItem, triggeringSpell: triggeringSpell, itemCategory: itemCategory);

@@ -50,16 +50,23 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// The pets (pet, guardians, mini pet) and totems that belong to <paramref name="owner"/> and have a spell state (vmangos
-    /// CallForAllControlledUnits with CONTROLLED_PET and CONTROLLED_TOTEMS, Unit.cpp). A snapshot, so a caller may edit the states.
+    /// The owner's real pet (UNIT_FIELD_SUMMON, vmangos Unit::GetPet; guardians and mini pets are separate CONTROLLED_GUARDIANS and
+    /// CONTROLLED_MINIPET bits that Aura::ReapplyAffectedPassiveAuras does not pass, SpellAuras.cpp:1075) and the totems that belong to
+    /// <paramref name="owner"/> and have a spell state (CONTROLLED_TOTEMS). The pet is an owner-keyed lookup; the totems are found by a
+    /// scan of the spell states because the totem slots are private to the totem system. A snapshot, so a caller may edit the states.
     /// </summary>
     internal List<Unit> ControlledPetsAndTotems(Player owner)
     {
         var found = new List<Unit>();
+        if (owner.GetPet() is { Summon.Kind: SummonKind.Pet } pet && pet.OwnerGuid == owner.Guid && _states.ContainsKey(pet.Guid))
+        {
+            found.Add(pet);
+        }
+
         foreach (UnitSpellState state in _states.Values)
         {
-            if (state.Unit is Creature creature && (creature.IsPet || creature.IsTotem) && creature.OwnerGuid == owner.Guid
-                && ReferenceEquals(creature.Map, owner.Map))
+            if (state.Unit is Creature creature && creature.OwnerGuid == owner.Guid && ReferenceEquals(creature.Map, owner.Map)
+                && creature.IsTotem)
             {
                 found.Add(creature);
             }

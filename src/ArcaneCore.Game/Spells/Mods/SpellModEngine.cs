@@ -17,8 +17,9 @@ public sealed partial class SpellModEngine : ISpellModEngine
 
     /// <summary>
     /// The operations vmangos reads with no spell (so no charge is touched): Player::AddGCD, AddCooldown, CalcThreat,
-    /// SpellEntry::CalculateDuration, the aura constructors (charges, activation time, speed/haste/attack power amounts) and the
-    /// proc chance (SpellAuras.cpp, ThreatManager.cpp:44, UnitAuraProcHandler.cpp:490).
+    /// SpellEntry::CalculateDuration, the aura constructors (charges, activation time, haste/attack power amounts) and the
+    /// proc chance (SpellAuras.cpp, ThreatManager.cpp:44, UnitAuraProcHandler.cpp:490). Speed is not listed: a holder added by a spell reads
+    /// it with the spell (SpellCaster.cpp:1209).
     /// </summary>
     private static bool ReadsWithoutSpell(SpellModOp op) => op is SpellModOp.Duration or SpellModOp.GlobalCooldown or SpellModOp.Cooldown
         or SpellModOp.Threat or SpellModOp.Charges or SpellModOp.ActivationTime or SpellModOp.ChanceOfSuccess or SpellModOp.Haste

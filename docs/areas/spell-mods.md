@@ -77,11 +77,13 @@ A unit standing in for a game object (`SpellSystem.CastForGameObject`, a wild tr
 ### Charges (`Player::DropModCharge`, `RestoreSpellMods`, `RemoveSpellMods`, `Player.cpp:17617-17783`)
 
 A cast gets a `SpellModScope` (`Spell::m_appliedMods`) when it is prepared. The engine spends charges only inside a **consume window** that
-`SpellSystem` opens around two phases: the cast-time read at prepare (after the first `CheckCast`, so a failed check spends nothing,
-`Spell.cpp:3436`) and the whole of `Cast()` from the re-check onwards, where the cost is read again with charges (`:3646-3658`,
-"in case of mana reduction buff proc while casting") and the effects and crit rolls run. Outside a window (checks, power checks) the
-engine only reads. Operations vmangos reads without a spell (duration, both cooldowns, threat, charges, activation time, chance of
-success, haste, attack power) never spend a charge. A spent mod with charges `> 0` goes to 0 -> `-1`: it is "depleted but pinned" and applies only
+`SpellSystem` opens around three phases: the first `CheckCast` of a non-triggered cast (only the range, radius and jump-target reads
+spend there; a triggered or aura-triggered cast opens no window, as vmangos reaches `CheckRange` only for a non-triggered spell,
+`Spell.cpp:5703-5707`), the cast-time read at prepare (after the first `CheckCast`, so a failed check spends nothing, `Spell.cpp:3436`)
+and the whole of `Cast()` from the re-check onwards, where the cost is read again with charges (`:3646-3658`, "in case of mana reduction
+buff proc while casting") and the effects and crit rolls run. Outside a window (the re-check, power checks, auto-repeat and next-swing
+checks) the engine only reads. Operations vmangos reads without a spell (duration, both cooldowns, threat, charges, activation time, chance of
+success, haste, attack power; speed only for a holder not added by a spell) never spend a charge. A spent mod with charges `> 0` goes to 0 -> `-1`: it is "depleted but pinned" and applies only
 to the casts whose scope holds it. A successful cast removes the aura of every pinned mod (`Spell::finish`, `:4399`); a channel does it
 when the channel starts (`:3834`); a cancelled or failed cast gives the charges back (-1 becomes 1; `:3534`, `:4364`). A percent mod on a zero
 value spends nothing; a flat CASTING_TIME mod is not spent when an instant-cast percent mod covers the spell (Patch 1.11, Nature's
@@ -137,12 +139,14 @@ information line with the remaining empty count instead of the warning.
 
 - **Operations**: every operation the catalog uses has a reader (`TalentModCoverage` reports none unread; its `Readers` list names the
   reading site of each and a test compares that list with the reads in the source, so wiring or removing one updates the list in the same
-  change). SPEED (`SpeedAuras`, `SpellAuras.cpp:3982`), ATTACK_POWER (`StatAuras`, `:5086-5219`) and CHARGES (the holder's proc charges at
-  creation, `SpellSystem.Auras.cs`, `:6693`) read the engine with no spell scope, so they spend nothing. HASTE (`AttackSpeedAuras`, `:4016`),
+  change). SPEED (`SpeedAuras`) reads with the spell for a holder added by a spell (vmangos `SpellCaster.cpp:1209`, so it spends a charge
+  inside the cast window; `SpellAuras.cpp:3978`/`:3982` is only the path for a holder not added by a spell). ATTACK_POWER (`StatAuras`,
+  `SpellAuras.cpp:5175-5219`) and CHARGES (the holder's proc charges at creation, `SpellSystem.Auras.cs`, `:6693`) read the engine with no
+  spell scope, so they spend nothing. HASTE (`AttackSpeedAuras`, `SpellAuras.cpp:5086-5135`),
   CHANCE_OF_SUCCESS (the proc chance, `UnitAuraProcHandler.cpp:490`), the aura-level RESIST_MISS_CHANCE (`ApplyReflectSchoolMods`, `:5430`)
   and MULTIPLE_VALUE (`DrainAuras`, `SpellSystem.PowerBurn.cs`, `SpellSystem.Combat.cs`, `SpellSystem.Mitigation.cs`) are wired too.
 - **Radius** is applied to every site vmangos `SetTargetMap` applies it to (`Spell.cpp:2051-2062`): area and random-near-caster targets,
-  caster-relative destination points (`SelectCasterRelativeLocation`, an effect with a radius index only; radius 0 stays 0, `:2988-2992`),
+  caster-relative destination points (`SelectCasterRelativeLocation`, an effect with a radius index only; radius 0 stays 0, `:3000`),
   area auras and persistent area auras (`HandleGroundEffects`).
 - **Charges**: a charge is spent by the first `CheckCast` in `Prepare` (only the range, radius and jump-target reads count there; a cost or
   cast-time read inside `CheckCast` is not counted, as vmangos `CheckPower` uses the cost computed before), then by the cast-time read, the
@@ -153,9 +157,11 @@ information line with the remaining empty count instead of the warning.
 - **Unswitched deviations, awaiting a developer decision** (no `Spells:Mods` option exists for either; the standing directive wants a default-retail switch, and neither retail behaviour is a sensible default):
   (1) a pet's or totem's cast reads its owner's mods but never spends the owner's charges (`SpellModEngine.CreateScope` returns no scope for a non-player). In vmangos the spell's `m_appliedMods` does record the spend (`DropModCharge`) but `Spell::finish` and `cancel` only call `RemoveSpellMods`/`RestoreSpellMods` when `m_caster->IsPlayer()` (`Spell.cpp:3534`, `:3564`, `:4399`), so retail leaves the owner's mod stuck at -1; a switch would reproduce that bug.
   (2) `PassiveReapply` stops re-entering after depth 2 (a recast passive that is itself a modifier). vmangos has no limit; the depth is a safety guard against a cycle of mutually affecting passives, and the claim that two levels cover the retail talent chains is **unverified** (no `Spell.dbc` here).
-- **Pets and totems** the player controls (a summoned pet, guardian, mini pet or totem owned by the player on the same map with a spell
-  state) are refreshed by `ReapplyAffectedPassiveAuras` too (`CallForAllControlledUnits`, `:1067-1073`), when
-  `Spells:Mods:OwnerModsForPetsAndTotems` is on. The set is found by scanning the spell system's unit states, not a per-owner list.
+- **Pets and totems** the player controls (the summoned pet in the owner's pet slot, or a totem owned by the player on the same map, with a spell
+  state) are refreshed by `ReapplyAffectedPassiveAuras` too (`CallForAllControlledUnits` with `CONTROLLED_PET | CONTROLLED_TOTEMS`,
+  `:1067-1075`), when `Spells:Mods:OwnerModsForPetsAndTotems` is on. Guardians and mini pets are not refreshed, as in vmangos. The pet is
+  found through the owner's pet guid; the totems by scanning the spell system's unit states, because the totem slots are private to the
+  totem system.
 - **Mask data**: vmangos corrects 99 masks from the classic SpellEffect.db2 in `sql/migrations/20240926142033_world.sql` (23 of them above
   32 bits) with `UPDATE ... WHERE` guard values that only equal the spell data after the `spell_affect` fold-in; evaluating them needs the
   imported spell data, so the importer does not apply them, and vmangos' `spell_effect_mod` table is not read either. Which list is
