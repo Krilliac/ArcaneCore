@@ -93,6 +93,7 @@ public sealed class SpellRulesFeatureTests
             SpellFeature spells = ((WorldSession)player.Session).Services.GetRequiredService<SpellFeature>();
             var vanilla = Assert.IsType<VanillaSpellCombatRules>(spells.System.CombatRules);
             Assert.Equal(22f, vanilla.Options.MagicHitFloorPercent);
+            Assert.IsType<ArcaneCore.Game.Stats.IntellectSpellCritSource>(vanilla.CritSource);
             Assert.Equal(3, spells.System.ApplicationRules.Count);
             Assert.IsType<ImmunityApplicationRule>(spells.System.ApplicationRules[0]);
             Assert.IsType<MechanicResistRule>(spells.System.ApplicationRules[1]);

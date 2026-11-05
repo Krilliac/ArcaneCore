@@ -44,7 +44,7 @@ maximum (Player.cpp:5356). The skill gain chance is a pure function; nothing cal
 Spell crit from intellect (`SpellCritTable`) is **not proven retail**: vmangos Unit.cpp:2604 and
 mangos-classic Player.cpp:4988 both carry the comment "from mangos 3462 for 1.12 MUST BE CHECKED", and
 mangos-classic adds "FIXME: Add base value and scaling for hunters" (Player.cpp:5009). The values are
-exactly the references' table; `SpellCritTable.VerifiedRetail` is `false`. Nothing consumes it yet.
+exactly the references' table; `SpellCritTable.VerifiedRetail` is `false`. `IntellectSpellCritSource` (an `ISpellCritSource`) feeds it into the spell crit roll: players get the table value from class, level and total intellect, other units a flat 5%. `SpellRulesCoreFeature` installs it. Warriors, rogues and hunters use the (0, 0, 10) filler row, so their base spell crit is about 0 (the hunter FIXME is open).
 
 ### 2. Player base data (`PlayerStatsDataModule`, `PlayerStatsDumpImporter`, `VMangosMigrationReader`)
 

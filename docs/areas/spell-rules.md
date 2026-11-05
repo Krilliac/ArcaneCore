@@ -83,8 +83,8 @@ returns. Features of this area live in namespace `ArcaneCore.World.Spells` so th
 - Frost aura state on stun (needs the aura-state service), fear/confuse/charm and root movement generators
   (the movement code reads the `Fleeing` / `Confused` flags and `SpellSystem.IsRooted`), weapon-dependent aura mods and
   swing timers on disarm, stun clearing the target guid.
-- `ISpellCritSource.Flat` gives every unit 5% crit until the stats lane merges the intellect-based chance
-  (`Unit.cpp:2597-2640`, marked "must be checked" by vmangos). Crit on a sitting victim uses the stand state only.
+- Base spell crit comes from `IntellectSpellCritSource` (installed by `SpellRulesCoreFeature`): players get `SpellCritTable` from class, level and intellect, other units 5%
+  (`Unit.cpp:2597-2640`, marked "must be checked" by vmangos). `ISpellCritSource.Flat` remains the fallback when no source is set. Crit on a sitting victim uses the stand state only.
 - Creature immunity data: `CreatureDataImmunities` (installed by `CreatureDataImmunityModule`) serves `creature_template.MechanicImmuneMask` /
   `SchoolImmuneMask` and the active `creature_immunities` set (world schema 61; see `content-import.md`). A dump that carries both (a cmangos / ClassicDB dump does) gets the union.
   Rows of type school (2) count as the template school mask (harmful spells of the school and its damage), type damage (3) absorbs damage of the school (spell hits, melee and every other absorb path, as mangos-classic Unit::IsImmuneToDamage) without making harmful spells of the school immune,
