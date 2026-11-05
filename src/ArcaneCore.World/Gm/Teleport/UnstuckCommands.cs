@@ -53,40 +53,75 @@ public sealed class UnstuckCommands : ICommandGroup
 
     private static bool Unstuck(CommandContext context, string text)
     {
-        Player player = context.Player;
-        SpellSystem? spells = context.Session.Services.GetService<SpellFeature>()?.System;
+        TryApply(context.Session.Services, context.Player, out string reply);
+        context.Reply(reply);
+        return true;
+    }
+
+    /// <summary>
+    /// The unstuck rules and effect for <paramref name="player"/> (world thread), as <c>.unstuck</c> applies them; the GM ticket assistant uses this for a
+    /// living author only. False with <see cref="Unavailable"/> when the rules refuse (nothing is changed); otherwise true with <see cref="Alive"/> (Undying
+    /// Soul cast, death when it expires) or <see cref="Dead"/> (a ghost: sickness, the cooldown and the trip to the graveyard). As in vmangos the ghost's
+    /// reply and penalty do not depend on that trip: with no graveyard or a refused teleport it stays where it is and still gets both. A caller that must
+    /// know whether the ghost moved makes its own trip between <see cref="Permitted"/> and <see cref="PenaliseGhost"/>.
+    /// </summary>
+    internal static bool TryApply(IServiceProvider services, Player player, out string reply)
+    {
+        if (Permitted(services, player) is not { } spells)
+        {
+            reply = Unavailable;
+            return false;
+        }
+
+        if (player.IsAlive)
+        {
+            if (spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false) != SpellCastResult.CastOk)
+            {
+                reply = Unavailable;
+                return false;
+            }
+
+            reply = Alive;
+        }
+        else
+        {
+            PenaliseGhost(spells, player);
+            services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
+            reply = Dead;
+        }
+
+        LogUse(services, player);
+        return true;
+    }
+
+    /// <summary>The spell system when the unstuck rules allow <paramref name="player"/> to use it now, otherwise null. Changes nothing. World thread.</summary>
+    internal static SpellSystem? Permitted(IServiceProvider services, Player player)
+    {
+        SpellSystem? spells = services.GetService<SpellFeature>()?.System;
         SpellInfo? undying = spells?.Store.Get(UndyingSoul);
-        if (spells is null || undying is null
+        bool refused = spells is null || undying is null
             || player.Combat.IsInCombat
             || BattlegroundManager.TypeOfMap(player.MapId) != BattlegroundType.None
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
             || !spells.IsSpellReady(player, undying)
             || player.Combat.DeathState == DeathState.Corpse
-            || player.Level < MinLevel)
-        {
-            context.Reply(Unavailable);
-            return true;
-        }
+            || player.Level < MinLevel;
+        return refused ? null : spells;
+    }
 
-        if (player.IsAlive)
-        {
-            spells.CastSpell(player, UndyingSoul, SpellCastTargets.ForSelf(), triggered: false);
-            context.Reply(Alive);
-        }
-        else
-        {
-            UnstuckFeature.ApplySickness(spells, player);
-            spells.RestoreCooldowns(player, [new PersistedCooldown(SpellCooldownKind.Spell, UndyingSoul,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + GhostCooldownMs)], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-            context.Session.Services.GetService<GraveyardFeature>()?.Service?.RepopAtGraveyard(player);
-            context.Reply(Dead);
-        }
+    /// <summary>What a ghost's unstuck costs: the sickness and the one-hour Undying Soul cooldown.</summary>
+    internal static void PenaliseGhost(SpellSystem spells, Player player)
+    {
+        UnstuckFeature.ApplySickness(spells, player);
+        spells.RestoreCooldowns(player, [new PersistedCooldown(SpellCooldownKind.Spell, UndyingSoul,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + GhostCooldownMs)], DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+    }
 
-        context.Session.Services.GetService<ILoggerFactory>()?.CreateLogger<UnstuckCommands>().LogInformation(
+    /// <summary>The log line of a use.</summary>
+    internal static void LogUse(IServiceProvider services, Player player)
+        => services.GetService<ILoggerFactory>()?.CreateLogger<UnstuckCommands>().LogInformation(
             "Player {Name} (guid {Guid}) used unstuck command at map {Map} ({X}, {Y}, {Z}).",
             player.Name, player.Guid.Low, player.MapId, player.X, player.Y, player.Z);
-        return true;
-    }
 }
 
 /// <summary>The expiry of Undying Soul (vmangos SpellAuras.cpp:1919-1944, Aura::HandleAuraDummy): an unstuck player dies.</summary>

@@ -947,9 +947,13 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
     }
 
     /// <summary>A provider's moderation step for <paramref name="ask"/>'s line (as it would be sent); any error fails the step.</summary>
-    private async Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? key, BotChatAsk ask, PlayerbotChatOptions options)
+    private Task<BotChatModeration> ModerateAsync(PlayerbotChatProviderOptions provider, string? key, BotChatAsk ask, PlayerbotChatOptions options)
+        => ModerateTextAsync(provider, key, Outgoing(ask, options).Text, options);
+
+    /// <summary>A provider's moderation step for <paramref name="line"/> (already stripped of personal data when that is on); any error fails the step.</summary>
+    private async Task<BotChatModeration> ModerateTextAsync(PlayerbotChatProviderOptions provider, string? key, string line, PlayerbotChatOptions options)
     {
-        string text = PlayerbotChatPrompts.Clean(Outgoing(ask, options).Text, PlayerbotChatPrompts.MaxLineLength);
+        string text = PlayerbotChatPrompts.Clean(line, PlayerbotChatPrompts.MaxLineLength);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
         deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 1, 60)));
         try
