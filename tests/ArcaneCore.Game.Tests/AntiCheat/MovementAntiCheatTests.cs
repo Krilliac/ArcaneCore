@@ -182,6 +182,35 @@ public sealed class MovementAntiCheatTests
         Assert.True(Has(client.All, AntiCheatViolation.TimeSync));
     }
 
+    [Theory]
+    [InlineData(1u)]
+    [InlineData(200u)]
+    [InlineData(500u)]
+    public void ABlink_StampedBehindThePreviousBlock_ScoresTeleport(uint behindMs)
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        client.Received += 500;
+        client.ClientTime -= behindMs; // behind the last block, within ClientTimeRegressionMs
+        client.X += 80;
+        List<AntiCheatFinding> findings = client.Send();
+        Assert.True(Has(findings, AntiCheatViolation.Teleport), "an 80 yard step behind the last stamp is a blink");
+        Assert.False(Has(findings, AntiCheatViolation.PacketTiming), "the stamp is inside the regression threshold, so the blink score is the only finding that can catch it");
+    }
+
+    [Fact]
+    public void AnOrdinaryStep_StampedBehindThePreviousBlock_IsNotScored()
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+        client.Received += 500;
+        client.ClientTime -= 100;
+        client.X += 1;
+        Assert.DoesNotContain(client.Send(), f => f.Type is AntiCheatViolation.Teleport or AntiCheatViolation.Speed);
+    }
+
     [Fact]
     public void ABlink_EightyYardsInOnePacket_ScoresTeleport_NotSpeed()
     {

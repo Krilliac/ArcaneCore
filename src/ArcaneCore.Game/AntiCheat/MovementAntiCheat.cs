@@ -567,7 +567,10 @@ public sealed class MovementAntiCheat
         int clientDelta = unchecked((int)(sample.Movement.Time - _lastMoveClientTime));
         if (clientDelta < 0)
         {
-            return; // a regression is its own finding; this step carries no usable time
+            // A stamp behind the previous block carries no usable client time, so the step gets none (as for an equal stamp):
+            // only the teleport slack, plus the supported time skip. Returning here made a block stamped 1..500 ms behind the
+            // last (under the regression finding's threshold) an unscored blink of any length.
+            clientDelta = 0;
         }
 
         uint receivedDelta = unchecked(now - _lastReceived);
