@@ -41,7 +41,8 @@ All new code is in `src/ArcaneCore.Game/Spells/Casters` (plus `src/ArcaneCore.Wo
   bonus and the absorb-shield bonus for it, and the crit rolls of direct damage and healing are skipped (a game object has no
   auras and never crits, `SpellCaster.h:320`); the target side still applies.
 - Spell power models damage done versus creature types, equipped-item restricted auras, class script modifiers (including the
-  owner's), talent spell mods and Ignite. Limits (see the `SpellBonusModule` header): the paladin seal exception for
+  owner's) and talent spell mods; Ignite's damage over time skips the done side (`SpellCaster.cpp:1571-1573`, its amount is a share of a
+  crit that already took it) and keeps the target side. Limits (see the `SpellBonusModule` header): the paladin seal exception for
   weapon-restricted percent auras, totems and pets using their owner's spell power (a totem or pet casts as itself, so the done auras, `ModDamageDone`, `ModHealingDone` and the percent and versus auras, are read from the totem or pet, where vmangos gives a totem its owner's whole bonus, `SpellCaster.cpp:1577-1581`, and adds a pet's `GetBonusDamage`, `:1685-1686`; the class script modifiers and the talent spell mods DAMAGE, DOT and SPELL_BONUS_DAMAGE do use the owner, the mods through `GetSpellModOwner` while `Spells:Mods:OwnerModsForPetsAndTotems` is on, see `docs/areas/spell-mods.md`), weapon-based periodic damage (left to the melee formulas) and the melee class SCHOOL_DAMAGE
   spells' `MeleeDamageBonusDone` (they take only the DAMAGE spell mod). Spell crit from intellect is installed by the spell rules
   feature (`IntellectSpellCritSource`).
