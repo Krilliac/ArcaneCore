@@ -223,7 +223,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
             if (!_holding)
             {
-                ReloadAuthority(authority);
+                BeginReloadAuthority(authority);
                 return; // nothing is written from this table until the read has replaced it
             }
 
