@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Content.Names;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Chat;
 using ArcaneCore.World.Chat;
@@ -59,6 +60,7 @@ public sealed class ChatWordFilterTests
     public void ATimedOutBlockRule_LogsOnce_WhileTheLedgerCountsEveryTimeout()
     {
         var ledger = new FaultLedger();
+        ledger.Configure(new DiagnosticsOptions { FaultLogLimit = 1 }); // one log per signature, then the ledger's once-a-minute throttle
         var logger = new CountingLogger();
         var filter = new ChatWordFilter(
             [new ChatWordFilterRule(77, @"(a+)+\1$", ChatWordFilterScope.Chat, ChatWordFilterAction.Block)],
@@ -72,7 +74,7 @@ public sealed class ChatWordFilterTests
         Assert.Equal(clean, filter.Apply(clean));
 
         Assert.Equal(3, ledger.Snapshot().Where(s => s.Site == "chat.word-filter-timeout").Sum(s => s.Count));
-        Assert.Equal(1, logger.Warnings); // rate limited to once a minute
+        Assert.Equal(1, logger.Warnings); // the ledger's throttle: the limit of one, then once a minute
         Assert.Contains("id 77", logger.LastMessage); // the warning names the rule
     }
 
