@@ -73,8 +73,9 @@ public sealed class PlayerbotQaScriptFactsTests
     [Fact]
     public void AKnownMissingEntry_IsStillReportedMissing()
     {
-        CatalogFacts facts = Facts(16079, "npc_theldren_trigger", 230); // Blackrock Depths: no reference script for the Theldren trigger
-        Assert.False(facts.HasScript(16079, 230));
-        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(16079, 230), facts).Cause);
+        // Blackrock Depths has instance scripts and the Theldren trigger now has its AI (DepthsNpcScripts); an unlisted ScriptName on that map is still missing.
+        CatalogFacts facts = Facts(99_999_002, "npc_unported_depths_unit", 230);
+        Assert.False(facts.HasScript(99_999_002, 230));
+        Assert.Equal(QaCause.MissingData, PlayerbotQaClassifier.Classify(Stall(99_999_002, 230), facts).Cause);
     }
 }
