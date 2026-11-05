@@ -40,7 +40,9 @@ public sealed class PageTextFeature : IWorldFeature
             if (scope.ServiceProvider.GetService<IPageTextStore>() is { } store)
             {
                 // Fail closed: a database that cannot be read refuses startup.
+#pragma warning disable ARC0006 // synchronous IWorldFeature.Attach runs once at startup before the world thread ticks and the realm accepts connections, so blocking the startup thread is intended (fail closed)
                 rows = store.LoadAsync().GetAwaiter().GetResult();
+#pragma warning restore ARC0006
             }
         }
 

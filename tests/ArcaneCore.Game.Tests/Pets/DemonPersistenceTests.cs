@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
@@ -274,7 +275,7 @@ public sealed class DemonPersistenceTests : IDisposable
             Assert.Null(_service.RestoreCurrentPet(warlock, current)); // IsPetNeedBeTemporaryUnsummoned
             Assert.True(warlock.PetGuid.IsEmpty);
             _spells.World.RunTick(100);
-            Assert.Empty(_creatures.Creatures.Where(c => c.IsPet));
+            Assert.DoesNotContain(_creatures.Creatures, c => c.IsPet);
             Assert.Equal(0u, Shards(warlock));
         }
 
@@ -316,7 +317,7 @@ public sealed class DemonPersistenceTests : IDisposable
         _spells.World.RunTick(100);
         await _service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
 
-        Assert.Empty(_creatures.Creatures.Where(c => c.IsPet));
+        Assert.DoesNotContain(_creatures.Creatures, c => c.IsPet);
         Assert.Equal(1u, Shards(warlock)); // given back at the death
         Assert.Null(store.Row);            // and the demon no longer holds the current slot
 

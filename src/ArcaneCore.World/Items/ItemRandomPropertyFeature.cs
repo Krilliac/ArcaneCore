@@ -61,7 +61,9 @@ public sealed class ItemRandomPropertyFeature : IWorldFeature
         {
             if (scope.ServiceProvider.GetService<IItemEnchantmentTemplateStore>() is { } store)
             {
+#pragma warning disable ARC0006 // synchronous IWorldFeature.Attach runs once at startup before the world thread ticks and the realm accepts connections, so blocking the startup thread is intended (fail closed)
                 chances = store.LoadAsync().GetAwaiter().GetResult();
+#pragma warning restore ARC0006
             }
         }
 

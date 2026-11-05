@@ -53,7 +53,7 @@ public sealed partial class EconomyFeature
     /// vmangos <c>if (HasUnitState(UNIT_STATE_FEIGN_DEATH)) RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c> in the seven auction handlers
     /// (AuctionHouseHandler.cpp:51-52 hello, 299-300 sell, 443-444 bid, 576-577 remove, 718-719 bidder list, 741-742 owner list, 777-778 item list):
     /// acting on the auction house ends a successful Feign Death; a resisted one holds no such state and is left alone
-    /// (<see cref="Spells.SpellSystem.BreakSuccessfulFeignDeath"/>). Without a spell feature nothing can be feigning.
+    /// (<see cref="ArcaneCore.Game.Spells.SpellSystem.BreakSuccessfulFeignDeath"/>). Without a spell feature nothing can be feigning.
     /// </summary>
     private void BreakFeignDeath(Player player) => _services.GetService<Spells.SpellFeature>()?.System.BreakSuccessfulFeignDeath(player);
 
