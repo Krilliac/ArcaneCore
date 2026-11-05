@@ -170,7 +170,7 @@ check main-rc124 1 "--stage main" 'no rerun: rc=124 is not a plain test failure'
 check main-rc255 1 "--stage main" 'no rerun: rc=255 is not a plain test failure' 'rerunning|FLAKY'
 # A suite killed before its totals: the reason says so and counts the result lines, and neither "executed 0 tests" nor "filter matched 0 tests" appears in it.
 tag=main-killed-plain
-check main-killed 1 "--stage main" 'main tests/ci/X\.slnf was killed \(rc=124\) before it reported totals (the log has 2 Passed and 0 Failed result lines)' 'executed 0 tests|filter matched 0 tests'
+check main-killed 1 "--stage main" 'main tests/ci/X\.slnf was killed \(rc=124\) before it reported totals \(the log has 2 Passed and 0 Failed result lines\)' 'executed 0 tests|filter matched 0 tests'
 tag=main-killed-filtered
 check main-killed 1 "--stage main --filter FullyQualifiedName~X" 'main tests/ci/X\.slnf was killed \(rc=124\) before it reported totals' 'filter matched 0 tests'
 tag=

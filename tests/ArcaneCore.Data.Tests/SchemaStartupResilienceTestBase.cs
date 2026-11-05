@@ -229,7 +229,7 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     /// The probe runs on its own databases, which are dropped when it is done.
     /// </summary>
     private static Task<int> FreshCreateDdlCountAsync(DatabaseProvider provider, string component)
-        => MeasureOnceAsync(FreshCreateDdl, (provider, component), async key =>
+        => MeasureOnceAsync<(DatabaseProvider Provider, string Component)>(FreshCreateDdl, (provider, component), async key =>
         {
             await using var databases = new TestDatabases();
             var counter = new CommandTap();
