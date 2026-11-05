@@ -280,6 +280,121 @@ public sealed class ScriptLocationTargetTests
         Assert.DoesNotContain(near.Guid.Value, rig.SpellGoHits());
     }
 
+    private const uint NearCaster38 = 990710;
+    private const uint CastTimeLocation = 990711;
+    private const uint LocationThenList = 990712;
+    private const uint UnitThenLocation = 990713;
+    private const int ListedByB = 99;
+
+    private static SpellInfo NearCasterSpell() => Spell(NearCaster38, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitScriptNearCaster))
+        with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+
+    [Fact]
+    public void Target38WithRows_AndNothingInRange_FailsTheCast_NoMatterTheKindOfRow()
+    {
+        // vmangos Spell::CheckScriptTargeting is the same search for 38 and 46; nothing found fails the cast (Spell.cpp:603-616).
+        using var rig = new Rig([NearCasterSpell()], [new SpellStore.ScriptTarget(NearCaster38, 0, Firecracker, 0)]);
+        rig.Spawn(Firecracker, 60);
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, NearCaster38);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast(NearCaster38));
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.CastSpell(rig.Caster, NearCaster38, SpellCastTargets.ForSelf(), triggered: false));
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void Target38_FindingAListedObject_IsNotRefused_AndGivesNoUnitTarget()
+    {
+        // A game object found for 38 is neither refused nor a unit target (Spell.cpp:566-585 adds only units for 38).
+        using var rig = new Rig([NearCasterSpell()], [new SpellStore.ScriptTarget(NearCaster38, 0, Firecracker, 0)]);
+        rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearCaster38));
+
+        Assert.DoesNotContain(rig.Caster.Guid.Value, rig.SpellGoHits());
+    }
+
+    [Fact]
+    public void AListedObjectFoundByTarget46_IsTheObjectTargetOfADummyEffect_NotTheCasterAsItsUnit()
+    {
+        // vmangos only calls AddGOTarget for a found object (Spell.cpp:590-591); the caster is no unit target of a Dummy effect.
+        using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+
+        ulong[] hits = rig.SpellGoHits();
+        Assert.Contains(listed.Guid.Value, hits);
+        Assert.DoesNotContain(rig.Caster.Guid.Value, hits);
+    }
+
+    [Fact]
+    public void ACastTimeSpell_IsNotRefusedAtPrepare_ButWhenTheCastGoesOff()
+    {
+        // vmangos refuses a missing script target only from SetTargetMap when the cast goes off, so an object that arrives during the cast bar counts.
+        SpellInfo spell = FireworkSpell(CastTimeLocation) with { CastTime = new SpellCastTime(2000, 0, 0) };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(CastTimeLocation, 0, Firecracker, 0)]);
+        rig.Kit.System.SpellBatchWindowMs = 0;
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, CastTimeLocation);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, CastTimeLocation, SpellCastTargets.ForSelf(), triggered: false));
+        GameObject listed = rig.Spawn(Firecracker, 4);
+        rig.Kit.Advance(2100);
+
+        Assert.Contains(listed.Guid.Value, rig.SpellGoHits());
+    }
+
+    [Fact]
+    public void ACastTimeSpell_WithNothingInRangeWhenItGoesOff_SendsNoGo()
+    {
+        SpellInfo spell = FireworkSpell(CastTimeLocation) with { CastTime = new SpellCastTime(2000, 0, 0) };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(CastTimeLocation, 0, Firecracker, 0)]);
+        rig.Kit.System.SpellBatchWindowMs = 0;
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, CastTimeLocation);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, CastTimeLocation, SpellCastTargets.ForSelf(), triggered: false));
+        rig.Kit.Advance(2100);
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void TargetA46BesideAUnitTargetB_RunsTheSelectorOfBToo()
+    {
+        // 17616 is A46 / B16: vmangos FillTargetMap runs SetTargetMap for target B as well (Spell.cpp:381-392).
+        SpellInfo spell = Spell(LocationThenList, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46, targetB: (SpellImplicitTarget)ListedByB))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(LocationThenList, 0, Firecracker, 0)]);
+        bool ran = false;
+        rig.Kit.System.RegisterSpellTargetSelector(LocationThenList, (SpellImplicitTarget)ListedByB, (_, cast, _, _) =>
+        {
+            ran = true;
+            return [(cast.Caster, 1f)];
+        });
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationThenList));
+
+        Assert.True(ran);
+        ulong[] hits = rig.SpellGoHits();
+        Assert.Contains(listed.Guid.Value, hits);
+        Assert.Contains(rig.Caster.Guid.Value, hits);
+        Assert.True(rig.SpellGoTargets().HasDest);
+    }
+
+    [Fact]
+    public void TargetB46BesideATarget38_WithNoRows_FailsWithBadTargets()
+    {
+        // 16074 and 28392 are A38 / B46 with no spell_script_target row: vmangos refuses on the B 46 too (Spell.cpp:446-460).
+        SpellInfo spell = Spell(UnitThenLocation, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitScriptNearCaster, targetB: (SpellImplicitTarget)Target46))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], []);
+        rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.BadTargets, rig.Cast(UnitThenLocation));
+    }
+
     [Theory]
     [InlineData(11)]
     [InlineData(46)]
