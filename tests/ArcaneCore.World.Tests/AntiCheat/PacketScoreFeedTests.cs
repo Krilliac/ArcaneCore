@@ -65,7 +65,6 @@ public sealed class PacketScoreFeedTests
             {
                 o.FeedAntiCheatScore = true;
                 o.ScoreWeight = 7;
-                o.CadenceLimits.PingMinIntervalMs = 0; // each SettleAsync sends a barrier ping; the second would otherwise be an overspeed-ping finding of its own
             });
             int characterId = (int)session.Player!.Guid.Low;
 

@@ -231,10 +231,12 @@ public sealed class SpeedClockOptions : ICloneable
     public int CooldownMs { get; set; } = 10000;
 
     /// <summary>
-    /// Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock over the usable packet pairs
-    /// since the last restart of the count (a teleport or a previous fire), a clock that runs fast by less than <see cref="TolerancePercent"/>
-    /// is reported too. 0 switches it off, which is the default (the sliding window alone, as before); otherwise 1000 to 3600000. Honest play
-    /// stays near zero (lag and the catch-up burst cancel), so a few seconds of margin is plenty.
+    /// Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock (the client time elapsed since the
+    /// last restart of the count, a teleport or a previous fire, minus the real time elapsed, over every packet pair), a clock that runs fast by
+    /// less than <see cref="TolerancePercent"/> is reported too. 0 switches it off, which is the default (the sliding window alone, as before);
+    /// otherwise 1000 to 3600000. Honest play stays near zero: lag and the catch-up burst cancel. The excess is floored at minus twice the limit,
+    /// so a stall (or two close together) longer than about three times the limit leaves an honest running player at or above the limit: choose
+    /// the limit at no less than a third of the longest stall you expect (3000 survives a 9 second spike).
     /// </summary>
     public int LongTermDriftMs { get; set; }
 

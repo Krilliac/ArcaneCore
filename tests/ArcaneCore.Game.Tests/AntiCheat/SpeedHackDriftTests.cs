@@ -114,19 +114,50 @@ public sealed class SpeedHackDriftTests
     [Fact]
     public void HonestPlay_AStampSlightlyBehindThePreviousOne_DoesNotAccumulateTowardsTheLimit()
     {
-        // The client's stamps jitter: every other packet carries a stamp 200 ms behind the true client time (still inside the regression
-        // tolerance). The excess must stay at zero, not gain 200 ms per round.
+        // The client's stamps jitter: every other packet carries a stamp 200 ms behind the true client time (inside the regression tolerance),
+        // and the real step before it is only 100 ms, so that pair's client step is -100 (really negative). An unsigned step would wrap to a huge
+        // positive one and gain about 4 billion per round; a step clamped to zero would gain 100 ms per round and reach the limit. The signed
+        // step keeps the excess at zero.
         var detector = new SpeedHackDetector(Options(5000));
         uint real = 5000;
         const uint Offset = 100000;
         detector.Feed(real + Offset, real);
         for (int round = 0; round < 500; round++)
         {
-            real += 500;
+            real += 100;
             Assert.False(detector.Feed(real + Offset - 200, real).LongTermDrift);
-            real += 500;
+            real += 900;
             Assert.False(detector.Feed(real + Offset, real).LongTermDrift, $"round {round}");
         }
+    }
+
+    [Fact]
+    public void TheNegativeFloor_BanksAtMostTwiceTheLimit_SoAFastClockStillFiresAfterThreeLimitsOfGain()
+    {
+        // 20 pairs of 1000 ms real time with the client clock frozen (-1000 each) drive the excess to the floor of -10000 (limit 5000) and
+        // far beyond it (-20000 unfloored). A client clock 2x fast then gains 1000 ms per 1000 ms pair: from the floor it needs 15 pairs to
+        // reach +5000; unfloored it would need 25. Only the long-term fire is looked at.
+        var detector = new SpeedHackDetector(Options(5000));
+        uint client = 100000, real = 5000;
+        detector.Feed(client, real);
+        for (int i = 0; i < 20; i++)
+        {
+            real += 1000;
+            Assert.False(detector.Feed(client, real).LongTermDrift);
+        }
+
+        int firedAt = 0;
+        for (int i = 1; i <= 40 && firedAt == 0; i++)
+        {
+            real += 1000;
+            client += 2000;
+            if (detector.Feed(client, real).LongTermDrift)
+            {
+                firedAt = i;
+            }
+        }
+
+        Assert.Equal(15, firedAt);
     }
 
     [Fact]

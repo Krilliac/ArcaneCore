@@ -47,7 +47,7 @@ public enum AntiCheatViolation : byte
     /// <summary>Using a game object from far outside its interaction distance (rejected).</summary>
     Interact = 13,
 
-    /// <summary>A packet-heuristics finding on a real player's traffic (shape, replay, cadence, orphan acknowledgement, stripped developer opcode, malformed payload), fed to the score only when <c>World:PacketHeuristics:FeedAntiCheatScore</c> is on.</summary>
+    /// <summary>A packet-heuristics finding on a real player's traffic (shape, stripped developer opcode, malformed payload), fed to the score only when <c>World:PacketHeuristics:FeedAntiCheatScore</c> is on.</summary>
     Packet = 14,
 }
 
