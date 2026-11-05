@@ -464,6 +464,31 @@ public sealed class PlayerbotDefenseBoardTests
     }
 
     [Fact]
+    public void Sweep_MergesOnTheReadingItAgedCallsBy_EvenWhenTheClockMovesBetweenReads()
+    {
+        // A clock that moves 2 ms between the first read of a pass and the next: the first reading leaves both callers live (9 999 ms
+        // after their reports), a second would leave both past the 10 s live window, and the merged centre would then fall back to the
+        // survivor's old one (no live caller) instead of the centroid of the two callers.
+        long reported = _now;
+        bool moving = false;
+        int reads = 0;
+        var board = new PlayerbotDefenseBoard(() => moving ? (++reads == 1 ? reported + 9_999 : reported + 10_001) : _now, () => Options, graceMs: 0, maxOpenMs: PlayerbotDefenseBoard.DefaultMaxOpenMs);
+        int low = Report(board, 1, 101, new Vector3(0, 0, 0)).CallId;
+        int high = Report(board, 2, 102, new Vector3(50, 0, 0), zone: Zone + 1).CallId;
+        Assert.NotEqual(low, high);
+
+        Options.MergeRadiusYards = 80;
+        moving = true;
+        board.Sweep();
+
+        DefenseCall survivor = board.Find(high)!;
+        Assert.Equal(low, survivor.Id);
+        Assert.Equal([1UL, 2UL], survivor.Callers.Keys.Order().ToArray());
+        Assert.InRange(survivor.Centre.X, 24.9f, 25.1f);
+        Assert.Equal(1, reads); // the sweep, merge included, read the clock once
+    }
+
+    [Fact]
     public void Centre_HoldsDuringGrace_AndNoFreshResponderGoesToACallStaleFor60Seconds()
     {
         Options.GraceSeconds = 120;

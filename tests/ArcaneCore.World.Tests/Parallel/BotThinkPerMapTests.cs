@@ -246,6 +246,24 @@ public sealed class BotThinkPerMapTests
     }
 
     [Fact]
+    public void AMapKeyServedTwiceInOnePass_IsWalkedOnce_AndWalksAgainAfterTheNextAssign()
+    {
+        PlayerbotThinkScheduler<TestBot> scheduler = Scheduler();
+        var bots = new List<TestBot> { new(0), new(1), new(2) };
+        var maps = bots.ToDictionary(b => b.Index, _ => 0u);
+        Assign(scheduler, bots, maps);
+        var order = new List<int>();
+
+        Assert.Equal(1, OneThink(scheduler, Key(0), order));
+        Assert.Equal(0, OneThink(scheduler, Key(0), order)); // the same key again before the next Assign: no second walk against the same frame time
+        Assert.Equal(new[] { 0 }, order);
+
+        Assign(scheduler, bots, maps);
+        Assert.Equal(1, OneThink(scheduler, Key(0), order));
+        Assert.Equal(new[] { 0, 1 }, order); // the rotation moved on by exactly one bot per pass
+    }
+
+    [Fact]
     public void WithRoomForEveryone_AMapThinksAllItsBotsEachTick()
     {
         PlayerbotThinkScheduler<TestBot> scheduler = Scheduler();
