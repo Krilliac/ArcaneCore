@@ -545,10 +545,8 @@ public sealed partial class TeleportService
             return false;
         }
 
-        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966), before the map change; done once the router
-        // took the request, so a request it declines here changes nothing. The gateway decides later, and its refusal does not undo this revive or
-        // the transport removal below. The revive reads no map state of the destination.
-        player.Map?.Combat.ReviveForDungeonEntry(player, destination.MapId);
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966), before the map change. Not here: the gateway decides after this returns and a revive
+        // cannot be taken back, so a refusal would leave a free resurrection. The target worker revives once the player has arrived (MapCombat.ReviveAfterTransferArrival).
 
         // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872). Until the gateway answers the client still sends
         // moves aboard: the transport observer boards it again from the first of them (TransportMovementObserver.AfterApply), so a refused teleport leaves it on the ship.

@@ -21,7 +21,7 @@ namespace ArcaneCore.Game.Teleport;
 /// Thread affinity: called on the world thread, possibly inside a map update. Implementations must not block it, and must defer anything
 /// that touches map state; the transfer itself runs asynchronously. The player is taken off its transport and its movement reset only
 /// after this returns true, so a snapshot taken inside the call still sees the transport and the moving flags. The ghost revive for a
-/// dungeon holding its corpse runs after acceptance too.
+/// dungeon holding its corpse does not run on this worker: the target does it once the player has arrived, because a later refusal could not undo it.
 /// </para>
 /// </summary>
 public interface IClusterFarTeleportRouter

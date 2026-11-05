@@ -640,51 +640,51 @@ public sealed class CharacterClaimWiringTests
     }
 
     [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenTheReadAfterTheClaimFails()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE13", "Rereader", (_, trip, reads) => reads.BeforeRead = () => trip.ThrowWhileClaimedAsync("the read after the claim failed"));
+
+    [Fact]
     public Task ALogin_GivesTheClaimBack_WhenTheRenameGateRefusesAfterTheClaim()
         => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE10", "Renamer",
-            (services, trip) => services.AddSingleton<ICharacterRenameStore>(new PostClaimRenameStore(trip, throws: false)));
+            (services, trip, _) => services.AddSingleton<ICharacterRenameStore>(new PostClaimRenameStore(trip)));
 
     [Fact]
     public Task ALogin_GivesTheClaimBack_WhenTheWorldDataIsMissingAfterTheClaim()
         => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE11", "Nodata",
-            (services, trip) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
                 (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: false)));
 
     [Fact]
     public Task ALogin_GivesTheClaimBack_WhenTheWorldDataReadThrowsAfterTheClaim()
         => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE12", "Databoom",
-            (services, trip) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
+            (services, trip, _) => services.AddSingleton<IWorldDataStore>(new PostClaimWorldData(
                 (IWorldDataStore)services.Last(d => d.ServiceType == typeof(IWorldDataStore)).ImplementationInstance!, trip, throws: true)));
 
+    [Fact]
+    public Task ALogin_GivesTheClaimBack_WhenThePlayerBuildThrowsAfterTheClaim()
+        => AssertPostClaimFailureGivesTheClaimBackAsync("CLAIMWIRE14", "Nobuttons", (_, trip, reads) => reads.BeforeActionButtons = () => trip.ThrowWhileClaimedAsync("the action buttons could not be read"));
+
     /// <summary>
-    /// A login whose claim is admitted after the previous owner released it (the same sequence as the post-claim record test) and whose re-checks then fail, by a refusal or a
-    /// throw that happens only once <c>trip</c> is set (right when the previous owner releases, so after the pre-claim checks). The login is answered as failed, no player exists,
-    /// and the claim is given back: a login on another worker can then claim the character.
+    /// A login whose step after the claim fails, by a refusal or a throw. <c>faultAfterClaim</c> installs the fault through <see cref="PostClaimTrip"/>, which fires only while the claim row
+    /// names this world, so the same checks made before the claim pass and the login really claims. The login is answered as failed, the fault saw the claim held, no player exists, and the
+    /// claim is given back: a login on another worker can then claim the character.
     /// </summary>
-    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip> faultAfterClaim)
+    private static async Task AssertPostClaimFailureGivesTheClaimBackAsync(string account, string name, Action<IServiceCollection, PostClaimTrip, StaleReadStore> faultAfterClaim)
     {
         using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
         await using Rig rig = await Rig.CreateAsync(directory);
         CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
         CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
-        var trip = new PostClaimTrip();
-        StaleReadStore? reads = null;
+        var trip = new PostClaimTrip(rig.Store, a);
         await using WorldTestHost host = rig.StartWorld(a, configure: services =>
         {
             ICharacterStore inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
-            reads = StaleReadStore.Wrap(inner);
+            StaleReadStore reads = StaleReadStore.Wrap(inner);
             services.AddSingleton((ICharacterStore)(object)reads);
-            faultAfterClaim(services, trip);
+            faultAfterClaim(services, trip, reads);
         });
         (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, account, name);
         trip.CharacterId = id;
-
-        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome);
-        reads!.Arm(id, readNumber: 2, async () =>
-        {
-            trip.On = true;
-            Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
-        });
 
         var login = new PacketWriter(8);
         login.WriteUInt64((ulong)id);
@@ -692,42 +692,52 @@ public sealed class CharacterClaimWiringTests
         byte[] failed = await client.ReadUntilAsync(WorldOpcode.SmsgCharacterLoginFailed);
 
         Assert.Equal((byte)CharResult.CharLoginFailed, failed[0]);
-        Assert.True(reads.Fired);
-        Assert.True(trip.Reached, "the post-claim check that was meant to fail never ran");
+        Assert.Equal(a, trip.HeldAtFault); // read inside the fault: this login held the claim when the step failed
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
         await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the claim is given back by the failed login");
         Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome); // another worker can claim now
     }
 
-    /// <summary>Set once the previous owner has released (the login's claim is admitted after this); <see cref="Reached"/> records that a fault hook actually ran after it.</summary>
-    private sealed class PostClaimTrip
+    /// <summary>
+    /// Decides a fault from the claim row itself, not from counting calls: <see cref="ClaimedAsync"/> is true only while the row names <paramref name="login"/>, so a check made before the
+    /// claim (the row is empty) passes and the first one after it fails. <see cref="HeldAtFault"/> keeps the owner the fault saw: a login that refused before claiming leaves it null.
+    /// </summary>
+    private sealed class PostClaimTrip(EfTransferDecisionStore store, CharacterOwnershipToken login)
     {
-        public volatile bool On;
-        public volatile bool Reached;
+        private volatile CharacterOwnershipToken? _heldAtFault;
+
         public volatile int CharacterId;
+
+        public CharacterOwnershipToken? HeldAtFault => _heldAtFault;
+
+        public async Task<bool> ClaimedAsync()
+        {
+            if (CharacterId == 0 || await store.GetActiveOwnershipAsync((ulong)CharacterId) is not { } owner || owner != login)
+            {
+                return false;
+            }
+
+            _heldAtFault = owner;
+            return true;
+        }
+
+        public async Task ThrowWhileClaimedAsync(string message)
+        {
+            if (await ClaimedAsync())
+            {
+                throw new InvalidOperationException(message);
+            }
+        }
     }
 
-    private sealed class PostClaimRenameStore(PostClaimTrip trip, bool throws) : ICharacterRenameStore
+    private sealed class PostClaimRenameStore(PostClaimTrip trip) : ICharacterRenameStore
     {
         public Task<bool> SetFlagAsync(int characterId, uint flag, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
         public Task<CharacterRenameResult> RenameAsync(int characterId, int accountId, string newName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-        public Task<IReadOnlyDictionary<int, uint>> GetFlagsAsync(int accountId, CancellationToken cancellationToken = default)
-        {
-            if (!trip.On)
-            {
-                return Task.FromResult<IReadOnlyDictionary<int, uint>>(new Dictionary<int, uint>());
-            }
-
-            trip.Reached = true;
-            if (throws)
-            {
-                throw new InvalidOperationException("rename flags failed after the claim");
-            }
-
-            return Task.FromResult<IReadOnlyDictionary<int, uint>>(new Dictionary<int, uint> { [trip.CharacterId] = CharacterAtLoginFlags.Rename });
-        }
+        public async Task<IReadOnlyDictionary<int, uint>> GetFlagsAsync(int accountId, CancellationToken cancellationToken = default)
+            => await trip.ClaimedAsync() ? new Dictionary<int, uint> { [trip.CharacterId] = CharacterAtLoginFlags.Rename } : new Dictionary<int, uint>();
     }
 
     private sealed class PostClaimWorldData(IWorldDataStore inner, PostClaimTrip trip, bool throws) : IWorldDataStore
@@ -738,15 +748,19 @@ public sealed class CharacterClaimWiringTests
 
         public Task<bool> IsValidRaceClassAsync(byte race, byte cls, CancellationToken cancellationToken = default) => inner.IsValidRaceClassAsync(race, cls, cancellationToken);
 
-        public Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
+        public async Task<RaceInfo?> GetRaceInfoAsync(byte race, byte gender, CancellationToken cancellationToken = default)
         {
-            if (!trip.On)
+            if (!await trip.ClaimedAsync())
             {
-                return inner.GetRaceInfoAsync(race, gender, cancellationToken);
+                return await inner.GetRaceInfoAsync(race, gender, cancellationToken);
             }
 
-            trip.Reached = true;
-            return throws ? throw new InvalidOperationException("world data failed after the claim") : Task.FromResult<RaceInfo?>(null);
+            if (throws)
+            {
+                throw new InvalidOperationException("world data failed after the claim");
+            }
+
+            return null;
         }
     }
 
@@ -1039,6 +1053,12 @@ public sealed class CharacterClaimWiringTests
 
         public bool Fired { get; private set; }
 
+        /// <summary>Runs before every read of a character; what it throws is the read's failure.</summary>
+        public Func<Task>? BeforeRead { get; set; }
+
+        /// <summary>Runs before every read of a character's action buttons; what it throws is the read's failure.</summary>
+        public Func<Task>? BeforeActionButtons { get; set; }
+
         public static StaleReadStore Wrap(ICharacterStore inner)
         {
             object proxy = Create<ICharacterStore, StaleReadStore>();
@@ -1058,6 +1078,16 @@ public sealed class CharacterClaimWiringTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
+            if (targetMethod.Name == nameof(ICharacterStore.GetByIdAsync) && args is [int read, CancellationToken readToken] && BeforeRead is { } beforeRead)
+            {
+                return ReadAfterAsync(beforeRead, read, readToken);
+            }
+
+            if (targetMethod.Name == nameof(ICharacterStore.GetActionButtonsAsync) && args is [int owner, CancellationToken buttonsToken] && BeforeActionButtons is { } beforeButtons)
+            {
+                return ActionButtonsAfterAsync(beforeButtons, owner, buttonsToken);
+            }
+
             if (targetMethod.Name == nameof(ICharacterStore.GetByIdAsync) && args is [int id, CancellationToken ct] && _onRead is not null && id == _armedId)
             {
                 return ReadAsync(id, ct);
@@ -1072,6 +1102,18 @@ public sealed class CharacterClaimWiringTests
                 ExceptionDispatchInfo.Throw(ex.InnerException);
                 throw;
             }
+        }
+
+        private async Task<CharacterRecord?> ReadAfterAsync(Func<Task> before, int id, CancellationToken ct)
+        {
+            await before();
+            return await _inner.GetByIdAsync(id, ct);
+        }
+
+        private async Task<IReadOnlyList<ActionButton>> ActionButtonsAfterAsync(Func<Task> before, int id, CancellationToken ct)
+        {
+            await before();
+            return await _inner.GetActionButtonsAsync(id, ct);
         }
 
         private async Task<CharacterRecord?> ReadAsync(int id, CancellationToken ct)

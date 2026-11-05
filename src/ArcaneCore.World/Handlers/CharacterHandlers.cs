@@ -519,12 +519,12 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                     FaultLedger.Shared.Record("handler.char-login-postclaim", ex);
                     AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"post-claim check error={ex.GetType().Name}: {ex.Message}");
                     session.Logger.LogError(ex, "[{Endpoint}] the checks after the claim of character {Guid} failed", session.RemoteEndpoint, character.Id);
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
                     if (!session.IsDisconnected)
                     {
                         session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
                     }
 
-                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
                     return;
                 }
             }
@@ -546,12 +546,12 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             FaultLedger.Shared.Record("handler.char-login-build", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"player build error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not build the player of character {Guid}", session.RemoteEndpoint, character.Id);
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
             if (!session.IsDisconnected)
             {
                 session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
             }
 
-            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
             return;
         }
 
@@ -580,8 +580,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             FaultLedger.Shared.Record("handler.char-login-load", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"load error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
-            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
             return;
         }
 
