@@ -18,6 +18,12 @@ namespace ArcaneCore.World.Playerbots.Population;
 /// </summary>
 internal sealed record PopulationCounts(int[] Desired, int[] Have, int OperatorRunning, int OwnedTarget)
 {
+    /// <summary>
+    /// The population's own running bots whose level is in no band. They count as running in the totals (they load the tick) but fill no band, so a
+    /// pass can be at its target while a band is short; the population log shows the figure.
+    /// </summary>
+    public int OutOfBand { get; init; }
+
     /// <param name="bands">The bands in force.</param>
     /// <param name="effectiveTarget">The lower of TargetOnline and MaxBots.</param>
     /// <param name="runningAll">Every managed bot running, whoever created it.</param>
@@ -31,9 +37,14 @@ internal sealed record PopulationCounts(int[] Desired, int[] Have, int OperatorR
         int operatorRunning = Math.Max(0, runningAll - ownedRunningAll);
         int ownedTarget = Math.Max(0, effectiveTarget - operatorRunning);
         int[] have = new int[bands.Count];
+        int outOfBand = 0;
         foreach (byte level in ownedLevels)
+        {
             if (PopulationBandPlanner.BandOf(bands, level) is var band and >= 0) have[band]++;
-        return new PopulationCounts(PopulationBandPlanner.DesiredPerBand(ownedTarget, bands), have, operatorRunning, ownedTarget);
+            else outOfBand++;
+        }
+
+        return new PopulationCounts(PopulationBandPlanner.DesiredPerBand(ownedTarget, bands), have, operatorRunning, ownedTarget) { OutOfBand = outOfBand };
     }
 }
 
@@ -48,7 +59,10 @@ internal sealed class PopulationPassActions
 
     public int Moved { get; set; }
 
-    public bool Any => Parked.Count > 0 || Started > 0 || Created > 0 || Moved > 0;
+    /// <summary>Why the pass held something back (the context note), or null.</summary>
+    public string? Note { get; set; }
+
+    public bool Any => Parked.Count > 0 || Started > 0 || Created > 0 || Moved > 0 || Note is not null;
 
     /// <summary>The reasons as <c>dead 2, sick 1</c>, in a fixed order (dead, sick, stalled, surplus, rotation), counts above 0 only.</summary>
     public static string Tally(IEnumerable<string> reasons)
@@ -72,6 +86,7 @@ internal sealed class PopulationActionLog
     private int _created;
     private int _moved;
     private int _passes;
+    private string? _note;
     private long? _lastMs;
 
     public void Add(PopulationPassActions pass)
@@ -82,6 +97,7 @@ internal sealed class PopulationActionLog
         _started += pass.Started;
         _created += pass.Created;
         _moved += pass.Moved;
+        if (pass.Note is not null) _note = pass.Note;
         _passes++;
     }
 
@@ -93,6 +109,8 @@ internal sealed class PopulationActionLog
         string parked = _parked.Count == 0 ? "parked 0" : $"parked {_parked.Count} ({PopulationPassActions.Tally(_parked)})";
         string line = string.Create(CultureInfo.InvariantCulture,
             $"{parked}, started {_started}, created {_created}, moved {_moved} in {_passes} pass{(_passes == 1 ? string.Empty : "es")}");
+        if (_note is not null) line += "; held back: " + _note;
+        _note = null;
         _parked.Clear();
         _started = _created = _moved = _passes = 0;
         _lastMs = nowMs;

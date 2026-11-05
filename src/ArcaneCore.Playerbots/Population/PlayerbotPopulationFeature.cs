@@ -1156,7 +1156,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // the pending-deletion members.
         int[] desired = new int[input.Bands.Length];
         int[] have = new int[input.Bands.Length];
-        int operatorRunning = 0, ownedTarget = 0;
+        int operatorRunning = 0, ownedTarget = 0, outOfBand = 0;
+        string? heldBack = null;
         int windows = _windows.Observe(input.Samples, input.TotalSamples, input.P95Ms, pop);
 
         PopulationDecision decision = new(PopulationAction.Hold, 0, "error", "the pass did not complete");
@@ -1214,6 +1215,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 members.Keys.Count(id => input.States.TryGetValue(id, out ManagedPlayerbotState s) && s == ManagedPlayerbotState.Running),
                 input.Running.Where(f => members.ContainsKey(f.BotId)).Select(f => f.Level));
             (desired, have, operatorRunning, ownedTarget) = (counts.Desired, counts.Have, counts.OperatorRunning, counts.OwnedTarget);
+            outOfBand = counts.OutOfBand;
             if (input.RushCount > 0)
             {
                 // A rush bypasses the budget loop and its confirmation windows (its own brake watches the tick p95), and plans against
@@ -1280,6 +1282,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
             if (homeChanges > 0) actions += (actions.Length == 0 ? string.Empty : ", ") + $"start homes {homeChanges}";
             if (ctx.Note is not null) actions += (actions.Length == 0 ? string.Empty : ", ") + "held back: " + ctx.Note;
+            heldBack = ctx.Note;
+            pass.Note = ctx.Note;
             if (input.RushCount > 0 && ctx.Note is not null && ctx.Note.StartsWith(PopulationRush.StartZonesFullNote, StringComparison.Ordinal))
                 Volatile.Write(ref _rushDeferredUntilMs, ClockMs + (pop.IntervalSeconds * 1000L));
             // A rush keeps the tick window: its brake reads the load the rush itself causes.
@@ -1314,7 +1318,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         while (_createTimes.Count > 0 && now - _createTimes.Peek() >= 60_000) _createTimes.Dequeue();
         if (!pop.FreshLaunch && !input.ShedOnly && input.RushCount == 0 && pop.TargetOnline > 0)
         {
-            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: decision.Reason);
+            ObserveBandDeficits(input.Bands, desired, have, now, pop, ctxNote: heldBack is null ? decision.Reason : decision.Reason + "; held back: " + heldBack);
         }
 
         PopulationBandStatus[] bands = [.. input.Bands.Select((b, i) => new PopulationBandStatus(b.MinLevel, b.MaxLevel, b.Weight, desired[i], have[i],
@@ -1322,8 +1326,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _actionLog.Add(pass);
         if (_actionLog.Due(now, pop.ActionLogSeconds) is { } line)
             logger.LogInformation(
-                "Playerbot population: {Actions}; state {State}: {Reason}; operator bots running {Operator}, population share {OwnedTarget}; bands {Bands}",
-                line, decision.State, decision.Reason, operatorRunning, ownedTarget,
+                "Playerbot population: {Actions}; state {State}: {Reason}; operator bots running {Operator}, population share {OwnedTarget}, out of band {OutOfBand}; bands {Bands}",
+                line, decision.State, decision.Reason, operatorRunning, ownedTarget, outOfBand,
                 string.Join(", ", bands.Select(b => string.Create(CultureInfo.InvariantCulture, $"{b.MinLevel}-{b.MaxLevel} want {b.Want} have {b.Have}"))));
         Publish(new PopulationStatus(true, decision.State, actions.Length == 0 ? decision.Reason : decision.Reason + "; " + actions,
             input.P95Ms, input.Samples, pop.TickP95BudgetMs, pop.TargetOnline, effectiveTarget, input.RunningAll, ownedRunning, ownedParked,
