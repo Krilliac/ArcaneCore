@@ -164,7 +164,7 @@ public sealed class BattlegroundInstancesWorldTests
         await context.StepAsync("SMSG_BATTLEFIELD_LIST for an asker in another bracket carries that bracket and none of these ids", async () =>
         {
             uint minLevel = await context.ReadAsync(() => Manager(context).TemplateOf(BattlegroundType.WarsongGulch)!.MinLevel);
-            ScenarioBot other = await AllianceAsync(context, "Bgtwootherbracket");
+            ScenarioBot other = await AllianceAsync(context, "Bgtwootherbr");
 
             // Move the asker ten levels away from the running matches' bracket (down if there is room, else up); the matches stay where they are.
             uint otherLevel = await other.ReadAsync(p =>
