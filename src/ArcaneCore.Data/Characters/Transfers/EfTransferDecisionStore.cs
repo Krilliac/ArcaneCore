@@ -30,7 +30,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     // ---------------------------------------------------------------- per-character ownership
 
     /// <inheritdoc />
-    public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken)
+    public async Task SeedCharacterOwnershipAsync(ulong characterGuid, CharacterOwnershipToken ownershipToken, CancellationToken cancellationToken = default)
     {
         if (characterGuid == 0)
             throw new ArgumentOutOfRangeException(nameof(characterGuid), "CharacterGuid must be non-zero.");
@@ -39,7 +39,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
         using IDisposable exempt = CharacterWriteFence.Exempt();
         long guid = (long)characterGuid;
-        ClusterTransferOwnerRow? row = db.Set<ClusterTransferOwnerRow>().SingleOrDefault(r => r.CharacterGuid == guid);
+        ClusterTransferOwnerRow? row = await db.Set<ClusterTransferOwnerRow>().SingleOrDefaultAsync(r => r.CharacterGuid == guid, cancellationToken).ConfigureAwait(false);
         if (row is null)
         {
             row = new ClusterTransferOwnerRow { CharacterGuid = guid };
@@ -54,16 +54,16 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         row.Epoch = ownershipToken.Epoch;
         row.Incarnation = ownershipToken.Incarnation.ToString("D");
         row.UpdatedAtUtcMs = _clock();
-        db.SaveChanges();
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
-    public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid)
+    public async Task<CharacterOwnershipToken?> GetActiveOwnershipAsync(ulong characterGuid, CancellationToken cancellationToken = default)
     {
         using IServiceScope scope = scopes.CreateScope();
         CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
         long guid = (long)characterGuid;
-        ClusterTransferOwnerRow? row = db.Set<ClusterTransferOwnerRow>().AsNoTracking().SingleOrDefault(r => r.CharacterGuid == guid);
+        ClusterTransferOwnerRow? row = await db.Set<ClusterTransferOwnerRow>().AsNoTracking().SingleOrDefaultAsync(r => r.CharacterGuid == guid, cancellationToken).ConfigureAwait(false);
         return row is null ? null : OwnerToken(row);
     }
 
@@ -976,9 +976,11 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     /// <summary>Records reservations under one handoff; such a transfer commits only with the handoff's epoch takeover.</summary>
     private sealed class HandoffScopedStore(EfTransferDecisionStore inner, Guid handoffId) : ITransferDecisionStore
     {
-        public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => inner.SeedCharacterOwnership(characterGuid, ownershipToken);
+        public Task SeedCharacterOwnershipAsync(ulong characterGuid, CharacterOwnershipToken ownershipToken, CancellationToken cancellationToken = default)
+            => inner.SeedCharacterOwnershipAsync(characterGuid, ownershipToken, cancellationToken);
 
-        public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid) => inner.GetActiveOwnership(characterGuid);
+        public Task<CharacterOwnershipToken?> GetActiveOwnershipAsync(ulong characterGuid, CancellationToken cancellationToken = default)
+            => inner.GetActiveOwnershipAsync(characterGuid, cancellationToken);
 
         public Task<TransferDecisionRecord> CreateReservationAsync(
             Guid transferId, ulong characterGuid, int accountId, long sessionGeneration, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId,

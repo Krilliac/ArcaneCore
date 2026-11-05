@@ -66,6 +66,30 @@ public sealed class AutoPatchTests : IDisposable
     }
 
     [Fact]
+    public void Warm_HashesEveryConfiguredPatch_UnderTheKeyFindUses_SoAChallengeHashesNothing()
+    {
+        File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), [1, 2, 3]);
+        File.WriteAllBytes(Path.Combine(_dir, "5464deDE.mpq"), [9, 9]);
+        File.WriteAllBytes(Path.Combine(_dir, "extra.mpq"), [4, 5, 6, 7]);
+        File.WriteAllBytes(Path.Combine(_dir, "notes.txt"), [1]);
+        var options = new AutoPatchOptions { Enabled = true, Directory = _dir };
+        options.Patches.Add(new AutoPatchEntry { Build = 5302, Locale = "enUS", File = "extra.mpq" });
+        options.Patches.Add(new AutoPatchEntry { Build = 5303, Locale = "enUS", File = "../escape.mpq" });
+        var catalog = new PatchCatalog(() => options);
+
+        Assert.Equal(3, catalog.Warm()); // the two pattern files and the entry; not notes.txt, not the one outside the folder
+        Assert.Equal(3, catalog.CachedHashes);
+
+        Assert.Equal(MD5.HashData(new byte[] { 1, 2, 3 }), catalog.Find(5464, "enUS")!.Md5);
+        Assert.Equal(MD5.HashData(new byte[] { 9, 9 }), catalog.Find(5464, "deDE")!.Md5);
+        Assert.Equal(MD5.HashData(new byte[] { 4, 5, 6, 7 }), catalog.Find(5302, "enUS")!.Md5);
+        Assert.Equal(3, catalog.CachedHashes); // every challenge was a cache hit: Warm and Find share the key
+
+        options.Enabled = false;
+        Assert.Equal(0, new PatchCatalog(() => options).Warm());
+    }
+
+    [Fact]
     public async Task WrongBuild_WithPatch_GetsVersionUpdateXferInitAndResumableData()
     {
         byte[] data = RandomNumberGenerator.GetBytes(LogonSession.XferChunkSize + 100);

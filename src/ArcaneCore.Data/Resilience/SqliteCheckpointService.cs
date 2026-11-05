@@ -270,10 +270,10 @@ internal sealed class SqliteWalCheckpointer
 
 /// <summary>
 /// The background WAL checkpointer (<c>Database:Sqlite:Checkpoint</c>): for every distinct file-backed SQLite database among the components this host registered, a loop that runs
-/// <see cref="SqliteWalCheckpointer.RunOnce"/> every <see cref="SqliteCheckpointOptions.IntervalMs"/> on a thread-pool thread at normal priority (never the world thread), and a final
+/// <see cref="SqliteWalCheckpointer.RunOnce"/> every <see cref="SqliteCheckpointOptions.IntervalMs"/> on its own dedicated (<see cref="TaskCreationOptions.LongRunning"/>) thread at normal priority (never the world thread, and never a pool thread held in an fsync), and a final
 /// TRUNCATE checkpoint when the host stops. The connections EF opens have auto-checkpoint switched off (<see cref="SqliteConnectionPragmaInterceptor.WalJournalSizeLimit"/>),
 /// so this is the only thing that checkpoints; with <c>Enabled=false</c> or a non-SQLite provider there are no targets and the service does nothing.
-/// Thread-safety: the targets are immutable after construction; each loop owns its checkpointer.
+/// Thread-safety: the targets are immutable after construction; each loop owns its checkpointer and its own dedicated thread.
 /// </summary>
 public sealed class SqliteCheckpointService : BackgroundService
 {
@@ -318,18 +318,24 @@ public sealed class SqliteCheckpointService : BackgroundService
             return;
         }
 
-        await Task.Yield(); // leave the caller's thread: StartAsync must not run SQLite I/O inline
-        await Task.WhenAll(Targets.Select(target => LoopAsync(new SqliteWalCheckpointer(target, _options, _logger, _clock), stoppingToken))).ConfigureAwait(false);
+        // One dedicated thread per database (LongRunning leaves the thread pool): the loop's open, PRAGMAs and checkpoint are blocking SQLite
+        // I/O (fsync), so they never hold a pool thread, and the thread that starts the host never runs them inline.
+        await Task.WhenAll(Targets.Select(target => Task.Factory.StartNew(
+            () => Loop(new SqliteWalCheckpointer(target, _options, _logger, _clock), stoppingToken),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default))).ConfigureAwait(false);
     }
 
-    private async Task LoopAsync(SqliteWalCheckpointer checkpointer, CancellationToken stoppingToken)
+    /// <summary>The loop of one database, on its dedicated thread: wait for the next tick (blocking this thread only), checkpoint, repeat; a final TRUNCATE when the host stops.</summary>
+    private void Loop(SqliteWalCheckpointer checkpointer, CancellationToken stoppingToken)
     {
         _logger.LogInformation("SQLite WAL checkpointer started for {Database} (PASSIVE every {IntervalMs} ms, TRUNCATE at host stop)",
             checkpointer.DatabasePath, _options.IntervalMs);
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(_options.IntervalMs), _clock);
         try
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            while (timer.WaitForNextTickAsync(stoppingToken).AsTask().GetAwaiter().GetResult())
             {
                 Run(checkpointer, final: false);
             }

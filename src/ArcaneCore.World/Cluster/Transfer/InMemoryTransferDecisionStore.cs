@@ -21,25 +21,33 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
     }
 
     /// <inheritdoc />
-    public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken)
+    public Task SeedCharacterOwnershipAsync(ulong characterGuid, CharacterOwnershipToken ownershipToken, CancellationToken cancellationToken = default)
     {
-        if (characterGuid == 0)
-            throw new ArgumentOutOfRangeException(nameof(characterGuid), "CharacterGuid must be non-zero.");
-        ArgumentNullException.ThrowIfNull(ownershipToken);
-
-        lock (_sync)
+        return GuardVoid(cancellationToken, () =>
         {
-            _activeOwnership[characterGuid] = ownershipToken;
-        }
+            if (characterGuid == 0)
+                throw new ArgumentOutOfRangeException(nameof(characterGuid), "CharacterGuid must be non-zero.");
+            ArgumentNullException.ThrowIfNull(ownershipToken);
+
+            lock (_sync)
+            {
+                _activeOwnership[characterGuid] = ownershipToken;
+            }
+
+            return Task.CompletedTask;
+        });
     }
 
     /// <inheritdoc />
-    public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid)
+    public Task<CharacterOwnershipToken?> GetActiveOwnershipAsync(ulong characterGuid, CancellationToken cancellationToken = default)
     {
-        lock (_sync)
+        return Guard<CharacterOwnershipToken?>(cancellationToken, () =>
         {
-            return _activeOwnership.TryGetValue(characterGuid, out CharacterOwnershipToken? token) ? token : null;
-        }
+            lock (_sync)
+            {
+                return Task.FromResult(_activeOwnership.TryGetValue(characterGuid, out CharacterOwnershipToken? token) ? token : null);
+            }
+        });
     }
 
     /// <summary>
@@ -75,64 +83,66 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         CharacterOwnershipToken sourceOwnershipToken,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (transferId == Guid.Empty)
-            throw new ArgumentException("TransferId must be non-empty.", nameof(transferId));
-        if (characterGuid == 0)
-            throw new ArgumentOutOfRangeException(nameof(characterGuid));
-        ArgumentNullException.ThrowIfNull(sourceOwnershipToken);
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            if (_decisions.ContainsKey(transferId))
-                throw new InvalidOperationException($"Transfer '{transferId}' already exists.");
+            if (transferId == Guid.Empty)
+                throw new ArgumentException("TransferId must be non-empty.", nameof(transferId));
+            if (characterGuid == 0)
+                throw new ArgumentOutOfRangeException(nameof(characterGuid));
+            ArgumentNullException.ThrowIfNull(sourceOwnershipToken);
 
-            // Check that no other unresolved transfer is already in flight for this character.
-            bool hasInFlight = _decisions.Values.Any(d =>
-                d.CharacterGuid == characterGuid &&
-                d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed);
-            if (hasInFlight)
+            lock (_sync)
             {
-                throw new InvalidOperationException(
-                    $"Character {characterGuid} already has an unresolved transfer in flight.");
-            }
+                if (_decisions.ContainsKey(transferId))
+                    throw new InvalidOperationException($"Transfer '{transferId}' already exists.");
 
-            if (_activeOwnership.TryGetValue(characterGuid, out CharacterOwnershipToken? currentOwner))
-            {
-                if (currentOwner != sourceOwnershipToken)
+                // Check that no other unresolved transfer is already in flight for this character.
+                bool hasInFlight = _decisions.Values.Any(d =>
+                    d.CharacterGuid == characterGuid &&
+                    d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed);
+                if (hasInFlight)
                 {
-                    throw new CharacterOwnershipRejectedException(
-                        sourceOwnershipToken.Scope,
-                        sourceOwnershipToken.Epoch);
+                    throw new InvalidOperationException(
+                        $"Character {characterGuid} already has an unresolved transfer in flight.");
                 }
-            }
-            else
-            {
-                _activeOwnership[characterGuid] = sourceOwnershipToken;
-            }
 
-            var record = new TransferDecisionRecord(
-                TransferId: transferId,
-                CharacterGuid: characterGuid,
-                AccountId: accountId,
-                SessionGeneration: sessionGeneration,
-                SourceWorkerId: sourceWorkerId,
-                TargetWorkerId: targetWorkerId,
-                SourceMapId: sourceMapId,
-                SourceInstanceId: sourceInstanceId,
-                TargetMapId: targetMapId,
-                TargetInstanceId: targetInstanceId,
-                CurrentStage: PlayerTransferStage.Reserve,
-                DecisionState: PlayerTransferDecisionState.PreCommit,
-                SourceOwnershipToken: sourceOwnershipToken,
-                TargetOwnershipToken: null,
-                CapturedBundle: null,
-                AbortReason: null,
-                UpdatedAtUtcMs: _clockUtcMs());
+                if (_activeOwnership.TryGetValue(characterGuid, out CharacterOwnershipToken? currentOwner))
+                {
+                    if (currentOwner != sourceOwnershipToken)
+                    {
+                        throw new CharacterOwnershipRejectedException(
+                            sourceOwnershipToken.Scope,
+                            sourceOwnershipToken.Epoch);
+                    }
+                }
+                else
+                {
+                    _activeOwnership[characterGuid] = sourceOwnershipToken;
+                }
 
-            _decisions[transferId] = record;
-            return Task.FromResult(record);
-        }
+                var record = new TransferDecisionRecord(
+                    TransferId: transferId,
+                    CharacterGuid: characterGuid,
+                    AccountId: accountId,
+                    SessionGeneration: sessionGeneration,
+                    SourceWorkerId: sourceWorkerId,
+                    TargetWorkerId: targetWorkerId,
+                    SourceMapId: sourceMapId,
+                    SourceInstanceId: sourceInstanceId,
+                    TargetMapId: targetMapId,
+                    TargetInstanceId: targetInstanceId,
+                    CurrentStage: PlayerTransferStage.Reserve,
+                    DecisionState: PlayerTransferDecisionState.PreCommit,
+                    SourceOwnershipToken: sourceOwnershipToken,
+                    TargetOwnershipToken: null,
+                    CapturedBundle: null,
+                    AbortReason: null,
+                    UpdatedAtUtcMs: _clockUtcMs());
+
+                _decisions[transferId] = record;
+                return Task.FromResult(record);
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -141,26 +151,28 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         uint targetInstanceId,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
-            if (current.TargetInstanceId == targetInstanceId)
+            lock (_sync)
             {
-                return Task.FromResult(current);
-            }
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+                if (current.TargetInstanceId == targetInstanceId)
+                {
+                    return Task.FromResult(current);
+                }
 
-            if (current.DecisionState != PlayerTransferDecisionState.PreCommit || current.CurrentStage != PlayerTransferStage.Reserve)
-            {
-                throw new InvalidOperationException(
-                    $"Cannot rebind the target instance of transfer '{transferId}' in state {current.DecisionState} at stage {current.CurrentStage}; only a pre-commit Reserve may.");
-            }
+                if (current.DecisionState != PlayerTransferDecisionState.PreCommit || current.CurrentStage != PlayerTransferStage.Reserve)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot rebind the target instance of transfer '{transferId}' in state {current.DecisionState} at stage {current.CurrentStage}; only a pre-commit Reserve may.");
+                }
 
-            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
-            TransferDecisionRecord updated = current with { TargetInstanceId = targetInstanceId, UpdatedAtUtcMs = _clockUtcMs() };
-            _decisions[transferId] = updated;
-            return Task.FromResult(updated);
-        }
+                EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
+                TransferDecisionRecord updated = current with { TargetInstanceId = targetInstanceId, UpdatedAtUtcMs = _clockUtcMs() };
+                _decisions[transferId] = updated;
+                return Task.FromResult(updated);
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -170,59 +182,61 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         PlayerTransferBundle? capturedBundle = null,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (nextStage is not (PlayerTransferStage.SuspendAndCapture
-            or PlayerTransferStage.InstallPassive
-            or PlayerTransferStage.StageWorldPort))
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(nextStage),
-                $"AdvancePreCommitStageAsync only accepts stages 2..4; got {nextStage}.");
-        }
 
-        lock (_sync)
-        {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
-            if (current.DecisionState != PlayerTransferDecisionState.PreCommit)
+            if (nextStage is not (PlayerTransferStage.SuspendAndCapture
+                or PlayerTransferStage.InstallPassive
+                or PlayerTransferStage.StageWorldPort))
             {
-                throw new InvalidOperationException(
-                    $"Cannot advance pre-commit stage for transfer '{transferId}' in state {current.DecisionState}.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(nextStage),
+                    $"AdvancePreCommitStageAsync only accepts stages 2..4; got {nextStage}.");
             }
 
-            PlayerTransferStage expectedPrevious = nextStage switch
+            lock (_sync)
             {
-                PlayerTransferStage.SuspendAndCapture => PlayerTransferStage.Reserve,
-                PlayerTransferStage.InstallPassive => PlayerTransferStage.SuspendAndCapture,
-                PlayerTransferStage.StageWorldPort => PlayerTransferStage.InstallPassive,
-                _ => PlayerTransferStage.None,
-            };
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+                if (current.DecisionState != PlayerTransferDecisionState.PreCommit)
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot advance pre-commit stage for transfer '{transferId}' in state {current.DecisionState}.");
+                }
 
-            if (current.CurrentStage != expectedPrevious)
-            {
-                throw new InvalidOperationException(
-                    $"Invalid stage transition for transfer '{transferId}': {current.CurrentStage} -> {nextStage} (expected {expectedPrevious}).");
+                PlayerTransferStage expectedPrevious = nextStage switch
+                {
+                    PlayerTransferStage.SuspendAndCapture => PlayerTransferStage.Reserve,
+                    PlayerTransferStage.InstallPassive => PlayerTransferStage.SuspendAndCapture,
+                    PlayerTransferStage.StageWorldPort => PlayerTransferStage.InstallPassive,
+                    _ => PlayerTransferStage.None,
+                };
+
+                if (current.CurrentStage != expectedPrevious)
+                {
+                    throw new InvalidOperationException(
+                        $"Invalid stage transition for transfer '{transferId}': {current.CurrentStage} -> {nextStage} (expected {expectedPrevious}).");
+                }
+
+                EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
+
+                PlayerTransferBundle? bundleToStore = capturedBundle ?? current.CapturedBundle;
+                if (nextStage == PlayerTransferStage.SuspendAndCapture && bundleToStore is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Stage {PlayerTransferStage.SuspendAndCapture} requires a non-null PlayerTransferBundle.");
+                }
+
+                TransferDecisionRecord updated = current with
+                {
+                    CurrentStage = nextStage,
+                    CapturedBundle = bundleToStore,
+                    UpdatedAtUtcMs = _clockUtcMs(),
+                };
+
+                _decisions[transferId] = updated;
+                return Task.FromResult(updated);
             }
-
-            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
-
-            PlayerTransferBundle? bundleToStore = capturedBundle ?? current.CapturedBundle;
-            if (nextStage == PlayerTransferStage.SuspendAndCapture && bundleToStore is null)
-            {
-                throw new InvalidOperationException(
-                    $"Stage {PlayerTransferStage.SuspendAndCapture} requires a non-null PlayerTransferBundle.");
-            }
-
-            TransferDecisionRecord updated = current with
-            {
-                CurrentStage = nextStage,
-                CapturedBundle = bundleToStore,
-                UpdatedAtUtcMs = _clockUtcMs(),
-            };
-
-            _decisions[transferId] = updated;
-            return Task.FromResult(updated);
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -232,57 +246,59 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         CancellationToken cancellationToken = default,
         string? targetScope = null)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (targetIncarnation == Guid.Empty)
-            throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (targetIncarnation == Guid.Empty)
+                throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
 
-            // Idempotent return if the same transfer was already committed with the same target incarnation.
-            if (current.DecisionState is PlayerTransferDecisionState.Committed or PlayerTransferDecisionState.Completed &&
-                current.TargetOwnershipToken is not null &&
-                current.TargetOwnershipToken.Incarnation == targetIncarnation)
+            lock (_sync)
             {
-                return Task.FromResult(current);
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+
+                // Idempotent return if the same transfer was already committed with the same target incarnation.
+                if (current.DecisionState is PlayerTransferDecisionState.Committed or PlayerTransferDecisionState.Completed &&
+                    current.TargetOwnershipToken is not null &&
+                    current.TargetOwnershipToken.Incarnation == targetIncarnation)
+                {
+                    return Task.FromResult(current);
+                }
+
+                if (current.DecisionState != PlayerTransferDecisionState.PreCommit ||
+                    current.CurrentStage != PlayerTransferStage.StageWorldPort)
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer '{transferId}' cannot commit from stage {current.CurrentStage} (state={current.DecisionState}); expected StageWorldPort.");
+                }
+
+                if (current.CapturedBundle is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer '{transferId}' cannot commit without a captured PlayerTransferBundle.");
+                }
+
+                // Fence check: source ownership token must still be the active authority at the commit instant.
+                EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
+
+                var targetToken = new CharacterOwnershipToken(
+                    Scope: targetScope ?? current.SourceOwnershipToken.Scope,
+                    Epoch: checked(current.SourceOwnershipToken.Epoch + 1),
+                    Incarnation: targetIncarnation);
+
+                // Atomic ownership handoff: source epoch N is superseded by target epoch N + 1 in the same critical section.
+                _activeOwnership[current.CharacterGuid] = targetToken;
+
+                TransferDecisionRecord committed = current with
+                {
+                    CurrentStage = PlayerTransferStage.CommitDecision,
+                    DecisionState = PlayerTransferDecisionState.Committed,
+                    TargetOwnershipToken = targetToken,
+                    UpdatedAtUtcMs = _clockUtcMs(),
+                };
+
+                _decisions[transferId] = committed;
+                return Task.FromResult(committed);
             }
-
-            if (current.DecisionState != PlayerTransferDecisionState.PreCommit ||
-                current.CurrentStage != PlayerTransferStage.StageWorldPort)
-            {
-                throw new InvalidOperationException(
-                    $"Transfer '{transferId}' cannot commit from stage {current.CurrentStage} (state={current.DecisionState}); expected StageWorldPort.");
-            }
-
-            if (current.CapturedBundle is null)
-            {
-                throw new InvalidOperationException(
-                    $"Transfer '{transferId}' cannot commit without a captured PlayerTransferBundle.");
-            }
-
-            // Fence check: source ownership token must still be the active authority at the commit instant.
-            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
-
-            var targetToken = new CharacterOwnershipToken(
-                Scope: targetScope ?? current.SourceOwnershipToken.Scope,
-                Epoch: checked(current.SourceOwnershipToken.Epoch + 1),
-                Incarnation: targetIncarnation);
-
-            // Atomic ownership handoff: source epoch N is superseded by target epoch N + 1 in the same critical section.
-            _activeOwnership[current.CharacterGuid] = targetToken;
-
-            TransferDecisionRecord committed = current with
-            {
-                CurrentStage = PlayerTransferStage.CommitDecision,
-                DecisionState = PlayerTransferDecisionState.Committed,
-                TargetOwnershipToken = targetToken,
-                UpdatedAtUtcMs = _clockUtcMs(),
-            };
-
-            _decisions[transferId] = committed;
-            return Task.FromResult(committed);
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -293,29 +309,31 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         Guid targetIncarnation,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (targetIncarnation == Guid.Empty)
-            throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
-            if (current.DecisionState != PlayerTransferDecisionState.Committed || current.TargetOwnershipToken is not { } committedToken)
+            if (targetIncarnation == Guid.Empty)
+                throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
+
+            lock (_sync)
             {
-                throw new InvalidOperationException(
-                    $"Transfer '{transferId}' cannot rebind its target from state {current.DecisionState}; only a committed transfer may.");
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+                if (current.DecisionState != PlayerTransferDecisionState.Committed || current.TargetOwnershipToken is not { } committedToken)
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer '{transferId}' cannot rebind its target from state {current.DecisionState}; only a committed transfer may.");
+                }
+
+                if (committedToken.Incarnation == targetIncarnation)
+                    return Task.FromResult(current);
+
+                EnsureOwnershipMatchesLocked(current.CharacterGuid, committedToken);
+                var rebound = new CharacterOwnershipToken(committedToken.Scope, checked(committedToken.Epoch + 1), targetIncarnation);
+                _activeOwnership[current.CharacterGuid] = rebound;
+                TransferDecisionRecord updated = current with { TargetOwnershipToken = rebound, UpdatedAtUtcMs = _clockUtcMs() };
+                _decisions[transferId] = updated;
+                return Task.FromResult(updated);
             }
-
-            if (committedToken.Incarnation == targetIncarnation)
-                return Task.FromResult(current);
-
-            EnsureOwnershipMatchesLocked(current.CharacterGuid, committedToken);
-            var rebound = new CharacterOwnershipToken(committedToken.Scope, checked(committedToken.Epoch + 1), targetIncarnation);
-            _activeOwnership[current.CharacterGuid] = rebound;
-            TransferDecisionRecord updated = current with { TargetOwnershipToken = rebound, UpdatedAtUtcMs = _clockUtcMs() };
-            _decisions[transferId] = updated;
-            return Task.FromResult(updated);
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -323,33 +341,35 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         Guid transferId,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
-            if (current.DecisionState == PlayerTransferDecisionState.Completed)
-                return Task.FromResult(current);
 
-            if (current.DecisionState != PlayerTransferDecisionState.Committed ||
-                current.TargetOwnershipToken is null)
+            lock (_sync)
             {
-                throw new InvalidOperationException(
-                    $"Transfer '{transferId}' cannot complete from state {current.DecisionState} (stage={current.CurrentStage}); CommitDecision must succeed first.");
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+                if (current.DecisionState == PlayerTransferDecisionState.Completed)
+                    return Task.FromResult(current);
+
+                if (current.DecisionState != PlayerTransferDecisionState.Committed ||
+                    current.TargetOwnershipToken is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer '{transferId}' cannot complete from state {current.DecisionState} (stage={current.CurrentStage}); CommitDecision must succeed first.");
+                }
+
+                EnsureOwnershipMatchesLocked(current.CharacterGuid, current.TargetOwnershipToken);
+
+                TransferDecisionRecord completed = current with
+                {
+                    CurrentStage = PlayerTransferStage.ActivateAndRetire,
+                    DecisionState = PlayerTransferDecisionState.Completed,
+                    UpdatedAtUtcMs = _clockUtcMs(),
+                };
+
+                _decisions[transferId] = completed;
+                return Task.FromResult(completed);
             }
-
-            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.TargetOwnershipToken);
-
-            TransferDecisionRecord completed = current with
-            {
-                CurrentStage = PlayerTransferStage.ActivateAndRetire,
-                DecisionState = PlayerTransferDecisionState.Completed,
-                UpdatedAtUtcMs = _clockUtcMs(),
-            };
-
-            _decisions[transferId] = completed;
-            return Task.FromResult(completed);
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -358,37 +378,39 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         string reason,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(reason))
-            reason = "aborted";
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord>(cancellationToken, () =>
         {
-            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = "aborted";
 
-            if (current.DecisionState == PlayerTransferDecisionState.Aborted)
-                return Task.FromResult(current);
-
-            if (current.IsCommittedOrBeyond)
+            lock (_sync)
             {
-                throw new InvalidOperationException(
-                    $"Transfer '{transferId}' has already reached {current.CurrentStage} ({current.DecisionState}); post-commit abort is forbidden and must roll forward.");
+                TransferDecisionRecord current = GetRequiredLocked(transferId);
+
+                if (current.DecisionState == PlayerTransferDecisionState.Aborted)
+                    return Task.FromResult(current);
+
+                if (current.IsCommittedOrBeyond)
+                {
+                    throw new InvalidOperationException(
+                        $"Transfer '{transferId}' has already reached {current.CurrentStage} ({current.DecisionState}); post-commit abort is forbidden and must roll forward.");
+                }
+
+                // Preserve source ownership token unchanged.
+                _activeOwnership[current.CharacterGuid] = current.SourceOwnershipToken;
+
+                TransferDecisionRecord aborted = current with
+                {
+                    CurrentStage = PlayerTransferStage.Aborted,
+                    DecisionState = PlayerTransferDecisionState.Aborted,
+                    AbortReason = reason,
+                    UpdatedAtUtcMs = _clockUtcMs(),
+                };
+
+                _decisions[transferId] = aborted;
+                return Task.FromResult(aborted);
             }
-
-            // Preserve source ownership token unchanged.
-            _activeOwnership[current.CharacterGuid] = current.SourceOwnershipToken;
-
-            TransferDecisionRecord aborted = current with
-            {
-                CurrentStage = PlayerTransferStage.Aborted,
-                DecisionState = PlayerTransferDecisionState.Aborted,
-                AbortReason = reason,
-                UpdatedAtUtcMs = _clockUtcMs(),
-            };
-
-            _decisions[transferId] = aborted;
-            return Task.FromResult(aborted);
-        }
+        });
     }
 
     /// <inheritdoc />
@@ -396,12 +418,14 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         Guid transferId,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (_sync)
+        return Guard<TransferDecisionRecord?>(cancellationToken, () =>
         {
-            return Task.FromResult(_decisions.TryGetValue(transferId, out TransferDecisionRecord? record) ? record : null);
-        }
+
+            lock (_sync)
+            {
+                return Task.FromResult(_decisions.TryGetValue(transferId, out TransferDecisionRecord? record) ? record : null);
+            }
+        });
     }
 
     /// <inheritdoc />
@@ -409,46 +433,88 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
         ulong characterGuid,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (_sync)
+        return Guard<IReadOnlyList<TransferDecisionRecord>>(cancellationToken, () =>
         {
-            IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
-                .Where(d =>
-                    d.CharacterGuid == characterGuid &&
-                    d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
-                .OrderBy(d => d.UpdatedAtUtcMs)
-                .ToArray();
 
-            return Task.FromResult(list);
-        }
+            lock (_sync)
+            {
+                IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
+                    .Where(d =>
+                        d.CharacterGuid == characterGuid &&
+                        d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
+                    .OrderBy(d => d.UpdatedAtUtcMs)
+                    .ToArray();
+
+                return Task.FromResult(list);
+            }
+        });
     }
 
     /// <inheritdoc />
     public Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (_sync)
+        return Guard<IReadOnlyList<TransferDecisionRecord>>(cancellationToken, () =>
         {
-            IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
-                .Where(d => d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
-                .OrderBy(d => d.UpdatedAtUtcMs)
-                .ToArray();
 
-            return Task.FromResult(list);
-        }
+            lock (_sync)
+            {
+                IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
+                    .Where(d => d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
+                    .OrderBy(d => d.UpdatedAtUtcMs)
+                    .ToArray();
+
+                return Task.FromResult(list);
+            }
+        });
     }
 
     /// <inheritdoc />
     public Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        lock (_sync)
+        return Guard<int>(cancellationToken, () =>
         {
-            return Task.FromResult(_decisions.Values.Count(d =>
-                d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed));
+
+            lock (_sync)
+            {
+                return Task.FromResult(_decisions.Values.Count(d =>
+                    d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Run <paramref name="body"/> and hand back its task; a cancellation already requested is a cancelled task and an exception the body
+    /// throws (argument checks, a refused stage, a rejected ownership token) a faulted one, never a synchronous throw. The EF store is
+    /// <c>async</c>, so its callers see these errors the same way.
+    /// </summary>
+    private static Task<T> Guard<T>(CancellationToken cancellationToken, Func<Task<T>> body)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<T>(cancellationToken);
+
+        try
+        {
+            return body();
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException<T>(ex);
+        }
+    }
+
+    /// <summary><see cref="Guard{T}"/> for a method with no result.</summary>
+    private static Task GuardVoid(CancellationToken cancellationToken, Func<Task> body)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled(cancellationToken);
+
+        try
+        {
+            return body();
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException(ex);
         }
     }
 

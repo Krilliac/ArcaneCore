@@ -54,4 +54,25 @@ public sealed class InMemoryTransferDecisionStoreCountTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new InMemoryTransferDecisionStore().CountUnresolvedAsync(cts.Token));
     }
+
+    [Fact]
+    public async Task ARefusedCall_ComesBackAsAFaultedOrCancelledTask_NeverASynchronousThrow()
+    {
+        var store = new InMemoryTransferDecisionStore();
+
+        Task<TransferDecisionRecord> bad = Reserve(store, Guid.NewGuid(), 0); // returns, does not throw
+        Assert.True(bad.IsFaulted);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => bad);
+
+        Task<TransferDecisionRecord> missing = store.MarkCompletedAsync(Guid.NewGuid());
+        Assert.True(missing.IsFaulted);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => missing);
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Task seed = store.SeedCharacterOwnershipAsync(31, new CharacterOwnershipToken("char:31", 1, Guid.NewGuid()), cancelled.Token);
+        Assert.True(seed.IsCanceled);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => seed);
+        Assert.Null(await store.GetActiveOwnershipAsync(31)); // nothing was seeded
+    }
 }

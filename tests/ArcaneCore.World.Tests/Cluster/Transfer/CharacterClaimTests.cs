@@ -47,7 +47,7 @@ public sealed class CharacterClaimTests
         Assert.Equal(CharacterClaimOutcome.RefusedLiveOwner, refused.Outcome);
         Assert.False(refused.IsClaimed);
         Assert.Equal(a.Scope, refused.PreviousScope);
-        Assert.Equal(a, rig.Store.GetActiveOwnership(10));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(10));
 
         await rig.WriteAsync(10, a); // the holder still writes
         await AssertRefusedAsync<CharacterClaimRejectedException>(() => rig.WriteAsync(10, b)); // the refused worker cannot
@@ -70,7 +70,7 @@ public sealed class CharacterClaimTests
         CharacterClaimResult taken = await rig.Store.TryClaimCharacterAsync(11, b);
         Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, taken.Outcome);
         Assert.Equal(a.Scope, taken.PreviousScope);
-        Assert.Equal(b, rig.Store.GetActiveOwnership(11));
+        Assert.Equal(b, await rig.Store.GetActiveOwnershipAsync(11));
         await rig.WriteAsync(11, b);
         await AssertRefusedAsync<CharacterOwnershipRejectedException>(() => rig.WriteAsync(11, a)); // the zombie's scope token is stale (its shard was reclaimed), which the write fence refuses before the claim is even looked at
     }
@@ -105,7 +105,7 @@ public sealed class CharacterClaimTests
         CharacterOwnershipToken restarted = (await rig.ReclaimAsync(a))!;
         Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync(13, b)).Outcome);
         Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync(13, restarted)).Outcome);
-        Assert.Equal(a, rig.Store.GetActiveOwnership(13));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(13));
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class CharacterClaimTests
         CharacterClaimResult reaped = await rig.Store.TryClaimCharacterAsync(14, b, policy);
         Assert.Equal(CharacterClaimOutcome.TookOverDeadOwner, reaped.Outcome);
         Assert.False((await rig.OwnershipRowAsync(a.Scope)).Active);
-        Assert.Equal(b, rig.Store.GetActiveOwnership(14));
+        Assert.Equal(b, await rig.Store.GetActiveOwnershipAsync(14));
         await rig.WriteAsync(14, b);
         await AssertRefusedAsync<CharacterOwnershipRejectedException>(() => rig.WriteAsync(14, a));
     }
@@ -168,7 +168,7 @@ public sealed class CharacterClaimTests
         await rig.WriteAsync(character, b); // the target writes under its own worker token
         TransferDecisionRecord done = await rig.Store.MarkCompletedAsync(transfer);
         Assert.Equal(b.Scope, done.TargetOwnershipToken!.Scope);
-        Assert.Equal(committed.TargetOwnershipToken, rig.Store.GetActiveOwnership(character));
+        Assert.Equal(committed.TargetOwnershipToken, await rig.Store.GetActiveOwnershipAsync(character));
     }
 
     [Fact]
@@ -244,7 +244,7 @@ public sealed class CharacterClaimTests
 
         await Assert.ThrowsAsync<CharacterClaimRejectedException>(
             () => rig.Store.CreateReservationAsync(Guid.NewGuid(), 16, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a));
-        Assert.Null(rig.Store.GetActiveOwnership(16));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(16));
 
         // After a release the claim is gone again (logout): a late save is refused and a new login can claim it elsewhere.
         await rig.Store.TryClaimCharacterAsync(16, a);
@@ -265,11 +265,11 @@ public sealed class CharacterClaimTests
         await rig.Store.TryClaimCharacterAsync(17, a);
 
         await Assert.ThrowsAsync<CharacterDeletionRefusedException>(() => rig.DeleteClaimDataAsync(17, b));
-        Assert.Equal(a, rig.Store.GetActiveOwnership(17));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(17));
 
         await rig.ReleaseShardAsync(a); // the owner is gone (its row is inactive), so its claim no longer blocks
         await rig.DeleteClaimDataAsync(17, b);
-        Assert.Null(rig.Store.GetActiveOwnership(17));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(17));
     }
 
     [Fact]

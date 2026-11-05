@@ -46,13 +46,13 @@ public sealed class CharacterClaimWiringTests
         await using WorldTestHost host = rig.StartWorld(a);
         (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE1", "Claimant");
 
-        Assert.Null(rig.Store.GetActiveOwnership((ulong)id));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync((ulong)id));
         await client.LoginAsync((ulong)id);
         Assert.True(host.World.IsOnline(ObjectGuid.Player((uint)id)));
-        Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id)); // claimed before the character was attached
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id)); // claimed before the character was attached
 
         await client.DisposeAsync(); // logout
-        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)id) is null, "the claim is released after the logout save");
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the claim is released after the logout save");
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
     }
 
@@ -73,7 +73,7 @@ public sealed class CharacterClaimWiringTests
         byte[] failed = await client.ReadUntilAsync(WorldOpcode.SmsgCharacterLoginFailed);
         Assert.Equal((byte)CharResult.CharLoginDuplicateCharacter, failed[0]);
         Assert.Equal(0, host.World.OnlinePlayerCount);
-        Assert.Equal(b, rig.Store.GetActiveOwnership((ulong)id)); // the holder keeps it
+        Assert.Equal(b, await rig.Store.GetActiveOwnershipAsync((ulong)id)); // the holder keeps it
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class CharacterClaimWiringTests
             }
 
             Assert.True((await rig.OwnershipRowAsync(a.Scope)).Active);
-            Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id));
+            Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
         }
 
         // The lock is free now (the process is gone) and the heartbeat is stale: the login reaps shard a and takes the character over.
@@ -111,7 +111,7 @@ public sealed class CharacterClaimWiringTests
             await rig.Store.TryClaimCharacterAsync((ulong)id, a);
             Assert.True(await rig.HeartbeatAsync(a, stale));
             await client.LoginAsync((ulong)id);
-            Assert.Equal(b, rig.Store.GetActiveOwnership((ulong)id));
+            Assert.Equal(b, await rig.Store.GetActiveOwnershipAsync((ulong)id));
             Assert.False((await rig.OwnershipRowAsync(a.Scope)).Active);
         }
 
@@ -148,7 +148,7 @@ public sealed class CharacterClaimWiringTests
         CharacterClaimResult realm = await claims.ClaimAsync(30, world);
         Assert.Equal(CharacterClaimOutcome.NotWorkerScope, realm.Outcome);
         Assert.True(CharacterClaimService.Admits(realm));
-        Assert.Null(rig.Store.GetActiveOwnership(30));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(30));
 
         (CharacterClaimResult claimed, long ticket) = await claims.ClaimWithTicketAsync(31, a);
         Assert.Equal(CharacterClaimOutcome.Claimed, claimed.Outcome);
@@ -159,18 +159,18 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(31, b); // not the holder: the delete is exact on the token
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(31));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(31));
 
         // A release only deletes with the ticket of the login that is releasing (an unticketed one never deletes a claim a live login holds).
         claims.ScheduleRelease(31, a, () => true, ticket); // the character is online again: it keeps the claim
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(31));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(31));
 
         (CharacterClaimResult again, long secondTicket) = await claims.ClaimWithTicketAsync(31, a);
         Assert.Equal(CharacterClaimOutcome.AlreadyHeld, again.Outcome);
         claims.ScheduleRelease(31, a, () => false, secondTicket);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(31));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(31));
     }
 
     [Fact]
@@ -192,7 +192,7 @@ public sealed class CharacterClaimWiringTests
         Assert.Equal(CharacterClaimOutcome.AlreadyHeld, relogin.Outcome);
         gate.SetResult();
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(32)); // the stale release did not strip the new session's claim
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(32)); // the stale release did not strip the new session's claim
     }
 
     [Fact]
@@ -215,11 +215,11 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(34, a, () => false, ticket1); // the replaced session's ReleaseUnenteredClaim, scheduled after the newer claim
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(34)); // the replacing session's claim survives
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(34)); // the replacing session's claim survives
 
         claims.ScheduleRelease(34, a, () => false, ticket2); // the newest login's own release still works
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(34));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(34));
     }
 
     [Fact]
@@ -239,11 +239,11 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(35, a, () => false, loggedOut); // the posted ScheduleRelease of the logout runs now; the relogin has not entered the world yet, so isOnline says false
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(35));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(35));
 
         claims.ScheduleRelease(35, a, () => false, relogin);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(35));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(35));
     }
 
     [Fact]
@@ -270,11 +270,11 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(37, a, () => false, claims.TicketOf(shadow)); // the posted logout release of the transferred-in player
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(37));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(37));
 
         claims.ScheduleRelease(37, a, () => false, reloginTicket);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(37));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(37));
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleRelease(36, a, () => false, older);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(36));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(36));
     }
 
     [Fact]
@@ -322,11 +322,11 @@ public sealed class CharacterClaimWiringTests
         (_, long duplicate) = await claims.ClaimWithTicketAsync(39, a); // a second login of the character, claimed while the first was online
         claims.ScheduleRelease(39, a, () => false, older); // the first login logged out: its release is skipped, the duplicate's ticket is newer
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(39));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(39));
 
         claims.AbandonTicket(39, duplicate, a, () => false); // EnterWorld refused the duplicate and nobody is online: nothing else would ever release the claim
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(39));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(39));
     }
 
     [Fact]
@@ -344,18 +344,18 @@ public sealed class CharacterClaimWiringTests
         (_, long duplicate) = await claims.ClaimWithTicketAsync(40, a);
         claims.AbandonTicket(40, duplicate, a, () => false); // nobody is online, so only the older live ticket keeps the claim: its logout owns the release
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(40));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(40));
 
         claims.ScheduleRelease(40, a, () => false, older);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(40));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(40));
 
         (_, long first) = await claims.ClaimWithTicketAsync(41, a);
         (_, long second) = await claims.ClaimWithTicketAsync(41, a);
         claims.ScheduleRelease(41, a, () => false, first); // skipped: a newer ticket exists
         claims.AbandonTicket(41, second, a, () => true); // no live ticket is left but the character is online: the claim stays
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(41));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(41));
     }
 
     [Fact]
@@ -372,11 +372,11 @@ public sealed class CharacterClaimWiringTests
         (_, long live) = await claims.ClaimWithTicketAsync(52, a);
         claims.ScheduleRelease(52, a, () => false); // ticket zero: what an abandoned login's release carries
         await claims.DrainAsync();
-        Assert.Equal(a, rig.Store.GetActiveOwnership(52)); // the live ticket keeps the claim
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(52)); // the live ticket keeps the claim
 
         claims.ScheduleRelease(52, a, () => false, live);
         await claims.DrainAsync();
-        Assert.Null(rig.Store.GetActiveOwnership(52));
+        Assert.Null(await rig.Store.GetActiveOwnershipAsync(52));
     }
 
     [Fact]
@@ -410,7 +410,7 @@ public sealed class CharacterClaimWiringTests
 
         await claims.DrainAsync();
 
-        Assert.Equal(a, rig.Store.GetActiveOwnership(53));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync(53));
     }
 
     [Fact]
@@ -440,7 +440,7 @@ public sealed class CharacterClaimWiringTests
 
         Assert.Single(results, r => r.IsClaimed);
         Assert.Single(results, r => r.Outcome == CharacterClaimOutcome.RefusedLiveOwner);
-        CharacterOwnershipToken holder = rig.Store.GetActiveOwnership(33)!;
+        CharacterOwnershipToken holder = (await rig.Store.GetActiveOwnershipAsync(33))!;
         Assert.Equal(results.Single(r => r.IsClaimed).Claim, holder);
     }
 
@@ -579,7 +579,7 @@ public sealed class CharacterClaimWiringTests
         });
         Assert.Equal(98765u, money);
         Assert.Equal(1u, map);
-        Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id));
+        Assert.Equal(a, await rig.Store.GetActiveOwnershipAsync((ulong)id));
     }
 
     /// <summary>
@@ -641,11 +641,11 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
         await Task.Delay(400);
-        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope); // still in flight: nothing deleted
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope); // still in flight: nothing deleted
         Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
 
         await rig.Store.MarkCompletedAsync(transfer);
-        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)character) is null, "the received claim is released once the transfer completed");
+        await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)character)).GetAwaiter().GetResult() is null, "the received claim is released once the transfer completed");
         await claims.DrainAsync();
         Assert.True((await rig.Store.TryClaimCharacterAsync((ulong)character, a)).IsClaimed);
     }
@@ -664,7 +664,7 @@ public sealed class CharacterClaimWiringTests
 
         claims.ScheduleReleaseOfReceivedClaim(character, b, () => true);
         await claims.DrainAsync();
-        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+        Assert.Equal(b.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope);
     }
 
     /// <summary>An <see cref="ICharacterStore"/> whose reads of one character return copies, and which runs a callback right after the Nth read of it (before returning it).</summary>

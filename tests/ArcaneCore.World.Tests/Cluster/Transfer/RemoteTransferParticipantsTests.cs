@@ -379,7 +379,7 @@ public sealed class RemoteTransferParticipantsTests
             }
 
             var sourceToken = new CharacterOwnershipToken("char:4242", 7, source.Incarnation);
-            store.SeedCharacterOwnership(Character, sourceToken);
+            await store.SeedCharacterOwnershipAsync(Character, sourceToken);
             PlayerTransferBundle seeded = PlayerTransferValidatorTests.CreateSampleValidBundle(
                 transferId: Guid.NewGuid(), characterGuid: Character, sourceWorker: SourceId, targetWorker: TargetId, sourceToken: sourceToken);
             source.Seed(seeded);
@@ -458,7 +458,7 @@ public sealed class RemoteTransferParticipantsTests
         public async Task<Guid> AddReservationRowAsync(ulong character)
         {
             var token = new CharacterOwnershipToken("char:" + character, 1, Source.Incarnation);
-            Store.SeedCharacterOwnership(character, token);
+            await Store.SeedCharacterOwnershipAsync(character, token);
             Guid id = Guid.NewGuid();
             await Store.CreateReservationAsync(id, character, 77, 5, SourceId, TargetId, 0, 0, 33, 0, token);
             return id;

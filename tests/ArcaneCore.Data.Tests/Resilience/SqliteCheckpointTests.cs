@@ -219,6 +219,56 @@ public sealed class SqliteCheckpointTests : IDisposable
     }
 
     [Fact]
+    public async Task TheCheckpointLoop_RunsOnADedicatedThread_NotAThreadPoolThread()
+    {
+        string path = NewWalDb("thread.db");
+        SqliteConnection app = OpenApp(path, new SqliteCheckpointOptions());
+        Insert(app, 50);
+        var observed = new ThreadProbeProvider("checkpointer started");
+        SqliteCheckpointService service = BuildService(path, logging => logging.AddProvider(observed));
+
+        await service.StartAsync(CancellationToken.None);
+        bool seen = SpinWait.SpinUntil(() => observed.PoolThread.HasValue, TimeSpan.FromSeconds(30));
+        await service.StopAsync(CancellationToken.None);
+
+        Assert.True(seen, "the checkpoint loop never started");
+        Assert.False(observed.PoolThread);
+        Assert.Equal(0L, WalBytes(path)); // the final TRUNCATE still ran on that thread
+    }
+
+    /// <summary>Records whether the thread that logged a line containing the marker is a thread-pool thread.</summary>
+    private sealed class ThreadProbeProvider(string marker) : ILoggerProvider
+    {
+        private volatile int _state; // 0 = not seen, 1 = pool thread, 2 = not a pool thread
+
+        internal string Marker => marker;
+
+        public bool? PoolThread => _state == 0 ? null : _state == 1;
+
+        public ILogger CreateLogger(string categoryName) => new Probe(this);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Probe(ThreadProbeProvider owner) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (formatter(state, exception).Contains(owner.Marker, StringComparison.Ordinal))
+                {
+                    owner._state = Thread.CurrentThread.IsThreadPoolThread ? 1 : 2;
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void ACheckpointThatKeepsFailingToCatchUp_WarnsAfterThirtySeconds_AndOnlyOncePerMinute()
     {
         string path = NewWalDb("stall.db");
@@ -566,6 +616,9 @@ public sealed class SqliteCheckpointTests : IDisposable
     }
 
     private SqliteCheckpointService ServiceFor(string path, params (string Key, string? Value)[] extra)
+        => BuildService(path, null, extra);
+
+    private SqliteCheckpointService BuildService(string path, Action<ILoggingBuilder>? logging, params (string Key, string? Value)[] extra)
     {
         var values = new Dictionary<string, string?>
         {
@@ -579,7 +632,7 @@ public sealed class SqliteCheckpointTests : IDisposable
 
         IConfiguration config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         var services = new ServiceCollection();
-        services.AddLogging();
+        services.AddLogging(builder => logging?.Invoke(builder));
         services.AddAuthDatabase(config).AddCharacterDatabase(config).AddWorldDatabase(config);
         ServiceProvider provider = services.BuildServiceProvider();
         _open.Add(provider);
