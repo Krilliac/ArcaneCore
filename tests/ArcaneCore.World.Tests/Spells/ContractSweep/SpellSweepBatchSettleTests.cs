@@ -1,4 +1,3 @@
-using ArcaneCore.Game.Spells;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Spells.ContractSweep;
