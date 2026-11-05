@@ -14,8 +14,8 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// quest is done for the group. The wave counter resets with the script only while he is not escorting (Reset :647-654).
 /// <para>
 /// Difference: the ambush points of the fans are the ground height under the point 30 yd away (GetNearPoint's collision search, which can move
-/// the point, is not run here: the pets lane owns that free-spot search, Y94). As in the source, his AttackedBy override does not call the base reaction, so a retaliation comes only from the threat the
-/// attackers put on him.
+/// the point, is not run here: the pets lane owns that free-spot search, Y94). As in the source, his AttackedBy override does not call the base
+/// reaction, so a retaliation comes only from the threat the attackers put on him.
 /// </para>
 /// </summary>
 public sealed class FeeroIronhandAI(Creature creature) : EscortAI(creature), IQuestScriptAI

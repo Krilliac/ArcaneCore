@@ -249,7 +249,7 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
                 Me.StandState = StandState.Kneel;
                 Me.NpcFlags &= ~(uint)NpcFlags.QuestGiver;
                 _cavaliers.Clear();
-                foreach (Creature cavalier in system.CreaturesOfEntry(Me, NpcScarletCavalier, 10f))
+                foreach (Creature cavalier in system.CreaturesOfEntryInRange(Me, NpcScarletCavalier, 10f))
                 {
                     // Z above 164 keeps out the cavaliers of the floor below.
                     if (cavalier.IsAlive && !cavalier.Combat.IsInCombat && cavalier.Z > 164f)
@@ -286,7 +286,7 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
                 {
                     if (cavalier.IsAlive && cavalier.IsInWorld)
                     {
-                        system.AttackStart(cavalier, Me);
+                        cavalier.AI?.AttackStart(Me);
                     }
                 }
 

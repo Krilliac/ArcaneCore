@@ -119,7 +119,13 @@ public sealed class Y90CreatureScriptsTests
             (World, Map, System) = CreateAiSystem(content, services, new CreatureOptions { CreatureAggroOnCreatures = creaturesAggroCreatures });
             (Player, Session) = AddPlayer(World, 1, x + playerOffset, y);
             Npc = Assert.Single(System.Creatures, c => c.Template.Entry == entry);
+            _pathOrigin = (x, y, z);
         }
+
+        private readonly (float X, float Y, float Z) _pathOrigin;
+
+        /// <summary>Where the script path's point <paramref name="point"/> lies (the constructor places point i at x + 3i).</summary>
+        public (float X, float Y, float Z) PointPosition(uint point) => (_pathOrigin.X + (point * 3f), _pathOrigin.Y, _pathOrigin.Z);
 
         public RecordingCaster Caster { get; } = new();
 
@@ -162,7 +168,8 @@ public sealed class Y90CreatureScriptsTests
     {
         var ai = Assert.IsAssignableFrom<EscortAI>(rig.Npc.AI);
         Assert.True(ai.SetNextWaypointByPointId(point));
-        rig.Npc.Relocate(rig.Npc.X + 1f, rig.Npc.Y, rig.Npc.Z);
+        (float x, float y, float z) = rig.PointPosition(point);
+        rig.Npc.Relocate(x, y, z);
         ai.OnMovementInform(MovementGeneratorType.Point, point);
     }
 
@@ -205,7 +212,7 @@ public sealed class Y90CreatureScriptsTests
         AssertSlot(guard, 0, Sword);
         Assert.Null(guard.ScriptEquipmentDefault);
 
-        guard.SetScriptEquipment(Items, loadDefault: false, ranged: BowItem);
+        guard.SetScriptEquipment(Items, loadDefault: false, ranged: (int)BowItem);
         AssertSlot(guard, 0, Sword);
         AssertSlot(guard, 1, Shield);
         AssertSlot(guard, 2, Bow);
@@ -264,6 +271,72 @@ public sealed class Y90CreatureScriptsTests
         Assert.Equal(UnitFlags.None, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
     }
 
+    private static Rig EnemyNextToRuul(out Creature enemy, float playerOffset = 1f)
+    {
+        var rig = new Rig(RuulSnowhoofAI.Entry, hostile: true, pathLength: 36, creaturesAggroCreatures: true, playerOffset: playerOffset,
+            extraTemplates: [Hostile(EnemyEntry)], extraSpawns: [Spawn(2, EnemyEntry, 6f, 0f)]);
+        enemy = Assert.Single(rig.System.Creatures, c => c.Template.Entry == EnemyEntry);
+        return rig;
+    }
+
+    [Fact]
+    public void AUnitImmuneToNpcs_CannotBeAttackedByACreature_ButAPlayerCan()
+    {
+        using Rig rig = EnemyNextToRuul(out Creature enemy);
+        CombatHooks hooks = rig.Map.Combat.Hooks;
+        Assert.True(hooks.CanAttack(enemy, rig.Npc), "without the flag a hostile creature may attack him");
+
+        rig.Npc.UnitFlags |= UnitFlags.ImmuneToNpc;
+
+        Assert.False(hooks.CanAttack(enemy, rig.Npc));
+        Assert.False(rig.System.AttackStart(enemy, rig.Npc));
+        Assert.Null(enemy.Combat.Victim);
+        Assert.False(rig.System.CanAggroOnSight(enemy, rig.Npc));
+        // The flag is about creatures only: it does not shield him from a player (the check for that is ImmuneToPlayer).
+        rig.Npc.UnitFlags &= ~UnitFlags.ImmuneToNpc;
+        rig.Npc.UnitFlags |= UnitFlags.ImmuneToPlayer;
+        Assert.True(hooks.CanAttack(enemy, rig.Npc));
+        Assert.False(hooks.CanAttack(rig.Player, rig.Npc));
+    }
+
+    [Fact]
+    public void AUnitImmuneToPlayers_IsNotAttackedByAPlayer_AndDoesNotAttackOne()
+    {
+        using Rig rig = EnemyNextToRuul(out Creature enemy);
+        CombatHooks hooks = rig.Map.Combat.Hooks;
+        Assert.True(hooks.CanAttack(enemy, rig.Player));
+
+        enemy.UnitFlags |= UnitFlags.ImmuneToNpc; // an NPC-immune creature still attacks a player
+        Assert.True(hooks.CanAttack(enemy, rig.Player));
+        enemy.UnitFlags &= ~UnitFlags.ImmuneToNpc;
+
+        enemy.UnitFlags |= UnitFlags.ImmuneToPlayer;
+        Assert.False(hooks.CanAttack(enemy, rig.Player), "the attacker's own immune-to-player flag stops it attacking a player");
+        Assert.False(rig.System.AttackStart(enemy, rig.Player));
+        Assert.Null(enemy.Combat.Victim);
+        Assert.False(hooks.CanAttack(rig.Player, enemy));
+    }
+
+    [Fact]
+    public void Ruul_HostileCreaturesDoNotAggroHim_WhileHeIsImmuneToNpcs()
+    {
+        using Rig rig = EnemyNextToRuul(out Creature enemy, playerOffset: 60f);
+        var ai = rig.Ai<RuulSnowhoofAI>();
+        ai.OnQuestAccept(rig.Player, RuulSnowhoofAI.QuestFreedomToRuul);
+        Reach(rig, 32);
+        Assert.Equal(UnitFlags.ImmuneToNpc, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
+
+        // Neither the enemy's own sight check nor the escort's aggro scan may start a fight with him.
+        Assert.False(rig.System.CanAggroOnSight(enemy, rig.Npc));
+        Assert.Null(rig.System.AggroNearestHostileCreature(rig.Npc));
+        Assert.False(rig.RunUntil(() => enemy.Combat.Victim is not null, 5_000), "an immune escort is left alone");
+        Assert.Null(rig.Npc.Combat.Victim);
+
+        Reach(rig, 34);
+        Assert.Equal(UnitFlags.ImmuneToNpc, rig.Npc.UnitFlags & UnitFlags.ImmuneToNpc);
+        Assert.False(rig.System.AttackStart(enemy, rig.Npc));
+    }
+
     [Fact]
     public void DefiasTraitor_IsDefensive_AtSpawnAndAfterEveryRespawn()
     {
@@ -311,12 +384,12 @@ public sealed class Y90CreatureScriptsTests
             [
                 Spawn(2, TaelanFordringAI.NpcScarletCavalier, 3f, 0f, high), Spawn(3, TaelanFordringAI.NpcScarletCavalier, -3f, 1f, high),
                 Spawn(4, TaelanFordringAI.NpcScarletCavalier, 0f, 4f, high),
-                Spawn(5, TaelanFordringAI.NpcScarletCavalier, 0f, -4f, 150f), // the floor below: not part of the scene
+                Spawn(5, TaelanFordringAI.NpcScarletCavalier, 0f, -4f, 162f), // inside 10 yd but below z 164: the floor below, not part of the scene
             ]);
         var ai = rig.Ai<TaelanFordringAI>();
         List<Creature> cavaliers = [.. rig.System.Creatures.Where(c => c.Template.Entry == TaelanFordringAI.NpcScarletCavalier)];
         Assert.Equal(4, cavaliers.Count);
-        Creature downstairs = Assert.Single(cavaliers, c => c.Z < 160f);
+        Creature downstairs = Assert.Single(cavaliers, c => c.Z < 164f);
         rig.Session.Clear();
 
         // A different quest does nothing.
@@ -339,8 +412,9 @@ public sealed class Y90CreatureScriptsTests
         Assert.Null(downstairs.Combat.Victim);
 
         // Back home he casts his aura, then gets his quest-giver flag back.
+        int auraCasts = rig.Caster.Casts.Count(c => ReferenceEquals(c.Caster, rig.Npc) && c.Spell == TaelanFordringAI.SpellDevotionAura);
         ai.OnReachedHome();
-        Assert.Contains(rig.Caster.Casts, c => ReferenceEquals(c.Caster, rig.Npc) && c.Spell == TaelanFordringAI.SpellDevotionAura);
+        Assert.Equal(auraCasts + 1, rig.Caster.Casts.Count(c => ReferenceEquals(c.Caster, rig.Npc) && c.Spell == TaelanFordringAI.SpellDevotionAura));
         Assert.Equal(0u, rig.Npc.NpcFlags & (uint)NpcFlags.QuestGiver);
         Assert.True(rig.RunUntil(() => (rig.Npc.NpcFlags & (uint)NpcFlags.QuestGiver) != 0));
 

@@ -172,6 +172,24 @@ public class CombatHooks
             && victim is not ICombatCreature { IsInEvadeMode: true };
     }
 
+    /// <summary>
+    /// UNIT_FLAG_IMMUNE_TO_PLAYER / UNIT_FLAG_IMMUNE_TO_NPC in the attack check (mangos-classic Unit::CanAttack, Relations.cpp:376-385): a
+    /// victim immune to players refuses an attacker a player controls (acts for), one immune to NPCs refuses every other attacker; the same
+    /// test with the roles swapped on the attacker's own flags, judged by who controls the victim. The shape of
+    /// <see cref="ArcaneCore.Game.Combat.Threat.ThreatRules.CanPullPetOwner"/>.
+    /// </summary>
+    private static bool IsBlockedByImmuneToFlags(Unit attacker, Unit victim)
+    {
+        if (((attacker.UnitFlags | victim.UnitFlags) & (UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc)) == 0)
+        {
+            return false;
+        }
+
+        UnitFlags victimBlocks = attacker.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        UnitFlags attackerBlocks = victim.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        return (victim.UnitFlags & victimBlocks) != 0 || (attacker.UnitFlags & attackerBlocks) != 0;
+    }
+
     private static bool InSameGroup(Unit mapOf, Player a, Player b)
     {
         if (mapOf.Map?.World is not { } world || !s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup))
@@ -218,6 +236,11 @@ public class CombatHooks
         }
 
         if (!IsAttackableState(victim))
+        {
+            return false;
+        }
+
+        if (IsBlockedByImmuneToFlags(attacker, victim))
         {
             return false;
         }
