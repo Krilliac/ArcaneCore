@@ -352,36 +352,179 @@ public sealed class SolicitedAckJudgementTests
         Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Physics);
     }
 
-    [Fact]
-    public async Task ASolicitedRootAck_DuringATaxiFlight_IsHonouredButItsPositionIsNotStored()
+    /// <summary>A real order the server sent and is waiting on: the type it is pending under, and its ack (counter and x offset of the block).</summary>
+    private sealed record SentOrder(MovementChangeType Type, Func<uint, float, byte[]> Ack);
+
+    /// <summary>Sends the order that <paramref name="ackOpcode"/> acknowledges, through the same calls the judged tests above use.</summary>
+    private static async Task<SentOrder> SendOrderAsync(Scene scene, WorldOpcode ackOpcode)
     {
-        await using Scene scene = await StartAsync("ROOTTAXI", "Roottaxi");
-        await scene.BaselineAsync();
-        await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
-        await scene.Client.CollectThroughBarrierAsync();
-        AntiCheatFeature feature = scene.Host.WorldServices.GetRequiredService<AntiCheatFeature>();
-        float budgetBefore = await scene.Host.OnWorldAsync(() => feature.BudgetedYardsOf(scene.Player));
-        float before = await scene.Host.OnWorldAsync(() =>
+        switch (ackOpcode)
+        {
+            case WorldOpcode.CmsgForceMoveRootAck:
+                await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, MovementChangeType.Root, apply: true));
+                await scene.Client.CollectThroughBarrierAsync();
+                return new SentOrder(MovementChangeType.Root, (counter, dx) => scene.Ack(counter, MovementFlags.Root, dx, _ => { }));
+            case WorldOpcode.CmsgForceRunSpeedChangeAck:
+                float target = UnitSpeed.BaseSpeed(MoveType.Run) * 1.4f;
+                await scene.Host.OnWorldAsync(() => UnitSpeed.SetRate(scene.Player, MoveType.Run, 1.4f));
+                await scene.Client.ReadUntilAsync(SpeedPackets.ForceOpcode(MoveType.Run));
+                return new SentOrder(MovementChangeType.SpeedRun, (counter, dx) => scene.Ack(counter, MovementFlags.Forward, dx, w => w.WriteSingle(target)));
+            case WorldOpcode.CmsgForceTurnRateChangeAck:
+                float rate = await scene.Host.OnWorldAsync(() =>
+                {
+                    UnitSpeed.SetTurnRate(scene.Player, 1.5f);
+                    return scene.Player.TurnRate;
+                });
+                await scene.Client.ReadUntilAsync(WorldOpcode.SmsgForceTurnRateChange);
+                return new SentOrder(MovementChangeType.TurnRate, (counter, dx) => scene.Ack(counter, MovementFlags.Forward, dx, w => w.WriteSingle(rate)));
+            case WorldOpcode.CmsgMoveKnockBackAck:
+                SpellSystem spells = scene.Host.WorldServices.GetRequiredService<SpellFeature>().System;
+                await scene.Host.OnWorldAsync(() => KnockbackService.KnockBack(spells, scene.Player, 0f, 7.5f, 5f));
+                await scene.Client.ReadUntilAsync(WorldOpcode.SmsgMoveKnockBack);
+                return new SentOrder(MovementChangeType.KnockBack, (counter, dx) => KnockbackAck(scene, counter, dx));
+            default:
+                MovementChangeType type = ackOpcode switch
+                {
+                    WorldOpcode.CmsgMoveWaterWalkAck => MovementChangeType.WaterWalk,
+                    WorldOpcode.CmsgMoveHoverAck => MovementChangeType.Hover,
+                    WorldOpcode.CmsgMoveFeatherFallAck => MovementChangeType.FeatherFall,
+                    _ => throw new ArgumentOutOfRangeException(nameof(ackOpcode)),
+                };
+                await scene.Host.OnWorldAsync(() => MovementControl.Request(scene.Player, type, apply: true));
+                await scene.Client.CollectThroughBarrierAsync();
+                return new SentOrder(type, (counter, dx) => scene.Ack(counter, FlagOf(type), dx, w => w.WriteUInt32(1)));
+        }
+    }
+
+    /// <summary>The ack of KnockbackService.KnockBack(spells, player, 0f, 7.5f, 5f): its jump section must repeat the order.</summary>
+    private static byte[] KnockbackAck(Scene scene, uint counter, float dx)
+    {
+        var writer = new PacketWriter(64);
+        writer.WriteUInt64(scene.Guid);
+        writer.WriteUInt32(counter);
+        new MovementInfo
+        {
+            Flags = MovementFlags.Jumping, Time = scene.Time, X = scene.X + dx, Y = scene.Y, Z = scene.Z,
+            JumpCosAngle = 1f, JumpSinAngle = 0f, JumpXySpeed = 7.5f, JumpZSpeed = -5f,
+        }.Write(writer);
+        return writer.ToArray();
+    }
+
+    /// <summary>The flag TaxiFlightSystem sets, and optionally one of its steps: <paramref name="flown"/> yards along x from where the scene started.</summary>
+    private static Task BoardFlightAsync(Scene scene, float? flown = null)
+        => scene.Host.OnWorldAsync(() =>
         {
             scene.Player.UnitFlags |= UnitFlags.TaxiFlight; // the flight system owns the position (TaxiFlightSystem relocates it each step)
-            return scene.Player.X;
+            if (flown is { } yards)
+            {
+                scene.Player.Relocate(scene.X + yards, scene.Y, scene.Z, scene.Player.Orientation, scene.Host.World.NowMs);
+            }
         });
 
+    /// <summary>TaxiFlightSystem.Finish clears the flag and tells the position checks nothing.</summary>
+    private static Task EndFlightAsync(Scene scene)
+        => scene.Host.OnWorldAsync(() =>
+        {
+            scene.Player.UnitFlags &= ~UnitFlags.TaxiFlight;
+        });
+
+    private static async Task SendAckAsync(Scene scene, WorldOpcode ackOpcode, SentOrder order, float dx)
+    {
         await Task.Delay(100);
         scene.Time += 100;
         uint counter = await scene.LastCounterAsync();
-        await scene.Client.SendAsync(WorldOpcode.CmsgForceMoveRootAck, scene.Ack(counter, MovementFlags.Root, 80.7f, _ => { }));
+        await scene.Client.SendAsync(ackOpcode, order.Ack(counter, dx));
         await scene.Client.CollectThroughBarrierAsync();
+    }
+
+    private static async Task SendHeartbeatAsync(Scene scene, float dx)
+    {
+        await Task.Delay(100);
+        scene.Time += 100;
+        await scene.Client.SendAsync(WorldOpcode.MsgMoveHeartbeat, scene.Block(MovementFlags.Forward, dx));
+        await scene.Client.CollectThroughBarrierAsync();
+    }
+
+    // Every handler that takes a solicited ack has its own ApplyObservedAck call, so each is proved here, not only the root ack's.
+    [Theory]
+    [InlineData(WorldOpcode.CmsgForceMoveRootAck)]
+    [InlineData(WorldOpcode.CmsgForceRunSpeedChangeAck)]
+    [InlineData(WorldOpcode.CmsgMoveWaterWalkAck)]
+    [InlineData(WorldOpcode.CmsgMoveHoverAck)]
+    [InlineData(WorldOpcode.CmsgMoveFeatherFallAck)]
+    [InlineData(WorldOpcode.CmsgMoveKnockBackAck)]
+    [InlineData(WorldOpcode.CmsgForceTurnRateChangeAck)]
+    public async Task ASolicitedAck_DuringATaxiFlight_IsHonouredButItsPositionIsNotStored(WorldOpcode ackOpcode)
+    {
+        await using Scene scene = await StartAsync("ACKTAXI", "Acktaxi");
+        await scene.BaselineAsync();
+        SentOrder order = await SendOrderAsync(scene, ackOpcode);
+        AntiCheatFeature feature = scene.Host.WorldServices.GetRequiredService<AntiCheatFeature>();
+        float budgetBefore = await scene.Host.OnWorldAsync(() => feature.BudgetedYardsOf(scene.Player));
+        await BoardFlightAsync(scene);
+        float before = await scene.Host.OnWorldAsync(() => scene.Player.X);
+
+        await SendAckAsync(scene, ackOpcode, order, 80.7f);
 
         // The order was acknowledged (vmangos erases it first, MovementHandler.cpp:671) but the block 80 yards off the flight path was not stored, so
         // the flight is not ended by drift and a pending order is no way off the taxi. Before, the position was stored.
         float budgetAfter = await scene.Host.OnWorldAsync(() => feature.BudgetedYardsOf(scene.Player));
-        (float x, bool pending) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)));
+        (float x, bool pending) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Locomotion.Pending.HasPendingOfType(order.Type)));
         Assert.Equal(before, x);
         Assert.False(pending);
         // Nor was it judged: the checks would see the flight's own relocation and take the client's block as a new baseline (a client-chosen rubberband target).
         Assert.Empty(scene.Seen);
         Assert.Equal(budgetBefore, budgetAfter);
+    }
+
+    [Theory]
+    [InlineData(WorldOpcode.CmsgForceMoveRootAck)]
+    [InlineData(WorldOpcode.CmsgForceRunSpeedChangeAck)]
+    [InlineData(WorldOpcode.CmsgMoveWaterWalkAck)]
+    [InlineData(WorldOpcode.CmsgMoveHoverAck)]
+    [InlineData(WorldOpcode.CmsgMoveFeatherFallAck)]
+    [InlineData(WorldOpcode.CmsgMoveKnockBackAck)]
+    [InlineData(WorldOpcode.CmsgForceTurnRateChangeAck)]
+    public async Task AFlightEndingWhereAnAckFoundThePlayer_IsStillARelocation_SoTheNextBlockIsNotScored(WorldOpcode ackOpcode)
+    {
+        const float Flown = 200f;
+        await using Scene scene = await StartAsync("ACKLAND", "Ackland");
+        await scene.BaselineAsync();
+        SentOrder order = await SendOrderAsync(scene, ackOpcode);
+        AntiCheatFeature feature = scene.Host.WorldServices.GetRequiredService<AntiCheatFeature>();
+        await BoardFlightAsync(scene, Flown);
+
+        // The honest client reports where the flight has it, and the flight ends right there (an ack in the final tick, or an abort).
+        await SendAckAsync(scene, ackOpcode, order, Flown);
+        Assert.Equal(scene.X + Flown, await scene.Host.OnWorldAsync(() => scene.Player.X), 0.01f);
+        Assert.False(await scene.Host.OnWorldAsync(() => scene.Player.Locomotion.Pending.HasPendingOfType(order.Type)));
+        await EndFlightAsync(scene);
+        await SendHeartbeatAsync(scene, Flown + 0.7f);
+
+        // The stored marker is the only sign of the flight: had the ack advanced it to the flight's position, this block would pass the server position
+        // check and be measured from before the flight (a 200 yard Teleport for an honest player), and the rubberband target would stay there.
+        Assert.Empty(scene.Seen);
+        float? lastValid = await scene.Host.OnWorldAsync(() => feature.LastValidXOf(scene.Player));
+        Assert.NotNull(lastValid);
+        Assert.Equal(scene.X + Flown + 0.7f, lastValid.Value, 0.01f);
+    }
+
+    [Fact]
+    public async Task AKnockbackAck_DuringATaxiFlight_OpensNoBaselineForTheNextBlock()
+    {
+        await using Scene scene = await StartAsync("KNOCKTAXI", "Knocktaxi");
+        await scene.BaselineAsync();
+        SentOrder order = await SendOrderAsync(scene, WorldOpcode.CmsgMoveKnockBackAck);
+        await BoardFlightAsync(scene);
+
+        // A flight that moved the player nowhere: only the ack could make the blink below a trusted baseline.
+        await SendAckAsync(scene, WorldOpcode.CmsgMoveKnockBackAck, order, 0.7f);
+        Assert.Empty(scene.Seen);
+        await EndFlightAsync(scene);
+        await SendHeartbeatAsync(scene, 80.7f);
+
+        // The flight kept the position, so nothing was launched: no new baseline and no knockback window for the block after the flight.
+        Assert.Contains(scene.Seen, f => f.Type == AntiCheatViolation.Teleport);
     }
 
     [Fact]

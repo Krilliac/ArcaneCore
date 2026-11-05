@@ -167,7 +167,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// </summary>
     public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
     {
-        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        if (IsOnTaxi(player))
         {
             return;
         }
@@ -175,8 +175,14 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
     }
 
+    private static bool IsOnTaxi(Player player) => (player.UnitFlags & UnitFlags.TaxiFlight) != 0;
+
     /// <summary>The yards the distance budget of this player's own unit has judged since its checks were built (diagnostics, world thread).</summary>
     internal float BudgetedYardsOf(Player player) => _players.TryGetValue(player.Guid, out PlayerState? state) ? state.Checks.BudgetedYards : 0f;
+
+    /// <summary>The X of this player's rubberband target, null when it has none (diagnostics, world thread).</summary>
+    internal float? LastValidXOf(Player player)
+        => _players.TryGetValue(player.Guid, out PlayerState? state) && state.Checks.TryGetLastValid(out float x, out _, out _, out _) ? x : null;
 
     private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
@@ -236,9 +242,19 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
-    /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds.</summary>
+    /// <summary>
+    /// After a block (movement or acknowledgement) was stored: the position the server now holds. During a taxi flight no block was stored
+    /// (<c>MovementHandlers.ApplyObservedAck</c>) and the position is the flight's, so the marker stays where the last judged block left it: it is the only
+    /// thing that tells the checks the flight moved the player (nothing notifies them at its end). Advanced here, a flight ending within
+    /// the stored-position tolerance of an ack would pass <see cref="MovementAntiCheat.CheckServerPosition"/> and the next block would be measured from before the flight.
+    /// </summary>
     public void AfterMovement(Player player)
     {
+        if (IsOnTaxi(player))
+        {
+            return;
+        }
+
         if (_players.TryGetValue(player.Guid, out PlayerState? state))
         {
             state.Checks.NotifyStored(player.X, player.Y, player.Z);
@@ -319,7 +335,10 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
-    /// <summary>An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline.</summary>
+    /// <summary>
+    /// An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline. A knockback acknowledged during a
+    /// taxi flight launched nothing (the flight keeps the position), so it opens no baseline and no knockback window.
+    /// </summary>
     public void OnAcknowledgement(WorldSession session, Player player, uint clientTime, bool knockback)
     {
         if (IsExempt(session, player))
@@ -330,7 +349,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         PlayerState state = StateOf(player);
         _scratch.Clear();
         state.Checks.NotifyAcknowledgement(clientTime, session.CurrentPacketReceivedMs, _scratch);
-        if (knockback)
+        if (knockback && !IsOnTaxi(player))
         {
             state.Checks.NotifyKnockback();
         }

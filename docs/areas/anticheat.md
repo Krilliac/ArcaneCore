@@ -126,20 +126,21 @@ check skipped for the opcode, teleport check off while launched), and the knockb
 six seconds.
 The acks are also not held to the reject window (`ShouldRejectMovement`) that movement packets obey, and the session trace
 shadow does not see ack blocks.
-Acks are honoured during a taxi flight but are neither judged nor stored.
-`HandleMovement` ignores client movement while `TaxiFlight` is set (the flight spline moves the player), and the flight
-system relocates
-the player on every step without telling the position checks.
-A solicited ack of an order the server really sent is still matched, so the order is no longer pending, but its block is not
-judged
-(`AntiCheatFeature.JudgeAcknowledgedMovement`) and not stored (`MovementHandlers.ApplyObservedAck`).
-Judged, the checks would see the flight's relocation and take the client's block as a new baseline and last-valid position,
-which is the
-rubberband target; stored, it would let a pending order move the player off the flight at a chosen position (the drift check then ends it).
-vmangos likewise runs no cheat test on an ack while a spline is pending (the `HasPendingSplineDone` gates, MovementHandler.cpp :489 speed,
-:589 flag, :683 root, :778 knockback) and erases the order first (`HandleMoveRootAck`, MovementHandler.cpp:671-723).
-Limit: the moving test (`Translating`) is narrower than vmangos `MOVEFLAG_MASK_MOVING` (it leaves out pitch, jumping, falling and spline
-elevation), so a jump-only block under a root is not scored.
+Acks are honoured during a taxi flight but are neither judged nor stored. `HandleMovement` ignores client movement while
+`TaxiFlight` is set (the flight spline moves the player), and the flight system relocates the player on every step without
+telling the position checks. A solicited ack of an order the server really sent is still matched, so the order is no longer
+pending, but its block is not judged (`AntiCheatFeature.JudgeAcknowledgedMovement`) and not stored
+(`MovementHandlers.ApplyObservedAck`). Judged, the checks would see the flight's relocation and take the client's block as a
+new baseline and last-valid position, which is the rubberband target; stored, it would let a pending order move the player
+off the flight at a chosen position (the drift check then ends it). The stored-position marker does not advance either
+(`AntiCheatFeature.AfterMovement`, and the session trace shadow's): nothing notifies the checks at the end of a flight, so
+that marker is the only thing that shows the flight moved the player, and the first block afterwards re-baselines from it
+wherever the last ack arrived. A knockback ack during a flight launched nothing, so it opens no baseline and no knockback
+window. vmangos likewise runs no cheat test on an ack while a spline is pending (the `HasPendingSplineDone` gates,
+MovementHandler.cpp :489 speed, :589 flag, :683 root, :778 knockback) and erases the order first (`HandleMoveRootAck`,
+MovementHandler.cpp:671-723).
+Limit: the moving test (`Translating`) is narrower than vmangos `MOVEFLAG_MASK_MOVING` (it leaves out pitch, jumping, falling
+and spline elevation), so a jump-only block under a root is not scored.
 
 **A unit the player controls** (a possessed creature or player, moved by `MSG_MOVE_*` or given up by
 `CMSG_MOVE_NOT_ACTIVE_MOVER`) has its own checks on the controller's state: the unit's position, speeds and auras (a creature
@@ -247,9 +248,10 @@ reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds
   `Net/PacketBudgetTests` (drop and flood through a real session). `MovementBypassTests`: a `CMSG_MOVE_NOT_ACTIVE_MOVER`
   naming the player itself is scored every time `CMSG_SET_ACTIVE_MOVER` re-arms it and is ignored on a taxi and inside the
   reject window; a possessed creature's and a possessed player's blink is scored against the controller, not the victim.
-  `SolicitedAckJudgementTests` (the timing stage): the block of a solicited speed, flag, root, knockback or turn-rate ack is judged like a movement
-  packet (a blink or a forged flag scores; an honest ack scores nothing and its block is stored), an unroot ack is exempt from the rooted-while-moving
-  check and the other acks are not.
+  `SolicitedAckJudgementTests` (the timing stage): the block of a solicited speed, flag, root, knockback or turn-rate ack is
+  judged like a movement packet (a blink or a forged flag scores; an honest ack scores nothing and its block is stored), an
+  unroot ack is exempt from the rooted-while-moving check and the other acks are not. During a taxi flight each of those acks
+  clears its order, is neither judged nor stored, and leaves the flight visible, so the next block is not scored.
 
 ## Open questions
 
