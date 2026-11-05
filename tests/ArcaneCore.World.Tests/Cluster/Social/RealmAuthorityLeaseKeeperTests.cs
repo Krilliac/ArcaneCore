@@ -188,11 +188,10 @@ public sealed class RealmAuthorityLeaseKeeperTests
     }
 
     [Fact]
-    public async Task EveryScopeOwnerlessAtStart_RunTimeScopesAreTakenOver_SocialAndEconomyAreNot()
+    public async Task EveryScopeOwnerlessAtStart_AllScopesAreTakenOver_SocialAndEconomyIncluded()
     {
         // The row's scenario: every scope is held by a node that is gone, so this keeper holds nothing at start and its timer must still run.
-        // Social and economy are never taken at run time: their singletons (AutoBroadcast, the auction bot) attach only at start, so a survivor holding
-        // the lease would strand them and block the restarting node from attaching them.
+        // Social and economy follow too: AutoBroadcast and the auction bot are attached dormant on every map worker and start when the lease is held. Unproven until the integration gate runs it.
         foreach (string scope in new[] { RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState })
         {
             _inner.TryAcquire(scope, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
@@ -211,8 +210,10 @@ public sealed class RealmAuthorityLeaseKeeperTests
         Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Instances));
         Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Maintenance));
         Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.WorldState));
-        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
-        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Social));
+        Assert.True(keeper.Holds(RealmAuthorityScopes.Economy));
         Assert.Equal(0, _lifetime.Stops);
     }
 

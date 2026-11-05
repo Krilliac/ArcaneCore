@@ -70,6 +70,14 @@ public sealed class ClusterRoleFeatureFilter
     }
 
     /// <summary>
+    /// Whether <paramref name="featureType"/> is attached on a node of <paramref name="role"/> even while the node does not hold its lease: the realm singletons (<see cref="LeaseScopeFor"/>) on a
+    /// <see cref="ClusterNodeRole.MapWorker"/>. They sit dormant (they gate every tick on <see cref="RealmAuthorityLeaseKeeper.Holds"/>) and start by themselves when the node takes the lease over at run time,
+    /// so a survivor of a dead holder runs them without a restart. <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, Func{string, long?}, DateTimeOffset, Guid)"/> still says whether the lease is held now.
+    /// </summary>
+    public static bool AttachesDormant(Type featureType, ClusterNodeRole role)
+        => role == ClusterNodeRole.MapWorker && LeaseScopeFor(featureType) is not null;
+
+    /// <summary>
     /// As <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, long?, DateTimeOffset)"/>, with the fencing token looked up per
     /// lease scope by <paramref name="tokenForScope"/> (a node holds one lease per realm singleton). A <see cref="ClusterNodeRole.MapWorker"/>
     /// runs a realm singleton only while the store confirms <paramref name="nodeId"/> holds that scope's lease at <paramref name="nowUtc"/>;

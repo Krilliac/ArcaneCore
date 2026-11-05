@@ -27,11 +27,10 @@ public interface IRealmSingletonHalt
 /// <para>Renewal starts as soon as the first lease is granted (inside <see cref="AcquireAtStartAsync"/>), so a slow start cannot outlast a lease.
 /// Every timer tick also judges the deadline on its own, so a renewal call that hangs in the store cannot hide an expiring lease: the node stops
 /// when the next tick would fall in the last half renewal interval before the lease lapses.</para>
-/// <para>Takeover: a scope another node held at start is not given up on, but only for the scopes whose work checks the lease at run time (<see cref="TakeoverScopes"/>: instances, maintenance, worldstate; the sweeps and durable
-/// writes ask <see cref="Holds"/> on every tick). When that node stops or dies and its lease lapses, a surviving worker takes the scope over with a new fencing token instead of leaving it ownerless until a restart. The social and economy
-/// scopes are never taken at run time: their singletons (AutoBroadcast, the auction house bot) are attached only at start, so a survivor taking the lease would hold it with no feature to run and keep the restarting node from attaching them;
-/// those two leases are taken at start only, so the restarting node takes them back as it always did. A takeover round never runs in a tick where a renewal failed, and it runs under its own guard after the renewal round, so
-/// store time spent on it can never delay the next renewal.</para>
+/// <para>Takeover: a scope another node held at start is not given up on (<see cref="TakeoverScopes"/>: every scope a map worker competes for). The work of each scope checks the lease at run time: the sweeps and durable
+/// writes ask <see cref="Holds"/> on every tick, and the two realm singletons that are attached on every map worker (AutoBroadcast for the social scope, the auction house bot for the economy scope) stay dormant until <see cref="Holds"/> is true and
+/// then start on their own, so no restart is needed. When the holder stops or dies and its lease lapses, a surviving worker takes the scope over with a new fencing token instead of leaving it ownerless until a restart. A takeover round never runs
+/// in a tick where a renewal failed, and it runs under its own guard after the renewal round, so store time spent on it can never delay the next renewal.</para>
 /// <para>Thread affinity: <see cref="AcquireAtStartAsync"/> and <see cref="ReleaseAllAsync"/> run on the host's start and stop; the renewal timer
 /// runs on the thread pool, and its ticks may overlap a still-running store call. The lease store is called synchronously off the world thread.
 /// All state is guarded by one lock.</para>
@@ -58,10 +57,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     /// </summary>
     private static readonly string[] OptionalScopes = [RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
 
-    /// <summary>The scopes that may be taken over after start: those whose work asks <see cref="Holds"/> at run time. Social and Economy are excluded, their features attach only at start (see the class summary). Only a map worker takes any.</summary>
-    private string[] TakeoverScopes => _node.Role == ClusterNodeRole.MapWorker ? RuntimeScopes : [];
-
-    private static readonly string[] RuntimeScopes = [RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
+    /// <summary>The scopes that may be taken over after start: those whose work asks <see cref="Holds"/> at run time (the social and economy singletons are attached dormant on every map worker and wake on it, see the class summary). Only a map worker takes any.</summary>
+    private string[] TakeoverScopes => _node.Role == ClusterNodeRole.MapWorker ? MapWorkerScopes : [];
 
     /// <summary>The scopes this node competes for: the Instances lease only on a <see cref="ClusterNodeRole.MapWorker"/> (the only non-combined role that attaches the instance feature), so a Gateway, Social or Economy node never holds it and orphans the schedule.</summary>
     private string[] ScopesToTake => _node.Role == ClusterNodeRole.MapWorker ? MapWorkerScopes : Scopes;

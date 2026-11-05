@@ -28,7 +28,9 @@ namespace ArcaneCore.World.Economy;
 /// and every copper it pays or bids is reserved in <see cref="Ledger"/> first; with a custody store (characters <c>ahbot_custody</c>)
 /// the reservation is durable before its economy transaction starts, and the transaction carries the row's stable operation id. A
 /// row whose outcome is unknown (also after a restart) stays reserved until the economy operation ledger says whether it committed.
-/// If the ledger's audit ever finds a broken invariant the bot stops itself.
+/// If the ledger's audit ever finds a broken invariant the bot stops itself. On a clustered map worker the bot is attached on every node and follows
+/// the economy realm authority lease: it does nothing while another node holds it, and when this node takes the lease over at run time it reads the
+/// custody ledger and the <c>ahbot_items</c> rows (off the world thread) before its first action, so no restart is needed.
 /// </summary>
 public sealed class AuctionBotFeature(IServiceProvider services, ILogger<AuctionBotFeature> logger, TimeProvider? clock = null)
     : IWorldFeature, IAsyncDisposable, Cluster.Social.IRealmSingletonHalt
@@ -68,6 +70,11 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     private int _overrideGeneration;
     private bool _persistent;
     private bool _flushing;
+    // Resolved in Attach (never in the constructor: the lease keeper builds the singletons it halts); null when nothing is clustered. World thread.
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _keeper;
+    // The custody ledger and the item overrides were read for this node's holding of the lease (at Attach when it held the lease then, else by the takeover). World thread.
+    private bool _stateLoaded;
+    private bool _activating; // the takeover read is running off the world thread
     private int _houseAction = -1;
     private long _tuningGeneration;
 
@@ -96,6 +103,9 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// <summary>The <c>ahbot_items</c> rows by item.</summary>
     public IReadOnlyDictionary<uint, AuctionBotItemOverride> Overrides => _overrides;
 
+    /// <summary>Whether the custody ledger and the item overrides were read for this node's holding of the economy lease (false while the lease is another node's).</summary>
+    public bool StateLoaded => _stateLoaded;
+
     /// <summary>Whether custody rows are written to <c>ahbot_custody</c>.</summary>
     public bool Persistent => _persistent;
 
@@ -112,31 +122,25 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         _world = world;
         _economy = services.GetService<EconomyFeature>();
         _items = services.GetService<ItemsFeature>();
+        _keeper = services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
         if (!Options.Enabled)
         {
             logger.LogInformation("AHBot is disabled (AuctionHouseBot:Enabled)");
             return;
         }
 
-        using (IServiceScope scope = services.CreateScope())
+        if (HoldsEconomyLease())
         {
-            // Startup load, as the economy feature loads its auctions: rows whose outcome was unknown at shutdown come back Reserved and
-            // are rechecked against the economy operation ledger by the first ticks (ReconcilePending).
-            if (scope.ServiceProvider.GetService<IAuctionBotCustodyStore>() is { } store)
-            {
-                IReadOnlyList<AuctionBotCustodyRecord> rows = store.LoadAsync().GetAwaiter().GetResult();
-                int skipped = Ledger.Load(rows);
-                _persistent = true;
-                logger.LogInformation("AHBot custody ledger: {Rows} rows ({Pending} to recheck){Skipped}", Ledger.Rows.Count, Ledger.Pending.Count(),
-                    skipped > 0 ? $", {skipped} unreadable rows skipped" : string.Empty);
-            }
-            else
-            {
-                logger.LogWarning("AHBot: no custody store; the ledger is kept in memory only");
-            }
+            LoadCustodyLedger();
+            LoadOverrides();
+            _stateLoaded = true;
+        }
+        else
+        {
+            // Another node holds the economy lease: nothing is read now (it would be stale by the time this node takes over). The first tick that finds the lease held reads it.
+            logger.LogInformation("AHBot is dormant: another node holds the economy realm authority lease; it starts here if that lease is taken over");
         }
 
-        LoadOverrides();
         if (_economy is not null)
         {
             _economy.BotBidSettled += OnBotBidSettled;
@@ -146,6 +150,110 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             Options.BuyChance > 0 && Options.DailyBuyBudgetCopper > 0 ? "Enabled" : "Disabled");
         TimeSpan period = TimeSpan.FromSeconds(Options.UpdateIntervalSeconds);
         _timer = new Timer(_ => world.Post(Tick), null, period, period);
+    }
+
+    /// <summary>Whether this node may run the bot now: always when nothing is clustered, otherwise only while it holds the economy lease.</summary>
+    private bool HoldsEconomyLease()
+        => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_keeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy);
+
+    /// <summary>
+    /// Attach time only (the world thread is not running): the startup load, as the economy feature loads its auctions. Rows whose outcome was unknown at shutdown
+    /// come back Reserved and are rechecked against the economy operation ledger by the first ticks (ReconcilePending).
+    /// </summary>
+    private void LoadCustodyLedger()
+    {
+        using IServiceScope scope = services.CreateScope();
+        if (scope.ServiceProvider.GetService<IAuctionBotCustodyStore>() is { } store)
+        {
+            IReadOnlyList<AuctionBotCustodyRecord> rows = store.LoadAsync().GetAwaiter().GetResult();
+            int skipped = Ledger.Load(rows);
+            _persistent = true;
+            logger.LogInformation("AHBot custody ledger: {Rows} rows ({Pending} to recheck){Skipped}", Ledger.Rows.Count, Ledger.Pending.Count(),
+                skipped > 0 ? $", {skipped} unreadable rows skipped" : string.Empty);
+        }
+        else
+        {
+            logger.LogWarning("AHBot: no custody store; the ledger is kept in memory only");
+        }
+    }
+
+    /// <summary>
+    /// World thread, from <see cref="Ready"/>: this node now holds the economy lease but has not read the state the previous holder wrote. Reads the custody rows and the
+    /// <c>ahbot_items</c> rows on the thread pool (the SQLite provider runs its async calls synchronously, so never on the tick) and finishes on the world thread; a failed read is
+    /// logged and tried again by a later tick. The bot does nothing until it is finished.
+    /// </summary>
+    private void BeginTakeoverLoad()
+    {
+        if (_activating || _world is not { } world)
+        {
+            return;
+        }
+
+        _activating = true;
+        _ = Task.Run(async () =>
+        {
+            IReadOnlyList<AuctionBotCustodyRecord>? rows = null;
+            Dictionary<uint, AuctionBotItemOverride>? overrides = null;
+            Exception? failure = null;
+            try
+            {
+                using (IServiceScope scope = services.CreateScope())
+                {
+                    if (scope.ServiceProvider.GetService<IAuctionBotCustodyStore>() is { } store)
+                    {
+                        rows = await store.LoadAsync().ConfigureAwait(false);
+                    }
+                }
+
+                overrides = await ReadOverridesAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                failure = ex;
+            }
+
+            world.Post(() => FinishTakeoverLoad(rows, overrides, failure));
+        });
+    }
+
+    private void FinishTakeoverLoad(IReadOnlyList<AuctionBotCustodyRecord>? rows, Dictionary<uint, AuctionBotItemOverride>? overrides, Exception? failure)
+    {
+        _activating = false;
+        if (failure is not null)
+        {
+            FaultLedger.Shared.Record("economy.ahbot-takeover-load", failure);
+            logger.LogFault("ahbot.takeover-load", failure, "AHBot: reading the custody ledger after taking over the economy lease failed; trying again on a later tick");
+            return;
+        }
+
+        if (_halted || _stateLoaded || !HoldsEconomyLease())
+        {
+            return;
+        }
+
+        Ledger = new AuctionBotCustodyLedger(Options);
+        if (rows is not null)
+        {
+            int skipped = Ledger.Load(rows);
+            _persistent = true;
+            logger.LogInformation("AHBot custody ledger after taking over the economy lease: {Rows} rows ({Pending} to recheck){Skipped}", Ledger.Rows.Count, Ledger.Pending.Count(),
+                skipped > 0 ? $", {skipped} unreadable rows skipped" : string.Empty);
+        }
+        else
+        {
+            logger.LogWarning("AHBot: no custody store; the ledger is kept in memory only");
+        }
+
+        if (overrides is not null)
+        {
+            Interlocked.Increment(ref _overrideGeneration); // a reload that started before this read is stale now
+            _overrides = overrides;
+            _planner = null;
+            _loot = null;
+        }
+
+        _stateLoaded = true;
+        logger.LogWarning("AHBot started on this node: it took over the economy realm authority lease");
     }
 
     public async Task StopAsync()
@@ -456,8 +564,14 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     {
         economy = _economy;
         planner = null;
-        if (!Options.Enabled || Halted || economy is not { Enabled: true })
+        if (!Options.Enabled || Halted || economy is not { Enabled: true } || !HoldsEconomyLease())
         {
+            return false;
+        }
+
+        if (!_stateLoaded)
+        {
+            BeginTakeoverLoad();
             return false;
         }
 

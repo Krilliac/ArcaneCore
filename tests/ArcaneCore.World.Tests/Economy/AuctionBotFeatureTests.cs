@@ -43,6 +43,49 @@ public sealed class AuctionBotFeatureTests
     }
 
     [Fact]
+    public async Task Bot_on_a_node_without_the_economy_lease_stays_dormant_then_starts_when_it_takes_the_lease_over()
+    {
+        // worker-b held the economy lease and died: it never renews. Unproven until the integration gate runs it.
+        var time = new ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero));
+        var store = new ArcaneCore.Kernel.Cluster.Social.InMemoryRealmAuthorityLeaseStore();
+        store.TryAcquire(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), time.GetUtcNow());
+        await using var keeper = new ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper(store,
+            Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Social.ClusterNodeOptions
+            {
+                Role = ArcaneCore.World.Cluster.Social.ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10,
+            }),
+            Microsoft.Extensions.Options.Options.Create(new ArcaneCore.World.Cluster.Gateway.GatewayWorkerOptions { Enabled = true, NodeId = "worker-a" }),
+            NullLogger<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>.Instance, null, time, _ => { });
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        Assert.False(keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy));
+
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        Assert.False(fixture.Bot.StateLoaded); // nothing read while another node holds the lease
+        Assert.Equal(0, await fixture.OnWorld(() => fixture.Bot.Sell(House)));
+        Assert.Empty(fixture.Bot.Ledger.Rows);
+
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10)); // worker-b's lease lapses at 30 s, and the keeper's renewal tick takes it over
+        }
+
+        Assert.True(keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy));
+        using var timeout = new CancellationTokenSource(Fixture.Budget);
+        while (!await fixture.OnWorld(() =>
+               {
+                   fixture.Bot.Tick(); // the first tick that finds the lease held starts the takeover read
+                   return fixture.Bot.StateLoaded;
+               }).WaitAsync(timeout.Token))
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+
+        Assert.Equal(3, await fixture.OnWorld(() => fixture.Bot.Sell(House))); // the daily item budget: it lists without a restart
+        Assert.True(fixture.Bot.Persistent);
+    }
+
+    [Fact]
     public async Task Tick_before_the_items_are_loaded_does_not_run_the_item_load_on_the_calling_thread()
     {
         var source = new ThreadRecordingTemplates();
@@ -836,7 +879,8 @@ public sealed class AuctionBotFeatureTests
 
         public static async Task<Fixture> CreateAsync(bool enabled = true, TimeProvider? clock = null, bool persist = false,
             Dictionary<string, string?>? extra = null, Func<CharacterDbContext, Task>? seed = null, Func<IEconomyStore, IEconomyStore>? wrapStore = null,
-            IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null)
+            IItemTemplateSource? templateSource = null, bool loadItems = true, IAuctionBotItemStore? itemStore = null,
+            ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? keeper = null)
         {
             string path = Path.Combine(Path.GetTempPath(), $"arcanecore-ahbot-{Guid.NewGuid():N}.db");
             var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
@@ -890,6 +934,11 @@ public sealed class AuctionBotFeatureTests
             var services = new ServiceCollection();
             services.AddSingleton(configuration);
             services.AddLogging();
+            if (keeper is not null)
+            {
+                services.AddSingleton(keeper); // a clustered map worker: the bot follows the economy lease this keeper holds
+            }
+
             services.AddScoped(_ => new CharacterDbContext(options));
             services.AddScoped<IEconomyStore>(provider =>
             {
