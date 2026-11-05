@@ -100,6 +100,20 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         return ToSnapshot(row, cooldowns);
     }
 
+    public async Task<IReadOnlyList<PersistentPetSnapshot>> LoadDemonsAsync(int characterId, CancellationToken cancellationToken = default)
+    {
+        List<PetStableRow> rows = await db.Set<PetStableRow>().AsNoTracking()
+            .Where(r => r.CharacterId == characterId && r.Slot >= PetStableRow.DemonSlotBase).OrderBy(r => r.Slot).ToListAsync(cancellationToken).ConfigureAwait(false);
+        return rows.Select(row =>
+        {
+            PersistentPetSnapshot? demon = JsonSerializer.Deserialize<PersistentPetSnapshot>(row.SnapshotJson);
+            return (demon ?? PersistentPetSnapshot.Empty(characterId, row.PetNumber, row.Entry, row.Level)) with
+            {
+                CharacterId = characterId, PetNumber = row.PetNumber, Entry = row.Entry, IsCurrent = false,
+            };
+        }).ToArray();
+    }
+
     public async Task SaveCurrentAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken = default)
         => await SaveCoreAsync(snapshot with { IsCurrent = true }, cancellationToken).ConfigureAwait(false);
 
@@ -160,7 +174,48 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
                 SpellId = c.SpellId, Category = c.Category, EndsAtUnixMs = c.EndsAtUnixMs,
             }));
         }
+        if (snapshot.CreatedBySpell != 0)
+        {
+            await WriteDemonRowAsync(db, snapshot, cancellationToken).ConfigureAwait(false);
+        }
+
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A warlock demon is also kept as the character's row for its creature entry (a <see cref="PetStableRow"/> from <see cref="PetStableRow.DemonSlotBase"/> up), so
+    /// that dismissing it, or replacing it with another demon, leaves its name, spells and state to load when the entry is summoned again (vmangos Unit::EffectSummonPet,
+    /// SpellEffects.cpp:3221, with the dismissed pet saved as PET_SAVE_NOT_IN_SLOT, Unit.cpp:5129-5136). The caller's transaction and SaveChanges cover it.
+    /// </summary>
+    private static async Task WriteDemonRowAsync(CharacterDbContext db, PersistentPetSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        List<PetStableRow> demons = await db.Set<PetStableRow>()
+            .Where(r => r.CharacterId == snapshot.CharacterId && r.Slot >= PetStableRow.DemonSlotBase).ToListAsync(cancellationToken).ConfigureAwait(false);
+        PetStableRow? row = demons.FirstOrDefault(r => r.Entry == snapshot.Entry);
+        if (row is null)
+        {
+            int slot = PetStableRow.DemonSlotBase;
+            while (slot <= byte.MaxValue && demons.Any(r => r.Slot == slot))
+            {
+                slot++;
+            }
+
+            if (slot > byte.MaxValue)
+            {
+                throw new InvalidOperationException($"character {snapshot.CharacterId} already has {demons.Count} saved demon entries");
+            }
+
+            row = new PetStableRow { CharacterId = snapshot.CharacterId, Slot = (byte)slot };
+            db.Set<PetStableRow>().Add(row);
+        }
+
+        row.PetNumber = snapshot.PetNumber;
+        row.Entry = snapshot.Entry;
+        row.Level = snapshot.Level;
+        row.Name = snapshot.Name;
+        row.Loyalty = snapshot.LoyaltyLevel;
+        row.Health = snapshot.Health;
+        row.SnapshotJson = JsonSerializer.Serialize(snapshot with { IsCurrent = false });
     }
 
     /// <summary>The character_pet JSON columns of <paramref name="snapshot"/>, for a caller that serializes them before its write transaction.</summary>
@@ -198,6 +253,8 @@ public sealed class EfPersistentPetStore(CharacterDbContext db) : IPersistentPet
         foreach (var entry in db.ChangeTracker.Entries<PersistentPetCooldownRow>()
             .Where(e => e.Entity.CharacterId == characterId).ToArray()) entry.State = EntityState.Detached;
         foreach (var entry in db.ChangeTracker.Entries<PersistentPetRow>()
+            .Where(e => e.Entity.CharacterId == characterId).ToArray()) entry.State = EntityState.Detached;
+        foreach (var entry in db.ChangeTracker.Entries<PetStableRow>()
             .Where(e => e.Entity.CharacterId == characterId).ToArray()) entry.State = EntityState.Detached;
     }
 

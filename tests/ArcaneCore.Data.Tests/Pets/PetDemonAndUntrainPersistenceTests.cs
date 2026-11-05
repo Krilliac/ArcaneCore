@@ -46,6 +46,31 @@ public sealed class PetDemonAndUntrainPersistenceTests
     }
 
     [Fact]
+    public async Task Sqlite_Demons_AreKeptPerEntry_SurviveDeletingTheCurrentRow_AndStayOutOfTheStableList()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(connection).Options;
+        await using (CharacterDbContext db = new(options))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, CharacterDbContext.Schema);
+            EfPersistentPetStore store = new(db);
+            await store.SaveCurrentAsync(new PersistentPetSnapshot(33, 8001, 416, 12, 0, 90, 55, 0, 1, [], [], Name: "Zorax", CreatedBySpell: 688));
+            await store.SaveCurrentAsync(new PersistentPetSnapshot(33, 8002, 1860, 12, 0, 80, 20, 0, 1, [], [], Name: "Bixel", CreatedBySpell: 697));
+            await store.SaveCurrentAsync(new PersistentPetSnapshot(33, 8001, 416, 12, 0, 70, 30, 0, 1, [], [], Name: "Zorax", CreatedBySpell: 688)); // the imp again, newer
+            await store.DeleteAsync(33); // the current-pet row goes (a dismissal); the demons stay
+        }
+
+        await using CharacterDbContext verify = new(options);
+        Assert.Null(await new EfPersistentPetStore(verify).LoadCurrentAsync(33));
+        IReadOnlyList<PersistentPetSnapshot> demons = await new EfPersistentPetStore(verify).LoadDemonsAsync(33);
+        Assert.Equal(new[] { (416u, 8001u, 70u, "Zorax"), (1860u, 8002u, 80u, "Bixel") }, demons.OrderBy(d => d.Entry).Select(d => (d.Entry, d.PetNumber, d.Health, d.Name)));
+        Assert.All(demons, d => Assert.False(d.IsCurrent));
+        Assert.Empty((await new EfPetStableStore(verify).LoadAsync(33)).Pets); // a hunter's stable list never shows them
+        Assert.Empty(await new EfPersistentPetStore(verify).LoadDemonsAsync(34));
+    }
+
+    [Fact]
     public async Task Sqlite_V75PetRow_UpgradesToTheDemonAndUntrainColumnsWithoutLosingTheRow()
     {
         await using SqliteConnection connection = new("Data Source=:memory:");

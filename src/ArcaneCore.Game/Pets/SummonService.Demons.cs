@@ -36,9 +36,11 @@ public sealed partial class SummonService
     /// gets the owner's faction, the spell, level stats from <c>pet_levelstats</c>, its create spells and the pet bar, and the Demonic Sacrifice buffs
     /// (override class script 2228) of the owner end.
     /// <para>
-    /// A player's demon gets a generated name (<c>ObjectMgr::GeneratePetName</c>, <see cref="PetContent.GeneratePetName"/>) and is saved as the owner's
-    /// current pet (<see cref="QueueCurrentPetSave"/>; <c>SavePetToDB</c>): a relog brings it back (<c>SummonService.PersistentPets.cs</c>), a dismissal or a
-    /// replacement deletes the saved row (<see cref="AbandonSavedDemon"/>).
+    /// A player first tries the demon of that entry it saved before (<c>LoadPetFromDB(player, petEntry)</c>, SpellEffects.cpp:3221; <see cref="SummonSavedDemon"/>): an
+    /// Imp keeps its name, number, spells and health across a dismissal, a Voidwalker swap or a relog. Only without a saved demon is a new one made, with a generated
+    /// name (<c>ObjectMgr::GeneratePetName</c>, <see cref="PetContent.GeneratePetName"/>, SpellEffects.cpp:3293) and a new pet number. Either way it is saved as the
+    /// owner's current pet (<see cref="QueueCurrentPetSave"/>; <c>SavePetToDB</c>) and a relog brings it back (<c>SummonService.PersistentPets.cs</c>). A dismissal or a
+    /// replacement saves its final state under its entry and leaves the current slot (<see cref="AbandonSavedDemon"/>; PET_SAVE_NOT_IN_SLOT, Unit.cpp:5129-5136).
     /// </para>
     /// <para>
     /// LIMITS: entry 0 (the hunter's Call Pet) is the persistent hunter pet path of <see cref="Install"/>; a demon with no <c>pet_name_generation</c> rows
@@ -70,6 +72,11 @@ public sealed partial class SummonService
         {
             Warn($"demon-template:{entry}", "creature entry {Entry} not found for spell {Spell}", entry, spellId);
             return null;
+        }
+
+        if (caster is Player summoner && FindSavedDemon(summoner, entry) is { } saved)
+        {
+            return SummonSavedDemon(summoner, saved, spellId);
         }
 
         (float x, float y, float z) = SafeClosePoint(caster, creatures, 0.0f, PetConstants.FollowDistance, caster.Orientation + PetConstants.FollowAngle);
@@ -117,15 +124,21 @@ public sealed partial class SummonService
     }
 
     /// <summary>
-    /// The saved row of a warlock's demon that is going away for good (dismissed, or replaced by a new summon) is deleted behind every save already queued,
-    /// so a relog does not bring it back (vmangos unsummons it with PET_SAVE_NOT_IN_SLOT, and LoadPetFromDB at login reads only the current slot). A
-    /// hunter's pet and every other summon are not touched. Call before <see cref="Unsummon(Creature, PetUnsummonReason)"/> clears the owner's pet link.
+    /// A warlock's demon that is leaving the current slot for good (dismissed, replaced by a new summon, or unsummoned with its reagents given back) saves its
+    /// final state under its entry, so summoning that entry again loads the same pet, and its current-pet row is deleted behind every save already queued, so a
+    /// relog does not bring it back (vmangos unsummons it with PET_SAVE_NOT_IN_SLOT, which keeps the row out of the slot LoadPetFromDB reads at login, Pet.cpp:495-514).
+    /// A hunter's pet and every other summon are not touched. Call before <see cref="Unsummon(Creature, PetUnsummonReason)"/> clears the owner's pet link.
     /// </summary>
     internal void AbandonSavedDemon(Unit owner, Creature pet)
     {
         if (owner is Player player && pet.Summon is { Kind: SummonKind.Pet } && pet.OwnerGuid == player.Guid && IsPermanentPetFor(player, pet))
         {
-            QueueDeletePet(player);
+            if (player.PetGuid == pet.Guid)
+            {
+                QueueCurrentPetSave(player);
+            }
+
+            QueueDeletePet(player, numberStaysInUse: true);
         }
     }
 

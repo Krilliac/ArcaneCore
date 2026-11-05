@@ -18,7 +18,7 @@ public sealed partial class SummonService
     public bool HasTemporarilyUnsummonedPet(Player owner) => _temporarilyUnsummoned.ContainsKey(owner.Guid);
 
     /// <summary>
-    /// vmangos Player::UnsummonPetTemporaryIfAny: the player's pet is unsummoned (a hunter pet saved as current, PET_SAVE_AS_CURRENT) and,
+    /// vmangos Player::UnsummonPetTemporaryIfAny: the player's pet is unsummoned (a hunter pet or a warlock's demon saved as current, PET_SAVE_AS_CURRENT) and,
     /// when it is a controlled pet that is not a temporary summon and none is remembered yet, remembered for
     /// <see cref="ResummonTemporarilyUnsummonedPet"/>. The pet number, level, health, mana, react state, action bar and spells come back;
     /// a hunter pet comes back from its current-pet snapshot (vmangos LoadPetFromDB(current = true)). A dead pet is unsummoned but not
@@ -41,9 +41,9 @@ public sealed partial class SummonService
             _temporarilyUnsummoned[owner.Guid] = remembered;
         }
 
-        if (owner.Class == Class.Hunter)
+        if (owner.Class == Class.Hunter || IsPermanentPetFor(owner, pet))
         {
-            QueueCurrentPetSave(owner);
+            QueueCurrentPetSave(owner); // Pet::SavePetToDB(PET_SAVE_AS_CURRENT): a permanent pet's row keeps its latest state if the owner leaves while it is put away
         }
 
         Unsummon(pet, PetUnsummonReason.OwnerLeft);

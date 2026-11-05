@@ -166,7 +166,7 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
 
         if (pet.GetOwner() is { } owner)
         {
-            summons.AbandonSavedDemon(owner, pet); // the warlock's own demon is gone for good, so its saved row goes too
+            summons.AbandonSavedDemon(owner, pet); // the warlock's own demon leaves the current slot (PET_SAVE_NOT_IN_SLOT) and keeps its saved state by entry
         }
 
         summons.Unsummon(pet, PetUnsummonReason.Dismissed);

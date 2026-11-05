@@ -9,7 +9,8 @@ namespace ArcaneCore.Data.Characters.Pets;
 /// Pet.cpp:580), <c>ResetTalentsCost</c> and <c>ResetTalentsTime</c> (the last pet untraining price in copper and its unix seconds; vmangos
 /// reset_talents_cost and reset_talents_time, Pet.cpp:582-583). Existing rows read 0 in all three: a hunter pet's next untraining costs 10 silver,
 /// as it did when these values were not stored. The columns are properties of <see cref="PersistentPetRow"/> (its table is configured by
-/// <see cref="PersistentPetDataModule"/>); the step only adds them to a database created at characters version 59-75.
+/// <see cref="PersistentPetDataModule"/>); the step only adds them to a database at characters version 75. A warlock's saved demons need no table of their own: they are
+/// <see cref="PetStableRow"/> rows from <see cref="PetStableRow.DemonSlotBase"/> up, one per creature entry.
 /// </summary>
 public sealed class PetUntrainAndDemonDataModule : IDataModule, ICharacterDataCleanup
 {

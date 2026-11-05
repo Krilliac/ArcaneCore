@@ -74,6 +74,13 @@ public sealed partial class SummonService
     // (a map update that saves before the pet despawns) can never bring the deleted row back.
     private readonly Dictionary<int, uint> _abandonedPets = [];
 
+    // A warlock's saved demons by character and creature entry: the demon summon loads from here (vmangos Unit::EffectSummonPet tries
+    // LoadPetFromDB(owner, petEntry) first, SpellEffects.cpp:3221). Filled at login (ReadCurrentPetAsync) and by every demon capture; the store keeps the same rows.
+    private readonly Dictionary<int, Dictionary<uint, PersistentPetSnapshot>> _demonCache = [];
+
+    /// <summary>Test seam for <see cref="IPersistentPetStore.LoadDemonsAsync"/>: replaces the store's read of the saved demons at login. Assigned once while the world is wired.</summary>
+    public Func<int, CancellationToken, Task<IReadOnlyList<PersistentPetSnapshot>>>? LoadDemonsPersistence { get; set; }
+
     private const int DeleteAttempts = 3;
     private static readonly TimeSpan DeleteRetryDelay = TimeSpan.FromMilliseconds(100);
 
@@ -126,6 +133,7 @@ public sealed partial class SummonService
             lock (_cacheGate)
             {
                 _cached[(int)owner.Guid.Low] = snapshot;
+                RememberDemonLocked(snapshot);
                 _cacheGeneration[(int)owner.Guid.Low] = _cacheGeneration.GetValueOrDefault((int)owner.Guid.Low) + 1;
             }
             await PersistSerializedAsync(snapshot, cancellationToken).ConfigureAwait(false);
@@ -159,6 +167,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             _cached[(int)owner.Guid.Low] = snapshot;
+            RememberDemonLocked(snapshot);
             _cacheGeneration[(int)owner.Guid.Low] = _cacheGeneration.GetValueOrDefault((int)owner.Guid.Low) + 1;
         }
         try { await PersistSerializedAsync(snapshot, CancellationToken.None).ConfigureAwait(false); }
@@ -177,14 +186,48 @@ public sealed partial class SummonService
             lock (_cacheGate)
             {
                 _cached[(int)owner.Guid.Low] = snapshot;
+                RememberDemonLocked(snapshot);
                 _cacheGeneration[(int)owner.Guid.Low] = _cacheGeneration.GetValueOrDefault((int)owner.Guid.Low) + 1;
             }
             _ = PersistQueuedAsync(snapshot);
         }
     }
 
-    /// <summary>Invalidate a character's cached pet and delete its durable row after every prior save.</summary>
-    public void QueueDeletePet(Player owner)
+    /// <summary>Keep a warlock demon's captured state as its saved row by entry (<c>_cacheGate</c> held). A hunter pet has no creating spell and is not kept.</summary>
+    private void RememberDemonLocked(PersistentPetSnapshot snapshot)
+    {
+        if (snapshot.CreatedBySpell == 0)
+        {
+            return;
+        }
+
+        if (!_demonCache.TryGetValue(snapshot.CharacterId, out Dictionary<uint, PersistentPetSnapshot>? byEntry))
+        {
+            byEntry = [];
+            _demonCache[snapshot.CharacterId] = byEntry;
+        }
+
+        byEntry[snapshot.Entry] = snapshot with { IsCurrent = false };
+    }
+
+    /// <summary>The owner's saved, living demon of <paramref name="entry"/> (vmangos LoadPetFromDB(owner, petEntry), Pet.cpp:150-156), or null. Reads only memory.</summary>
+    private PersistentPetSnapshot? FindSavedDemon(Player owner, uint entry)
+    {
+        lock (_cacheGate)
+        {
+            return _demonCache.TryGetValue((int)owner.Guid.Low, out Dictionary<uint, PersistentPetSnapshot>? byEntry)
+                && byEntry.TryGetValue(entry, out PersistentPetSnapshot? saved) && saved.Health > 0 && saved.PetNumber != 0 && saved.Entry == entry
+                ? saved
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// Invalidate a character's cached pet and delete its durable current-pet row after every prior save. A warlock's saved demons (one per entry) stay.
+    /// <paramref name="numberStaysInUse"/> is true for a demon, whose pet number is loaded again when its entry is summoned again: its number is then not
+    /// recorded as abandoned (which would drop every later save of that number).
+    /// </summary>
+    public void QueueDeletePet(Player owner, bool numberStaysInUse = false)
     {
         ArgumentNullException.ThrowIfNull(owner);
         int characterId = checked((int)owner.Guid.Low);
@@ -196,7 +239,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             uint petNumber = livePetNumber != 0 ? livePetNumber : _cached.GetValueOrDefault(characterId)?.PetNumber ?? 0;
-            if (petNumber != 0)
+            if (petNumber != 0 && !numberStaysInUse)
             {
                 _abandonedPets[characterId] = petNumber;
             }
@@ -595,6 +638,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             _cached.Remove(characterId);
+            _demonCache.Remove(characterId);
             _retained.Remove(characterId);
             // The character is gone (deleted): its abandon delete and the dropped-save guard must not outlive it, or a reused id inherits them.
             _failedDeletes.Remove(characterId);
@@ -649,6 +693,7 @@ public sealed partial class SummonService
         lock (_cacheGate)
         {
             _cached.Remove(characterId);
+            _demonCache.Remove(characterId);
             _cacheGeneration[characterId] = _cacheGeneration.GetValueOrDefault(characterId) + 1;
             _saveTails.Remove(characterId);
             if (!_failedDeletes.Contains(characterId))
@@ -761,6 +806,11 @@ public sealed partial class SummonService
             : Persistence is { } store
                 ? await store.LoadCurrentAsync(characterId, cancellationToken).ConfigureAwait(false)
                 : null;
+        // A warlock's other saved demons come with the login read, so summoning an entry again needs no database call on the world thread.
+        IReadOnlyList<PersistentPetSnapshot> demons = owner.Class != Class.Warlock ? []
+            : LoadDemonsPersistence is { } loadDemons ? await loadDemons(characterId, cancellationToken).ConfigureAwait(false)
+            : Persistence is { } demonStore ? await demonStore.LoadDemonsAsync(characterId, cancellationToken).ConfigureAwait(false)
+            : [];
         lock (_cacheGate)
         {
             if (_cacheGeneration.GetValueOrDefault(characterId) != generation)
@@ -774,6 +824,17 @@ public sealed partial class SummonService
             else
             {
                 _cached.Remove(characterId);
+            }
+
+            _demonCache.Remove(characterId);
+            foreach (PersistentPetSnapshot demon in demons.Where(d => d.CharacterId == characterId))
+            {
+                RememberDemonLocked(demon);
+            }
+
+            if (snapshot is not null)
+            {
+                RememberDemonLocked(snapshot);
             }
         }
 
@@ -825,8 +886,10 @@ public sealed partial class SummonService
     /// vmangos Pet::LoadPetFromDB for the warlock's saved demon at login (the current pet, Pet.cpp:130-420): the same pet number, entry, summoning spell,
     /// saved name (a SUMMON_PET is only renamed when its saved <c>renamed</c> flag is 0, and SavePetToDB writes 1 for a pet without the PET_RENAME flag,
     /// Pet.cpp:270 and :529), health, mana, experience, react state, spells, bar and cooldowns, at the owner's level and close point. A dead demon is not
-    /// brought back, the same rule as a dead hunter pet. Refuses when the owner has a pet, the snapshot is another character's or not current, or the
-    /// entry is not a demon template. World thread.
+    /// brought back, the same rule as a dead hunter pet. A dead owner or one on a taxi flight gets no pet either: <c>LoadPetFromDB(current)</c> refuses
+    /// when <c>IsPetNeedBeTemporaryUnsummoned</c> (Pet.cpp:217-223, Player.cpp:20941-20944) and only remembers the pet number
+    /// (<c>SetTemporaryUnsummonedPetNumber</c>), so the pet comes back with <see cref="ResummonTemporarilyUnsummonedPet"/> and the saved row stays the current one.
+    /// Refuses when the owner has a pet, the snapshot is another character's or not current, or the entry is not a demon template. World thread.
     /// </summary>
     private Creature? RestoreCurrentDemon(Player owner, PersistentPetSnapshot snapshot)
     {
@@ -838,17 +901,43 @@ public sealed partial class SummonService
             return null;
         }
 
-        TemporarilyUnsummonedPet remembered = new(
-            snapshot.PetNumber, snapshot.Entry, snapshot.CreatedBySpell, null, snapshot.Health, snapshot.Mana,
-            (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2), snapshot.ActionBar,
-            [.. snapshot.Spells.Select(s => new KeyValuePair<uint, ActionType>(s.SpellId, s.Passive ? ActionType.Passive : s.Autocast ? ActionType.Enabled : ActionType.Disabled))],
-            snapshot.Name, snapshot.Experience);
+        TemporarilyUnsummonedPet remembered = RememberedDemon(snapshot, snapshot.CreatedBySpell);
+        if (!owner.IsAlive || (owner.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            _temporarilyUnsummoned[owner.Guid] = remembered; // Player::SetTemporaryUnsummonedPetNumber; the pet is not summoned, so no reagent is given back for it
+            return null;
+        }
+
         Creature? pet = RestoreSummonedPet(owner, remembered);
         if (pet is not null)
         {
             RestorePetCooldowns(pet, snapshot);
         }
 
+        return pet;
+    }
+
+    /// <summary>The saved demon <paramref name="snapshot"/> as the pet <see cref="RestoreSummonedPet"/> rebuilds, summoned by <paramref name="spellId"/>.</summary>
+    private static TemporarilyUnsummonedPet RememberedDemon(PersistentPetSnapshot snapshot, uint spellId) => new(
+        snapshot.PetNumber, snapshot.Entry, spellId, null, snapshot.Health, snapshot.Mana,
+        (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2), snapshot.ActionBar,
+        [.. snapshot.Spells.Select(s => new KeyValuePair<uint, ActionType>(s.SpellId, s.Passive ? ActionType.Passive : s.Autocast ? ActionType.Enabled : ActionType.Disabled))],
+        snapshot.Name, snapshot.Experience);
+
+    /// <summary>
+    /// Unit::EffectSummonPet's <c>LoadPetFromDB(player, petEntry)</c> (SpellEffects.cpp:3221) for a demon the owner saved before: the pet comes back with its
+    /// number, name, spells, bar, health and mana, and the Demonic Sacrifice buffs end as for any known pet (SpellEffects.cpp:3222-3228). Null when the load fails.
+    /// </summary>
+    private Creature? SummonSavedDemon(Player owner, PersistentPetSnapshot saved, uint spellId)
+    {
+        if (RestoreSummonedPet(owner, RememberedDemon(saved, spellId)) is not { } pet)
+        {
+            return null;
+        }
+
+        RestorePetCooldowns(pet, saved);
+        RemoveDemonicSacrifice(owner);
+        QueueCurrentPetSave(owner); // Pet::SavePetToDB at the end of the summon: it is the current pet again
         return pet;
     }
 

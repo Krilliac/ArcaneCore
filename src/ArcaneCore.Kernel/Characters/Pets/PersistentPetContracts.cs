@@ -49,5 +49,13 @@ public interface IPersistentPetStore
     Task SaveCurrentAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken = default);
     Task SaveDetachedAsync(PersistentPetSnapshot snapshot, CancellationToken cancellationToken = default)
         => Task.FromException(new NotSupportedException("detached hunter-pet persistence is not supported by this store"));
+    /// <summary>
+    /// Every warlock demon the character has saved, one per creature entry (vmangos keeps them as character_pet rows of slot NOT_IN_SLOT or the current slot, and
+    /// <c>LoadPetFromDB(owner, petEntry)</c> reads them by entry, Pet.cpp:150-156). A store writes the demon's per-entry row together with the current row
+    /// (<see cref="SaveCurrentAsync"/>), and <see cref="DeleteAsync"/> leaves them: dismissing a demon removes only its current-pet row. Empty for a store that keeps none.
+    /// </summary>
+    Task<IReadOnlyList<PersistentPetSnapshot>> LoadDemonsAsync(int characterId, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<PersistentPetSnapshot>>(Array.Empty<PersistentPetSnapshot>());
+
     Task DeleteAsync(int characterId, CancellationToken cancellationToken = default);
 }
