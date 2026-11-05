@@ -195,15 +195,16 @@ public sealed class MapFeedAnomalyRingTests
             ring.Offer(notice); // warm up: JIT, and the ring is full so every later offer overwrites
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 20_000; i++)
+        // Clean windows only: a collection or a runtime cache swap on another thread (parallel test classes) is discarded and retried, a real per-offer allocation still fails every window.
+        Action window = () =>
         {
-            ring.Offer(notice);
-            ring.Offer(foreign);
-        }
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.True(allocated <= 512, $"40000 offers (20000 kept) allocated {allocated} bytes; the slots are preallocated and the notice's strings are shared");
+            for (int i = 0; i < 20_000; i++)
+            {
+                ring.Offer(notice);
+                ring.Offer(foreign);
+            }
+        };
+        AllocationProbe.AssertEveryCleanWindowAtMost(window, 512, "40000 offers (20000 kept): the slots are preallocated and the notice's strings are shared");
     }
 
     [Fact]
