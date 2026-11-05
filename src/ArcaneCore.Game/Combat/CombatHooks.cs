@@ -172,6 +172,51 @@ public class CombatHooks
             && victim is not ICombatCreature { IsInEvadeMode: true };
     }
 
+    /// <summary>
+    /// UNIT_FLAG_IMMUNE_TO_PLAYER / UNIT_FLAG_IMMUNE_TO_NPC in the attack check (mangos-classic Unit::CanAttack, Relations.cpp:376-385): a
+    /// victim immune to players refuses an attacker a player controls (acts for), one immune to NPCs refuses every other attacker; the same
+    /// test with the roles swapped on the attacker's own flags, judged by who controls the victim. The shape of
+    /// <see cref="ArcaneCore.Game.Combat.Threat.ThreatRules.CanPullPetOwner"/>.
+    /// </summary>
+    private static bool IsBlockedByImmuneToFlags(Unit attacker, Unit victim)
+    {
+        if (t_ignoreImmuneToFlags > 0)
+        {
+            return false;
+        }
+
+        if (((attacker.UnitFlags | victim.UnitFlags) & (UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc)) == 0)
+        {
+            return false;
+        }
+
+        UnitFlags victimBlocks = attacker.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        UnitFlags attackerBlocks = victim.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        return (victim.UnitFlags & victimBlocks) != 0 || (attacker.UnitFlags & attackerBlocks) != 0;
+    }
+
+    [ThreadStatic]
+    private static int t_ignoreImmuneToFlags;
+
+    /// <summary>
+    /// <see cref="CanAttack"/> without the ImmuneToPlayer / ImmuneToNpc clause, for a script-forced attack and for keeping a started fight.
+    /// mangos-classic <c>UnitAI::AttackStart</c> (UnitAI.cpp:283-294) goes straight to <c>Unit::Attack</c>, which has no CanAttack or immunity check
+    /// (Unit.cpp:6259), and vmangos silithus.cpp:1463-1470 fights with UNIT_FLAG_IMMUNE_TO_NPC set. On-sight, assist, target-selection and spell paths
+    /// keep using <see cref="CanAttack"/>. Runs on the calling thread only; the bypass is scoped to this call (virtual overrides are included).
+    /// </summary>
+    public bool CanAttackIgnoringImmuneToFlags(Unit attacker, Unit victim)
+    {
+        t_ignoreImmuneToFlags++;
+        try
+        {
+            return CanAttack(attacker, victim);
+        }
+        finally
+        {
+            t_ignoreImmuneToFlags--;
+        }
+    }
+
     private static bool InSameGroup(Unit mapOf, Player a, Player b)
     {
         if (mapOf.Map?.World is not { } world || !s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup))
@@ -218,6 +263,11 @@ public class CombatHooks
         }
 
         if (!IsAttackableState(victim))
+        {
+            return false;
+        }
+
+        if (IsBlockedByImmuneToFlags(attacker, victim))
         {
             return false;
         }

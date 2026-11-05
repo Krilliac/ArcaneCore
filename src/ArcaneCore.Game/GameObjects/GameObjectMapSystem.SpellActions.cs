@@ -143,7 +143,10 @@ public sealed partial class GameObjectMapSystem
         _ => 0,
     };
 
-    /// <summary>GameObject::Use for a creature on a goober: the player-only gossip and quest paths are skipped.</summary>
+    /// <summary>
+    /// GameObject::Use on a goober through the script path. A player goes through <see cref="UseGoober"/>, so a use that fails the quest gate
+    /// still puts the goober in use and starts its cooldown. For a creature the player-only gossip and quest paths are skipped.
+    /// </summary>
     private GameObjectUseResult UseGooberByUnit(Unit user, GameObject go)
     {
         if (user is Player player)
@@ -151,7 +154,9 @@ public sealed partial class GameObjectMapSystem
         if (go.CooldownUntilMs > _clockMs || go.LootState != GameObjectLootState.Ready)
             return GameObjectUseResult.InUse;
 
+        StartGuidUseScript(user, go); // dbscripts_on_go_use of a goober used by a creature (GameObject.cpp:1703)
         TriggerLinkedTrap(go, user);
+        StartGooberCooldown(go);
         uint autoClose = go.Template.AutoCloseSeconds();
         go.Flags |= GameObjectFlags.InUse;
         go.LootState = GameObjectLootState.Activated;

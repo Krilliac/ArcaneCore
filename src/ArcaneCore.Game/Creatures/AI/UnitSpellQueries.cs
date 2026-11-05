@@ -33,6 +33,12 @@ public interface IUnitSpellQueries
     /// be its target (EventAI FRIENDLY_HP then leaves the creature itself out, CreatureEventAIMgr.cpp:1082-1096). False for an unknown spell.
     /// </summary>
     bool ExcludesCaster(uint spellId) => false;
+
+    /// <summary>
+    /// cmangos Unit::InterruptSpell(<paramref name="currentSpellType"/>) (SCRIPT_COMMAND_INTERRUPT_SPELL, DBScripts/ScriptMgr.cpp:2983-2991):
+    /// cancel the unit's spell of that slot (CurrentSpellTypes: 0 melee, 1 generic, 2 auto-repeat, 3 channeled). False when the slot held nothing.
+    /// </summary>
+    bool InterruptSpell(Unit unit, uint currentSpellType) => false;
 }
 
 /// <summary><see cref="IUnitSpellQueries"/> over the world <see cref="SpellSystem"/>.</summary>
@@ -108,6 +114,12 @@ public sealed class SpellSystemUnitSpellQueries(Func<SpellSystem> spells) : IUni
     }
 
     public bool ExcludesCaster(uint spellId) => spells().Store.Get(spellId) is { } spell && spell.HasAttribute(SpellAttributesEx.CantTargetSelf);
+
+    public bool InterruptSpell(Unit unit, uint currentSpellType)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return spells().InterruptCurrentSpell(unit, currentSpellType);
+    }
 
     public bool IsCasting(Unit unit)
     {

@@ -559,6 +559,8 @@ public sealed class CreatureDumpImporter
                 case DbScriptDataModule.GossipTable:
                 case DbScriptDataModule.CreatureMovementTable:
                 case DbScriptDataModule.SpellTable:
+                case DbScriptDataModule.GameObjectUseTable:
+                case DbScriptDataModule.GameObjectTemplateUseTable:
                 case VmangosSpellScriptTranslator.Table:
                 case "conditions": // read only to resolve the conditions of vmangos spell_scripts (the conditions importer writes the table)
                     _dbScripts.Accept(row);
@@ -1088,6 +1090,11 @@ public sealed class CreatureDumpImporter
             uint static1 = U32(row, "static_flags1");
             uint static2 = U32(row, "static_flags2");
             t.TypeFlags = VMangosTypeFlags(static1, static2);
+            if ((t.ExtraFlags & VMangosExtraCanAssist) != 0)
+            {
+                t.TypeFlags |= 0x1000; // CREATURE_FLAG_EXTRA_CAN_ASSIST (vmangos CreatureDefines.h:176, Creature.h:611) -> CreatureTypeFlags::CAN_ASSIST
+            }
+
             t.UnitFlags = VMangosUnitFlags(static1);
             stats = new VMangosStats(
                 F32(row, 1f, "health_multiplier"), F32(row, 1f, "mana_multiplier"), F32(row, 1f, "armor_multiplier"),
@@ -1101,6 +1108,9 @@ public sealed class CreatureDumpImporter
             ApplyVMangosImmunityFlags(entry, U32(row, "immunity_flags"));
         }
     }
+
+    /// <summary>vmangos <c>CREATURE_FLAG_EXTRA_CAN_ASSIST</c> in <c>creature_template.flags_extra</c> (CreatureDefines.h:176).</summary>
+    private const uint VMangosExtraCanAssist = 0x00080000;
 
     /// <summary>vmangos <c>CREATURE_IMMUNITY_TAUNT</c> (CreatureDefines.h) in <c>creature_template.immunity_flags</c>.</summary>
     private const uint VMangosImmunityTaunt = 0x02;

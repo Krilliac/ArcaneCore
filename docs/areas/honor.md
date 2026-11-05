@@ -58,20 +58,24 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
 - **CHARACTER_FLAG_HAS_PVP_RANK** in the character list is not delivered (ArcaneCore has no `character_flags` column).
 - **The honor tab refreshes on `Add`, login, GM commands and the weekly job**, not at the game-day rollover or before every autosave (the same as vmangos,
   which refreshes only on those events and before a save). The derived fields are not persisted.
-- **Contribution rows are written at least once, not exactly once.** A batch is one transaction; if a commit succeeds but its acknowledgement is lost, the
-  retry appends the batch again. A write queued while the weekly calculation runs can overwrite an online player's new numbers with older ones (the job
+- **Contribution rows are written exactly once per queued row.** `HonorWriteQueue.AppendCp` stamps every row with an operation id (`HonorCpRecord.OperationId`)
+  when it takes it, and a retained or retried write carries the same ids. `EfHonorStore.AppendCpAsync` skips a row whose id is already stored in
+  `character_honor_cp.operation_id` (unique together with the character id, schema 76), so a commit whose acknowledgement was lost does not add the batch a second time; a concurrent
+  attempt that wins the race trips the unique index and the second pass finds the rows stored. A row without an id (not queued through the write queue) is
+  always appended. Rows written before schema 76 have a null id. A write queued while the weekly calculation runs can overwrite an online player's new numbers with older ones (the job
   re-queues the post-maintenance state to narrow that window).
 - `.reset honor` (SEC_DEVELOPER, a separate vmangos command) is not provided; `.honor reset` is the same `HonorMgr::Reset`.
 
 ## Schema
 
 Characters schema **version 23** (allocated as 21 by the lane; renumbered at wave-4 integration) (`CharacterHonorDataModule.Version`, the next free number in this tree; the integrator renumbers it, tests use the constant).
-Three new tables, nothing existing changes:
+Three new tables, nothing existing changes. Characters schema **version 76** (`HonorCpOperationDataModule.Version`, renumbered by the integrator like the others)
+adds `character_honor_cp.operation_id` and its unique (character, operation id) index to databases created at 23 or later:
 
 | Table | Columns | Replaces (vmangos) |
 |---|---|---|
 | `character_honor` | `character_id` PK, `rank_points` float, `highest_rank`, `standing`, `last_week_hk`, `last_week_cp`, `stored_hk`, `stored_dk`, `pvp_flags`, `city_protector` | `characters.honor_*`, `extra_flags` bit 0x0400 |
-| `character_honor_cp` | `id` bigint identity PK, `character_id`, `victim_type`, `victim_id`, `cp` float, `date`, `type`; indexes `(character_id, date)` and `(date)` | `character_honor_cp` |
+| `character_honor_cp` | `id` bigint identity PK, `character_id`, `victim_type`, `victim_id`, `cp` float, `date`, `type`, `operation_id` varchar(36) null (unique, added by schema 76); indexes `(character_id, date)` and `(date)` | `character_honor_cp` |
 | `honor_maintenance` | `id` PK (always 1), `last_day`, `next_day`, `marker` | `saved_variables.honor_*` |
 
 Contribution points and rank points are stored with one decimal, as vmangos writes them with `%.1f`; an exact tie (x.25, x.75) rounds to even.

@@ -191,6 +191,12 @@ public enum SpellAttributesExCombat : uint
     /// <summary>SPELL_ATTR_EX_FINISHING_MOVE_DURATION (bit 22): uses combo points.</summary>
     FinishingMoveDuration = 0x00400000,
 
+    /// <summary>
+    /// SPELL_ATTR_EX_REQUIRE_ALL_TARGETS (bit 26, vmangos SpellDefines.h:896): when the explicit unit target does not take the spell
+    /// (any miss, immunity or reflect), no effect lands on any target (Spell.cpp:430-441).
+    /// </summary>
+    RequireAllTargets = 0x04000000,
+
     /// <summary>SPELL_ATTR_EX_DISCOUNT_POWER_ON_MISS (bit 27): power is refunded on a dodge/parry/miss.</summary>
     DiscountPowerOnMiss = 0x08000000,
 

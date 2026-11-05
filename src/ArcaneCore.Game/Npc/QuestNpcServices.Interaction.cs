@@ -239,7 +239,7 @@ public sealed partial class QuestNpcServices
 
         if (!((state.Quests.Get(quest.Id)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest)))
         {
-            if (Deps.Qa is { } qa && !AcceptableQuest(quest))
+            if (Deps.Qa is { } qa && qa.Observes(player) && !AcceptableQuest(quest))
             {
                 // Withheld without a word to the client: a quest whose behaviour this server lacks (bot QA reports it, docs/areas/playbots-qa.md).
                 qa.OnQuestRefused(player, quest.Id, Diagnostics.QuestFailure.Unsupported, 0, MissingAdapters(quest).ToString());

@@ -20,7 +20,7 @@ public sealed class EfPetAdminStore(CharacterDbContext db) : IPetAdminStore
         }
 
         return await db.Set<PetStableRow>().AsNoTracking().Where(r => r.PetNumber == petNumber).OrderBy(r => r.CharacterId)
-            .Select(r => new StoredPetLocation(petNumber, r.CharacterId, r.Name, true)).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+            .Select(r => new StoredPetLocation(petNumber, r.CharacterId, r.Name, r.Slot < PetStableRow.DemonSlotBase)).FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> RenameAsync(uint petNumber, string name, CancellationToken cancellationToken = default)

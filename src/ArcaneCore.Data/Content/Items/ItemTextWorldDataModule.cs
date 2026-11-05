@@ -38,7 +38,7 @@ public interface IItemEnchantmentTemplateStore
 }
 
 /// <summary>
-/// World schema 70 (the next number on the 2026-11-05 integration branch; renumbered at the integration if another step took it): the world
+/// World schema 70: the world
 /// database carries <c>page_text</c> and <c>item_enchantment_template</c>, which the world used to read from a MySQL dump at every start
 /// (<c>PageText:DumpPath</c>, <c>ItemRandomProperties:EnchantmentTemplateDumpPath</c>, both retired). Both tables are GPL content the operator
 /// imports (<c>arcane-content-importer import</c> or <c>refresh</c>, <see cref="ArcaneCore.Data.Content.Import.ItemTextDumpImporter"/>); nothing

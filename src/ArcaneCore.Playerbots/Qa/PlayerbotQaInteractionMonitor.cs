@@ -8,11 +8,13 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Quests;
 using InventoryResult = ArcaneCore.Game.Items.InventoryResult;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Progression;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots.Qa;
@@ -64,22 +66,35 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
     private readonly object _gate = new();
     private readonly Dictionary<QaRepeatKey, long> _reported = [];
     private readonly Dictionary<QaRepeatKey, (int Count, long FirstMs)> _repeats = [];
-    private readonly Dictionary<(ulong Bot, byte Credit, uint Entry), (int Count, uint Quest, int Objective)> _attempts = [];
+    private readonly Dictionary<QaAttemptKey, int> _attempts = [];
+    private readonly Func<Player, bool> _inRaidGroup;
     private readonly Dictionary<ulong, int> _explainedInventory = [];
 
     /// <summary>The production monitor: the QA sink, and the quest services looked up per use (they are built when the quest feature attaches).</summary>
     public PlayerbotQaInteractionMonitor(IPlayerbotQaSink sink, IServiceProvider services)
-        : this(sink, quests: () => services.GetService<QuestNpcFeature>()?.Services)
+        : this(sink, quests: () => services.GetService<QuestNpcFeature>()?.Services, inRaidGroup: RaidGroupOf(services))
     {
+    }
+
+    /// <summary>
+    /// Whether a player is in a raid group, as the kill credit sees it (<see cref="RewardGroups.Resolver"/>, resolved on first use: the social feature is built
+    /// after this monitor). World thread.
+    /// </summary>
+    private static Func<Player, bool> RaidGroupOf(IServiceProvider services)
+    {
+        Func<Player, RewardGroup?>? resolver = null;
+        return player => (resolver ??= RewardGroups.Resolver(services))(player)?.IsRaid == true;
     }
 
     /// <param name="sink">Where the signals go.</param>
     /// <param name="identify">Test seam: which units are bots (default <see cref="PlayerbotQaBots.Identify"/>).</param>
     /// <param name="clockMs">Test seam: a millisecond clock (default <see cref="Environment.TickCount64"/>).</param>
     /// <param name="quests">The quest services (the bots' quest logs and the quest table); null when there are none.</param>
+    /// <param name="inRaidGroup">Whether a player is in a raid group (null: nobody is); a raid group credits kills of raid quests only.</param>
     internal PlayerbotQaInteractionMonitor(IPlayerbotQaSink sink, Func<Unit?, QaBot?>? identify = null, Func<long>? clockMs = null,
-        Func<QuestNpcServices?>? quests = null)
+        Func<QuestNpcServices?>? quests = null, Func<Player, bool>? inRaidGroup = null)
     {
+        _inRaidGroup = inRaidGroup ?? (static _ => false);
         _sink = sink ?? throw new ArgumentNullException(nameof(sink));
         _identify = identify ?? PlayerbotQaBots.Identify;
         _clockMs = clockMs ?? (static () => Environment.TickCount64);
@@ -88,6 +103,12 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
 
     /// <summary>Whether the packet tap is worth installing: QA is on.</summary>
     public bool Active => _sink.Enabled;
+
+    /// <inheritdoc />
+    public bool Reporting => _sink.Enabled;
+
+    /// <inheritdoc />
+    public bool Observes(Player player) => _sink.Enabled && _identify(player) is not null;
 
     /// <summary>Objective counters held (a test reads it).</summary>
     internal int TrackedAttempts
@@ -161,14 +182,15 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
 
     /// <summary>
     /// A creature died (MapCombat.UnitKilled; <see cref="PlayerbotQaInteractionFeature"/> subscribes every map): a bot that killed a creature an incomplete
-    /// kill objective of its log names makes one attempt of that objective. Returns at once for a killer that is not a bot, and on instance maps (a raid
-    /// group credits raid quests only).
+    /// kill objective of its log names makes one attempt of that objective. Returns at once for a killer that is not a bot, and on instance maps. A bot in a
+    /// raid group makes no attempt for a quest that is not allowed in raids: the kill credit skips it too (QuestNpcServices.CreditCreature, vmangos
+    /// Quest::IsAllowedInRaid), so its kills are no sign of a broken objective.
     /// </summary>
     internal void OnUnitKilled(Unit? killer, Unit victim)
     {
         if (killer is not Player player || victim is not Creature creature || !_sink.Enabled || _identify(player) is not { } bot
             || player.Map is not { InstanceId: 0 }) return;
-        Objectives(bot, player, CreditKill, creature.Entry, creature.Entry);
+        Objectives(bot, player, CreditKill, creature.Entry, creature.Entry, raidFiltered: true);
     }
 
     public void OnObjectUsed(Player player, GameObject go)
@@ -181,9 +203,10 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
     /// One attempt of every incomplete objective of the bot's log that <paramref name="entry"/> credits (a kill objective, a game object objective with
     /// <see cref="ObjectFlag"/>, an item objective); allocation-free (the quest log is read by slot).
     /// </summary>
-    private void Objectives(QaBot bot, Player player, byte credit, uint creditEntry, uint entry)
+    private void Objectives(QaBot bot, Player player, byte credit, uint creditEntry, uint entry, bool raidFiltered = false)
     {
         if (_quests() is not { } quests || quests.StateOf(player) is not { Loaded: true } state) return;
+        bool? inRaid = null;
         QuestStore store = quests.Quests;
         for (int slot = 0; slot < QuestConstants.MaxQuestLogSize; slot++)
         {
@@ -195,6 +218,7 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
                     ? quest.ReqItemId[i] == entry && quest.ReqItemCount[i] != 0 && data.ItemCount[i] < quest.ReqItemCount[i] && entry != quest.Template.SrcItemId
                     : quest.ReqSpell[i] == 0 && quest.ReqCreatureOrGOId[i] == ((creditEntry & ObjectFlag) != 0 ? -(int)entry : (int)entry)
                         && data.CreatureOrGOCount[i] < quest.ReqCreatureOrGOCount[i];
+                if (match && raidFiltered && !quests.IsAllowedInRaid(quest) && (inRaid ??= _inRaidGroup(player)) == true) match = false;
                 if (match) Attempt(bot, player, credit, creditEntry, entry, questId, i);
             }
         }
@@ -202,19 +226,18 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
 
     private void Attempt(QaBot bot, Player player, byte credit, uint creditEntry, uint entry, uint questId, int objective)
     {
-        var key = (player.Guid.Value, credit, creditEntry);
+        var key = new QaAttemptKey(player.Guid.Value, credit, creditEntry, questId, objective);
         lock (_gate)
         {
             if (_attempts.Count >= MaxTracked) _attempts.Clear();
-            (int count, uint quest, int index) = _attempts.GetValueOrDefault(key);
-            count = quest == questId && index == objective ? count + 1 : 1;
+            int count = _attempts.GetValueOrDefault(key) + 1;
             if (count < ObjectiveAttempts)
             {
-                _attempts[key] = (count, questId, objective);
+                _attempts[key] = count;
                 return;
             }
 
-            _attempts[key] = (0, questId, objective);
+            _attempts.Remove(key);
             if (!Due(new QaRepeatKey(player.Guid.Value, QaSignalKind.QuestBroken, 100 + credit, objective, questId, creditEntry, 0), _clockMs())) return;
         }
 
@@ -232,13 +255,27 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
         });
     }
 
-    /// <summary>A quest update for the bot: the objective it credits progressed, so its attempts start again.</summary>
-    private void Credited(Player player, byte credit, uint creditEntry)
+    /// <summary>
+    /// A quest update for the bot: the objective it credits progressed, so its attempts start again. A kill update names the quest
+    /// (<paramref name="questId"/>), so only that quest's counters go; an item update names none, so every quest's counter for the item goes.
+    /// </summary>
+    private void Credited(Player player, byte credit, uint creditEntry, uint questId)
     {
         lock (_gate)
         {
-            var key = (player.Guid.Value, credit, creditEntry);
-            if (_attempts.ContainsKey(key)) _attempts.Remove(key);
+            if (_attempts.Count == 0) return;
+            ulong bot = player.Guid.Value;
+            if (questId != 0)
+            {
+                for (int objective = 0; objective < QuestConstants.ObjectivesCount; objective++)
+                    _attempts.Remove(new QaAttemptKey(bot, credit, creditEntry, questId, objective));
+                return;
+            }
+
+            List<QaAttemptKey>? gone = null;
+            foreach (QaAttemptKey key in _attempts.Keys)
+                if (key.Bot == bot && key.Credit == credit && key.Entry == creditEntry) (gone ??= []).Add(key);
+            if (gone is not null) foreach (QaAttemptKey key in gone) _attempts.Remove(key);
         }
     }
 
@@ -304,7 +341,7 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
     // --- the packet tap ------------------------------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// A packet a managed bot session captured (WorldSession.CaptureManagedPacket, under its send lock). Every opcode but four returns at the switch.
+    /// A packet a managed bot session captured (WorldSession.CaptureManagedPacket: under its send lock for a full session, with no lock for a lean one). Every opcode but four returns at the switch.
     /// </summary>
     public void OnPacket(WorldSession session, WorldOpcode opcode, byte[] payload)
     {
@@ -326,10 +363,10 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
         switch (opcode)
         {
             case WorldOpcode.SmsgQuestupdateAddKill:
-                if (payload.Length >= 8) Credited(player, CreditKill, BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4)));
+                if (payload.Length >= 8) Credited(player, CreditKill, BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(4)), BinaryPrimitives.ReadUInt32LittleEndian(payload));
                 return;
             case WorldOpcode.SmsgQuestupdateAddItem:
-                if (payload.Length >= 4) Credited(player, CreditItem, BinaryPrimitives.ReadUInt32LittleEndian(payload));
+                if (payload.Length >= 4) Credited(player, CreditItem, BinaryPrimitives.ReadUInt32LittleEndian(payload), 0);
                 return;
             case WorldOpcode.SmsgItemPushResult:
                 // guid u64, received u32, created u32, shown u32, bag u8, slot u32, entry u32 (ItemPackets.ItemPushResult).
@@ -429,3 +466,6 @@ internal sealed class PlayerbotQaInteractionMonitor : IGameQaObserver, IManagedP
 
 /// <summary>What a repeat counter or a throttle is about: a bot (0 for a bot-independent report), a kind, a reason, a code and up to three ids.</summary>
 internal readonly record struct QaRepeatKey(ulong Bot, QaSignalKind Kind, int Reason, int Code, uint A, uint B, uint C);
+
+/// <summary>What an objective's attempt counter is about: a bot, the credit kind, the credited entry, and the quest objective it counts for (two quests may name one creature).</summary>
+internal readonly record struct QaAttemptKey(ulong Bot, byte Credit, uint Entry, uint Quest, int Objective);

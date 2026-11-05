@@ -988,7 +988,11 @@ public sealed partial class LootService : IViewerFieldFilter
                 bag.ApplyRecord(updated);
                 PersistOwnerRelease(bag); // released while the take was in flight: store it now
                 byte[] removed = LootPackets.Removed(item.Slot);
-                if (item.IsQuestItem || item.IsPerPlayer)
+                if (item.IsQuestItem && !item.IsPerPlayer)
+                {
+                    SendQuestItemRemoved(bag, item, removed);
+                }
+                else if (item.IsQuestItem || item.IsPerPlayer)
                 {
                     if (actorCurrent)
                     {
@@ -1291,7 +1295,11 @@ public sealed partial class LootService : IViewerFieldFilter
         item.RollActive = false;
         item.Winner = default;
         byte[] removed = LootPackets.Removed(item.Slot);
-        if (item.IsQuestItem || item.IsPerPlayer)
+        if (item.IsQuestItem && !item.IsPerPlayer)
+        {
+            SendQuestItemRemoved(bag, item, removed);
+        }
+        else if (item.IsQuestItem || item.IsPerPlayer)
         {
             recipient.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
         }
@@ -1307,6 +1315,21 @@ public sealed partial class LootService : IViewerFieldFilter
         RefreshLootable(bag);
         bag.Changed?.Invoke(bag);
         return InventoryResult.Ok;
+    }
+
+    /// <summary>
+    /// A quest item without the party-loot flag was taken (vmangos <c>Loot::NotifyQuestItemRemoved</c>): every viewer who was shown it loses
+    /// the slot, since it is gone for all of them.
+    /// </summary>
+    private static void SendQuestItemRemoved(LootBag bag, LootItem item, byte[] removed)
+    {
+        foreach (Player viewer in bag.Viewers)
+        {
+            if (item.AllowedLooters.Contains(viewer.Guid))
+            {
+                viewer.Session.Send(WorldOpcode.SmsgLootRemoved, removed);
+            }
+        }
     }
 
     /// <summary>

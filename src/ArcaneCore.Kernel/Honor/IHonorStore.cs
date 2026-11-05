@@ -16,7 +16,20 @@ public enum HonorKind : byte
 /// One contribution point row (vmangos character_honor_cp: victim_type, victim_id, cp, date, type).
 /// <see cref="Date"/> is the game day; <see cref="VictimType"/> is 0 (no source), 3 (unit) or 4 (player).
 /// </summary>
-public sealed record HonorCpRecord(byte VictimType, uint VictimId, float Cp, uint Date, byte Type);
+public sealed record HonorCpRecord(byte VictimType, uint VictimId, float Cp, uint Date, byte Type)
+{
+    /// <summary>
+    /// The write identity of this row (character_honor_cp.operation_id): the write queue stamps it once when it takes the row, and a retry of the
+    /// same row carries the same id, so the store appends it at most once. <see cref="Guid.Empty"/> means unstamped (the row is always appended).
+    /// It identifies the write, not the event, so it is not part of equality and a stored row read back carries none.
+    /// </summary>
+    public Guid OperationId { get; init; }
+
+    public bool Equals(HonorCpRecord? other)
+        => other is not null && VictimType == other.VictimType && VictimId == other.VictimId && Cp.Equals(other.Cp) && Date == other.Date && Type == other.Type;
+
+    public override int GetHashCode() => HashCode.Combine(VictimType, VictimId, Cp, Date, Type);
+}
 
 /// <summary>
 /// The per-character honor state that vmangos keeps in columns of <c>characters</c>
@@ -113,7 +126,10 @@ public interface IHonorStore
     /// <summary>Insert or replace the state (rank and contribution points rounded to one decimal); a missing character is ignored.</summary>
     Task SaveStateAsync(int characterId, CharacterHonorState state, CancellationToken cancellationToken = default);
 
-    /// <summary>Append contribution rows (cp rounded to one decimal); a missing character is ignored.</summary>
+    /// <summary>
+    /// Append contribution rows (cp rounded to one decimal); a missing character is ignored. A row whose <see cref="HonorCpRecord.OperationId"/> is
+    /// already stored is skipped, so repeating a batch whose first commit succeeded adds nothing.
+    /// </summary>
     Task AppendCpAsync(int characterId, IReadOnlyList<HonorCpRecord> rows, CancellationToken cancellationToken = default);
 
     /// <summary>HonorMgr::Reset: delete the contribution rows and the state of a character.</summary>

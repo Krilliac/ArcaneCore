@@ -190,8 +190,8 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 | experience, quest kill credit, reputation (group-loot-xp, npc-services-quests lanes) | the same killer resolution | `Unit.cpp:1256` |
 | faction and PvP rules (`Combat/FactionCombatHooks.cs`, lines 31-32 list it as missing) | hostility of a pet or totem is its owner's: `Object.cpp:3745-3815`; copy of the owner faction is already on the unit, the player-controlled and PvP flags too | `Object.cpp:3745-3815` |
 | stats (stats-combat-formulas lane) | the owner's stat inheritance for a pet (`Pet::UpdateAllStats`), `CreatureClassLevelStats` for pets without `pet_levelstats` | `Pet.cpp:1274-1480` |
-| mounts (the owner's lane) | done: `MountService` raises `SpellSystem.PlayerMounted` / `PlayerDismounted` and `SummonService.Mounts.cs` calls `SetPetEnabled(pet, false/true)` (greys the bar), or brings back a pet put away when a dismounted owner has none; a pet loaded while its owner rides starts greyed out, but not during a taxi flight (vmangos loads no pet then; the landing raises no dismount event here) | `Player.cpp:18214`, `18249-18251`, `20944-20945`, `Pet.cpp:216-221`, `401-404` |
-| teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet through the pet store (P7), a demon is not stored | `UnsummonPetTemporaryIfAny` |
+| mounts (the owner's lane) | done: `MountService` raises `SpellSystem.PlayerMounted` / `PlayerDismounted` and `SummonService.Mounts.cs` calls `SetPetEnabled(pet, false/true)` (greys the bar), or brings back a pet put away when a dismounted owner has none; a pet loaded while its owner rides starts greyed out, but not during a taxi flight (vmangos loads no pet then; the landing raises no dismount event here, and `NpcServicesFeature.OnFlightEnded` brings back a pet put away instead) | `Player.cpp:18214`, `18249-18251`, `20944-20945`, `Pet.cpp:216-221`, `401-404` |
+| teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet and the warlock's demon through the pet store (P7; the demon is the current `character_pet` row, restored at login by `SummonService.RestoreCurrentDemon`, which leaves it to the temporary-unsummon memory while the owner is dead or on a taxi, and the end of the flight, landed or aborted, brings it back; a dismissal, replacement or reagent refund saves it under its entry and removes only the current row, and the next summon of that entry loads it again) | `UnsummonPetTemporaryIfAny` |
 
 ## Configuration (`Pets`, every default is the retail value)
 
@@ -273,29 +273,36 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   (`PetTeleportFollow`, `SummonService.UnsummonPetTemporarily` / `ResummonTemporarilyUnsummonedPet`; vmangos
   `UnsummonPetTemporaryIfAny`, `ResummonPetTemporaryUnSummonedIfAny`, Player.cpp:1911-1921, 2045-2048, 20911-20940,
   MovementHandler.cpp:197-198, 274-284). A hunter pet comes back from its current-pet snapshot; a demon or other summoned pet keeps
-  its pet number, health, mana, react state, name, spells and bar (held in memory, since demons are not stored). Totems, guardians
+  its pet number, health, mana, react state, name, spells and bar (held in memory for the teleport; a demon is also saved as the current pet for a relog). Totems, guardians
   and mini pets are unsummoned and stay gone (vmangos `RemoveFromWorld`); a temporary summon and a dead pet are not brought back (a
   dead hunter pet stays dead in its snapshot, where Revive Pet finds it; vmangos would reload it as a corpse). A summoned possessed
   minion puts the pet away for its life (`CharmService.SummonPossessed.cs`), and a dismount brings the pet back when the owner has none
-  (`Player::Unmount`, Player.cpp:18250-18251, `SummonService.Mounts.cs`). Not done: the taxi trigger of the same pair (vmangos mounts
-  the flight without a spell, Player.cpp:18201-18203, and dismounts on landing).
+  (`Player::Unmount`, Player.cpp:18250-18251, `SummonService.Mounts.cs`). The end of a taxi flight, landed or aborted, does the same in the next tick's commands phase:
+  vmangos `FlightPathMovementGenerator::Finalize` clears the flight state and calls `Player::Unmount` (WaypointMovementGenerator.cpp:359-362), and here
+  `NpcServicesFeature.OnFlightEnded` calls `ResummonTemporarilyUnsummonedPet` on `TaxiFlightSystem.FlightEnded`, which covers the demon remembered at a login in the air.
+  A player leaving its map keeps the pet remembered for the teleport's end. Not done: the taxi start of the same pair (vmangos mounts the flight without a spell and
+  puts the pet away, Player.cpp:18201-18203; here a pet out at the start of a flight is not put away).
 * **Spirit guide re-summon (wave 2).** `SummonService.AutoReSummonPet` (vmangos `Player::AutoReSummonPet`, Player.cpp:1580-1628) runs
   on `SpellSystem.PlayerSpiritHealed` (SPELL_EFFECT_SPIRIT_HEAL): the last demon or loaded permanent pet (`m_petEntry`, `m_petSpell`)
   comes back when the summoning spell's reagents are in the bags (they are taken); a pet saved dead is brought back to life at full
   health, a living one keeps its saved health (Player.cpp:1619-1628). A hunter's abandon forgets it, and so does a logout
   (`SummonService.ForgetOwner` on `WorldRuntime.PlayerLoggingOut`: vmangos keeps it on the Player object). A warlock gets a fresh demon
-  of that entry. A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard does not apply to it.
+  of that entry (a new demon, with a new generated name). A hunter pet carries no taming spell here, so the vmangos "no spell, no pet" guard does not apply to it.
 * **Reagents back (wave 2).** A pet whose owner dies, that lost its owner, was left beyond the leash or whose owner has no pet any
-  more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). Not done: the
-  talent reset, taxi and far-control triggers of the same mode.
+  more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). A talent reset
+  also sends a warlock's demon out of the current slot (the demon is kept under its entry and comes back at full health and mana when its entry is summoned
+  again, Pet.cpp:360-364, 415). Not done: the reagent refund of the talent reset, taxi and far-control triggers of the same mode.
 * **Pet data gaps.** A hunter pet reads the creature id `1` rows of `pet_levelstats` (a hunter without that row falls back to the pet's own entry); any other pet whose creature has no `pet_levelstats` row keeps its template health, damage,
   armor and stats: vmangos falls back to `creature_classlevelstats` (`GetClassLevelStats`), a table of the
   stats lane that this build does not have. Not ported: the owner's stat inheritance and `UpdateAllStats`
   (the stats lane), the template's school resistances, `LearnPetPassives` (skill-line passives),
   `CastPetAuras` (`spell_pet_auras`), the owner's teach spells (`AddTeachSpell`: the player learning the
   summoned demon's spells), `GetPetCreateSpellEntry` rows by creature spell list (`pet_spell_list_id`), the
-  the scale and pet-specific flags of the hunter pet branch, and `pet_name_generation`. The pet name is the creature name, not the family name of
-  `CreatureFamily.dbc` (`InitializeDefaultName`).
+  the scale and pet-specific flags of the hunter pet branch. A player's demon is named from `pet_name_generation` (`PetContent.GeneratePetName`, vmangos
+  `ObjectMgr::GeneratePetName`, ObjectMgr.cpp:8607); an entry with no rows in both halves keeps the creature name, not the family name of
+  `CreatureFamily.dbc` (`InitializeDefaultName`). The untraining price and its time (`CharmInfo.ResetTalentsCost` / `ResetTalentsTime`) are saved with the
+  hunter pet (`character_pet.ResetTalentsCost` / `ResetTalentsTime`, vmangos Pet.cpp:582-583) and the price drops back to 10 silver after one day
+  (Pet.cpp:2130).
 * **Pet spell lists.** A summoned pet starts with no spells: its spell list comes from
   `petcreateinfo_spell` / the creature spell list (vmangos `InitPetCreateSpells`), the data of slice P4.
   `CharmInfo.LearnSpell` is the entry point; rank chains (`GetFirstSpellInChain`) are not modelled, so a new

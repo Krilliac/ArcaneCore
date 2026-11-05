@@ -4,7 +4,11 @@ Branch `claude/ac-10a-cluster-docs`, base `c3dea16292756e146df0ddd0783f97fee734d
 This is the scope record for M15.0 "Ownership/session seams, durable fencing and saves,
 ID allocation, schema authority" ([ROADMAP.md:139](../ROADMAP.md),
 [CLUSTERING_DESIGN.md:315](../CLUSTERING_DESIGN.md)). It contains no code and no schema.
-M15.0 stays **open**; nothing here implements any part of it beyond item 1 below.
+M15.0 stayed **open** when this record was written; nothing here implements any part of it beyond item 1 below.
+
+> **Superseded (dated record).** M15.0 has since merged; [ROADMAP.md:133](../ROADMAP.md) owns the phase status and says so. Its closure is still
+> open on one clause, the provider gap (the MariaDB and PostgreSQL rows of the provider theories are Skipped unless the server test-database
+> variables are set). Retire this note once the V2 provider gap closes.
 
 ## What this tranche delivers
 
@@ -78,7 +82,7 @@ these is started.
 ## Deliberately deferred, and out of scope
 
 - All of M15.1 and later: gateway and worker processes, gRPC packages, transfer
-  participant interfaces, supervision, placement. Nothing is pre-created before it has a consumer.
+  participant interfaces, supervision, placement. Nothing was pre-created before it had a consumer (those phases have since merged; see the superseded note above).
 - Durable item-GUID ranges and `ISessionClaims` (A3, A4) until a consumer exists.
 - Fencing the non-core stores (B4) and the settlement paths until their lanes merge.
 - Any default-on behavior change (see decisions).
@@ -91,8 +95,8 @@ these is started.
 ## Decisions that need an explicit go
 
 The 2026-10-02 charter amendment (the "Blanket go-ahead"; the charter has since been retired, see
-[contributing](../guide/contributing.md#retired-rules)) removed per-milestone waiting, but `ROADMAP.md:146-149` still says this request
-authorizes research and planning, with runtime code only in its bounded phase. Ask once,
+[contributing](../guide/contributing.md#retired-rules)) removed per-milestone waiting, but `ROADMAP.md:146-149` still said this request
+authorized research and planning, with runtime code only in its bounded phase. The record asked once,
 explicitly, before any A-item code.
 
 1. **Start M15.0 implementation** and confirm which of A1-A4 are in the first tranche.

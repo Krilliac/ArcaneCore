@@ -375,13 +375,16 @@ on existing paths without replacing their geometry (mangos-classic `WaypointMove
 `Start(..., player, questId)` links the escort to a player and quest (vmangos npc_escortAI::Start): every second it checks that the player
 or an online member of its group is within `MaxPlayerDistance` (100, IsWithinDistInMap), and when nobody is it fails the quest and
 disappears (JustDied then ResetEscort, ScriptedEscortAI.cpp:265-300); its death fails the quest too, for every group member who still has
-it incomplete (`QuestNpcServices.GroupEventFailHappens`, Player::GroupEventFailHappens). Not ported: the assist of the player in combat.
+it incomplete (`QuestNpcServices.GroupEventFailHappens`, Player::GroupEventFailHappens). An escort or follower whose template has the CAN_ASSIST type flag
+(0x1000) assists a player in combat (`CreatureMapSystem.AssistPlayerInCombat`, from `MoveInLineOfSight`), and the default `UpdateEscortAI` makes nearby
+enemies aggro a passive escort (`AggroNearestHostileCreature`).
 
 World-wide scripts by entry (the ScriptDev2 `ScriptName`, which this server does not import): `CreatureAiFactory.RegisterEntryScript`
 selects an AI before the AIName on every map (vmangos selectAI asks the script name first), with the event quests it completes. Built in:
 `RuulSnowhoofAI` (12818, mangos-classic npc_ruul_snowhoof, ashenvale.cpp:373-472): taking quest 6482 sets him off with the player under
 the passive escort faction 33; ambushes of three Thistlefur furbolgs at points 14 and 31; the quest for the player and the group near him
-at point 32 (RewardPlayerAndGroupAtEventExplored); he bows at 33 and leaves at 36. Not ported there: SetImmuneToNPC.
+at point 32 (RewardPlayerAndGroupAtEventExplored); he bows at 33 and leaves at 36. From point 32 to 36 he carries UNIT_FLAG_IMMUNE_TO_NPC, which `CombatHooks.CanAttack` enforces (and
+IMMUNE_TO_PLAYER), so hostile creatures neither attack nor aggro him.
 
 The map services the scripts use (`CreatureMapSystem.ScriptedAi.cs`): `SummonCorpseDespawn` (TEMPSUMMON_CORPSE_DESPAWN: the summon stays
 until it dies and goes with its corpse on the next update; `MarkCorpseDespawn` for an object's summon), `SetHomePosition`, `NearTeleport`
@@ -471,7 +474,7 @@ code was copied.
 - No vmangos generic-script AI (`creature_ai_events`/`creature_ai_scripts` in vmangos format). Only cmangos EventAI rows are imported.
 - Hostility comes from the faction template only. Reputation, at-war and forced reactions are not used; that seam is for the reputation area.
 - Paths and line of sight come from `map.Collision` (feat/vmap-los). Without installed vmaps or mmaps they are straight and always clear. There is no re-path while a long path is being walked, other than chase's own re-check timer.
-- Evade removes the auras vmangos removes on evade (`Creatures:EvadeResetsAuras`, default on: everything except a non-permanent positive aura cast by a player; `KEEP_POSITIVE_AURAS_ON_EVADE` removes only the negative ones). Switch the option off to keep every aura.
+- Evade removes the auras vmangos removes on evade (`Creatures:EvadeResetsAuras`, default on: everything except a non-permanent positive aura cast by a player; `KEEP_POSITIVE_AURAS_ON_EVADE` removes only the negative ones). Switch the option off to keep every aura. A script's own evade through `ResetAurasOnEvade` (`CreatureMapSystem.Evade.cs`) ignores that option and always resets the auras.
 - Creature-versus-creature aggro reads the faction templates only (the reputation seam answers for players); creature stealth
   and invisibility are not modelled for creature targets; `Poll` mode scans players only. Mobs aggro on pets and totems alike
   (no totem exemption exists in the references' on-sight rules; UNVERIFIED against the client).

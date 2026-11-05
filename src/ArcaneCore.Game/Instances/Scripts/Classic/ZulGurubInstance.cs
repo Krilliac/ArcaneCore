@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <para>
 /// Ported: the eight-slot save string, TYPE_OHGAN with Mandokir running downstairs on SPECIAL, TYPE_LORKHAN/TYPE_ZATH, the Arlokk
 /// forcefield and gong (ZulGurubObjects.cs), and priest death/power bookkeeping for Hakkar (ZulGurubPriestState.cs).
-/// Not ported: Mar'li's egg and Arlokk's gong respawn on FAIL (Mar'li's AI resets her eggs itself).
+/// Mar'li's eggs and Arlokk's gong respawn on FAIL (ZulGurubObjects.cs). Types of 8 or more are ignored, as in the original.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]

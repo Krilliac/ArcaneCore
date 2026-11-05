@@ -5,11 +5,11 @@ using Microsoft.EntityFrameworkCore;
 namespace ArcaneCore.Data.Content.Import;
 
 /// <summary>What a pet import read and wrote.</summary>
-public sealed record PetImportReport(int LevelStats, int CreateSpells, int SkippedRows, IReadOnlyList<string> Warnings);
+public sealed record PetImportReport(int LevelStats, int CreateSpells, int SkippedRows, IReadOnlyList<string> Warnings, int NameParts = 0);
 
 /// <summary>
-/// Maps <c>pet_levelstats</c> and <c>petcreateinfo_spell</c> of a cmangos classic-db or vmangos dump into
-/// <see cref="PetLevelStatsRow"/> and <see cref="PetCreateSpellRow"/> by column name. classic-db names the
+/// Maps <c>pet_levelstats</c>, <c>petcreateinfo_spell</c> and (vmangos only) <c>pet_name_generation</c> of a cmangos classic-db or vmangos dump into
+/// <see cref="PetLevelStatsRow"/>, <see cref="PetCreateSpellRow"/> and <see cref="PetNameGenerationRow"/> by column name. classic-db names the
 /// columns <c>creature_entry, hp, str, agi, sta, inte, spi</c> (and has no damage columns, so
 /// <c>DmgMin</c>/<c>DmgMax</c> stay 0 and the pet keeps its template damage); vmangos uses
 /// <c>entry, health, strength, agility, stamina, intellect, spirit, dmg_min, dmg_max</c>
@@ -22,6 +22,7 @@ public sealed class PetDumpImporter
 {
     private const string LevelTable = "pet_levelstats";
     private const string SpellTable = "petcreateinfo_spell";
+    private const string NameTable = "pet_name_generation";
 
     private static readonly RowMapper<PetLevelStatsRow> s_levelMapper = new(new Dictionary<string, string>
     {
@@ -36,9 +37,12 @@ public sealed class PetDumpImporter
 
     private static readonly RowMapper<PetCreateSpellRow> s_spellMapper = new();
 
+    private static readonly RowMapper<PetNameGenerationRow> s_nameMapper = new();
+
     private readonly SpecKeyReader _keys = new();
     private readonly Dictionary<(uint Entry, uint Level), PetLevelStatsRow> _levels = [];
     private readonly Dictionary<uint, PetCreateSpellRow> _spells = [];
+    private readonly Dictionary<uint, PetNameGenerationRow> _names = [];
     private readonly MapDiagnostics _diagnostics = new();
 
     /// <summary>Whether a <c>pet_levelstats</c> column is read (the spec's mapped-column rule).</summary>
@@ -46,6 +50,12 @@ public sealed class PetDumpImporter
 
     /// <summary>Whether a <c>petcreateinfo_spell</c> column is read (the spec's mapped-column rule).</summary>
     internal static bool ReadsSpellColumn(string column) => s_spellMapper.Maps(column);
+
+    /// <summary>Whether a <c>pet_name_generation</c> column is read (the spec's mapped-column rule).</summary>
+    internal static bool ReadsNameColumn(string column) => s_nameMapper.Maps(column);
+
+    /// <summary>The generated-name rows that would be written, ordered by id.</summary>
+    public IReadOnlyList<PetNameGenerationRow> NameParts => [.. _names.Values.OrderBy(r => r.Id)];
 
     /// <summary>The level rows that would be written (creatures without level 1 data removed), ordered by entry and level.</summary>
     public IReadOnlyList<PetLevelStatsRow> LevelStats => Resolve().Rows;
@@ -78,6 +88,16 @@ public sealed class PetDumpImporter
                 mapped.Entry = key[0];
                 _spells[key[0]] = mapped;
             }
+            else if (row.Table.Equals(NameTable, StringComparison.OrdinalIgnoreCase))
+            {
+                uint[] key = _keys.Read(row, NameTable);
+                PetNameGenerationRow mapped = s_nameMapper.Map(row, _diagnostics);
+                mapped.Id = key[0];
+                if (mapped.Word.Length > 0)
+                {
+                    _names[key[0]] = mapped;
+                }
+            }
         }
     }
 
@@ -85,7 +105,7 @@ public sealed class PetDumpImporter
     {
         (List<PetLevelStatsRow> rows, int skipped, List<string> warnings) = Resolve();
         warnings.AddRange(_diagnostics.Samples);
-        return new PetImportReport(rows.Count, _spells.Count, skipped, warnings);
+        return new PetImportReport(rows.Count, _spells.Count, skipped, warnings, _names.Count);
     }
 
     /// <summary>
@@ -98,6 +118,7 @@ public sealed class PetDumpImporter
         ArgumentNullException.ThrowIfNull(db);
         IReadOnlyList<PetLevelStatsRow> levels = LevelStats;
         IReadOnlyList<PetCreateSpellRow> spells = CreateSpells;
+        IReadOnlyList<PetNameGenerationRow> names = NameParts;
         await ImportTransaction.RunAsync(db, async token =>
         {
             bool detect = db.ChangeTracker.AutoDetectChangesEnabled;
@@ -108,10 +129,12 @@ public sealed class PetDumpImporter
                 {
                     await db.Set<PetLevelStatsRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                     await db.Set<PetCreateSpellRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    await db.Set<PetNameGenerationRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                 }
 
                 await ImportBatch.InsertAsync(db, levels, token).ConfigureAwait(false);
                 await ImportBatch.InsertAsync(db, spells, token).ConfigureAwait(false);
+                await ImportBatch.InsertAsync(db, names, token).ConfigureAwait(false);
             }
             finally
             {

@@ -143,6 +143,32 @@ public sealed class RenatakiVanishScript : ISpellScript
     }
 }
 
+/// <summary>
+/// The teleport effect of RenatakiVanishTeleport (24700; implicit targets A 25 unit, B 18 caster destination) with Renataki as the target:
+/// the vanish target is the caster, and mangos-classic moves the spell's target to the caster (Spell.cpp:1817-1822), so Renataki reappears at the
+/// enemy. The generic effect (vmangos SpellEffects.cpp:1627-1636) would move the caster, the enemy, to Renataki; vmangos has no 24700 caller.
+/// The stun aura effect of the spell is untouched; the effect runs for Renataki only and is cancelled otherwise.
+/// </summary>
+[SpellScript(RenatakiAI.VanishTeleport, ExecuteEffects = [SpellEffectName.TeleportUnits])]
+public sealed class RenatakiVanishTeleportScript : ISpellScript
+{
+    public bool OnEffectExecute(SpellEffectContext context, bool runByDefault)
+    {
+        if (context.Effect.Effect != SpellEffectName.TeleportUnits)
+        {
+            return runByDefault;
+        }
+
+        Unit mover = context.Target;
+        if (mover.IsAlive && !ReferenceEquals(mover, context.Caster))
+        {
+            context.System.Teleports.Teleport(mover, context.Caster.MapId, context.Caster.X, context.Caster.Y, context.Caster.Z, mover.Orientation, keepCombat: true);
+        }
+
+        return false;
+    }
+}
+
 /// <summary>mangos-classic boss_renataki.cpp RenatakiVanishTeleport::OnApply(apply = false): when the 24700 aura leaves its target
 /// (Renataki), the target casts Thrash (3391) on the aura's caster and loses Vanish (24699).</summary>
 public sealed class RenatakiVanishTeleportAuraModule : ISpellHandlerModule

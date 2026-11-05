@@ -32,7 +32,7 @@ public sealed class TuningContentReloadable(IServiceProvider services) : IConten
             {
                 IReadOnlyList<string> missing = TuningFeature.MissingTables(content);
                 return missing.Count == 0 ? catalog.Summary
-                    : $"{catalog.Summary}; empty tables, whose behaviour is off until the next restart reseeds them: {string.Join(", ", missing)}";
+                    : $"{catalog.Summary}; empty tables, whose behaviour is off until they are filled (a restart reseeds them only where the start-up policy allows writes): {string.Join(", ", missing)}";
             }
         }
 

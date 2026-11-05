@@ -55,6 +55,8 @@ public sealed class TalentPetHooks : IDisposable
             _pets.QueueDetachedPetSave(player); // read from the live pet, so before it goes
         }
 
+        // RemovePet(PET_SAVE_REAGENTS) is stored as PET_SAVE_NOT_IN_SLOT (Pet.cpp:1050): a warlock's demon leaves the current slot and a relog does not restore it
+        _pets.AbandonSavedDemon(player, pet);
         _pets.Unsummon(pet);
     }
 

@@ -570,6 +570,72 @@ public sealed class RemainingRaidBossTests
         Assert.False(spells.HasAura(renataki, RenatakiAI.Vanish));
     }
 
+    private sealed class MoveLog : ITeleportSink
+    {
+        public List<(Unit Unit, float X, float Y, float Z)> Moves { get; } = [];
+
+        public bool Teleport(Unit unit, uint mapId, float x, float y, float z, float orientation)
+        {
+            Moves.Add((unit, x, y, z));
+            return true;
+        }
+
+        public bool CanTeleport(Unit unit, uint mapId, float x, float y, float z, float orientation) => true;
+    }
+
+    /// <summary>24700 as built from Spell.dbc: an aura on a unit target plus a teleport effect with implicit target B 18 (caster destination).</summary>
+    private static SpellInfo RenatakiVanishTeleportSpell()
+        => SpellTestKit.Spell(RenatakiAI.VanishTeleport,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.Unit, AuraType.Dummy),
+            SpellTestKit.Effect(SpellEffectName.TeleportUnits, 0, SpellImplicitTarget.Unit, targetB: SpellImplicitTarget.LocationCasterDest)) with
+        {
+            Duration = new SpellDuration(2000, 0, 2000),
+            SpellVisual = 1,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+
+    [Fact]
+    public void RenatakiVanishTeleport_RealEffectShape_MovesRenatakiToTheEnemy_AndTheEnemyStaysPut()
+    {
+        // The vanish target is the caster and Renataki the target; the generic effect would pull the enemy to him, the script moves him (mangos-classic Spell.cpp:1817-1822).
+        using var kit = new PetTestKit([RenatakiVanishTeleportSpell()]);
+        var moves = new MoveLog();
+        kit.Spells.System.Teleports = moves;
+        SpellScriptDispatcher.Install(kit.Spells.System, new SpellScriptRegistry([new RenatakiVanishTeleportScript()]));
+        (Player player, _) = kit.AddPlayer(1, 5, 5);
+        Creature renataki = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 40, 5, 0, 0);
+
+        kit.Spells.System.CastSpell(player, RenatakiAI.VanishTeleport, SpellCastTargets.ForUnit(renataki.Guid), triggered: true);
+
+        (Unit Unit, float X, float Y, float Z) move = Assert.Single(moves.Moves);
+        Assert.Same(renataki, move.Unit);
+        Assert.Equal(player.X, move.X, 3);
+        Assert.Equal(player.Y, move.Y, 3);
+        Assert.True(kit.Spells.System.HasAura(renataki, RenatakiAI.VanishTeleport)); // the aura effect still lands
+    }
+
+    [Fact]
+    public void RenatakiVanishTeleport_ThroughTheDefaultSink_StopsRenataki_AndTellsHisObservers()
+    {
+        // The creature half of the move (vmangos Unit::NearTeleportTo, Objects/Unit.cpp:9801-9825), which the recording sink above cannot show.
+        using var kit = new PetTestKit([RenatakiVanishTeleportSpell()]);
+        SpellScriptDispatcher.Install(kit.Spells.System, new SpellScriptRegistry([new RenatakiVanishTeleportScript()]));
+        (Player player, var session) = kit.AddPlayer(1, 5, 5);
+        Creature renataki = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 40, 5, player.Z, 0);
+        kit.Run(100);
+        Assert.Contains(renataki.Guid, player.VisibleObjects);
+        kit.Creatures.MoveStraight(renataki, 60, 5, player.Z, run: false, finalOrientation: null);
+        Assert.True(renataki.IsMoving);
+        session.Clear();
+
+        kit.Spells.System.CastSpell(player, RenatakiAI.VanishTeleport, SpellCastTargets.ForUnit(renataki.Guid), triggered: true);
+
+        Assert.False(renataki.IsMoving);
+        Assert.Equal((player.X, player.Y), (renataki.X, renataki.Y));
+        Assert.Equal(2, SpellTestKit.Packets(session, ArcaneCore.Protocol.WorldOpcode.MsgMoveTeleport).Count); // before and after the relocation
+    }
+
     [Fact]
     public void Ossirian_FirstCrystalStandsBeforeThePull_AndFiveMoreRiseTenSecondsIn()
     {

@@ -79,6 +79,8 @@ public sealed class DbScriptDumpImporter
         [DbScriptDataModule.GossipTable] = StepCount(DbScriptKind.Gossip),
         [DbScriptDataModule.EventTable] = StepCount(DbScriptKind.Event),
         [DbScriptDataModule.CreatureMovementTable] = StepCount(DbScriptKind.CreatureMovement),
+        [DbScriptDataModule.GameObjectUseTable] = StepCount(DbScriptKind.GameObject),
+        [DbScriptDataModule.GameObjectTemplateUseTable] = StepCount(DbScriptKind.GameObjectTemplate),
         [DbScriptDataModule.SpellTable] = StepCount(DbScriptKind.Spell)
             + _vmangosSpellScripts.Where(pair => !_scripts.ContainsKey((DbScriptKind.Spell, pair.Key))).Sum(pair => pair.Value.Count),
         [DbScriptDataModule.WaypointTable] = WaypointRows().Count(),
@@ -335,6 +337,8 @@ public sealed class DbScriptDumpImporter
         await db.Set<EventScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CreatureMovementScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<SpellScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GameObjectUseScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GameObjectTemplateUseScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScriptWaypointRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -445,6 +449,8 @@ public sealed class DbScriptDumpImporter
             DbScriptDataModule.EventTable => (true, DbScriptKind.Event),
             DbScriptDataModule.CreatureMovementTable => (true, DbScriptKind.CreatureMovement),
             DbScriptDataModule.SpellTable => (true, DbScriptKind.Spell),
+            DbScriptDataModule.GameObjectUseTable => (true, DbScriptKind.GameObject),
+            DbScriptDataModule.GameObjectTemplateUseTable => (true, DbScriptKind.GameObjectTemplate),
             _ => (false, default(DbScriptKind)),
         };
         return known;

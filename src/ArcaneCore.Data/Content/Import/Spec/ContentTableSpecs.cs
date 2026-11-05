@@ -195,7 +195,7 @@ public static class ContentTableSpecs
                 "z", "o", "speed", "condition_id",
             ], []),
         // World schema 42: the quest, gossip and event DB scripts (the relay layout, no key; DbScriptDumpImporter) and ScriptDev2's escort paths.
-        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell" }.Select(table => new TableSpec(table,
+        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell", "dbscripts_on_go_use", "dbscripts_on_go_template_use" }.Select(table => new TableSpec(table,
             [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
              new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
             [
@@ -318,6 +318,8 @@ public static class ContentTableSpecs
         // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
         new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
         new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
+        // pet_name_generation: a vmangos table (id, word, entry, half; not checked against classic-db); the halves of a demon's generated name (PetDumpImporter, ObjectMgr::LoadPetNames).
+        new("pet_name_generation", [new KeyColumn("id")], [], [], PetDumpImporter.ReadsNameColumn),
         // The world-state tables (WorldStateDumpImporter reads game_weather and exploration_basexp by name), the seven game-event tables
         // (GameEventDumpImporter, keyed as it keys its own maps), the ship periods (TransportDumpImporter; a missing build reads as 0) and
         // the inns (AreaTriggerTavernDumpImporter reads only id). Without a spec `plan` listed them as read by no importer and the scan

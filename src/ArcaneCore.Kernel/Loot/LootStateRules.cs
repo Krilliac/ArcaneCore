@@ -47,7 +47,7 @@ public static class LootStateRules
 
     /// <summary>
     /// The record after <paramref name="characterId"/> takes the stack in <paramref name="slot"/>
-    /// (LootBag.MarkTaken): a quest stack is looted once every allowed character took it, a
+    /// (LootBag.MarkTaken): a quest stack is looted at once unless it is also per-player, when it is looted once every allowed character took it, a
     /// per-player stack once every recipient did, any other stack at once. When every stack is
     /// taken the record becomes consumed and respawns at <paramref name="respawnAtUnix"/>.
     /// Null when the stack does not exist or is not available to the character.
@@ -65,7 +65,8 @@ public static class LootStateRules
         if (item.IsQuest)
         {
             int[] by = [.. item.LootedBy, characterId];
-            taken = item with { LootedBy = by, IsLooted = item.AllowedLooters.All(by.Contains) };
+            // As LootBag.MarkTaken: a quest stack without the party-loot flag is gone for everyone after one pickup.
+            taken = item with { LootedBy = by, IsLooted = !item.IsPerPlayer || item.AllowedLooters.All(by.Contains) };
         }
         else if (item.IsPerPlayer)
         {

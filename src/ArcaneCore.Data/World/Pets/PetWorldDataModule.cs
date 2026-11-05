@@ -87,15 +87,17 @@ public sealed class PetWorldDataModule : IDataModule
     public void AddServices(IServiceCollection services) => services.AddScoped<IPetDataStore, EfPetDataStore>();
 }
 
-/// <summary>Reads the pet tables into an immutable <see cref="PetContent"/>.</summary>
+/// <summary>Reads the pet tables (levelstats, create spells, generated-name parts) into an immutable <see cref="PetContent"/>.</summary>
 public sealed class EfPetDataStore(WorldDbContext db) : IPetDataStore
 {
     public async Task<PetContent> LoadAsync(CancellationToken cancellationToken = default)
     {
         List<PetLevelStatsRow> stats = await db.Set<PetLevelStatsRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<PetCreateSpellRow> spells = await db.Set<PetCreateSpellRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<PetNameGenerationRow> names = await db.Set<PetNameGenerationRow>().AsNoTracking().OrderBy(r => r.Id).ToListAsync(cancellationToken).ConfigureAwait(false);
         return new PetContent(
             stats.Select(r => new PetLevelStats(r.Entry, r.Level, r.Health, r.Mana, r.Armor, r.DmgMin, r.DmgMax, r.Strength, r.Agility, r.Stamina, r.Intellect, r.Spirit)),
-            spells.Select(r => new PetCreateSpells(r.Entry, [r.Spell1, r.Spell2, r.Spell3, r.Spell4])));
+            spells.Select(r => new PetCreateSpells(r.Entry, [r.Spell1, r.Spell2, r.Spell3, r.Spell4])),
+            names.Select(r => new PetNamePart(r.Entry, r.Half, r.Word)));
     }
 }

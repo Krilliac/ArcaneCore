@@ -281,7 +281,7 @@ public sealed class PetMapSystem : IMapUpdater
                         // corpse timer ran out (Pet.cpp:679-686): the owner's pet link and action bar go too.
                         if (creature.Summon is { Kind: SummonKind.Pet } && _map.FindObject(creature.OwnerGuid) is Player petOwner)
                         {
-                            _service?.QueueCurrentPetSave(petOwner);
+                            _service?.QueueCurrentPetSave(petOwner, creature); // the pet is off the map: capture it from the creature, with the health it died with
                             SummonService.ReleasePetLink(creature, petOwner);
                         }
 
@@ -407,7 +407,8 @@ public sealed class PetMapSystem : IMapUpdater
         {
             // vmangos Unsummon(PET_SAVE_REAGENTS), which SavePetToDB stores as PET_SAVE_NOT_IN_SLOT: the owner's current pet is saved
             // first (a pet that is no longer the owner's current one is not, as it is not captured as current).
-            if (owner is Player petOwner && links.Kind == SummonKind.Pet && petOwner.PetGuid == pet.Guid)
+            // A warlock's demon is saved by UnsummonReturningReagents (AbandonSavedDemon), so only a hunter's pet needs the save here.
+            if (owner is Player petOwner && links.Kind == SummonKind.Pet && petOwner.PetGuid == pet.Guid && !SummonService.IsPermanentPetFor(petOwner, pet))
             {
                 _service?.QueueCurrentPetSave(petOwner);
             }
@@ -432,7 +433,11 @@ public sealed class PetMapSystem : IMapUpdater
         {
             if (links.Kind == SummonKind.Pet)
             {
-                _service?.QueueCurrentPetSave(deadOwner);
+                if (!SummonService.IsPermanentPetFor(deadOwner, pet)) // a demon is saved by UnsummonReturningReagents (AbandonSavedDemon)
+                {
+                    _service?.QueueCurrentPetSave(deadOwner);
+                }
+
                 _service?.UnsummonReturningReagents(pet); // RemovePet(PET_SAVE_REAGENTS)
             }
             else
