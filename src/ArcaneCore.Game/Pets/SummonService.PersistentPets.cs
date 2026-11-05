@@ -87,19 +87,11 @@ public sealed partial class SummonService
         }
     }
 
-    public async Task SaveDetachedPetAsync(Player owner, CancellationToken cancellationToken = default)
-    {
-        if (CaptureCurrentPet(owner) is { } snapshot)
-        {
-            snapshot = snapshot with { IsCurrent = false };
-            lock (_cacheGate)
-            {
-                _cached[(int)owner.Guid.Low] = snapshot;
-                _cacheGeneration[(int)owner.Guid.Low] = _cacheGeneration.GetValueOrDefault((int)owner.Guid.Low) + 1;
-            }
-            await PersistSerializedAsync(snapshot, cancellationToken).ConfigureAwait(false);
-        }
-    }
+    /// <summary>
+    /// Test seam: replaces <see cref="CaptureCurrentPet"/> for <see cref="QueueDetachedPetSave"/> only, so a capture failure can be provoked.
+    /// Null in production.
+    /// </summary>
+    internal Func<Player, PersistentPetSnapshot?>? DetachedCaptureOverride { get; set; }
 
     public void QueueDetachedPetSave(Player owner)
     {
@@ -109,9 +101,10 @@ public sealed partial class SummonService
     private async Task SaveDetachedQueuedAsync(Player owner)
     {
         PersistentPetSnapshot? snapshot;
-        try { snapshot = CaptureCurrentPet(owner); }
+        try { snapshot = (DetachedCaptureOverride ?? CaptureCurrentPet)(owner); }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {owner.Guid.Low}", ex.Message);
             _logger.LogFault("pet.persistence", ex, "detached hunter pet capture failed for character {CharacterId}", owner.Guid.Low);
             return;
         }
@@ -186,8 +179,8 @@ public sealed partial class SummonService
             }
             catch (Exception ex)
             {
-                // Observe only, whatever the exception (an OutOfMemoryException included): the failed predecessor recorded itself when it
-                // ran, and its failure must not stop this delete or pass down the queue.
+                // Observe only, whatever the exception (an OutOfMemoryException included): a failed predecessor was already recorded when it
+                // ran (an OutOfMemoryException is the one exception that is never recorded), and its failure must not stop this delete or pass down the queue.
                 _logger.LogDebug(ex, "previous persistent pet write failed for character {CharacterId}; continuing with abandon delete", characterId);
             }
 
@@ -370,8 +363,8 @@ public sealed partial class SummonService
         catch (Exception ex)
         {
             // A failed predecessor is retained (or superseded by this snapshot); it must not poison the next authoritative
-            // snapshot for this character. Observe only, an OutOfMemoryException included: the predecessor recorded itself when
-            // it failed, and only a fresh failure of this snapshot's own store call may propagate.
+            // snapshot for this character. Observe only, an OutOfMemoryException included: a failed predecessor was already recorded when
+            // it failed (an OutOfMemoryException is never recorded), and only a fresh failure of this snapshot's own store call may propagate.
             _logger.LogDebug(ex, "previous persistent pet save failed for character {CharacterId}; continuing with newer state", snapshot.CharacterId);
         }
         bool abandoned;
@@ -418,7 +411,8 @@ public sealed partial class SummonService
             }
             catch (Exception ex)
             {
-                // Not recorded here: whichever write or delete failed already recorded itself when it ran. An OutOfMemoryException
+                // Not recorded here: a failed write or delete was already recorded when it ran, except an OutOfMemoryException, which is deliberately never
+                // recorded. An OutOfMemoryException
                 // observed from a tail must not abort the drain of the other characters; it is reported with the rest.
                 failed.Add(characterId);
                 failures.Add(ex);
@@ -447,7 +441,8 @@ public sealed partial class SummonService
         }
         catch
         {
-            // Not recorded here: the write or delete that failed already recorded itself when it ran. An OutOfMemoryException
+            // Not recorded here: a failed write or delete was already recorded when it ran, except an OutOfMemoryException, which is deliberately never
+            // recorded. An OutOfMemoryException
             // observed from the tail is treated like any other failed tail so the retained snapshot or owed delete still runs.
             bool retainedOrNewer;
             lock (_cacheGate)

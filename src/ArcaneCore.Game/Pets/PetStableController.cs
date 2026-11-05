@@ -361,7 +361,6 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("pet.stable", ex);
                 _logger.LogFault("pet-stable", ex, "pet stable slot rollback failed for character {CharacterId} (attempt {Attempt})", id, attempt);
                 if (attempt == 2)
                 {
@@ -443,7 +442,6 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogFault("pet-stable", ex, "pet stable load failed for character {CharacterId}", id);
         }
@@ -506,7 +504,6 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("pet.stable", ex);
             AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {id}", ex.Message);
             _logger.LogFault("pet-stable", ex, "pet stable write failed for character {CharacterId}", id);
         }

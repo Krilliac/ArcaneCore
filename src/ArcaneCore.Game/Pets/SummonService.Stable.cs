@@ -43,7 +43,7 @@ public sealed partial class SummonService
             }
             catch (Exception ex)
             {
-                // Observe only, an OutOfMemoryException included: the failed predecessor recorded itself, and its failure must not
+                // Observe only, an OutOfMemoryException included: a failed predecessor was already recorded (an OutOfMemoryException is deliberately never recorded), and its failure must not
                 // stop this write or pass down the queue.
                 _logger.LogDebug(ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
             }

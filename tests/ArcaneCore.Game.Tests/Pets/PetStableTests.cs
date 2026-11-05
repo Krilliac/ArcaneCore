@@ -507,6 +507,31 @@ public sealed class PetStableTests
     }
 
     [Fact]
+    public async Task BuySlot_RollbackWriteFailure_IsRecordedUnderOneFaultSite()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, MemoryStableStore store, WorldPump pump) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        hunter.Money = 500;
+        store.FailSlotCallsFrom = 2;
+        store.FailSlotCallsThrough = 9;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/stable-rollback-failed" && n.Subject == "character 1");
+        long Count(string site) => FaultLedger.Shared.Snapshot().Where(s => s.Site == site).Sum(s => s.Count);
+        long before = Count("pet.stable");
+        await PrimeAsync(stable, pump, hunter);
+        var gate = new TaskCompletionSource();
+
+        await BuyInFlightAsync(stable, store, pump, hunter, gate);
+        hunter.Money = 100;
+        gate.SetResult();
+        await pump.UntilAsync(() => capture.Any("pet/stable-rollback-failed"));
+
+        // LogFault records the fault ledger entry (site "pet-stable"); a second Record under "pet.stable" would count every failure twice.
+        Assert.Equal(before, Count("pet.stable"));
+        Assert.True(Count("pet-stable") >= 2);
+    }
+
+    [Fact]
     public async Task StableThenUnstable_RoundTripsTheSummonedPet()
     {
         using PetTestKit kit = Kit();
