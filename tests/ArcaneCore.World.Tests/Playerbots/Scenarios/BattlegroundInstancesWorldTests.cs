@@ -16,17 +16,17 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// <list type="bullet">
 /// <item>A queue run fills the running matches that have free slots first (<c>CheckFreeSlots</c> / <c>FillPlayersToBg</c>,
 /// BattleGroundMgr.cpp:691-741, 456-529) and then creates a new match of the same type and bracket as soon as each side has the minimum
-/// queued, however many matches already run (<c>CheckCreateNewBg</c> / <c>CheckNormalMatch</c>, BattleGroundMgr.cpp:742-868, 587-628;
+/// queued, however many matches already run (<c>CheckCreateNewBg</c> / <c>CheckNormalMatch</c>, BattleGroundMgr.cpp:743-868, 587-628;
 /// <c>Update</c> :870-891). A running match's free slots are offered while it prepares (STATUS_WAIT_JOIN) and while it is in progress
-/// (<c>GetFreeSlotsForTeam</c>, BattleGround.cpp:1185-1188).</item>
+/// (<c>GetFreeSlotsForTeam</c>, BattleGround.cpp:1185-1189).</item>
 /// <item>Each match gets the lowest unused client instance id of its type and bracket (<c>CreateClientVisibleInstanceId</c>,
 /// BattleGroundMgr.cpp:1217-1236), and SMSG_BATTLEFIELD_LIST lists those ids for the asker's bracket (<c>BuildBattleGroundListPacket</c>,
-/// BattleGroundMgr.cpp:1432-1448; layout Server/Packets/Battleground.cpp:203-214 and wow_messages smsg_battlefield_list.wowm 1.12:
+/// BattleGroundMgr.cpp:1432-1450; layout Server/Packets/Battleground.cpp:203-214 and wow_messages smsg_battlefield_list.wowm 1.12:
 /// u64 battlemaster, u32 map, u8 bracket, u32 count, u32 ids).</item>
 /// <item>CMSG_BATTLEMASTER_JOIN's instance id (0 = first available) is the group's <c>desiredInstanceId</c> (BattleGroundHandler.cpp:155-156,
-/// 189); a queued group with one is only invited to that match (<c>SelectionPool::AddGroup</c>, BattleGroundMgr.cpp:125-138).</item>
+/// 192, group path 234); a queued group with one is only invited to that match (<c>SelectionPool::AddGroup</c>, BattleGroundMgr.cpp:125-138).</item>
 /// <item>A participant who leaves frees an invitation, puts the match back in the free-slot list and schedules a queue run
-/// (<c>RemovePlayerAtLeave</c>, BattleGround.cpp:966-977), so the slot is refilled from the queue.</item>
+/// (<c>RemovePlayerAtLeave</c>, BattleGround.cpp:971-977), so the slot is refilled from the queue.</item>
 /// </list>
 /// </summary>
 public sealed class BattlegroundInstancesWorldTests
@@ -147,11 +147,14 @@ public sealed class BattlegroundInstancesWorldTests
             ScenarioBot asker = await AllianceAsync(context, "Bgtwoasker");
             (ObjectGuid master, byte[] list) = await HelloAsync(context, asker);
 
-            // u64 battlemaster, u32 map, u8 bracket (the asker's), u32 count, u32 ids (Battleground.cpp:203-214, BattleGroundMgr.cpp:1432-1448).
+            // u64 battlemaster, u32 map, u8 bracket (the asker's), u32 count, u32 ids (Battleground.cpp:203-214, BattleGroundMgr.cpp:1432-1450).
             byte[] expected = new byte[8 + 4 + 1 + 4 + (2 * 4)];
             BinaryPrimitives.WriteUInt64LittleEndian(expected.AsSpan(0), master.Value);
             BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(8), Wsg);
-            expected[12] = (byte)first.Bracket;
+            uint askerLevel = await asker.ReadAsync(p => p.Level);
+            uint minLevel = await context.ReadAsync(() => Manager(context).TemplateOf(BattlegroundType.WarsongGulch)!.MinLevel);
+            int askerBracket = BattlegroundConstants.BracketOfLevel(askerLevel, minLevel);
+            expected[12] = (byte)askerBracket;
             BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(13), 2);
             BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(17), 1);
             BinaryPrimitives.WriteUInt32LittleEndian(expected.AsSpan(21), 2);

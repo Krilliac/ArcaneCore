@@ -5,8 +5,9 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// The numeric exit codes of <c>arcane-db</c> and <c>arcane-content-importer</c>. run-gm-commands.ps1, dev-runner.ps1 and the deploy
-/// scripts branch on these values, so they must not change when the CLI code moves between assemblies.
+/// The numeric exit codes of <c>arcane-db</c> and <c>arcane-content-importer</c>. Operators and scripts read them from each tool's usage
+/// text and docs/ops/database-upgrade.md (DbUpgradeExitCodes.cs lists them); the in-repo scripts only test zero versus non-zero, so this
+/// pins the documented numbers so they do not change when the CLI code moves between assemblies.
 /// </summary>
 public sealed class CliExitCodeContractTests
 {
