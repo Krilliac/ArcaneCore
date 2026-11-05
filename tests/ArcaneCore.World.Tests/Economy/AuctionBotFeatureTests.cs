@@ -210,6 +210,7 @@ public sealed class AuctionBotFeatureTests
         var clock = new ManualClock(DateTimeOffset.UtcNow);
         await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper, clock: clock, wrapStore: gate.Wrap,
             extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        int baseline = gate.FullReadAttempts; // Attach has already done its own full read through the wrapped store
         gate.FailNextFullRead();
         for (int i = 0; i < 4; i++)
         {
@@ -219,7 +220,7 @@ public sealed class AuctionBotFeatureTests
         Assert.True(keeper.Holds(EconomyScope));
         Assert.False(await fixture.OnWorld(fixture.Economy.EnsureAuctionCacheCurrent)); // starts the read, which fails
         await fixture.WaitUntilAsync(() => fixture.Economy.AuctionRefreshNotBeforeMs > 0); // the failure has been applied on the world thread
-        Assert.Equal(1, gate.FullReadAttempts);
+        Assert.Equal(baseline + 1, gate.FullReadAttempts);
 
         // Inside the backoff nothing starts: not on this call, and not on the next ones either.
         for (int i = 0; i < 3; i++)
@@ -227,11 +228,11 @@ public sealed class AuctionBotFeatureTests
             Assert.False(await fixture.OnWorld(() => fixture.Economy.EnsureAuctionCacheCurrent() || fixture.Economy.AuctionRefreshInFlight));
         }
 
-        Assert.Equal(1, gate.FullReadAttempts);
+        Assert.Equal(baseline + 1, gate.FullReadAttempts);
 
         clock.Advance(TimeSpan.FromSeconds(2));
         await fixture.WaitUntilAsync(fixture.Economy.EnsureAuctionCacheCurrent); // the first call after the backoff starts the retry, a later one sees it applied
-        Assert.Equal(2, gate.FullReadAttempts);
+        Assert.Equal(baseline + 2, gate.FullReadAttempts);
     }
 
     [Fact]
@@ -998,7 +999,7 @@ public sealed class AuctionBotFeatureTests
         /// <summary>The next full auction read throws instead of returning a snapshot.</summary>
         public void FailNextFullRead() => Volatile.Write(ref _failRead, 1);
 
-        /// <summary>Every full auction read started, failed or not.</summary>
+        /// <summary>Every full auction read started since the store was wrapped, failed or not, including the one the economy feature makes when it attaches; tests take a baseline after the fixture is created.</summary>
         public int FullReadAttempts => Volatile.Read(ref _readAttempts);
 
         public void HoldNextCommit() => Volatile.Write(ref _holdCommit, 1);
