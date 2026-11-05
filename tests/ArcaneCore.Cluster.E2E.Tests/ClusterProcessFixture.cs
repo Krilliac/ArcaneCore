@@ -161,6 +161,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-cluster-e2e-" + Guid.NewGuid().ToString("N"));
     private readonly DateTime _startedUtc = DateTime.UtcNow;
     private readonly object _gate = new();
+    private readonly PortReservations _ports = new(PortLockDirectory);
     private Task? _disposeTask;
     private int _realmId;
     private string _authConnection = string.Empty;
@@ -691,12 +692,22 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private const int PortRangeSize = 8000;
     private static int s_nextPort = RandomNumberGenerator.GetInt32(PortRangeSize);
 
-    private static int FreePort()
+    // Cross-process reservation: a port is also claimed by an exclusive lock file (FileShare.None, an flock on Linux) in a shared temp directory, held until
+    // this fixture is disposed (the OS drops it when the process dies). Concurrent gate runs on one host then never pick the same port, even though the
+    // probe cannot bind it for a child. An unusable directory means no reservation (PortReservations.Enabled is false): the listener probe alone decides, as before.
+    private static readonly string PortLockDirectory = Path.Combine(Path.GetTempPath(), "arcanecore-cluster-e2e-ports");
+
+    private int FreePort()
     {
         for (int attempt = 0; attempt < PortRangeSize; attempt++)
         {
             int port = PortRangeStart + (int)((uint)Interlocked.Increment(ref s_nextPort) % PortRangeSize);
-            if (CanListen(IPAddress.Any, port) && CanListen(IPAddress.Loopback, port))
+            if (!CanListen(IPAddress.Any, port) || !CanListen(IPAddress.Loopback, port))
+            {
+                continue;
+            }
+
+            if (_ports.TryReserve(port))
             {
                 return port;
             }
@@ -975,6 +986,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         {
             child.Dispose();
         }
+
+        _ports.Dispose();
 
         // The orphan assertion: nothing this fixture launched may outlive it.
         IReadOnlyList<int> alive = LiveProcessIds();
