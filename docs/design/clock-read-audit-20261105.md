@@ -1,7 +1,8 @@
 # World clock read audit
 
-This audit covers the clock sources of `src/ArcaneCore.Playerbots` and `src/ArcaneCore.Game`: every `Now`-style property, every injected clock delegate
-(`Func<long>`, `Func<uint>`), every accumulator a system advances itself, and the game-UTC reads, each in a table below with its family. It also covers the
+This audit covers the clock sources of `src/ArcaneCore.Playerbots` and `src/ArcaneCore.Game` that the greps in "Method and tallies" and the tables below name:
+the `Now`-style properties and methods listed in the wrapper tables, the injected clock delegates found by the name-filtered grep (`Func<long>`, `Func<uint>`),
+the accumulators in the accumulator table, and the game-UTC reads, each with its family. What the greps cannot see is listed under "Not covered". It also covers the
 fields assigned from a clock reading, by a scan of single-line and split-line assignments (the patterns are in "Method and tallies"), and the helpers that
 receive a reading. It records what each clock is, which sites share a clock, and the one
 double read it found and fixed. It is a static reading of the source; nothing here was run against a server. The tests named in this doc were not run
@@ -31,7 +32,7 @@ two agree modulo 2^32, so a `Uptime`-based stamp and a `NowMs`-based one are nev
 
 ## Clock families
 
-Every clock source in the two projects found by the scans and the delegate grep in "Method and tallies" is one of these. The name `NowMs` is reused by several of
+Every clock source in the two projects that the scans, the delegate grep and the tables below name is one of these. The name `NowMs` is reused by several of
 them, so a name is never proof of the family; the source is. The wrapper, delegate and accumulator tables below give each named source its family.
 
 | Family | Source | Type | Where |
@@ -49,8 +50,8 @@ them, so a name is never proof of the family; the source is. The wrapper, delega
 
 ## Wrappers
 
-The `Now`-style properties and wrapper delegates, with their source. The table has 15 rows naming 17 wrappers (two rows name two each: the boards, and
-`PlayerbotWorldClock`). Every row is counted, Wall ones included. The clock delegates held as fields or constructor parameters are in the next two tables.
+The `Now`-style properties and wrapper delegates, with their source. The table has 25 rows naming 28 wrappers (two rows name two each: the boards, and
+`PlayerbotWorldClock`; `PlayerbotQaFeature.Now` / `UtcNow` is one row naming two properties). Every row is counted, Wall ones included. The clock delegates held as fields or constructor parameters are in the next two tables.
 
 | Wrapper | Source |
 |---|---|
@@ -69,6 +70,16 @@ The `Now`-style properties and wrapper delegates, with their source. The table h
 | `PlayerbotChat.NowMs` | Wall (unix ms, `TimeProvider`) |
 | `PlayerbotWorldClock.UptimeMs` and `Ms(world, nowMs)` | Uptime; `Ms` places a wrapped `NowMs` on the Uptime axis relative to the present (the defer ledger's bridge between the two) |
 | `PlayerbotSocialPass.NowMs` | Social accumulator |
+| `PlayerbotPopulationFeature.NowUnix()` | Game UTC (`DateTimeOffset.UtcNow` Unix seconds); every use is a persisted `UpdatedUnix` or a veto/trouble window on Unix seconds, never `NowMs` |
+| `CreatureRuleRunner.Clock` | Map accumulator of the runner (`_clock`, see the accumulator table); read by tests and the Game rule host only |
+| `CreatureRuleRunner.FrozenNow` | the same `_clock`: `_inBatch ? _clock : _clock - _diffMs`. Two readings of one accumulator, by design (see "CreatureRuleRunner timers") |
+| `RuleActionContext.NowMs` | the `nowMs` the evaluator was handed: `CreatureRuleRunner._clock` on the creature path (`_evaluator.Update/Fire(..., _clock, ...)`) |
+| `EventAiContext.ClockMs` | `System?.ClockMs`: the `CreatureMapSystem._clockMs` map accumulator (0 outside a map) |
+| `GameEventService.Now` | `_utcNow()`, the injected UTC delegate: Game UTC (`DateTimeOffset`) |
+| `IGameTime.UtcNow` | Game UTC; implemented by the world-state time service and test fakes |
+| `PlayerbotQaFeature.Now` / `UtcNow` | Wall (`TimeProvider.GetUtcNow`, `Time` test seam); passes, age-out and views all use it |
+| `ISchedulerClock.NowUs` | `SimClock` (a manual counter) or the stopwatch clock in `SchedulerClock.cs`: microseconds of the chat inference scheduler only, Wall |
+| `FireworksShow.Now` | `Func<DateTime>`, server local time (`DateTime.Now`), a calendar read; tests replace it. Wall family, not compared with any map clock |
 
 ### Clock delegates and Game-side wrappers
 
@@ -80,7 +91,7 @@ traced to the lambda its production constructor receives. "Result" is whether an
 |---|---|---|---|
 | `TaxiFlightSystem._nowMs` | `NpcServicesFeature`: `() => _world?.NowMs ?? 0` | World | only `Relocate(..., _nowMs())` stamps; no comparison |
 | `PlayerProgression._nowMs` | `ProgressionFeature`: `() => _world?.NowMs ?? 0` (class default `() => 0`) | World | one use, `ResetLevelPlayedTime(_nowMs())`; no comparison |
-| `CreatureMapSystem._serverTime` | `CreatureWorldFeature`, both creation sites: `() => world.NowMs`; default (tests) `unchecked((uint)_clockMs)` | World | `StopSpline(_clockMs, _serverTime())` passes the map accumulator (spline time) and the server time as two separate parameters on purpose (`Creature.StopSpline(long clockMs, uint serverTimeMs)`); the other two reads are `now` locals used against World stamps |
+| `CreatureMapSystem._serverTime` | `CreatureWorldFeature`, both creation sites: `() => world.NowMs`; default (tests) `unchecked((uint)_clockMs)` | World in production (the truncated map accumulator only in tests that pass no delegate) | 16 call sites, all read. `StopSpline(_clockMs, _serverTime())` (`CreatureMapSystem.cs`) passes the map accumulator (spline time) and the server time as two separate parameters on purpose (`Creature.StopSpline(long clockMs, uint serverTimeMs)`). Two `now` locals (`CreatureMapSystem.cs`, near 990 and 1203) are used against World stamps. Eight `ResetToHome` calls: five in `CreatureMapSystem.Lifecycle.cs` (near 140, 462, 527, 601, 616) and one each in `PetRevival` (22), `RelayCommands` (140) and `SummonedUnits` (40). `moved.Time` and `Relocate` in `PetRevival` (64, 67) and `ScriptedAi` (137, 140). `GuardPosts.TryUse` in `CreatureMapSystem.Guards.cs` (71). All stamp a `Unit` movement `Time` or a home reset from World. `GuardPostTable.TryUse(areaId, team, long nowMs)` takes the wrapped `uint` widened to `long`; its stamps (`LastUseMs`, `RechargeEpoch = nowMs / RechargeMs`) are World values, and the wrap branch (`GuardPostTable.cs` near 156-162, `nowMs < state.LastUseMs`) restarts the post with full charges, so a 49.7-day wrap is a reset and not a stuck cooldown. **Mixed family found and fixed:** the under-map stand-up in `CreatureMapSystem.Anomalies.cs` (near 301 and 349) called `creature.Relocate(..., unchecked((uint)_clockMs))`, stamping the movement block `Time` from the map accumulator while every other `Relocate` and `moved.Time` site used `_serverTime()` (World). Both now pass `_serverTime()`. The one comparison on that field (`StampServerMovementTime`, `MovementCheats.cs`) is player-only, so no creature-side behaviour was found to depend on it; the fix is for consistency |
 | `WorldEventRuleRunner._clockMs` | `WorldEventRuleFeature`: `() => _clockMs`, the feature's own `_clockMs += diffMs` | accumulator (`long`) | `now` and the `Fire(..., _clockMs())` stamp read the same accumulator |
 | `DuelService.Clock` | `DuelFeature`: `DeathHooks.For(world).Clock.UnixSeconds`, or `TimeProvider.GetUtcNow` seconds when a provider is set | Game UTC | the same delegate is also set as `SpellSystem.UnixSecondsClock`, so aura stamps and the duel start share one clock |
 | `GroupAuthority.MillisecondsClock`, `GroupManager.MillisecondsClock` | default `Kernel.Logging.Clock.Milliseconds` (`Environment.TickCount64`) | Wall | online-hint stamps and their age checks both use the delegate, both `long`; no other family reaches them |
@@ -103,17 +114,20 @@ Fields a system advances by the tick diff. Each is stamped and compared on its o
 
 | Accumulator | Type | Notes |
 |---|---|---|
-| `CreatureSpellListScheduler._nowMs` | `ulong` (the other accumulators are `long`) | `_nowMs += diffMs`; `_readyAtMs` entries are `_nowMs + roll`, compared with `_nowMs` only |
+| `CreatureSpellListScheduler._nowMs` | `ulong` (`ItemMaintenance` is `uint`, `_autosaveClockMs` is `ulong`, the rest are `long`) | `_nowMs += diffMs`; `_readyAtMs` entries are `_nowMs + roll`, compared with `_nowMs` only |
 | `ItemMaintenance._elapsedMs` | `uint` | an interval timer: `+= diffMs`, reset to 0 at the zone-limit check; never a stamp |
+| Interval timers: `ManagedPlayerbotFeature._checkpointMs`, `PlayerbotPopulationFeature._sinceMs`, `PlayerbotSocialFeature._sinceLastPassMs`, `PlayerbotEventScenarioFeature._sinceMs`, `_thinkElapsed` (`PlayerbotBrain`, `PlayerbotGroupAI`, `PlayerbotPartyAI`, `PlayerbotBattlegroundAI`), `PlayerbotCombatAnomalies._sinceMs` | `uint`; `long` for Population and Social | the rule: a field that is only `+= elapsedMs`, compared with a constant interval and reset to 0 is a duration counter, not a clock. It holds no stamp and meets no other family, so it is named here and not read further |
 | `WorldRuntime._autosaveClockMs` | `ulong` | sum of tick diffs; the `_autosaveDue` values and the compare in `WorldRuntime.Autosave.cs` use it alone |
 | `ManagedPlayerbotFeature._clockMs` | `long` | `Interlocked.Add(ref _clockMs, elapsedMs)`; restored across a restart (`playerbots.clockMs`); feeds `PathJobs`, the quarantine retry times and the slow-think log |
 | `WorldEventRuleFeature._clockMs` | `long` | the delegate source above |
+| `CreatureRuleRunner._clock` | `long` | `_clock += diffMs` in `Update`; the runner's own timer clock, stamped and compared only on itself (see "CreatureRuleRunner timers") |
+| `EventScenarioEngine._now` | `long` | `Advance()` adds `unchecked(host.NowMs - _lastRaw)`: a non-wrapping copy of the World clock that starts at 0; `CreateRetryMs = _now + RetryMs` and its comparison use `_now` only |
 
 The game-UTC reads (for example `Honor/HonorKillRewards.cs` through `HonorClock.UnixMilliseconds`, `Creatures/CreatureMapSystem.RespawnPersistence.cs` through
 `IRespawnClock.UnixSeconds`, `MapCombat.NowSeconds`) are in the Game UTC family. Each pairs a Unix-time stamp with a Unix-time comparison (rows persisted with
 a Unix due time); none is read against `NowMs`.
 
-Outside the question and not read as world coverage: `BattlegroundManager.NowMs` (accumulator), `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
+`BattlegroundManager.NowMs` is the Battleground accumulator family above and is handed to lane Y22 (see "Handed to lane Y22"). Outside the two projects and not read: `SqliteWriteGate._clock.NowMs` (`IWriteGateClock`,
 a stopwatch), `DebugDrawFeature.Now` and `EconomyFeature`-style `Now` properties (world and wall respectively, in `ArcaneCore.World`).
 
 ## Method and tallies
@@ -152,10 +166,10 @@ The scan cannot see a parameter's source or a delegate invocation. So the follow
 1. **Fields assigned from more than one family.** The scan reports a field name assigned in one file from two families. There were 15; ten were the
    local name `now` in different methods, and the rest (`StageMs`, `NextPlanMs`, `StateMs`, `LastDriveMs`, `StepSinceMs`, `_dropNextMs`, `AnchorMs`,
    `FollowedMs`, `RenewedMs`, `SeenMs`) are a constructor or method parameter in one place and `session.World.NowMs` in another. Every caller was read:
-   each hands a World reading or a local of one. None mixes families.
+   each hands a World reading or a local of one. One stamp did: the `Relocate` call in the `_serverTime` row, fixed. This list covers assignments to named fields; method arguments such as `Relocate` were found through the delegate table, not this scan.
 2. **Every file holding two or more families** (25 files with a World and a Wall read; 12 with both Uptime and World; the files that hold an accumulator and
    World, such as `CreatureMapSystem` with `_clockMs` and `_serverTime`, and `ManagedPlayerbotFeature` with `_clockMs`, `NowMs`, `LiveNowMs` and Wall, were read
-   through the delegate and accumulator tables). The lines were read, not just counted. Mixed-clock subtraction: none. Where both appear in one function they go to different fields (a wall stopwatch for a budget, World for a stamp).
+   through the delegate and accumulator tables). The lines were read, not just counted. Mixed-clock subtraction: none, other than the `Relocate` stamp fixed in the `_serverTime` row. Where both appear in one function they go to different fields (a wall stopwatch for a budget, World for a stamp).
 3. **The four Uptime wrappers.** Every helper that receives their `Now` was checked for a second caller on another family. `RivalryOptOut.Handle` and
    `InviteOptOut.Handle` (shared across bots, `_answered` stamps) have one caller, `PlayerbotPartyAI`. `LfgLookupBudget` has one. The episode, reply,
    follow-drop, unreachable and watch helpers are instances owned by one AI. `PlayerbotBattlegroundBuffs.Update/GiveUp` have one caller.
@@ -170,6 +184,16 @@ The scan cannot see a parameter's source or a delegate invocation. So the follow
 7. **The wall reads in the 25 files** (`Environment.TickCount64` in `PlayerbotShip`'s dock cache, `PlayerbotMood._now`, `PlayerbotSocialFeature` lane
    fault gap, `PlayerbotNavigation` wall budget, `ScenarioContext._wall`, `PlayerbotChaosEngine` movement payloads). Each pairs a wall stamp with a wall
    comparison in the same method or type.
+
+### CreatureRuleRunner timers
+
+`CreatureRuleRunner._clock` is the sum of the `diffMs` the runner saw. `_diffMs` is the time accumulated since the last batch, and `FrozenNow` is
+`_inBatch ? _clock : _clock - _diffMs`: the clock as of the last batch, so a timer stamped between batches lands on the batch boundary (cmangos decrements timers
+only at a batch). `_timerUntil` is stamped from `FrozenNow` (`UpdateRepeatTimer`) and compared with `_clock` (the batch loop), `_clock - _diffMs` (the
+phase-hidden shift) and `FrozenNow` (`CheckEvent`). All of these are readings of the one `_clock` accumulator, so no family is mixed, and `_clock` and `FrozenNow`
+differ only by the intended accumulated `_diffMs`. The evaluator receives raw `_clock` (`_evaluator.Update`, `Fire`) for its own delayed actions, which it stamps and
+compares against the same value; `_timerUntil` never reaches it. No bug found. `EventAiContext.ClockMs` is the map's accumulator, a different one, and is not
+compared with `_timerUntil`.
 
 ## Result per field family
 
@@ -274,6 +298,10 @@ these is a mixed-clock comparison on a reading of the code; the open question is
 - Assignments split over lines are covered only by the split-line scan, for the tokens and line endings it names; a clock reached through a longer chain of
   continuation lines would not be seen. Delegates are covered only by the grep above the delegate table: a delegate typed other than `Func<long|uint|ulong|int>`
   (for example `Func<long, ...>`, or an interface such as `IWriteGateClock`) is not.
+- Delegate names. The delegate grep filters on a name containing `clock`, `now`, `time` or `ms`, so a clock delegate with another name is not found. Known ones
+  read by hand: `PlayerbotNavigation.RealTicks` and `PlayerbotOpportunities.ChestWaitRealTicks` (`Func<long>`, Stopwatch ticks for a wall budget, default
+  `Stopwatch.GetTimestamp`, so Wall) and the `unixSeconds` parameter of `PlayerbotWorldEventBoard` (Unix seconds, Game UTC). Others may exist.
+- Interval timers beyond those named in the accumulator table, and any accumulator not found by the greps, are not claimed.
 - Behaviour. Nothing here shows the code runs correctly, only that no stamp was found compared against a different clock family.
 
 Nothing mechanically enforces this audit. Re-run it with the patterns in "Method and tallies" and the delegate grep, group by family as above, and read every field
