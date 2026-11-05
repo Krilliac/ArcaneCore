@@ -145,6 +145,21 @@ packet per session per simulated 100 ms tick): the number is in the test output 
 (asserted). Per-session state is created lazily on the first checked packet and guarded by a small per-session lock; the shared counters
 are `Interlocked`.
 
+What the bounds cover. The ns-per-packet and ms-per-tick bounds in that test are on `OnClientPacket` only (shape, cadence and replay on the
+network path). `OnWorldPacket`, the incapacitated-action hook every world packet passes on the world thread, has its own test
+(`TheWorldPacketHook_PaysAdmitAndTheOpcodeMask_AndAllocatesNothing`, `PERF world-hook` line), which prices `Admit` plus the opcode mask lookup
+with an opcode that needs no player state; a packet that does reach the player (dead, taxi or far-transfer check) adds two field reads and,
+for the far-transfer case, a service lookup, and is not separately bounded. `Admit` itself is a volatile settings read, the session flags and the
+state lookup, and is part of both measurements.
+
+What a checked client packet pays beyond the disabled gate: one acquisition of the session's own lock (uncontended except when a finding races
+the next packet; it is never held while reporting) and, for the replay check, one FNV-1a hash over the first 256 payload bytes plus the length
+(at most 256 multiply-xor steps, no allocation). With the feature off a packet costs one volatile read.
+
+The anomaly ring the Atlas map feed keeps (`MapFeedAnomalyRing`) bounds packet findings separately: they carry no owner, so each account
+may put at most 16 in the ring per minute and all accounts together 512, otherwise one client cycling opcodes would overwrite the ring's 4096
+slots. The ledger still counts every finding; only the ring's copy is limited, and the ring counts what it turned away.
+
 ## Movement-clock drift and possessed units
 
 Neither is a packet check. The movement-clock long-term drift is in the AntiCheat clock detector, behind its own option (off by default; [anticheat](anticheat.md#long-term-clock-drift)), and the possessed-unit movement checks already exist there ([anticheat](anticheat.md#possessed-units)).
