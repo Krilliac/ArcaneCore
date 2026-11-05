@@ -2,9 +2,10 @@ namespace ArcaneCore.World.Gm.TicketAssistant;
 
 /// <summary>
 /// The code-side allowlist: which <see cref="TicketAction"/> a category may lead to, and the named evidence each needs. Pure: the
-/// same category and facts always give the same decision. A model's only influence is the category; the target is always the
+/// same category and facts always give the same decision. A model's influence on the world is only the category; the target is always the
 /// ticket's author, and there is no entry that gives an item, gold, experience, reputation or a level, or that bans, kicks, mutes or
-/// touches an account. Each entry's evidence predicate is a method of this class.
+/// touches an account. (With <see cref="GmTicketAssistantOptions.UseModel"/> on, a model also drafts the text of a Question answer, which closes
+/// the ticket; that path is screened by <c>GmTicketAssistant.ScreenDraft</c>, not decided here.) Each entry's evidence predicate is a method of this class.
 /// </summary>
 public static class TicketPolicy
 {

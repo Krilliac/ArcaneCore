@@ -139,8 +139,7 @@ three comparison tests fail until the orchestrator does that after the merge.
 
 ArcaneCore only, off by default (`World:GmTicketAssistant:Enabled`). `GmTicketAssistant` (`src/ArcaneCore.World/Gm/TicketAssistant`) polls the open
 tickets and handles one at a time, skipping any it has handled or a GM has answered. A model, when the playerbot chat stack has one
-(`PlayerbotTicketAssistantModel`, behind the `ITicketAssistantModel` seam), may only choose a category (`TicketCategory`, parsed strictly:
-anything else is `Other`); with no model, or on a failure, a keyword classifier chooses and defaults to `Other`. The ticket text is untrusted.
+(`PlayerbotTicketAssistantModel`, behind the `ITicketAssistantModel` seam), chooses the category (`TicketCategory`, parsed strictly: anything else is `Other`) and, for a Question ticket, also writes the player-visible answer that closes it. `World:GmTicketAssistant:UseModel` is false by default: with no model, or on a failure, a keyword classifier chooses and defaults to `Other`, and no answer is drafted, so a Question ticket is left to a GM. A drafted answer passes `GmTicketAssistant.ScreenDraft` (length, no client escapes or links, only dot commands the FAQ names) before it is sent. The ticket text is untrusted. Players on a map other than the two continents (dungeons, raids, battlegrounds) are never touched.
 
 What the assistant does is decided by code from the category and the facts (`TicketPolicy`), each action behind a named evidence predicate, only
 for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `ActionCooldownSeconds`) and written to the GM audit tail
@@ -158,4 +157,4 @@ for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `Act
 
 Never given by any action: items, gold, experience, reputation, levels; never done: bans, kicks, mutes or account changes. Not delivered:
 a stuck taxi flight, transport passenger, cast, loot window or trade window reset (no clean API for the evidence), a visible persona on GM
-Island, and tickets from whispers. `.ticket assistant status|on|off|run $id` switches and tests it.
+Island, and tickets from whispers. `.ticket assistant status|on|off|run $id` switches and tests it: `status` needs a Game Master, `on`, `off` and `run` an Administrator.

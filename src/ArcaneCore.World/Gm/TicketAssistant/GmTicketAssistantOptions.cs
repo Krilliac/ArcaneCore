@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Gm.TicketAssistant;
 
 /// <summary>
 /// The <c>World:GmTicketAssistant</c> configuration section: the GM ticket assistant (ArcaneCore only, no reference core has one).
-/// It reads open tickets, classifies them (a model may only pick a category), answers, and runs the few evidence-gated fixes of
+/// It reads open tickets, classifies them (with the model on, it picks a category and drafts the answer to a Question ticket), answers, and runs the few evidence-gated fixes of
 /// <see cref="TicketPolicy"/> for the ticket's own author. Everything else is left open for a human GM. Off by default.
 /// </summary>
 public sealed class GmTicketAssistantOptions
@@ -47,8 +47,8 @@ public sealed class GmTicketAssistantOptions
     /// <summary>Seconds the author must have been "in combat" with nobody fighting them before the combat state is cleared (0..86400).</summary>
     public int StaleCombatSeconds { get; set; } = 30;
 
-    /// <summary>Whether a model may classify tickets and draft answers (when the playerbot chat stack has a model provider). Off: keywords only, no answers drafted.</summary>
-    public bool UseModel { get; set; } = true;
+    /// <summary>Whether a model may classify tickets and draft answers (when the playerbot chat stack has a model provider). Default false: keywords only, no answers drafted, so no model-written text reaches a player and an FAQ ticket is left to a GM. On, the model picks the category and also writes the player-visible answer that closes a Question ticket.</summary>
+    public bool UseModel { get; set; }
 
     /// <summary>The section bound from <paramref name="configuration"/>, every number clamped to its range.</summary>
     public static GmTicketAssistantOptions Bind(IConfiguration? configuration)

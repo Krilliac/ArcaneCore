@@ -360,7 +360,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         try
         {
             string? text = await model.DraftAnswerAsync(ticketText, Faq(), timeout.Token).ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(text) ? null : AuditCommands.CleanReason(text);
+            return string.IsNullOrWhiteSpace(text) ? null : ScreenDraft(AuditCommands.CleanReason(text), Faq());
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -371,6 +371,45 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
             FaultLedger.Shared.Record("gm.ticket-assistant", error);
             return null;
         }
+    }
+
+    /// <summary>The longest drafted answer sent to a player (the model is told 200; this is the code-side bound).</summary>
+    internal const int MaxDraftLength = 300;
+
+    private static readonly Regex DraftCommandPattern = new(@"(?<![\w.])\.[A-Za-z]{2,}", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(50));
+
+    /// <summary>
+    /// The code-side check of a model-drafted answer, which is the one model-written text a player sees and which closes the ticket
+    /// (prompt injection through the ticket text can steer it). Null, so the ticket is left to a GM, when the draft is longer than
+    /// <see cref="MaxDraftLength"/>, carries a client escape (<c>|</c>: colour, item or quest link), a link (<c>://</c>, <c>www.</c>), or
+    /// names a dot command the <paramref name="faq"/> does not contain. Pure.
+    /// </summary>
+    internal static string? ScreenDraft(string draft, string faq)
+    {
+        if (draft.Length > MaxDraftLength
+            || draft.Contains('|', StringComparison.Ordinal)
+            || draft.Contains("://", StringComparison.Ordinal)
+            || draft.Contains("www.", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        try
+        {
+            foreach (Match command in DraftCommandPattern.Matches(draft))
+            {
+                if (!faq.Contains(command.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return null;
+        }
+
+        return draft;
     }
 
     private string Faq()
@@ -425,6 +464,7 @@ public sealed partial class GmTicketAssistant(IServiceProvider services, IConfig
         Watch watch = Observe(player, now);
         bool blocked = player.IsGameMaster
             || player.IsQuestSettlementPending
+            || player.MapId > 1
             || (player.UnitFlags & UnitFlags.TaxiFlight) != 0
             || BattlegroundManager.TypeOfMap(player.MapId) != BattlegroundType.None;
         bool ghost = (player.Flags & PlayerFlags.Ghost) != 0;

@@ -16,9 +16,12 @@ public sealed class TicketAssistantCommands : ICommandExtension
     public IReadOnlyList<ChatCommand> Children { get; } =
     [
         new ChatCommand("assistant", AccountSecurity.GameMaster,
-            "Syntax: .ticket assistant status|on|off|run $id\nstatus: whether the ticket assistant is on and what it has done. on/off: switch it until the daemon restarts. run $id: handle that open ticket now.",
+            "Syntax: .ticket assistant status|on|off|run $id\nstatus: whether the ticket assistant is on and what it has done (Game Master). on/off/run: Administrator only; on/off switch it until the daemon restarts, run $id handles that open ticket now.",
             Assistant),
     ];
+
+    /// <summary>Why a Game Master is refused on/off/run: they change the world for players (revive, unstuck, teleport), so they need an Administrator.</summary>
+    internal const string AdministratorOnly = "Only an Administrator can switch the ticket assistant or run it on a ticket. status is open to Game Masters.";
 
     private static bool Assistant(CommandContext context, string text)
     {
@@ -39,11 +42,23 @@ public sealed class TicketAssistantCommands : ICommandExtension
                 return true;
             case "on":
             case "off":
+                if (context.Security < AccountSecurity.Administrator)
+                {
+                    context.Reply(AdministratorOnly);
+                    return true;
+                }
+
                 assistant.SetEnabled(word == "on");
                 Record(context, $"ticket assistant {word}", $"{context.InvokerName} switched the ticket assistant {word}");
                 context.Reply($"Ticket assistant switched {word}.");
                 return true;
             case "run":
+                if (context.Security < AccountSecurity.Administrator)
+                {
+                    context.Reply(AdministratorOnly);
+                    return true;
+                }
+
                 string rest = text.Trim()[3..].Trim();
                 if (!uint.TryParse(rest, out uint id) || id == 0 || id > int.MaxValue)
                 {
