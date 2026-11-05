@@ -552,7 +552,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// failure then replans. The exception is the two levels of a same-map trigger that moves the bot by more than 150 yards in height (<see cref="TriggerSeparates"/>):
     /// two places at those two levels, at least one of them unplaced, are not joined, so the planner takes the trigger (two placed places answer by component alone). The first same-map place the planner asks about after the start
     /// reads its tile at once (<see cref="BlockingLocates"/>); on a cross-map goal the walkable test returns early (the maps differ) and locates nothing for it, so it is the first same-map node the planner asks about
-    /// (a port, a trigger end, a bind point or a teleport destination), not the goal.
+    /// (a port, a mage place, a trigger end, a bind point or a teleport destination), not the goal. A same-map goal that the water of Teldrassil separates from the start also returns
+    /// at <c>Separated</c> before locating, so the blocking read goes to the next same-map node the planner asks about, not to that goal.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
     /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
@@ -656,9 +657,10 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     /// <summary>
     /// How many places one set of facts locates with a blocking tile read: the first same-map place that is not the bot's own, which the planner asks
-    /// about right after the start. That is the goal when the goal is on the bot's map; for a goal on another map the walkable test returns early
-    /// (the maps differ, <c>Separated</c> is not even asked for it) before locating anything and the planner skips other-map nodes, so it is the first same-map node
-    /// (a port, a trigger end, a bind point or a teleport destination). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// about right after the start. That is the goal when the goal is on the bot's map and not separated from the start by water; a same-map goal
+    /// that <c>Separated</c> (the water of Teldrassil on map 1) cuts off returns before locating anything, and for a goal on another map the walkable test returns early
+    /// (the maps differ) the same way, so in both cases the blocking read goes to the next same-map node the planner asks about
+    /// (a port, a mage place, a trigger end, a bind point or a teleport destination). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
     /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
     /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
     /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
