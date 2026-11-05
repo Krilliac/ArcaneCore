@@ -123,7 +123,8 @@ internal static class CrashDialogTaskDialog
     /// <summary>
     /// Show the box and block until it is dismissed. Returns true when the box was shown; false when it could not be (comctl32 version 6 could not
     /// be activated, the entry point is missing, or <c>TaskDialogIndirect</c> failed), with the reason in <paramref name="failure"/>, so the caller
-    /// can fall back. Never throws except <see cref="OutOfMemoryException"/>. Runs on the calling thread, which pumps the box's messages.
+    /// can fall back. Never throws except <see cref="OutOfMemoryException"/>; an out-of-memory failure inside the STA thread body is not caught there
+    /// and ends the process rather than reaching the caller. The box runs on its own STA thread that this call joins.
     /// </summary>
     internal static bool TryShow(string title, string text, out string? failure)
     {
