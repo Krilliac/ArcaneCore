@@ -206,7 +206,8 @@ internal static class GroupWireCodec
 /// Group operations between workers (M15.2 S3a). The group manager of this worker hands every command to <see cref="Forward"/> (an enqueue, safe on the world thread); one background
 /// task sends them in order to the group authority at the Social lease holder (<see cref="IGroupAuthorityTransport"/>), and the pump (<see cref="PumpOnce"/>, every interval after
 /// <see cref="Start"/>) drains the events queued for this worker and hands them to <see cref="Deliver"/>, which the social feature posts to the world thread. A command whose send
-/// fails once the authority is reachable (link dropped mid-call, refusal) is dropped with a log line, as chat is.
+/// fails on a broken link (<see cref="IOException"/>, <see cref="TimeoutException"/>, the link gone) stays at the head of the queue and is sent again once the holder is reachable, for up to
+/// <see cref="MaxHeldCommandAge"/> (<see cref="SendRetried"/>); a refusal over a live link, a relay, or a command that kept failing past that is dropped with a log line, as chat is.
 /// <para>
 /// While <see cref="IGroupAuthorityTransport.IsAuthorityReachable"/> is false (the peer link is not up yet, or the holder is away) the sender holds the oldest command and the rest
 /// wait behind it in the queue, in order. Transient <see cref="GroupCommandKind.Relay"/> commands (party stats, pings, rolls) are never held: <see cref="Forward"/> drops them
@@ -234,6 +235,9 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
     private static readonly TimeSpan HoldPoll = TimeSpan.FromMilliseconds(25);
 
+    /// <summary>How long the sender waits before it sends again a command whose send failed on a broken link.</summary>
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
+
     private sealed record Queued(GroupCommand Command, long EnqueuedAt);
 
     private readonly IGroupAuthorityTransport _transport;
@@ -248,6 +252,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     private Action<GroupEvent>? _deliver;
     private long _queueDropped;
     private long _sendFailed;
+    private long _sendRetried;
     private long _relayDropped;
     private long _expired;
     private int _started;
@@ -287,6 +292,9 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
     /// <summary>Commands dropped because the authority could not be reached or refused them.</summary>
     public long SendFailed => Interlocked.Read(ref _sendFailed);
+
+    /// <summary>Times a command whose send failed on a broken link (<see cref="IOException"/>, <see cref="TimeoutException"/>, or the link gone) was kept to be sent again.</summary>
+    public long SendRetried => Interlocked.Read(ref _sendRetried);
 
     /// <summary>Relay commands (stats, pings, rolls) dropped because the authority was unreachable.</summary>
     public long RelayDropped => Interlocked.Read(ref _relayDropped);
@@ -384,19 +392,53 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
                         ReportResume(reader);
                     }
 
-                    try
+                    long failingSince = 0;
+                    bool failing = false;
+                    while (true)
                     {
-                        _transport.ExecuteGroupCommand(_workerId, command);
-                    }
-                    catch (Exception ex) when (IsTransportFailure(ex))
-                    {
-                        Interlocked.Increment(ref _sendFailed);
-                        _logger.LogWarning("Group command {Kind} of {Actor} dropped ({Message})", command.Kind, command.Actor, ex.Message);
-                    }
-                    catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
-                    {
-                        Interlocked.Increment(ref _sendFailed);
-                        _logger.LogFault("cluster.group-send", ex, "A group command failed at the authority; it is dropped");
+                        try
+                        {
+                            _transport.ExecuteGroupCommand(_workerId, command);
+                            break;
+                        }
+                        catch (Exception ex) when (IsTransportFailure(ex))
+                        {
+                            // A link that broke mid-call (the holder died or is unreachable) is not a refusal: the command stays in hand, at the head of the queue, and goes again once the link is back, until it has
+                            // failed for MaxHeldCommandAge. A relay is transient and a refusal over a live link would be refused again, so those are dropped. A timeout may have reached the holder, so a retry can apply
+                            // a command twice (every group command is idempotent or answers with a refusal event the second time).
+                            if (!failing)
+                            {
+                                failing = true;
+                                failingSince = _time.GetTimestamp();
+                            }
+
+                            bool retry = command.Kind != GroupCommandKind.Relay
+                                && (ex is IOException or TimeoutException || !_transport.IsAuthorityReachable)
+                                && _time.GetElapsedTime(failingSince) <= MaxHeldCommandAge;
+                            if (!retry)
+                            {
+                                Interlocked.Increment(ref _sendFailed);
+                                _logger.LogWarning("Group command {Kind} of {Actor} dropped ({Message})", command.Kind, command.Actor, ex.Message);
+                                break;
+                            }
+
+                            Interlocked.Increment(ref _sendRetried);
+                            _logger.LogDebug("Group command {Kind} of {Actor} failed ({Message}); it is sent again once the holder is reachable", command.Kind, command.Actor, ex.Message);
+                            inHand = 1;
+                            await Task.Delay(RetryDelay, _stop.Token).ConfigureAwait(false);
+                            if (!_transport.IsAuthorityReachable)
+                            {
+                                await HoldUntilReachableAsync(reader, command).ConfigureAwait(false);
+                            }
+
+                            inHand = 0;
+                        }
+                        catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+                        {
+                            Interlocked.Increment(ref _sendFailed);
+                            _logger.LogFault("cluster.group-send", ex, "A group command failed at the authority; it is dropped");
+                            break;
+                        }
                     }
                 }
 

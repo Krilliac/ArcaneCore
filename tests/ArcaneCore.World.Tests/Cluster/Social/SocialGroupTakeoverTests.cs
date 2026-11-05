@@ -172,6 +172,34 @@ public sealed class SocialGroupTakeoverTests
     }
 
     [Fact]
+    public async Task A_stop_during_the_read_drops_what_was_held_and_installs_nothing()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.Rows.Seed(Group(1, 1, 2));
+        rig.Characters.HoldReads();
+        rig.TakeOver();
+        await rig.OnWorld(() =>
+        {
+            rig.Persistence.SyncNow();
+            return true;
+        });
+        await rig.Characters.ReadHeld.WaitAsync(Budget);
+
+        var invite = new GroupCommand(GroupCommandKind.Invite, ObjectGuid.Player(1).Value, "Char1", 0, false, TargetName: "Nobody");
+        rig.Holder.Groups.Execute("worker-c", invite); // held: a table that is about to be replaced
+        Assert.Equal(0, rig.Holder.Groups.PendingFor("worker-c"));
+
+        await rig.StopPersistenceAsync();
+
+        Assert.False(rig.Persistence.AuthorityLoaded);
+        Assert.Equal(0, rig.Holder.Groups.PendingFor("worker-c")); // the held invite did not run
+        rig.Holder.Groups.Execute("worker-c", invite); // the hold is over: this one applies (BadPlayerName)
+        Assert.Equal(1, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Empty(rig.Holder.Groups.Snapshots());
+        Assert.Equal(0, rig.Rows.Writes);
+    }
+
+    [Fact]
     public async Task A_failed_directory_read_installs_nothing_and_is_tried_again()
     {
         await using Rig rig = await Rig.CreateAsync();
@@ -250,6 +278,7 @@ public sealed class SocialGroupTakeoverTests
         private readonly ManualTimeProvider _time;
         private readonly ServiceProvider _services;
         private readonly ManualResetEventSlim _worldGate = new(true);
+        private bool _worldDisposed;
 
         private Rig(ManualTimeProvider time, RealmAuthorityLeaseKeeper keeper, GroupRows rows, IdentityRows characters, CharacterDirectory directory, PresenceHolderService holder, ServiceProvider services)
         {
@@ -371,10 +400,27 @@ public sealed class SocialGroupTakeoverTests
             }
         }
 
+        /// <summary>The world stops, then the group feature stops, as the host does it.</summary>
+        public async Task StopPersistenceAsync()
+        {
+            _worldGate.Set();
+            DisposeWorld();
+            await Persistence.StopAsync();
+        }
+
+        private void DisposeWorld()
+        {
+            if (!_worldDisposed)
+            {
+                _worldDisposed = true;
+                World.Dispose();
+            }
+        }
+
         public async ValueTask DisposeAsync()
         {
             _worldGate.Set();
-            World.Dispose();
+            DisposeWorld();
             await Persistence.StopAsync();
             await Social.StopAsync();
             await _services.GetRequiredService<CharacterSaveQueue>().StopAsync();

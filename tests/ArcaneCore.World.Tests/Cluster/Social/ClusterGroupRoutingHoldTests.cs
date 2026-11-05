@@ -444,26 +444,76 @@ public sealed class ClusterGroupRoutingHoldTests
     }
 
     [Fact]
-    public async Task A_link_lost_mid_send_drops_that_command_then_the_next_ones_are_held_and_sent_after_the_resume()
+    public async Task A_link_lost_mid_send_keeps_that_command_at_the_head_and_sends_it_again_once_the_holder_is_reachable()
     {
         var authority = new SwitchableAuthority();
         authority.SetReachable(true);
-        authority.LoseLink = static c => c.Actor == 1;
+        int calls = 0;
+        authority.LoseLink = c =>
+        {
+            if (c.Actor == 1 && Interlocked.Increment(ref calls) == 1)
+            {
+                authority.SetReachable(false); // the holder died with the call in flight
+                return true;
+            }
+
+            return false;
+        };
         await using var routing = new ClusterGroupRouting(authority, "worker-a");
         routing.Forward(Command(GroupCommandKind.Invite, 1));
-        await routing.FlushAsync().WaitAsync(Safety);
-        Assert.Equal(1, routing.SendFailed);
-        Assert.Empty(authority.Executed);
-
-        authority.SetReachable(false);
         routing.Forward(Command(GroupCommandKind.Login, 2));
         routing.Forward(Command(GroupCommandKind.Logout, 3));
         await authority.Probed.WaitAsync(Safety);
-        authority.SetReachable(true);
+        Assert.Empty(authority.Executed);
+
+        authority.SetReachable(true); // the new holder
         await routing.FlushAsync().WaitAsync(Safety);
 
-        Assert.Equal(new ulong[] { 2, 3 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(new ulong[] { 1, 2, 3 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(0, routing.SendFailed);
+        Assert.Equal(1, routing.SendRetried);
+    }
+
+    [Fact]
+    public async Task A_send_that_fails_while_the_link_stays_open_is_sent_again_and_a_command_that_keeps_failing_is_dropped_after_the_age_limit()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true); // a hung holder: the link reads as open, every call times out
+        authority.LoseLink = static c => c.Actor == 1;
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Invite, 1));
+        routing.Forward(Command(GroupCommandKind.Login, 2));
+        using var timeout = new CancellationTokenSource(Safety);
+        while (routing.SendRetried < 2)
+        {
+            await Task.Delay(10, timeout.Token); // it keeps the command and tries again
+        }
+
+        Assert.Empty(authority.Executed);
+        Assert.Equal(0, routing.SendFailed);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        await routing.FlushAsync().WaitAsync(Safety);
+
         Assert.Equal(1, routing.SendFailed);
+        Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
+    }
+
+    [Fact]
+    public async Task A_relay_whose_send_fails_is_dropped_not_retried()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        authority.LoseLink = static c => c.Kind == GroupCommandKind.Relay;
+        await using var routing = new ClusterGroupRouting(authority, "worker-a");
+        routing.Forward(Command(GroupCommandKind.Relay, 1));
+        routing.Forward(Command(GroupCommandKind.Login, 2));
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(1, routing.SendFailed);
+        Assert.Equal(0, routing.SendRetried);
+        Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
     }
 
     [Fact]

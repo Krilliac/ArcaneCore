@@ -123,7 +123,7 @@ public interface IGroupAuthorityLink
 /// </para>
 /// <para>
 /// Thread-safety: one lock guards all state; <see cref="Execute"/> and <see cref="Drain"/> may be called from any thread. Memory: the groups, plus at most
-/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped) and <see cref="MaxCommandsHeldForReload"/> commands during a reload.
+/// <see cref="MaxQueuedEventsPerWorker"/> events per worker (the oldest are dropped) and <see cref="MaxCommandsHeldForReload"/> commands during a reload (<see cref="GroupCommandKind.Relay"/> commands are not held).
 /// </para>
 /// </summary>
 public sealed class GroupAuthority(IRealmPresenceDirectory directory)
@@ -131,7 +131,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     /// <summary>Most undelivered events kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedEventsPerWorker = 8192;
 
-    /// <summary>Most commands kept while the table is held (<see cref="HoldForReload"/>): 16384, four workers' full outage backlogs (the routing queue holds 4096 each), because after a takeover the backlogs of several workers land here. Past it the oldest is dropped.</summary>
+    /// <summary>Most commands kept while the table is held (<see cref="HoldForReload"/>): 16384, four workers' full outage backlogs (the routing queue holds 4096 each), because after a takeover the backlogs of several workers land here. Past it the oldest is dropped. Relay commands never count: they are not held.</summary>
     public const int MaxCommandsHeldForReload = 16384;
 
     /// <summary>Encoded size past which <see cref="Drain"/> stops adding events to one reply.</summary>
@@ -150,6 +150,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     private readonly Dictionary<ObjectGuid, Draft> _drafts = [];
     private uint _nextId = 1;
     private List<(string WorkerId, GroupCommand Command)>? _heldForReload;
+    private long _relaysDroppedWhileHeld;
 
     private sealed class Draft
     {
@@ -206,6 +207,18 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         }
     }
 
+    /// <summary><see cref="GroupCommandKind.Relay"/> commands (stats, pings, rolls) dropped, not held, while the table was held for a reload.</summary>
+    public long RelaysDroppedWhileHeld
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _relaysDroppedWhileHeld;
+            }
+        }
+    }
+
     /// <summary>Forget every group, invite and queued event (before a restore at a lease gain).</summary>
     public void Reset()
     {
@@ -220,7 +233,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
-    /// The table is about to be replaced by a read: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away. Idempotent. On a node that
+    /// The table is about to be replaced by a read: from now on <see cref="Execute"/> keeps each command, in order, instead of applying it, because <see cref="Reset"/> would throw its result away; a <see cref="GroupCommandKind.Relay"/> command is dropped and counted in <see cref="RelaysDroppedWhileHeld"/>. Idempotent. On a node that
     /// does not hold the Social lease the table is held from attach, so no command reaches a table that was never loaded. At most <see cref="MaxCommandsHeldForReload"/> are kept (the oldest goes first).
     /// </summary>
     public void HoldForReload()
@@ -266,18 +279,6 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         lock (_gate)
         {
             _heldForReload = null;
-        }
-    }
-
-    /// <summary>The held commands belong to a holding that ended before its table was installed: they are discarded, and the table stays held for the next reload.</summary>
-    public void DiscardHeldCommands()
-    {
-        lock (_gate)
-        {
-            if (_heldForReload is not null)
-            {
-                _heldForReload = [];
-            }
         }
     }
 
@@ -423,6 +424,13 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         {
             if (_heldForReload is { } held)
             {
+                if (command.Kind == GroupCommandKind.Relay)
+                {
+                    // Transient (party stats, pings, rolls): a replay would be stale, and the once-a-second stats pass would push the commands that matter (Leave, Logout, Kick) out of the cap.
+                    _relaysDroppedWhileHeld++;
+                    return;
+                }
+
                 if (held.Count >= MaxCommandsHeldForReload)
                 {
                     held.RemoveAt(0);

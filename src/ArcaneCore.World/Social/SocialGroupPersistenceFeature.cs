@@ -191,14 +191,10 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         IReadOnlyList<GroupRecord> current;
         if (_authority is { } authority)
         {
+            // Not the holder (yet): the table is held from attach and the holder writes. A holder never turns into a non-holder on a running node: a lost lease keeps its token in the keeper and stops the process
+            // (RealmAuthorityLeaseKeeper.Lose), and the leases are only given back after the features have stopped. So the hold is lifted only by an install.
             if (!HoldsSocial())
             {
-                if (_holding)
-                {
-                    _holding = false; // another node owns the table now; it writes
-                    authority.HoldForReload(); // and what reaches this table waits for the next install
-                }
-
                 return;
             }
 
@@ -242,9 +238,6 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
     private bool HoldsSocial()
         => services.GetService<RealmAuthorityLeaseKeeper>() is not { } keeper || keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
 
-    /// <summary>The Social lease's token here, or null: a read started under one token is not installed under another.</summary>
-    private long? SocialToken() => services.GetService<RealmAuthorityLeaseKeeper>()?.TokenFor(RealmAuthorityScopes.Social);
-
     /// <summary>
     /// World thread. The lease moved to this node: the authority is rebuilt from the stored groups (the previous holder wrote its changes within a second of making them), so a failover continues from storage. The read runs off
     /// the world thread, nothing is written until it is installed, and commands that reach the table meanwhile wait in it. The table is held from attach until the install (also on a node that never held the lease), so no command reaches an unloaded table. A failed read is tried again a second later.
@@ -258,12 +251,11 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
         _reloading = true;
         authority.HoldForReload();
-        long? token = SocialToken();
         WorldRuntime world = _world!;
-        _reload = Task.Run(() => ReadAuthorityStateAsync(world, authority, token));
+        _reload = Task.Run(() => ReadAuthorityStateAsync(world, authority));
     }
 
-    private async Task ReadAuthorityStateAsync(WorldRuntime world, GroupAuthority authority, long? token)
+    private async Task ReadAuthorityStateAsync(WorldRuntime world, GroupAuthority authority)
     {
         try
         {
@@ -275,7 +267,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
             // Restore drops a group or member the directory does not know, and the drop deletes rows; this worker's directory has none of what other workers created since it started. So it is brought up to date first, and
             // after the rows, which can only name characters stored before them. If it cannot be read nothing is installed: the catch below keeps the writes held.
             await _directory!.RefreshAsync(scope.ServiceProvider.GetRequiredService<ICharacterStore>(), budget.Token).ConfigureAwait(false);
-            world.Post(() => InstallAuthorityState(authority, token, stored));
+            world.Post(() => InstallAuthorityState(authority, stored));
         }
         catch (OperationCanceledException) when (_stopping)
         {
@@ -294,18 +286,12 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         _reloadNotBeforeMs = Environment.TickCount64 + ReloadRetryDelayMs;
     }
 
-    /// <summary>World thread: what was read replaces the table, the held commands run on it, and the writes resume. If the lease moved during the read the rows are not this holding's, and the next gain reads again.</summary>
-    private void InstallAuthorityState(GroupAuthority authority, long? token, IReadOnlyList<GroupRecord> stored)
+    /// <summary>World thread: what was read replaces the table, the held commands run on it, and the writes resume. The lease cannot move during the read (losing it stops the process), so the rows are this holding's.</summary>
+    private void InstallAuthorityState(GroupAuthority authority, IReadOnlyList<GroupRecord> stored)
     {
         _reloading = false;
         if (_stopping)
         {
-            return;
-        }
-
-        if (SocialToken() != token)
-        {
-            authority.DiscardHeldCommands(); // DropHeldCommands would reopen a table that was never loaded
             return;
         }
 
