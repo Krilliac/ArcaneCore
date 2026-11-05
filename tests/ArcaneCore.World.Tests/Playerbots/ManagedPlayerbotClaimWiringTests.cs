@@ -73,7 +73,7 @@ public sealed class ManagedPlayerbotClaimWiringTests
         Assert.Equal("live-on-other-worker", result.Code);
         Assert.Equal(before, owners.Peek(id));
         Assert.Equal(rows, owners.RowsWritten);
-        Assert.Equal(theirs, store.GetActiveOwnership((ulong)before.CharacterId)); // the holder keeps its claim
+        Assert.Equal(theirs, await store.GetActiveOwnershipAsync((ulong)before.CharacterId)); // the holder keeps its claim
         Assert.False(feature.IsActive(id));
     }
 }

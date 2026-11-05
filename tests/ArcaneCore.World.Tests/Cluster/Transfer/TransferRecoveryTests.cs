@@ -244,7 +244,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         mapTable.AssignStaticMap(1, target.WorkerId);
 
         var sourceToken = new CharacterOwnershipToken("char:4242", 7, source.Incarnation);
-        store.SeedCharacterOwnership(Character, sourceToken);
+        await store.SeedCharacterOwnershipAsync(Character, sourceToken);
         gateway.Routes[Character] = source.WorkerId;
 
         Guid transferId = Guid.NewGuid();
@@ -279,7 +279,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         return (service, store);
     }
 
-    private static void AssertExactlyOneOwner(Fixture f, ITransferDecisionStore store, FakeWorker expectedOwner, FakeWorker other, long expectedEpoch)
+    private static async Task AssertExactlyOneOwner(Fixture f, ITransferDecisionStore store, FakeWorker expectedOwner, FakeWorker other, long expectedEpoch)
     {
         // Exactly one worker holds the player active, and not suspended anywhere.
         Assert.Equal(1, f.Source.Active.Count + f.Target.Active.Count);
@@ -291,7 +291,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         Assert.Empty(f.Target.Slots);
 
         // The durable owner is that worker's token, at the expected epoch.
-        CharacterOwnershipToken? durable = store.GetActiveOwnership(Character);
+        CharacterOwnershipToken? durable = await store.GetActiveOwnershipAsync(Character);
         Assert.NotNull(durable);
         Assert.Equal(expectedEpoch, durable!.Epoch);
         Assert.Equal(expectedOwner.Incarnation, durable.Incarnation);
@@ -342,9 +342,9 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         Assert.Equal(committed ? new TransferRecoverySummary(1, 1, 0, 0, 0) : new TransferRecoverySummary(1, 0, 1, 0, 0), summary);
 
         if (committed)
-            AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
+            await AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
         else
-            AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
+            await AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
 
         Assert.Equal(0, await store.CountUnresolvedAsync());
         Assert.Empty(await ((ITransferJournalScan)store).ListUnresolvedAsync());
@@ -382,7 +382,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         TransferRecoverySummary summary = await service.RunStartupSweepAsync(localWorker: null, stagedRoutes: f.Gateway);
 
         Assert.Equal(new TransferRecoverySummary(1, 1, 0, 0, 0), summary);
-        AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
+        await AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
         Assert.Equal(0, await store.CountUnresolvedAsync());
         Assert.Empty(await ((ITransferJournalScan)store).ListUnresolvedAsync());
 
@@ -408,7 +408,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
 
         TransferRecoverySummary participant = await service.RunStartupSweepAsync(f.Target.WorkerId);
         Assert.Equal(new TransferRecoverySummary(1, 0, 1, 0, 0), participant);
-        AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
+        await AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
     }
 
     [Theory]
@@ -428,7 +428,7 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
 
         Assert.Equal(new TransferRecoverySummary(1, 0, 1, 0, 0), summary);
         Assert.Equal(2, f.Gateway.Cancels);
-        AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
+        await AssertExactlyOneOwner(f, store, f.Source, f.Target, f.Request.SourceOwnershipToken.Epoch);
     }
 
     [Fact]

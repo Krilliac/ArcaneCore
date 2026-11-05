@@ -647,7 +647,7 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         Assert.Equal("worker:kalimdor", held.Scope);
         Assert.True(held.Epoch > committed.TargetOwnershipToken.Epoch);
         Assert.Equal(held, recovered.TargetOwnershipToken);
-        Assert.Equal(held, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.Equal(held, await decisionStore.GetActiveOwnershipAsync(request.CharacterGuid));
         Assert.Equal(held, gateway.RoutedOwnershipTokens[request.CharacterGuid]);
     }
 
