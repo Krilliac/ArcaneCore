@@ -2226,6 +2226,13 @@ internal static class PlayerbotNavigation
     /// x, y probed from z (<see cref="MapCollision.GetHeight(float, float, float, bool, float)"/>).
     /// </summary>
     internal static Vector3 GroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
+        => TryGroundNear(height, usable, botZ, point) ?? point;
+
+    /// <summary>
+    /// <see cref="GroundNear(Func{float, float, float, float}, Func{Vector3, bool}?, float, Vector3)"/>, but null where no floor qualifies
+    /// (the point would stay at the bot's height, on no region): a caller that must not plan toward such a point can tell.
+    /// </summary>
+    internal static Vector3? TryGroundNear(Func<float, float, float, float> height, Func<Vector3, bool>? usable, float botZ, Vector3 point)
     {
         float best = float.NaN, bestDelta = float.MaxValue;
         for (int probe = 0; probe < 2; probe++)
@@ -2237,7 +2244,7 @@ internal static class PlayerbotNavigation
             (best, bestDelta) = (floor, delta);
         }
 
-        return float.IsNaN(best) ? point : point with { Z = best };
+        return float.IsNaN(best) ? null : point with { Z = best };
     }
 
     /// <summary>
@@ -2280,6 +2287,9 @@ internal static class PlayerbotNavigation
 
         /// <summary><paramref name="point"/> on the floor nearest the bot's height, as <see cref="GroundNear(Map, Vector3, Vector3)"/>.</summary>
         internal Vector3 Near(Vector3 point) => GroundNear(_height, _usable, _bot.Z, point);
+
+        /// <summary>As <see cref="Near"/>, null where no usable floor qualifies.</summary>
+        internal Vector3? TryNear(Vector3 point) => TryGroundNear(_height, _usable, _bot.Z, point);
 
         private float Height(float x, float y, float z) => _map.Collision.GetHeight(x, y, z);
 
