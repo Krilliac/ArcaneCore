@@ -1604,6 +1604,16 @@ public sealed partial class SpellSystem
                 return targetState;
             }
         }
+        else if (unitTarget is not null && (!triggered || targets.FromClient))
+        {
+            // A destination selector that reads the explicit unit (TARGET_LOCATION_CASTER_TARGET_POSITION, 53) needs no unit target of its
+            // own but is still an explicit negative selector (vmangos IsExplicitNegativeTarget, SpellEntry.h:258-270): same gate.
+            SpellCastResult hostileDest = CheckExplicitHostileTargetRules(caster, spell, unitTarget);
+            if (hostileDest != SpellCastResult.CastOk)
+            {
+                return hostileDest;
+            }
+        }
 
         // Registered equipment checks: vmangos CheckItems (Spell.cpp:5698), before CheckRange (:5707) and CheckPower (:5721).
         if (!triggered && castItem is { } resourceItem && caster is Player itemUser)

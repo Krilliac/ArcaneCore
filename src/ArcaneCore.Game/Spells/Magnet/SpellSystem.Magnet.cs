@@ -49,6 +49,7 @@ public sealed partial class SpellSystem
             cast.MagnetTarget = magnet;
             if (updateExplicitTarget)
             {
+                // The redirect keeps FromClient: the landing re-check (CheckCast) still gates the magnet as the client-named target.
                 cast.Targets.Unit = magnet.Guid;
             }
             if (holder.Charges > 0)
