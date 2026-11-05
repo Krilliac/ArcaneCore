@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Pets.PetAuras;
@@ -12,6 +13,7 @@ using ArcaneCore.Game.Talents;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Talents;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
@@ -35,6 +37,8 @@ public sealed class DemonPersistenceTests : IDisposable
     private const uint Beast = 5002;
     private const uint SoulShard = 6265;
     private const uint DemonType = 3;
+    private const uint Gryphon = 3837;
+    private const uint GryphonDisplay = 1147;
 
     private readonly SpellTestKit _spells;
     private readonly Map _map;
@@ -89,6 +93,28 @@ public sealed class DemonPersistenceTests : IDisposable
     }
 
     private static uint Shards(Player player) => player.Inventory.GetItemCount(SoulShard);
+
+    /// <summary>A real flight of node 1 to node 2 whose end calls the resummon, as NpcServicesFeature.OnFlightEnded does (NpcServicesFeatureTaxiTests proves that wiring).</summary>
+    private TaxiFlightSystem Flights()
+    {
+        var flights = new TaxiFlightSystem(
+            new NpcStore(NpcContent.Empty with
+            {
+                TaxiNodes =
+                [
+                    new TaxiNode { Id = 1, MapId = 0, X = 0, Y = 0, Z = 83.5f, MountAlliance = Gryphon, MountHorde = Gryphon },
+                    new TaxiNode { Id = 2, MapId = 0, X = 64, Y = 0, Z = 83.5f, MountAlliance = Gryphon, MountHorde = Gryphon },
+                ],
+                TaxiPaths = [new TaxiPath { Id = 10, FromNode = 1, ToNode = 2, Price = 100 }],
+            }),
+            new TaxiPathNodeCatalog([new TaxiPathNodeRecord(1, 10, 0, 0, 0, 0, 83.5f, 0, 0), new TaxiPathNodeRecord(2, 10, 1, 0, 64, 0, 83.5f, 0, 0)]),
+            e => e == Gryphon ? GryphonDisplay : 0u, () => 0u);
+        flights.FlightEnded += owner => _service.ResummonTemporarilyUnsummonedPet(owner);
+        return flights;
+    }
+
+    private static void ResumeFlight(TaxiFlightSystem flights, Player owner)
+        => Assert.True(flights.ResumeFlight(owner, new TaxiFlightRoute([1, 2], [10], [0]), Gryphon, (_, _) => true));
 
     /// <summary>An in-memory character_pet current row (the store seams the world wires to the database), so a relog reads what the saves and deletes left.</summary>
     private sealed class CurrentRow
@@ -258,19 +284,23 @@ public sealed class DemonPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void ATaxiLogin_DoesNotRestoreTheDemon_ButRemembersIt()
+    public void ATaxiLogin_OnlyRemembersTheDemon_AndTheEndOfTheFlightBringsItBack()
     {
         Player warlock = Warlock();
         PersistentPetSnapshot current = new(1, 77, Imp, 10, 0, 50, 10, 0, 1, [], [], CreatedBySpell: SummonImp);
-        warlock.UnitFlags |= UnitFlags.TaxiFlight;
+        TaxiFlightSystem flights = Flights();
+        ResumeFlight(flights, warlock);
 
         Assert.Null(_service.RestoreCurrentPet(warlock, current));
         Assert.True(_service.HasTemporarilyUnsummonedPet(warlock));
+        Assert.Null(_service.ResummonTemporarilyUnsummonedPet(warlock)); // still in the air: IsPetNeedBeTemporaryUnsummoned
+        Assert.True(warlock.PetGuid.IsEmpty);
 
-        warlock.UnitFlags &= ~UnitFlags.TaxiFlight;
-        Creature? back = _service.ResummonTemporarilyUnsummonedPet(warlock);
-        Assert.NotNull(back);
+        flights.LandNow(warlock);
+
+        Creature back = Assert.IsType<Creature>(_map.FindObject(warlock.PetGuid));
         Assert.Equal(77u, back.Summon!.Charm!.PetNumber);
+        Assert.False(_service.HasTemporarilyUnsummonedPet(warlock));
     }
 
     [Fact]
@@ -476,12 +506,13 @@ public sealed class DemonPersistenceTests : IDisposable
         long ends = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 60_000;
         PersistentPetSnapshot current = new(1, 77, Imp, 10, 0, 50, 10, 0, 1, [], [], CreatedBySpell: SummonImp,
             Cooldowns: [new PersistentPetCooldown(0, SummonImp, 0, ends)]);
-        warlock.UnitFlags |= UnitFlags.TaxiFlight;
+        TaxiFlightSystem flights = Flights();
+        ResumeFlight(flights, warlock);
         Assert.Null(_service.RestoreCurrentPet(warlock, current));
-        warlock.UnitFlags &= ~UnitFlags.TaxiFlight;
 
-        Creature back = Assert.IsType<Creature>(_service.ResummonTemporarilyUnsummonedPet(warlock));
+        flights.LandNow(warlock);
 
+        Creature back = Assert.IsType<Creature>(_map.FindObject(warlock.PetGuid));
         Assert.NotEmpty(_spells.System.GetActiveCooldowns(back));
     }
 

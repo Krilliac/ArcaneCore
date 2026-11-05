@@ -71,7 +71,10 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>Raised when an in-progress flight is aborted before reaching its destination (external teleport, drift, or explicit abort).</summary>
     public event Action<Player, uint>? Aborted;
 
-    /// <summary>Raised when a route finishes or is interrupted, so its persisted resume state can be cleared.</summary>
+    /// <summary>
+    /// Raised when a route finishes or is interrupted, after the flight flags are cleared, so its persisted resume state can be cleared and a pet the owner
+    /// could not have in the air comes back (NpcServicesFeature; vmangos FlightPathMovementGenerator::Finalize -> Player::Unmount). Not raised for a logout that keeps the route.
+    /// </summary>
     public event Action<Player>? FlightEnded;
 
     /// <summary>Whether the player's last flight was aborted before reaching its destination (consumed once read).</summary>

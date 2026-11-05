@@ -910,6 +910,7 @@ public sealed partial class SummonService
     /// brought back, the same rule as a dead hunter pet. A dead owner or one on a taxi flight gets no pet either: <c>LoadPetFromDB(current)</c> refuses
     /// when <c>IsPetNeedBeTemporaryUnsummoned</c> (Pet.cpp:217-223, Player.cpp:20941-20944) and only remembers the pet number
     /// (<c>SetTemporaryUnsummonedPetNumber</c>), so the pet comes back with <see cref="ResummonTemporarilyUnsummonedPet"/> and the saved row stays the current one.
+    /// For a taxi flight that is the flight's end, landed or aborted (NpcServicesFeature on <c>TaxiFlightSystem.FlightEnded</c>; vmangos Player::Unmount, Player.cpp:18251).
     /// Refuses when the owner has a pet, the snapshot is another character's or not current, or the entry is not a demon template. World thread.
     /// </summary>
     private Creature? RestoreCurrentDemon(Player owner, PersistentPetSnapshot snapshot)

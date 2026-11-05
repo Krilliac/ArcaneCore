@@ -190,8 +190,8 @@ lane's file, listed here so the integrator can apply it where the lane that owns
 | experience, quest kill credit, reputation (group-loot-xp, npc-services-quests lanes) | the same killer resolution | `Unit.cpp:1256` |
 | faction and PvP rules (`Combat/FactionCombatHooks.cs`, lines 31-32 list it as missing) | hostility of a pet or totem is its owner's: `Object.cpp:3745-3815`; copy of the owner faction is already on the unit, the player-controlled and PvP flags too | `Object.cpp:3745-3815` |
 | stats (stats-combat-formulas lane) | the owner's stat inheritance for a pet (`Pet::UpdateAllStats`), `CreatureClassLevelStats` for pets without `pet_levelstats` | `Pet.cpp:1274-1480` |
-| mounts (the owner's lane) | done: `MountService` raises `SpellSystem.PlayerMounted` / `PlayerDismounted` and `SummonService.Mounts.cs` calls `SetPetEnabled(pet, false/true)` (greys the bar), or brings back a pet put away when a dismounted owner has none; a pet loaded while its owner rides starts greyed out, but not during a taxi flight (vmangos loads no pet then; the landing raises no dismount event here) | `Player.cpp:18214`, `18249-18251`, `20944-20945`, `Pet.cpp:216-221`, `401-404` |
-| teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet and the warlock's demon through the pet store (P7; the demon is the current `character_pet` row, restored at login by `SummonService.RestoreCurrentDemon`, which leaves it to the temporary-unsummon memory while the owner is dead or on a taxi; a dismissal, replacement or reagent refund saves it under its entry and removes only the current row, and the next summon of that entry loads it again) | `UnsummonPetTemporaryIfAny` |
+| mounts (the owner's lane) | done: `MountService` raises `SpellSystem.PlayerMounted` / `PlayerDismounted` and `SummonService.Mounts.cs` calls `SetPetEnabled(pet, false/true)` (greys the bar), or brings back a pet put away when a dismounted owner has none; a pet loaded while its owner rides starts greyed out, but not during a taxi flight (vmangos loads no pet then; the landing raises no dismount event here, and `NpcServicesFeature.OnFlightEnded` brings back a pet put away instead) | `Player.cpp:18214`, `18249-18251`, `20944-20945`, `Pet.cpp:216-221`, `401-404` |
+| teleports and logout (teleport, character lanes) | done for teleports (`PetTeleportFollow`, wave 2); a logout keeps the hunter pet and the warlock's demon through the pet store (P7; the demon is the current `character_pet` row, restored at login by `SummonService.RestoreCurrentDemon`, which leaves it to the temporary-unsummon memory while the owner is dead or on a taxi, and the end of the flight, landed or aborted, brings it back; a dismissal, replacement or reagent refund saves it under its entry and removes only the current row, and the next summon of that entry loads it again) | `UnsummonPetTemporaryIfAny` |
 
 ## Configuration (`Pets`, every default is the retail value)
 
@@ -277,8 +277,11 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   and mini pets are unsummoned and stay gone (vmangos `RemoveFromWorld`); a temporary summon and a dead pet are not brought back (a
   dead hunter pet stays dead in its snapshot, where Revive Pet finds it; vmangos would reload it as a corpse). A summoned possessed
   minion puts the pet away for its life (`CharmService.SummonPossessed.cs`), and a dismount brings the pet back when the owner has none
-  (`Player::Unmount`, Player.cpp:18250-18251, `SummonService.Mounts.cs`). Not done: the taxi trigger of the same pair (vmangos mounts
-  the flight without a spell, Player.cpp:18201-18203, and dismounts on landing).
+  (`Player::Unmount`, Player.cpp:18250-18251, `SummonService.Mounts.cs`). The end of a taxi flight, landed or aborted, does the same in the next tick's commands phase:
+  vmangos `FlightPathMovementGenerator::Finalize` clears the flight state and calls `Player::Unmount` (WaypointMovementGenerator.cpp:359-362), and here
+  `NpcServicesFeature.OnFlightEnded` calls `ResummonTemporarilyUnsummonedPet` on `TaxiFlightSystem.FlightEnded`, which covers the demon remembered at a login in the air.
+  A player leaving its map keeps the pet remembered for the teleport's end. Not done: the taxi start of the same pair (vmangos mounts the flight without a spell and
+  puts the pet away, Player.cpp:18201-18203; here a pet out at the start of a flight is not put away).
 * **Spirit guide re-summon (wave 2).** `SummonService.AutoReSummonPet` (vmangos `Player::AutoReSummonPet`, Player.cpp:1580-1628) runs
   on `SpellSystem.PlayerSpiritHealed` (SPELL_EFFECT_SPIRIT_HEAL): the last demon or loaded permanent pet (`m_petEntry`, `m_petSpell`)
   comes back when the summoning spell's reagents are in the bags (they are taken); a pet saved dead is brought back to life at full

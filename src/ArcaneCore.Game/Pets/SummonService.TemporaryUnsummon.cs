@@ -9,7 +9,8 @@ namespace ArcaneCore.Game.Pets;
 
 // A pet that is put away for a while and comes back (vmangos Player::UnsummonPetTemporaryIfAny / ResummonPetTemporaryUnSummonedIfAny,
 // Player.cpp:20911-20940, and m_temporaryUnsummonedPetNumber): a far teleport, a near teleport out of the pet's reach. A dismount also
-// brings it back (Player::Unmount, SummonService.Mounts.cs).
+// brings it back (Player::Unmount, SummonService.Mounts.cs), and so does the end of a taxi flight (Player::Unmount from
+// FlightPathMovementGenerator::Finalize; NpcServicesFeature.OnFlightEnded, as a flight raises no dismount event).
 public sealed partial class SummonService
 {
     private readonly Dictionary<ObjectGuid, TemporarilyUnsummonedPet> _temporarilyUnsummoned = [];
