@@ -91,24 +91,74 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// Whether the spell has an effect that selects with target 46 (as target A or B) through the generic selector, has spell_script_target rows, and
+    /// finds no listed object within range of <paramref name="caster"/>. vmangos Spell::CheckScriptTargeting then fails the cast
+    /// (SPELL_FAILED_BAD_TARGETS, or DONT_REPORT when triggered; Spell.cpp:603-616, SetTargetMap :2850-2856).
+    /// </summary>
+    private bool ScriptLocationTargetMissing(Unit caster, SpellInfo spell, Unit? explicitTarget)
+    {
+        if (Store.GetScriptTargets(spell.Id).Count == 0 || _spellTargetSelectors.ContainsKey((spell.Id, SpellImplicitTarget.LocationScriptNearCaster)))
+        {
+            return false;
+        }
+
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            SpellEffectInfo effect = spell.Effects[i];
+            if (effect.IsEmpty || effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster && effect.TargetB != SpellImplicitTarget.LocationScriptNearCaster)
+            {
+                continue;
+            }
+
+            (Unit? unit, GameObject? gameObject) = FindScriptLocationTarget(caster, spell, effect, i, explicitTarget);
+            if (unit is null && gameObject is null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// TARGET_LOCATION_SCRIPT_NEAR_CASTER (46; vmangos Spell::CheckScriptTargeting, Spell.cpp:446-600, and Spell::SetTargetMap :2848-2860): the
     /// object of the nearest spell_script_target row within the effect radius (else the spell's maximum range, 200 yd for an "anywhere" range)
     /// becomes the destination. Row type 0 is a game object, 1 a living creature, 2 a dead creature, 3 a player; a valid explicit unit is preferred
     /// to the nearest one. The found object is also a target of the effect only when target A is 46 and the effect is not a persistent area aura
     /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target with the caster as carrier. Nothing within range leaves
-    /// the destination alone and selects nothing; a spell with no rows at all is refused at cast time (<c>CheckCast</c>, SPELL_FAILED_BAD_TARGETS).
+    /// the destination alone and selects nothing; the cast itself is refused beforehand (<c>CheckCast</c>, <see cref="ScriptLocationTargetMissing"/>).
+    /// Target B 46 beside another target A only sets the destination.
     /// </summary>
     private List<(Unit Unit, float Multiplier)> SelectScriptLocationTarget(SpellCast cast, SpellEffectInfo effect, int effectIndex, Unit? explicitTarget)
     {
         Unit caster = cast.Caster;
-        if (caster.Map is not { } map) return [];
-        SpellStore.ScriptTarget[] rows = [.. Store.GetScriptTargets(cast.Spell.Id).Where(row => (row.InverseEffectMask & (1u << effectIndex)) == 0)];
-        if (rows.Length == 0) return [];
+        (Unit? chosenUnit, GameObject? chosenObject) = FindScriptLocationTarget(caster, cast.Spell, effect, effectIndex, explicitTarget);
+        WorldObject? found = chosenUnit is not null ? chosenUnit : chosenObject;
+        if (found is null) return [];
+        cast.Targets.Dest = (found.X, found.Y, found.Z);
+        cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
+        if (effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster || effect.Effect == SpellEffectName.PersistentAreaAura) return [];
+        if (chosenUnit is not null) return [(chosenUnit, 1f)];
+        cast.ObjectTargetsByEffect[effectIndex] = [chosenObject!.Guid];
+        return [(caster, 1f)]; // the caster carries the object effect through the unit-effect pipeline
+    }
 
-        float radius = TargetMapRadius(cast.Spell, effect, effectIndex);
-        if (radius <= 0) radius = cast.Spell.Range.Max;
-        if (radius >= 50_000f) radius = 200f; // CheckScriptTargeting bounds the "anywhere" range of an entry search
-        if (radius <= 0) return [];
+    /// <summary>Extra yards the grid pre-filter of the 46 unit search adds beyond the caster's reach, so a large target combat reach is still a candidate (the exact check follows).</summary>
+    private const float MaxCombatReachMargin = 20f;
+
+    /// <summary>The nearest listed unit or game object of the 46 search of <paramref name="effect"/> (a valid explicit unit first); both null when none is in range. Reads state only.</summary>
+    private (Unit? Unit, GameObject? Object) FindScriptLocationTarget(Unit caster, SpellInfo spell, SpellEffectInfo effect, int effectIndex, Unit? explicitTarget)
+    {
+        if (caster.Map is not { } map) return (null, null);
+        SpellStore.ScriptTarget[] rows = [.. Store.GetScriptTargets(spell.Id).Where(row => (row.InverseEffectMask & (1u << effectIndex)) == 0)];
+        if (rows.Length == 0) return (null, null);
+
+        float radius = TargetMapRadius(spell, effect, effectIndex);
+        if (radius <= 0) radius = spell.Range.Max;
+        if (radius >= 50_000f) radius = 200f; // mangos-classic CheckScriptTargeting bounds the "anywhere" range of an entry search
+        // SPELLMOD_RADIUS applies to the search radius (vmangos Spell.cpp:2059-2062; the sibling game-object path does the same).
+        if (radius > 0) radius = ModFloat(caster, spell, SpellModOp.Radius, radius);
+        if (radius < 0) return (null, null);
 
         float DistanceSquared(WorldObject target) => WorldGeometry.DistanceSq3D(target, caster);
 
@@ -120,9 +170,21 @@ public sealed partial class SpellSystem
             _ => false,
         });
 
-        Unit? chosenUnit = explicitTarget is not null && UnitListed(explicitTarget) && DistanceSquared(explicitTarget) <= radius * radius
+        // The unit search measures combat distance, as vmangos NearestUnitFitConditionInCombatRangeCheck does (Spell.cpp:539, Object.h:603-606,
+        // GetDistance with SizeFactor::CombatReach): centre distance minus both combat reaches, so a radius of 0 (28364 Damage vs. Guards: range
+        // index 1, no radius) still finds a listed unit within melee reach.
+        // Deviation: the explicit-unit check below also uses combat reach, while vmangos uses IsWithinDistInMap (bounding radius, Spell.cpp:519-533);
+        // only the choice among listed units in that band differs.
+        float casterReach = CombatReach(caster);
+        bool UnitInCombatRange(Unit unit)
+        {
+            float reach = radius + casterReach + CombatReach(unit);
+            return DistanceSquared(unit) <= reach * reach;
+        }
+
+        Unit? chosenUnit = explicitTarget is not null && UnitListed(explicitTarget) && UnitInCombatRange(explicitTarget)
             ? explicitTarget
-            : UnitsInRadius(map, caster.X, caster.Y, caster.Z, radius).Where(UnitListed)
+            : UnitsInRadius(map, caster.X, caster.Y, caster.Z, radius + casterReach + MaxCombatReachMargin).Where(unit => UnitListed(unit) && UnitInCombatRange(unit))
                 .OrderBy(DistanceSquared).ThenBy(unit => unit.Guid.Value).FirstOrDefault();
         GameObject? chosenObject = null;
         if (explicitTarget is null || chosenUnit is null || !ReferenceEquals(chosenUnit, explicitTarget))
@@ -143,13 +205,6 @@ public sealed partial class SpellSystem
             chosenUnit = null;
         }
 
-        WorldObject? found = chosenUnit is not null ? chosenUnit : chosenObject;
-        if (found is null) return [];
-        cast.Targets.Dest = (found.X, found.Y, found.Z);
-        cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
-        if (effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster || effect.Effect == SpellEffectName.PersistentAreaAura) return [];
-        if (chosenUnit is not null) return [(chosenUnit, 1f)];
-        cast.ObjectTargetsByEffect[effectIndex] = [chosenObject!.Guid];
-        return [(caster, 1f)]; // the caster carries the object effect through the unit-effect pipeline
+        return chosenUnit is not null ? (chosenUnit, null) : (null, chosenObject);
     }
 }
