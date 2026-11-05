@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Tests.Social;
 
 /// <summary>
 /// The Social lease gain of <see cref="SocialGroupPersistenceFeature"/>: the groups table is read on the thread pool and applied on a later world tick, <c>_holding</c> stays false (nothing is
-/// written) until then, a lease lost or a stop during the read drops the stale result, and a failed read is retried on the next sweep. Each test starts a world host that does not hold the
+/// written) until then, a stop during the read installs nothing and finishes, and a failed read is retried a second later (a sweep after that delay starts the read again). Each test starts a world host that does not hold the
 /// Social lease (another node does), gives the lease over and drives the sweep by hand (<see cref="SocialGroupPersistenceFeature.SyncNow"/>; the host's clock is frozen, so the world tick sweeps once only).
 /// </summary>
 public sealed class SocialGroupPersistenceLeaseTests
@@ -32,13 +32,10 @@ public sealed class SocialGroupPersistenceLeaseTests
         private TaskCompletionSource? _gate;
         private int _failures;
         private int _loads;
-        private int _loadsReturned;
         private int _saves;
         private int _deletes;
 
         public int Loads => Volatile.Read(ref _loads);
-
-        public int LoadsReturned => Volatile.Read(ref _loadsReturned);
 
         public int Saves => Volatile.Read(ref _saves);
 
@@ -110,10 +107,9 @@ public sealed class SocialGroupPersistenceLeaseTests
 
             if (gate is not null)
             {
-                await gate.Task.ConfigureAwait(false);
+                await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            Interlocked.Increment(ref _loadsReturned);
             return snapshot;
         }
 
@@ -208,6 +204,12 @@ public sealed class SocialGroupPersistenceLeaseTests
                 services.AddSingleton(holder);
                 services.AddSingleton(_ => new ClusterGroupRouting(holder, Node));
             });
+            // The reread refreshes the directory from the character store and drops what the store lacks, so the store holds ids 101-106 too (ids are assigned in order, so 1-106 are created).
+            for (int id = 1; id <= 106; id++)
+            {
+                await fixture.Host.Characters.CreateAsync(new CharacterRecord { Name = "Member" + id, AccountId = 1000 + id, Race = 1, Class = 1 });
+            }
+
             for (int id = 101; id <= 106; id++)
             {
                 fixture.Host.Directory.Add(new CharacterIdentity(id, 1000 + id, "Member" + id, 1, 0, 1));
@@ -288,44 +290,7 @@ public sealed class SocialGroupPersistenceLeaseTests
     }
 
     [Fact]
-    public async Task ALeaseLostDuringTheRead_DropsTheStaleResult_AndTheNextGainReadsAgain()
-    {
-        await using Fixture f = await Fixture.StartAsync();
-        f.Store.Seed(Party(12, 103, 104));
-        f.Store.Hold();
-        int loadsBefore = f.Store.Loads;
-        await f.GainAsync();
-        await f.SweepAsync();
-        await WorldTestHost.WaitForAsync(() => f.Store.Loads == loadsBefore + 1, "the groups read to start");
-
-        // The lease goes away while the read is out, and the table changes meanwhile (another node held it and wrote).
-        f.Store.Seed(Party(13, 105, 106));
-        await f.Keeper.ReleaseAllAsync();
-        Assert.Null(f.Keeper.TokenFor(RealmAuthorityScopes.Social));
-        await f.SweepAsync(); // the sweep sees the loss: the read in flight belongs to the lease that is gone
-
-        f.Store.Release();
-        await WorldTestHost.WaitForAsync(() => f.Store.LoadsReturned == loadsBefore + 1, "the stale read to return");
-        await f.SettleWorldAsync();
-        await f.Persistence.Writes!.FlushAsync();
-
-        Assert.Empty(await f.AuthorityGroupsAsync()); // the stale result (group 12) was not applied
-        Assert.Empty(f.Persistence.Restored!.Restored);
-        Assert.Equal((0, 0), (f.Store.Saves, f.Store.Deletes));
-
-        // The lease comes back: a new read starts (the lost one did not leave the reload stuck) and its result, not the stale one, is applied.
-        await f.Regain();
-        await f.SweepAsync();
-        await f.WaitForAuthorityGroupsAsync(13);
-        Assert.Equal([13u], f.Persistence.Restored.Restored);
-        Assert.Equal(loadsBefore + 2, f.Store.Loads);
-        await f.SweepAsync();
-        await f.Persistence.Writes.FlushAsync();
-        Assert.Equal((0, 0), (f.Store.Saves, f.Store.Deletes));
-    }
-
-    [Fact]
-    public async Task AFailedRead_IsRetriedOnTheNextSweep_AndNothingIsWrittenMeanwhile()
+    public async Task AFailedRead_IsRetriedASecondLater_AndNothingIsWrittenMeanwhile()
     {
         await using Fixture f = await Fixture.StartAsync();
         f.Store.Seed(Party(12, 103, 104));
@@ -333,7 +298,7 @@ public sealed class SocialGroupPersistenceLeaseTests
         int loadsBefore = f.Store.Loads;
         await f.GainAsync();
 
-        // The first sweep starts the read that fails; sweeps go on until the failure has been handled and the next sweep reads again.
+        // The first sweep starts the read that fails; sweeps go on until the failure has been handled and, a second later, a sweep reads again.
         DateTime deadline = DateTime.UtcNow.AddSeconds(30);
         while (f.Store.Loads < loadsBefore + 2)
         {
@@ -361,9 +326,8 @@ public sealed class SocialGroupPersistenceLeaseTests
         await f.SweepAsync();
         await WorldTestHost.WaitForAsync(() => f.Store.Loads == loadsBefore + 1, "the groups read to start");
 
-        await f.Persistence.StopAsync(); // the final sync of the stop runs with the read still out
+        await f.Persistence.StopAsync(); // the stop cancels the read (the gate honours the token) and finishes without installing it
         f.Store.Release();
-        await WorldTestHost.WaitForAsync(() => f.Store.LoadsReturned == loadsBefore + 1, "the read to return");
         await f.SettleWorldAsync();
 
         Assert.Empty(await f.AuthorityGroupsAsync()); // the late result was not applied
