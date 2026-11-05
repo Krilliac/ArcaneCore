@@ -45,7 +45,7 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
 
     // Prefetch (TilePrefetchCache): parsed tile spawn lists, the models they need that were not cached yet (parsed on the pool), and
     // the names already cached (read by the pool to skip them; written on the world thread).
-    private readonly TilePrefetchCache<List<(ModelSpawn Spawn, uint Slot)>> _prefetch = new();
+    private readonly TilePrefetchCache<List<(ModelSpawn Spawn, uint Slot)>> _prefetch = new(SyncReadFile.VMap);
     private readonly ConcurrentDictionary<string, WorldModel> _prefetchedModels = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _cachedModelNames = new(StringComparer.Ordinal);
     private const int MaxPrefetchedModels = 512;
@@ -316,6 +316,15 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
 
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>Untaken approach prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchEvictions => _prefetch.Evictions;
+
+    /// <summary>Untaken arrival prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchArrivalEvictions => _prefetch.ArrivalEvictions;
+
+    /// <summary>Untaken prefetches dropped because they expired (diagnostics and tests).</summary>
+    internal int PrefetchExpiries => _prefetch.Expiries;
 
     /// <summary>Whether a prefetch of the tile was asked for, is finished and has not been taken (diagnostics and tests).</summary>
     internal bool IsPrefetchFinished(uint mapId, int tileX, int tileY) => _prefetch.Contains(mapId, tileX, tileY) && !_prefetch.IsRunning(mapId, tileX, tileY);

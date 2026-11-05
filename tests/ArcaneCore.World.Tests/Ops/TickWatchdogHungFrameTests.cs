@@ -176,6 +176,7 @@ public sealed class TickWatchdogHungFrameTests : IDisposable
         Assert.StartsWith("v1|tickhang|phase=OutsideTick|item=none", PlayerbotQaFingerprint.Key(signal), StringComparison.Ordinal);
     }
 
+    /// <summary>The counters are process-wide and never reset, so this leaves them raised for every other test in the assembly that reads a hang detail.</summary>
     [Fact]
     public void ACompletedHang_CarriesTheTerrainAndVmapFileReadTotals()
     {

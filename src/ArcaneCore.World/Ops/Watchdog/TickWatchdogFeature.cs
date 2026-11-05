@@ -380,8 +380,8 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
     }
 
     /// <summary>
-    /// The completed-hang detail's tail: the terrain/vmap file read totals (cumulative since start, not a per-hang delta; a read that blocked the hang is in them
-    /// by now, because it is recorded when the read returns) then the save queue backlog.
+    /// The completed-hang detail's tail: the terrain/vmap file read and dropped prefetch totals (cumulative since start, not a per-hang delta; a read that blocked
+    /// the hang is in them by now, because it is recorded when the read returns) then the save queue backlog.
     /// </summary>
     private string AppendSaveQueue(string text)
     {
@@ -400,7 +400,7 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
 
     /// <summary>
     /// Watchdog thread, only when a hang or overrun line is about to be logged: where the tick is (in progress), or the phase split
-    /// and slowest features of the slowest recent slow tick (after the fact), then the character save queue's backlog.
+    /// and slowest features of the slowest recent slow tick (after the fact), then the terrain/vmap file read totals and the character save queue's backlog.
     /// </summary>
     private string Describe(WorldRuntime world, bool inProgress)
     {

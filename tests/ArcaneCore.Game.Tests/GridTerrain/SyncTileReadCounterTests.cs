@@ -218,6 +218,141 @@ public sealed class SyncTileReadCounterTests : IDisposable
     }
 
     [Fact]
+    public void DescribeProcess_NamesThePrefetchesDroppedUntaken_AfterTheReads()
+    {
+        SyncTileReadCounters.Record(SyncReadCaller.WorldThread, SyncReadFile.Terrain, 1_000, 7, 1, 1);
+        SyncTileReadCounters.RecordPrefetchDrop(SyncReadFile.VMap, PrefetchDrop.Expired);
+
+        string text = SyncTileReadCounters.DescribeProcess();
+
+        int drops = text.IndexOf("; terrain/vmap tile prefetches dropped untaken since start: ", StringComparison.Ordinal);
+        Assert.True(drops > 0, text);
+        Assert.Matches(@"VMap \d+ evicted, \d+ arrival evicted, [1-9]\d* expired", text[drops..]);
+    }
+
+    private static TilePrefetchCache<object> CacheOfHeldWork() => new() { Start = _ => new TaskCompletionSource<object?>().Task };
+
+    [Fact]
+    public void AFullApproachBudget_CountsOneEviction_PerPrefetchItDrops()
+    {
+        TilePrefetchCache<object> cache = CacheOfHeldWork();
+        for (int i = 0; i < TilePrefetchCache<object>.MaxEntries; i++)
+        {
+            cache.Request(0, i, 0, () => new object());
+        }
+
+        Assert.Equal(0, cache.Evictions);
+
+        cache.Request(0, 100, 0, () => new object());
+        cache.Request(0, 101, 0, () => new object());
+
+        Assert.Equal(2, cache.Evictions);
+        Assert.Equal(0, cache.ArrivalEvictions);
+        Assert.Equal(0, cache.Expiries);
+        Assert.Equal(TilePrefetchCache<object>.MaxEntries, cache.Pending);
+    }
+
+    [Fact]
+    public void AFullArrivalBudget_CountsArrivalEvictions_NotApproachEvictions()
+    {
+        TilePrefetchCache<object> cache = CacheOfHeldWork();
+        for (int i = 0; i <= TilePrefetchCache<object>.MaxArrivalEntries; i++)
+        {
+            cache.Request(0, i, 0, () => new object(), arrival: true);
+        }
+
+        Assert.Equal(1, cache.ArrivalEvictions);
+        Assert.Equal(0, cache.Evictions);
+    }
+
+    [Fact]
+    public void PrefetchesPastTheirExpiry_CountAsExpired_AndEvictNothing()
+    {
+        TilePrefetchCache<object> cache = CacheOfHeldWork();
+        long now = 0;
+        cache.NowMs = () => now;
+        for (int i = 0; i < TilePrefetchCache<object>.MaxEntries; i++)
+        {
+            cache.Request(0, i, 0, () => new object());
+        }
+
+        now = TilePrefetchCache<object>.ExpiryMs + 1;
+        cache.Request(0, 100, 0, () => new object());
+
+        Assert.Equal(TilePrefetchCache<object>.MaxEntries, cache.Expiries);
+        Assert.Equal(0, cache.Evictions);
+        Assert.Equal(1, cache.Pending);
+    }
+
+    [Fact]
+    public void APrefetchTakenClaimedOrForgotten_IsNoDrop()
+    {
+        var cache = new TilePrefetchCache<object> { Start = work => Task.FromResult(work()) };
+        cache.Request(0, 1, 0, () => new object());
+        Assert.True(cache.TryTake(0, 1, 0, out object _));
+        cache.Request(0, 2, 0, () => new object());
+        cache.Forget(0, 2, 0);
+        TilePrefetchCache<object> held = CacheOfHeldWork();
+        held.Request(0, 3, 0, () => new object());
+        Assert.True(held.TryClaimQueued(0, 3, 0));
+
+        foreach (TilePrefetchCache<object> each in new[] { cache, held })
+        {
+            Assert.Equal(0, each.Evictions + each.ArrivalEvictions + each.Expiries);
+        }
+    }
+
+    [Fact]
+    public void TheTerrainLoader_ExposesItsEvictions_AndAddsThemToTheProcessTotals()
+    {
+        TerrainManager manager = ManagerWithTile(32, 32);
+        long approach = SyncTileReadCounters.PrefetchDrops(SyncReadFile.Terrain, PrefetchDrop.Evicted);
+        long arrival = SyncTileReadCounters.PrefetchDrops(SyncReadFile.Terrain, PrefetchDrop.ArrivalEvicted);
+
+        // Tiles with no file: the background reads open nothing that Dispose then has to delete.
+        for (int i = 0; i <= TilePrefetchCache<TerrainTile>.MaxEntries; i++)
+        {
+            manager.Prefetch(0, i, 0);
+        }
+
+        for (int i = 0; i <= TilePrefetchCache<TerrainTile>.MaxArrivalEntries; i++)
+        {
+            manager.PrefetchArrival(0, i, 1);
+        }
+
+        Assert.Equal(1, manager.PrefetchEvictions);
+        Assert.Equal(1, manager.PrefetchArrivalEvictions);
+        Assert.Equal(0, manager.PrefetchExpiries);
+        Assert.True(SyncTileReadCounters.PrefetchDrops(SyncReadFile.Terrain, PrefetchDrop.Evicted) >= approach + 1);
+        Assert.True(SyncTileReadCounters.PrefetchDrops(SyncReadFile.Terrain, PrefetchDrop.ArrivalEvicted) >= arrival + 1);
+    }
+
+    [Fact]
+    public void TheVMapLoader_ExposesItsEvictions_AndAddsThemToTheProcessTotals()
+    {
+        VMapManager vmaps = VMapsWithTiles(4);
+        long approach = SyncTileReadCounters.PrefetchDrops(SyncReadFile.VMap, PrefetchDrop.Evicted);
+        long arrival = SyncTileReadCounters.PrefetchDrops(SyncReadFile.VMap, PrefetchDrop.ArrivalEvicted);
+
+        // Rows with no tile file: the background reads open nothing that Dispose then has to delete.
+        for (int i = 0; i <= TilePrefetchCache<object>.MaxEntries; i++)
+        {
+            vmaps.Prefetch(VMapMapId, i, VMapRow + 1);
+        }
+
+        for (int i = 0; i <= TilePrefetchCache<object>.MaxArrivalEntries; i++)
+        {
+            vmaps.PrefetchArrival(VMapMapId, i, VMapRow + 2);
+        }
+
+        Assert.Equal(1, vmaps.PrefetchEvictions);
+        Assert.Equal(1, vmaps.PrefetchArrivalEvictions);
+        Assert.Equal(0, vmaps.PrefetchExpiries);
+        Assert.True(SyncTileReadCounters.PrefetchDrops(SyncReadFile.VMap, PrefetchDrop.Evicted) >= approach + 1);
+        Assert.True(SyncTileReadCounters.PrefetchDrops(SyncReadFile.VMap, PrefetchDrop.ArrivalEvicted) >= arrival + 1);
+    }
+
+    [Fact]
     public void ARead_OutsideAnyMapUpdate_IsOfTheOutsideKind()
     {
         Assert.Equal(SyncReadCaller.OutsideMapUpdate, SyncTileReadCounters.CallerKind());

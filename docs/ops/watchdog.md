@@ -93,6 +93,8 @@ recorder are appended to each line so both views are on one line.
     and the report counts the hangs it consumed, so a hang that closes while the check runs is reported once with its own record; with no record left the line says
     `hung frame described in the previous report` and nothing goes to bot QA. World-thread work after `RunTick` returns (the tick observer, the tick-completed event, the
     performance log) is not in the tick body, so it counts as outside tick code.
+  Both modes, and the hung-frame text, carry process totals since start once there are any: `; terrain/vmap tile file reads since start (prefetch misses): <caller kind> <N> (<M> ms), ...`
+  and `; terrain/vmap tile prefetches dropped untaken since start: <Terrain|VMap> <N> evicted, <N> arrival evicted, <N> expired`. An expiry is counted when a later prefetch request sweeps it.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
   `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion

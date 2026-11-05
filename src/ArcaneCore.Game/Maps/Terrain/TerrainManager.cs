@@ -27,7 +27,7 @@ public sealed class TerrainManager
     private readonly List<uint> _unloadRequests = [];
     private readonly ILogger _logger;
     private readonly string? _mapsDirectory;
-    private readonly TilePrefetchCache<TerrainTile> _prefetch = new();
+    private readonly TilePrefetchCache<TerrainTile> _prefetch = new(SyncReadFile.Terrain);
 
     public TerrainManager(string? dataDirectory, ILogger? logger = null)
     {
@@ -166,6 +166,15 @@ public sealed class TerrainManager
 
     /// <summary>Prefetches the loader took instead of reading the file itself (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>Untaken approach prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchEvictions => _prefetch.Evictions;
+
+    /// <summary>Untaken arrival prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchArrivalEvictions => _prefetch.ArrivalEvictions;
+
+    /// <summary>Untaken prefetches dropped because they expired (diagnostics and tests).</summary>
+    internal int PrefetchExpiries => _prefetch.Expiries;
 
     /// <summary>Whether a prefetch of the tile is waiting to be taken (<paramref name="finished"/>: its read is done) (diagnostics and tests).</summary>
     internal bool IsPrefetched(uint mapId, int tileX, int tileY, out bool finished)
