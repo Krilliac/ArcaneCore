@@ -156,7 +156,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// Whether this node is attached but not running the bot because another node holds the economy lease (never on a node with no lease keeper). The <c>.ahbot</c> commands
     /// refuse on it: it has read no ledger or overrides, so their answers would be empty and an <c>item</c> change would never reach the holder.
     /// </summary>
-    public bool IsDormant => !HoldsEconomyLease();
+    public bool IsDormant => !HoldsEconomyLease() || (Options.Enabled && !_stateLoaded);
 
     /// <summary>Whether this node may run the bot now: always when nothing is clustered, otherwise only while it holds the economy lease.</summary>
     private bool HoldsEconomyLease()

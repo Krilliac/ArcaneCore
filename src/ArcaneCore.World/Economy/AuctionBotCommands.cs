@@ -56,7 +56,7 @@ public sealed class AuctionBotCommands : ICommandGroup
 
         if (bot.IsDormant)
         {
-            return "The auction house bot does not run on this node (the economy lease is held by another node).";
+            return "The auction house bot does not run on this node (the economy lease is held by another node, or this node has not finished loading the bot state after taking it over).";
         }
 
         return null;

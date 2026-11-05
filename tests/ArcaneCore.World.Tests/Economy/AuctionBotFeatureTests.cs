@@ -134,10 +134,47 @@ public sealed class AuctionBotFeatureTests
         // It buys out the player auction the bot values above its buyout and bids on auction 2; auction 3 already carries the bot's bid.
         Assert.Equal(2, await fixture.OnWorld(() => fixture.Bot.Buy(House)));
         await fixture.TickUntilAsync(() => fixture.Bot.Ledger.Rows.Count(r => r.Role != AuctionBotCustodyRole.Listing && r.State == AuctionBotCustodyState.TerminalOk) == 3);
-        AuctionBotCustodyRow bid = fixture.Bot.Ledger.Rows.Single(r => r.Role == AuctionBotCustodyRole.Bid && r.AuctionId == 2);
-        Assert.Equal(AuctionBotCustodyState.TerminalOk, bid.State);
+        AuctionBotCustodyRow botBid = fixture.Bot.Ledger.Rows.Single(r => r.Role == AuctionBotCustodyRole.Bid && r.AuctionId == 2);
+        Assert.Equal(AuctionBotCustodyState.TerminalOk, botBid.State);
         Assert.Contains(fixture.Bot.Ledger.Rows, r => r.Role == AuctionBotCustodyRole.Buyout && r.AuctionId == 1);
         Assert.True(await fixture.OnWorld(() => fixture.Economy.FindAuction(2)!.Bid > 0));
+    }
+
+    [Fact]
+    public async Task Auction_listed_on_this_node_while_the_takeover_snapshot_is_read_stays_listed_after_the_snapshot_is_applied()
+    {
+        (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper keeper, ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider time) = await DormantWorkerKeeperAsync();
+        await using var keeperScope = keeper;
+        await using var fixture = await Fixture.CreateAsync(persist: true, keeper: keeper,
+            extra: new() { ["AuctionHouseBot:SellChance"] = "0", ["AuctionHouseBot:BuyChance"] = "0" });
+        for (int i = 0; i < 4; i++)
+        {
+            time.Advance(TimeSpan.FromSeconds(10));
+        }
+
+        Assert.True(keeper.Holds(EconomyScope));
+        var listed = new TaskCompletionSource<EconomyOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        long expire = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + (48 * 3600);
+
+        // One world-thread turn: the snapshot read starts off the world thread, and the listing is committed locally while it runs, so the snapshot is applied after the listing.
+        // The read may or may not have seen the new row; the cache must hold the listing either way (before the fix a snapshot without it dropped it).
+        await fixture.OnWorld(() =>
+        {
+            Assert.False(fixture.Economy.EnsureAuctionCacheCurrent());
+            fixture.Economy.StartBotListing(House, 90, new ItemInstanceData { Guid = 900, Entry = Fixture.Entry, Count = 1 }, 500, 1000, expire,
+                Guid.NewGuid(), outcome => listed.TrySetResult(outcome));
+            return true;
+        });
+        Assert.Equal(EconomyOutcome.After, await listed.Task.WaitAsync(Fixture.Budget));
+
+        using var timeout = new CancellationTokenSource(Fixture.Budget);
+        while (!await fixture.OnWorld(() => fixture.Economy.EnsureAuctionCacheCurrent()).WaitAsync(timeout.Token))
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+
+        Assert.NotNull(await fixture.OnWorld(() => fixture.Economy.FindAuction(90)));
+        Assert.Equal(2, await fixture.OnWorld(() => fixture.Economy.Auctions.Count)); // the fixture's player auction and the listing
     }
 
     [Fact]
@@ -157,6 +194,18 @@ public sealed class AuctionBotFeatureTests
         }
 
         Assert.True(keeper.Holds(EconomyScope));
+        Assert.NotNull(AuctionBotCommands.Unavailable(fixture.Bot, null)); // lease held, state not read yet
+
+        using var timeout = new CancellationTokenSource(Fixture.Budget);
+        while (!await fixture.OnWorld(() =>
+               {
+                   fixture.Bot.Tick(); // the first tick that finds the lease held reads the ledger and overrides
+                   return fixture.Bot.StateLoaded;
+               }).WaitAsync(timeout.Token))
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+
         Assert.Null(AuctionBotCommands.Unavailable(fixture.Bot, null));
         Assert.Contains("disabled", AuctionBotCommands.Unavailable(null, null));
     }

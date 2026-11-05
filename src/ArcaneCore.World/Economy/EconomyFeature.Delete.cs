@@ -57,6 +57,7 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
         foreach (AuctionView view in _auctions.Values.Where(v => v.Auction.SellerId == id || v.Auction.BidderId == id).ToList())
         {
             AuctionRecord auction = view.Auction;
+            NoteAuctionTouched(auction.Id);
             if (auction.SellerId == id)
             {
                 if (stillSold.TryGetValue(auction.Id, out AuctionRecord? kept))

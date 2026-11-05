@@ -29,6 +29,41 @@ public sealed partial class EconomyFeature
     private bool _auctionCacheStale;
     private bool _auctionRefreshing;
 
+    // Auction ids this node's own commits, forwarded commits or deletion resyncs changed since the snapshot read began: the snapshot may predate them, so it never replaces these (world thread).
+    private readonly HashSet<uint> _auctionsTouchedDuringRefresh = [];
+
+    private void NoteAuctionTouched(uint auctionId)
+    {
+        if (_auctionRefreshing)
+        {
+            _auctionsTouchedDuringRefresh.Add(auctionId);
+        }
+    }
+
+    private void NoteAuctionChangesTouched(IReadOnlyList<EconomyChange> changes)
+    {
+        if (!_auctionRefreshing)
+        {
+            return;
+        }
+
+        foreach (EconomyChange change in changes)
+        {
+            switch (change)
+            {
+                case InsertAuction insert:
+                    _auctionsTouchedDuringRefresh.Add(insert.Auction.Id);
+                    break;
+                case UpdateAuction update:
+                    _auctionsTouchedDuringRefresh.Add(update.Expected.Id);
+                    break;
+                case DeleteAuction delete:
+                    _auctionsTouchedDuringRefresh.Add(delete.Expected.Id);
+                    break;
+            }
+        }
+    }
+
     /// <summary>
     /// World thread: whether the auction cache is current for this node's holding of the Economy lease. Always true on a node that held the lease at attach (or runs no keeper).
     /// On a node that took the lease over later it is false until a fresh snapshot of the auctions has replaced the cache: the first call that finds the lease held starts the read
@@ -57,6 +92,9 @@ public sealed partial class EconomyFeature
         }
 
         _auctionRefreshing = true;
+        // Operations already in flight commit during the read, so their ids count as touched from the start.
+        _auctionsTouchedDuringRefresh.Clear();
+        _auctionsTouchedDuringRefresh.UnionWith(_busyAuctions);
         Read(async (store, ct) =>
         {
             // Rows and escrow from one snapshot, the id seed read after it (as Attach does), so every row seen is at or below the seed.
@@ -68,13 +106,19 @@ public sealed partial class EconomyFeature
             _auctionRefreshing = false;
             if (_stopping || !_auctionCacheStale)
             {
+                _auctionsTouchedDuringRefresh.Clear();
                 return;
             }
 
             ApplyAuctionSnapshot(result.Snapshot, result.Seed);
+            _auctionsTouchedDuringRefresh.Clear();
             _auctionCacheStale = false;
             _logger.LogInformation("Auction cache reloaded after taking over the economy lease: {Auctions} auctions ({Reserved} reserved)", _auctions.Count, _auctionRecoveries.Count);
-        }, () => _auctionRefreshing = false);
+        }, () =>
+        {
+            _auctionRefreshing = false;
+            _auctionsTouchedDuringRefresh.Clear();
+        });
     }
 
     /// <summary>World thread: replace the auction cache with <paramref name="snapshot"/> (rows the cache holds and the snapshot lacks are gone; a row whose escrow item does not match is reserved, as at Attach) and raise the id allocators.</summary>
@@ -84,7 +128,8 @@ public sealed partial class EconomyFeature
         RaiseTo(ref _lastAuctionId, seed.MaxAuctionId);
         RaiseTo(ref _lastTextId, seed.MaxItemTextId);
         HashSet<uint> present = [.. snapshot.Auctions.Select(a => a.Id)];
-        foreach (uint gone in _auctions.Keys.Where(id => !present.Contains(id)).ToList())
+        // Ids a local commit changed after the read began are newer than the snapshot: the cache keeps them (a node-local listing the snapshot lacks stays listed, a bid or cancel is not rolled back).
+        foreach (uint gone in _auctions.Keys.Where(id => !present.Contains(id) && !_auctionsTouchedDuringRefresh.Contains(id)).ToList())
         {
             _auctions.Remove(gone);
             _expiryBackoff.Remove(gone);
@@ -94,6 +139,11 @@ public sealed partial class EconomyFeature
 
         foreach (AuctionRecord auction in snapshot.Auctions)
         {
+            if (_auctionsTouchedDuringRefresh.Contains(auction.Id))
+            {
+                continue;
+            }
+
             if (snapshot.Escrow.TryGetValue(auction.ItemGuid, out ItemInstanceData? item) && EscrowMatches(auction, item))
             {
                 if (!_auctions.TryGetValue(auction.Id, out AuctionView? previous) || previous.Auction != auction)
