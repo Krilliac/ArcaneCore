@@ -72,6 +72,8 @@ internal static class PlayerbotVoiceTemplates
         ["voice.reply.lfg.gone"] = ["sorry, not looking anymore", "nvm, gave up on it", "sorry, got it done already", "not anymore, sorry"],
         ["voice.reply.lfg.cant"] = ["sorry, cant fit you in right now", "cant take you right now, sorry", "sorry, it wont work out for you this time", "sorry, cant get you in"],
         ["voice.reply.lfg.expired"] = ["sorry, couldnt get a group together", "sorry, no group came together", "couldnt get it going, sorry", "sorry, nobody else showed, no group"],
+        ["voice.reply.lfg.role"] = ["sorry, we need a {roles}", "only have room for a {roles}, sorry", "need a {roles} for the last spot, sorry"],
+        ["voice.reply.lfg.declined"] = ["you turned us down just now, try again in a bit", "you declined us a minute ago, pst later", "give it a few min and pst again"],
         ["voice.reply.wts"] =
         [
             "{item} for {price}, im in {place}", "{price} for {item}, come to {place}", "{item} is {price}, meet me in {place}",
