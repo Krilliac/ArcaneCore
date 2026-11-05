@@ -32,6 +32,28 @@ public sealed class PlayerProgressionTests
     }
 
     [Fact]
+    public void PlayTimeFlags_HalveOrRemoveExperience_BeforeThePersonalRate()
+    {
+        // vmangos Player::GiveXP (Player.cpp:3011-3015): PARTIAL_PLAY_TIME halves, NO_PLAY_TIME grants nothing.
+        (Player player, FakeSession session) = Create();
+        PlayerProgression progression = Progression();
+        progression.InitializeLoadedPlayer(player);
+        session.Clear();
+
+        Assert.Equal(100u, progression.GiveXp(player, 100, ObjectGuid.Empty));
+        player.Flags |= PlayerFlags.PartialPlayTime;
+        Assert.Equal(50u, progression.GiveXp(player, 100, ObjectGuid.Empty));
+        Assert.Equal(0u, progression.GiveXp(player, 1, ObjectGuid.Empty)); // 1 / 2 rounds to nothing
+        player.Flags |= PlayerFlags.NoPlayTime;
+        session.Clear();
+        Assert.Equal(0u, progression.GiveXp(player, 100, ObjectGuid.Empty));
+        Assert.Equal(150u, PlayerProgression.CurrentXp(player)); // 100 + 50 were granted, nothing after the flag
+        Assert.Equal(1, player.Level);
+        player.Flags &= ~(PlayerFlags.PartialPlayTime | PlayerFlags.NoPlayTime);
+        Assert.Equal(100u, progression.GiveXp(player, 100, ObjectGuid.Empty));
+    }
+
+    [Fact]
     public void NonKillXp_LevelsUpWithLogAndLevelUpPackets_AndRecalculatesStats()
     {
         (Player player, FakeSession session) = Create();

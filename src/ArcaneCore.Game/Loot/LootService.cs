@@ -1381,6 +1381,13 @@ public sealed partial class LootService : IViewerFieldFilter
             return MasterGiveResult.TargetNotEligible;
         }
 
+        // LootHandler.cpp:642-646: a recipient flagged NO_PLAY_TIME (World:LimitPlayTime) cannot be given loot.
+        if ((target.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            master.Session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(lootGuid, LootError.MasterOther));
+            return MasterGiveResult.TargetOther;
+        }
+
         InventoryResult stored = AwardItem(target, bag, item);
         if (stored == InventoryResult.Ok)
         {
@@ -1483,6 +1490,13 @@ public sealed partial class LootService : IViewerFieldFilter
 
     private void GiveMoney(Player player, uint amount)
     {
+        // Player::LootMoney (Player.cpp:21793-21797): the play-time flags remove or halve what this player receives; the share notify still names the full share (LootHandler.cpp:322-323).
+        amount = PlayTimeLimit.ApplyToLootedMoney(player, amount);
+        if (amount == 0)
+        {
+            return;
+        }
+
         player.Money = (uint)Math.Min((ulong)player.Money + amount, MaxMoneyAmount);
         Quests?.MoneyLooted(player);
     }

@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Skills;
 /// A key opens its lock when it is the cast item (Spell::CanOpenLock, Spell.cpp:7885-7888: the item case matches <c>m_CastItem</c>), and a
 /// cast from an item never gives a skill-up or adds the caster's skill (Spell.cpp:7906-7907, SpellEffects.cpp:2191-2192); the key is then
 /// used up by its own spell charges (Spell::TakeCastItem). Not modelled: the per-object use
-/// requirement table, battleground flags, the play-time flag, the SPELL_FAILED_DAMAGE_IMMUNE cast check (the effect itself refuses an
+/// requirement table, battleground flags, the SPELL_FAILED_DAMAGE_IMMUNE cast check (the effect itself refuses an
 /// immune caster, <see cref="GameObjectMapSystem.OpenLock"/>). Multi-use veins are the object system's (an emptied vein may stay for another open,
 /// LootHandler.cpp:435-487, in <see cref="GameObjectMapSystem"/>). Skinning follows Spell.cpp:5940-5969 including the tapper's head start; the
 /// tap list is approximated by the corpse loot's recipients (see <see cref="LootService.IsSkinnableBy"/>).
@@ -94,6 +94,12 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         if (context.Caster is not Player { Skills: { } playerSkills } player)
         {
             return SpellCastResult.BadTargets; // only players open locks and gather
+        }
+
+        // Spell.cpp:5975-5976 (World:LimitPlayTime sets the flag): a NO_PLAY_TIME player cannot open locks or gather.
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            return SpellCastResult.PlayTime;
         }
 
         SpellEffectInfo effect = context.Effect;

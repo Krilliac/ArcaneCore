@@ -43,6 +43,12 @@ public interface IPlayerSession
     /// <summary>Queue a packet for this client. Thread-safe; never blocks on the socket.</summary>
     void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 
+    /// <summary>
+    /// <see cref="Send"/> for a movement relay to an observer (vmangos <c>WorldSession::SendMovementPacket</c>): a session may batch it into
+    /// SMSG_COMPRESSED_MOVES under <c>World:CompressMovementCount</c>. The default sends it at once.
+    /// </summary>
+    void SendMovement(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
+
     /// <summary>Handle the in-world packets queued since the last tick (world thread).</summary>
     void ProcessWorldPackets(Player player);
 

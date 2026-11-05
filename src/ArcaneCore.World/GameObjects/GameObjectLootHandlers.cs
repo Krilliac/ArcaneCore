@@ -126,6 +126,13 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
 
         var reader = new PacketReader(payload);
         ObjectGuid source = new(reader.ReadUInt64());
+        if (player.IsAlive && (player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            // vmangos HandleLootOpcode (LootHandler.cpp:358-362), after its alive check: LOOT_ERROR_PLAY_TIME_EXCEEDED (World:LimitPlayTime).
+            session.Send(WorldOpcode.SmsgLootResponse, GroupLootPackets.LootErrorResponse(source, LootError.PlayTimeExceeded));
+            return;
+        }
+
         int answered = session.ClientLootAnswersSent;
         LootResult result = loot.Open(player, source);
         if (result != LootResult.Ok && session.SilentDropLogEnabled && session.ClientLootAnswersSent == answered)
@@ -188,6 +195,13 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     {
         if (LootOf(session, player) is { } loot && GroupLootPackets.TryParseLootRoll(payload, out ObjectGuid corpse, out uint slot, out RollVote vote))
         {
+            // vmangos GroupHandler.cpp:380-385: a player flagged NO_PLAY_TIME (World:LimitPlayTime) is told so and its vote becomes a pass.
+            if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+            {
+                PlayTimeLimit.SendUnhealthyWarning(player);
+                vote = RollVote.Pass;
+            }
+
             loot.Rolls.Vote(player, corpse, slot, vote);
         }
     }

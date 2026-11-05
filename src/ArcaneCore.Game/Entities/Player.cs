@@ -26,6 +26,12 @@ public enum PlayerFlags : uint
     PvpDesired = 0x0200,
     HideHelm = 0x0400,
     HideCloak = 0x0800,
+
+    /// <summary>Played a long time (vmangos PLAYER_FLAGS_PARTIAL_PLAY_TIME 0x1000, mangos-classic Player.h:381): experience is halved. Set only under <c>World:LimitPlayTime</c>.</summary>
+    PartialPlayTime = 0x1000,
+
+    /// <summary>Played too long (vmangos PLAYER_FLAGS_NO_PLAY_TIME 0x2000, mangos-classic Player.h:382): no experience, no loot, no quest rewards. Set only under <c>World:LimitPlayTime</c>.</summary>
+    NoPlayTime = 0x2000,
 }
 
 /// <summary>The two factions.</summary>
