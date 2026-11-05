@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Battlegrounds.AlteracValleyScripts;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
