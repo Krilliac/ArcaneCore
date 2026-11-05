@@ -361,7 +361,7 @@ public sealed partial class CreatureMapSystem
         SyncWalkMode(creature, run);
     }
 
-    /// <summary>vmangos IsWithinLOSInMap between two objects of this map (open without vmaps).</summary>
+    /// <summary>vmangos IsWithinLOSInMap between two objects of this map (open without vmaps); also the spell lists' target-rule line of sight.</summary>
     internal bool IsInLineOfSight(WorldObject from, WorldObject to) => InLineOfSight(from, to);
 
     /// <summary>A spell a creature of this map cast landed: its AI hears of it (cmangos SpellHitTarget).</summary>

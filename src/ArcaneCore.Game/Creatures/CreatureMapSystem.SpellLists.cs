@@ -99,9 +99,6 @@ public sealed partial class CreatureMapSystem
         creature.SpellLists?.Update(diffMs);
     }
 
-    /// <summary>The map's line of sight for the list's target rules.</summary>
-    internal bool IsInLineOfSight(WorldObject from, WorldObject to) => InLineOfSight(from, to);
-
     /// <summary>Put a spell list problem on the anomaly ledger, once per map for each <paramref name="key"/>.</summary>
     internal void ReportSpellListOnce(string key, string code, string detail)
     {
