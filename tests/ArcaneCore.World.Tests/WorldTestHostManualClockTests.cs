@@ -47,8 +47,8 @@ public sealed class WorldTestHostManualClockTests
     [Fact]
     public async Task TwoRunsWithTheSameSeedAndSteps_ProduceIdenticalOutboundBytes()
     {
-        // A scripted login, chat and played-time interaction over fixed steps. The cast is in the next test; combat and loot still draw from
-        // Random.Shared (ICombatRandom / LootGenerator default to it), so they need a seeded source before they can join this comparison.
+        // A scripted login, chat and played-time interaction over fixed steps. The damage cast and the swing are in the next two tests, with seeded dice;
+        // loot is in none of them: GameObjectLootFeature draws from a private new Random() with no seam to seed.
         List<(WorldOpcode Opcode, byte[] Payload)> first = await RunScriptedAsync();
         List<(WorldOpcode Opcode, byte[] Payload)> second = await RunScriptedAsync();
 
@@ -62,41 +62,88 @@ public sealed class WorldTestHostManualClockTests
     }
 
     [Fact]
-    public async Task TwoRunsOfTheSameCastOnTheManualClock_ProduceIdenticalSpellGoBytes()
+    public async Task TwoRunsOfTheSameDamageCastOnTheManualClock_ProduceIdenticalDamageLogBytes()
     {
-        byte[] first = await RunCastAsync();
-        byte[] second = await RunCastAsync();
+        (byte[] first, uint damageFirst) = await RunCastAsync();
+        (byte[] second, uint damageSecond) = await RunCastAsync();
 
         Assert.NotEmpty(first);
-        Assert.True(first.AsSpan().SequenceEqual(second), "SMSG_SPELL_GO differs between two identical scripted casts");
+        Assert.InRange(damageFirst, 11u, 60u); // BasePoints 10 plus a die of 1..50: the amount is a draw from SpellSystem.Random
+        Assert.Equal(damageFirst, damageSecond);
+        Assert.True(first.AsSpan().SequenceEqual(second), "SMSG_SPELLNONMELEEDAMAGELOG differs between two identical scripted casts");
     }
 
-    private static async Task<byte[]> RunCastAsync()
+    [Fact]
+    public async Task TwoRunsOfTheSameSwingOnTheManualClock_ProduceIdenticalAttackerStateBytes()
+    {
+        byte[] first = await RunSwingAsync();
+        byte[] second = await RunSwingAsync();
+
+        Assert.NotEmpty(first);
+        Assert.True(first.AsSpan().SequenceEqual(second), "SMSG_ATTACKERSTATEUPDATE differs between two identical scripted swings");
+    }
+
+    private sealed class HostileHooks : ArcaneCore.Game.Combat.CombatHooks
+    {
+        public override bool IsFriendly(Unit a, Unit b) => false;
+    }
+
+    private static async Task<byte[]> RunSwingAsync()
     {
         await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual(startMs: 1000));
-        await using WorldTestClient client = await host.EnterWorldAsync("castrepro", "Castrepro");
-        await host.OnWorldAsync(() =>
+        await using WorldTestClient attacker = await host.EnterWorldAsync("swingone", "Swingone");
+        await using WorldTestClient victim = await host.EnterWorldAsync("swingtwo", "Swingtwo", race: 2);
+        uint window = await host.OnWorldAsync(() =>
+        {
+            host.World.GetMap(0).Combat.Hooks = new HostileHooks();
+            // The same seeds in both runs: the hit table and the damage roll draw from the combat dice, the batch dither from the spell system's.
+            host.World.GetMap(0).Combat.Random = new global::ArcaneCore.World.Tests.Playerbots.Risk.RiskTestWorld.SeededDice(7);
+            SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+            spells.Random = new Random(7);
+            return spells.SpellBatchWindowMs;
+        });
+        await global::ArcaneCore.World.Tests.Spells.SpellTestServices.FlagForPvpAsync(host, "Swingtwo");
+        ulong victimGuid = await host.PlayerStateAsync("Swingtwo", p => p.Guid.Value);
+
+        await attacker.SendAsync(WorldOpcode.CmsgAttackswing, BitConverter.GetBytes(victimGuid));
+        await host.StepAsync();
+        // A swing is held to the spell batch boundary, which the manual clock only reaches when the test runs it there.
+        await host.AdvanceAsync(window);
+        return await victim.ReadUntilAsync(WorldOpcode.SmsgAttackerstateupdate);
+    }
+
+    private static async Task<(byte[] DamageLog, uint Damage)> RunCastAsync()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual(startMs: 1000));
+        await using WorldTestClient caster = await host.EnterWorldAsync("castone", "Castone");
+        await using WorldTestClient target = await host.EnterWorldAsync("casttwo", "Casttwo", race: 2);
+        await global::ArcaneCore.World.Tests.Spells.SpellTestServices.FlagForPvpAsync(host, "Casttwo");
+        ulong targetGuid = await host.PlayerStateAsync("Casttwo", p => p.Guid.Value);
+        uint healthBefore = await host.PlayerStateAsync("Casttwo", p => p.Health);
+        uint window = await host.OnWorldAsync(() =>
         {
             SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Random = new Random(7);
             feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
             {
-                Id = 994011, Name = "Synthetic Determinism Aura", Duration = new SpellDuration(20_000, 0, 20_000),
-                Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, BasePoints = 16,
-                    BaseDice = 1, DieSides = 1, AuraType = AuraType.ModPowerRegen, MiscValue = (int)PowerType.Rage,
-                    TargetA = SpellImplicitTarget.UnitCaster }],
+                Id = 994011, Name = "Synthetic Random Damage", School = SpellSchool.Fire, RangeIndex = 4, Range = new SpellRange(0, 20),
+                Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, BasePoints = 10, BaseDice = 1, DieSides = 50,
+                    TargetA = SpellImplicitTarget.UnitEnemy }],
             }], [], []);
-            Player player = host.World.FindOnlinePlayer("Castrepro")!;
-            feature.Spellbook.LearnSpell(player, 994011);
+            feature.Spellbook.LearnSpell(host.World.FindOnlinePlayer("Castone")!, 994011);
+            return feature.System.SpellBatchWindowMs;
         });
 
         var writer = new PacketWriter(16);
         writer.WriteUInt32(994011);
-        SpellCastTargets.ForSelf().Write(writer);
-        await client.SendAsync(WorldOpcode.CmsgCastSpell, writer.ToArray());
+        SpellCastTargets.ForUnit(new ObjectGuid(targetGuid)).Write(writer);
+        await caster.SendAsync(WorldOpcode.CmsgCastSpell, writer.ToArray());
         await host.StepAsync();
-        // With spell batching on the go is held to the next batch boundary, which the manual clock only reaches when the test runs it there.
-        await host.AdvanceAsync(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<SpellFeature>().System.SpellBatchWindowMs));
-        return await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
+        // With spell batching on the damage is held to the next batch boundary, which the manual clock only reaches when the test runs it there.
+        await host.AdvanceAsync(window);
+        byte[] log = await target.ReadUntilAsync(WorldOpcode.SmsgSpellnonmeleedamagelog);
+        uint damage = healthBefore - await host.PlayerStateAsync("Casttwo", p => p.Health);
+        return (log, damage);
     }
 
     private static async Task<List<(WorldOpcode Opcode, byte[] Payload)>> RunScriptedAsync()

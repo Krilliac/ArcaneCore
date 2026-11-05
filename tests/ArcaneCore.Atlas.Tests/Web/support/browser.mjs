@@ -12,6 +12,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /** Longest a single DevTools request may take; a loaded machine is slow, a wedged browser never answers. */
 const COMMAND_TIMEOUT_MS = 60_000;
 
+/** How long the liveness probe waits after a command timed out; a browser that cannot answer `1` in this time is wedged. */
+const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Set once a browser stopped answering DevTools commands (a command timed out and the follow-up probe timed out as well). A wedged
+ * machine or browser fails every later launch the same way, and each stalled test costs 60 s or more, so one stall used up the whole
+ * 600 s budget of the node run with tests still to go (the local gate run of 2026-11-02: tests 44-50 each waited out a 60 s command).
+ * Later launches fail at once with this reason instead, so the run ends inside its budget with every result reported.
+ */
+let wedgedReason = null;
+
+/** The probe of the stall being assessed, if any; a launch waits for it so a verdict is never missed by a race with the next test. */
+let assessing = null;
+
 /**
  * PIDs of the msedge.exe/chrome.exe processes whose command line passes this launch's own profile dir as the
  * `--user-data-dir` value (optionally quoted: a relaunched browser re-quotes it). Windows only; null elsewhere.
@@ -40,6 +54,10 @@ async function killTree(pid) {
 
 export class Browser {
     static async launch(executable, { width = 1440, height = 900 } = {}) {
+        await assessing;
+        if (wedgedReason) {
+            throw new Error(`Not launching a browser: an earlier one stopped answering DevTools commands (${wedgedReason}).`);
+        }
         const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-browser-'));
         const child = spawn(executable, [
             '--headless=new',
@@ -216,11 +234,16 @@ export class Page {
     }
 
     /** Sends a DevTools command; rejects after `timeoutMs` so a stalled browser fails this test instead of hanging the run. */
-    send(method, params = {}, timeoutMs = COMMAND_TIMEOUT_MS) {
+    send(method, params = {}, timeoutMs = COMMAND_TIMEOUT_MS, assess = true) {
         const id = this.nextId++;
         return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
+            const timer = setTimeout(async () => {
                 this.pending.delete(id);
+                if (assess) {
+                    // The browser may merely be slow for this one command; a wedged one cannot answer anything. Decide before the failure reaches the test.
+                    assessing = this.#assess(method, timeoutMs);
+                    await assessing;
+                }
                 reject(new Error(`${method}: no answer from the browser within ${timeoutMs} ms`));
             }, timeoutMs);
             this.pending.set(id, {
@@ -230,6 +253,16 @@ export class Page {
             });
             this.ws.send(JSON.stringify({ id, method, params }));
         });
+    }
+
+    async #assess(method, timeoutMs) {
+        try {
+            await this.send('Runtime.evaluate', { expression: '1', returnByValue: true }, PROBE_TIMEOUT_MS, false);
+        } catch (error) {
+            if (String(error.message).includes('no answer from the browser')) {
+                wedgedReason = `${method} had no answer within ${timeoutMs} ms and a trivial Runtime.evaluate none within ${PROBE_TIMEOUT_MS} ms`;
+            }
+        }
     }
 
     /** Evaluates an expression in the page and returns its JSON value; throws when it throws. */

@@ -151,10 +151,10 @@ public sealed class PlayerbotQuestGoalsTests
             {
                 float before = player.X;
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                brain.Update(500);
+                OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 PlayerbotMotion.ElapseForTests(player, 500);
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                brain.Update(500);
+                OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 Assert.True(player.X < before, "the completed quest must begin the return walk");
                 Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
                 Assert.Equal(QuestInteractionFixture.QuestId, brain.QuestId);
@@ -685,7 +685,7 @@ public sealed class PlayerbotQuestGoalsTests
                 for (int think = 0; think < 3; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(1);
-                    brain.Update(500);
+                    OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 }
 
                 Assert.True(brain.QuestGoals.IsRefused(QuestInteractionFixture.QuestId));
@@ -732,7 +732,7 @@ public sealed class PlayerbotQuestGoalsTests
                 for (int think = 0; think < 3; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(1);
-                    brain.Update(500);
+                    OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 }
 
                 Assert.True(paths.PartialQueries > 0, "the exact plan failed and a toward-leg was asked");

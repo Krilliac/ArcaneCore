@@ -378,7 +378,16 @@ public sealed class TwoWorldFencingProviderTests
             }
             catch
             {
-                await cluster.DisposeAsync();
+                try
+                {
+                    await cluster.DisposeAsync();
+                }
+                catch (Exception cleanup)
+                {
+                    // The bootstrap failure is the one to report; a failed cleanup must not replace it.
+                    Console.Error.WriteLine("ScratchCluster cleanup after a failed bootstrap also failed: " + cleanup.Message);
+                }
+
                 throw;
             }
 

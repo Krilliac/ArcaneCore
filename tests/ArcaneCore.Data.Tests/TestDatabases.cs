@@ -65,7 +65,7 @@ internal sealed class TestDatabases : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (!_created.Remove(options))
+            if (!_created.Contains(options))
             {
                 return;
             }
@@ -74,10 +74,20 @@ internal sealed class TestDatabases : IAsyncDisposable
         ClearPool(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
+            // Forgotten only once the drop worked: one that fails every retry stays listed, so DisposeAsync tries it again and reports it.
             await DropAsync(options);
+            lock (_gate)
+            {
+                _created.Remove(options);
+            }
         }
         else
         {
+            lock (_gate)
+            {
+                _created.Remove(options);
+            }
+
             string path = new SqliteConnectionStringBuilder(options.ConnectionString).DataSource;
             try
             {
