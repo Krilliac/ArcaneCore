@@ -187,7 +187,7 @@ public sealed class PlayerbotSummonWorldTests
     public async Task NoSoulShard_MeansNoCast_AndWithOneAWarlockInCombatDoesNotCastEither()
     {
         await using GroupTestWorld world = await StartAsync();
-        var warlock = await BotAsync(world, "Summonnoshard", Warlock, Camp, ritual: true, shards: 0);
+        var warlock = await BotAsync(world, "Summonnoshd", Warlock, Camp, ritual: true, shards: 0);
         var helperOne = await BotAsync(world, "Summonhelpe", Warrior, Camp + new Vector3(4f, 4f, 0f));
         var helperTwo = await BotAsync(world, "Summonhelpf", Warrior, Camp + new Vector3(-4f, 4f, 0f));
         var far = await BotAsync(world, "Summonfarb", Warrior, FarCamp);
@@ -281,7 +281,7 @@ public sealed class PlayerbotSummonWorldTests
     {
         await using GroupTestWorld world = await StartAsync(stone: true);
         var user = await BotAsync(world, "Stonealone", Warrior, Camp + new Vector3(6f, 3f, 0f));
-        var other = await BotAsync(world, "Stoneelsewhere", Warrior, Camp + new Vector3(-150f, 0f, 0f));
+        var other = await BotAsync(world, "Stoneelsewhr", Warrior, Camp + new Vector3(-150f, 0f, 0f));
         var far = await BotAsync(world, "Stonefarb", Warrior, FarCamp);
         await GroupAsync(world, user.Name, other.Name, far.Name);
         await world.RunAsync(60_000);
