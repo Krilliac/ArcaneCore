@@ -221,8 +221,8 @@ public sealed class GmTicketAssistantTests
         GmTicketAssistantOptions bound = GmTicketAssistantOptions.Bind(shipped);
         Assert.False(bound.Enabled);
         Assert.False(bound.UseModel);
-        Assert.Equal("false", shipped["World:GmTicketAssistant:UseModel"]);
-        Assert.Equal("false", shipped["World:GmTicketAssistant:Enabled"]);
+        Assert.False(bool.Parse(shipped["World:GmTicketAssistant:UseModel"]!));
+        Assert.False(bool.Parse(shipped["World:GmTicketAssistant:Enabled"]!));
     }
 
     [Fact]

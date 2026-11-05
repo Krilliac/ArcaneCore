@@ -368,7 +368,9 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>The map's <c>.mmap</c> bytes: the finished prefetch's, else read here (no prefetch, or it has not finished). The entry stays, so a second instance of the map does not read the file again.</summary>
     private byte[]? ReadParams(uint mapId, string path)
+#pragma warning disable ARC0006 // the task is already completed successfully (checked in the same condition), so Result does not block
         => _paramsPrefetch.TryGetValue(mapId, out Task<byte[]?>? read) && read.IsCompletedSuccessfully ? read.Result : ReadFile(path);
+#pragma warning restore ARC0006
 
     /// <summary>Load a terrain tile's navmesh tile (vmangos <c>MMapManager::loadMap</c>). False when nothing was loaded.</summary>
     public bool LoadTile(uint mapId, int tileX, int tileY)
@@ -1224,7 +1226,9 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                 return TileReadState.Pending;
             }
 
-            TileRead done = entry.Read.Result; // a held read never faults (StartTileRead): a failure is its result
+#pragma warning disable ARC0006 // completed (checked above), and a held read never faults (StartTileRead: a failure is its result), so Result does not block
+            TileRead done = entry.Read.Result;
+#pragma warning restore ARC0006
             if (done.Tile is { } ready)
             {
                 tile = ready;
@@ -1288,7 +1292,9 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             return false;
         }
 
+#pragma warning disable ARC0006 // the pattern checks IsCompletedSuccessfully first, so Result does not block
         if (oldestTask is { IsCompletedSuccessfully: true, Result.Error: { } droppedError })
+#pragma warning restore ARC0006
         {
             FaultLedger.Shared.Record("nav.read", droppedError);
         }

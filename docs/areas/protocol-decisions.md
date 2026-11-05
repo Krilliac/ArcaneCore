@@ -79,3 +79,67 @@ Source locations are as they were read at the time; line numbers are not given b
    Shared-database creation with `EnsureCreated` skipped a context as soon as the database had any table, which is why schema creation is per component.
 5. **Toolchain.** The EF Core and Extensions packages stay at version 9 because the Pomelo MySQL/MariaDB provider (the primary engine) had no .NET 11 release; EF 9 runs on net11.0
    (`Directory.Packages.props`).
+
+## Opcodes with no working path (the opcode-gap sweep)
+
+Every client and server opcode below had no handler or no sender before the sweep. References: vmangos `src/game/Server/Protocol/Opcodes.cpp` at 9b7fb4d
+(vm) and mangos-classic `src/game/Server/Opcodes.cpp` at 8ec338a (mc). Line numbers are for those commits. A client opcode that both references leave
+unhandled stays on ArcaneCore's unhandled path on purpose: it is counted and logged there, so a real client that starts sending one shows up instead of vanishing
+(pinned by `DevOpcodeTests`). A server opcode is sent only where a reference sends it or retail needs it; the rest are reserved ids.
+
+### Client opcodes: unhandled in both references, kept unhandled
+
+| Opcode | vmangos | mangos-classic | Reason |
+| --- | --- | --- | --- |
+| `CMSG_AUTOEQUIP_GROUND_ITEM`, `CMSG_AUTOSTORE_GROUND_ITEM` | `INVALID_PACKET Unhandled` :343-344 | `STATUS_NEVER` :290-291 | Ground-item ids no reference implements; the working paths are `CMSG_AUTOEQUIP_ITEM` and `CMSG_AUTOSTORE_LOOT_ITEM`, both handled. |
+| `CMSG_DROP_ITEM` | :353 | `OBSOLETE_DROP_ITEM` :300 | Marked obsolete by mangos-classic; destroying an item is `CMSG_DESTROYITEM`, which is handled. |
+| `CMSG_STORE_LOOT_IN_SLOT` | :346 | :293 | Loot is taken with `CMSG_AUTOSTORE_LOOT_ITEM`, which is handled. |
+| `CMSG_SKILL_BUY_STEP`, `CMSG_SKILL_BUY_RANK` | :635-636 | :571-572 | Skill ranks are learned from trainers (`CMSG_TRAINER_BUY_SPELL`, handled). |
+| `CMSG_NEW_SPELL_SLOT` | :382 | :329 | Unhandled in both references (`Unhandled` / `STATUS_NEVER`); spells come to the client in `SMSG_INITIAL_SPELLS` and `SMSG_LEARNED_SPELL`. |
+| `CMSG_SET_LOOKING_FOR_GROUP` | :603 | :540 | The looking-for-group list works through `MSG_LOOKING_FOR_GROUP`, which is handled (`MiscNoticeHandlers`). |
+| `MSG_UPDATE_GROUP_MEMBERS`, `MSG_UPDATE_GUILD`, `MSG_DELETE_GUILD_CHARTER` | :209, :229, :800 | `UMSG_*` :156, :176, :732 | mangos-classic names them `UMSG_` (unused). Group rosters travel in `SMSG_GROUP_LIST`, guild rosters in `SMSG_GUILD_ROSTER` and `SMSG_GUILD_EVENT`, charters in `CMSG_PETITION_*`. |
+| `CMSG_BOT_DETECTED2` | :97 | :51 | Dropped by both references. ArcaneCore's anti-cheat is server-side; a client that sent it would show in the unhandled counters. |
+| `CMSG_LUA_USAGE` | :916 | :831 | Dropped by both references. |
+| `MSG_MOVE_SET_RAW_POSITION_ACK` | :305 | :252 | `CMSG_MOVE_SET_RAW_POSITION` has a handler; the ack is unhandled in both references. |
+| `MSG_SET_DUNGEON_DIFFICULTY` | :922 | :837 | Dungeon difficulty modes arrive after 1.12.1; vanilla instances have no difficulty selector. |
+| `CMSG_MINIGAME_MOVE` | :867 | :788 | The minigame family (`SMSG_MINIGAME_SETUP`, `_STATE`, `_MOVE_FAILED`) is server-send or unhandled in both references and has no game behind it. |
+| `CMSG_CHAT_FILTERED`, `CMSG_GM_UPDATE_TICKET_STATUS`, `MSG_DELAY_GHOST_TELEPORT` | :932, :920, :927 | :845, :835, :842 | Neither reference registers a handler (vmangos `Unhandled`, mangos-classic `STATUS_NEVER` / `Handle_NULL`), no 1.12.1 client path is known to send them, and no ArcaneCore feature needs them. They stay on the counted unhandled path, so a client that does send one shows up in the counters; a use beyond upstream (scoring, diagnostics) can be added there. |
+
+### Server opcodes
+
+Sent by ArcaneCore:
+
+| Opcode | Where | Reference |
+| --- | --- | --- |
+| `SMSG_OPEN_CONTAINER` | After `CMSG_AUTOEQUIP_ITEM` puts a bag into a bag slot (`ItemHandlers.HandleAutoEquipItem`, `ItemMiscPackets.OpenContainer`). | vmangos `HandleAutoEquipItemOpcode` ItemHandler.cpp:225-227, `Player::SendOpenContainer` Player.cpp:11552; mangos-classic Player.cpp:11148 |
+| `SMSG_GM_TICKET_STATUS_UPDATE` | To an online ticket owner when staff run `.ticket respond` (status 1) or `.ticket close` / `.ticket delete` (status 2) (`TicketCommands`, `GmTicketHandlers.BuildStatusUpdate`). | mangos-classic GMTicketMgr.cpp:1012-1018 (first save), :1145-1149 (first assignment: the nearest analog of a respond, which ArcaneCore, having no assignment, sends on every respond) and :1329-1333 (close); `SendGMTicketResult` GMTicketHandler.cpp:28-33. No sender in vmangos (the opcode is only listed, Opcodes_1_12_1.h:809). `.ticket delete` has no reference analog and sends the closed status as `.ticket close` does. Status 3 (survey) is not sent. |
+| `SMSG_SPELL_UPDATE_CHAIN_TARGETS` | At the start of a channel that has the IS_CHANNELED attribute and whose SpellVisual has a ChannelKit (`SpellSystem.SendChannelChainTargets`, `SpellPackets.BuildSpellUpdateChainTargets`): the targets other than the caster, to the caster and its observers. The ChannelKit comes from `SpellVisual.dbc` in `World:GmCommands:LiveFxDbcDirectory` (read with the `.fx` tables); without that file, or with the GM option `World:GmCommands:LiveFx` off (the table is read by the live-fx data feature, default on), nothing is sent. | vmangos `Spell::SendChannelStart` Spell.cpp:4880-4906 (build > 1.11.2); mangos-classic Spell.cpp:4277. |
+| `SMSG_PET_DISMISS_SOUND` | On `CMSG_PET_ACTION` with the dismiss command for a real pet, hunter pets included (`PetController.SendDismissSound`, `PetPackets.BuildDismissSound`): u32 sound, float x y z. The sound is chosen by the summoning spell (Imp 688: 11 or 371 at random, Voidwalker 697: 162, Succubus 712: 37, Doomguard 22865: 68; any other pet 0). | mangos-classic PetHandler.cpp:259-263, `Pet::PlayDismissSound` Pet.cpp:1401-1422, `Unit::SendPetDismiss` Unit.cpp:9898-9903. vmangos has no sender. |
+| `SMSG_GAMEOBJECT_RESET_STATE` | When an object whose lock has SLOW_OPEN (17) in its second slot respawns (`GameObjectMapSystem.Respawn`, `GameObjectPackets.ResetState`): u64 guid, sent after the create block, to the players that have the object (the observers): the respawn only queues the object and its creates go out in the same tick's output stage, so the packet is deferred past that stage (vmangos sends it after the synchronous `Map::Add` visibility update). | vmangos `GameObject::Update` GO_READY respawn GameObject.cpp:445-453 (the PvP banner workaround), `SendGameObjectReset` GameObject.cpp:2460-2465. vmangos also raises its spawn-animation delay for the add, which ArcaneCore has no counterpart for, and does this only for objects spawned by default; ArcaneCore's Arathi Basin banners come back through event spawns, so it sends on every respawn of such an object. mangos-classic has no sender. |
+| `SMSG_SET_FACTION_ATWAR` | When a creature first enters combat with a player (`CreatureMapSystem.AttackStart` -> `ReputationCombatHooks.OnCreatureEnteredCombat`): the creature's faction is set at war with the player and the client told (u32 reputation list slot, u8 flags 0x02). When the player leaves combat (`MapCombat.ClearInCombat` -> `ReputationCombatHooks.OnPlayerLeftCombat`) every faction that went to war that way and is above Hostile is made peaceful again and the client told (flags 0). A faction the player already had at war is left alone. The temporary war is never written to the saved reputation rows (the at-war bit is masked in `PlayerReputation.TakeDirty` for those factions), so a logout or a persist in the middle of a fight cannot keep it. | vmangos `Creature::OnEnterCombat` Creature.cpp:3678-3686, `Creature` reputation slot Creature.cpp:639-642, `Player::SendFactionAtWar` Player.cpp:17067-17075, `Player::ClearTemporaryWarWithFactions` Player.cpp:22736-22750, `Unit::ClearInCombat` Unit.cpp:6111-6121. |
+
+Closed with a reason (no sender in the references, or no feature behind it):
+
+| Opcode | vm / mc | Reason |
+| --- | --- | --- |
+| `SMSG_LOOT_ITEM_NOTIFY` | :439 / :384 | No sender in either reference. |
+| `SMSG_STANDSTATE_CHANGE_FAILURE` | :701 / not listed | No sender in vmangos. |
+| `SMSG_PLAYERBINDERROR` | :523 / :466 | No sender in either reference. |
+| `SMSG_NPC_WONT_TALK` | :470 / :413 | No sender in either reference. |
+| `SMSG_CLEAR_FAR_SIGHT_IMMEDIATE` | :616 / :553 | No sender in either reference. |
+| `SMSG_GHOSTEE_GONE` | :919 / :834 | No sender in either reference. |
+| `SMSG_SPELLSTEALLOG` | :934 / :847 | No sender in either reference. |
+| `SMSG_CHAT_RESTRICTED` | :874 / :793 | Both references define `SendChatRestrictedNotice` and never call it. |
+| `SMSG_CHAT_PLAYER_AMBIGUOUS` | :926 / :841 | No sender in either reference. |
+| `SMSG_RWHOIS` | :601 / :538 | Reply to the stripped developer command `CMSG_RWHOIS`; no sender. |
+| `SMSG_GROUP_CANCEL` | :194 / :141 | No sender in either reference. |
+| `SMSG_SCRIPT_MESSAGE` | :790 / :722 | No sender in either reference. |
+| `SMSG_COMPRESSED_MOVES` | :870 / :791 | vmangos builds it to batch movement (UpdateData.cpp:203-213). It is a size optimisation over the individual movement packets, which ArcaneCore sends and which carry the same data; no retail capture was checked for it, so this is a judgement from the reference, not a measurement. |
+| `SMSG_GAMETIME_SET`, `SMSG_GAMESPEED_SET`, `SMSG_GAMETIMEBIAS_SET` | :150, :152, :899 / :97, :99, :816 | No sender in either reference; the game clock is `SMSG_LOGIN_SETTIMESPEED`. |
+| `SMSG_ITEM_QUERY_MULTIPLE_RESPONSE` | :170 / :117 | No sender in either reference; item data is `SMSG_ITEM_QUERY_SINGLE_RESPONSE`. |
+| `SMSG_PLAY_TIME_WARNING` | :864 / :785 | vmangos sends it from `WorldSession::CheckPlayedTimeLimit` (WorldSession.cpp:377-420, called at :518 under `CONFIG_BOOL_LIMIT_PLAY_TIME`): an approaching-limit warning at each consecutive-play-time step and the unhealthy-time warning at the full limit, which also sets `PLAYER_FLAGS_NO_PLAY_TIME` / `PARTIAL_PLAY_TIME`. It also sends the unhealthy warning to a flagged player who tries to roll for loot (GroupHandler.cpp:382) and again from Player.cpp:12733 for a flagged player. This is the regional anti-addiction rule, behind the `CONFIG_BOOL_LIMIT_PLAY_TIME` switch; ArcaneCore has no play-time limit, so it has no sender. mangos-classic has no sender. |
+| `SMSG_INVALID_PROMOTION_CODE` | :574 / :515 | No sender in either reference. |
+| `SMSG_EXPECTED_SPAM_RECORDS` | :933 / :846 | vmangos has no sender. mangos-classic sends its configured spam list at login, even when the list is empty (CharacterHandler.cpp:755, 990; WorldSession.cpp:856-867). ArcaneCore has no spam list to send. What the client does with an empty list is unverified, so this closure rests on the lack of a list, not on a client check. |
+| `SMSG_CHARACTER_PROFILE`, `SMSG_CHARACTER_PROFILE_REALM_CONNECTED` | :939-940 / :852-853 | No sender in either reference. |
+| `SMSG_MINIGAME_SETUP`, `SMSG_MINIGAME_STATE`, `SMSG_MINIGAME_MOVE_FAILED` | :865-866, :868 / :786-787, :789 | No game behind them (see `CMSG_MINIGAME_MOVE`). |
+| `SMSG_SPLINE_MOVE_START_SWIM`, `SMSG_SPLINE_MOVE_STOP_SWIM` | :888-889 / :807-808 | Defined, never called. vmangos has no sender. mangos-classic builds them only in `Unit::SetSwim` (Unit.cpp:12384-12399), and `SetSwim` has no caller anywhere in mangos-classic or vmangos `src` (it appears only at Unit.cpp:12384 and its declaration at Unit.h:1806). The same case as `SMSG_CHAT_RESTRICTED`. There is no reference sender to port. |

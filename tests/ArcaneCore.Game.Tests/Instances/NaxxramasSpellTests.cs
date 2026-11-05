@@ -97,6 +97,147 @@ public sealed class NaxxramasSpellTests
         Assert.True(kit.System.HasAura(player, SapphironSummonBlizzardScript.SummonBlizzard));
     }
 
+    /// <summary>Records the original caster of every cast that is prepared.</summary>
+    private sealed class OriginalCasterRecorder : ISpellCastObserver
+    {
+        public List<(uint SpellId, Unit Caster, Unit OriginalCaster)> Casts { get; } = [];
+
+        public void OnPrepared(SpellCast cast) => Casts.Add((cast.Spell.Id, cast.Caster, cast.OriginalCaster));
+    }
+
+    [Fact]
+    public void SummonBlizzard_TheBlizzardSummonCarriesTheBossAsItsOriginalCaster()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(SummonBlizzard, SpellImplicitTarget.Unit), Marker(SapphironSummonBlizzardScript.SummonBlizzard));
+        var recorder = new OriginalCasterRecorder();
+        kit.System.RegisterObserver(recorder);
+        (Player player, _) = kit.AddPlayer(1);
+        Creature boss = SpawnCreatures(kit, (CreatureTestKit.WolfEntry, 4))[0];
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(boss, SummonBlizzard, SpellCastTargets.ForUnit(player.Guid), triggered: true));
+        FlushSpellBatch(kit);
+
+        (uint _, Unit caster, Unit original) = Assert.Single(recorder.Casts, c => c.SpellId == SapphironSummonBlizzardScript.SummonBlizzard);
+        Assert.Same(player, caster);
+        Assert.Same(boss, original);
+    }
+
+    [Fact]
+    public void OriginalCaster_OfAPlainCastIsTheCaster_AndASelfNamedOneIsNoOverride()
+    {
+        using SpellTestKit kit = Kit(Marker(SapphironSummonBlizzardScript.SummonBlizzard));
+        var recorder = new OriginalCasterRecorder();
+        kit.System.RegisterObserver(recorder);
+        (Player player, _) = kit.AddPlayer(1);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, SapphironSummonBlizzardScript.SummonBlizzard, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, SapphironSummonBlizzardScript.SummonBlizzard, SpellCastTargets.ForSelf(),
+            triggered: true, triggeringSpell: null, originalCaster: player));
+
+        Assert.Equal(2, recorder.Casts.Count);
+        Assert.All(recorder.Casts, c => Assert.Same(player, c.OriginalCaster));
+    }
+
+    private const uint BlizzardEntry = 16474, ParentSpell = 910501, ChildSpell = 910502;
+
+    /// <summary>A creature AI that only records who it was told to attack (a real attack needs hostility the test map does not model).</summary>
+    private sealed class AttackProbeAI(Creature creature) : AggressorAI(creature)
+    {
+        public List<Unit> Started { get; } = [];
+
+        public override bool AttackStart(Unit target)
+        {
+            Started.Add(target);
+            return true;
+        }
+    }
+
+    /// <summary>A pet-test map with Sapphiron's script AI on <see cref="PetTestKit.NpcCasterEntry"/> and probe AIs on the Blizzard and a wild entry.</summary>
+    private static PetTestKit BossKit(IEnumerable<SpellInfo> spells)
+    {
+        var kit = new PetTestKit(spells, creatureSpells: true,
+            extraTemplates: [CreatureTestKit.Template(BlizzardEntry, t => { t.MinLevelHealth = 100; t.MaxLevelHealth = 100; })]);
+        SpellScriptDispatcher.Install(kit.Spells.System, SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly));
+        kit.Creatures.RegisterEntryAi(PetTestKit.NpcCasterEntry, c => new SapphironAI(c));
+        kit.Creatures.RegisterEntryAi(BlizzardEntry, c => new AttackProbeAI(c));
+        kit.Creatures.RegisterEntryAi(PetTestKit.WildEntry, c => new AttackProbeAI(c));
+        return kit;
+    }
+
+    [Fact]
+    public void SummonBlizzard_TheRealWildSummonIsSapphironsSummon_AndTheBlizzardGoesForAPlayerOnHisThreatList()
+    {
+        using PetTestKit kit = BossKit(
+        [
+            ScriptEffect(SummonBlizzard, SpellImplicitTarget.Unit),
+            Instant(SpellTestKit.Spell(SapphironSummonBlizzardScript.SummonBlizzard,
+                SpellTestKit.Effect(SpellEffectName.SummonWild, 1, misc: (int)BlizzardEntry))),
+        ]);
+        (Player player, _) = kit.AddPlayer(1);
+        Creature boss = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, 83.5f, 0);
+        Assert.True(kit.Map.Combat.Attack(boss, player));
+        boss.Combat.Threat.AddThreat(player, 1f);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(boss, SummonBlizzard, SpellCastTargets.ForUnit(player.Guid), triggered: true));
+        FlushSpellBatch(kit.Spells);
+
+        Creature blizzard = Assert.Single(kit.Creatures.Creatures, c => c.Template.Entry == BlizzardEntry);
+        Assert.Same(boss, kit.Creatures.SummonerOf(blizzard));
+        Assert.Same(player, Assert.Single(Assert.IsType<AttackProbeAI>(blizzard.AI).Started));
+    }
+
+    [Fact]
+    public void SapphironAI_OnJustSummoned_SendsOnlyTheBlizzardAtAThreatListPlayer()
+    {
+        using PetTestKit kit = BossKit([]);
+        (Player player, _) = kit.AddPlayer(1);
+        Creature boss = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, 83.5f, 0);
+        Assert.True(kit.Map.Combat.Attack(boss, player));
+        boss.Combat.Threat.AddThreat(player, 1f);
+        Creature blizzard = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(BlizzardEntry)!, 3, 0, 83.5f, 0);
+        Creature other = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.WildEntry)!, 4, 0, 83.5f, 0);
+
+        boss.AI!.OnJustSummoned(other);
+        Assert.Empty(Assert.IsType<AttackProbeAI>(other.AI).Started);
+
+        boss.AI.OnJustSummoned(blizzard);
+        Assert.Same(player, Assert.Single(Assert.IsType<AttackProbeAI>(blizzard.AI).Started));
+    }
+
+    [Fact]
+    public void SapphironAI_OnJustSummoned_WithNoPlayerOnTheThreatList_LeavesTheBlizzardAlone()
+    {
+        using PetTestKit kit = BossKit([]);
+        Creature boss = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, 83.5f, 0);
+        Creature blizzard = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(BlizzardEntry)!, 3, 0, 83.5f, 0);
+
+        boss.AI!.OnJustSummoned(blizzard);
+
+        Assert.Empty(Assert.IsType<AttackProbeAI>(blizzard.AI).Started);
+    }
+
+    [Theory]
+    [InlineData(SpellEffectName.TriggerSpell)]
+    [InlineData(SpellEffectName.TriggerMissile)]
+    public void TriggeredChild_InheritsTheParentsOriginalCaster(SpellEffectName trigger)
+    {
+        using SpellTestKit kit = Kit(
+            Instant(SpellTestKit.Spell(ParentSpell, SpellTestKit.Effect(trigger, 0, SpellImplicitTarget.UnitCaster, trigger: ChildSpell))),
+            Marker(ChildSpell));
+        var recorder = new OriginalCasterRecorder();
+        kit.System.RegisterObserver(recorder);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player original, _) = kit.AddPlayer(2, 2, 0);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, ParentSpell, SpellCastTargets.ForSelf(), triggered: true,
+            triggeringSpell: null, originalCaster: original));
+        FlushSpellBatch(kit);
+
+        (uint _, Unit childCaster, Unit childOriginal) = Assert.Single(recorder.Casts, c => c.SpellId == ChildSpell);
+        Assert.Same(caster, childCaster);
+        Assert.Same(original, childOriginal);
+    }
+
     [Fact]
     public void MagneticPullA_TheHitUnitCastsTheJumpAtTheCastersVictim()
     {

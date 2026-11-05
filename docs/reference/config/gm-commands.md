@@ -1,0 +1,55 @@
+# GmCommands options
+
+29 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `World:GmCommands`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `AllowDangerousDebug` | bool | `false` | true \| false | World | start | ArcaneCore only: allow the debug commands that can hurt a running world (time offset, inject, opcode disable, stall, combat RNG override, forced acks, map/grid unload, watchdog dumps) behind `DangerousDebugGate`. Off by default; changing it needs a restart. On the live server (`ARCANECORE_LIVE_SERVER=1`) the commands are refused whatever this says. |
+| `AuditTailSize` | int | `200` | a whole number, -2147483648 to 2147483647 | World | start | How many of the latest audit lines `.arcane gmlog` can show (ArcaneCore only; the lines are the ones `LogCommands` writes, kept in memory, lost on restart). 0 keeps none. |
+| `ExactNameFirst` | bool | `false` | true \| false | World | start | A command word matching a command name exactly wins over a longer name that starts with it (the behaviour before the retail table work). Retail (false) takes the first table entry the word is a prefix of (hasStringAbbr, Chat.cpp:1566-1600), with roots in retail order. |
+| `HideUnavailable` | bool | `false` | true \| false | World | start | Treat a command above the invoker's level as if it did not exist ("There is no such command", the behaviour before the retail table work). Retail (false) resolves the command first and answers "This command is not available to you." (Chat.cpp:1884-1888). |
+| `LiveFx` | bool | `true` | true \| false | World | start | ArcaneCore only, NOT the retail default: registers the `.fx` GM tooling (music, sounds, spell visuals, cinematics, zone-under-attack, world states, client clock speed, screen messages, multi-zone weather and the `.fx event` presets), which pushes client-visible effects to the invoker, the selection, the zone, the map or the server. vmangos has no such root: only `.debug play music\|sound\|cinematic` and `.debug worldstate`, each to the invoker (Chat.cpp:288-323). False removes the root (restart to change). |
+| `LiveFxDbcDirectory` | string | `(empty)` | text | World | start | ArcaneCore only: a directory of the developer's own build-5875 client DBC files (nothing is shipped). When set, `.fx music`/`sound` refuse an id not in SoundEntries.dbc, `.fx cinematic` one not in CinematicSequences.dbc and `.fx visual` one not in SpellVisualKit.dbc, and `.fx lookup` searches those files plus ZoneMusic, SpellVisualEffectName and WorldStateUI .dbc. A file missing from the directory leaves its kind unchecked (with a warning); a missing directory or a malformed file stops the daemon. Empty (the default): every id is sent unchecked. vmangos' `.debug play sound\|music\|cinematic` refuse unknown ids against its own loaded tables (DebugCommands.cpp:471-536); ArcaneCore loads no such tables unless this is set. |
+| `LogCommands` | bool | `true` | true \| false | World | start | Write one log line per GM command (a command above level 0), as vmangos Chat.cpp:1908-1925 does. |
+| `LookupMaxResults` | int | `0` | a whole number, -2147483648 to 2147483647 | World | start | The most lines `.lookup` prints (0 = unlimited, as vmangos). A one-letter search on a full classic database matches about 14,000 items, each its own chat packet, all sent from the world thread; an operator may cap it (a final line says results were left out). |
+| `LowerSecurity` | bool | `true` | true \| false | World | start | vmangos GM.LowerSecurity (mangosd.conf.dist.in:2536). Retail default is false, which lets staff act on a higher account; ArcaneCore keeps the stricter true as its default so the existing refusal does not weaken. Strong checks (mute/unmute) are strict in both. |
+| `RetailLevels` | bool | `true` | true \| false | World | start | Apply the vmangos account level of the commands declared before the retail command work (`RetailCommandLevels`); off keeps their ArcaneCore four-level declarations. |
+| `SecurityMap` | Dictionary<AccountSecurity, byte> | `{'key': 'Player', 'value': '0', 'text': False}, {'key': 'Moderator', 'value': '1', 'text': False}, {'key': 'GameMaster', 'value': '3', 'text': False}, {'key': 'Administrator', 'value': '6', 'text': False}` | a map: one key per entry name; each value is a whole number, 0 to 255 | World | start | The retail account level (vmangos AccountTypes, vmangos@0e3ff01 src/shared/Common.h:136-146: PLAYER 0, MODERATOR 1, TICKETMASTER 2, GAMEMASTER 3, BASIC_ADMIN 4, DEVELOPER 5, ADMINISTRATOR 6, CONSOLE 7) each stored `AccountSecurity` stands for. ArcaneCore stores four levels, so the retail levels 2, 4 and 5 are only reachable by mapping a stored level onto them (an operator may remap, e.g. GameMaster=4). |
+| `TicketMutationsPerMinute` | int | `10` | a whole number, -2147483648 to 2147483647 | World | start | ArcaneCore only (no reference core limits these): the most ticket mutations (`CMSG_GMTICKET_CREATE`, `_UPDATETEXT`, `_DELETETICKET`) one account may send per minute. Beyond it the packet is refused before anything is read (create and update answer with their error code, a delete is answered with the ticket's unchanged state) and the player is told; every accepted create or changed text tells all GameMasters online, so this also bounds that. Fail-closed: 0 refuses every ticket mutation, a negative value is the default. |
+
+## `World:GmCommands:Boost`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `MaxQuality` | uint | `3` | a whole number, 0 to 4294967295 | World | start | The highest item quality a boost kit piece may have: 1 white, 2 green, 3 blue (default), 4 epic. Blue is what a character gets from the dungeons of its level; values outside 1-4 are clamped. White is always the lowest: grey items are never offered. |
+
+## `World:GmCommands:DebugDraw`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `FollowIntervalMs` | int | `500` | a whole number, -2147483648 to 2147483647 | World | start | Milliseconds between two reads of a followed unit's path (`.debug vis follow`); it is redrawn only when it changed. 100..10000. |
+| `FollowNearbyMaxRadius` | float | `100` | a number, '.' is the decimal point | World | start | Widest `.debug vis follow nearby` radius in yards (a larger request is cut to it). 5..533. |
+| `GameObjectDisplayInfoDbcPath` | string | `(empty)` | text | World | start | The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is shipped). When set, every marker model (built-in and overridden) is checked against it at startup: an override the client does not have falls back to the built-in model with a warning. An unreadable or malformed file stops the daemon, as every configured DBC does. Empty: no check. |
+| `Glow` | bool | `true` | true \| false | World | start | Add a coloured glow model next to the key markers (end points, hits, path corners, waypoints, heights, spawns). |
+| `GlowModels` | Dictionary<string, uint> | `(empty)` | a map: one key per entry name; each value is a whole number, 0 to 4294967295 | World | start | Per marker kind, the glow companion's GameObjectDisplayInfo id (0 = no glow), checked like `Models`. |
+| `LifetimeSeconds` | int | `120` | a whole number, -2147483648 to 2147483647 | World | start | Seconds a drawing stays before it is removed on its own (it also goes with .debug vis clear, a logout or a map change). 5..3600. |
+| `MaxFollowedUnits` | int | `10` | a whole number, -2147483648 to 2147483647 | World | start | Most units one GM follows at once (`.debug vis follow`, `follow nearby`); they share `MaxMarkersPerGm`. 1..50. |
+| `MaxMarkersPerGm` | int | `300` | a whole number, -2147483648 to 2147483647 | World | start | Most markers one GM's client holds at once (glow companions count); a new drawing removes the oldest ones to fit. 1..2000. |
+| `Models` | Dictionary<string, uint> | `(empty)` | a map: one key per entry name; each value is a whole number, 0 to 4294967295 | World | start | Per marker kind (the `DebugMarkerKind` name, e.g. `Cell`, `LosClear`, `Waypoint`), a GameObjectDisplayInfo id to draw instead of the built-in model. 0 or an id missing from `GameObjectDisplayInfoDbcPath` keeps the built-in model. |
+| `Spacing` | float | `2` | a number, '.' is the decimal point | World | start | Yards between the dots of a line or path (at least 0.5; a long line spreads its dots further to stay within its share of markers). |
+
+## `World:GmCommands:FirstLoginTools`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `Enabled` | bool | `false` | true \| false | World | start | Teach a staff character's first login the reviewed GM tool spells (off by default; when off the other keys are not read). |
+| `ExcludedSpellIds` | uint[] | `(empty)` | a list: numbered keys 0, 1, 2, ...; each value is a whole number, 0 to 4294967295 | World | start | Catalog spell ids never taught (at most 64, unique). |
+| `IncludeDeveloperSpells` | bool | `true` | true \| false | World | start | Also teach the catalog's developer-only spells. |
+| `MinimumSecurity` | AccountSecurity | `GameMaster` | Player \| Moderator \| GameMaster \| Administrator | World | start | The lowest account security that gets the tools (Moderator, GameMaster or Administrator). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `ShowToolGuide` | bool | `true` | true \| false | World | start | Show the staff member a short guide to the taught tools at that first login. |
+| `SpellIds` | uint[] | `(empty)` | a list: numbered keys 0, 1, 2, ...; each value is a whole number, 0 to 4294967295 | World | start | Optional operator subset. Empty means the reviewed rank-filtered catalog; populated values narrow it to known catalog IDs and never add new spells. |

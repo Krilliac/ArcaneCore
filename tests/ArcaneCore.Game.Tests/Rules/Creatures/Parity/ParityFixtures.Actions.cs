@@ -48,6 +48,7 @@ internal static partial class ParityFixtures
                 Row(125, 4, a1: Act(53, 99, Self)),
                 Row(126, 4, a1: Act(34, 3, 4), a2: Act(35, 5, Invoker), a3: Act(56, (int)ParityScenario.SummonEntry)),
                 Row(127, 1, 300, 300, 0, 0, a1: Act(59, 0, 1)),
+                Row(128, 4, a1: Act(60, 0)),
             ],
             Steps =
             [

@@ -9,6 +9,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Social;
 using ArcaneCore.World.Spells;
@@ -316,7 +317,7 @@ public sealed class ScenarioContext
     // --- waits and reads ------------------------------------------------------------------------------------------
 
     /// <summary>Evaluate <paramref name="read"/> on the world thread.</summary>
-    public Task<T> ReadAsync<T>(Func<T> read) => World.InvokeAsync(read);
+    public Task<T> ReadAsync<T>([RunsOnWorldThread] Func<T> read) => World.InvokeAsync(read);
 
     /// <summary>
     /// Wait until <paramref name="condition"/> (evaluated on the world thread) holds. With a manual clock the world runs
@@ -329,7 +330,7 @@ public sealed class ScenarioContext
     /// It never runs more than <paramref name="timeout"/> of game time. With the real clock it polls until
     /// <paramref name="timeout"/> of wall time. Always bounded (and by the run's deadline).
     /// </summary>
-    public async Task WaitUntilAsync(string what, Func<bool> condition, TimeSpan? timeout = null)
+    public async Task WaitUntilAsync(string what, [RunsOnWorldThread] Func<bool> condition, TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(condition);
         TimeSpan limit = timeout ?? Options.StepTimeout;
@@ -386,7 +387,7 @@ public sealed class ScenarioContext
     }
 
     /// <summary>Assert a fact about a bot's player, read on the world thread.</summary>
-    public async Task ExpectAsync(ScenarioBot bot, string what, Func<Player, bool> fact)
+    public async Task ExpectAsync(ScenarioBot bot, string what, [RunsOnWorldThread] Func<Player, bool> fact)
     {
         if (!await bot.ReadAsync(fact).ConfigureAwait(false)) throw new ScenarioAssertionException($"{bot.Name}: {what}");
     }

@@ -1,0 +1,20 @@
+# Battleground options
+
+9 options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).
+
+Daemon says which server reads it. Reload says whether `.reload config` applies it.
+
+
+## `Battleground`
+
+| Option | Type | Default | Allowed | Daemon | Reload | What it does |
+|---|---|---|---|---|---|---|
+| `AlteracValleyReinforcementLoss` | bool | `false` | true \| false | World | start | End Alterac Valley in favour of the other side when a side's reinforcements reach 0 (the patch 2.3.0 rule; cmangos mangos-classic BattleGroundAV.cpp UpdateScore keeps it). Off by default: in 1.12 only a general's death ends the match, and vmangos removed the reinforcement win (BattleGroundAV.cpp:782-787). The reinforcements are counted either way. |
+| `CastDeserter` | bool | `true` | true \| false | World | start | Cast Deserter on a player who leaves a running or starting match (vmangos Battleground.CastDeserter, World.cpp:781, mangosd.conf.dist.in:2929, default on). |
+| `GroupQueueLimit` | uint | `40` | a whole number, 0 to 4294967295 | World | start | Groups larger than this are queued as individuals (vmangos BattleGround.GroupQueueLimit, default 40). |
+| `InvitationType` | uint | `1` | a whole number, 0 to 4294967295 | World | start | 0 invites from the queue in order, 1 balances the two sides (vmangos Battleground.InvitationType; World.cpp:787 reads 0 when the key is missing but the shipped mangosd.conf.dist.in:2932 sets 1, which is the retail behaviour and the default here). |
+| `PremadeGroupWaitForMatchMs` | uint | `0` | a whole number, 0 to 4294967295 | World | start | Wait for a premade-versus-premade match this long before premades fall back to the normal queue, ms; 0 turns it off (vmangos BattleGround.PremadeGroupWaitForMatch, default 0). |
+| `PremadeQueueMinGroupSize` | uint | `6` | a whole number, 0 to 4294967295 | World | start | Smallest group that counts as a premade (vmangos BattleGround.PremadeQueue.MinGroupSize, default 6). |
+| `PrematureFinishTimerMs` | uint | `300000` | a whole number, 0 to 4294967295 | World | start | How long a side may stay below the minimum before the match ends in favour of the other side, in ms; 0 turns it off (vmangos BattleGround.PrematureFinishTimer, World.cpp:788, default 5 minutes). |
+| `QueuesCount` | uint | `0` | a whole number, 0 to 4294967295 | World | start | Queues a player may be in at once; 0 means the patch default, which is 3 from client patch 1.9 on and so 3 for 1.12.1 (vmangos BattleGround.QueuesCount, World.cpp:794-803). |
+| `TagInBattlegrounds` | bool | `true` | true \| false | World | start | Whether a player inside a battleground may be tagged into a group queue (vmangos BattleGround.TagInBattleGrounds, default on). |

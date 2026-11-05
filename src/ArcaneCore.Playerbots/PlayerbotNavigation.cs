@@ -347,6 +347,9 @@ internal struct TileWait
 internal static class PlayerbotNavigation
 {
     [ThreadStatic] private static bool t_nonPathRefusal;
+
+    /// <summary>Whether the last refusal on this thread was no verdict on the destination (<see cref="Usable"/> refusing a remembered rejected place sets it); tests read and reset it.</summary>
+    internal static bool NonPathRefusal { get => t_nonPathRefusal; set => t_nonPathRefusal = value; }
     internal static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotRisk> Guards = [];
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Player, PlayerbotStallWatch> StallWatches = [];
 
@@ -1389,7 +1392,7 @@ internal static class PlayerbotNavigation
             MaxSearchNodes = searchNodes ?? SearchNodes(from, to), LoadTiles = true, NonBlockingTiles = true });
 
     /// <summary>Whether a mesh answer from <paramref name="from"/> is a route the bot takes (<see cref="Bounded"/>), and the route.</summary>
-    private static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
+    internal static bool Usable(Player player, PathResult path, Vector3 from, Vector3 destination, Vector3 goal, bool partial,
         bool nearestEnd, PlayerbotOptions options, out PlayerbotRoute? route)
     {
         route = null;

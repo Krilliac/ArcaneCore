@@ -132,7 +132,8 @@ internal static class PlayerbotEconomyPlanner
         _ => WeaponPage, // MainHand: weapons of every hand and inventory type
     };
 
-    // Nothing goes in the off hand next to a two-hander. Otherwise a shield for a shield tank (and for a shield caster: paladin, shaman),
+    // Nothing goes in the off hand next to a two-hander. A TwoHand-style bot that wears no two-hander (it has none yet, or lost it) falls to the
+    // weapon page below, so the page may list any hand type and the scorer decides what fits. Otherwise a shield for a shield tank (and for a shield caster: paladin, shaman),
     // a held-in-off-hand item for the other casters, and the weapon page for builds that fill the hand with a weapon.
     private static PlayerbotUpgradeSearch? OffHandSearch(PlayerbotUpgradeProfile profile)
     {
@@ -143,15 +144,23 @@ internal static class PlayerbotEconomyPlanner
             PlayerbotWeaponStyle.Caster => profile.PlayerClass is Class.Paladin or Class.Shaman
                 ? new((uint)InventoryType.Shield, PlayerbotEconomyWire.Any)
                 : new((uint)InventoryType.Holdable, PlayerbotEconomyWire.Any),
-            _ => WeaponPage,
+            _ => WeaponPage, // DualWield, and TwoHand without a two-hander worn: the weapon page ranks the off hand like the main hand
         };
     }
 
-    // Paladin, druid and shaman wear a relic there (ItemTemplateRules.RelicSlot); every other class uses a ranged weapon, wand or thrown weapon.
+    // Paladin, druid, shaman and warlock wear a relic there (ItemTemplateRules.RelicSlot: libram, idol, totem and the warlock's misc-armor relic);
+    // every other class uses a ranged weapon, wand or thrown weapon. A warlock also wields wands in the same slot, so it gets both searches.
     private static PlayerbotUpgradeSearch RangedSearch(PlayerbotUpgradeProfile profile)
-        => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman
+        => profile.PlayerClass is Class.Paladin or Class.Druid or Class.Shaman or Class.Warlock
             ? new((uint)InventoryType.Relic, PlayerbotEconomyWire.Any)
             : WeaponPage;
+
+    // The searches one slot yields: normally the one of UpgradeSearchOf; the warlock ranged slot yields the relic and then the weapon page (wands).
+    private static IEnumerable<PlayerbotUpgradeSearch> UpgradeSearchesOf(byte slot, PlayerbotUpgradeProfile profile)
+    {
+        if (UpgradeSearchOf(slot, profile) is { } search) yield return search;
+        if (slot == InventorySlots.Ranged && profile.PlayerClass == Class.Warlock) yield return WeaponPage;
+    }
 
     /// <summary>
     /// The house searches of a visit. <paramref name="max"/> of 0 or less: the two class-wide pages of earlier versions (weapons, then armor).
@@ -173,20 +182,26 @@ internal static class PlayerbotEconomyPlanner
         for (int i = 0; i < ranked.Length; i++)
         {
             float score = worn(UpgradeSlotOrder[i]);
-            ranked[i] = (UpgradeSlotOrder[i], float.IsFinite(score) ? score : 0f);
+            ranked[i] = (UpgradeSlotOrder[i], FiniteOrZero(score));
         }
 
         // OrderBy is stable, so equal scores keep the fixed order above.
         List<PlayerbotUpgradeSearch> searches = new(max);
         foreach ((byte slot, _) in ranked.OrderBy(entry => entry.Score))
         {
+            foreach (PlayerbotUpgradeSearch search in UpgradeSearchesOf(slot, profile))
+            {
+                if (searches.Count >= max) break;
+                if (!searches.Contains(search)) searches.Add(search);
+            }
             if (searches.Count >= max) break;
-            if (UpgradeSearchOf(slot, profile) is not { } search) continue;
-            if (!searches.Contains(search)) searches.Add(search);
         }
 
         return searches;
     }
+
+    /// <summary>A score with a NaN or infinite value read as 0 (the one guard the planner and the gear-score seam share).</summary>
+    internal static float FiniteOrZero(float score) => float.IsFinite(score) ? score : 0f;
 
     /// <summary>The listing slots a bot short of money gets on top of <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/>.</summary>
     internal const int MoneyGoalExtraListings = 3;

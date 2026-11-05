@@ -225,7 +225,7 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>vmangos Spell::DoAllEffectOnTarget → HandleEffects per effect, then the built aura holder is added.</summary>
-    private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null, bool reflected = false)
+    private SpellTargetOutcome? ApplyEffects(SpellCast cast, Unit target, int effectMask, float[]? multipliers = null, bool reflected = false, bool carrier = false)
     {
         if (IsQuestSettlementPending(cast.Caster) || IsQuestSettlementPending(target))
         {
@@ -235,7 +235,7 @@ public sealed partial class SpellSystem
 
         // Application rules (mechanic resistance, diminishing returns): they narrow the effect mask before any effect runs.
         SpellApplication? application = null;
-        if (ApplicationRules.Count > 0)
+        if (!carrier && ApplicationRules.Count > 0)
         {
             application = new SpellApplication(this, cast, target, effectMask);
             foreach (ISpellApplicationRule rule in ApplicationRules)
@@ -302,7 +302,7 @@ public sealed partial class SpellSystem
             }
 
             // The hit's procs when no direct damage fired them (heals, auras, utility; vmangos Spell.cpp:1349-1532).
-            if (!outcome.ProcsDone)
+            if (!outcome.ProcsDone && !carrier)
             {
                 outcome.ProcsDone = true;
                 FireSpellHitProcs(cast, target, reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, 0, 0, outcome.Critical, 0, effectMask, reflected,
@@ -311,13 +311,17 @@ public sealed partial class SpellSystem
 
             FlushQueuedMeleeSpellDamage(outcome);
 
-            InterruptTargetOfHostileSpell(cast, target, hit: true, dealsDamage); // rogue lane (vmangos Spell.cpp:1622-1650)
-            if ((cast.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0)
+            // A game object carrier is no unit hit: no interrupt of a target, no pet stop, no unit-hit events (quest credit for the object has its own event).
+            if (!carrier)
             {
-                StopPetsAttackingCrowdControlledTarget(target, cast.Caster); // vmangos Spell.cpp:1566-1577
+                InterruptTargetOfHostileSpell(cast, target, hit: true, dealsDamage); // rogue lane (vmangos Spell.cpp:1622-1650)
+                if ((cast.Spell.AuraInterruptFlags & SpellAuraInterruptFlags.Damage) != 0)
+                {
+                    StopPetsAttackingCrowdControlledTarget(target, cast.Caster); // vmangos Spell.cpp:1566-1577
+                }
+                SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
+                SpellHit?.Invoke(cast.Caster, target, cast.Spell);
             }
-            SpellHitTarget?.Invoke(cast.Caster, target, cast.Spell.Id);
-            SpellHit?.Invoke(cast.Caster, target, cast.Spell);
         }
         finally
         {
@@ -347,7 +351,15 @@ public sealed partial class SpellSystem
             return;
         }
 
-        HashSet<ObjectGuid> guids = [.. cast.ObjectTargetsByEffect.Values.SelectMany(g => g)];
+        HashSet<ObjectGuid> guids = [];
+        if (cast.ObjectTargetsOrNull is { } selectedByEffect)
+        {
+            foreach (ObjectGuid[] selected in selectedByEffect.Values)
+            {
+                guids.UnionWith(selected);
+            }
+        }
+
         if (!cast.Targets.GameObject.IsEmpty)
         {
             for (int i = 0; i < SpellConstants.MaxEffects; i++)
@@ -553,7 +565,8 @@ public sealed partial class SpellSystem
         uint spellId = context.Effect.TriggerSpell;
         if (Store.Get(spellId) is not null)
         {
-            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell);
+            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell,
+                originalCaster: context.Cast.OriginalCaster);
         }
     }
 

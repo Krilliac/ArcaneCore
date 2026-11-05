@@ -298,7 +298,7 @@ public sealed partial class CreatureMapSystem
             creature.SetHome(creature.Home with { Z = standZ });
         }
 
-        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
         creature.ClearUnderMapEpisode();
         return true;
     }
@@ -346,7 +346,7 @@ public sealed partial class CreatureMapSystem
             creature.SetHome(creature.Home with { Z = standZ });
         }
 
-        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, unchecked((uint)_clockMs));
+        creature.Relocate(creature.X, creature.Y, standZ, creature.Orientation, _serverTime());
         return true;
     }
 

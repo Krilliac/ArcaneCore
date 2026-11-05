@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Economy: a configured `Economy:AuctionHouses` entry for house 2, 6 or 7 now replaces that house's percentages (it used to have no effect), and an entry with a field missing or unreadable now fails the start and `check-config` naming the key (it used to be dropped without a message).
 - Creatures: creature spell lists now run. The world database gains the five cmangos list and condition tables (world schema 68) and `creature_template.SpellList`, the importer and store load them, and creatures whose AI runs lists cast from them on the 1200 ms tick. EventAI action 60 and the `creature.set_spell_list` rule action change a list, and the seven Alterac Valley commanders ship with lists in `sql/content`. `Creatures:SpellListContinueAfterCast` (default off, retail) follows the cmangos code loop instead.
 - Spells: base spell crit now comes from intellect (the reference class table, not yet proven against retail) instead of a flat 5% for every player. Spell crit rises with intellect above the baseline, drops slightly below it, and falls to near 0 for warriors, rogues and hunters. Non-player units keep 5%. This changes live balance once deployed.
 - Docs: the build charter (`ARCANECORE_CHARTER.md`) and the per-milestone pages (`MILESTONE_*.md`, `docs/M*_ACCEPTANCE.md`) are retired. The binding rules moved to `docs/guide/contributing.md`; protocol decisions, the real-client checklist and the mock client now have their own pages. Git history keeps the old text. The README describes the current project.

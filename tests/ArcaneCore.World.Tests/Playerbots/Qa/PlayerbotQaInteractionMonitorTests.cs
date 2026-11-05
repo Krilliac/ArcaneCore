@@ -206,10 +206,7 @@ public sealed class PlayerbotQaInteractionMonitorTests
         }
 
         Run(); // warm up (JIT, first dictionary probes)
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Run, 0, "the monitor hot paths for what is not a failure");
         Assert.Empty(sink.Signals);
     }
 

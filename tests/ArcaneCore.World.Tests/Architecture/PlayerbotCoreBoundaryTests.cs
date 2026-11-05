@@ -30,6 +30,7 @@ public sealed class PlayerbotCoreBoundaryTests
     private static readonly SortedDictionary<string, string> AllowedInternals = new(StringComparer.Ordinal)
     {
         // The managed-bot session seam: WorldSession's managed members and the types they hand out. Tier 2c: a public managed-session contract (4.1).
+        ["ArcaneCore.World.Net.IManagedPacketTap"] = "the bot QA tap of a managed session's packets and unhandled opcodes (the pack's QA monitor implements it)",
         ["ArcaneCore.World.Net.ManagedActionBudget"] = "the per-tick action budget of a managed session",
         ["ArcaneCore.World.Net.ManagedSessionPacket"] = "a packet a managed session queued for its bot",
         ["ArcaneCore.World.Net.WorldSession.CreateManagedAsync"] = "creates a bot's in-process session",
@@ -50,6 +51,7 @@ public sealed class PlayerbotCoreBoundaryTests
         ["ArcaneCore.World.Battlegrounds.BattlegroundEventIndexMap"] = "match event indexes",
         ["ArcaneCore.World.Battlegrounds.BattlegroundFeature.Battlemasters"] = "the battlemaster list",
         ["ArcaneCore.World.Battlegrounds.BattlegroundFeature.Events"] = "match events",
+        ["ArcaneCore.World.Battlegrounds.BattlegroundFeature.HoldsQueueState"] = "whether this cluster node holds the queue state (bots queue only there)",
         ["ArcaneCore.World.Battlegrounds.BattlegroundFeature.IsDeserter"] = "deserter check before queueing a bot",
         ["ArcaneCore.World.Battlegrounds.MatchRuntime"] = "a running match",
 

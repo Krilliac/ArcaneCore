@@ -476,6 +476,7 @@ public sealed partial class Map
     /// <summary>Re-file an object whose X/Y changed; non-player objects get a visibility pass this tick.</summary>
     internal void OnObjectMoved(WorldObject obj)
     {
+        CheckWorldThread("Map.OnObjectMoved");
         if (_world.IsParallelPhase)
         {
             if (!ReferenceEquals(TickOwner.CurrentMap, this))

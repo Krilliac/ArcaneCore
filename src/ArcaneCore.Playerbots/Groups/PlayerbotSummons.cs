@@ -354,7 +354,7 @@ internal sealed class PlayerbotSummons
         bool offered = target?.PendingSummon is { } pending && pending.Summoner == player.Guid && pending.ExpiresAtMs >= now;
         if (offered)
         {
-            if (job.Kind == SummonKind.Ritual && job.Cast is not null) PlayerbotTravelCast.CancelCast(session, player, job.Cast.SpellId);
+            if (job.Kind == SummonKind.Ritual && job.Cast is not null) StopRitual(session, player, job.Cast.SpellId);
             return End(player, job);
         }
 
@@ -521,8 +521,29 @@ internal sealed class PlayerbotSummons
 
     private bool Fail(WorldSession session, Player summoner, SummonJob job)
     {
-        if (job.Kind == SummonKind.Ritual && job.Cast is { Stage: TravelCastStage.Casting }) PlayerbotTravelCast.CancelCast(session, summoner, job.Cast.SpellId);
+        if (job.Kind == SummonKind.Ritual && job.Cast is { Stage: TravelCastStage.Casting }) StopRitual(session, summoner, job.Cast.SpellId);
         return End(summoner, job);
+    }
+
+    /// <summary>
+    /// Ends the summoner's own ritual cast. The ritual is a channel. This repo's <see cref="SpellSystem.CancelCast"/> leaves a channel alone (pinned by
+    /// SpellSeamTests), and CMSG_CANCEL_CHANNELLING is the packet a client sends to stop one (vmangos HandleCancelChanneling, SpellHandler.cpp:446-459), so a
+    /// channel still running is stopped with that, and only a cast still being prepared gets CMSG_CANCEL_CAST. Left running it would keep the warlock "casting" with its portal gone and bar it from any further
+    /// summon until the channel runs out. The job ends right after this and nothing retries, so the packet is sent unbudgeted (like the stop of a walk):
+    /// a bot visited with no action left in the tick's shared budget must not be left channelling.
+    /// </summary>
+    internal static void StopRitual(WorldSession session, Player summoner, uint spellId)
+    {
+        if (session.Services.GetService<SpellFeature>()?.System is not { } spells
+            || spells.GetState(summoner.Guid)?.CurrentCast is not { } cast || cast.Spell.Id != spellId) return;
+        WorldOpcode opcode;
+        if (cast.State == SpellCastState.Preparing) opcode = WorldOpcode.CmsgCancelCast;
+        else if (cast.State == SpellCastState.Casting) opcode = WorldOpcode.CmsgCancelChannelling;
+        else return;
+        ManagedActionBudget? budget = session.ManagedBudget;
+        session.ManagedBudget = null;
+        try { session.TryManagedAction(opcode, BitConverter.GetBytes(spellId)); }
+        finally { session.ManagedBudget = budget; }
     }
 
     private void Forget(WorldSession session, Player player)

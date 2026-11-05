@@ -12,6 +12,7 @@ namespace ArcaneCore.World.Bots;
 /// </summary>
 public sealed class InstanceEncounterCatalog : IWorldFeature
 {
+    private readonly Lock _gate = new();
     private IReadOnlyList<InstanceEncounter> _encounters = [];
     private volatile bool _loaded;
 
@@ -25,9 +26,29 @@ public sealed class InstanceEncounterCatalog : IWorldFeature
     public IReadOnlyList<InstanceEncounter> Replace(IReadOnlyList<InstanceEncounter> encounters)
     {
         ArgumentNullException.ThrowIfNull(encounters);
-        IReadOnlyList<InstanceEncounter> previous = Interlocked.Exchange(ref _encounters, encounters);
-        _loaded = true;
-        return previous;
+        lock (_gate)
+        {
+            IReadOnlyList<InstanceEncounter> previous = Interlocked.Exchange(ref _encounters, encounters);
+            _loaded = true;
+            return previous;
+        }
+    }
+
+    /// <summary>
+    /// Put <paramref name="encounters"/> in force only when nothing was loaded yet: the check and the swap are one step against
+    /// <see cref="Replace"/>, so a first read that ends while a <c>.reload instance_encounter</c> swaps its rows cannot overwrite them.
+    /// Returns whether the rows were taken.
+    /// </summary>
+    public bool ReplaceIfNotLoaded(IReadOnlyList<InstanceEncounter> encounters)
+    {
+        ArgumentNullException.ThrowIfNull(encounters);
+        lock (_gate)
+        {
+            if (_loaded) return false;
+            _encounters = encounters;
+            _loaded = true;
+            return true;
+        }
     }
 
     public void Attach(WorldRuntime world)

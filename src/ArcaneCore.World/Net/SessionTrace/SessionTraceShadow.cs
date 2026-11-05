@@ -120,7 +120,7 @@ internal sealed class SessionTraceShadow(SessionTrace trace)
         MovementAntiCheat checks = ChecksFor(feature.Options);
         _findings.Clear();
         checks.NotifyAcknowledgement(clientTime, session.CurrentPacketReceivedMs, _findings);
-        if (knockback)
+        if (knockback && (player.UnitFlags & UnitFlags.TaxiFlight) == 0)
         {
             checks.NotifyKnockback();
         }
@@ -142,8 +142,17 @@ internal sealed class SessionTraceShadow(SessionTrace trace)
         Report(reason);
     }
 
-    /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds, as the feature's AfterMovement records it.</summary>
-    internal void AfterMovement(Player player) => _checks?.NotifyStored(player.X, player.Y, player.Z);
+    /// <summary>
+    /// After a block (movement or acknowledgement) was stored: the position the server now holds, as the feature's AfterMovement records it,
+    /// and like it not during a taxi flight (no block was stored, and the marker is what shows the flight moved the player).
+    /// </summary>
+    internal void AfterMovement(Player player)
+    {
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) == 0)
+        {
+            _checks?.NotifyStored(player.X, player.Y, player.Z);
+        }
+    }
 
     private MovementAntiCheat ChecksFor(AntiCheatOptions options)
         => _checks is { } existing && ReferenceEquals(existing.Options, options) ? existing : (_checks = new MovementAntiCheat(options));

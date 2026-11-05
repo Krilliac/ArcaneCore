@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 using Microsoft.Win32.SafeHandles;
 
 namespace ArcaneCore.Game.Maps;
@@ -152,6 +153,7 @@ public sealed class WorldTickWaiter : IDisposable
     }
 
     /// <summary>A Windows high-resolution waitable timer as a <see cref="WaitHandle"/> (WaitAny with the stop event).</summary>
+    [AuditedUnsafe("kernel32 high-resolution waitable timer: SafeWaitHandle-owned handle, Windows only behind OperatingSystem checks, no raw pointers")]
     private sealed class HighResolutionTimer : WaitHandle
     {
         private const uint CreateWaitableTimerHighResolution = 0x00000002;

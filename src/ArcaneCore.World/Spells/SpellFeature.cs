@@ -99,6 +99,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         _world = world;
         System.Units = new WorldSpellUnitResolver();
         System.Damage = new WorldSpellDamageSink();
+        System.HasChannelKit = visual => ArcaneCore.World.Gm.Events.LiveFxData.Of(world).Visuals?.Find(visual) is { ChannelKit: > 0 };
 
         // Attach runs once before the world thread starts, so blocking on the startup loads is
         // safe (WorldHost loads the character name cache the same way, just before this).

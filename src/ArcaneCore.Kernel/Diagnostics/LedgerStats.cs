@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Kernel.Diagnostics;
 
@@ -151,6 +152,7 @@ internal sealed class GapRing
 /// replaces the tracked subject with the lowest count and starts at that count plus one, so a heavy subject is never lost, a subject that returns after eviction may be
 /// over-counted by at most the count it replaced, and <see cref="Count"/> saturates at the capacity. Not thread safe: the owner locks.
 /// </summary>
+[AuditedUnsafe("CollectionsMarshal.GetValueRefOrNullRef and Unsafe.IsNullRef do one dictionary lookup per Add; the ref is used immediately under the owner's lock, before any mutation of the dictionary")]
 internal sealed class SubjectTally(int capacity)
 {
     private readonly Dictionary<string, long> _counts = new(StringComparer.Ordinal);

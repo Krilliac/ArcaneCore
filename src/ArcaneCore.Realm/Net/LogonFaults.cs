@@ -42,6 +42,9 @@ public static class LogonFaults
     /// <summary>Site: tagging fault context onto an exception failed.</summary>
     public const string TagFaultContextSite = "logon/tag-fault-context";
 
+    /// <summary>Site: pre-hashing the configured client patches failed (the startup warm in <see cref="LogonServer"/> and the folder scan and file reads inside <see cref="PatchCatalog.Warm"/>).</summary>
+    public const string PatchWarmSite = "realm.patch-warm";
+
     /// <summary>Site: a malformed IntegrityHashes hex entry while verifying a client version.</summary>
     public const string VerifyVersionFormatSite = "logon/verify-version/format";
 

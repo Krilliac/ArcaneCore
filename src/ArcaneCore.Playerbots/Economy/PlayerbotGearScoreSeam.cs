@@ -51,7 +51,7 @@ internal static class PlayerbotGearScoreSeam
         return new PlayerbotUpgradeProfile(PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights.Style, player.Inventory.IsTwoHandUsed, player.Class);
     }
 
-    /// <summary>The seam's answer for the slot search profile; a faulty reader reads as a one-hander that wears no two-hander (the weapon page for the hands).</summary>
+    /// <summary>The seam's answer for the slot search profile; a faulty reader reads as a dual-wield warrior that wears no two-hander (the weapon page for the hands).</summary>
     internal static PlayerbotUpgradeProfile Profile(Player player)
     {
         try
@@ -71,7 +71,7 @@ internal static class PlayerbotGearScoreSeam
         try
         {
             float value = WornScore(player, slot);
-            return float.IsFinite(value) ? value : 0f;
+            return PlayerbotEconomyPlanner.FiniteOrZero(value);
         }
         catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
         {

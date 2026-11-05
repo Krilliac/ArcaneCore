@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Safety;
 using System.Buffers;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -361,7 +362,7 @@ internal sealed partial class MapFeedConnection
     /// Run <paramref name="work"/> on the world thread and wait for it, at most <see cref="WorldMapFeed.QueryTimeout"/>. The value, or a
     /// refusal that says why there is none. A connection that is going away rethrows the cancellation instead.
     /// </summary>
-    internal async Task<(T? Value, FeedError? Failure)> InvokeWorldAsync<T>(Func<T> work)
+    internal async Task<(T? Value, FeedError? Failure)> InvokeWorldAsync<T>([RunsOnWorldThread] Func<T> work)
         where T : class
     {
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);

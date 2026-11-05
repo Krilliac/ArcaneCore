@@ -62,6 +62,58 @@ public sealed class SpellCastPipelineCharacterisationTests
         Assert.Equal([WorldOpcode.SmsgSpellStart, WorldOpcode.SmsgCastResult, WorldOpcode.SmsgSpellGo], opcodes);
     }
 
+    private const uint EnemyChannelSpell = 995110;
+    private const uint ChannelVisualWithKit = 7;
+
+    private static SpellInfo EnemyChannel(uint visual) => SpellTestKit.Spell(
+        EnemyChannelSpell, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitEnemy, AuraType.Dummy)) with
+    {
+        AttributesEx = SpellAttributesEx.IsChanneled,
+        Duration = new SpellDuration(5000, 0, 5000),
+        RangeIndex = 4,
+        Range = new SpellRange(0, 30),
+        SpellVisual = visual,
+    };
+
+    [Fact]
+    public void ChannelStart_WithAChannelKitVisual_SendsTheChainTargetsToTheCasterAndTheTargetsSeeIt()
+    {
+        using var kit = new SpellTestKit(EnemyChannel(ChannelVisualWithKit));
+        kit.System.HasChannelKit = visual => visual == ChannelVisualWithKit;
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, x: 5);
+        kit.Spellbook.Teach(caster, EnemyChannelSpell);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, EnemyChannelSpell, SpellCastTargets.ForUnit(target.Guid)));
+
+        Assert.Equal(
+            SpellPackets.BuildSpellUpdateChainTargets(caster.Guid.Value, EnemyChannelSpell, [target.Guid.Value]),
+            SpellTestKit.Packets(session, WorldOpcode.SmsgSpellUpdateChainTargets).Single());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChannelStart_WithoutAChannelKitVisual_OrWithoutTheTable_SendsNoChainTargets(bool tableLoaded)
+    {
+        using var kit = new SpellTestKit(EnemyChannel(ChannelVisualWithKit));
+        if (tableLoaded)
+        {
+            kit.System.HasChannelKit = visual => visual == ChannelVisualWithKit + 1; // a table, but this visual has no kit
+        }
+
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, x: 5);
+        kit.Spellbook.Teach(caster, EnemyChannelSpell);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, EnemyChannelSpell, SpellCastTargets.ForUnit(target.Guid)));
+
+        Assert.Single(SpellTestKit.Packets(session, WorldOpcode.MsgChannelStart)); // the channel did start
+        Assert.Empty(SpellTestKit.Packets(session, WorldOpcode.SmsgSpellUpdateChainTargets));
+    }
+
     [Fact]
     public void ChannelCast_StartsTheChannelWithItsDurationTargetAndSpell_AndStaysTheCurrentCast()
     {

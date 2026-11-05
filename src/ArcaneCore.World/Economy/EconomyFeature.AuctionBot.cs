@@ -100,7 +100,7 @@ public sealed partial class EconomyFeature
         }
 
         AuctionRecord auction = view.Auction;
-        AuctionHouseEntry house = Options.AuctionHouses.FirstOrDefault(h => h.Id == auction.HouseId) ?? new AuctionHouseEntry(auction.HouseId, 0, 0);
+        AuctionHouseEntry house = AuctionHouseRules.House(Options, auction.HouseId) ?? new AuctionHouseEntry(auction.HouseId, 0, 0);
         AuctionRecord sold = auction with { BidderId = BotSellerId, Bid = price };
         var letters = new List<MailView>();
         if (auction.BidderId != 0 && CharacterExists(auction.BidderId))

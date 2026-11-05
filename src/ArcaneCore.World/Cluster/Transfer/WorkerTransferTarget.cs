@@ -282,7 +282,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     /// <summary>How many finished (activated or discarded) transfer ids are remembered to keep repeats idempotent.</summary>
     private const int RememberedFinished = 4096;
 
-    private readonly WorkerNodeId _workerId;
+    private readonly WorkerNodeId _ownName;
+    private readonly WorkerTransferName? _servedName;
     private readonly WorldRuntime _world;
     private readonly ITransferShadowLoader _loader;
     private readonly ITransferSessionEntry _entry;
@@ -313,13 +314,15 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ITransferInstanceAllocator? instances = null,
         Func<PlayerTransferBundle, bool>? sessionReady = null,
         ITransferOfflineArrival? offlineArrival = null,
-        CharacterClaimService? claims = null)
+        CharacterClaimService? claims = null,
+        WorkerTransferName? servedName = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxReservations, 1);
-        _workerId = workerId;
+        _ownName = workerId;
+        _servedName = servedName;
         _world = world;
         _loader = loader;
         _entry = entry;
@@ -340,7 +343,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     /// </summary>
     internal TimeSpan SessionOpenGrace { get; init; } = TimeSpan.FromSeconds(2);
 
-    public WorkerNodeId WorkerId => _workerId;
+    /// <summary>The name this target answers under: the served name as it is now, else the id it was built with.</summary>
+    public WorkerNodeId WorkerId => _servedName?.Current ?? _ownName;
 
     public Guid Incarnation { get; }
 
@@ -608,7 +612,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         if (removed is not null)
         {
-            _logger.LogInformation("Transfer {TransferId} discarded on {Worker}: {Reason}", transferId, _workerId, abortReason);
+            _logger.LogInformation("Transfer {TransferId} discarded on {Worker}: {Reason}", transferId, WorkerId, abortReason);
         }
 
         // The shadow was never in a map or the online registry: dropping the reference is the teardown, plus undoing what its load registered
@@ -711,7 +715,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (_discarded.Contains(transferId))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{WorkerId}'");
             }
 
             if (!_slots.TryGetValue(transferId, out Slot? found))
@@ -732,7 +736,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (found.Activating)
             {
-                throw new InvalidOperationException($"transfer '{transferId}' is already activating on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' is already activating on worker '{WorkerId}'");
             }
 
             found.Activating = true; // from here a discard of this transfer is ignored
@@ -744,7 +748,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             if (PlayerTokenFor(token) is not { } playerToken)
             {
                 throw new InvalidOperationException(
-                    $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+                    $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{WorkerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
             }
 
             var guid = new ObjectGuid(bundle.CharacterGuid);
@@ -763,7 +767,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 online
                     ? "Transfer {TransferId}: character {Character} is online on {Worker} already; the activation without the client writes nothing"
                     : "Transfer {TransferId}: the client of character {Character} is gone; the character arrived offline on {Worker}",
-                transferId, bundle.CharacterGuid, _workerId);
+                transferId, bundle.CharacterGuid, WorkerId);
         }
         catch
         {
@@ -856,18 +860,18 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return false;
             }
 
-            throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{_workerId}'");
+            throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{WorkerId}'");
         }
 
         if (_world.TryGetMap(bundle.TargetMapId, bundle.TargetInstanceId, out Map? map) != MapAccessResult.Granted || map is null)
         {
-            throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
+            throw new InvalidOperationException($"worker '{WorkerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
         }
 
         TeleportService? teleports = TeleportService.Of(_world);
         if (teleports is null)
         {
-            throw new InvalidOperationException($"worker '{_workerId}' has no teleport service attached");
+            throw new InvalidOperationException($"worker '{WorkerId}' has no teleport service attached");
         }
 
         // The arrived player's snapshot token must be this world's own ownership token: the write fence verifies a snapshot's token against the scope's
@@ -877,7 +881,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         if (PlayerTokenFor(token) is not { } playerToken)
         {
             throw new InvalidOperationException(
-                $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+                $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{WorkerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
         }
 
         TransferPosition at = bundle.TargetPosition;
@@ -1070,7 +1074,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
             if (_discarded.Contains(transferId))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{_workerId}'");
+                throw new InvalidOperationException($"transfer '{transferId}' was discarded on worker '{WorkerId}'");
             }
 
             if (!_slots.TryGetValue(transferId, out Slot? slot))
@@ -1078,7 +1082,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 // The reservation is gone (this worker restarted after the reserve): adopt the transfer from the bundle.
                 if (!_world.Owns(bundle.TargetMapId, bundle.TargetInstanceId))
                 {
-                    throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
+                    throw new InvalidOperationException($"worker '{WorkerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
                 }
 
                 if (_byCharacter.TryGetValue(bundle.CharacterGuid, out Guid other))
@@ -1245,9 +1249,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             throw new ArgumentException($"bundle belongs to transfer '{bundle.TransferId}', not '{transferId}'", nameof(bundle));
         }
 
-        if (bundle.TargetWorkerId != _workerId)
+        if (bundle.TargetWorkerId != WorkerId)
         {
-            throw new ArgumentException($"bundle targets worker '{bundle.TargetWorkerId}', this is '{_workerId}'", nameof(bundle));
+            throw new ArgumentException($"bundle targets worker '{bundle.TargetWorkerId}', this is '{WorkerId}'", nameof(bundle));
         }
     }
 

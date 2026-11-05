@@ -6,6 +6,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.PacketHeuristics;
@@ -13,7 +14,7 @@ namespace ArcaneCore.World.Tests.PacketHeuristics;
 /// <summary>
 /// The packet heuristics on the client path: real sessions over loopback sockets, every packet through <c>WorldSession.DispatchAsync</c> and,
 /// for world opcodes, the world queue and <c>ProcessWorldPackets</c>. Each check is proven to fire (RED when its hook is removed) and the
-/// switches (off by default, exempt staff) are proven to keep everything silent.
+/// switches (explicitly off, exempt staff) are proven to keep everything silent.
 /// </summary>
 public sealed class PacketHeuristicsClientTests
 {
@@ -22,13 +23,14 @@ public sealed class PacketHeuristicsClientTests
     private static string Key(PacketCheck check) => Subsystem + "/" + PacketChecks.Code(check);
 
     [Fact]
-    public async Task OffByDefault_ABurstOfBadPackets_RecordsNothingAndAllocatesNoState()
+    public async Task ConfiguredOff_ABurstOfBadPackets_RecordsNothingAndAllocatesNoState()
     {
-        await using var host = WorldTestHost.Start();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(
+            Microsoft.Extensions.Options.Options.Create(new PacketHeuristicsOptions { Enabled = false }))); // the section says Enabled = false
         PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
         Assert.False(feature.Active);
         var ledger = new AnomalyLedger();
-        feature.Ledger = ledger; // the options were never switched on: this is the shipped default
+        feature.Ledger = ledger;
         (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHOFF", "Phoffone");
         await using (client)
         {
@@ -52,6 +54,29 @@ public sealed class PacketHeuristicsClientTests
             }
 
             Assert.Null(session.HeuristicsState); // no per-session state exists while the feature is off
+        }
+    }
+
+    [Fact]
+    public async Task WithTheDefaultOptions_TheChecksRun_WithoutAnyConfiguration()
+    {
+        // A server with no World:PacketHeuristics section resolves the default options; the test host pins them off, so this one asks for them.
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new PacketHeuristicsOptions())));
+        PacketHeuristicsFeature feature = PacketHeuristicsTestKit.FeatureOf(host);
+        Assert.True(feature.Active);
+        var ledger = new AnomalyLedger();
+        feature.Ledger = ledger;
+        (WorldTestClient client, WorldSession session) = await PacketHeuristicsTestKit.EnterClientAsync(host, "PHDEF", "Phdefone");
+        await using (client)
+        {
+            using AnomalyCapture capture = ledger.Capture();
+
+            await client.SendAsync(WorldOpcode.CmsgCharEnum, []); // allowed at the character screen only
+            await WorldTestHost.WaitForAsync(() => feature.Count(PacketCheck.WrongState, PacketTraffic.Player) >= 1, "the wrong-state finding");
+
+            Assert.Single(capture.Notices, n => n.Key == Key(PacketCheck.WrongState));
+            Assert.NotNull(session.HeuristicsState);
+            Assert.Equal(SessionState.InWorld, session.State); // report only: the session is where it was
         }
     }
 

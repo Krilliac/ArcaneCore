@@ -1815,7 +1815,9 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #                     Cluster:Supervisor that runs more than one world: an unfenced world skips the
 #                     durable id allocator priming and collides on in-memory id counters. Each world
 #                     of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a
-#                     PostgreSQL or MariaDB characters database.
+#                     PostgreSQL or MariaDB characters database. The gateway reads this key too:
+#                     with it or Cluster:Worker:Enabled true, the write fence is attached to the
+#                     gateway's own characters connection (the handoff and transfer journals).
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -2439,7 +2441,9 @@ Cluster.Worker.ContentRevision = "world-schema-68"
 #        Description: true opens the gateway listener (worker mode) and makes character fencing
 #                     mandatory: Cluster:Fencing:Enabled must be true, and the characters write
 #                     fence is attached either way. false, the default, is Combined mode: no
-#                     listener, no change.
+#                     listener, no change. The gateway reads this key too, only to attach the write
+#                     fence to its own characters connection (the handoff and transfer journals), as
+#                     it does for Cluster:Fencing:Enabled.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4757,7 +4761,9 @@ Economy.AuctionDepositMin = 0
 #        Description: The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the
 #                     deposit and cut percentages of the build-5875 client AuctionHouse.dbc
 #                     (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction
-#                     houses, 25/15 for the neutral one.
+#                     houses, 25/15 for the neutral one. A configured entry is added after these
+#                     three, whatever its index, and the last entry of an id is the one in force, so
+#                     an entry with id 2, 6 or 7 replaces that house's percentages.
 #        Type: List<AuctionHouseEntry>
 #        Default: 0:CutPercent = 5; 0:DepositPercent = 5; 0:Id = 2; 1:CutPercent = 5;
 #                 1:DepositPercent = 5; 1:Id = 6; 2:CutPercent = 15; 2:DepositPercent = 25; 2:Id = 7
@@ -13296,15 +13302,16 @@ World.PacketHeuristics.DevOpcode = true
 
 #
 #    World.PacketHeuristics.Enabled
-#        Description: Run the checks at all. Default false: with it off a packet costs one volatile
-#                     read and no per-session state exists.
+#        Description: Run the checks at all. Default true: a server with no section runs them; false
+#                     switches them off, and then a packet costs one volatile read and no
+#                     per-session state exists.
 #        Type: bool
-#        Default: false
+#        Default: true
 #        Allowed: true | false
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
-World.PacketHeuristics.Enabled = false
+World.PacketHeuristics.Enabled = true
 
 #
 #    World.PacketHeuristics.ExemptBots

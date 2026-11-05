@@ -53,6 +53,18 @@ public static partial class ReputationPackets
         return writer.ToArray();
     }
 
+    /// <summary>
+    /// SMSG_SET_FACTION_ATWAR: u32 list slot, u8 flags (vmangos Player::SendFactionAtWar, Player.cpp:17067-17075: FACTION_FLAG_AT_WAR 0x02 when the
+    /// faction goes to war, 0 when it stops).
+    /// </summary>
+    public static byte[] SetFactionAtWar(int listId, bool atWar)
+    {
+        var writer = new PacketWriter(5);
+        writer.WriteUInt32((uint)listId);
+        writer.WriteByte(atWar ? (byte)FactionStateFlags.AtWar : (byte)0);
+        return writer.ToArray();
+    }
+
     /// <summary>CMSG_SET_FACTION_ATWAR: exactly u32 list slot + u8 flag (nonzero declares war).</summary>
     public static bool TryReadSetAtWar(ReadOnlySpan<byte> payload, out int listId, out bool atWar)
         => TryReadSlotAndByte(payload, out listId, out atWar);

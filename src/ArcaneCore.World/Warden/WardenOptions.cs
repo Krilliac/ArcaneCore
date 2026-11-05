@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
 
 namespace ArcaneCore.World.Warden;
 
@@ -102,7 +103,9 @@ public sealed class WardenCheckOptions
 /// <summary>
 /// Warden for build 5875 (<c>Warden</c> section). Off by default. Ported from MaNGOS Zero src/game/Warden (module delivery, handshake,
 /// RC4 keys) and vmangos src/game/Anticheat/WardenAnticheat (the memory, page and driver scans and the penalty).
+/// The gateway binds the same section and runs the scans (GatewayServiceCollectionExtensions), so the keys belong in world.conf and gateway.conf.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.World | ConfigDaemon.Gateway)]
 public sealed class WardenOptions
 {
     public const string SectionName = "Warden";

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Roslyn analyzer for the memory- and thread-safety rules (docs/ops/memory-safety.md). It loads inside the compiler, so it targets
+       netstandard2.0 and is referenced by the other projects as an analyzer (Directory.Build.props), never as a runtime dependency.
+       Microsoft.CodeAnalysis.CSharp is pinned centrally (Directory.Packages.props); the analyzer needs nothing else. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>ArcaneCore.Analyzers</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <!-- RS2008: release tracking (AnalyzerReleases.*.md) is for published analyzers; these rules are internal and versioned with the repo. -->
+    <NoWarn>$(NoWarn);RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.Analyzers.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -64,6 +64,7 @@ internal sealed class PlayerbotChatSafety
     private readonly object _filterGate = new();
     private FilterState _filterState = new(PlayerbotChatSafetyFilter.Default, string.Empty, false, default);
     private long _filterCheckedTicks;
+    private (string File, bool Replace, TimeSpan Timeout) _filterAttempt; // guarded by _filterGate: the keys the last file read was started for
     private Task _filterRefresh = Task.CompletedTask; // guarded by _filterGate
     private long _filterGeneration; // guarded by _filterGate: bumped by every publish, so a refresh started before one never overwrites it
     private long _screened;
@@ -117,7 +118,7 @@ internal sealed class PlayerbotChatSafety
 
     /// <summary>
     /// The filter for the current options: the shipped list, plus or instead of the operator's file. Never does file I/O and never takes
-    /// the lock on the common path (it may run on the world tick). The file is checked every <see cref="TermsFileCheck"/> and, when it
+    /// the lock on the common path (it may run on the world tick). The file is checked every <see cref="TermsFileCheck"/> (a read that fails is retried at that pace too, not on every call) and, when it
     /// (or the file, replace or timeout option) changed, read and rebuilt on the thread pool; until that finishes the previous filter is
     /// returned, then the new one is published whole. A change of the timeout alone (no file) rebuilds here: it reads nothing.
     /// </summary>
@@ -151,6 +152,12 @@ internal sealed class PlayerbotChatSafety
 
             if (!_filterRefresh.IsCompleted)
                 return state.Filter; // a check is already running; it publishes when done
+
+            // The same file and options were already tried less than TermsFileCheck ago and did not publish (the read failed, or the file
+            // vanished): every line of chat would otherwise start a read and log a fault. A change of the keys starts one at once.
+            if (_filterAttempt == (file, replace, timeout) && now.UtcTicks - Volatile.Read(ref _filterCheckedTicks) < TermsFileCheck.Ticks)
+                return state.Filter;
+            _filterAttempt = (file, replace, timeout);
             Volatile.Write(ref _filterCheckedTicks, now.UtcTicks);
             long generation = _filterGeneration;
             _filterRefresh = Task.Run(() => RefreshFromFile(file, replace, timeout, generation));

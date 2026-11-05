@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
+using ArcaneCore.World.Playerbots.Combat;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -145,6 +146,10 @@ public sealed class PlayerbotTroubleWorldTests
         await using WorldTestClient victim = await world.AddPlayerAsync("Troublevic");
         await using WorldTestClient orc = await world.AddPlayerAsync("Troubleorc", SocialTestKit.Orc);
         Scene scene = await SetUpAsync(world);
+        // War Mode on, an idle bot attacks a flagged enemy on sight (5 yd at the least): the pet's owner stands well beyond it, so only the help lane
+        // can draw the bot in, never the bot's own think starting a fight with the owner between the switch and the scan.
+        await HelpTestKit.StandAsync(world, "Troublebot", ("Troubleorc", 40f));
+        await world.Host.OnWorldAsync(() => world.Options.Pvp.Initiate.RadiusYards = PlayerbotPvpInitiateOptions.MinRadiusYards);
         await world.Host.OnWorldAsync(() =>
         {
             Player self = HelpTestKit.Online(world, "Troublebot");

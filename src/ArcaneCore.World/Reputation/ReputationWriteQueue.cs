@@ -776,18 +776,7 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
     private sealed record Snapshot(long? DeleteGeneration, CharacterReputationRow[] Rows, int? Watched, long DeleteRequested, CharacterOwnershipToken? Ownership, Overlay? Overlay);
 
     /// <summary>True when <paramref name="ex"/>, or any inner exception (EF may wrap what an interceptor throws), is an ownership-fence rejection.</summary>
-    private static bool IsOwnershipRejection(Exception ex)
-    {
-        for (Exception? e = ex; e is not null; e = e.InnerException)
-        {
-            if (e is CharacterOwnershipRejectedException)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool IsOwnershipRejection(Exception ex) => OwnershipRefusal.Find(ex) is not null;
 
     /// <summary>One token-scoped overlay of reputation mutations for a character. Never coalesced across different ownership tokens.</summary>
     private sealed class Overlay(CharacterOwnershipToken? ownership)
