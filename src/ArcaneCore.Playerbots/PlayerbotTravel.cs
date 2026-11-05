@@ -550,8 +550,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
     /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
     /// failure then replans. The exception is the two levels of a same-map trigger that moves the bot by more than 150 yards in height (<see cref="TriggerSeparates"/>):
-    /// two unplaced places at those two levels are not joined, so the planner takes the trigger. The first same-map place the planner asks about after the start
-    /// reads its tile at once (<see cref="BlockingLocates"/>); on a cross-map goal that is the first same-map node (a port or a trigger end), not the goal.
+    /// two places at those two levels, at least one of them unplaced, are not joined, so the planner takes the trigger (two placed places answer by component alone). The first same-map place the planner asks about after the start
+    /// reads its tile at once (<see cref="BlockingLocates"/>); on a cross-map goal the walkable test returns early (the maps differ) and locates nothing for it, so it is the first same-map node the planner asks about
+    /// (a port, a trigger end, a bind point or a teleport destination), not the goal.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
     /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
@@ -655,8 +656,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     /// <summary>
     /// How many places one set of facts locates with a blocking tile read: the first same-map place that is not the bot's own, which the planner asks
-    /// about right after the start. That is the goal when the goal is on the bot's map; for a goal on another map the walkable test returns before
-    /// locating anything (the maps differ) and the planner skips other-map nodes, so it is the first same-map node (a port or a trigger end). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// about right after the start. That is the goal when the goal is on the bot's map; for a goal on another map the walkable test returns early
+    /// (the maps differ, <c>Separated</c> is not even asked for it) before locating anything and the planner skips other-map nodes, so it is the first same-map node
+    /// (a port, a trigger end, a bind point or a teleport destination). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
     /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
     /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
     /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
@@ -717,8 +719,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     /// <summary>
     /// Whether two places of one map (not separated by water) count as walkable from each other, given what the region graph answered for
-    /// each (<c>d*</c>: it placed the place in component <c>c*</c>). Two placed places are joined when they share a component. A place the
-    /// graph could not place counts as joined, except between the two levels a same-map teleport trigger joins
+    /// each (<c>d*</c>: it placed the place in component <c>c*</c>). Two placed places are joined when they share a component. When at least one
+    /// of the two is unplaced (the graph could not place it) they count as joined, except between the two levels a same-map teleport trigger joins
     /// (<see cref="TriggerSeparates"/>): a walk planned there fails only after thousands of yards, and the trigger is the way.
     /// </summary>
     internal static bool Joined(TravelPlace a, TravelPlace b, int ca, bool da, int cb, bool db, IReadOnlyList<TriggerPortal>? triggers)
@@ -731,8 +733,11 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     internal static bool TriggerSeparates(TravelPlace a, TravelPlace b, IReadOnlyList<TriggerPortal>? triggers)
     {
         if (triggers is null) return false;
-        foreach (TriggerPortal t in triggers)
+        for (int i = 0; i < triggers.Count; i++)
         {
+            TriggerPortal t = triggers[i];
+            // A trigger separates the levels of its own map only; a place of another map is never on its levels.
+            if (a.MapId != t.Entrance.MapId || b.MapId != t.Entrance.MapId || t.Exit.MapId != t.Entrance.MapId) continue;
             if (MathF.Abs(t.Entrance.Position.Z - t.Exit.Position.Z) <= TriggerLevelYards) continue;
             if ((OnLevel(a, t.Entrance) && OnLevel(b, t.Exit)) || (OnLevel(a, t.Exit) && OnLevel(b, t.Entrance))) return true;
         }

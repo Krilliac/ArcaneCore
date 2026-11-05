@@ -198,6 +198,29 @@ public sealed class PlayerbotTravelFallbackRealTerrainTests : RealTerrainNavigat
         Assert.True(left <= 10f, $"stopped {left:F1} yards short of the point beyond the portal");
     }
 
+    // The Rut'theran boat port as the planner tests place it (PlayerbotTravelPlannerTests.RuttheranPort: an approximate fixture, not a surveyed
+    // dock); its keyframe lies over the water, so the walk's goal is the dry dock floor PlayerbotShip.ResolveDockTarget finds beside it.
+    private static readonly Vector3 RuttheranPort = new(8600f, 800f, 0f);
+
+    /// <summary>
+    /// Row 15/225: a bot that landed from the Darnassus portal (trigger 527) walks to the Rut'theran dock on the real mesh, on the ground
+    /// below the tree, and is not sent up trigger 542 (the landing is 3.9 yd outside its volume, the dock lies away from it).
+    /// </summary>
+    [RealTerrainBotFact]
+    public async Task FromTheDarnassusPortalExit_TheBotWalksToTheRuttheranDock_WithoutTakingThePortalUp()
+    {
+        await using Terrain terrain = await Terrain.StartAsync(services: PortalWorld);
+        await terrain.PlaceAsync(Landing, Kalimdor);
+        Vector3 dock = await terrain.Host.OnWorldAsync(() => PlayerbotShip.ResolveDockTarget(terrain.Player.Map!, RuttheranPort,
+            new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z)));
+        output.WriteLine($"port {RuttheranPort}, dock target {dock}");
+        float left = await terrain.WalkTowardAsync(dock, 5f, 120_000, output);
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        output.WriteLine($"left {left:F1} yd; the bot ends at {end}");
+        Assert.True(end.Z < 500f && Vector3.Distance(end, DarnassusExit) > 100f, $"the bot was sent up trigger 542 on its way to the dock (ends at {end})");
+        Assert.True(left <= 5f, $"stopped {left:F1} yards from the Rut'theran dock {dock}");
+    }
+
     [RealTerrainBotFact]
     public async Task WalkingIntoThePortalOnPurpose_StillTakesIt()
     {
