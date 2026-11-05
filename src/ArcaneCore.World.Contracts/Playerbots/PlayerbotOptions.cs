@@ -330,6 +330,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotEconomyOptions Economy { get; set; } = new();
 
+    /// <summary>Bots make trips to their capital cities (<c>World:Playerbots:City</c>; live; docs/areas/playbots-city.md).</summary>
+    public PlayerbotCityOptions City { get; set; } = new();
+
     /// <summary>How bots save money for what they will need: class spells, riding, a mount (<c>World:Playerbots:Budget</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotBudgetOptions Budget { get; set; } = new();
 
@@ -451,6 +454,8 @@ public sealed class PlayerbotOptions
         Social.Validate();
         if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
         Economy.Validate();
+        if (City is null) throw new InvalidOperationException($"{SectionName}:City is missing.");
+        City.Validate();
         if (Budget is null) throw new InvalidOperationException($"{SectionName}:Budget is missing.");
         Budget.Validate();
         if (Mounts is null) throw new InvalidOperationException($"{SectionName}:Mounts is missing.");
