@@ -192,8 +192,8 @@ public sealed class ManagedPlayerbotProvisionTests
     [Fact]
     public async Task Sqlite_TwoWorkers_CreatingTheSameAccountNameAtTheSameTime_ExactlyOneWins()
     {
-        // Both creators run on their own thread and context against one file, so both can pass the AnyAsync pre-check and race into the insert: the loser is refused by the pre-check, the unique
-        // index or the database lock, whichever it hits, and leaves nothing behind.
+        // Both creators run on their own thread and context against one file. This proves one winner and that the loser leaves nothing behind. It does not prove which refusal fired: the store opens
+        // its transaction before the pre-check, so on SQLite the writers may serialise there and the unique index may never be reached.
         for (int round = 0; round < 8; round++)
         {
             await using TwoWorkers workers = await TwoWorkers.StartAsync();
@@ -212,7 +212,7 @@ public sealed class ManagedPlayerbotProvisionTests
             catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* the loser's refusal */ }
             Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully));
             Assert.Equal(1, new[] { first, second }.Count(t => t.IsFaulted));
-            Account winner = (first.IsCompletedSuccessfully ? first : second).Result;
+            Account winner = await (first.IsCompletedSuccessfully ? first : second);
             ManagedPlayerbotProvision only = Assert.Single(await workers.A.LoadPendingAsync());
             Assert.Equal(winner.Id, only.AccountId);
             Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync(a => a.Username == name));
@@ -222,7 +222,8 @@ public sealed class ManagedPlayerbotProvisionTests
     [Fact]
     public async Task Sqlite_TwoWorkers_RollingBackTheSameRowAtTheSameTime_RollBackExactlyOnce()
     {
-        // What two sweeps taking the same stale row do: only one removes the empty account and its journal row, the other is refused (or loses the database lock) without leaving a half state.
+        // The store calls two sweeps taking the same stale row would make (no sweep runs here): only one removes the empty account and its journal row, the other is refused or loses the database
+        // lock, and no half state is left. As above, the test does not tell those two apart.
         for (int round = 0; round < 8; round++)
         {
             await using TwoWorkers workers = await TwoWorkers.StartAsync();
