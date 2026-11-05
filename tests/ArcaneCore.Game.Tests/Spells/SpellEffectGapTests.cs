@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -160,14 +161,23 @@ public sealed class SpellEffectGapTests
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
         Creature creature = AddCreature(kit, 3);
+        Map map = kit.World.GetMap(0);
         var registry = new ArcaneCore.Game.Stealth.StealthRegistry();
         ArcaneCore.Game.Stealth.StealthServices.Install(
-            kit.World.GetMap(0), new ArcaneCore.Game.Stealth.StealthServices(kit.System, registry, ArcaneCore.Game.Stealth.StealthOptions.Default));
+            map, new ArcaneCore.Game.Stealth.StealthServices(kit.System, registry, ArcaneCore.Game.Stealth.StealthOptions.Default));
+        map.AddVisibilityRule(new ArcaneCore.Game.Stealth.StealthVisibilityRule(kit.System, registry));
+
+        // How a unit goes into stealth (StealthAuras): NO_DETECT drops it from every viewer, then the STEALTH group keeps it hidden.
+        registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.NoDetect);
+        map.RefreshVisibility(creature);
         registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.Stealth);
+        Assert.DoesNotContain(creature.Guid, caster.VisibleObjects);
 
         kit.System.CastSpell(caster, SpawnSpell, SpellCastTargets.ForUnit(creature.Guid), triggered: true);
 
         Assert.Equal(ArcaneCore.Game.Stealth.StealthVisibility.On, registry.VisibilityOf(creature));
+        // Nobody moved, so only the effect's own re-evaluation can show the creature (vmangos Objects/Unit.cpp:6494-6500).
+        Assert.Contains(creature.Guid, caster.VisibleObjects);
     }
 
     // --- EffectTriggerSpell ------------------------------------------------------------------------------------------------------
@@ -249,6 +259,36 @@ public sealed class SpellEffectGapTests
         Assert.Equal(10f, caster.Y, 3);
         Assert.Equal(facing, caster.Orientation, 3);
         Assert.Equal(30f, target.X, 3); // the target stays
+    }
+
+    [Fact]
+    public void TeleportUnits_ToCasterDest_WithACreatureCaster_StopsIt_AndTellsItsObservers()
+    {
+        // vmangos SpellEffects.cpp:1627-1636 moves the caster with Unit::NearTeleportTo (Objects/Unit.cpp:9801-9825): the spline is disabled and
+        // MSG_MOVE_TELEPORT goes to the observers before and after the relocation. No recording sink here: the default sink is the one under test.
+        using var kit = new PetTestKit(Spells());
+        (Player target, var session) = kit.AddPlayer(1, 30, 10);
+        Creature caster = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, target.Z, 1f);
+        kit.Run(100);
+        Assert.Contains(caster.Guid, target.VisibleObjects);
+        kit.Creatures.MoveStraight(caster, -20, 0, target.Z, run: false, finalOrientation: null);
+        Assert.True(caster.IsMoving);
+        float facing = caster.Orientation;
+        session.Clear();
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(caster, TeleportToTarget, SpellCastTargets.ForUnit(target.Guid), triggered: true));
+
+        Assert.False(caster.IsMoving);
+        Assert.Equal((30f, 10f, facing), (caster.X, caster.Y, caster.Orientation));
+        List<byte[]> teleports = Packets(session, WorldOpcode.MsgMoveTeleport);
+        Assert.Equal(2, teleports.Count);
+        foreach (byte[] packet in teleports)
+        {
+            var reader = new PacketReader(packet);
+            Assert.Equal(caster.Guid.Value, reader.ReadPackedGuid());
+            MovementInfo movement = MovementInfo.Read(ref reader);
+            Assert.Equal((30f, 10f), (movement.X, movement.Y));
+        }
     }
 
     [Fact]
