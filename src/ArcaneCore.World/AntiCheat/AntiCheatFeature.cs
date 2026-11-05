@@ -198,19 +198,32 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
         PlayerState state = StateOf(controller);
         MovementAntiCheat checks = state.ControlledChecksFor(unit.Guid, _options);
-        checks.CheckServerPosition(unit.X, unit.Y, unit.Z);
+        // Judged against the position the server holds for the unit: the first block of a possession, and any block after the server moved
+        // the unit, is never a baseline of the client's own coordinates (that would let a client relocate the unit anywhere unscored).
+        checks.SeedFromServerPosition(unit.X, unit.Y, unit.Z, session.CurrentPacketReceivedMs, movement.Time);
         float allowed;
-        TransportClaim claim;
+        bool alive;
+        bool rooted;
+        MovementFlags granted;
+        bool serverControlled;
         if (unit is Player unitPlayer)
         {
             allowed = AllowedSpeed(unitPlayer);
-            claim = ClaimOf(unitPlayer, movement);
+            alive = unitPlayer.IsAlive;
+            rooted = unitPlayer.IsRooted && unitPlayer.Movement.HasFlag(MovementFlags.Root) && !unitPlayer.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
+            granted = GrantedFlags(unitPlayer, state);
+            serverControlled = (unitPlayer.UnitFlags & UnitFlags.ServerControlled) != 0;
         }
         else
         {
             allowed = Math.Max(Math.Max(unit.RunSpeed, unit.WalkSpeed), Math.Max(Math.Max(unit.RunBackSpeed, unit.SwimSpeed), unit.SwimBackSpeed));
-            claim = movement.HasFlag(MovementFlags.OnTransport) ? TransportClaim.Fake : TransportClaim.None;
+            alive = false;
+            rooted = false;
+            granted = MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating | MovementFlags.Flying;
+            serverControlled = true;
         }
+
+        TransportClaim claim = ClaimOf(unit, movement);
 
         var sample = new MovementSample
         {
@@ -219,10 +232,10 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             ReceivedMs = session.CurrentPacketReceivedMs,
             LatencyMs = session.LatencyMs,
             AllowedSpeed = allowed,
-            Alive = false,
-            Rooted = false,
-            GrantedFlags = MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating | MovementFlags.Flying,
-            ServerControlled = true,
+            Alive = alive,
+            Rooted = rooted,
+            GrantedFlags = granted,
+            ServerControlled = serverControlled,
             Transport = claim,
             Terrain = null,
         };
@@ -744,7 +757,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// map near the player; an elevator or tram (a TRANSPORT game object) must exist on the map near the player, measured from
     /// where its animation puts it now (its spawn without one); any other GUID is fake. Without a transport system or game object system the claim cannot be judged and is never scored.
     /// </summary>
-    private TransportClaim ClaimOf(Player player, in MovementInfo movement)
+    private TransportClaim ClaimOf(Unit player, in MovementInfo movement)
     {
         if (!movement.HasFlag(MovementFlags.OnTransport))
         {

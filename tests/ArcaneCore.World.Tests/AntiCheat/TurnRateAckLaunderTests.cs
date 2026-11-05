@@ -55,12 +55,18 @@ public sealed class TurnRateAckLaunderTests
         new MovementInfo { Flags = MovementFlags.Forward, Time = time, X = x + 80.7f, Y = y, Z = z }.Write(ack);
         ack.WriteSingle(rate);
         await client.SendAsync(WorldOpcode.CmsgForceTurnRateChangeAck, ack.ToArray());
+        await client.CollectThroughBarrierAsync();
+
+        // The pending-order gate (MovementControl.AcknowledgeTurnRate) refuses the ack, so its block is not stored. Without the gate the
+        // handler stores it (and AfterMovement records it), which would leave the player 80 yards off here.
+        Assert.Equal(x + 0.7f, await host.OnWorldAsync(() => player.X));
         await Task.Delay(100);
         time += 100;
         await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Block(time, x + 80.7f, y, z));
         await client.CollectThroughBarrierAsync();
 
-        // RED on origin/main 46e2ecf6d: the ack stored the block unjudged and the heartbeat was then trusted as a server relocation.
+        // RED on 46e2ecf6d (no gate, no AfterMovement): the ack stored the block unjudged and the heartbeat was then trusted as a server relocation.
+        // With the gate gone alone the position assertion above fails; with it kept, the heartbeat is judged from the last judged position.
         Assert.Contains(seen, s => s.Player == "Turnlaunder" && s.Finding.Type == AntiCheatViolation.Teleport);
     }
 }

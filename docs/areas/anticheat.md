@@ -96,19 +96,25 @@ graveyard, the end of a taxi flight); a knockback acknowledgement (no speed chec
 re-baselines: the step after them is judged against the time that passed, so holding packets and then jumping buys only what the
 silence covers (the client's own elapsed time, capped by the receive interval plus the latency slack).
 
-**Other paths that store a client block** are judged too, because a block stored unjudged would be laundered by the next
-packet's re-baseline (the stored position no longer where the last judged packet left it): `CMSG_MOVE_NOT_ACTIVE_MOVER` for
-the player itself goes through the same reject window, taxi test and checks as a movement packet (vmangos
-`HandleMoveNotActiveMoverOpcode`, MovementHandler.cpp:919-955).
+**Other paths that store a client block**: `CMSG_MOVE_NOT_ACTIVE_MOVER` is judged, because a block stored unjudged would be
+laundered by the next packet's re-baseline (the stored position no longer where the last judged packet left it). The
+sender's reject window and the moved player's taxi flight refuse the block for every unit, then the checks run (vmangos
+`HandleMoveNotActiveMoverOpcode`, MovementHandler.cpp:922-924, :937, :948). The solicited acknowledgements (speed, flag, root,
+knockback, turn rate) are stored after a clock check only, so the position they carry is not judged (vmangos runs the cheat
+tests on them, MovementHandler.cpp:492); a pending-order ack can move the server position and a later zero-distance
+heartbeat then goes unscored. Open follow-up.
 
 **A unit the player controls** (a possessed creature or player, moved by `MSG_MOVE_*` or given up by
 `CMSG_MOVE_NOT_ACTIVE_MOVER`) has its own checks on the controller's state: the unit's position, speeds and auras (a creature
-may also keep the hover, water walk, slow fall, levitate and fly flags the server already holds for it), a fresh baseline for
-each new unit. Findings score the controller, whose client sent the block, with the detail "controlled unit N: ..."; the
+may also keep the hover, water walk, slow fall, levitate and fly flags the server already holds for it; a possessed player is
+judged on its own flags, root, death state and granted flags like any player), a fresh baseline for
+each new unit. The baseline is the position the server holds for the unit, never the client's first block: a first block any
+distance beyond `TeleportDistance` from the unit, and a block after the server moved the unit, is a teleport finding.
+There are no terrain checks and no knockback exemption for a controlled unit, and a time skip is not fed to its checks. Findings score the controller, whose client sent the block, with the detail "controlled unit N: ..."; the
 controller's exemption applies, and a controlled finding never rubberbands (the rubberband target is the controller's own).
 vmangos runs the controller's cheat tests on a possessed player and none on a creature (MovementHandler.cpp:318-325); here
 both are scored and neither is refused, so a creature's block is still stored as in vmangos. A creature's root is not judged
-(only a player acknowledges a root order).
+(only a player acknowledges a root order). A creature aboard a ship is judged against the same transport claim as a player.
 
 **Time skips** (`CMSG_MOVE_TIME_SKIPPED`) buy no baseline and blind no clock check. The skip the evidence supports is the lag,
 capped by `MaxTimeSkipMs` and by the arrival silence before the skip (since the previous in-world packet the world handler

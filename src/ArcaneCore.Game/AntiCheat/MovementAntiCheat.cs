@@ -137,6 +137,36 @@ public sealed class MovementAntiCheat
         }
     }
 
+    /// <summary>
+    /// For a unit the player controls instead of its own: make the position the server holds for the unit the baseline when there is
+    /// none yet, or when the server moved the unit since the last judged block. The client's block is then judged against that
+    /// position (with no client time elapsed, so only <see cref="AntiCheatOptions.TeleportDistance"/> of slack), never trusted.
+    /// </summary>
+    public void SeedFromServerPosition(float x, float y, float z, uint receivedMs, uint clientTime)
+    {
+        if (_hasLast && !_trustNext && _hasStored && MathF.Abs(x - _storedX) <= StoredPositionTolerance && MathF.Abs(y - _storedY) <= StoredPositionTolerance
+            && MathF.Abs(z - _storedZ) <= StoredPositionTolerance)
+        {
+            return;
+        }
+
+        NotifyServerRelocation();
+        _trustNext = false;
+        _hasLast = true;
+        _lastX = x;
+        _lastY = y;
+        _lastZ = z;
+        _lastReceived = receivedMs;
+        _lastOnTransport = false;
+        _lastLegitTransport = false;
+        _lastAirborne = false;
+        _lastMoveClientTime = clientTime;
+        _airborne = false;
+        _apexZ = z;
+        _knockback = false;
+        NotifyStored(x, y, z);
+    }
+
     /// <summary>After a block was stored: the position the server now holds (observers may have corrected the client's).</summary>
     public void NotifyStored(float x, float y, float z)
     {

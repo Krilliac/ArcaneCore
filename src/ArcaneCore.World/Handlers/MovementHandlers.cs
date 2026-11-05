@@ -97,12 +97,12 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // The player itself: the same admission as HandleMovement before the block is judged (vmangos HandleMoveNotActiveMoverOpcode
-        // MovementHandler.cpp:919-920 the reject window, :933-937 the flight spline, then the cheat tests :946-952 before HandleMoverRelocation :955).
-        // A block stored without being judged would be laundered: the next packet sees the server position moved, takes it for a server relocation
-        // and re-baselines (docs/areas/anticheat.md).
+        // The same admission as HandleMovement before the block is judged, for every unit (vmangos HandleMoveNotActiveMoverOpcode
+        // MovementHandler.cpp:922-924 the sender's reject window, :937 the moved player's flight spline, then the cheat tests :948 before
+        // HandleMoverRelocation). A block stored without being judged would be laundered: the next packet sees the server position moved,
+        // takes it for a server relocation and re-baselines (docs/areas/anticheat.md).
         bool selfBlock = ReferenceEquals(unit, player);
-        if (selfBlock && ((player.UnitFlags & UnitFlags.TaxiFlight) != 0 || player.Locomotion.ShouldRejectMovement(session.CurrentPacketReceivedMs)))
+        if (player.Locomotion.ShouldRejectMovement(session.CurrentPacketReceivedMs) || (unit is Player { } flying && (flying.UnitFlags & UnitFlags.TaxiFlight) != 0))
         {
             return;
         }
