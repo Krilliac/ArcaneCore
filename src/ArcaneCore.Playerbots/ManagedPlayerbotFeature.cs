@@ -904,6 +904,44 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal bool HoldsMaintenanceLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
         services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(), ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance);
 
+    /// <summary>
+    /// Loads the festival flavours and tells the event board. A load failure keeps the plain gathering festivals; a board invalidate failure is logged on its own
+    /// (the flavours are set by then, so it must not claim they could not be loaded).
+    /// </summary>
+    internal async Task LoadHolidayFlavoursAsync(ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore flavourStore, CancellationToken cancellationToken)
+    {
+        Events.PlayerbotFestivalFlavours flavours;
+        try
+        {
+            flavours = new Events.PlayerbotFestivalFlavours(await flavourStore.LoadAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.social.events", ex);
+            logger.LogWarning(ex, "Playerbot festival flavours could not be loaded ({Type}); festivals run as plain gathering festivals", ex.GetType().Name);
+            return;
+        }
+
+        _holidayFlavours = flavours;
+        if (!flavours.HasDefault)
+            logger.LogWarning("holiday_flavour has no row for holiday id 0: festivals the table does not name run as plain gathering festivals without crowd emotes (the world database initializer seeds an empty table)");
+        // Festivals that started before the load pick up their flavours (the board belongs to the world thread).
+        if (_world is not { } flavourWorld) return;
+        try
+        {
+            await flavourWorld.InvokeAsync(() =>
+            {
+                _eventBoard?.Invalidate();
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("playerbot.social.events", ex);
+            logger.LogWarning(ex, "Playerbot festival flavours are loaded, but the event board could not be refreshed ({Type}); festivals that already started keep their old flavour until the next refresh", ex.GetType().Name);
+        }
+    }
+
     public async Task StartupAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled) return;
@@ -942,27 +980,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         await LoadTradeCountersAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>() is { } flavourStore)
-        {
-            try
-            {
-                var flavours = new Events.PlayerbotFestivalFlavours(await flavourStore.LoadAsync(cancellationToken).ConfigureAwait(false));
-                _holidayFlavours = flavours;
-                // Festivals that started before the load pick up their flavours (the board belongs to the world thread).
-                if (_world is { } flavourWorld)
-                    await flavourWorld.InvokeAsync(() =>
-                    {
-                        _eventBoard?.Invalidate();
-                        return true;
-                    }, cancellationToken).ConfigureAwait(false);
-                if (!flavours.HasDefault)
-                    logger.LogWarning("holiday_flavour has no row for holiday id 0: festivals the table does not name run as plain gathering festivals without crowd emotes (the world database initializer seeds an empty table)");
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
-            {
-                FaultLedger.Shared.Record("playerbot.social.events", ex);
-                logger.LogWarning(ex, "Playerbot festival flavours could not be loaded ({Type}); festivals run as plain gathering festivals", ex.GetType().Name);
-            }
-        }
+            await LoadHolidayFlavoursAsync(flavourStore, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;
