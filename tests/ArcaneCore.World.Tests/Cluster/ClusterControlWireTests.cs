@@ -15,7 +15,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Cluster;
 
 /// <summary>
-/// The unified control wire (C3 of _wf/handoff-control-DESIGN.md): frames 28-32 (<see cref="ClusterControlWire"/>), contract 5 and the shared
+/// The unified control wire (C3 of _wf/handoff-control-DESIGN.md): frames 28-32 (<see cref="ClusterControlWire"/>), contract 6 and the shared
 /// bundle JSON. Golden bytes pin the layout, every verb round-trips, every malformed shape is refused with <see cref="InvalidDataException"/>
 /// (the exception a gateway link host's receive loop turns into a closed link once C4 dispatches these frames; no host calls the decoders yet), and a bundle crosses the journal and the wire identically.
 /// </summary>
