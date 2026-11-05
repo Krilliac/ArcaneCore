@@ -399,6 +399,15 @@ public sealed class CharacterClaimService(
         }
     }
 
+    /// <summary>The login tickets still live, ascending (any thread; takes the pending gate). For tests.</summary>
+    internal long[] LiveTicketsSnapshot()
+    {
+        lock (_pendingGate)
+        {
+            return [.. _liveTickets.Values.SelectMany(tickets => tickets).Order()];
+        }
+    }
+
     private void ForgetPending(int characterId, object marker)
     {
         lock (_pendingGate)
