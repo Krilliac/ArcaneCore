@@ -138,6 +138,12 @@ internal sealed class PlayerbotSummons
     /// <summary>The job of <paramref name="summoner"/>, or null (tests).</summary>
     internal SummonJob? JobOf(ObjectGuid summoner) => _bySummoner.GetValueOrDefault(summoner);
 
+    /// <summary>The portal clicks the bot has sent for its latest helper job, 0 for a bot with no state (tests). World thread.</summary>
+    internal int ClicksOf(ObjectGuid bot) => _bots.TryGetValue(bot, out BotState? state) ? state.ClickTries : 0;
+
+    /// <summary>How many meeting stones the cached list of <paramref name="map"/> holds, or -1 when the map was never scanned (tests). World thread.</summary>
+    internal int StonesCached(Map map) => _stones.TryGetValue(map, out StoneCache cache) ? cache.Stones.Length : -1;
+
     private sealed class BotState
     {
         public uint NextEvalMs;
