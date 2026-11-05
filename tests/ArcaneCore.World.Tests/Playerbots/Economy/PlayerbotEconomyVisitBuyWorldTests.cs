@@ -186,6 +186,95 @@ public sealed class PlayerbotEconomyVisitBuyWorldTests : PlayerbotEconomyWorldTe
         });
     }
 
+    // --- the visit searches by the weakest slots ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A visit of a buyer whose worn scores are steered by the seam, with the small ring (inventory type Finger) listed at its buy cap.
+    /// Returns what the visit searched for, how many purchases it made and the buyer's money afterwards.
+    /// </summary>
+    private static async Task<((uint InventoryType, uint ItemClass)[] Searches, int Purchases, uint Money, bool StillListed)> VisitWithWornScoresAsync(
+        ScenarioContext c, string buyerName, Func<byte, float> worn, int upgradeSlotSearches)
+    {
+        EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+        ScenarioBot seller = await c.LoginAsync("Econseller");
+        ScenarioBot buyer = await c.LoginAsync(buyerName);
+        await c.GiveMoneyAsync(seller, 1000);
+        uint auction = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), RingStartBid, RingBuyout, 480);
+        await c.GiveMoneyAsync(buyer, 4000);
+
+        PlayerbotOptions options = Options(listChance: 0, maxListings: 5, budget: 0.25f);
+        options.Economy.UpgradeSlotSearches = upgradeSlotSearches;
+        Driver driver = await AttachAsync(c, buyer, options);
+        Func<Player, byte, float> previous = PlayerbotGearScoreSeam.WornScore;
+        try
+        {
+            await c.ReadAsync(() => { PlayerbotGearScoreSeam.WornScore = (_, slot) => worn(slot); return true; });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+        }
+        finally
+        {
+            await c.ReadAsync(() => { PlayerbotGearScoreSeam.WornScore = previous; return true; });
+        }
+
+        (uint, uint)[] searches = await c.ReadAsync(() => driver.Economy.UpgradeSearchesMade.Select(s => (s.InventoryType, s.ItemClass)).ToArray());
+        int purchases = await c.ReadAsync(() => driver.Economy.PurchasesMade);
+        uint money = await buyer.ReadAsync(p => p.Money);
+        bool stillListed = await c.ReadAsync(() => economy.FindAuction(auction) is not null);
+        await c.ReadAsync(() => driver.Active = false);
+        return (searches, purchases, money, stillListed);
+    }
+
+    [Fact]
+    public async Task Visit_SearchesTheWeakestSlot_AndBuysTheRingWhenTheFingersAreWeakest()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-finger", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econfinger",
+                slot => slot is InventorySlots.Finger1 or InventorySlots.Finger2 ? 0f : 100f, upgradeSlotSearches: 1);
+
+            ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Finger, PlayerbotEconomyWire.Any)]), "the one search is for the finger slot");
+            ScenarioContext.ExpectEqual(1, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, result.Money, "money after the buyout");
+            ScenarioContext.Expect(!result.StillListed, "the ring left the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_SearchesBySlot_SoAWeakHeadSlotDoesNotFindTheRing()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-head", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econhead",
+                slot => slot == InventorySlots.Head ? 0f : 100f, upgradeSlotSearches: 1);
+
+            // The legacy class-wide armor page would have found the ring; the head search does not.
+            ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Head, PlayerbotEconomyWire.Any)]), "the one search is for the head slot");
+            ScenarioContext.ExpectEqual(0, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u, result.Money, "money");
+            ScenarioContext.Expect(result.StillListed, "the auction is still in the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_WithSlotSearchesOff_UsesTheLegacyWeaponAndArmorPages_AndBuysTheRing()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-off", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econlegacy",
+                slot => slot == InventorySlots.Head ? 0f : 100f, upgradeSlotSearches: 0);
+
+            ScenarioContext.Expect(result.Searches.SequenceEqual(
+                [(PlayerbotEconomyWire.Any, (uint)ItemClass.Weapon), (PlayerbotEconomyWire.Any, (uint)ItemClass.Armor)]), "weapons, then armor");
+            ScenarioContext.ExpectEqual(1, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, result.Money, "money after the buyout");
+            ScenarioContext.Expect(!result.StillListed, "the ring left the house");
+        });
+    }
+
     [Fact]
     public async Task Visit_BuysNothing_WhenTheBudgetDoesNotCoverTheBuyout()
     {

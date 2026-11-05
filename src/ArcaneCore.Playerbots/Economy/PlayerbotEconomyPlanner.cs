@@ -19,8 +19,12 @@ internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Dep
 /// <summary>The auction the bot buys out and the gain its slot sees.</summary>
 internal sealed record PlayerbotUpgradeChoice(PlayerbotAuctionRow Row, float Gain);
 
+/// <summary>One upgrade search of the house: an inventory type and an item class (either may be <see cref="PlayerbotEconomyWire.Any"/>).</summary>
+internal sealed record PlayerbotUpgradeSearch(uint InventoryType, uint ItemClass);
+
 /// <summary>The reagent auction the bot buys out.</summary>
 internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row);
+
 
 /// <summary>
 /// Entries the bot bought at the auction house lately, which it does not list again for <see cref="HoldMs"/> (no buy-then-relist loop).
@@ -89,6 +93,66 @@ internal static class PlayerbotEconomyPlanner
     internal static bool IsCarried(byte bagSlot, byte slot)
         => bagSlot == InventorySlots.Bag0 ? slot >= InventorySlots.ItemStart && slot < InventorySlots.ItemEnd
             : bagSlot >= InventorySlots.BagStart && bagSlot < InventorySlots.BagEnd;
+
+    /// <summary>The most upgrade searches a visit may make (the upper bound of <see cref="PlayerbotEconomyOptions.UpgradeSlotSearches"/>).</summary>
+    internal const int MaxUpgradeSearches = PlayerbotEconomyOptions.MaxUpgradeSearches;
+
+    // The equipment slots in the order that breaks a tie between equal worn scores (the larger stat budgets first). Body (shirt) and
+    // Tabard carry no stats and are never searched.
+    private static readonly byte[] UpgradeSlotOrder =
+    [
+        InventorySlots.Chest, InventorySlots.Legs, InventorySlots.Head, InventorySlots.Shoulders, InventorySlots.MainHand, InventorySlots.Hands,
+        InventorySlots.Feet, InventorySlots.Waist, InventorySlots.Wrists, InventorySlots.Back, InventorySlots.OffHand, InventorySlots.Ranged,
+        InventorySlots.Neck, InventorySlots.Finger1, InventorySlots.Finger2, InventorySlots.Trinket1, InventorySlots.Trinket2,
+    ];
+
+    private static PlayerbotUpgradeSearch UpgradeSearchOf(byte slot) => slot switch
+    {
+        InventorySlots.Head => new((uint)InventoryType.Head, PlayerbotEconomyWire.Any),
+        InventorySlots.Neck => new((uint)InventoryType.Neck, PlayerbotEconomyWire.Any),
+        InventorySlots.Shoulders => new((uint)InventoryType.Shoulders, PlayerbotEconomyWire.Any),
+        InventorySlots.Chest => new((uint)InventoryType.Chest, PlayerbotEconomyWire.Any),
+        InventorySlots.Waist => new((uint)InventoryType.Waist, PlayerbotEconomyWire.Any),
+        InventorySlots.Legs => new((uint)InventoryType.Legs, PlayerbotEconomyWire.Any),
+        InventorySlots.Feet => new((uint)InventoryType.Feet, PlayerbotEconomyWire.Any),
+        InventorySlots.Wrists => new((uint)InventoryType.Wrists, PlayerbotEconomyWire.Any),
+        InventorySlots.Hands => new((uint)InventoryType.Hands, PlayerbotEconomyWire.Any),
+        InventorySlots.Finger1 or InventorySlots.Finger2 => new((uint)InventoryType.Finger, PlayerbotEconomyWire.Any),
+        InventorySlots.Trinket1 or InventorySlots.Trinket2 => new((uint)InventoryType.Trinket, PlayerbotEconomyWire.Any),
+        InventorySlots.Back => new((uint)InventoryType.Cloak, PlayerbotEconomyWire.Any),
+        _ => new(PlayerbotEconomyWire.Any, (uint)ItemClass.Weapon), // MainHand, OffHand, Ranged: weapon inventory types vary by class and hand
+    };
+
+    /// <summary>
+    /// The house searches of a visit. <paramref name="max"/> of 0 or less: the two class-wide pages of earlier versions (weapons, then armor).
+    /// Otherwise the equipment slots ranked by <paramref name="worn"/> (what is worn there, an empty slot 0; a NaN or infinite score counts as 0)
+    /// from the weakest, equal scores in a fixed order (the larger stat budgets first), each slot mapped to its inventory type (the three
+    /// weapon slots to one class-wide weapon page), a search already taken skipped, until <paramref name="max"/> distinct searches.
+    /// </summary>
+    internal static IReadOnlyList<PlayerbotUpgradeSearch> UpgradeSearches(Func<byte, float> worn, int max)
+    {
+        ArgumentNullException.ThrowIfNull(worn);
+        if (max <= 0)
+            return [new(PlayerbotEconomyWire.Any, (uint)ItemClass.Weapon), new(PlayerbotEconomyWire.Any, (uint)ItemClass.Armor)];
+
+        (byte Slot, float Score)[] ranked = new (byte, float)[UpgradeSlotOrder.Length];
+        for (int i = 0; i < ranked.Length; i++)
+        {
+            float score = worn(UpgradeSlotOrder[i]);
+            ranked[i] = (UpgradeSlotOrder[i], float.IsFinite(score) ? score : 0f);
+        }
+
+        // OrderBy is stable, so equal scores keep the fixed order above.
+        List<PlayerbotUpgradeSearch> searches = new(Math.Min(max, MaxUpgradeSearches));
+        foreach ((byte slot, _) in ranked.OrderBy(entry => entry.Score))
+        {
+            if (searches.Count >= max) break;
+            PlayerbotUpgradeSearch search = UpgradeSearchOf(slot);
+            if (!searches.Contains(search)) searches.Add(search);
+        }
+
+        return searches;
+    }
 
     /// <summary>The listing slots a bot short of money gets on top of <see cref="PlayerbotEconomyOptions.MaxListingsPerBot"/>.</summary>
     internal const int MoneyGoalExtraListings = 3;

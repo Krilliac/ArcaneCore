@@ -12,6 +12,9 @@ public sealed class PlayerbotEconomyOptions
     /// <summary>The highest <see cref="MaxListingsPerBot"/> accepted.</summary>
     public const int MaxListingsCeiling = 50;
 
+    /// <summary>The highest <see cref="UpgradeSlotSearches"/> accepted.</summary>
+    public const int MaxUpgradeSearches = 8;
+
     /// <summary>The longest <see cref="VisitIntervalMinutes"/> accepted (one day).</summary>
     public const int MaxVisitIntervalMinutes = 1440;
 
@@ -32,6 +35,12 @@ public sealed class PlayerbotEconomyOptions
     /// buyout of an upgrade count against it. 0 spends nothing.
     /// </summary>
     public float BuyUpgradeBudgetFraction { get; set; } = 0.25f;
+
+    /// <summary>
+    /// How many of the bot's weakest equipment slots a visit searches the auction house for (0..8), one page each, by inventory type;
+    /// the weapon slots share one weapon page. 0 searches the two class-wide pages (weapons, then armor) of earlier versions.
+    /// </summary>
+    public int UpgradeSlotSearches { get; set; } = 3;
 
     /// <summary>Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval.</summary>
     public int VisitIntervalMinutes { get; set; } = 30;
@@ -120,6 +129,7 @@ public sealed class PlayerbotEconomyOptions
         if (MaxListingsPerBot is < 0 or > MaxListingsCeiling) throw new InvalidOperationException($"{section}: MaxListingsPerBot must be 0..{MaxListingsCeiling}.");
         if (!float.IsFinite(BuyUpgradeBudgetFraction) || BuyUpgradeBudgetFraction is < 0f or > 1f)
             throw new InvalidOperationException($"{section}: BuyUpgradeBudgetFraction must be 0..1.");
+        if (UpgradeSlotSearches is < 0 or > MaxUpgradeSearches) throw new InvalidOperationException($"{section}: UpgradeSlotSearches must be 0..{MaxUpgradeSearches}.");
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
         if (MoneyGoalCopperPerLevel is < 0 or > 100000) throw new InvalidOperationException($"{section}: MoneyGoalCopperPerLevel must be 0..100000.");

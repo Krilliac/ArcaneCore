@@ -18,7 +18,7 @@ must obey is the server's, enforced by the ordinary handlers.
 | File (`src/ArcaneCore.Playerbots/Economy/`) | What it does |
 |---|---|
 | `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
-| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`, `BuyReagents`, `MoneyGoal`, `MoneyGoalCopperPerLevel`, `MaxBuyoutsPerHour`, `MaxListingsPerHour`, `HouseBuyoutsPerHour`, `HouseListingsPerHour`, `ListSurplusConsumables`, `ConsumableKeepCount`, `ListMarkupPercentCommon`, `ListMarkupPercentUncommon`, `ListMarkupPercentRare`, `ListMarkupPercentEpic`, `BuyBelowAskPercent`. |
+| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `UpgradeSlotSearches`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`, `BuyReagents`, `MoneyGoal`, `MoneyGoalCopperPerLevel`, `MaxBuyoutsPerHour`, `MaxListingsPerHour`, `HouseBuyoutsPerHour`, `HouseListingsPerHour`, `ListSurplusConsumables`, `ConsumableKeepCount`, `ListMarkupPercentCommon`, `ListMarkupPercentUncommon`, `ListMarkupPercentRare`, `ListMarkupPercentEpic`, `BuyBelowAskPercent`. |
 | `PlayerbotBank.cs` (folder `Playerbots/`) | The bank errand while the bot stays at its capital home: deposit goods it does not need, buy a bank bag slot when the bank is nearly full. |
 | `PlayerbotEconomy.cs` | The world side, one per bot (owned by `PlayerbotBrain`): the visit as a state machine, one step per think. |
 | `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the reagent to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`, `PlayerbotBoughtMemory`. |
@@ -64,7 +64,7 @@ than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and
    purchases a visit and two failed tries; a bid waits for its result like an upgrade's, then the visit returns to this phase. The
    purchase is noted in `PlayerbotBoughtMemory`. `BuyReagents` is read again at this step, so a live reload that turns it off ends the
    phase at once, mid-visit.
-5. **Buying** (only when the budget allows). One page of usable green-or-better weapons, one of armor; among the rows the bot can pay
+5. **Buying** (only when the budget allows). One page of usable green-or-better items for each of the `UpgradeSlotSearches` (default 3, 0 to 8) weakest equipment slots (ranked by the worn item's progression score, an empty slot 0, ties in a fixed order of the larger stat budgets first; the slot's inventory type is the filter, and the three weapon slots share one weapon page); with `UpgradeSlotSearches` at 0, one page of weapons and one of armor as before. Among the rows the bot can pay
    (a buyout, not its own, within the budget left and the money in hand, not refused lately, and whose buyout per unit, rounded up, is at most the
    buy cap of the item) the one whose item gains the most for its
    slot, then the lower buyout, then the lower auction id; nothing gaining more than `PlayerbotItemScore.MinimumGain` is bought. It

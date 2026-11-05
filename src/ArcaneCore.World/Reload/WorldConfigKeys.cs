@@ -834,6 +834,8 @@ public static class WorldConfigKeys
             v => v is >= 0 and <= PlayerbotEconomyOptions.MaxListingsCeiling ? null : $"must be 0..{PlayerbotEconomyOptions.MaxListingsCeiling}"),
         LivePlayerbotsValue("Economy:BuyUpgradeBudgetFraction", o => o.Economy.BuyUpgradeBudgetFraction, (o, v) => o.Economy.BuyUpgradeBudgetFraction = v,
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
+        LivePlayerbotsValue("Economy:UpgradeSlotSearches", o => o.Economy.UpgradeSlotSearches, (o, v) => o.Economy.UpgradeSlotSearches = v,
+            v => v is >= 0 and <= PlayerbotEconomyOptions.MaxUpgradeSearches ? null : $"must be 0..{PlayerbotEconomyOptions.MaxUpgradeSearches}"),
         LivePlayerbotsValue("Economy:VisitIntervalMinutes", o => o.Economy.VisitIntervalMinutes, (o, v) => o.Economy.VisitIntervalMinutes = v,
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
         LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),

@@ -169,7 +169,7 @@ public abstract class PlayerbotEconomyWorldTestBase
     private protected static PlayerbotOptions Options(int listChance, int maxListings, float budget) => new()
     {
         Enabled = true,
-        Economy = new PlayerbotEconomyOptions { ListChancePerVisit = listChance, MaxListingsPerBot = maxListings, BuyUpgradeBudgetFraction = budget, VisitIntervalMinutes = 30 },
+        Economy = new PlayerbotEconomyOptions { ListChancePerVisit = listChance, MaxListingsPerBot = maxListings, BuyUpgradeBudgetFraction = budget, UpgradeSlotSearches = 0, VisitIntervalMinutes = 30 },
     };
 
     private protected static AuctionHouseEntry HouseOf(EconomyFeature economy) => economy.Options.AuctionHouses.Single(h => h.Id == AuctionHouseRules.AllianceHouse);

@@ -1133,6 +1133,140 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ConsumableKeepCount = 201 }.Validate());
     }
 
+    // --- the upgrade searches by weakest slot -----------------------------------------------------------------------
+
+    private const uint AnyKey = PlayerbotEconomyWire.Any;
+    private const uint WeaponKey = (uint)ItemClass.Weapon;
+    private const uint ArmorKey = (uint)ItemClass.Armor;
+
+    /// <summary>A worn-score function: <paramref name="baseline"/> everywhere, except the listed slots.</summary>
+    private static Func<byte, float> WornExcept(float baseline, params (byte Slot, float Score)[] exceptions)
+        => slot =>
+        {
+            foreach ((byte s, float score) in exceptions)
+            {
+                if (s == slot) return score;
+            }
+
+            return baseline;
+        };
+
+    private static (uint InventoryType, uint ItemClass)[] Keys(IReadOnlyList<PlayerbotUpgradeSearch> searches)
+        => searches.Select(s => (s.InventoryType, s.ItemClass)).ToArray();
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void UpgradeSearches_NoSlotSearches_ReturnsTheLegacyWeaponThenArmorPair(int max)
+    {
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0f), max);
+        Assert.Equal(new[] { (AnyKey, WeaponKey), (AnyKey, ArmorKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_AllSlotsEmpty_TakesTheLargestStatBudgetsFirst_ChestLegsHead()
+    {
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(_ => 0f, 3);
+        Assert.Equal(new[] { ((uint)InventoryType.Chest, AnyKey), ((uint)InventoryType.Legs, AnyKey), ((uint)InventoryType.Head, AnyKey) }, Keys(searches));
+        Assert.Equal(5u, (uint)InventoryType.Chest);
+        Assert.Equal(7u, (uint)InventoryType.Legs);
+        Assert.Equal(1u, (uint)InventoryType.Head);
+    }
+
+    [Fact]
+    public void UpgradeSearches_TheLowestWornScoreBeatsTheTieOrder()
+    {
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(10f, (InventorySlots.Feet, 2f)), 2);
+        Assert.Equal(new[] { ((uint)InventoryType.Feet, AnyKey), ((uint)InventoryType.Chest, AnyKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_AnEmptySlotScoresZero_AndOutranksAWornOneAtAnyPositiveScore()
+    {
+        // The empty slot is reported as 0 by the scorer; a slot worn at a tiny positive score ranks behind it.
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(0.5f, (InventorySlots.Hands, 0f)), 1);
+        Assert.Equal(new[] { ((uint)InventoryType.Hands, AnyKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_BothFingersAndBothTrinkets_GiveOneKeyEach()
+    {
+        var weak = WornExcept(100f, (InventorySlots.Finger1, 0f), (InventorySlots.Finger2, 0f), (InventorySlots.Trinket1, 0f), (InventorySlots.Trinket2, 0f));
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 2);
+        Assert.Equal(new[] { ((uint)InventoryType.Finger, AnyKey), ((uint)InventoryType.Trinket, AnyKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_TheWeaponSlotsShareOneClassWideWeaponKey()
+    {
+        var weak = WornExcept(100f, (InventorySlots.MainHand, 0f), (InventorySlots.OffHand, 0f), (InventorySlots.Ranged, 0f));
+        var searches = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 2));
+        Assert.Equal(2, searches.Length);
+        Assert.Equal((AnyKey, WeaponKey), searches[0]);
+        Assert.Single(searches, k => k == (AnyKey, WeaponKey));
+        Assert.Equal(((uint)InventoryType.Chest, AnyKey), searches[1]);
+    }
+
+    [Fact]
+    public void UpgradeSearches_DuplicateKeysDoNotSpendTheBudget_TheNextDistinctKeyFillsIt()
+    {
+        // Tie order among the zero slots: MainHand, OffHand, Ranged, Finger1, Finger2, Trinket1, Trinket2.
+        var weak = WornExcept(100f, (InventorySlots.MainHand, 0f), (InventorySlots.OffHand, 0f), (InventorySlots.Ranged, 0f),
+            (InventorySlots.Finger1, 0f), (InventorySlots.Finger2, 0f), (InventorySlots.Trinket1, 0f), (InventorySlots.Trinket2, 0f));
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(weak, 3);
+        Assert.Equal(new[] { (AnyKey, WeaponKey), ((uint)InventoryType.Finger, AnyKey), ((uint)InventoryType.Trinket, AnyKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_BodyAndTabardAreNeverSearched_EvenAsTheOnlyWeakSlots()
+    {
+        var weak = WornExcept(100f, (InventorySlots.Body, 0f), (InventorySlots.Tabard, 0f));
+        var first = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, 1));
+        Assert.Equal(new[] { ((uint)InventoryType.Chest, AnyKey) }, first);
+
+        var all = Keys(PlayerbotEconomyPlanner.UpgradeSearches(weak, PlayerbotEconomyPlanner.MaxUpgradeSearches + 100));
+        Assert.DoesNotContain(((uint)InventoryType.Body, AnyKey), all);
+        Assert.DoesNotContain(((uint)InventoryType.Tabard, AnyKey), all);
+        Assert.Equal(13, all.Length);
+    }
+
+    [Theory]
+    [InlineData(float.NaN)]
+    [InlineData(float.PositiveInfinity)]
+    [InlineData(float.NegativeInfinity)]
+    public void UpgradeSearches_ANonFiniteWornScoreCountsAsZero(float bad)
+    {
+        // Everything else is worn at 5, so a slot read as 0 is the weakest; Feet is late in the tie order, so only the score puts it first.
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(WornExcept(5f, (InventorySlots.Feet, bad)), 1);
+        Assert.Equal(new[] { ((uint)InventoryType.Feet, AnyKey) }, Keys(searches));
+    }
+
+    [Fact]
+    public void UpgradeSearches_MoreThanTheDistinctKeys_ReturnsEveryDistinctKeyOnce()
+    {
+        var searches = PlayerbotEconomyPlanner.UpgradeSearches(slot => slot, 1000);
+        var keys = Keys(searches);
+        Assert.Equal(13, keys.Length);
+        Assert.Equal(keys.Length, keys.Distinct().Count());
+        Assert.Equal(1, keys.Count(k => k == (AnyKey, WeaponKey)));
+        Assert.Equal(12, keys.Count(k => k.Item2 == AnyKey && k.Item1 != AnyKey));
+    }
+
+    [Fact]
+    public void Options_UpgradeSlotSearches_DefaultsToThree_AndTheBoundsAreEnforced()
+    {
+        var defaults = new PlayerbotEconomyOptions();
+        defaults.Validate();
+        Assert.Equal(3, defaults.UpgradeSlotSearches);
+        Assert.Equal(8, PlayerbotEconomyPlanner.MaxUpgradeSearches);
+
+        new PlayerbotEconomyOptions { UpgradeSlotSearches = 0 }.Validate();
+        new PlayerbotEconomyOptions { UpgradeSlotSearches = 8 }.Validate();
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { UpgradeSlotSearches = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { UpgradeSlotSearches = 9 }.Validate());
+    }
+
     // --- the money goal --------------------------------------------------------------------------------------------
 
     [Fact]
