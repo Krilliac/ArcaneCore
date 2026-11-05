@@ -335,9 +335,6 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return 0;
     }
 
-    /// <summary>Spawns checked per dropper at most; a creature with more is kept (the answer would cost a region lookup per spawn).</summary>
-    internal const int MaxSpawnsChecked = 32;
-
     /// <summary>How long a dropper found unreachable is not looked at again (ms): the bot may have crossed to another walking component since.</summary>
     internal const uint UnreachableRecheckMs = 300_000;
 
@@ -389,8 +386,6 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
             _unreachableUntil.Remove(dropper);
         }
 
-        if (spawns.Count > MaxSpawnsChecked)
-            return false;
         bool all = ReachabilityProbe is { } probe ? AllSpawnsUnreachable(spawns, probe) : AllSpawnsUnreachable(player, spawns);
         if (all)
         {

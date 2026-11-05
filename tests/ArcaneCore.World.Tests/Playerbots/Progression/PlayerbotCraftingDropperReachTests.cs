@@ -133,6 +133,31 @@ public sealed class PlayerbotCraftingDropperReachTests
     }
 
     [Fact]
+    public async Task ADropperWithMoreThanThirtyTwoSpawns_AllUnreachable_IsStillSkipped()
+    {
+        (WorldTestHost host, Bot bot) = await StartAsync();
+        try
+        {
+            uint picked = await OnWorld(host, () =>
+            {
+                var spawns = new List<CreatureSpawn>();
+                for (uint i = 0; i < 40; i++)
+                    spawns.Add(Spawn(100 + i, Far, 2000f + i));
+                spawns.Add(Spawn(200, Near, 10f));
+                var content = new CreatureContent([Template(Far), Template(Near)], spawns, [], [], []);
+                var crafting = new PlayerbotCrafting(bot.Session, bot.Options) { ReachabilityProbe = at => at.X >= 1000f };
+                return crafting.FirstUsableDropper(bot.Player, [Far, Near], content, 1_000);
+            });
+
+            Assert.Equal(Near, picked);
+        }
+        finally
+        {
+            await StopAsync(host, bot);
+        }
+    }
+
+    [Fact]
     public async Task WithNoNavigationMesh_NoDropperIsCalledUnreachable()
     {
         (WorldTestHost host, Bot bot) = await StartAsync();
