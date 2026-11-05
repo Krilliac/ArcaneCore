@@ -76,6 +76,18 @@ public static class PacketChecks
         _ => throw new ArgumentOutOfRangeException(nameof(check)),
     };
 
+    /// <summary>The fixed AntiCheat finding detail of a fed check (never client input; stored in the violation log).</summary>
+    public static string ScoreDetail(PacketCheck check) => check switch
+    {
+        PacketCheck.Malformed => "packet malformed payload",
+        PacketCheck.Shape => "packet shape",
+        PacketCheck.Cadence => "packet cadence",
+        PacketCheck.Replay => "packet replay",
+        PacketCheck.OrphanAck => "packet orphan acknowledgement",
+        PacketCheck.DevOpcode => "packet stripped developer opcode",
+        _ => throw new ArgumentOutOfRangeException(nameof(check)),
+    };
+
     /// <summary>The severity a finding of <paramref name="check"/> is reported with (unknown-opcode and incapacitated-action vary with the finding).</summary>
     public static AnomalySeverity Severity(PacketCheck check) => check == PacketCheck.Malformed ? AnomalySeverity.Error : AnomalySeverity.Warning;
 }
@@ -115,6 +127,8 @@ internal sealed class PacketHeuristicsSettings
         Enabled = options.Enabled;
         ExemptBots = options.ExemptBots;
         ExemptStaff = options.ExemptStaff;
+        FeedScore = options.FeedAntiCheatScore;
+        ScoreWeight = options.ScoreWeight;
     }
 
     /// <summary>The options this view was built from (a private copy).</summary>
@@ -125,6 +139,12 @@ internal sealed class PacketHeuristicsSettings
     internal bool ExemptBots { get; }
 
     internal bool ExemptStaff { get; }
+
+    /// <summary>Whether reports of player traffic also score in the AntiCheat feature.</summary>
+    internal bool FeedScore { get; }
+
+    /// <summary>The weight of one fed finding.</summary>
+    internal int ScoreWeight { get; }
 
     internal long ReportIntervalMs { get; }
 

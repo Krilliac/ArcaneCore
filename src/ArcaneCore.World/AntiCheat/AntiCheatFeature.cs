@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
@@ -54,6 +55,14 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     private readonly LogGate _lineGate = new(TimeSpan.FromSeconds(10));
     private readonly LogGate _flushGate = new(TimeSpan.FromSeconds(60));
     private readonly List<AntiCheatFinding> _scratch = [];
+    private readonly ConcurrentQueue<PacketScoreRequest> _packetScores = new();
+    private int _packetScoresQueued;
+    private long _packetScoresDropped;
+
+    /// <summary>The most packet-heuristics score requests held between two world ticks; more are dropped (and counted), so a flood cannot grow the queue.</summary>
+    internal const int MaxQueuedPacketScores = 512;
+
+    private readonly record struct PacketScoreRequest(WorldSession Session, float Weight, string Detail);
 
     /// <summary>Tests only: the terrain probe used instead of the map's own (the test host holds no client data). Null in production.</summary>
     internal Func<Map, IAntiCheatTerrain?>? TerrainProbe { get; set; }
@@ -402,6 +411,45 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         }
     }
 
+    // --- packet heuristics feed ---------------------------------------------------------------------------------------
+
+    /// <summary>Packet-heuristics score requests dropped because the queue was full (diagnostics and tests).</summary>
+    internal long PacketScoresDropped => Interlocked.Read(ref _packetScoresDropped);
+
+    /// <summary>
+    /// A packet-heuristics finding of <paramref name="session"/>'s player (<c>World:PacketHeuristics:FeedAntiCheatScore</c>). Callable from any thread:
+    /// the request is queued and applied on the world thread at the next tick, through <see cref="OnRejected"/> (so the exemptions and the
+    /// score, escalation and log apply as for a rejected request). A session that has no player in the world by then scores nothing. False when the
+    /// queue is full (<see cref="MaxQueuedPacketScores"/>). <paramref name="detail"/> must be a constant.
+    /// </summary>
+    public bool EnqueuePacketFinding(WorldSession session, float weight, string detail)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(detail);
+        if (Interlocked.Increment(ref _packetScoresQueued) > MaxQueuedPacketScores)
+        {
+            Interlocked.Decrement(ref _packetScoresQueued);
+            Interlocked.Increment(ref _packetScoresDropped);
+            return false;
+        }
+
+        _packetScores.Enqueue(new PacketScoreRequest(session, weight, detail));
+        return true;
+    }
+
+    /// <summary>World thread: applies the queued packet-heuristics score requests.</summary>
+    internal void DrainPacketScores()
+    {
+        while (_packetScores.TryDequeue(out PacketScoreRequest request))
+        {
+            Interlocked.Decrement(ref _packetScoresQueued);
+            if (request.Session.Player is { IsInWorld: true } player)
+            {
+                OnRejected(request.Session, player, AntiCheatViolation.Packet, request.Weight, request.Detail);
+            }
+        }
+    }
+
     // --- rejection points ---------------------------------------------------------------------------------------------
 
     /// <summary>
@@ -727,6 +775,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
                     // the teleport feature is not attached in this host: the position check still re-baselines
                 }
             }
+
+            DrainPacketScores();
 
             // A kick or autoban window that ended with lines held back: one summary line per account and kind.
             foreach (SuppressedNotices held in _staffLimiter.TakeExpired())

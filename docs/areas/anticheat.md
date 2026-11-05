@@ -12,7 +12,23 @@ findings are scored, logged and written to the violation log, and nothing is don
 ceiling. vmangos ships its own anticheat off (`Anticheat.Enable = 0`), so the default is listed in the release-caveat
 register of [operations](../guide/operations.md).
 
-A separate, report-only analysis of the packets themselves (shape, cadence, replay, wrong state, orphan acknowledgements, actions while incapacitated) is described in [packet heuristics](packet-heuristics.md); it is on by default (report only) and never feeds these scores.
+A separate, report-only analysis of the packets themselves (shape, cadence, replay, wrong state, orphan acknowledgements, actions while incapacitated) is described in [packet heuristics](packet-heuristics.md); it is on by default (report only) and feeds these scores only when its `FeedAntiCheatScore` option is switched on (off by default; see [Packet findings and the score](#packet-findings-and-the-score)).
+
+## Stream output
+
+Every finding the manager records is also published, when a GM follows the channel, to the `anticheat` channel of the [GM stream](../ops/gm-stream.md) (`.arcane stream on anticheat [target|near|all]`), with its running score and the verdict (None included, which the log and the staff alert never show): `(Player:guid) account N: Type 'detail' weight W score S -> Action at map M (x, y, z)`. The line carries the player's GUID and the account id only, never a player or account name. The packet-heuristics reports share the channel (`packet CODE (Player:guid) account N: text [Severity]`, no score, no verdict, no position). Publishing is observe-only: a failing publish is logged and never changes what is recorded or decided, and with nobody following the channel it costs one lock-free flag read.
+
+## Packet findings and the score
+
+`World:PacketHeuristics` has two options for this, both defaulting to the previous behaviour (report only): `FeedAntiCheatScore` (false) and `ScoreWeight` (3, range 1 to 100). With the first on, a reported finding of a real player's traffic is queued (any thread, at most 512 held between world ticks, more are dropped and counted) and applied on the world thread at the next tick through the same path as a rejected request (`AntiCheatFeature.OnRejected`), as violation type `Packet`: it adds `ScoreWeight` to the score, appears on the stream, and takes part in the escalation and the violation log like any other finding. Only `shape`, `cadence`, `replay`, `orphan-ack`, `dev-opcode` and `malformed` score; `wrong-state`, `unknown-opcode` and `incapacitated-action` never do (latency and unimplemented client features produce them). Bot, staff and tool-injected traffic never scores, and the manager's own exemptions (checks off, staff, GM mode, managed bot) apply on top. One score per reported finding, so the packet report throttle (`ReportIntervalSeconds`) also limits the score. The log detail is a fixed text such as `packet shape`, never client input.
+
+## Long-term clock drift
+
+The sliding window of the independent-clock detector only fires on a clock that runs fast by more than `TolerancePercent`. The `LongTermDriftMs` option of the `AntiCheat:SpeedClock` section (0 = off, the default; otherwise 1000 to 3600000) adds a running excess: every usable packet pair adds the client's clock delta minus the server's receive delta, floored at minus the limit, and reaching the limit is a `TimeSync` finding ("client clock drifts ahead of real time (long term)", weight half the percentage gained, 5 to 25) after which the count restarts. An honest client's excess telescopes (lag stretches the receive side, the catch-up burst gives it back), a clock a few percent fast climbs steadily. The count restarts on every teleport or relocation and a reported time skip is credited as for the window.
+
+## Possessed units
+
+The possessed-unit checks exist: see "A unit the player controls" below (`BeforeControlledMovement`, `OnControlledTimeSkipped`). The packet-heuristics page used to list them as absent; that was stale.
 
 ## What runs where
 
@@ -176,6 +192,18 @@ map's vmap tile (`VMapManager`, line of sight enabled) for all three. The probe 
 reversal checks, its bot heuristic (snap-to-waypoint plus metronomic timing), the GCD/cast-spam check, the `.spoof` /
 `.anticheat test` simulators, the jail, the auto-resync rubberband on desync streaks, the relay-time correction, and the
 gateway's protocol validator and session guard.
+
+**Fork decisions** (each item decided, safe default kept; the fork's source tree is not available in this workspace, so nothing was ported from it
+on its own authority, and a decision here changes only with a retail or vmangos basis and a measured false-positive rate):
+
+| Fork item | Decision | Reason |
+|---|---|---|
+| Acceleration gate (velocity-delta) | declined | no retail rule and no vmangos check; the 1.12 client changes speed in steps (mounts, auras, knockback, charge) and the lag bunching of real connections trips it. The distance budget and the speed check already bound the yards covered |
+| Bot heuristic (waypoint snap plus metronomic timing) | declined | the server's playerbots are managed sessions exempt from the checks, and a real player's autorun, follow and a steady 50 packets per second look metronomic. A heuristic on timing alone would flag honest players |
+| `.spoof` and `.anticheat test` simulators | declined | they inject synthetic findings into a live score. The suite exercises every check with synthetic packets, and `.anticheat score` with a value (Administrator) already lets an operator rehearse the escalation |
+| Jail | declined | a punishment with no retail basis and a map, spawn and release rule to invent. The ladder ends in the kick and the autoban, which go through the normal ban path |
+| Long-term clock drift | added behind `LongTermDriftMs`, off by default | see [Long-term clock drift](#long-term-clock-drift) |
+| Packet findings in the score | added behind `FeedAntiCheatScore`, off by default | see [Packet findings and the score](#packet-findings-and-the-score) |
 
 ## Escalation
 

@@ -230,6 +230,14 @@ public sealed class SpeedClockOptions : ICloneable
     /// <summary>After firing it stays silent for this long (milliseconds). Default 10000.</summary>
     public int CooldownMs { get; set; } = 10000;
 
+    /// <summary>
+    /// Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock over the usable packet pairs
+    /// since the last restart of the count (a teleport or a previous fire), a clock that runs fast by less than <see cref="TolerancePercent"/>
+    /// is reported too. 0 switches it off, which is the default (the sliding window alone, as before); otherwise 1000 to 3600000. Honest play
+    /// stays near zero (lag and the catch-up burst cancel), so a few seconds of margin is plenty.
+    /// </summary>
+    public int LongTermDriftMs { get; set; }
+
     public object Clone() => MemberwiseClone();
 
     public IEnumerable<string> Validate()
@@ -257,6 +265,11 @@ public sealed class SpeedClockOptions : ICloneable
         if (MaxGapMs <= 0 || CooldownMs < 0)
         {
             yield return "AntiCheat:SpeedClock:MaxGapMs must be positive and CooldownMs not negative.";
+        }
+
+        if (LongTermDriftMs != 0 && (LongTermDriftMs < 1000 || LongTermDriftMs > 3_600_000))
+        {
+            yield return $"AntiCheat:SpeedClock:LongTermDriftMs ({LongTermDriftMs}) must be 0 (off) or 1000 to 3600000.";
         }
     }
 }

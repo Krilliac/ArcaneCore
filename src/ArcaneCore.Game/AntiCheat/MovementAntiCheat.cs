@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.AntiCheat;
 /// The movement checks of one player (docs/areas/anticheat.md), ported from the MaNGOS Zero anticheat fork's
 /// MovementAnticheat (feature/anticheat-tooling, feature/timesync) and cross-checked against vmangos'
 /// Anticheat/MovementAnticheat (HandlePositionTests, HandleFlagTests). They observe and score; they never change or reject
-/// a packet. Only low false-positive checks are here: the fork's acceleration gate and bot heuristic are not ported.
+/// a packet. Only low false-positive checks are here: the fork's acceleration gate and bot heuristic are declined (decision table in docs/areas/anticheat.md).
 /// <list type="bullet">
 /// <item>Speed and teleport: the distance of a step against the allowed speed over the step's time budget, which is the
 /// client's own elapsed time capped by the server's receive interval plus a latency slack, and never more than
@@ -226,7 +226,8 @@ public sealed class MovementAntiCheat
         SpeedHackDecision clock = _clock.Feed(m.Time, now);
         if (clock.Fire)
         {
-            findings.Add(new AntiCheatFinding(AntiCheatViolation.TimeSync, Math.Clamp(clock.Severity * 0.5f, 5f, 25f), "client clock runs fast (independent clock)"));
+            findings.Add(new AntiCheatFinding(AntiCheatViolation.TimeSync, Math.Clamp(clock.Severity * 0.5f, 5f, 25f),
+                clock.LongTermDrift ? "client clock drifts ahead of real time (long term)" : "client clock runs fast (independent clock)"));
         }
 
         long skipBudgetMs = _skipSpanBudgetMs;

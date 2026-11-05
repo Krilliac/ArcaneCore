@@ -22,7 +22,7 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 /// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. On by default.
 /// <para>
 /// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays or alters
-/// a packet, kicks, or touches the AntiCheat score; a packet that dispatched before still dispatches and one that was dropped is still dropped.
+/// a packet, kicks; the only thing it hands on is an optional score request to the AntiCheat feature (<c>FeedAntiCheatScore</c>, off by default), applied later on the world thread; a packet that dispatched before still dispatches and one that was dropped is still dropped.
 /// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off (<c>Enabled</c> = false).
 /// </para>
 /// <para>
@@ -428,11 +428,49 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
 
             Ledger.Report(PacketChecks.Subsystem, PacketChecks.Code(check), SubjectOf(session, traffic), text, severity);
             TraceToGmStream(session, check, severity, text, traffic);
+            FeedScore(session, settings, check, traffic);
         }
 
         // Counted last: a reader that sees the count also finds the ledger report of that occurrence (when it was not held back).
         Interlocked.Increment(ref _counts[Slot(check, traffic)]);
     }
+
+    /// <summary>
+    /// Hands one reported finding of a real player to the AntiCheat score, when <c>FeedAntiCheatScore</c> is on. Only the checks a real client
+    /// never trips are fed (not wrong-state, unknown-opcode or incapacitated-action, which latency and unimplemented client features produce);
+    /// bot, staff and tool-injected traffic is never fed. The request is queued (any thread) and applied on the world thread by the AntiCheat feature,
+    /// which also applies its own exemptions. The detail is a constant, never client input. Observe only: nothing here changes the packet.
+    /// </summary>
+    private void FeedScore(WorldSession session, PacketHeuristicsSettings settings, PacketCheck check, PacketTraffic traffic)
+    {
+        if (!settings.FeedScore || traffic != PacketTraffic.Player || !IsScoredCheck(check))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_services.GetService<AntiCheatFeature>() is { } antiCheat)
+            {
+                antiCheat.EnqueuePacketFinding(session, settings.ScoreWeight, PacketChecks.ScoreDetail(check));
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (_logger is { } log)
+            {
+                log.LogFault("packet.score-feed", ex, "PacketHeuristics: score feed threw for account {Account}", session.AccountId);
+            }
+            else
+            {
+                FaultLedger.Shared.Record("packet.score-feed", ex);
+            }
+        }
+    }
+
+    /// <summary>The checks that may feed the AntiCheat score.</summary>
+    internal static bool IsScoredCheck(PacketCheck check) => check is PacketCheck.Shape or PacketCheck.Cadence or PacketCheck.Replay
+        or PacketCheck.OrphanAck or PacketCheck.DevOpcode or PacketCheck.Malformed;
 
     /// <summary>
     /// The report that just went to the ledger, to GMs following the <c>anticheat</c> channel. The subject is the session's player by GUID

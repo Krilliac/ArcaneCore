@@ -3,8 +3,9 @@ namespace ArcaneCore.Game.AntiCheat;
 /// <summary>What one sample fed to <see cref="SpeedHackDetector"/> decided.</summary>
 /// <param name="Fire">The window ran hot long enough: report it.</param>
 /// <param name="Severity">1..100, the percentage the client clock runs fast (only meaningful when <paramref name="Fire"/>).</param>
-/// <param name="Ratio">The measured client/real ratio of the window.</param>
-public readonly record struct SpeedHackDecision(bool Fire, int Severity, double Ratio);
+/// <param name="Ratio">The measured client/real ratio of the window (for a long-term drift fire, the ratio over the drifted span).</param>
+/// <param name="LongTermDrift">The fire is the long-term drift (the accumulated excess of the client clock), not the sliding window.</param>
+public readonly record struct SpeedHackDecision(bool Fire, int Severity, double Ratio, bool LongTermDrift = false);
 
 /// <summary>
 /// The independent-clock speed-hack detector, ported from the MaNGOS Zero anticheat fork
@@ -19,6 +20,13 @@ public readonly record struct SpeedHackDecision(bool Fire, int Severity, double 
 /// client step more than MaxGapMs ahead of the real one is a desync; all three are discarded. Hysteresis: the hot counter
 /// rises above the trip ratio, holds between half the tolerance and the trip ratio, and clears below; after a fire it
 /// stays silent for the cooldown. Lag only stretches the real side (ratio below 1) and never fires.
+/// </para>
+/// <para>
+/// Long-term drift (<see cref="SpeedClockOptions.LongTermDriftMs"/>, off by default): the window above only sees a clock that runs fast
+/// by more than the tolerance. A client that runs a few percent fast, below the tolerance, gains time for as long as it plays. Every
+/// usable pair (not discarded by the guards above, after any time-skip credit) adds its client delta minus its real delta to a running
+/// excess, floored at minus the limit; the excess of an honest client telescopes (lag stretches the real side and the catch-up burst gives
+/// it back), so it stays near zero, while a slow clock hack climbs steadily. Reaching the limit fires once and restarts the excess.
 /// </para>
 /// Pure, single-player, single-threaded; times are milliseconds and wrap like the client's 32-bit clock.
 /// </summary>
@@ -38,6 +46,8 @@ public sealed class SpeedHackDetector
     private bool _inCooldown;
     private uint _cooldownUntil;
     private uint _credit;
+    private long _drift;
+    private long _driftRealMs;
 
     public SpeedHackDetector(SpeedClockOptions options)
     {
@@ -65,6 +75,8 @@ public sealed class SpeedHackDetector
         _inCooldown = false;
         _cooldownUntil = 0;
         _credit = 0;
+        _drift = 0;
+        _driftRealMs = 0;
     }
 
     /// <summary>
@@ -129,17 +141,41 @@ public sealed class SpeedHackDetector
 
         _ring[_head] = sample;
         _head = (_head + 1) % _ring.Length;
+        bool driftFired = false;
+        long driftExcess = 0;
+        long driftSpan = 0;
         if (sample.Valid)
         {
             _sumClient += sample.ClientDelta;
             _sumReal += sample.RealDelta;
             _validCount++;
+            long limit = _options.LongTermDriftMs;
+            if (limit > 0)
+            {
+                _drift = Math.Max(-limit, _drift + ((long)sample.ClientDelta - sample.RealDelta));
+                _driftRealMs += sample.RealDelta;
+                if (_drift >= limit)
+                {
+                    driftFired = true;
+                    driftExcess = _drift;
+                    driftSpan = _driftRealMs;
+                    _drift = 0;
+                    _driftRealMs = 0;
+                }
+            }
         }
 
         // The cooldown ends once the receive clock reaches its deadline (wrap-safe signed comparison).
         if (_inCooldown && unchecked((int)(receivedMs - _cooldownUntil)) >= 0)
         {
             _inCooldown = false;
+        }
+
+        if (driftFired)
+        {
+            double driftRatio = 1.0 + ((double)driftExcess / Math.Max(1, driftSpan));
+            int driftSeverity = (int)Math.Clamp(Math.Round((driftRatio - 1.0) * 100.0, MidpointRounding.AwayFromZero), 1, 100);
+            return new SpeedHackDecision(true, driftSeverity, driftRatio, LongTermDrift: true);
         }
 
         if (_validCount < _options.MinSamples || _sumReal <= 0)
