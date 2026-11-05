@@ -59,6 +59,18 @@ public sealed partial class WorldRuntime : IDisposable
     /// </summary>
     public Scripting.ScriptHookRegistry Scripts { get; } = new();
 
+    private ArcaneCore.Game.Diagnostics.IGmTraceSink? _gmTrace;
+
+    /// <summary>
+    /// Where game code publishes GM stream events (<see cref="GmTraceGuard.Wants"/>). Set by the World's
+    /// <c>GmStreamFeature</c>; null in a bare Game host, where every producer's guard is a null check. Safe to read from any map thread.
+    /// </summary>
+    public ArcaneCore.Game.Diagnostics.IGmTraceSink? GmTrace
+    {
+        get => Volatile.Read(ref _gmTrace);
+        set => Volatile.Write(ref _gmTrace, value);
+    }
+
     public WorldRuntimeOptions Options { get; }
 
     /// <summary>The durable characters-database authority assigned before features attach and world startup.</summary>
