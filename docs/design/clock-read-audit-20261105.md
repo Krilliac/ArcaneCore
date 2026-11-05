@@ -89,7 +89,7 @@ Every row is counted, Wall ones included. The rows come from the wrapper greps i
 | `QuestNpcServices.UnixNow` | Game UTC (`_unixNow()`, see the delegate table); quest `TimerEndUnix` and vendor restock times, Unix seconds on both sides. A live read: `AddQuest` read it twice in one expression and now reads it once (see "Double reads of a live clock") |
 | `MapCombat.NowSeconds` | Game UTC (`DeathHooks.For(world).Clock.UnixSeconds`) |
 | `GmAuditFeature.NowUnixSeconds` | Game UTC, in `ArcaneCore.World`. The one Playerbots reader, the bot chat mute in `ManagedPlayerbotFeature`, adds a duration and compares with `MutedUntil`, Unix seconds on both sides |
-| `PlayerbotWorldEventBoard.UnixSeconds` | Game UTC (`_setAsideTime` Unix seconds from `ManagedPlayerbotFeature`). One reader, `PlayerbotFestivalRules.StaggeredDay`: a calendar day, not a stamp |
+| `PlayerbotWorldEventBoard.UnixSeconds` | Game UTC (`_setAsideTime` Unix seconds from `ManagedPlayerbotFeature`; the same provider the Wall rows read as Unix ms, labelled here by its use as a calendar time in seconds). One reader, `PlayerbotFestivalRules.StaggeredDay`: a calendar day, not a stamp |
 | `WorldStateHooks.LocalNow()`, `IGameTime.LocalNow()` | Game UTC (`IGameTime.UtcNow`) moved to a time zone. A calendar read (weather season, the login time, a GM command), never a stamp and never compared with a millisecond clock |
 | `WorldClock.UnixSeconds`, `WorldClock.UnixMilliseconds` | Game UTC: `WorldClock.UtcNow`, so tick-start like `NowMs` |
 | `DeathClock.UnixSeconds`, `HonorClock.UnixSeconds`, `HonorClock.UnixMilliseconds`, `IRespawnClock.UnixSeconds` | Game UTC (see the families table; `WorldDeathClock` follows world time on the manual clock) |
@@ -183,8 +183,13 @@ The hits not in this table stay inside one family (a Unix value against a Unix v
 
 A clock that moves between two reads can make one expression disagree with itself; a tick-start clock cannot. So these two scans took the live sources only (`UnixNow`, `NowUnix()`, `unixNow()`,
 `_unixNow()`, `UnixSecondsClock()`, `DateTimeOffset.UtcNow`, `DateTime.UtcNow`, `GetUtcNow()`, `TickCount64`, `_now()`, `Clock.Milliseconds()`, `_respawnClock.UnixSeconds`, `Clock.UnixSeconds`,
-`Clock.UnixMilliseconds`, `MillisecondsClock()`, `UnixNowMs`): two reads on one line, and two reads in one file no more than four lines apart. Comment lines were dropped. The hits that are
-a wrapper's own declaration are not double reads. These are the rest, with `PenaliseGhost`, which came from reading the `RestoreCooldowns` callers:
+`Clock.UnixMilliseconds`, `MillisecondsClock()`, `UnixNowMs`): two reads on one line, and two reads in one file no more than four lines apart. Whole comment lines were dropped; a trailing comment was kept. On the tree this doc was committed in, the scans
+give 6 one-line hits and 5 pairs, and each one is accounted for here. A hit only means two tokens sit close together, so it can be something other than two reads feeding one computation; the table records what each one turned out to be.
+
+The 6 one-line hits: four are a wrapper's own declaration, where the name and the clock in its body are the two tokens, and are not double reads (`QuestNpcServices.UnixNow`, `PetController.UnixNow`, `PlayerbotGroupCoordinator.UnixNow`, `PlayerbotPopulationFeature.NowUnix`).
+One is `ChatRestrictionService.MuteRemaining`, in the table. One is the `AddQuest` line after its fix, `long nowUnix = UnixNow;`, whose second token is in the trailing comment; before the fix the expression below was the hit.
+The 5 pairs: the `GameObjectMapSystem` chest rebuild (`GameObjectMapSystem.cs:1879/1883`), `InProcessBotChatClient.Overran` (`:199/202`), `ManagedPlayerbotFeature.CreateSocial` (`:298/299`), `PlayerbotPolicyTelemetry` (`:313/315`) and the zone value pass of `PlayerbotPopulationFeature` (`:2515/2519`), all in the table.
+`PenaliseGhost` is not a scan hit; it came from reading the `RestoreCooldowns` callers.
 
 | Site | Clock | Result |
 |---|---|---|
@@ -193,6 +198,9 @@ a wrapper's own declaration are not double reads. These are the rest, with `Pena
 | `ChatRestrictionService.MuteRemaining` | `unixNow()`, live | harmless. `until > unixNow() ? until - unixNow() : 0`: a later second read gives one second less, and a result of 0 or below means the mute has ended at that read. Every caller tests `> 0`. Not changed |
 | `UnstuckCommands.PenaliseGhost` (`ArcaneCore.World`) | `DateTimeOffset.UtcNow`, twice in one call | harmless. The end and `nowUnixMs` are separate reads, so the one-hour cooldown can start short by the gap between them. Not changed |
 | `PlayerbotPolicyTelemetry`, the wait loop on `Environment.TickCount64` | Wall | intended: a deadline stamp and a poll against it |
+| `InProcessBotChatClient.Overran` | `_time.GetUtcNow()`, Wall, live | harmless. Two statements under `_gate`: the first tests whether the circuit is still open and returns if so, the second stamps a new `_circuitOpenUntil`. The second is only reached when the circuit was closed at the first, and it does not use the first reading. The lock does not stop the clock, but the only effect of a gap between the reads is that the circuit stays open that much longer. Not changed |
+| `ManagedPlayerbotFeature.CreateSocial` | `_setAsideTime.GetUtcNow()`, Wall (Unix ms), in two lambdas | not a read here. Both lines build a delegate, one for `PlayerbotSocialMemory` and one for `PlayerbotTradeLedger`, and neither runs at this site. Each object reads its own delegate later. Not changed |
+| `PlayerbotPopulationFeature`, the zone value pass (`troubleOf`, `stayedSince`) | `NowUnix()`, Game UTC, live | not two reads of one computation. `troubleOf` is a lambda that reads the clock each time it is called, for a count in the trouble window. `stayedSince` is one read, a cutoff compared with `UpdatedUnix`. Neither value is used with the other, so a second boundary between them can only move a window edge by one second. Not changed |
 
 Two reads of a tick-start clock in one expression are equal once ticks run, so they are not listed as faults: `PlayerbotGroupCoordinator` set-aside remaining (`until - Now` twice), `PlayerbotBattlegroundCoordinator`
 `PhaseSinceMs = Now, QueuedSinceMs = Now`, `PlayerbotElevatorSnapshot`, and the social lanes' `pass.NowMs`. `PlayerbotGroupAI` reads `Now` (Uptime, against `_resurrectAtMs`) and `World.NowMs` (World, into
