@@ -43,7 +43,7 @@ public sealed class GatewayCrossWorkerTeleportTests
 
     /// <summary>
     /// Blocks the gateway's read-loop thread inside a test hook until <paramref name="released"/> holds (the route switch completed and nothing is staged) or the test is cancelled.
-    /// A bounded spin-then-yield wait (<see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/>), not a fixed-length sleep per poll; the hook runs on a pool thread that nothing else needs.
+    /// A bounded spin-then-yield wait (<see cref="SpinWait.SpinUntil(Func{bool}, TimeSpan)"/>), not a fixed-length sleep per poll. It still polls and holds the hook's thread while it waits (no signal exists to wait on; the router exposes only these two counters), bounded by <see cref="Deadline"/> and by the test's own token.
     /// </summary>
     private static void HoldUntil(Func<bool> released, CancellationToken cancellation)
         => SpinWait.SpinUntil(() => cancellation.IsCancellationRequested || released(), Deadline);
