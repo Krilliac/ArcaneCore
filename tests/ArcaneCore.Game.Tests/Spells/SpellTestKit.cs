@@ -106,6 +106,7 @@ internal sealed class SpellTestKit : IDisposable
     {
         Id = id,
         Name = $"Spell {id}",
+        SpellVisual = 1, // a visible spell: an invisible triggered cast sends no SMSG_SPELL_GO (vmangos Spell::IsNeedSendToClient)
         RangeIndex = SpellConstants.RangeIndexSelfOnly,
         Range = new SpellRange(0, 0),
         StartRecoveryCategory = SpellConstants.GlobalCooldownCategory,
