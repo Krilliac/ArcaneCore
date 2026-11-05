@@ -349,6 +349,21 @@ public sealed class ManagedPlayerbotProvisionSweepTests
     }
 
     [Fact]
+    public async Task TheStaleSweep_OfASplitHolder_DoesRun_SoTheNegativeControlsAboveCanFail()
+    {
+        // Positive control for TheStaleSweep_IsSplitOnly_AndHolderOnly: the same stale row, a split holder that does sweep.
+        var holder = new Shared();
+        await holder.JournalRowAsync("PBSWEEPHOLD", ageSeconds: 5000);
+        await using WorldTestHost holderHost = holder.Host(0);
+
+        await BotsOf(holderHost).SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(1, holder.Provisions.LoadPendingCalls);
+        Assert.Equal(1, holder.Provisions.RollbackCount);
+        Assert.Empty(await holder.Provisions.LoadPendingAsync());
+    }
+
+    [Fact]
     public async Task TheStaleSweep_UnderALatchedSplitBrain_IssuesNoWrites_AndRunsAgainOnceItIsCleared()
     {
         var shared = new Shared();

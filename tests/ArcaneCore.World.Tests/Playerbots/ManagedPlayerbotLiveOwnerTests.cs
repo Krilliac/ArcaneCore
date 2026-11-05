@@ -325,6 +325,75 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     }
 
     [Fact]
+    public async Task AStart_WhoseFaultRowWriteFailsAfterTheStartingRowWasStored_ReportsStartFailed_AndTheRowStaysStarting()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()));
+        host.World.Ownership = Owning(1); // the login map (0) is not owned here: the login is refused, no worker holds the character, so the start faults
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Faultrowfail", 1, 1)).BotId!.Value;
+        owners.BeforeUpdate = (bot, _) => bot.State == ManagedPlayerbotState.Faulted
+            ? Task.FromException(new InvalidOperationException("fixture-fault-row-failure"))
+            : Task.CompletedTask;
+
+        PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
+
+        Assert.False(result.Success);
+        Assert.Equal("start-failed", result.Code);
+        Assert.Equal(ManagedPlayerbotState.Starting, owners.Peek(id)!.State); // the Starting row stays: the fault row was never written
+        Assert.False(feature.IsActive(id));
+    }
+
+    [Fact]
+    public async Task ALoginRaced_WhoseRowPutBackFailsWithoutAConflict_StillReportsLoginRaced_InsteadOfThrowing()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var live = new FakeLiveOwners();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(live));
+        host.World.Ownership = Owning(1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Putbackfail", 1, 1)).BotId!.Value;
+        ManagedPlayerbot before = owners.Peek(id)!;
+        live.Holders[before.CharacterId] = "worker:Kalimdor";
+        live.FreeProbes[before.CharacterId] = 1; // the check finds no holder; the holder claims before the login does
+        owners.BeforeUpdate = (bot, _) => bot.State == ManagedPlayerbotState.Stopped
+            ? Task.FromException(new InvalidOperationException("fixture-put-back-failure")) // only the put-back writes the Stopped row
+            : Task.CompletedTask;
+
+        PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
+
+        Assert.Equal("login-raced", result.Code);
+        Assert.Equal(ManagedPlayerbotState.Starting, owners.Peek(id)!.State); // the put-back never landed
+        Assert.Null(owners.Peek(id)!.ErrorCode); // and no fault was written on top
+        Assert.False(feature.IsActive(id));
+    }
+
+    [Fact]
+    public async Task AStart_WhoseFaultRowConflicts_ReturnsTheRevisionConflictCode_AndCountsNoFault()
+    {
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()));
+        host.World.Ownership = Owning(1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Faultconflict", 1, 1)).BotId!.Value;
+        owners.BeforeUpdate = (bot, _) =>
+        {
+            if (bot.State == ManagedPlayerbotState.Faulted) owners.RefuseUpdatesOf(id); // another writer took the row between the Starting write and the fault row
+            return Task.CompletedTask;
+        };
+
+        PlayerbotOperationResult result = await feature.StartAsync(id.ToString());
+
+        Assert.False(result.Success);
+        Assert.Equal("managed-revision-conflict", result.Code); // one code for both conflict paths, not start-failed
+        Assert.Equal(0, feature.QuarantineCount);
+        Assert.False(feature.IsActive(id));
+    }
+
+    [Fact]
     public async Task ARetryOfAStartFailedBot_IsStampedWhenMade_BacksOffByDoubling_AndStopsAfterFourAttempts()
     {
         var live = new FakeLiveOwners();
