@@ -32,12 +32,12 @@ public sealed class TestStagesScriptTests
 
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\n{stdout}\n{stderr.Result}");
         Assert.Contains("test-stages self-test: all cases behaved", stdout, StringComparison.Ordinal);
-        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "flaky-line", "both", "main-rc124", "main-rc255", "main-setup", "main-timeout", "main-crash", "timing-rc124", "timing-rc255", "sweep-skipped", "sweep-default", "sweep-default-off", "sweep-nodbc", "batch-pass", "batch-fail", "batch-env-set", "batch-off", "batch-stage-nothing" })
+        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text", "main-flaky", "main-twice", "main-many", "main-flaky-off", "main-abort", "flaky-line", "both", "main-rc124", "main-rc255", "main-killed-plain", "main-killed-filtered", "main-setup", "main-timeout", "main-crash", "timing-rc124", "timing-rc255", "sweep-skipped", "sweep-default", "sweep-default-off", "sweep-nodbc", "batch-pass", "batch-fail", "batch-env-set", "batch-off", "batch-stage-nothing" })
         {
             Assert.Contains("ok   " + budgetCase + ":", stdout, StringComparison.Ordinal);
         }
 
-        Assert.Equal(79, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
+        Assert.Equal(82, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
     }
 }
 

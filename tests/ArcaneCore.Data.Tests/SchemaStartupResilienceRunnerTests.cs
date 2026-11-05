@@ -179,6 +179,19 @@ public sealed class SchemaStartupResilienceRunnerTests
         }
     }
 
+    [Fact]
+    public async Task MeasureOnceAsync_SharesAValue_ButForgetsAFailedMeasurement()
+    {
+        var cache = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<int>>>();
+        int calls = 0;
+        Task<int> Measure(string key) => ++calls == 1 ? throw new InvalidOperationException("transient") : Task.FromResult(7);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => SchemaStartupResilienceTestBase.MeasureOnceAsync(cache, "k", Measure));
+        Assert.Equal(7, await SchemaStartupResilienceTestBase.MeasureOnceAsync(cache, "k", Measure));
+        Assert.Equal(7, await SchemaStartupResilienceTestBase.MeasureOnceAsync(cache, "k", Measure));
+        Assert.Equal(2, calls);
+    }
+
     private static string Key(object[] row) => string.Join("|", row);
 
     private static List<Type> SliceClasses(string prefix) => typeof(SchemaStartupResilienceTestBase).Assembly.GetTypes()

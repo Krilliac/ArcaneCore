@@ -73,57 +73,92 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
         }
     }
 
-    /// <summary>The body of the interrupted-upgrade-step theory; the slice classes each run a share of <see cref="UpgradeSteps"/> through it, so the rows run in parallel.</summary>
+    /// <summary>
+    /// The body of the interrupted-upgrade-step theory; the slice classes each run a share of <see cref="UpgradeSteps"/> through it, so the rows run in parallel.
+    /// The legacy database and the steps before this one are replayed once, and every fault runs on its own clone of the result, because the replay is the same for every fault of the step.
+    /// The fault list is still measured on the replay itself, and the clone is checked against the replay for every step.
+    /// </summary>
     private protected async Task RunInterruptedUpgradeStepAsync(DatabaseProvider provider, string component, int stepVersion)
     {
-        // How many DDL statements does this step issue? Measured, not assumed.
-        DatabaseConnectionOptions probe = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-        var counter = new CommandTap();
-        await EnsureAsync(component, probe, stepVersion, counter);
-        int ddl = counter.Ddl;
-        // A placeholder step that holds a reserved version open (a lane schema gap class) has no changes, and a content step (world 64, the shipped bot ladder)
-        // only inserts missing rows and issues no DDL: in both only the row writes and the version write can be interrupted.
-        SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
-        Assert.True(ddl > 0 || step.Changes.All(c => c is EnsureRowChange), $"{component} step {stepVersion} issued no DDL");
-
-        Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
-            && CommandTap.IsWrite(sql, "UPDATE", "INSERT");
-
-        var faults = new List<(string Label, Func<string, bool> When, int On)>();
-        for (int k = 1; k <= ddl; k++)
+        DatabaseConnectionOptions replay = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
+        DatabaseConnectionOptions master = await _databases.CloneAsync(await TestDatabases.CaptureAsync(replay));
+        try
         {
-            faults.Add(($"after DDL #{k}", CommandTap.IsDdl, k));
-        }
+            await AssertSameDatabaseAsync(replay, master, $"{provider} {component} clone before step {stepVersion}");
+            TestDatabases.DatabaseImage image = await TestDatabases.CaptureAsync(master);
 
-        faults.Add(("after the version write", isVersionWrite, 1));
+            // How many DDL statements does this step issue? Measured, not assumed, on the replayed database.
+            var counter = new CommandTap();
+            await EnsureAsync(component, replay, stepVersion, counter);
+            int ddl = counter.Ddl;
+            // A placeholder step that holds a reserved version open (a lane schema gap class) has no changes, and a content step (world 64, the shipped bot ladder)
+            // only inserts missing rows and issues no DDL: in both only the row writes and the version write can be interrupted.
+            SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
+            Assert.True(ddl > 0 || step.Changes.All(c => c is EnsureRowChange), $"{component} step {stepVersion} issued no DDL");
 
-        await RunFaultsAsync(faults, FaultParallelism, async fault =>
-        {
-            (string label, Func<string, bool> when, int on) = fault;
-            DatabaseConnectionOptions connection = await PrepareLegacyAsync(provider, component, stepVersion - 1, stepVersion);
-            try
+            // A clone that took another path through the step would have other crash points than the ones below.
+            DatabaseConnectionOptions probe = await _databases.CloneAsync(image);
+            var cloneCounter = new CommandTap();
+            await EnsureAsync(component, probe, stepVersion, cloneCounter);
+            await _databases.ReleaseAsync(probe);
+            Assert.True(ddl == cloneCounter.Ddl, $"{provider} {component} step {stepVersion}: the replay issued {ddl} DDL statements, its clone {cloneCounter.Ddl}");
+
+            Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
+                && CommandTap.IsWrite(sql, "UPDATE", "INSERT");
+
+            var faults = new List<(string Label, Func<string, bool> When, int On)>();
+            for (int k = 1; k <= ddl; k++)
             {
-                var tap = new CommandTap(when, on);
-                await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
+                faults.Add(($"after DDL #{k}", CommandTap.IsDdl, k));
+            }
 
-                // A restart under the current definition must reach the same schema as an uninterrupted start.
+            faults.Add(("after the version write", isVersionWrite, 1));
+
+            await RunFaultsAsync(faults, FaultParallelism, async fault =>
+            {
+                (string label, Func<string, bool> when, int on) = fault;
+                DatabaseConnectionOptions connection = await _databases.CloneAsync(image);
                 try
                 {
-                    await SchemaProbe.EnsureCurrentAsync(component, connection);
-                }
-                catch (Exception ex)
-                {
-                    throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
-                }
+                    var tap = new CommandTap(when, on);
+                    await AssertInjectedAsync(() => EnsureAsync(component, connection, stepVersion, tap), $"{provider} {component} step {stepVersion} {label} (probe saw {ddl} DDL)", tap);
 
-                await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
-            }
-            finally
-            {
-                await _databases.ReleaseAsync(connection);
-            }
-        });
-        await _databases.ReleaseAsync(probe);
+                    // A restart under the current definition must reach the same schema as an uninterrupted start.
+                    try
+                    {
+                        await SchemaProbe.EnsureCurrentAsync(component, connection);
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new Xunit.Sdk.XunitException($"{component} step {stepVersion} interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                    }
+
+                    await AssertConvergedAsync(component, connection, $"{component} step {stepVersion} {label}");
+                }
+                finally
+                {
+                    await _databases.ReleaseAsync(connection);
+                }
+            });
+        }
+        finally
+        {
+            await _databases.ReleaseAsync(replay);
+            await _databases.ReleaseAsync(master);
+        }
+    }
+
+    /// <summary>Both databases must hold exactly the same definitions and rows (<see cref="TestDatabases.DescribeAsync"/>). Two empty descriptions prove nothing, so an empty one is refused.</summary>
+    private protected static async Task AssertSameDatabaseAsync(DatabaseConnectionOptions expected, DatabaseConnectionOptions actual, string label)
+    {
+        IReadOnlyList<string> want = await TestDatabases.DescribeAsync(expected);
+        IReadOnlyList<string> got = await TestDatabases.DescribeAsync(actual);
+        Assert.True(want.Count > 0, $"{label}: nothing to compare");
+        string[] missing = [.. want.Except(got)];
+        string[] extra = [.. got.Except(want)];
+        Assert.True(
+            want.Count == got.Count && missing.Length == 0 && extra.Length == 0,
+            $"{label}: {want.Count} lines against {got.Count}. missing: [{string.Join("; ", missing.Take(5).Select(l => Shorten(l, 300)))}] unexpected: [{string.Join("; ", extra.Take(5).Select(l => Shorten(l, 300)))}]");
     }
 
     /// <summary>How many classes share the interrupted-upgrade-step theory (<c>SchemaStartupResilienceUpgradeSlice*Tests</c>).</summary>
@@ -135,7 +170,7 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     /// <summary>
     /// How many test cases one world fresh create is cut into. A fresh create of the world component issues one DDL statement per table and
     /// the theory replays the whole create once per injected fault, so the cost of one case grows with the square of the table count (727 s for
-    /// MariaDB world on gate 57a1c0c21, 32 minutes on gate 1c7134022, where every test of the suite ran 2.45 times slower). Each shard owns every
+    /// MariaDB world on gate 57a1c0c21). Each shard owns every
     /// <c>WorldFaultShards</c>-th fault, so the faults still all run, in cases that the classes spread.
     /// </summary>
     internal const int WorldFaultShards = 12;
@@ -147,29 +182,11 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     internal const int CharactersFaultShards = 4;
 
     /// <summary>
-    /// Every <paramref name="slices"/>-th row of each provider's block of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/> of the block: the slices together
-    /// cover each row exactly once, and every slice carries the same number of rows of each provider, within one (a MariaDB row costs far more than a SQLite one; the runner
-    /// test pins this). <see cref="UpgradeSteps"/> yields the same steps in the same order for every provider, so a step has the same position in every block: all providers of
-    /// one step land in the same slice, and a heavy step's rows stack in one class.
+    /// Every <paramref name="slices"/>-th row of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/>: the slices together cover each row exactly once. Each provider's rows
+    /// are one run of consecutive rows, so a slice carries the same number of each provider's rows, within one (a MariaDB row costs far more than a SQLite one; the runner test pins this).
+    /// While a provider's block is not a multiple of the slice count, a step's rows of the different providers land in different slices, so a heavy step does not stack in one class.
     /// </summary>
-    public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices)
-    {
-        object? provider = null;
-        int within = 0;
-        foreach (object[] row in UpgradeSteps())
-        {
-            if (!Equals(row[0], provider))
-            {
-                provider = row[0];
-                within = 0;
-            }
-
-            if (within++ % slices == slice)
-            {
-                yield return row;
-            }
-        }
-    }
+    public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices) => UpgradeSteps().Where((_, index) => index % slices == slice);
 
     /// <summary>
     /// Every (provider, component, shard, shards) case of the interrupted-fresh-create theory: the world component is cut into <see cref="WorldFaultShards"/> shards, characters into <see cref="CharactersFaultShards"/>, the others are one case.
@@ -204,7 +221,7 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
         return faults.Where((_, index) => index % shards == shard).ToList();
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(DatabaseProvider Provider, string Component), Lazy<Task<int>>> s_freshCreateDdl = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(DatabaseProvider Provider, string Component), Lazy<Task<int>>> FreshCreateDdl = new();
 
     /// <summary>
     /// How many DDL statements a fresh create of <paramref name="component"/> issues on <paramref name="provider"/>, measured once per process and shared by every shard:
@@ -212,13 +229,32 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     /// The probe runs on its own databases, which are dropped when it is done.
     /// </summary>
     private static Task<int> FreshCreateDdlCountAsync(DatabaseProvider provider, string component)
-        => s_freshCreateDdl.GetOrAdd((provider, component), key => new Lazy<Task<int>>(async () =>
+        => MeasureOnceAsync(FreshCreateDdl, (provider, component), async key =>
         {
             await using var databases = new TestDatabases();
             var counter = new CommandTap();
             await SchemaProbe.EnsureCurrentAsync(key.Component, await databases.CreateAsync(key.Provider), counter);
             return counter.Ddl;
-        })).Value;
+        });
+
+    /// <summary>
+    /// The value of <paramref name="key"/>, measured by the first caller and shared by the callers after it. A measurement that fails fails the callers waiting on it and is then forgotten:
+    /// a transient error of a shared database must fail one wave of callers, not every later shard of the process with the same old exception.
+    /// </summary>
+    internal static async Task<int> MeasureOnceAsync<TKey>(System.Collections.Concurrent.ConcurrentDictionary<TKey, Lazy<Task<int>>> cache, TKey key, Func<TKey, Task<int>> measure)
+        where TKey : notnull
+    {
+        Lazy<Task<int>> entry = cache.GetOrAdd(key, k => new Lazy<Task<int>>(() => measure(k)));
+        try
+        {
+            return await entry.Value;
+        }
+        catch
+        {
+            cache.TryRemove(new KeyValuePair<TKey, Lazy<Task<int>>>(key, entry));
+            throw;
+        }
+    }
 
     /// <summary>The body of the interrupted-fresh-create theory; the share classes each run a share of <see cref="FreshCreateCases"/> through it, so the rows run in parallel. Runs shard <paramref name="shard"/> of <paramref name="shards"/> of the faults.</summary>
     private protected async Task RunInterruptedFreshCreateAsync(DatabaseProvider provider, string component, int shard, int shards)

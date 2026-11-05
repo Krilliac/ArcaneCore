@@ -227,6 +227,7 @@ rerun_n=0 rerun_pass=0 rerun_fail=0
 m_rerun_n=0 m_rerun_pass=0 m_rerun_fail=0
 flaky=()
 serial_seen=0
+killed_any=0
 
 if [ "$stage" = main ] || [ "$stage" = all ]; then
   flt='Category!=Timing'; [ -n "$filter" ] && flt="($filter)&Category!=Timing"
@@ -251,6 +252,13 @@ if [ "$stage" = main ] || [ "$stage" = all ]; then
     # VSTest's own line when the session timeout fires: "Aborting test run: test run timeout of N milliseconds exceeded."
     timedout=0; grep -q 'test run timeout of [0-9]* milliseconds exceeded' "$log" && timedout=1
     part=; [ $timedout = 1 ] && part=" (partial: stopped at budget)"
+    # A suite killed by GATE_WRAP's timeout (124, 137 after its -k) or a TERM prints no totals, so its "executed 0" means the totals are lost, not that nothing ran.
+    killed=0; killed_why=
+    case "$rc" in 124|137|143) if [ "$e" -eq 0 ]; then
+      killed=1; killed_any=1
+      killed_why="main $t was killed (rc=$rc) before it reported totals (the log has $(grep -cE '^[[:space:]]+Passed ' "$log") Passed and $(grep -cE '^[[:space:]]+Failed ' "$log") Failed result lines)"
+      part=" (killed: no totals)"
+    fi ;; esac
     echo "main $t rc=$rc executed $e (passed $p, failed $f), skipped $s$part"
     summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s$part")
     over=$timedout
@@ -294,7 +302,7 @@ if [ "$stage" = main ] || [ "$stage" = all ]; then
         [ $all_passed = 1 ] && cleared=1
       fi
       [ -n "$why" ] && echo "main $t: no rerun: $why"
-      [ $cleared = 1 ] || fail "main $t rc=$rc failed=$f"
+      [ $cleared = 1 ] || fail "${killed_why:-main $t rc=$rc failed=$f}"
     fi
     summary+=("    run time $((secs / 60))m$((secs % 60))s")
     # Budgets that fail the gate: not with --filter (a subset's times say nothing about the suite) and not when switched off.
@@ -319,7 +327,7 @@ if [ "$stage" = main ] || [ "$stage" = all ]; then
     else
       summary+=("    slowest class (s): $(head -1 <<< "${classes:-none}")")
     fi
-    [ -z "$filter" ] && [ "$e" -eq 0 ] && fail "main $t executed 0 tests"
+    [ -z "$filter" ] && [ "$e" -eq 0 ] && [ $killed = 0 ] && fail "main $t executed 0 tests"
   done
   # Executed-test guard: a class that is required to run and only skipped (no client DBCs on this host) must not read as a pass.
   if [ -z "$filter" ] && [ -n "$require_executed" ]; then
@@ -437,7 +445,7 @@ fi
 # Flaky tests of both stages (main first, then timing).
 if [ ${#flaky[@]} -gt 0 ]; then summary+=("flaky tests (passed their rerun): $(IFS=,; echo "${flaky[*]}" | sed 's/,/, /g')"); else summary+=("flaky tests (passed their rerun): none"); fi
 
-[ -n "$filter" ] && [ $((a_exec + b_exec)) -eq 0 ] && fail "filter matched 0 tests"
+[ -n "$filter" ] && [ $((a_exec + b_exec)) -eq 0 ] && [ $killed_any = 0 ] && fail "filter matched 0 tests"
 
 result=PASS; [ ${#reasons[@]} -gt 0 ] && result=FAIL
 {

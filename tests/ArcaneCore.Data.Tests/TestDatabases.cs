@@ -11,7 +11,7 @@ namespace ArcaneCore.Data.Tests;
 /// name) in <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c>. The PostgreSQL server must be
 /// version 13 or later (the drop uses <c>DROP DATABASE ... WITH (FORCE)</c>).
 /// </summary>
-internal sealed class TestDatabases : IAsyncDisposable
+internal sealed partial class TestDatabases : IAsyncDisposable
 {
     public const string MariaDbVariable = "ARCANECORE_TEST_MARIADB";
     public const string PostgresVariable = "ARCANECORE_TEST_POSTGRES";
