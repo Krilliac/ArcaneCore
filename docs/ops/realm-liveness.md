@@ -83,6 +83,14 @@ Not written by the world: with `World:Realm:Id` 0, with no auth database, and in
 where an active and a standby world share the realm and the gateway owns the client-facing address. There the gateway writes
 the row (section 7).
 
+Startup refusal (exit 78): under the host supervisor, a child labelled `social` or `coordinator` is a whole World executable, so its own
+`Arguments` must carry `--World:Realm:Id=0` in the exact `--Key=value` form, or the supervisor's config check refuses to start. Any other form is refused
+too (space form, slash form, a mention inside a quoted value, a mention right after a `--Key` that has no `=`), as is any non-zero value among
+several mentions (the message names the offending one). A labelled child that also sets `Cluster:Worker:Enabled=true` is still refused until it carries `--World:Realm:Id=0`.
+Accepted limit: the check covers only the `social` and `coordinator` labels. A second `combined` child, or a `worker` child that does not set
+`Cluster:Worker:Enabled=true`, is not refused for the realm row and, with `World:Realm:Id` above 0, writes it beside the world that serves the realm:
+give such a child `--World:Realm:Id=0` yourself (tests: `ClusterSupervisorConfigChecksTests`).
+
 ## 5. How the logon daemon reads it
 
 `RealmListProjection` (pure, `src/ArcaneCore.Realm/Protocol`) turns the row, the heartbeat age and the account's GM level

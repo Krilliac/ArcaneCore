@@ -185,6 +185,33 @@ public sealed class ClusterHostSupervisorStopAuthTests
         Assert.Null(Snap(rig).LastBeatAgeMs);
     }
 
+    // Row Y4-3: a heartbeat-shaped line that no parser accepts (a stray control character, a trailing word) is ordinary output, but a child writes the real
+    // per-run token on every beat, so it must not reach the console or the child's log.
+    [Theory]
+    [InlineData("\r")]
+    [InlineData(" trailing")]
+    public async Task ARejectedHeartbeatShapedLine_CarryingTheRealToken_IsShownWithTheTokenRedacted(string suffix)
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = rig.Launcher.Last;
+
+        child.Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={child.ProcessId} alive token={child.Token}{suffix}");
+
+        Assert.DoesNotContain(child.Token!, rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Contains("token=<redacted>", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Contains("heartbeat 2026-10-29T00:00:00.000Z", rig.ConsoleText, StringComparison.Ordinal); // still shown as the ordinary output it is
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Theory]
+    [InlineData("heartbeat x pid=1 alive token=SECRET\r", "heartbeat x pid=1 alive token=<redacted>")]
+    [InlineData("lifecycle stopping token=SECRET intent=shutdown code=0 extra", "lifecycle stopping token=<redacted> intent=shutdown code=0 extra")]
+    [InlineData("a log line mentioning token=SECRET", "a log line mentioning token=SECRET")]
+    [InlineData("heartbeat garbage", "heartbeat garbage")]
+    public void RedactProtocolToken_ChangesOnlyProtocolShapedLines(string line, string expected)
+        => Assert.Equal(expected, ClusterHostSupervisor.RedactProtocolToken(line));
+
     [Fact]
     public async Task HeartbeatWithTheToken_IsConsumed_AndIsALifeSign()
     {

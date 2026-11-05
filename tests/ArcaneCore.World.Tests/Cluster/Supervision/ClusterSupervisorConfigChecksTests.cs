@@ -77,6 +77,10 @@ public sealed class ClusterSupervisorConfigChecksTests
     [InlineData("social", "--World:Realm:Id=0 /World:Realm:Id=1", "0")]
     [InlineData("social", "--World:Realm:Id=0 --World:Realm:Id=1", null)]
     [InlineData("coordinator", "--World:Realm:Id=-1", null)]
+    [InlineData("social", "--Cluster:Fencing:Shard --World:Realm:Id=0", "0")] // the configuration provider reads the second word as the value of --Cluster:Fencing:Shard
+    [InlineData("social", "--Some:Key=\"a --World:Realm:Id=0\"", "0")] // inside a quoted value of another key
+    [InlineData("coordinator", "--Some:Key=\"a --World:Realm:Id=0\" --Other:Key=1", "0")]
+    [InlineData("social", "--Some:Key \"--World:Realm:Id=0\"", "0")] // a bare key takes the quoted word as its value
     [InlineData("Coordinator", "--World:Realm:Id=2", null)]
     public void ASocialOrCoordinatorLabelledChild_ThatCouldWriteTheRealmRow_IsRefused(string role, string arguments, string? sharedRealmId)
     {
@@ -92,17 +96,13 @@ public sealed class ClusterSupervisorConfigChecksTests
     }
 
     [Theory]
-    [InlineData("social", "--World:Realm:Id=0", null)]
-    [InlineData("coordinator", "--World:Realm:Id=0", null)]
-    [InlineData("Social", "--World:Realm:Id=0", null)]
-    public void ASocialOrCoordinatorLabelledChild_WithRealmIdZero_IsNotRefusedForTheRealmRow(string role, string arguments, string? sharedRealmId)
+    [InlineData("social", "--World:Realm:Id=0")]
+    [InlineData("coordinator", "--World:Realm:Id=0")]
+    [InlineData("Social", "--World:Realm:Id=0")]
+    [InlineData("social", "--World:Realm:Id=\"0\"")]
+    public void ASocialOrCoordinatorLabelledChild_WithRealmIdZero_IsNotRefusedForTheRealmRow(string role, string arguments)
     {
         Dictionary<string, string?> values = Base();
-        if (sharedRealmId is not null)
-        {
-            values["World:Realm:Id"] = sharedRealmId;
-        }
-
         AddWorld(values, "b", role, arguments + " --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
 
         Assert.False(RealmRowRefused(Errors(values), "b"));
@@ -125,6 +125,89 @@ public sealed class ClusterSupervisorConfigChecksTests
         AddWorld(values, "world", "combined", string.Empty);
 
         Assert.False(RealmRowRefused(Errors(values), "world"));
+    }
+
+    // Row Y4-7: the child's own value decides; the shared World:Realm:Id is not consulted for a labelled child.
+    [Fact]
+    public void ASharedNonZeroRealmId_DoesNotRefuseALabelledChild_WhoseOwnArgumentsSetZero()
+    {
+        Dictionary<string, string?> values = Base();
+        values["World:Realm:Id"] = "3";
+        AddWorld(values, "b", "social", "--World:Realm:Id=0 --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        Assert.False(RealmRowRefused(Errors(values), "b"));
+    }
+
+    // Row Y4-6: with several mentions the refusal names the offending value, not the last one.
+    [Theory]
+    [InlineData("--World:Realm:Id=1 --World:Realm:Id=0", "found 1")]
+    [InlineData("--World:Realm:Id=0 --World:Realm:Id=2 --World:Realm:Id=0", "found 2")]
+    [InlineData("--World:Realm:Id=0 --World:Realm:Id=abc", "found abc")]
+    public void TheRealmRowRefusal_NamesTheOffendingValue_NotTheLastOne(string arguments, string expected)
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "b", "social", arguments + " --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        ConfigIssue refusal = Assert.Single(Errors(values), e => e.Key == "Cluster:Supervisor:Processes:b:Arguments" && e.Problem.Contains("World:Realm:Id=0", StringComparison.Ordinal));
+        Assert.Contains(expected, refusal.Problem, StringComparison.Ordinal);
+    }
+
+    // Row Y4-5: the command line is read the way the child reads it.
+    [Theory]
+    [InlineData("--World:Realm:Id=0", false, "")]
+    [InlineData("--World:Realm:Id=1 --World:Realm:Id=0", true, "1")]
+    [InlineData("--Some:Key --World:Realm:Id=0", true, "an argument form the supervisor cannot read")]
+    [InlineData("--Some:Key=\"x --World:Realm:Id=0\"", true, "an argument form the supervisor cannot read")]
+    [InlineData("--Some:Key=\"two words\" --World:Realm:Id=0", false, "")]
+    [InlineData("--Some:Key=1", true, "no value, so the default 1")]
+    public void ResolveChildRealmId_ReadsTheCommandLineLikeTheChildDoes(string arguments, bool writesRow, string message)
+    {
+        string resolved = ClusterSupervisorConfigChecks.ResolveChildRealmId(arguments, out bool writes);
+
+        Assert.Equal(writesRow, writes);
+        if (writesRow)
+        {
+            Assert.Equal(message, resolved);
+        }
+    }
+
+    // Row Y4-8: the check does not look at Cluster:Worker:Enabled. A labelled child that is a gateway worker never writes the row (RealmLivenessService.EvaluateGate),
+    // but the refusal stays, fail closed: such a child still carries --World:Realm:Id=0. A child with role worker is not a social/coordinator label at all: it is
+    // expected to be a gateway worker (Cluster:Worker:Enabled=true), and its row write is the world's own gate.
+    [Theory]
+    [InlineData("social")]
+    [InlineData("coordinator")]
+    public void ALabelledChild_WithWorkerEnabled_IsStillRefusedForTheRealmRow_UntilItCarriesRealmIdZero(string role)
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "b", role, "--Cluster:Worker:Enabled=true --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+        Assert.True(RealmRowRefused(Errors(values), "b"));
+
+        AddWorld(values, "b", role, "--World:Realm:Id=0 --Cluster:Worker:Enabled=true --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+        Assert.False(RealmRowRefused(Errors(values), "b"));
+    }
+
+    [Fact]
+    public void ARoleWorkerChild_IsNotRefusedForTheRealmRow_WhetherOrNotItSetsWorkerEnabled()
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Worker:Enabled=true --Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a");
+        Assert.False(RealmRowRefused(Errors(values), "a"));
+
+        AddWorld(values, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a");
+        Assert.False(RealmRowRefused(Errors(values), "a"));
+    }
+
+    // Row Y4-9, accepted limit (docs/ops/realm-liveness.md): a second combined child is not a social/coordinator label, so the realm-row check does not see it.
+    [Fact]
+    public void ASecondCombinedChild_IsNotRefusedForTheRealmRow_AnAcceptedLimit()
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "combined", FencedA);
+        AddWorld(values, "b", "combined", FencedB);
+
+        Assert.False(RealmRowRefused(Errors(values), "a"));
+        Assert.False(RealmRowRefused(Errors(values), "b"));
     }
 
     [Fact]

@@ -1421,7 +1421,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             // A heartbeat is authenticated like the stop announcement: logged text a player or GM influences can land on a line of its own and match the
             // shape, so a token-less (or wrong-token) heartbeat is ordinary output and never counts as liveness or arms the hang watch.
-            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken) && TokenMatches(beatToken))
+            bool parsedAsProtocol = SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat, out string beatToken);
+            if (parsedAsProtocol && TokenMatches(beatToken))
             {
                 RecordBeat(entry, process, beat);
                 return;
@@ -1429,7 +1430,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // The dumping announcement is authenticated like the stop announcement: an unauthenticated one could be forged from logged text to keep
             // a hung child from being drained for the whole dump grace, so a token-less or wrong-token line is ordinary output.
-            if (SupervisorProtocol.TryParseDumping(line, out int dumpingMaxSeconds, out string dumpingToken) && TokenMatches(dumpingToken))
+            bool parsedDumping = SupervisorProtocol.TryParseDumping(line, out int dumpingMaxSeconds, out string dumpingToken);
+            parsedAsProtocol |= parsedDumping;
+            if (parsedDumping && TokenMatches(dumpingToken))
             {
                 RecordDumping(entry, process, dumpingMaxSeconds);
                 return;
@@ -1437,7 +1440,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
             // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
-            if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
+            bool parsedStopping = SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _);
+            parsedAsProtocol |= parsedStopping;
+            if (parsedStopping && TokenMatches(stoppingToken))
             {
                 RecordStopping(entry, process, intent);
                 return;
@@ -1454,10 +1459,34 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 HandleChildRestartRequest(entry, process, childRestart);
                 return;
             }
+
+            // A protocol-shaped line that no parser accepted (a stray control character, a trailing word) may still hold the real per-run token, because the
+            // child writes it on every beat. It is ordinary output for the console and the child log, but the token must not reach them. A line that parsed with
+            // a wrong token cannot hold the real one, so it is shown as it is.
+            if (!parsedAsProtocol)
+                line = RedactProtocolToken(line);
         }
 
         _multiplexer.RouteLine(entry.Config, line, isStdErr);
     }
+
+    /// <summary>
+    /// <paramref name="line"/> with the value of every <c>token=</c> replaced by <c>&lt;redacted&gt;</c> when it starts like a supervisor protocol line
+    /// (<c>heartbeat </c> or <c>lifecycle </c>); any other line is returned unchanged.
+    /// </summary>
+    internal static string RedactProtocolToken(string line)
+    {
+        if (line is null
+            || !(line.StartsWith("heartbeat ", StringComparison.Ordinal) || line.StartsWith("lifecycle ", StringComparison.Ordinal))
+            || !line.Contains("token=", StringComparison.Ordinal))
+        {
+            return line!;
+        }
+
+        return ProtocolTokenValue.Replace(line, "token=<redacted>");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ProtocolTokenValue = new(@"token=[^\s]*", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private void RecordBeat(ManagedEntry entry, ISupervisedProcess process, SupervisorHeartbeatState beat)
     {
@@ -1653,7 +1682,10 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         if (peer is null)
             return;
 
+        bool wasStandby = peer.Standby;
+        string argumentsBefore = peer.Config.Arguments ?? string.Empty;
         SetStandbyUnderLock(peer, false);
+        bool changed = wasStandby || !string.Equals(argumentsBefore, peer.Config.Arguments ?? string.Empty, StringComparison.Ordinal);
         int realmId = demoted.Config.RealmId;
         if (realmId > 0 && peer.Config.RealmId == 0)
         {
@@ -1661,7 +1693,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             demoted.Config.RealmId = 0;
             _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
         }
-        else
+        else if (changed) // a peer that was already active (never a standby) has nothing cleared: no line
         {
             _logger.LogInformation("Supervisor cleared the standby role of {Promoted}, the world that replaces {Demoted} in shard {Shard}", peer.Config.Name, demoted.Config.Name, shard);
         }
@@ -1684,6 +1716,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// again. A child that is already down is simply started. The old process has exited before the new one starts, so it has released what the new one needs
     /// (a world's writer lock). Throws <see cref="KeyNotFoundException"/> for an unknown name, and <see cref="InvalidOperationException"/> when the old process
     /// survived its kill (nothing is relaunched then), the role cannot be a standby, or admission refuses the launch.
+    /// <para>
+    /// <paramref name="standby"/> <c>false</c> is a promotion request: <see cref="WithStandbyArgument"/> strips <see cref="StandbyArgument"/> from the child's launch arguments, so a worker
+    /// that is configured as a standby and was never promoted comes back as an active world, not as a standby. That is the operator's explicit request (it is how a restart by name
+    /// makes a standby the active world); a caller that only wants the child relaunched in its present role passes <paramref name="standby"/> as the child's current role
+    /// (<see cref="SupervisedProcessSnapshot"/>).
+    /// </para>
     /// </summary>
     public async Task<SupervisedProcessSnapshot> RestartProcessAsync(string name, bool standby, CancellationToken ct = default)
     {
@@ -2365,6 +2403,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// <summary>
     /// Records one failure of <paramref name="entry"/> at <paramref name="now"/> and, when that is more than <c>CrashLoopMaxRestarts</c> inside the window,
     /// marks the child Faulted, writes the ledgers and returns true with the message to show. Call under <c>_gate</c>.
+    /// <para>
+    /// Accepted limit: only failures inside the sliding window count, so a child that fails more slowly than <c>CrashLoopMaxRestarts</c> times per
+    /// <c>CrashLoopWindowSeconds</c> (with the defaults, a crash cycle of six minutes or longer) is relaunched after its backoff for ever and never gives up. A child
+    /// that stays up that long between crashes is not a tight loop, and the hang watch, the fault ledger and the anomaly ledger still show each crash. To give up
+    /// on a slower cycle, raise <c>CrashLoopWindowSeconds</c> or lower <c>CrashLoopMaxRestarts</c>.
+    /// </para>
     /// </summary>
     private bool GiveUpOnCrashLoopUnderLock(ManagedEntry entry, long now, int? exitCode, out string? message)
     {
