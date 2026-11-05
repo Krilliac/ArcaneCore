@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
