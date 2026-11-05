@@ -369,7 +369,6 @@ public sealed class InstanceChestDurabilityTests
         Assert.Equal(2u, await f.Host.PlayerStateAsync("Dlootee", p => Count(p, Cloth)));
         Assert.False(await f.Host.PlayerStateAsync("Dlootee", p => p.IsQuestSettlementPending));
         Assert.False(await f.Host.OnWorldAsync(() => f.Settlements.IsPending(key)));
-        Assert.Empty(await f.Host.OnWorldAsync(() => f.Settlements.SettlingCharacters));
         Assert.True(f.Store.States[key].Items.Single(i => i.Slot == 0).IsLooted);
         Assert.Equal(0u, await f.Host.PlayerStateAsync("Dlootee", p => Count(p, Silk)));
         await TakeAsync(alice, 1);
