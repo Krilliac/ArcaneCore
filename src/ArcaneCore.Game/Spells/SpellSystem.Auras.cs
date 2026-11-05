@@ -1350,6 +1350,15 @@ public sealed partial class SpellSystem
             return;
         }
 
+        CastDefaultPeriodicTrigger(holder, aura);
+    }
+
+    /// <summary>
+    /// The generic tail of Aura::TriggerSpell, for a tick script that only gates the default cast (rocket boots roll first, then cast what the
+    /// aura names): the caster casts the effect's trigger spell, triggered, at the target.
+    /// </summary>
+    internal void CastDefaultPeriodicTrigger(SpellAuraHolder holder, SpellAura aura)
+    {
         uint triggerSpell = holder.Spell.Effects[aura.EffectIndex].TriggerSpell;
         Unit caster = ResolveAuraCaster(holder) ?? holder.Target;
         Unit triggerTarget = holder.Target;

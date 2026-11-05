@@ -19,9 +19,13 @@ public sealed partial class SpellSystem
     /// (cmangos starts the table from DUMMY as well, ScriptMgr.cpp:67-106): it starts the row from the FIRST DUMMY effect of a spell that has no
     /// SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>). Of the DUMMY-only ids with imported rows,
     /// 11886-11889 (CaptureDespawnScript) and 25716 (ForceBowScript) are claimed by an <see cref="ISpellScript"/>, so their rows never run;
-    /// 9096, 11365, 11885, 16378, 19250, 21052, 21914, 21917 and 23359 have no code claim, so their rows are the only implementation. 29182 and
-    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Audit of the full imported set of 21 ids (5784, 9096, 11365, 11885-11889, 13819,
-    /// 16378, 19250, 21052, 21914, 21917, 23161, 23214, 23359, 25716, 26608, 29182, 29188): a source search for each bare id finds no hard-coded
+    /// 9096, 11365, 11885, 16378, 19250, 21052, 21914 and 21917 have no code claim, so their rows are the only implementation. 23359 has no
+    /// code claim either, but its row is not the only reaction to the cast: the hit creature also answers through its EventAI SpellHit rows
+    /// (DeliberatelyInertSpells.Researched.cs, entry 23359, a ScriptCarrier). 29182 and
+    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Audit of the classic-db z2815 set (21 ids with imported rows, 32 rows; the
+    /// importer also translates about 27 vmangos ids, docs/areas/content-import.md, and the count of vmangos spell_scripts ids a former note gave
+    /// as 32 is UNVERIFIED: no vmangos extract was available, and 32 is the z2815 row count): 5784, 9096, 11365, 11885-11889, 13819,
+    /// 16378, 19250, 21052, 21914, 21917, 23161, 23214, 23359, 25716, 26608, 29182, 29188. A source search for each bare id finds no hard-coded
     /// switch, dummy-aura case or handler except the <see cref="ISpellScript"/> claims named above and 26608 (also an <see cref="ISpellScript"/>,
     /// claimed), so no row and code ever both act. 16378 appears only as a creature entry (GuardPostTable); 5784, 13819, 23161 and 23214 are the
     /// mount spells and have no code claim.

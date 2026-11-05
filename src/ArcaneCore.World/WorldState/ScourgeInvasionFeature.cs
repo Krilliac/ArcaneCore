@@ -361,7 +361,10 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
 
     /// <summary>
     /// Every Necropolis the saved state counts as destroyed stays torn down: the Necropolis creature and objects of its Health spawn are
-    /// removed again when a grid load or an event refresh brought them back (a restart, a player returning to an unloaded grid).
+    /// removed again when a grid load or an event refresh brought them back (a restart, a player returning to an unloaded grid). So is the
+    /// Health unit itself (16421): its 10-year respawn row is lost with <c>Creatures:Respawn:Persist=false</c>, and a zone event refresh
+    /// spawns it again as an attackable unit although its Necropolis is gone. A zone restart reloads the snapshot, which no longer holds
+    /// the destroyed record, before the events are driven, so a Health unit of the next attack is not removed here.
     /// </summary>
     private void EnforceTeardowns()
     {
@@ -369,7 +372,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (destroyed.Count == 0) return;
         foreach (CreatureMapSystem creatures in _healthSystems)
             foreach (CreatureSpawn spawn in creatures.Content.GetSpawns(creatures.Map.MapId, ScourgeInvasionCatalog.NecropolisHealth))
-                if (destroyed.Contains(spawn.Guid)) TearDownNecropolis(creatures, spawn.X, spawn.Y, spawn.Z);
+                if (destroyed.Contains(spawn.Guid))
+                {
+                    TearDownNecropolis(creatures, spawn.X, spawn.Y, spawn.Z);
+                    foreach (Creature health in creatures.Creatures.Where(c => c.Spawn?.Guid == spawn.Guid).ToArray())
+                        creatures.RemoveWithoutRespawn(health);
+                }
     }
 
     /// <summary>
