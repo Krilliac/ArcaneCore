@@ -35,6 +35,13 @@ public sealed class AvEventAI : EscortAI
     public const uint SpellRejuvenation = 15981;
     public const uint SpellVisualTransform = 24085;
     public const uint SpellInvisible = 24699;
+
+    /// <summary>Wing Commander Ichman's own invisibility (classic-db creature_ai_scripts 1343701 and 1343702); no vmangos script names it.</summary>
+    public const uint SpellGreaterInvisibility = 16380;
+
+    /// <summary>The initial timer of classic-db row 1343701.</summary>
+    public const uint GreaterInvisibilityDelayMs = 1000;
+
     public const uint WarRiderDisplayId = 11012;
     public const uint AerialGryphonDisplayId = 1148;
     public const uint EarthbindTotemEntry = 2630;
@@ -75,6 +82,7 @@ public sealed class AvEventAI : EscortAI
     private uint _point;
     private bool _warRiderSummoned;
     private uint _despawnTimer;
+    private uint _greaterInvisibilityTimer;
 
     public AvEventAI(Creature creature, AlteracValleyScripts scripts)
         : base(creature)
@@ -90,7 +98,8 @@ public sealed class AvEventAI : EscortAI
 
     /// <summary>
     /// This script replaces the cmangos EventAI of these commanders, whose fights were EventAI rows. Their spells ship as spell lists
-    /// (sql/content/world, 0006_creature_spell_lists_av.sql, list id = entry * 100 + 1), which the classic-db templates do not name.
+    /// (sql/content/world, 0006_creature_spell_lists_av.sql, list id = entry * 100 + 1), which the classic-db templates do not name. Ichman's out of
+    /// combat Greater Invisibility is no list entry: <see cref="CheckGreaterInvisibility"/> and <see cref="Aggro"/> run those two rows.
     /// </summary>
     public override uint ScriptSpellList => Entry switch
     {
@@ -310,6 +319,31 @@ public sealed class AvEventAI : EscortAI
         }
     }
 
+    /// <summary>
+    /// classic-db row 1343701: an EVENT_T_TIMER_OOC of 1000 ms, not repeatable, casting 16380 on Ichman unless he has it (CAST_AURA_NOT_PRESENT). This
+    /// script replaces his EventAI, so it runs the row. The timer stands while he fights or evades (cmangos CreatureEventAI::CheckEvent); after an evade
+    /// it counts from his arrival at home, where cmangos JustReachedHome sets it again.
+    /// </summary>
+    private void CheckGreaterInvisibility(uint diffMs)
+    {
+        if (_greaterInvisibilityTimer == 0 || Me.Combat.IsInCombat || Me.IsInEvadeMode)
+        {
+            return;
+        }
+
+        if (_greaterInvisibilityTimer > diffMs)
+        {
+            _greaterInvisibilityTimer -= diffMs;
+            return;
+        }
+
+        _greaterInvisibilityTimer = 0;
+        if (System?.HasAura(Me, SpellGreaterInvisibility) != true)
+        {
+            DoCast(Me, SpellGreaterInvisibility);
+        }
+    }
+
     // ------------------------------------------------------------------ the AI
 
     /// <summary>JustRespawned (battleground_alterac.cpp:1794-1868): back at the spawn point with the adds of the summoners; a cavalry commander's riders go.</summary>
@@ -410,6 +444,9 @@ public sealed class AvEventAI : EscortAI
             _rejuvenationTimer = 10000;
         }
 
+        // cmangos CreatureEventAI::Reset and JustRespawned arm an out of combat timer: every spawn, respawn and evade.
+        _greaterInvisibilityTimer = Entry == NpcWingCommanderIchman ? GreaterInvisibilityDelayMs : 0;
+
         _transformTimer = 5000;
         _disappearTimer = 5000;
         _transformed = false;
@@ -440,6 +477,10 @@ public sealed class AvEventAI : EscortAI
         if (Entry == NpcPrimalistThurloga)
         {
             DoCast(Me, SpellEarthbindTotem);
+        }
+        else if (Entry == NpcWingCommanderIchman)
+        {
+            System?.RemoveAuras(Me, SpellGreaterInvisibility); // classic-db row 1343702
         }
 
         _aggro = true;
@@ -748,6 +789,8 @@ public sealed class AvEventAI : EscortAI
     /// <summary>UpdateEscortAI (battleground_alterac.cpp:2279-2470).</summary>
     protected override void UpdateEscortAI(uint diffMs)
     {
+        CheckGreaterInvisibility(diffMs);
+
         switch (Entry)
         {
             case NpcWingCommanderMulverick or NpcWingCommanderJeztor or NpcWingCommanderGuse

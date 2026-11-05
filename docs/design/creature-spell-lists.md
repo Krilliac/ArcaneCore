@@ -37,7 +37,7 @@ Limits:
 - **A charmed creature's own casts** use the Spell.dbc times. cmangos Creature::AddCooldown still reads the list then; here the list is gone with the scheduler.
 - **A new entry without a list** clears the old one. cmangos keeps it, because its SetSpellList ignores the unknown id `entry * 100`. None of classic-db's 21 action 36 rows involve a list.
 - **Targeting flags.** A row has no range parameters, so the two range select flags never pass; no classic-db row uses them.
-- **AV commanders.** EventAI stopped Sunder Armor at five stacks with a phase; the list recasts it on its timer. Ichman's Greater Invisibility on spawn is out of combat, so no list carries it.
+- **AV commanders.** EventAI stopped Sunder Armor at five stacks with a phase; the list recasts it on its timer.
 
 ## Part 1: wave-79 contract (copied)
 

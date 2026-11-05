@@ -192,7 +192,8 @@ inert default.
     there. AV_NpcEventAI only melees (it calls no UpdateSpellsList), so the combat spells of those rows ship as spell lists that `AvEventAI` names
     (`sql/content/world/<provider>/0006_creature_spell_lists_av.sql`): Sunder Armor and Strike (Guse 13179, Jeztor 13180, Mulverick 13181), Strike and
     Rend (Ichman 13437, Slidore 13438, Vipore 13439), and Mortal Strike and Cleave for the Stormpike Ram Rider Commander (13577). Without that file they only melee.
-    Ichman still loses his Greater Invisibility on spawn. Thurloga (13236), Renferal (13442),
+    Ichman's Greater Invisibility (16380, classic-db rows 1343701 and 1343702) is out of combat, so `AvEventAI` runs those rows itself: he casts it one second after every
+    spawn, respawn and return from an evade, and it goes when he aggroes. Thurloga (13236), Renferal (13442),
     Lokholar (13256), Ivus (13419), the Frostwolf Shaman (13284), the Druid of the Grove (13443) and the war riders (14943, 14946) cast their
     vmangos script spells instead of the classic-db sets (for example the war riders no longer Throw Liquid Fire, 23969, and Renferal no
     longer casts Thorns or Moonfire 22206).
