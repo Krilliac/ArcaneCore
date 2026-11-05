@@ -219,12 +219,12 @@ public sealed class NecropolisTeardownTests
     }
 
     [Fact]
-    public void ADestroyedNecropolisKeepsItsHealthUnitOutWhenNoStoredRespawnRowSurvives()
+    public async Task ADestroyedNecropolisKeepsItsHealthUnitOutWhenNoStoredRespawnRowSurvives()
     {
         // Creatures:Respawn:Persist=false (or a lost row): the event refresh spawns the Health unit again at start, although the saved state
         // counts its Necropolis as destroyed. EnforceTeardowns removes it, as it does the Necropolis and its objects.
         var store = new StateStore();
-        Assert.True(store.NecropolisDestroyedAsync(440, HealthGuid, StartUnix, 3000).GetAwaiter().GetResult());
+        Assert.True(await store.NecropolisDestroyedAsync(440, HealthGuid, StartUnix, 3000));
         using var rig = new Rig(store, new FakePersistence(), new FakeClock());
         rig.Run(40);
         Assert.Null(rig.Alive(ScourgeInvasionCatalog.NecropolisHealth));

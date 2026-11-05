@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.MockClient.Hosting;
