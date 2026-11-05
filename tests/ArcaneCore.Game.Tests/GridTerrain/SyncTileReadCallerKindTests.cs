@@ -127,6 +127,7 @@ public sealed class SyncTileReadCallerKindTests
 
         var all = readers.SelectMany(r => r.Seen).ToList();
         Assert.Contains(all, s => IsWorker(s.Thread));
+        Assert.Contains(all, s => !IsWorker(s.Thread));
         Assert.All(all, s =>
         {
             Assert.Equal(IsWorker(s.Thread) ? SyncReadCaller.MapWorker : SyncReadCaller.WorldThread, s.Kind);
@@ -148,6 +149,7 @@ public sealed class SyncTileReadCallerKindTests
 
         var all = readers.SelectMany(r => r.Seen).ToList();
         Assert.Contains(all, s => IsWorker(s.Thread));
+        Assert.Contains(all, s => !IsWorker(s.Thread));
         Assert.All(all, s =>
         {
             Assert.Equal(SyncReadCaller.MapWorkerHoldingGate, s.Kind); // worker threads and the world thread alike

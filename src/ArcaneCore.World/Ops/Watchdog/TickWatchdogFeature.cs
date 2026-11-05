@@ -379,8 +379,17 @@ public sealed class TickWatchdogFeature(IServiceProvider services, ILogger<TickW
         return text.ToString();
     }
 
+    /// <summary>
+    /// The completed-hang detail's tail: the terrain/vmap file read totals (cumulative since start, not a per-hang delta; a read that blocked the hang is in them
+    /// by now, because it is recorded when the read returns) then the save queue backlog.
+    /// </summary>
     private string AppendSaveQueue(string text)
     {
+        if (SyncTileReadCounters.DescribeProcess() is { Length: > 0 } fileReads)
+        {
+            text += "; " + fileReads;
+        }
+
         if (services.GetService<CharacterSaveQueue>() is { } saves)
         {
             return text + string.Create(CultureInfo.InvariantCulture, $"; save queue depth {saves.Pending}, oldest pending {saves.OldestPendingAge.TotalMilliseconds:F0} ms");

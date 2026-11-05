@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops.Watchdog;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
@@ -173,6 +174,21 @@ public sealed class TickWatchdogHungFrameTests : IDisposable
         Assert.Equal("OutsideTick", signal.Stage);
         Assert.Equal("none", signal.Reason);
         Assert.StartsWith("v1|tickhang|phase=OutsideTick|item=none", PlayerbotQaFingerprint.Key(signal), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACompletedHang_CarriesTheTerrainAndVmapFileReadTotals()
+    {
+        SyncTileReadCounters.Record(SyncReadCaller.OutsideMapUpdate, SyncReadFile.Terrain, System.Diagnostics.Stopwatch.Frequency / 1000, 7, 1, 1);
+        _world.RunTick(50);
+        _clock.AdvanceMs(4_000);
+        _world.RunTick(50);
+
+        CompletedHangText text = _monitor.CompletedHangDetail!();
+
+        Assert.Equal(1, text.Hangs);
+        Assert.Contains("terrain/vmap tile file reads since start", text.Text);
+        Assert.Contains("OutsideMapUpdate", text.Text);
     }
 
     [Fact]

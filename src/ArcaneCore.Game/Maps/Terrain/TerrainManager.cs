@@ -512,7 +512,7 @@ public sealed class TerrainManager
         }
 
         // A prefetch miss: the file is read and parsed on this thread, inside whatever tick asked. Counted per caller kind, and reported
-        // as an anomaly past SyncTileReadCounters.AnomalyMs (docs: _land/design-terrain-io.md section 3.1). A missing file is no read.
+        // as an anomaly past SyncTileReadCounters.AnomalyMs. A missing file is no read.
         long started = Stopwatch.GetTimestamp();
         TerrainTile loaded = ReadTileOnThisThread(mapId, tileX, tileY, out bool fileRead);
         if (fileRead)

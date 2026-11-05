@@ -200,8 +200,8 @@ public enum SyncReadFile
 
 /// <summary>
 /// Terrain and vmap tile files read synchronously, that is a prefetch miss: the loader read and parsed the file on the thread that needed
-/// the tile, inside a tick (<c>_land/design-terrain-io.md</c> section 3.1; the navigation mesh's own reads are in
-/// <see cref="PathSearchCounters"/>). Counted per caller kind (<see cref="SyncReadCaller"/>) with the time they took; a read over
+/// the tile, inside a tick (the navigation mesh's own reads are in <see cref="PathSearchCounters"/>). Terrain time includes parsing the tile;
+/// vmap time covers only the <c>.vmtile</c> read (not parsing, not the model reads made while instantiating). Counted per caller kind (<see cref="SyncReadCaller"/>) with the time they took; a read over
 /// <see cref="AnomalyMs"/> is also reported to the anomaly ledger as <c>sync-tile-read</c> (subsystem <c>terrain</c> or <c>collision</c>).
 /// <para>
 /// Thread affinity: any thread. The per-thread totals are thread-static (a caller takes <see cref="Current"/> before and after a piece
