@@ -453,8 +453,10 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         Assert.Equal(baseline + 1, live.CallsFor(record.CharacterId));
     }
 
+    // The feature contains a failed fault-row write (the start reports start-failed), so this proves the pass goes on through a poisoned row, not the population's retry catch:
+    // that catch (a start that still throws, such as a failed put-back write after a raced login refusal) has no test yet.
     [Fact]
-    public async Task ARetryThatThrows_DoesNotEndThePass_SoNewBotsAreStillCreated()
+    public async Task ARetryWhoseFaultRowCannotBeWritten_ReportsStartFailed_SoNewBotsAreStillCreated()
     {
         (PopulationTestHost world, _, Guid poisoned, _) = await RestartedFaultedBotAsync(1000);
         await using PopulationTestHost owned = world;

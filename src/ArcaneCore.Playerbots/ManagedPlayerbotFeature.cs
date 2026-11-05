@@ -2054,11 +2054,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
                 (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
+                bool faultWritten = false;
                 try
                 {
                     bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
-                    character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
-                    PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
+                    faultWritten = true;
+                }
+                catch (ManagedRevisionConflictException)
+                {
+                    // Another writer owns the row: not a fault (as in the start's outer handler); its row stands.
+                    WarnConflictOnce(bot.BotId, "start (fault row)");
                 }
                 catch (Exception persistEx) when (persistEx is not OutOfMemoryException and not OperationCanceledException)
                 {
@@ -2066,6 +2071,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     // attempts (the population's bounded retries) still counts it and its pass goes on.
                     FaultLedger.Shared.Record("playerbot.lifecycle", persistEx);
                     logger.LogWarning(persistEx, "Managed playerbot {BotId} start failed and its fault row could not be written ({Type}: {Message}); the registry row stays as it was", bot.BotId, persistEx.GetType().Name, persistEx.Message);
+                }
+                if (faultWritten)
+                {
+                    character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
+                    PublishStopped(bot, character?.Name ?? idOrName, character?.MapId ?? 0);
                 }
             }
             if (ex is not OperationCanceledException)
@@ -4537,7 +4547,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (!await _operations.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
         try
         {
-            if (_stopping || _detaching) return;
+            if (_stopping || _detaching || SplitBrainLatched) return;
             Volatile.Write(ref _lastProvisionSweepMs, now);
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken, ProvisionSweep.StaleAt(DateTimeOffset.UtcNow.ToUnixTimeSeconds()), isolateRows: true).ConfigureAwait(false);

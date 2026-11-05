@@ -367,18 +367,31 @@ public sealed class ManagedPlayerbotProvisionSweepTests
     }
 
     [Fact]
-    public async Task ACancelledStaleSweep_Propagates_AndDoesNotUseUpTheInterval()
+    public async Task ASweepCancelledDuringTheReconcile_Propagates_ReleasesTheLock_AndUsesUpTheInterval()
     {
         var shared = new Shared();
         await shared.JournalRowAsync("PBSWEEPCANCEL", ageSeconds: 5000);
         await using WorldTestHost host = shared.Host(0);
         ManagedPlayerbotFeature bots = BotsOf(host);
         using var cancel = new CancellationTokenSource();
-        await cancel.CancelAsync();
+        // The token is live when the sweep takes the lock and stamps the interval; it is cancelled inside the reconcile (the catch's cancellation filter is what lets it through).
+        shared.Provisions.OnLoadPending = ct =>
+        {
+            cancel.Cancel();
+            ct.ThrowIfCancellationRequested();
+        };
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bots.SweepStaleProvisionsAsync(cancel.Token));
+        Assert.Equal(1, shared.Provisions.LoadPendingCalls);
+        Assert.Equal(0, shared.Provisions.RollbackCount);
+        shared.Provisions.OnLoadPending = null;
+
+        // The stamp came before the reconcile, so the cancelled run used up the interval: the next sweep inside it does nothing (and the lock was released, or it would hang or skip for that reason).
+        await bots.SweepStaleProvisionsAsync(default);
+        Assert.Equal(1, shared.Provisions.LoadPendingCalls);
         Assert.Equal(0, shared.Provisions.RollbackCount);
 
+        bots.ProvisionSweepIntervalMs = 0;
         await bots.SweepStaleProvisionsAsync(default);
         Assert.Equal(1, shared.Provisions.RollbackCount);
     }

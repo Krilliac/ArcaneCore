@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Rules;
 using ArcaneCore.Game.Rules.WorldEvent;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Rules;
 using Xunit;
 
@@ -220,11 +221,14 @@ public sealed class WorldEventHostTests
             [Rule(1, WorldEventRuleIds.Started, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 8)],
             [Act(1, WorldEventRuleIds.StartEvent, 9), Act(2, SayAction, 1)]));
         h.Control.OnStart = _ => throw new InvalidOperationException("boom");
+        long before = FaultLedger.Shared.Snapshot().Where(f => f.Site == "world-event.rules").Sum(f => f.Count);
 
         h.Runner.OnEventChanged(7, active: true, resume: false);
         h.Runner.OnEventChanged(8, active: true, resume: false);
 
         Assert.Equal(["start 9", "say hello"], h.Control.Log);
+        // The harness passes no logger, so the fault goes to the shared ledger (the runner's null-logger branch): exactly the one throwing action is recorded.
+        Assert.Equal(before + 1, FaultLedger.Shared.Snapshot().Where(f => f.Site == "world-event.rules").Sum(f => f.Count));
     }
 
     /// <summary>A control that behaves like <c>GameEventService</c>: it refuses to start a running event, ignores a stop of a stopped one, and tells the runner.</summary>

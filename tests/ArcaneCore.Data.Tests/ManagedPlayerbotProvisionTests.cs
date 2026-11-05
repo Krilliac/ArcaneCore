@@ -189,6 +189,63 @@ public sealed class ManagedPlayerbotProvisionTests
         Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync());
     }
 
+    [Fact]
+    public async Task Sqlite_TwoWorkers_CreatingTheSameAccountNameAtTheSameTime_ExactlyOneWins()
+    {
+        // Both creators run on their own thread and context against one file, so both can pass the AnyAsync pre-check and race into the insert: the loser is refused by the pre-check, the unique
+        // index or the database lock, whichever it hits, and leaves nothing behind.
+        for (int round = 0; round < 8; round++)
+        {
+            await using TwoWorkers workers = await TwoWorkers.StartAsync();
+            string name = $"PBRACE{round:D3}";
+            using var gate = new ManualResetEventSlim(false);
+            Task<Account> Create(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CreateAsync(Guid.NewGuid(), NewAccount(name));
+            });
+            Task<Account> first = Create(workers.A);
+            Task<Account> second = Create(workers.B);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* the loser's refusal */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully));
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsFaulted));
+            Account winner = (first.IsCompletedSuccessfully ? first : second).Result;
+            ManagedPlayerbotProvision only = Assert.Single(await workers.A.LoadPendingAsync());
+            Assert.Equal(winner.Id, only.AccountId);
+            Assert.Equal(1, await workers.DbB.Accounts.AsNoTracking().CountAsync(a => a.Username == name));
+        }
+    }
+
+    [Fact]
+    public async Task Sqlite_TwoWorkers_RollingBackTheSameRowAtTheSameTime_RollBackExactlyOnce()
+    {
+        // What two sweeps taking the same stale row do: only one removes the empty account and its journal row, the other is refused (or loses the database lock) without leaving a half state.
+        for (int round = 0; round < 8; round++)
+        {
+            await using TwoWorkers workers = await TwoWorkers.StartAsync();
+            Guid botId = Guid.NewGuid();
+            Account stored = await workers.A.CreateAsync(botId, NewAccount($"PBRBACK{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Rollback(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.RollbackEmptyOwnerAsync(botId, stored.Id);
+            });
+            Task<bool> first = Rollback(workers.A);
+            Task<bool> second = Rollback(workers.B);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost the database lock: it did not roll back */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Null(await workers.DbA.Accounts.AsNoTracking().SingleOrDefaultAsync(a => a.Id == stored.Id));
+            Assert.Empty(await workers.B.LoadPendingAsync());
+        }
+    }
+
     private static Account NewAccount(string username, AccountSecurity security = AccountSecurity.Player, byte[]? sessionKey = null)
         => new() { Username = username, Salt = new byte[32], Verifier = new byte[32], Security = security, SessionKey = sessionKey };
 }
