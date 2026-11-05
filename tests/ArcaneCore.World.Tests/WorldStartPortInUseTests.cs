@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Characters;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;

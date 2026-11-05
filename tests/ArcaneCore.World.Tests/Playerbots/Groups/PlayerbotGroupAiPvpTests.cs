@@ -310,7 +310,7 @@ public sealed class PlayerbotGroupAiPvpTests
             StartRecoveryCategory = 133, StartRecoveryTime = 1500, DamageClass = SpellDamageClass.Magic,
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, TargetA = SpellImplicitTarget.UnitEnemy, BasePoints = 0, BaseDice = 1, DieSides = 1 }, new SpellEffectInfo(), new SpellEffectInfo()],
         };
-        var spellFeature = bot.Services.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>();
+        var spellFeature = rig.Host.WorldServices.GetRequiredService<ArcaneCore.World.Spells.SpellFeature>();
         spellFeature.System.Store = new SpellStore([.. spellFeature.System.Store.All, fireball], [], []);
         Assert.True(spellFeature.Spellbook.LearnSpell(bot, fireball.Id));
 
