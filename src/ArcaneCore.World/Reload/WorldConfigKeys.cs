@@ -110,6 +110,7 @@ public static class WorldConfigKeys
         LiveNonNegative("AccountDataWriteIntervalMs", o => o.AccountDataWriteIntervalMs, (o, v) => o.AccountDataWriteIntervalMs = v),
         LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
+        Live("ExpectedSpamRecords", o => o.ExpectedSpamRecords, (o, v) => o.ExpectedSpamRecords = v),
         LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),
         LiveNonNegative("ListenRangeYell", o => o.ListenRangeYell, (o, v) => o.ListenRangeYell = v),
         LiveNonNegative("ListenRangeTextEmote", o => o.ListenRangeTextEmote, (o, v) => o.ListenRangeTextEmote = v),

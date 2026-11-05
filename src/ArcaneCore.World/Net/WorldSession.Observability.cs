@@ -184,7 +184,7 @@ public sealed partial class WorldSession
     {
         WorldOpcode[] known = Enum.GetValues<WorldOpcode>();
         var table = new bool[known.Max(o => (int)o) + 1];
-        WorldOpcode[] gameplayOpcodes = [WorldOpcode.CmsgOpeningCinematic, WorldOpcode.CmsgGmsurveySubmit, WorldOpcode.CmsgStoreLootInSlot, WorldOpcode.CmsgSkillBuyStep];
+        WorldOpcode[] gameplayOpcodes = [WorldOpcode.CmsgOpeningCinematic, WorldOpcode.CmsgGmsurveySubmit];
         foreach (WorldOpcode opcode in known)
         {
             table[(int)opcode] = gameplay
@@ -201,7 +201,7 @@ public sealed partial class WorldSession
     /// opcode has a (stripped) handler and never gets here. The subject is the opcode name, so the ledger's subject count says how many opcodes are missing.
     /// Cost: two table loads, then the ledger call (no allocation of its own: the subject is the tracker's label).
     /// </summary>
-    private static void NoteUnhandledOpcode(WorldOpcode opcode)
+    internal static void NoteUnhandledOpcode(WorldOpcode opcode)
     {
         int index = (ushort)opcode;
         if (index >= UnhandledNotReported.Length || UnhandledNotReported[index] || UnhandledOpcodeTracker.LabelOf(opcode) == UnhandledOpcodeTracker.UnknownLabel)

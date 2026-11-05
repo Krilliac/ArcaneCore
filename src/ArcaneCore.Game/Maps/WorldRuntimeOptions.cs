@@ -64,6 +64,12 @@ public sealed class WorldRuntimeOptions
     public string Motd { get; set; } = "Welcome to ArcaneCore.";
 
     /// <summary>
+    /// Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the day; '@' separates records, empty (the default) sends no packet. mangos-classic sends
+    /// the rows of its spam_records table the same way (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the client's use of them is unconfirmed.
+    /// </summary>
+    public string ExpectedSpamRecords { get; set; } = string.Empty;
+
+    /// <summary>
     /// Distance /say reaches. vmangos and cmangos-classic World.cpp default to 25 (cmangos'
     /// shipped mangosd.conf keeps 25; vmangos' raises it to 40). 0 = the whole map.
     /// </summary>

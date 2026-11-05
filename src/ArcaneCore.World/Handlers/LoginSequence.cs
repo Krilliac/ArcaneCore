@@ -40,6 +40,12 @@ public static class LoginSequence
         session.Send(WorldOpcode.SmsgAccountDataMd5, accountDataMd5);
         session.Send(WorldOpcode.SmsgFriendList, LoginPackets.BuildEmptyFriendList());
         session.Send(WorldOpcode.SmsgIgnoreList, LoginPackets.BuildEmptyIgnoreList());
+        if (world.Options.ExpectedSpamRecords.Split('@', StringSplitOptions.RemoveEmptyEntries) is { Length: > 0 } spamRecords)
+        {
+            // mangos-classic SendExpectedSpamRecords runs right before SendMotd (CharacterHandler.cpp:755-756).
+            session.Send(WorldOpcode.SmsgExpectedSpamRecords, ProtocolGapPackets.ExpectedSpamRecords(spamRecords));
+        }
+
         foreach (string line in world.Options.Motd.Split('@', StringSplitOptions.RemoveEmptyEntries))
         {
             session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(line));
