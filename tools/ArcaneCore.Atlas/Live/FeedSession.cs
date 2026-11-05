@@ -26,7 +26,7 @@ internal interface IFeedSink
 /// <summary>
 /// One connection to a map feed: the pipe, the handshake, the NDJSON reader loop and the queries waiting for their results.
 /// <para>
-/// Ownership: created by <see cref="OpenAsync"/>, owned by <see cref="LiveFeed"/>, which disposes it. Threads: the reader loop runs on the
+/// Ownership: created by <see cref="OpenAsync"/>, owned by <see cref="LiveFeed"/>, which disposes it; the reader loop also disposes it when it ends. Threads: the reader loop runs on the
 /// thread pool and is the only reader of the pipe; any thread may send (writes are serialised) or query. Every failure is a
 /// <see cref="CommandException"/> with a precise message; bad input from the server is counted in <see cref="Stats"/> and never thrown.
 /// </para>
@@ -368,8 +368,14 @@ internal sealed class FeedSession : IDisposable
         // Windows keeps a pipe instance alive until every handle closes, so a leaked handle made the server's next instance on the
         // same name fail with "All pipe instances are busy" and the reconnect could not happen. It is released before the close notice,
         // so whoever sees "disconnected" can already reuse the name; the notice only reads Hello and PipeName, which survive disposal.
-        Dispose();
-        _sink.Closed(this, reason);
+        try
+        {
+            Dispose();
+        }
+        finally
+        {
+            _sink.Closed(this, reason);
+        }
     }
 
     private async Task<string> ReadLoopAsync()

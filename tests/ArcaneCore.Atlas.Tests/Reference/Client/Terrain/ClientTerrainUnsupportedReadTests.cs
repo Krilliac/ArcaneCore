@@ -12,7 +12,7 @@ namespace ArcaneCore.Atlas.Tests.Reference.Client.Terrain;
 /// </summary>
 public sealed class ClientTerrainUnsupportedReadTests
 {
-    private const string Message = "compression method 0x10 (bzip2) is not supported";
+    private const string Message = "compression method lzma (sector mask 0x12) is not implemented in this reader";
 
     private static readonly ClientMap Azeroth = new(0, "Azeroth", "Eastern Kingdoms", 0);
 

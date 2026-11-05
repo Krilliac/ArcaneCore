@@ -104,15 +104,23 @@ public sealed class LiveFeed : IDisposable
                 session = _session;
             }
 
-            // Reporting "disconnected" means the entity list is already gone: a connection that ended is retired here too, so a caller that
-            // sees false never reads entities of the dead connection in the gap before its close notice runs.
-            RetireIfEnded(session);
-            return session is { IsOpen: true };
+            // One read of IsOpen decides both the retire and the answer, so false is only ever returned after the dead connection's entity
+            // list was emptied: a caller that reads IsConnected before the store never sees "disconnected" next to stale entities.
+            bool open = session is { IsOpen: true };
+            if (!open && session is not null)
+            {
+                Retire(session.Id);
+            }
+
+            return open;
         }
     }
 
     /// <summary>Test hook invoked after hello succeeds and before the session swap lock is taken.</summary>
     internal Action<FeedSession>? BeforeSwap { get; set; }
+
+    /// <summary>Test hook invoked at the start of the close notice, after the session ended and before its entities are retired.</summary>
+    internal Action<FeedSession>? BeforeClose { get; set; }
 
     /// <summary>
     /// Connects to the feed of process <paramref name="pid"/>, or to the only feed found by discovery when it is null, replacing any
@@ -681,7 +689,14 @@ public sealed class LiveFeed : IDisposable
             subscription = _subscription;
         }
 
-        RetireIfEnded(session);
+        // One read of IsOpen, taken before the store is read, decides the retire and the reported state.
+        bool connected = session is { IsOpen: true };
+        if (!connected && session is not null)
+        {
+            Retire(session.Id);
+            detail = "the connection has ended";
+        }
+
         IReadOnlyList<MapSummary> summaries = Store.Summaries();
         var frames = new JsonArray();
         long missed = 0;
@@ -716,7 +731,6 @@ public sealed class LiveFeed : IDisposable
             totals[LiveKinds.Names[i]] = byKind[i];
         }
 
-        bool connected = session is { IsOpen: true };
         IReadOnlyList<ServerMap> serverMaps = connected && session!.Hello is { } hello ? hello.Maps : [];
         string? following = _view.Current.FollowGuid;
         return new JsonObject
@@ -818,15 +832,6 @@ public sealed class LiveFeed : IDisposable
         }
     }
 
-    /// <summary>Retires <paramref name="session"/> when it has ended but its close notice has not emptied the store yet. Idempotent.</summary>
-    private void RetireIfEnded(FeedSession? session)
-    {
-        if (session is { IsOpen: false })
-        {
-            Retire(session.Id);
-        }
-    }
-
     private bool IsDisposed
     {
         get
@@ -919,6 +924,7 @@ public sealed class LiveFeed : IDisposable
 
     private void OnClosed(FeedSession session, string reason)
     {
+        BeforeClose?.Invoke(session);
         // The store is emptied before the connection is reported gone, so nobody sees "disconnected" next to a stale entity list.
         Retire(session.Id);
         lock (_state)
