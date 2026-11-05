@@ -81,7 +81,11 @@ internal sealed class PlayerbotSummons
     /// <summary>A member must stay far this long before it is summoned, so a bot just logged in or teleporting is not.</summary>
     internal const uint FarDebounceMs = 10_000;
 
-    /// <summary>A far-since entry not refreshed for this long (picks gated meanwhile) is restarted, not trusted.</summary>
+    /// <summary>
+    /// A far-since entry not refreshed for this long (picks gated meanwhile) is restarted, not trusted. Known limit: it is three <see cref="EvalGapMs"/>, so a host whose think rate
+    /// starves the evaluations to a gap above this restarts the <see cref="FarDebounceMs"/> debounce on every look and no summon starts until the thinks catch up (a stricter gate than
+    /// not having the rule; the failure is a missing summon, never a wrong one).
+    /// </summary>
     internal const uint FarStaleMs = 6_000;
 
     /// <summary>How often one bot looks for a summon to start.</summary>
@@ -105,6 +109,11 @@ internal sealed class PlayerbotSummons
     private readonly Dictionary<ObjectGuid, uint> _cooldownUntil = [];
     private readonly Dictionary<ObjectGuid, (uint Since, uint Seen)> _farSince = [];
     private readonly Dictionary<ObjectGuid, BotState> _bots = [];
+    /// <summary>
+    /// The meeting stones of each map, rescanned every <see cref="StoneScanMs"/>. The key and the cached objects are strong references, so a closed instance map stays referenced until
+    /// <see cref="Prune"/> ages it out (five minutes, and Prune runs only from a grouped bot's <see cref="Drive"/>) or the feature is switched off. A stone that was gone or not yet
+    /// grid-loaded at scan time is misread for up to one scan interval; <c>DriveStone</c> catches a gone stone when it is used, at the cost of a Fail and the target's cooldown.
+    /// </summary>
     private readonly Dictionary<Map, StoneCache> _stones = [];
     private readonly List<ObjectGuid> _goneHelpers = [];
     private uint _lastPruneMs;

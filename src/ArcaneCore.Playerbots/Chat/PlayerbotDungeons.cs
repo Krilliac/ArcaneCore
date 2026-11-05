@@ -63,15 +63,10 @@ internal static partial class PlayerbotDungeons
     /// The dungeon a chat line names (a token of a dungeon, whole word, any case), the one that suits <paramref name="level"/> when a
     /// token is ambiguous ("dm"); null when it names none.
     /// </summary>
-    internal static PlayerbotDungeon? Named(string text, int level) => Named(text, level, out _);
-
-    /// <summary><see cref="Named(string, int)"/>, and the token of the line that named it (<paramref name="token"/>; null when none).</summary>
-    internal static PlayerbotDungeon? Named(string text, int level, out string? token)
+    internal static PlayerbotDungeon? Named(string text, int level)
     {
-        token = null;
-        foreach ((string word, List<PlayerbotDungeon> dungeons) in Mentions(text))
+        foreach ((_, List<PlayerbotDungeon> dungeons) in Mentions(text))
         {
-            token = word;
             PlayerbotDungeon found = dungeons[0];
             for (int i = 1; i < dungeons.Count; i++)
                 if (Fits(dungeons[i], level) && !Fits(found, level)) found = dungeons[i];
