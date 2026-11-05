@@ -89,7 +89,11 @@ public sealed class SupervisorRestartByNameTests : IDisposable
     [InlineData("--a --Cluster:Worker:Standby=true", false, "--a")]
     [InlineData("--Cluster:Worker:Standby=true", false, "")]
     [InlineData("--a --b", false, "--a --b")]
-    public void StandbyArgument_IsAppendedAndRemovedAtTheEnd(string arguments, bool standby, string expected)
+    [InlineData("--a --Cluster:Worker:Standby=true --b --c", false, "--a --b --c")]
+    [InlineData("--Cluster:Worker:Standby=true --b", false, "--b")]
+    [InlineData("--a --Cluster:Worker:Standby=true --Cluster:Worker:Standby=true --b", false, "--a --b")]
+    [InlineData("--a --Cluster:Worker:Standby=truex --b", false, "--a --Cluster:Worker:Standby=truex --b")]
+    public void StandbyArgument_IsAppendedWhenMissing_AndRemovedWhereverItStands(string arguments, bool standby, string expected)
     {
         Assert.Equal(expected, ClusterHostSupervisor.WithStandbyArgument(arguments, standby));
     }

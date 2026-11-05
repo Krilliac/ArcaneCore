@@ -46,6 +46,21 @@ public sealed class ClusterSupervisorConfigChecksTests
     private const string FencedA = "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a";
     private const string FencedB = "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b";
 
+    // Row 61: a child labelled social or coordinator that sets no Cluster:Worker runs a whole Combined world, so it is a writer beside the worker like any other.
+    [Theory]
+    [InlineData("social")]
+    [InlineData("coordinator")]
+    public void ASocialOrCoordinatorLabelledWorldBesideAWorker_WithoutFencing_IsRefused_LikeASecondWorld(string role)
+    {
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Worker:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a");
+        AddWorld(values, "b", role, "--Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-b");
+
+        ConfigIssue[] errors = Errors(values);
+
+        Assert.Contains(errors, e => e.Problem.Contains("'b'", StringComparison.Ordinal) && e.Problem.Contains("Cluster:Fencing:Enabled=true", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void TwoWorldChildren_WithoutFencing_AreRefused()
     {

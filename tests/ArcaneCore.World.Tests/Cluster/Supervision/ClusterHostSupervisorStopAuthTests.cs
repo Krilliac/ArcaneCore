@@ -159,4 +159,57 @@ public sealed class ClusterHostSupervisorStopAuthTests
         Assert.Equal(["world"], plan.Admitted);
         Assert.Empty(plan.Denied);
     }
+
+    [Fact]
+    public async Task HeartbeatWithoutTheToken_IsOrdinaryOutput_AndIsNotALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+
+        rig.Launcher.Last.Beat("alive", withToken: false);
+
+        Assert.Contains("heartbeat 2026-10-29T00:00:00.000Z", rig.ConsoleText, StringComparison.Ordinal); // shown as the ordinary output it is
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task HeartbeatWithAWrongToken_IsOrdinaryOutput_AndIsNotALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = rig.Launcher.Last;
+
+        child.Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={child.ProcessId} alive token=not-the-token");
+
+        Assert.Contains("token=not-the-token", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task HeartbeatWithTheToken_IsConsumed_AndIsALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+
+        rig.Launcher.Last.Beat();
+
+        Assert.DoesNotContain("heartbeat", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.NotNull(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task ForgedTokenlessHeartbeats_CannotKeepAHungChildFromBeingDrained()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = launcher.Last;
+        child.Beat(); // the one real beat arms the hang watch
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(100));
+        child.Beat("alive", withToken: false); // a forged line from logged text: it must not reset the silence
+        rig.Clock.Advance(TimeSpan.FromSeconds(21)); // 121 s since the real beat
+
+        await rig.Delays.ReleaseUntilAsync(() => child.Drains == 1, "the hang watch to act on a child whose only recent beat was forged");
+    }
 }

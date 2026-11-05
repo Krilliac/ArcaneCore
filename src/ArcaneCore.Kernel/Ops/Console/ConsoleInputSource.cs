@@ -19,15 +19,14 @@ public sealed record ConsoleInputSource(TextReader Input, TextWriter Output, boo
     public bool IsInteractive => !IsInputRedirected && IsUserInteractive;
 
     /// <summary>
-    /// The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>. The supervisor token is read from the environment
-    /// and the variable is deliberately left in place: the World's cross-realm lifecycle channel (<c>SupervisorProtocolChannel.Process</c>) reads
-    /// <c>ARCANECORE_SUPERVISOR_TOKEN</c> from the live process environment on first use, long after this runs, and clearing it here would silently
-    /// disable <c>.server restart|shutdown ... &lt;realmId&gt;</c> under supervision. Clearing the variable (so grandchildren do not inherit it) needs
-    /// every consumer to take the token from one captured place first; that touches the World supervisor files and is tracked as a follow-up.
+    /// The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>. The supervisor token comes from
+    /// <see cref="ServerConsole.SupervisorProtocol.CaptureProcessToken"/>: it is read from the environment once and the variable is removed, so processes
+    /// this one starts do not inherit it. Every other reader (the heartbeat writer, the World's cross-realm lifecycle channel) takes the token from the same
+    /// captured place (<see cref="ServerConsole.SupervisorProtocol.ProcessEnvironment"/>), so removing the variable disables nothing.
     /// </summary>
     public static ConsoleInputSource Default()
         => new(Console.In, TextWriter.Synchronized(Console.Out), Console.IsInputRedirected, Environment.UserInteractive,
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(SupervisedChildDrain.EnvironmentVariable)),
             ServerConsole.SupervisorProtocol.IsEnabled(),
-            Environment.GetEnvironmentVariable(ServerConsole.SupervisorProtocol.TokenEnvironmentVariable));
+            ServerConsole.SupervisorProtocol.CaptureProcessToken());
 }

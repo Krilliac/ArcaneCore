@@ -3,6 +3,7 @@ using ArcaneCore.World.Cluster.Supervision;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -47,8 +48,8 @@ public sealed class ClusterSupervisorHostingTests
     public async Task Start_BelowMinClusterProcesses_LaunchesNothing_AndThrowsNamingTheKey()
     {
         var launcher = new RecordingLauncher();
-        // Three processes configured, but the reserve admits none of them: nothing may be launched.
-        await using ServiceProvider provider = Build(Config(min: 2, processCount: 3, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "999999999")), launcher);
+        // Three processes configured, but the process ceiling admits one of them: nothing may be launched. (A refusal for free memory alone waits instead, see below.)
+        await using ServiceProvider provider = Build(Config(min: 2, processCount: 3, ("Cluster:Supervisor:MaxConcurrentProcesses", "1")), launcher);
         IHostedService hosted = provider.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().Single();
 
         InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
@@ -143,6 +144,7 @@ public sealed class ClusterSupervisorHostingTests
 
         Assert.Equal(1, exit);
         Assert.Contains("failed while stopping", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("exiting with code 1: the stop failed", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -158,6 +160,7 @@ public sealed class ClusterSupervisorHostingTests
 
         Assert.Equal(0, exit); // an operator stop is a clean exit, not an unhandled OperationCanceledException
         Assert.Contains("cancelled", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("exiting with code 0: the start was cancelled by a stop signal", error.ToString(), StringComparison.Ordinal);
         Assert.Single(inner.Launched); // the second launch never ran
         Assert.Equal(1, inner.Drained);
     }
@@ -213,6 +216,235 @@ public sealed class ClusterSupervisorHostingTests
             }
         }
     }
+
+    [Fact]
+    public async Task RunAsync_ARefusedStart_SaysItsExitCodeAndWhy_OnStderr()
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Configuration.AddConfiguration(Config(min: 2, processCount: 1));
+        builder.Services.AddSingleton<ISupervisedProcessLauncher>(new RecordingLauncher());
+        var error = new StringWriter();
+
+        int exit = await ClusterSupervisorHosting.RunAsync(builder, error).WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("exiting with code 1: the start was refused", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Cluster:Supervisor:MinClusterProcesses", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WriteExit_WritesTheCodeAndReason_AndNeverThrowsWhenStderrIsGone()
+    {
+        var error = new StringWriter();
+        ClusterSupervisorHosting.WriteExit(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, error, 3, "unhandled exception: Boom", null);
+        Assert.Equal("ArcaneCore.World supervisor exiting with code 3: unhandled exception: Boom" + Environment.NewLine, error.ToString());
+
+        var gone = new StringWriter();
+        gone.Dispose();
+        ClusterSupervisorHosting.WriteExit(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, gone, 0, "done", null);
+    }
+
+    private static string ReadSharedText(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    // The exit hooks run where nothing else flushes the queued file sink (a crash runs no ProcessExit; the provider's own ProcessExit flush runs before the hook's line is queued).
+    [Fact]
+    public async Task TheUnhandledExceptionHook_GetsItsLineToTheFileSink_WithoutAnyDisposeOrProcessExit_AndNamesNoExitCode()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-exit-hook-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string logPath = Path.Combine(dir, "supervisor.log");
+        try
+        {
+            IConfiguration config = Config(min: 1, processCount: 1, ("Logging:ArcaneCore:File:Enabled", "true"), ("Logging:ArcaneCore:File:Path", logPath));
+            await using ServiceProvider provider = Build(config, new RecordingLauncher());
+            ILogger log = provider.GetRequiredService<ILoggerFactory>().CreateLogger(ClusterSupervisorHosting.ExitLoggerName);
+            var error = new StringWriter();
+
+            ClusterSupervisorHosting.ReportUnhandledException(log, error, () => ClusterSupervisorHosting.FlushLogProviders(provider), new UnhandledExceptionEventArgs(new InvalidOperationException("boom-for-the-hook"), isTerminating: true));
+
+            string file = ReadSharedText(logPath);
+            Assert.Contains("boom-for-the-hook", file, StringComparison.Ordinal);
+            Assert.Contains("Supervisor exiting", file, StringComparison.Ordinal);
+            Assert.Contains("boom-for-the-hook", error.ToString(), StringComparison.Ordinal);
+            Assert.Contains("chosen by the runtime", error.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("with code 1", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A late handle on Windows: the temp directory is not the subject of the test.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task WriteExit_WithAFlush_GetsTheLineToTheFileSink_AndFlushRunsEvenWhenStderrIsGone()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "supervisor-exit-flush-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string logPath = Path.Combine(dir, "supervisor.log");
+        try
+        {
+            IConfiguration config = Config(min: 1, processCount: 1, ("Logging:ArcaneCore:File:Enabled", "true"), ("Logging:ArcaneCore:File:Path", logPath));
+            await using ServiceProvider provider = Build(config, new RecordingLauncher());
+            ILogger log = provider.GetRequiredService<ILoggerFactory>().CreateLogger(ClusterSupervisorHosting.ExitLoggerName);
+            var gone = new StringWriter();
+            gone.Dispose();
+
+            ClusterSupervisorHosting.WriteExit(log, gone, 7, "process-exit-reason", null, () => ClusterSupervisorHosting.FlushLogProviders(provider));
+
+            string file = ReadSharedText(logPath);
+            Assert.Contains("process-exit-reason", file, StringComparison.Ordinal);
+            Assert.Contains("with code 7", file, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A late handle on Windows: the temp directory is not the subject of the test.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Start_WithAReserveNotBelowTheHostsMemory_ThrowsAConfigurationError_InsteadOfWaitingForever()
+    {
+        var launcher = new RecordingLauncher();
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "5000")), launcher, new SequenceProbe(10), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 4000;
+        hosted.DelayAsync = (_, _) => throw new InvalidOperationException("the supervisor waited");
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Contains("MinFreeMemoryReserveMb", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("waited", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(launcher.Launched);
+    }
+
+    [Fact]
+    public async Task Start_AMixedPlan_WhereMemoryRefusalsCannotReachTheMinimum_ThrowsInsteadOfWaiting()
+    {
+        var launcher = new RecordingLauncher();
+        // Three configured, the ceiling admits one (the others are refused for the count, not memory), minimum 2: memory cannot help.
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 2, processCount: 3, ("Cluster:Supervisor:MaxConcurrentProcesses", "1"), ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, new SequenceProbe(1_500), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        hosted.DelayAsync = (_, _) => throw new InvalidOperationException("the supervisor waited");
+
+        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(() => hosted.StartAsync(CancellationToken.None));
+
+        Assert.Contains("MinClusterProcesses", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(launcher.Launched);
+    }
+
+    // ---- a start refused for free memory waits ----
+
+    private static ClusterSupervisorHostedService HostedWith(IConfiguration configuration, RecordingLauncher launcher, IClusterCapacityProbe probe, out ServiceProvider provider)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ISupervisedProcessLauncher>(launcher);
+        services.AddSingleton(probe);
+        services.AddClusterSupervisor(configuration);
+        provider = services.BuildServiceProvider();
+        return provider.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().Single();
+    }
+
+    [Fact]
+    public async Task Start_RefusedOnlyForFreeMemory_WaitsAndPlansAgain_ThenLaunches_InsteadOfExiting()
+    {
+        var launcher = new RecordingLauncher();
+        var probe = new SequenceProbe(10, 10, 100_000, 100_000); // two plans see 10 MiB free, the third plan and the child's admission see plenty
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, probe, out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        var delays = new List<TimeSpan>();
+        hosted.DelayAsync = (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        };
+
+        await hosted.StartAsync(CancellationToken.None);
+
+        Assert.Equal([ClusterSupervisorHostedService.MemoryRetryInterval, ClusterSupervisorHostedService.MemoryRetryInterval], delays);
+        Assert.Equal(["p0"], launcher.Launched.ToArray());
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Start_WaitingForFreeMemory_EndsWithTheStopSignal_AndLaunchesNothing()
+    {
+        var launcher = new RecordingLauncher();
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 1, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "1000")), launcher, new SequenceProbe(10), out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        using var stop = new CancellationTokenSource();
+        hosted.DelayAsync = (_, ct) =>
+        {
+            stop.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => hosted.StartAsync(stop.Token));
+
+        Assert.Empty(launcher.Launched);
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Start_WhenALaunchedChildTookTheMemoryTheNextOneNeeds_WaitsThenLaunchesTheRest()
+    {
+        var launcher = new RecordingLauncher();
+        // The plan (one read) and the first child's admission see plenty; the second child's admission sees 10 MiB; the retry sees plenty again.
+        var probe = new SequenceProbe(100_000, 100_000, 10, 100_000);
+        ClusterSupervisorHostedService hosted = HostedWith(Config(min: 1, processCount: 2, ("Cluster:Supervisor:MinFreeMemoryReserveMb", "50")), launcher, probe, out ServiceProvider provider);
+        await using ServiceProvider owner = provider;
+        hosted.TotalMemoryMb = () => 1_000_000;
+        var delays = new List<TimeSpan>();
+        hosted.DelayAsync = (delay, _) =>
+        {
+            delays.Add(delay);
+            return Task.CompletedTask;
+        };
+
+        await hosted.StartAsync(CancellationToken.None);
+
+        Assert.Equal(["p0", "p1"], launcher.Launched.ToArray()); // p0 is not launched a second time
+        Assert.Single(delays);
+        await hosted.StopAsync(CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData("Cannot admit process 'w': available host memory (10 MiB) minus RequiredMemoryMb (1 MiB) is below MinFreeMemoryReserveMb (50 MiB).", true)]
+    [InlineData("active process count (3) would exceed MaxConcurrentProcesses (2).", false)]
+    [InlineData("map 1 is already assigned to worker 'a'.", false)]
+    [InlineData(null, false)]
+    public void IsMemoryReserveRefusal_OnlyTheReserveIsAWaitableRefusal(string? reason, bool expected)
+        => Assert.Equal(expected, ClusterHostSupervisor.IsMemoryReserveRefusal(reason));
+
+    private sealed class SequenceProbe(params long[] values) : IClusterCapacityProbe
+    {
+        private int _next;
+
+        public long GetAvailableMemoryMb() => values[Math.Min(Interlocked.Increment(ref _next) - 1, values.Length - 1)];
+    }
+
 
     private sealed class FixedProbe(long availableMb) : IClusterCapacityProbe
     {

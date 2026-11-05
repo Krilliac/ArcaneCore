@@ -62,7 +62,10 @@ Console.Out.Flush();
 if (args.Contains("--cr-heartbeat"))
 {
     // A bare CR inside one LF-terminated line: a reader that also splits at CR would see a second line that is a valid heartbeat.
-    Console.Out.Write($"noise\rheartbeat 2026-10-29T00:00:00.000Z pid={Environment.ProcessId} alive\n");
+    // It carries the supervisor's real per-run token when it has one, so a CR-split line is rejected for the CR and not merely for a missing token.
+    string? runToken = Environment.GetEnvironmentVariable("ARCANECORE_SUPERVISOR_TOKEN");
+    string tokenSuffix = string.IsNullOrEmpty(runToken) ? string.Empty : " token=" + runToken;
+    Console.Out.Write($"noise\rheartbeat 2026-10-29T00:00:00.000Z pid={Environment.ProcessId} alive{tokenSuffix}\n");
     Console.Out.Write("done\n");
     Console.Out.Flush();
 }

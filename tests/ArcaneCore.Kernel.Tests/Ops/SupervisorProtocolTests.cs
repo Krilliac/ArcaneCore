@@ -204,4 +204,52 @@ public sealed class SupervisorProtocolTests
     [InlineData("1", true)]
     public void IsEnabled_ReadsTheEnvironmentVariable(string? value, bool expected)
         => Assert.Equal(expected, SupervisorProtocol.IsEnabled(name => name == SupervisorProtocol.EnvironmentVariable ? value : null));
+
+    [Fact]
+    public void Heartbeat_WithAToken_CarriesItOnEveryState_AndTheParserReturnsIt()
+    {
+        var writer = new StringWriter();
+        using var sink = new TextWriterHeartbeatSink(writer, 77, supervisorToken: "run-token");
+        sink.Ready("up");
+        sink.Beat();
+        sink.Stopping("down");
+
+        string[] lines = writer.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Equal(3, lines.Length);
+        Assert.All(lines, line => Assert.EndsWith(" token=run-token", line, StringComparison.Ordinal));
+        SupervisorHeartbeatState[] states = new SupervisorHeartbeatState[3];
+        for (int i = 0; i < lines.Length; i++)
+        {
+            Assert.True(SupervisorProtocol.TryParseHeartbeat(lines[i], out states[i], out string token), lines[i]);
+            Assert.Equal("run-token", token);
+        }
+
+        Assert.Equal([SupervisorHeartbeatState.Ready, SupervisorHeartbeatState.Alive, SupervisorHeartbeatState.Stopping], states);
+    }
+
+    [Fact]
+    public void Heartbeat_WithoutAToken_ParsesWithAnEmptyToken_SoASupervisorTreatsItAsOutput()
+    {
+        Assert.True(SupervisorProtocol.TryParseHeartbeat("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive", out SupervisorHeartbeatState state, out string token));
+        Assert.Equal(SupervisorHeartbeatState.Alive, state);
+        Assert.Equal(string.Empty, token);
+    }
+
+    [Theory]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive token=")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive token=a token=b")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive token=a\r")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive token=a\n")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive  token=a")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive token=a extra")]
+    public void Heartbeat_MalformedToken_IsRejected(string line)
+        => Assert.False(SupervisorProtocol.TryParseHeartbeat(line, out _, out _));
+
+    [Theory]
+    [InlineData("alive", null, "alive")]
+    [InlineData("alive", "", "alive")]
+    [InlineData("ready", "tok", "ready token=tok")]
+    [InlineData("stopping", "a b", "stopping token=a_b")]
+    public void FormatAuthenticatedState_AppendsTheSanitisedToken_OnlyWhenThereIsOne(string state, string? token, string expected)
+        => Assert.Equal(expected, SupervisorProtocol.FormatAuthenticatedState(state, token));
 }

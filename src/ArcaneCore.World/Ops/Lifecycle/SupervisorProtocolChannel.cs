@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Ops.Lifecycle;
 public sealed class SupervisorProtocolChannel
 {
     private static readonly Lazy<SupervisorProtocolChannel> FromProcess = new(
-        () => FromEnvironment(Environment.GetEnvironmentVariable, Console.Out), LazyThreadSafetyMode.ExecutionAndPublication);
+        () => FromEnvironment(SupervisorProtocol.ProcessEnvironment, Console.Out), LazyThreadSafetyMode.ExecutionAndPublication);
 
     private readonly TextWriter _output;
     private readonly Lock _gate = new();
