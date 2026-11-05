@@ -140,9 +140,11 @@ public sealed class LocalWorldHandoffSource(
 
         // The characters this world froze now belong to the new owner: every write queue of this process drops their writes silently and counts them
         // (the shared registry, consulted before a write is enqueued and again before it runs), and the save queue drops their waiting and retained snapshots and skips later ones
-        // (one informational line), instead of attempting writes the fence must refuse. Only the frozen characters are named; any other character keeps its writes.
-        retirement?.Retire(moved);
-        saveQueue.RetireCharacters([.. moved, .. saveQueue.RetainedCharacterIds()]); // plus the offline characters whose last save is retained: their retry would be refused too
+        // (one informational line), instead of attempting writes the fence must refuse. The frozen characters are named, and so are the offline characters whose last save is retained
+        // (their retry would be refused too); any other character keeps its writes.
+        int[] retiring = [.. moved, .. saveQueue.RetainedCharacterIds()];
+        retirement?.Retire(retiring);
+        saveQueue.RetireCharacters(retiring);
         return Task.CompletedTask;
     }
 

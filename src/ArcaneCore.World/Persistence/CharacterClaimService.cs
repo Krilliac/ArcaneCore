@@ -361,6 +361,9 @@ public sealed class CharacterClaimService(
     /// </summary>
     private async Task<bool> WaitForTransferSettledAsync(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, CancellationToken stop)
     {
+        long started = Environment.TickCount64;
+        bool slowReported = false;
+        bool failing = false;
         while (true)
         {
             lock (_pendingGate)
@@ -369,8 +372,28 @@ public sealed class CharacterClaimService(
                     return false; // a login claimed the character meanwhile: the claim is that session's now
             }
 
-            if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
-                return true;
+            try
+            {
+                if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
+                    return true;
+
+                failing = false;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                // A failed poll says nothing about the transfer: keep polling, or the claim would stay and other workers refuse the character's logins.
+                if (!failing)
+                {
+                    failing = true;
+                    logger?.LogWarning(ex, "polling the transfer of character {Character} failed; retrying", characterId);
+                }
+            }
+
+            if (!slowReported && Environment.TickCount64 - started >= 60_000)
+            {
+                slowReported = true;
+                logger?.LogWarning("the transfer that brought the claim of character {Character} has not settled after 60 s; the claim release keeps polling", characterId);
+            }
 
             await Task.Delay(TransferSettlePoll, stop).ConfigureAwait(false);
         }

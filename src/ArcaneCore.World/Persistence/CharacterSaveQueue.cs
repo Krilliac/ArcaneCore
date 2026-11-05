@@ -340,10 +340,12 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
         ArgumentNullException.ThrowIfNull(characterIds);
         int characters = 0;
         int dropped = 0;
+        var lostRetained = new List<int>();
         lock (_gate)
         {
             foreach (int id in characterIds)
             {
+                _retired.Add(id); // before the early continue: a character already quarantined still has its in-flight fence refusal expected
                 if (!_quarantined.Add(id))
                 {
                     continue;
@@ -351,15 +353,25 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
 
                 characters++;
                 _quarantineAnnounced.Add(id); // the refused snapshots of a retired character are expected: nothing to tell the staff
-                _retired.Add(id);
                 bool waiting = _slots.TryGetValue(id, out Slot? slot) && slot.State is not null; // dropped by the consumer when it reaches the slot
                 bool retained = _failed.Remove(id);
+                if (retained)
+                {
+                    lostRetained.Add(id);
+                }
+
                 _exhaustedReported.Remove(id);
                 if (waiting || retained)
                 {
                     dropped++;
                 }
             }
+        }
+
+        if (lostRetained.Count > 0)
+        {
+            // A retained snapshot is a save that failed and was never written; nothing flushes it for a character the handoff did not freeze, so it is lost for good.
+            _logger.LogWarning("Retained snapshot(s) of character(s) {Characters} were dropped by the handoff retirement and will not be written; their last save is lost", string.Join(", ", lostRetained));
         }
 
         if (characters > 0)

@@ -86,6 +86,9 @@ public interface ITransferSessionEntry
     void ResumeSaves(Player player);
 }
 
+/// <summary>The shadow load found the adopted session already closed (its scope disposed): the client left, which is not a fault.</summary>
+internal sealed class TransferClientClosedException(string message, Exception inner) : InvalidOperationException(message, inner);
+
 /// <summary>
 /// Production <see cref="ITransferShadowLoader"/>: the <see cref="ICharacterHooks"/> loading phases of CMSG_PLAYER_LOGIN (through
 /// <see cref="TransferShadowHooks"/>, so hooks marked <see cref="ISkippedOnTransferShadowLoad"/> do not run) on the adopted session's service
@@ -106,6 +109,19 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
             throw new InvalidOperationException($"adopted session belongs to account {session.AccountId}, the transfer to account {bundle.AccountId}");
         }
 
+        try
+        {
+            return await LoadForSessionAsync(session, bundle, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException ex) when (session.IsDisconnected)
+        {
+            // The session's scope was disposed because the client left while the load ran: the client closing, not a fault of a service.
+            throw new TransferClientClosedException($"the session of account {bundle.AccountId} closed while its shadow load ran", ex);
+        }
+    }
+
+    private static async Task<Player> LoadForSessionAsync(WorldSession session, PlayerTransferBundle bundle, CancellationToken cancellationToken)
+    {
         int characterId = checked((int)new ObjectGuid(bundle.CharacterGuid).Low);
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IWorldDataStore worldData = session.Services.GetRequiredService<IWorldDataStore>();
@@ -556,6 +572,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         if (error is not null)
         {
+            if (error is TransferClientClosedException)
+            {
+                _logger.LogInformation("The deferred shadow load of character {Guid} for transfer {TransferId} found the client closed", slot.CharacterGuid, slot.TransferId);
+                return;
+            }
+
             FaultLedger.Shared.Record("cluster.transfer-target", error);
             _logger.LogWarning(error, "The deferred shadow load of character {Guid} for transfer {TransferId} failed; the install after the commit repeats it", slot.CharacterGuid, slot.TransferId);
         }
@@ -920,15 +942,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         {
             // Never leave a session "in world" with a player that is in the registry but will never reach a map: undo the registration and kick.
             // Each undo step is guarded on its own, so a second failure cannot skip the ones after it (above all the detach, which unregisters the player).
-            // A session that closed since the probe (its scope disposed) is the client leaving, not a fault: it is logged, not recorded.
-            if (ex is ObjectDisposedException)
-            {
-                _logger.LogInformation("Transfer {TransferId}: the client of character {Character} closed while its arrival started", slot.TransferId, bundle.CharacterGuid);
-            }
-            else
-            {
-                FaultLedger.Shared.Record("cluster.transfer-target", ex);
-            }
+            FaultLedger.Shared.Record("cluster.transfer-target", ex);
 
             UndoStep(() => claims?.AbandonTicket(characterId, claimTicket), slot, "abandon the claim ticket");
             UndoStep(() => teleports.Forget(shadow), slot, "forget the teleport");
@@ -1166,7 +1180,14 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                     }
                 }
 
-                FaultLedger.Shared.Record("cluster.transfer-target", ex);
+                if (ex is TransferClientClosedException)
+                {
+                    _logger.LogInformation("Transfer {TransferId}: the shadow load found the client of character {Guid} closed", slot.TransferId, slot.CharacterGuid);
+                }
+                else
+                {
+                    FaultLedger.Shared.Record("cluster.transfer-target", ex);
+                }
             }
 
             throw;

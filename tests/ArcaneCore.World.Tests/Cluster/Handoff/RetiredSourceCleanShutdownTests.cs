@@ -1,8 +1,14 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Data.Characters.Life;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.TestSupport;
+using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Progression;
 using ArcaneCore.World.Persistence;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -10,7 +16,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Handoff;
 
-/// <summary>A retired handoff source drops the pending writes of the characters that moved to the new owner (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly; a character it still owns keeps its write.</summary>
+/// <summary>A retired handoff source drops the pending writes of the characters that moved to the new owner (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly; a character it still owns keeps its write. Offline characters with a retained (failed) snapshot are retired with them.</summary>
 public sealed class RetiredSourceCleanShutdownTests
 {
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
@@ -68,6 +74,35 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.Contains(store.Attempts, s => s.Id == 1);
         Assert.Empty(queue.RetainedCharacterIds());
         Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Warning);
+    }
+
+    /// <summary>An offline character whose last save is retained (the database was locked) is not frozen by the handoff, yet its retry would be refused by the fence once another world owns the shard: the retirement drops it, so a clean stop follows.</summary>
+    [Fact]
+    public async Task ARetainedSnapshotOfANonFrozenCharacter_IsDroppedByTheSourceRetirement_AndTheQueueStopsCleanly()
+    {
+        var store = new FencedStore(moved: 5) { BusyOnce = 5 }; // the first write of 5 finds the database locked (retained); every later write is refused by the fence
+        await using ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
+        var logger = new CaptureLogger();
+        var queue = new CharacterSaveQueue(services.GetRequiredService<IServiceScopeFactory>(), logger);
+        Exception? fatal = null;
+        queue.FatalFailure += ex => fatal = ex;
+        using WorldRuntime world = new(new WorldRuntimeOptions(), NullSaveQueue.Instance, NullLogger<WorldRuntime>.Instance);
+        using var source = new LocalWorldHandoffSource(new WorkerNodeId("w1"), world, queue, new WorkerAdmission(), new WorldWriterGuard());
+
+        queue.Enqueue(State(5, 55));
+        queue.Start();
+        await WorldTestHost.WaitForAsync(() => queue.RetainedCharacters.Contains(5), "the busy snapshot of character 5 to be retained");
+        Assert.Equal(new[] { 5 }, queue.RetainedCharacterIds()); // not frozen: the source froze nobody
+
+        await source.RetireAsync(CancellationToken.None);
+        Assert.Empty(queue.RetainedCharacterIds());
+
+        await queue.StopAsync(); // must not throw: the retained snapshot was dropped, so no refused retry reaches the fence
+
+        Assert.Null(fatal);
+        Assert.Null(queue.TerminalFailure);
+        Assert.Single(store.Attempts); // only the first, busy attempt
+        Assert.Empty(store.Saved);
     }
 
     [Fact]
@@ -251,10 +286,17 @@ public sealed class RetiredSourceCleanShutdownTests
         /// <summary>Runs inside the store call, before the fence answers: the point where a handoff can retire a character whose write is already in flight.</summary>
         public Action<CharacterState>? OnSave { get; set; }
 
+        /// <summary>The character whose first write fails as a locked database (retained by the queue) before the fence logic applies; null for none.</summary>
+        public int? BusyOnce { get; set; }
+
+        private int _busyDone;
+
         public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
         {
             Attempts.Enqueue(state);
             OnSave?.Invoke(state);
+            if (BusyOnce == state.Id && Interlocked.Exchange(ref _busyDone, 1) == 0)
+                return Task.FromException(new SqliteException("SQLite Error 5: 'database is locked'.", 5));
             if (state.Id == moved)
                 return Task.FromException(new CharacterOwnershipRejectedException("world", 7));
             Saved.Enqueue(state);

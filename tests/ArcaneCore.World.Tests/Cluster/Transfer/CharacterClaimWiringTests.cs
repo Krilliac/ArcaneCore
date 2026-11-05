@@ -66,6 +66,14 @@ public sealed class CharacterClaimWiringTests
         CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
         await using WorldTestHost host = rig.StartWorld(a);
         (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE9", "Vanisher");
+        host.ExpectSessionFaults = true; // a fault escaping the session lands in SessionFaults instead of vanishing
+        var disposedFaults = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        Action<ArcaneCore.Kernel.Diagnostics.FaultNotice> watch = n =>
+        {
+            if (n.ExceptionType.Contains(nameof(ObjectDisposedException), StringComparison.Ordinal))
+                disposedFaults.Enqueue(n.Site + ": " + n.Message);
+        };
+        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.FaultNoticed += watch; // world-thread and transfer faults go through the ledger
 
         using var gate = new ManualResetEventSlim(false);
         using var blocked = new ManualResetEventSlim(false);
@@ -96,7 +104,9 @@ public sealed class CharacterClaimWiringTests
 
         await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)id) is null, "the unentered login's claim to be released");
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
+        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.FaultNoticed -= watch;
         Assert.Empty(host.SessionFaults);
+        Assert.Empty(disposedFaults);
     }
 
     [Fact]
@@ -691,6 +701,109 @@ public sealed class CharacterClaimWiringTests
         await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)character) is null, "the received claim is released once the transfer completed");
         await claims.DrainAsync();
         Assert.True((await rig.Store.TryClaimCharacterAsync((ulong)character, a)).IsClaimed);
+    }
+
+    /// <summary>A failed poll of the claim row says nothing about the transfer: the received-claim release logs it, keeps polling, and still releases once the transfer completed.</summary>
+    [Fact]
+    public async Task AReceivedClaimsRelease_SurvivesAFailedPoll_AndStillReleasesOnceTheTransferCompleted()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("PollFail");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        Guid transfer = await rig.CommitClaimMoveAsync(character, a, b);
+        var scopes = new FailingScopeFactory(rig.Services.GetRequiredService<IServiceScopeFactory>());
+        var flaky = new EfTransferDecisionStore(scopes);
+        using var claims = new CharacterClaimService(new StoreOverrideProvider(rig.Services, flaky)) { TransferSettlePoll = TimeSpan.FromMilliseconds(50) };
+
+        scopes.FailNext(1); // the first poll throws
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
+        await WorldTestHost.WaitForAsync(() => scopes.Failures >= 1, "the first poll to fail");
+        await Task.Delay(300); // later polls run: the release did not end on the failure
+        Assert.False(claims.DrainAsync().IsCompleted, "the release ended on a failed poll");
+        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+
+        await rig.Store.MarkCompletedAsync(transfer);
+        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)character) is null, "the received claim is released after the failed poll");
+        await claims.DrainAsync();
+    }
+
+    /// <summary>A login of the character that supersedes the pending release ends its poll while the transfer is still unsettled, and the claim stays.</summary>
+    [Fact]
+    public async Task AReceivedClaimsReleasePoll_EndsWhenALoginSupersedesIt()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Superseded");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        await rig.CommitClaimMoveAsync(character, a, b); // never completed
+        using var claims = new CharacterClaimService(rig.Services) { TransferSettlePoll = TimeSpan.FromMilliseconds(50) };
+
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
+        await Task.Delay(300);
+        Assert.False(claims.DrainAsync().IsCompleted, "the poll must still be waiting for the transfer");
+
+        claims.ScheduleRelease(character, b, () => false); // a later release registers its own marker: the first poll is superseded
+        await claims.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+    }
+
+    /// <summary>Disposing the service cancels a poll that waits for an unsettled transfer (no 60 s limit any more), and the claim stays.</summary>
+    [Fact]
+    public async Task AReceivedClaimsReleasePoll_EndsWhenTheServiceIsDisposed()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Disposed");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        await rig.CommitClaimMoveAsync(character, a, b); // never completed
+        var claims = new CharacterClaimService(rig.Services) { TransferSettlePoll = TimeSpan.FromMilliseconds(50) };
+
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
+        await Task.Delay(300);
+        Task pending = claims.DrainAsync();
+        Assert.False(pending.IsCompleted, "the poll must still be waiting for the transfer");
+
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        claims.Dispose();
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(4), "Dispose waited out its grace period: the poll did not observe the cancellation");
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+    }
+
+    /// <summary>A scope factory that throws from the next N scope creations, then delegates.</summary>
+    private sealed class FailingScopeFactory(IServiceScopeFactory inner) : IServiceScopeFactory
+    {
+        private int _failNext;
+        private int _failures;
+
+        public int Failures => Volatile.Read(ref _failures);
+
+        public void FailNext(int count) => Volatile.Write(ref _failNext, count);
+
+        public IServiceScope CreateScope()
+        {
+            if (Interlocked.Decrement(ref _failNext) >= 0)
+            {
+                Interlocked.Increment(ref _failures);
+                throw new InvalidOperationException("injected store failure");
+            }
+
+            Interlocked.Exchange(ref _failNext, 0);
+            return inner.CreateScope();
+        }
+    }
+
+    /// <summary>The rig's provider, except that <see cref="EfTransferDecisionStore"/> resolves to the given instance.</summary>
+    private sealed class StoreOverrideProvider(IServiceProvider inner, EfTransferDecisionStore store) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => serviceType == typeof(EfTransferDecisionStore) ? store : inner.GetService(serviceType);
     }
 
     [Fact]

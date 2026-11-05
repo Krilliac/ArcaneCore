@@ -12,6 +12,8 @@ using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
+using ArcaneCore.World.Persistence;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -344,6 +346,42 @@ public sealed class WorkerTransferTargetTests : IDisposable
         Assert.True(target.WasActivated(id));
     }
 
+    /// <summary>
+    /// Every step of a failed arrival's undo runs even when one of them fails: the arrival throws on send, and the session's kick (the last step) throws too. The claim ticket is abandoned,
+    /// the teleport forgotten, the player detached and the kick attempted, and the caller still sees the original failure, not the kick's.
+    /// </summary>
+    [Fact]
+    public async Task AFailedArrival_RunsEveryUndoStep_EvenWhenTheKickFails_AndRethrowsTheOriginalFailure()
+    {
+        var worker = new CharacterOwnershipToken("worker:b", 4, Guid.NewGuid());
+        _world.CharacterOwnership = worker; // a worker-shard world: the activation issues a claim ticket for the received claim
+        await using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+        using var claims = new CharacterClaimService(services);
+        var target = new WorkerTransferTarget(Target, _world, _loader, _entry, claims: claims);
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+        _session.ThrowOnSend = true;
+        _session.ThrowOnKick = true;
+
+        Exception failure = await Assert.ThrowsAnyAsync<Exception>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), worker));
+
+        Assert.Contains("send failed", failure.GetBaseException().Message, StringComparison.Ordinal); // not "kick failed"
+        Assert.Equal(0, LiveTicketCount(claims)); // abandon the claim ticket
+        Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount)); // forget the teleport
+        Assert.False(_world.IsOnline(new ObjectGuid(7))); // detach the player
+        Assert.Equal(1, _session.Kicks); // kick the session (attempted, and it threw)
+        Assert.False(target.WasActivated(id));
+    }
+
+    private static int LiveTicketCount(CharacterClaimService claims)
+    {
+        var live = (Dictionary<int, List<long>>)typeof(CharacterClaimService).GetField("_liveTickets", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!;
+        lock (typeof(CharacterClaimService).GetField("_pendingGate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(claims)!)
+        {
+            return live.Values.Sum(tickets => tickets.Count);
+        }
+    }
+
     [Fact]
     public async Task ADisconnectBeforeTheWorldportAck_ResumesTheHeldSaves_AndSavesThePlayerAtItsArrivalPosition()
     {
@@ -480,6 +518,8 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         public volatile bool ThrowOnSend;
 
+        public volatile bool ThrowOnKick;
+
         public int Kicks => Volatile.Read(ref _kicks);
 
         public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
@@ -494,7 +534,14 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         public void ProcessWorldPackets(Player player) { }
 
-        public void Kick() => Interlocked.Increment(ref _kicks);
+        public void Kick()
+        {
+            Interlocked.Increment(ref _kicks);
+            if (ThrowOnKick)
+            {
+                throw new InvalidOperationException("kick failed");
+            }
+        }
 
         public void OnLoggedOut() { }
     }
