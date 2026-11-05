@@ -10,7 +10,7 @@ survivable one at a time. Its full-health strength gate also discarded a fight t
 the bot could win it after resting.
 
 A live log showed two bots refusing unsafe bodies at the cemetery and then dying again within minutes on the next living walk, ending
-in three-death loops with attackers 202, 531 and 949 in the area. Refusing unsafe bodies alone did not keep the next walk out of it.
+in repeated deaths, one loop with attackers 202 and 531 and a three-death loop with 202, 531 and 949. Refusing unsafe bodies alone did not keep the next walk out of it.
 
 | Entry | Name | Levels | Faction | Rank | Spawn time in this area |
 |---|---|---:|---:|---:|---:|
@@ -28,7 +28,8 @@ fight worse, but a bot with neither also looped there: the shared failure is ent
 ## Change and proof
 
 The on-sight and fight-strength rules decide whether an ordinary route may cross a visible pack: `PlayerbotRisk.ScanHazards` marks
-creatures whose aggro reaches overlap as strong hazards, and `Blocking` rejects or detours a route through them. `TooStrongWithin`
+creatures whose aggro reaches overlap as strong hazards when their summed fight exposure passes the maximum pull threshold
+(`PlayerbotRisk.BeyondStrengthWithNearby`; each one alone stays acceptable), and `Blocking` rejects or detours a route through them. `TooStrongWithin`
 weighs every hostile reaching the exact body or healer landing together, while keeping its individual checks across the reclaim
 disc, and an exact landing rejects a fight predicted to consume all of the bot's health at resurrection health.
 
@@ -38,7 +39,8 @@ disc, and an exact landing rejects a fight predicted to consume all of the bot's
 - `CreatureAtHealerLanding_UnsafeAtResurrectionHealth_EvenWhenSafeAtFullHealth`
 - `TwoCreaturesWhoseReachesOverlapBetweenThem_AreMarkedStrongByTheScan`
 - `AutonomousWalk_DoesNotCrossAnUnchosenLethalPack`: one survivable creature leaves an ordinary route open, a second whose reach
-  overlaps the first makes the planned route avoid every point inside both reaches.
+  overlaps the first, and whose summed exposure passes that threshold, makes the planned route avoid every point inside both
+  reaches.
 
 This is local decision coverage, not a live Raven Hill acceptance run. Newly unseen patrols and respawns are learned only when
 visible, and the bot damage estimate may need real fights to converge after a gear or sickness change.

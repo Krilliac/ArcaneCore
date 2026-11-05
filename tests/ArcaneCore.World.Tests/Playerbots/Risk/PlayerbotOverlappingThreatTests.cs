@@ -86,7 +86,9 @@ public sealed class PlayerbotOverlappingThreatTests
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync();
         (byte level, uint health) = await world.OnWorldAsync(() => (world.Player.Level, world.Player.MaxHealth));
-        float damage = health * 0.35f * PlayerbotRiskModel.PriorBotDps(level) / 60f * 2f;
+        // One creature alone stays within what the bot accepts (0.6 of the 0.9 ceiling); two summed (1.2) pass it, which is what
+        // marks an overlapping pair strong (PlayerbotRisk.BeyondStrengthWithNearby).
+        float damage = health * 0.6f * PlayerbotRiskModel.PriorBotDps(level) / 60f * 2f;
         CreatureTemplate template = RiskTestWorld.Template(991093, level, health: 60, minDamage: damage, maxDamage: damage)
             with { ExtraFlagsDialect = CreatureExtraFlagsDialect.VMangos, CallForHelp = 0 };
         var first = await world.OnWorldAsync(() => world.Spawn(template, 30, 0));
@@ -103,7 +105,9 @@ public sealed class PlayerbotOverlappingThreatTests
         Assert.True(loneRoute, "one survivable creature must not close an ordinary route");
 
         var second = await world.OnWorldAsync(() => world.Spawn(template with { Entry = 991094 }, 33, 0));
-        await world.SeeAsync(second);
+        // Past the first look's phase and period so the second scan really looks; still under StrongHazardLifeMs.
+        await world.Host.World.AdvanceClockAsync(2 * PlayerbotRisk.HazardScanMs);
+        await world.SeeAsync(first, second);
 
         bool safe = await world.OnWorldAsync(() =>
         {

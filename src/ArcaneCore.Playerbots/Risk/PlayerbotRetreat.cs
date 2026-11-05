@@ -377,9 +377,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
     /// <summary>
     /// A further run of <see cref="ExtendYards"/>: straight away from the enemies when the navigation has a way there, else the first of
-    /// the turns of <see cref="FanDegrees"/> that has one, else the walkable point nearest the straight one
+    /// the turns of <see cref="FanDegrees"/> that has one, else the walkable point nearest the first grounded one
     /// (<see cref="PlayerbotNavigation.TryPlanToward"/>); null when none. Each goal stands on the ground there (the bot's own height
-    /// is yards off it on a slope). <paramref name="goal"/> is where the run goes (the straight one when there is none).
+    /// is yards off it on a slope). <paramref name="goal"/> is where the run goes (the first grounded point, which the nearest-point search also uses).
     /// <para>
     /// The retreat once asked only for the straight one, every think: where that was a cliff edge, water or a wall, all
     /// <see cref="MaxExtensions"/> replans were refused alike within a few thinks and the bot gave up cornered where it stood, although
@@ -396,7 +396,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         Vector3 here = new(player.X, player.Y, player.Z);
         Vector3 away = Away(player);
         float straight = MathF.Atan2(away.Y, away.X);
-        // The bot's own region is looked up once for the up to six goal points below.
+        // The bot's own region is looked up once for the up to five goal points below.
         PlayerbotNavigation.FloorProbe? floors = player.Map is { } map ? new PlayerbotNavigation.FloorProbe(map, here) : null;
         Func<Vector3, Vector3?>? ground = null;
         if (floors is not null) ground = floors.TryNear;
