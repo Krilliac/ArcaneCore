@@ -148,7 +148,7 @@ public sealed class PlayerbotRetreatPlanBudgetTests
 
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
-            Ends.Add(end);
+            if (end != start) Ends.Add(end); // OnWalkableMesh asks Find(point, point) about the bot's own position; that is not a fan direction
             clock.Advance(40);
             return PathResult.None(start);
         }
