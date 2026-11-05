@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Schema;
@@ -14,6 +15,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace ArcaneCore.World.Tests.Gm;
 
@@ -23,7 +25,11 @@ public sealed class PlayerDumpCommandTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "arcane-pdump-" + Guid.NewGuid().ToString("N"));
     private readonly SqliteConnection _connection = new("Data Source=:memory:");
 
-    public PlayerDumpCommandTests() => _connection.Open();
+    public PlayerDumpCommandTests(ITestOutputHelper output)
+    {
+        _output = output;
+        _connection.Open();
+    }
 
     public void Dispose()
     {
@@ -36,17 +42,58 @@ public sealed class PlayerDumpCommandTests : IDisposable
 
     private CharacterDbContext Db() => new(new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite(_connection).Options);
 
-    /// <summary>
-    /// Hang guard of one reply. <c>.pdump</c> replies come from pool-thread database and file work posted back to the world thread, so a
-    /// host starved by a full gate (gate 1c7134022: this test took 84 s while minute-long scenario tests ran beside it; alone it takes
-    /// under a second) can exceed the client's 10 s default with nothing wrong. The reply text is still asserted exactly.
-    /// </summary>
-    private static readonly TimeSpan ReplyTimeout = TimeSpan.FromSeconds(60);
+    private readonly ITestOutputHelper _output;
+    private WorldTestHost? _host;
 
-    private static async Task<string> RunAsync(WorldTestClient client, string command)
+    /// <summary>
+    /// Sends <paramref name="command"/> and reads its reply with the client's default 10 s bound. The step time is written to the test
+    /// output; when the reply misses the bound, the failure says how long a thread-pool item and a world-thread command waited right
+    /// then and when the reply came after all, so a stall reads as pool queueing, a stalled world tick or slow import work (the reply
+    /// itself is posted to the world thread, so it needs both).
+    /// </summary>
+    private async Task<string> RunAsync(WorldTestClient client, string command)
     {
+        var step = Stopwatch.StartNew();
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
-        return (await client.ReadChatAsync(ReplyTimeout)).Text;
+        try
+        {
+            string text = (await client.ReadChatAsync()).Text;
+            _output.WriteLine($"{command}: reply after {step.ElapsedMilliseconds} ms");
+            return text;
+        }
+        catch (TimeoutException ex)
+        {
+            long waited = step.ElapsedMilliseconds;
+            long pool = await ProbeAsync(() => Task.Run(() => 0));
+            long world = _host is null ? -1 : await ProbeAsync(() => _host.World.InvokeAsync(() => 0));
+            string late;
+            try
+            {
+                await client.ReadChatAsync(TimeSpan.FromSeconds(60));
+                late = $"{step.ElapsedMilliseconds} ms after the send";
+            }
+            catch (TimeoutException)
+            {
+                late = "not within 60 s more";
+            }
+
+            throw new TimeoutException($"{command}: no reply within {waited} ms; a pool item then waited {pool} ms, a world-thread command {world} ms (-1: none); reply came {late}", ex);
+        }
+    }
+
+    private static async Task<long> ProbeAsync(Func<Task<int>> probe)
+    {
+        var watch = Stopwatch.StartNew();
+        try
+        {
+            await probe().WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            return 30_000;
+        }
+
+        return watch.ElapsedMilliseconds;
     }
 
     [Fact]
@@ -71,6 +118,7 @@ public sealed class PlayerDumpCommandTests : IDisposable
             services.AddDbContext<CharacterDbContext>(o => o.UseSqlite(_connection));
             services.AddSingleton(new PlayerDumpOptions { Directory = _dir });
         });
+        _host = host;
         await using WorldTestClient gm = await host.EnterWorldAsync("PDGM", "Pdgm", AccountSecurity.Administrator);
         await gm.CollectAsync();
 
@@ -134,6 +182,7 @@ public sealed class PlayerDumpCommandTests : IDisposable
             services.AddSingleton<IRealmCharacterCountStore>(counts);
             services.AddSingleton(Options.Create(new RealmStatusOptions { Id = realmId }));
         });
+        _host = host;
         await using WorldTestClient gm = await host.EnterWorldAsync("PDGM", "Pdgm", AccountSecurity.Administrator);
         await gm.CollectAsync();
         int account = (await host.Accounts.FindByUsernameAsync("PDGM"))!.Id;
