@@ -17,8 +17,10 @@ public sealed partial class SpellSystem
     /// Spell::CheckScriptTargeting, which keeps a valid explicit target and otherwise takes the one nearest unit any
     /// spell_script_target row lists (a single unit, Spell.cpp:445-575); TARGET_ENUM_UNITS_SCRIPT_AOE_AT_SRC_LOC (7)
     /// fills the source area and keeps the units whose entry and state a row matches, or every unit when the spell has
-    /// no rows (Spell.cpp:2356-2398). A listed creature caster may select itself with 38, while area 7 excludes the caster. vmangos fails a 38 cast with no target
-    /// (SPELL_FAILED_BAD_TARGETS); here the effect only gets no unit.
+    /// no rows (Spell.cpp:2356-2398). A listed creature caster may select itself with 38, while area 7 excludes the caster. Target 38 runs the same
+    /// search as target 46 (<see cref="FindScriptLocationTarget"/>: combat distance, radius mod, no line of sight, nearest of a listed unit or
+    /// game object); a game object found by 38 is no unit target (Spell.cpp:566-585). A 38 effect with rows that finds nothing fails the cast
+    /// beforehand (<see cref="ScriptLocationTargetMissing"/>); a 38 spell with no rows keeps selecting nobody.
     /// </summary>
     /// <para>
     /// <paramref name="cone"/> (TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60) fills the caster's frontal cone (<see cref="SpellConstants.ConeArc"/>) instead of a circle.
@@ -30,20 +32,23 @@ public sealed partial class SpellSystem
     private List<(Unit Unit, float Multiplier)> SelectScriptTargets(
         SpellCast cast, SpellEffectInfo effect, int effectIndex, bool nearest, Unit? explicitTarget, (float X, float Y, float Z)? destination = null, bool cone = false)
     {
+        if (nearest)
+        {
+            (Unit? nearestUnit, _) = FindScriptLocationTarget(cast.Caster, cast.Spell, effect, effectIndex, explicitTarget);
+            return nearestUnit is null ? [] : [(nearestUnit, 1f)];
+        }
+
         if (cast.Caster.Map is not { } map) return [];
         IReadOnlyList<SpellStore.ScriptTarget> rows = Store.GetScriptTargets(cast.Spell.Id);
-        if (nearest && rows.Count == 0) return [];
         // vmangos SetTargetMap: the effect radius, else the spell's maximum range (Spell.cpp:2049-2053).
         float baseRadius = TargetMapRadius(cast.Spell, effect, effectIndex);
         float radius = baseRadius > 0 ? baseRadius : cast.Spell.Range.Max;
         if (radius <= 0) return [];
-        // mangos-classic Spell::CheckScriptTargeting bounds the "anywhere" range (50000) of an entry search to 200 yards.
-        if (nearest && radius >= 50_000f) radius = 200f;
-        (float x, float y, float z) = nearest || cone ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : destination ?? SourceCentre(cast, effect);
+        (float x, float y, float z) = cone ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : destination ?? SourceCentre(cast, effect);
 
         bool Matches(Unit unit)
         {
-            if (!nearest && destination is null && ReferenceEquals(unit, cast.Caster)) return false;
+            if (destination is null && ReferenceEquals(unit, cast.Caster)) return false;
             // TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60 (Spell.cpp:2702-2740): the caster's frontal cone; with no rows a SCRIPT_EFFECT takes every
             // living unit in it and any other effect the enemies (the AoE damage targets).
             if (cone && (ReferenceEquals(unit, cast.Caster) || !Combat.MapCombat.HasInArc(cast.Caster, unit, SpellConstants.ConeArc))) return false;
@@ -62,24 +67,19 @@ public sealed partial class SpellSystem
 
         List<Unit> units = [.. UnitsInRadius(map, x, y, z, radius).Where(Matches)
             .Where(unit => IsInLineOfSightFromPoint(cast.Spell, map, x, y, z, unit))];
-        if (nearest)
-        {
-            // CheckScriptTargeting: a matching explicit target wins, else the nearest match; either way one unit.
-            if (explicitTarget is not null && units.Contains(explicitTarget)) return [(explicitTarget, 1f)];
-            float Distance(Unit unit) => (unit.X - x) * (unit.X - x) + (unit.Y - y) * (unit.Y - y) + (unit.Z - z) * (unit.Z - z);
-            return units.Count == 0 ? [] : [(units.MinBy(Distance)!, 1f)];
-        }
-
         CapTargets(units, MaxTargetsOf(cast.Spell));
         return [.. units.Select(unit => (unit, 1f))];
     }
 
-    /// <summary>Whether an effect of <paramref name="spell"/> selects with target 46 through the generic selector while the spell has no spell_script_target row.</summary>
+    /// <summary>
+    /// Whether an effect of <paramref name="spell"/> has target 46 (as target A or B, as vmangos SetTargetMap runs both) through the generic selector while
+    /// the spell has no spell_script_target row.
+    /// </summary>
     private bool HasScriptLocationTargetWithoutRows(SpellInfo spell)
     {
         foreach (SpellEffectInfo effect in spell.Effects)
         {
-            if (!effect.IsEmpty && SelectorOf(effect) == SpellImplicitTarget.LocationScriptNearCaster
+            if (!effect.IsEmpty && (effect.TargetA == SpellImplicitTarget.LocationScriptNearCaster || effect.TargetB == SpellImplicitTarget.LocationScriptNearCaster)
                 && !_spellTargetSelectors.ContainsKey((spell.Id, SpellImplicitTarget.LocationScriptNearCaster))
                 && Store.GetScriptTargets(spell.Id).Count == 0)
             {
@@ -91,21 +91,25 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// Whether the spell has an effect that selects with target 46 (as target A or B) through the generic selector, has spell_script_target rows, and
-    /// finds no listed object within range of <paramref name="caster"/>. vmangos Spell::CheckScriptTargeting then fails the cast
-    /// (SPELL_FAILED_BAD_TARGETS, or DONT_REPORT when triggered; Spell.cpp:603-616, SetTargetMap :2850-2856).
+    /// Whether the spell has an effect that selects with target 46 (as target A or B) or target 38 (when it is the effect's selector) through the
+    /// generic selector, has spell_script_target rows, and finds no listed unit or object within range of <paramref name="caster"/>.
+    /// vmangos Spell::CheckScriptTargeting then fails the cast (SPELL_FAILED_BAD_TARGETS, or DONT_REPORT when triggered; Spell.cpp:603-616,
+    /// SetTargetMap :2848-2856). A 38 spell with no rows is not refused here: spell-specific selectors and scripts own those.
     /// </summary>
     private bool ScriptLocationTargetMissing(Unit caster, SpellInfo spell, Unit? explicitTarget)
     {
-        if (Store.GetScriptTargets(spell.Id).Count == 0 || _spellTargetSelectors.ContainsKey((spell.Id, SpellImplicitTarget.LocationScriptNearCaster)))
+        if (Store.GetScriptTargets(spell.Id).Count == 0)
         {
             return false;
         }
 
+        bool locationOwned = _spellTargetSelectors.ContainsKey((spell.Id, SpellImplicitTarget.LocationScriptNearCaster));
         for (int i = 0; i < spell.Effects.Count; i++)
         {
             SpellEffectInfo effect = spell.Effects[i];
-            if (effect.IsEmpty || effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster && effect.TargetB != SpellImplicitTarget.LocationScriptNearCaster)
+            bool location = !locationOwned
+                && (effect.TargetA == SpellImplicitTarget.LocationScriptNearCaster || effect.TargetB == SpellImplicitTarget.LocationScriptNearCaster);
+            if (effect.IsEmpty || !location && SelectorOf(effect) != SpellImplicitTarget.UnitScriptNearCaster)
             {
                 continue;
             }
@@ -125,7 +129,7 @@ public sealed partial class SpellSystem
     /// object of the nearest spell_script_target row within the effect radius (else the spell's maximum range, 200 yd for an "anywhere" range)
     /// becomes the destination. Row type 0 is a game object, 1 a living creature, 2 a dead creature, 3 a player; a valid explicit unit is preferred
     /// to the nearest one. The found object is also a target of the effect only when target A is 46 and the effect is not a persistent area aura
-    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target with the caster as carrier. Nothing within range leaves
+    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target (carried by the caster for every effect except aura-applying ones; the carrier is no unit target, see <c>ObjectCarriers</c>). Nothing within range leaves
     /// the destination alone and selects nothing; the cast itself is refused beforehand (<c>CheckCast</c>, <see cref="ScriptLocationTargetMissing"/>).
     /// Target B 46 beside another target A only sets the destination.
     /// </summary>
@@ -140,8 +144,22 @@ public sealed partial class SpellSystem
         if (effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster || effect.Effect == SpellEffectName.PersistentAreaAura) return [];
         if (chosenUnit is not null) return [(chosenUnit, 1f)];
         cast.ObjectTargetsByEffect[effectIndex] = [chosenObject!.Guid];
-        return [(caster, 1f)]; // the caster carries the object effect through the unit-effect pipeline
+        // vmangos calls AddGOTarget here (Spell.cpp:590-591) and DoAllEffectOnTarget(GOTargetInfo) then runs HandleEffects(nullptr, nullptr, go, i)
+        // (Spell.cpp:1841-1843), so a summon (SummonWild, SummonObjectWild), Dummy or activate effect still runs and reads the destination. The unit pipeline
+        // needs a unit, so the caster carries the effect (the carrier is no hit, see IsObjectCarriedEffect); an aura effect would apply to the carrier, so it is skipped.
+        if (IsAuraApplyingEffect(effect.Effect)) return [];
+        cast.ObjectCarriers[effectIndex] = caster;
+        return [(caster, 1f)];
     }
+
+    /// <summary>An effect that puts an aura on its unit target, which a game object carrier must not receive.</summary>
+    private static bool IsAuraApplyingEffect(SpellEffectName effect) => effect is SpellEffectName.ApplyAura or SpellEffectName.ApplyAreaAuraParty
+        or SpellEffectName.ApplyAreaAuraPet or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy
+        or SpellEffectName.ApplyAreaAuraRaid or SpellEffectName.ApplyAreaAuraOwner or SpellEffectName.PersistentAreaAura;
+
+    /// <summary>Whether <paramref name="target"/> only carries effect <paramref name="effectIndex"/> for a game object found by target A 46 (no unit hit). A unit that target B also selected is a real target and not a carrier.</summary>
+    private static bool IsObjectCarriedEffect(SpellCast cast, int effectIndex, Unit target)
+        => cast.ObjectCarriers.TryGetValue(effectIndex, out Unit? carrier) && ReferenceEquals(carrier, target);
 
     /// <summary>Extra yards the grid pre-filter of the 46 unit search adds beyond the caster's reach, so a large target combat reach is still a candidate (the exact check follows).</summary>
     private const float MaxCombatReachMargin = 20f;

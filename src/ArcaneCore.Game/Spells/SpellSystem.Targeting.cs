@@ -91,6 +91,26 @@ public sealed partial class SpellSystem
                 continue;
             }
 
+            // Target A 46 beside a unit target B (17616: A46 / B16): vmangos FillTargetMap runs SetTargetMap for both (Spell.cpp:381-392), A's found
+            // unit first and then B's list; SelectorOf names only A here, so B is selected as well and the two lists are merged.
+            if (selector == SpellImplicitTarget.LocationScriptNearCaster && effect.TargetA == selector
+                && effect.TargetB is not (SpellImplicitTarget.None or SpellImplicitTarget.LocationScriptNearCaster) && !IsLocationTarget(effect.TargetB)
+                && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, selector)))
+            {
+                List<(Unit Unit, float Multiplier)>? fromB = SelectEffectTargets(cast, effect, i, effect.TargetB, unitTarget);
+                if (fromB is null)
+                {
+                    ReportUnsupported(cast, i, "implicit target", (uint)effect.TargetB);
+                }
+                else
+                {
+                    // A unit B selected is a real target of the effect, even when it is also the A 46 carrier (the caster).
+                    if (cast.ObjectCarriers.TryGetValue(i, out Unit? carrier) && fromB.Exists(entryB => ReferenceEquals(entryB.Unit, carrier)))
+                        cast.ObjectCarriers.Remove(i);
+                    units = [.. units, .. fromB];
+                }
+            }
+
             units = FilterRegistered(cast, effect, units);
 
             foreach ((Unit unit, float multiplier) in units)

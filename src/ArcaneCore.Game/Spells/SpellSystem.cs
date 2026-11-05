@@ -902,7 +902,7 @@ public sealed partial class SpellSystem
             bool objectOnly = entry.EffectMask != 0;
             for (int i = 0; i < SpellConstants.MaxEffects && objectOnly; i++)
             {
-                if ((entry.EffectMask & (1 << i)) != 0 && spell.Effects[i].Effect != SpellEffectName.ActivateObject)
+                if ((entry.EffectMask & (1 << i)) != 0 && spell.Effects[i].Effect != SpellEffectName.ActivateObject && !IsObjectCarriedEffect(cast, i, target))
                     objectOnly = false;
             }
             entry.Miss = objectOnly ? SpellMissInfo.None
@@ -1646,13 +1646,14 @@ public sealed partial class SpellSystem
 
         // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers
         // SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). Runs after the Items phase (spell focus, Spell.cpp:7243): vmangos reaches CheckScriptTargeting only from SetTargetMap at cast time (:2848-2860). A spell-specific selector for the target owns its own targeting.
-        if (HasScriptLocationTargetWithoutRows(spell))
+        // Not at prepare (strict): vmangos refuses only when the cast goes off, from SetTargetMap, so the target may still come into range while the cast bar runs.
+        if (!strict && HasScriptLocationTargetWithoutRows(spell))
         {
             return SpellCastResult.BadTargets;
         }
 
-        // With rows but no listed object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered).
-        if (ScriptLocationTargetMissing(caster, spell, unitTarget))
+        // With rows but no listed unit or object in range the cast fails too (Spell.cpp:603-616; DONT_REPORT when triggered), targets 38 and 46.
+        if (!strict && ScriptLocationTargetMissing(caster, spell, unitTarget))
         {
             return triggered ? SpellCastResult.DontReport : SpellCastResult.BadTargets;
         }
