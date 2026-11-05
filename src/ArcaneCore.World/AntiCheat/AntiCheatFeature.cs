@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
@@ -379,6 +380,25 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             {
                 FaultLedger.Shared.Record("anticheat.finding", ex);
                 logger.LogFault("anticheat.finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
+            }
+        }
+
+        if (GmTraceGuard.Wants(_world, GmStreamChannels.AntiCheat, out IGmTraceSink? sink))
+        {
+            // Every finding with its running score and the verdict, None included: the log and the staff alert below only see acted-on ones.
+            // The subject is the player by GUID, and the line carries the GUID and the account id only, never the player's name.
+            try
+            {
+                sink.Publish(GmStreamChannels.AntiCheat, GmTraceGuard.SubjectOf(player, default),
+                    (Guid: player.Guid.Low, Account: session.AccountId, finding.Type, finding.Detail, finding.Weight, Score: score, Action: action,
+                        player.MapId, player.X, player.Y, player.Z),
+                    static s => string.Create(CultureInfo.InvariantCulture,
+                        $"(Player:{s.Guid}) account {s.Account}: {s.Type} '{s.Detail}' weight {s.Weight:0.#} score {s.Score:0} -> {s.Action} at map {s.MapId} ({s.X:0.0}, {s.Y:0.0}, {s.Z:0.0})"));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // Tracing never changes what the anticheat records or decides.
+                logger.LogFault("gm.trace-anticheat", ex, "AntiCheat: GM stream publish threw for account {Account}", session.AccountId);
             }
         }
 

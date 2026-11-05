@@ -23,7 +23,7 @@ An unknown channel is refused with the list of channels that exist. `on` and `of
 | `procs` | target, near, all | Proc chance rolls: aura, chance, roll, result. |
 | `spells` | target, near, all | Cast start, fail with reason, go with hit and miss per target, spell misses and interrupts. |
 | `moves` | target, near | Movement opcodes with position and speed. Not available for everyone: it would flood the chat. |
-| `anticheat` | target, near, all | Anticheat findings with score and verdict. Limit: no producer publishes to this channel yet, so following it stays silent; that is not "no findings". The note goes away when the anticheat wiring lands. |
+| `anticheat` | target, near, all | Anticheat findings with score and verdict (verdict None included), and the packet-heuristics reports. Lines carry the player GUID and the account id only, never a player or account name: `(Player:guid) account N: Type 'detail' weight W score S -> Action at map M (x, y, z)` for a finding, `packet CODE (Player:guid) account N: text [Severity]` for a packet report, and `packet CODE account N: text [Severity]` while the session has no player yet (the account id alone identifies it). A packet report has no position, so it reaches `all` scopes and a `target` scope whose GM has that player selected, never a `near` scope. |
 
 The `damage`, `spells` and `moves` channels are fed from the packets the server sends to the players who can see a unit, so they show what a
 client would be told, also for units nobody is watching. Spell lines show the spell id (a name where the spell code has it: cast failures and procs).
