@@ -60,13 +60,20 @@ public sealed class LogonPacketMetricsTests
         OpcodeTable table = new OpcodeTrafficMeter(meter).Register("logon", LogonPacketMetrics.Commands);
         using MeterListener listener = Listen(meter);
 
+        // CMD_REALM_LIST + its unused u32 before authentication: no reply, and the session closes (a pre-auth refusal ends the connection).
         (TcpClient tcp, Task server) = await StartSessionAsync(table);
-        NetworkStream client = tcp.GetStream();
         using (tcp)
         {
-            // CMD_REALM_LIST + its unused u32, then a byte no logon command uses. Unauthenticated, so no reply.
-            await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0, 0x7F });
-            await server; // the unknown byte closes the session
+            await tcp.GetStream().WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 });
+            await server;
+        }
+
+        // A byte no logon command uses closes a second session.
+        (TcpClient tcp2, Task server2) = await StartSessionAsync(table);
+        using (tcp2)
+        {
+            await tcp2.GetStream().WriteAsync(new byte[] { 0x7F });
+            await server2;
         }
 
         Assert.Equal(new OpcodeCounts(1, 5, 0, 0), table.Read((uint)AuthCommand.RealmList));

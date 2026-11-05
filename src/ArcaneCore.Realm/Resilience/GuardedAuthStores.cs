@@ -78,6 +78,9 @@ internal sealed class GuardedRealmCharacterCountStore(GuardedCalls<IRealmCharact
             static (store, s, ct) => store.SetCountAsync(s.RealmId, s.AccountId, s.Count, ct),
             (RealmId: realmId, AccountId: accountId, Count: count),
             cancellationToken);
+
+    public Task<int> DeleteByAccountAsync(int accountId, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.DeleteByAccountAsync(s, ct), accountId, cancellationToken);
 }
 
 /// <summary>See <see cref="GuardedAccountStore"/>.</summary>
