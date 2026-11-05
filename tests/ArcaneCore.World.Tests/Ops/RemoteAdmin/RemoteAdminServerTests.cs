@@ -557,7 +557,7 @@ public sealed class RemoteAdminServerTests
     {
         var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
 
-        // AddRemoteAdmin alone must register the checker (one singleton): a dropped AddSecondFactorChecker would leave the RA login without its second factor.
+        // AddRemoteAdmin alone must register the checker (one singleton): without the registration the RA server falls back to a private SecondFactorChecker: the factor is still enforced, but its replay record is not shared with the web login.
         var remoteOnly = new ServiceCollection();
         remoteOnly.AddRemoteAdmin(configuration);
         ServiceDescriptor own = Assert.Single(remoteOnly, d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));

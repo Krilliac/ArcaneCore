@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
@@ -68,6 +69,17 @@ public sealed class GatewayBadHeaderDiagnosticsTests
                 ((IGatewaySessionSink)connection).OnServerPacket(WorldOpcode.SmsgNewWorld, new byte[20]);
             }
 
+            // A real frame first, so the read loop's trail has something to report: a plaintext CMSG_PING (size 8 = 4 opcode bytes + 4 payload bytes) is
+            // answered in any state, and GatewayClientConnection.ReadLoopAsync records it in the trail before dispatching it.
+            byte[] ping = new byte[10];
+            ping[1] = 0x08;
+            BinaryPrimitives.WriteUInt32LittleEndian(ping.AsSpan(2, 4), (uint)WorldOpcode.CmsgPing);
+            ping[6] = 1;
+            ping[7] = 2;
+            ping[8] = 3;
+            ping[9] = 4;
+            await stream.WriteAsync(ping, cts.Token);
+
             // No cipher is engaged yet, so the plain header is read as sent: size 0xFFFF is outside [4, 0x2800].
             await stream.WriteAsync(new byte[] { 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00 }, cts.Token);
             await stream.FlushAsync(cts.Token);
@@ -91,8 +103,11 @@ public sealed class GatewayBadHeaderDiagnosticsTests
             Assert.Contains("cipher-desync-or-plaintext", warn.Message, StringComparison.Ordinal);
             Assert.Contains("plain FFFF01000000", warn.Message, StringComparison.Ordinal);
             Assert.Contains("state Connected,", warn.Message, StringComparison.Ordinal);
-            // The frame trail: no frame was parsed with the cipher engaged and no frame came before the bad header.
-            Assert.Contains("0 frames / 0 bytes since the cipher engaged, last good none,", warn.Message, StringComparison.Ordinal);
+            // The frame trail comes from the connection's own read loop: the CMSG_PING sent first was parsed, so it is the last good frame (a fresh
+            // ClientFrameTrail would print "last good none"). The frame count stays 0 because the client is unauthenticated, so no cipher is engaged;
+            // a non-zero count needs an authenticated client and is pinned for the world session by BadHeaderDiagnosticsTests.
+            Assert.Contains("0 frames / 0 bytes since the cipher engaged, last good CMSG_PING ", warn.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("last good none", warn.Message, StringComparison.Ordinal);
             Assert.EndsWith("disconnecting", warn.Message, StringComparison.Ordinal);
             return warn.Message;
         }

@@ -11,8 +11,8 @@ intake review (see "Intake" below). Nothing was pushed.
   `IP_LOCK` on a changed address or `ALWAYS_ENFORCE`; proof parsing reads the
   optional 36-byte PINData and verifies fixed PIN or RFC 6238 TOTP before storing
   the world session key. Fixed PIN has priority if a legacy row has both bits.
-  Behavior: vmangos `src/realmd/AuthSocket.cpp` account/IP policy 393-414,
-  challenge 497-517, PINData 578-587, factor verification 697-749,
+  Behavior: vmangos `src/realmd/AuthSocket.cpp` account/IP policy 411-441,
+  challenge 497-520 (PIN grid decision from 501), PINData 576-588, factor verification 697-749,
   `VerifyPinData` 1221 and `GenerateTotpPin` 1291; flag values in
   `src/realmd/AuthSocket.h` `LockFlag`. PIN hashing follows the permitted
   WowSrp import in `THIRD_PARTY_NOTICES.md`.
