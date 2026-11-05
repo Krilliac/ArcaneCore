@@ -7,7 +7,7 @@ public readonly record struct BotCandidate(short GoalId, PlayerbotLadderRung Run
 
 /// <summary>
 /// The playerbot as a rule subject: its facts for subject filters, and the proposals the pass collects. The brain's adapter derives from
-/// this and supplies the player; tests derive their own. One instance per bot; world thread only. Fixed-size buffers: a pass allocates
+/// this and supplies the player; tests derive their own. One instance per bot; only the thread that runs that bot's think touches it (world thread, or its map thread under per-map think). Fixed-size buffers: a pass allocates
 /// nothing (a proposal past <see cref="MaxProposals"/> is dropped and counted in <see cref="DroppedProposals"/>).
 /// </summary>
 public abstract class BotRuleSubject : IBotRuleSubject
@@ -149,7 +149,7 @@ public abstract class BotRuleSubject : IBotRuleSubject
 /// drops disabled and suppressed goals, ranks the rest by weight (ties by <c>playerbot_goal.base_priority</c>, then proposal order) and
 /// leaves one candidate per driver, best first. The brain then tries the drivers in that order until one acts (fall-through). Conditions of
 /// the rules are checked when a rule fires, at the start of the pass, before any driver runs; they draw nothing from the bot's random sequence.
-/// One ladder per evaluator (world thread).
+/// One ladder per evaluator; it runs on the thread of the brain that owns it (world thread, or its map thread under per-map think).
 /// </summary>
 public sealed class BotGoalLadder(RuleEvaluator evaluator)
 {

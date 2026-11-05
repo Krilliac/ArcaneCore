@@ -124,6 +124,13 @@ public sealed class WorldEventRuleRunner : IGameEventListener
         _scratch.AddRange(_entries.Values);
         foreach (Entry entry in _scratch)
         {
+            // An action run earlier in this tick may have replaced (a start of the same event) or removed this entry: it is no longer
+            // the event's entry, so it gets no tick, and its delayed runs are dropped with it rather than run once more.
+            if (!IsCurrent(entry))
+            {
+                continue;
+            }
+
             if (!ReferenceEquals(entry.State.Binding.Catalog, catalog))
             {
                 entry.State = catalog.Bind(RuleHostKind.WorldEvent, new RuleOwner(RuleOwnerKind.GameEvent, entry.Subject.EventId)).CreateState();
@@ -132,6 +139,12 @@ public sealed class WorldEventRuleRunner : IGameEventListener
             if (entry.Running)
             {
                 Fire(entry, WorldEventRuleIds.Update, default);
+            }
+
+            // The Update rules above may have replaced this entry too.
+            if (!IsCurrent(entry))
+            {
+                continue;
             }
 
             try
@@ -143,7 +156,7 @@ public sealed class WorldEventRuleRunner : IGameEventListener
                 Faulted("update", entry, ex);
             }
 
-            if (!entry.Running && entry.State.PendingCount == 0 && _entries.TryGetValue(entry.Subject.EventId, out Entry? current) && ReferenceEquals(current, entry))
+            if (!entry.Running && entry.State.PendingCount == 0 && IsCurrent(entry))
             {
                 _entries.Remove(entry.Subject.EventId);
             }
@@ -151,6 +164,8 @@ public sealed class WorldEventRuleRunner : IGameEventListener
 
         _scratch.Clear();
     }
+
+    private bool IsCurrent(Entry entry) => _entries.TryGetValue(entry.Subject.EventId, out Entry? current) && ReferenceEquals(current, entry);
 
     private Entry Bind(ushort eventId)
     {

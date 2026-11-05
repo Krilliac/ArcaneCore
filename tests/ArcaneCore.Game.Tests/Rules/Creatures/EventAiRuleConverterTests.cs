@@ -208,6 +208,19 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void ARowWithTwoAdjustments_CountsOnceInAdjusted_ButReportsBoth()
+    {
+        EventAiConversion conversion = Convert(Row(1, chance: 150, action: new CreatureAiAction(22, 40, 0, 0)), Row(2));
+
+        Assert.Equal(2, conversion.Converted);
+        Assert.Equal(2, conversion.Issues.Count);
+        Assert.All(conversion.Issues, i => Assert.Equal(1u, i.SourceId));
+        Assert.Equal(1, conversion.Adjusted);
+        Assert.Contains(conversion.Issues, i => i.Reason.Contains("chance 150 written as 100", StringComparison.Ordinal));
+        Assert.Contains(conversion.Issues, i => i.Reason.Contains("SET_PHASE 40 written as 31", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ASourceIdAboveTheBand_IsReported()
     {
         EventAiConversion conversion = Convert(Row(CreatureRuleIds.MaxConvertedSourceId), Row(CreatureRuleIds.MaxConvertedSourceId + 1));

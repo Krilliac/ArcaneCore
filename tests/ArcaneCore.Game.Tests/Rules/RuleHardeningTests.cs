@@ -159,6 +159,48 @@ public sealed class RuleHardeningTests
     }
 
     [Fact]
+    public void WithAllowSameEventNesting_AnActionMayFireItsOwnEventAgain_UntilTheNestingLimit()
+    {
+        RuleCatalog catalog = BuildCatalog(new RuleContent
+        {
+            Rules = [Rule(1)],
+            Actions = [Action(1, HookType, Ping), Action(1, MarkType, 1, seq: 1)],
+        });
+        var subject = new HookSubject(1);
+        var evaluator = new RuleEvaluator(new Random(1)) { FaultSite = "rules.test", AllowSameEventNesting = true };
+        RuleSubjectState state = catalog.Bind(Kind).CreateState();
+        bool nested = false;
+        int innerRan = -1;
+        subject.OnFire = eventType =>
+        {
+            if (!nested)
+            {
+                nested = true;
+                innerRan = evaluator.Fire(state, subject, eventType, default, 0);
+            }
+        };
+
+        int ran = evaluator.Fire(state, subject, Ping, default, 0);
+
+        Assert.Equal(1, ran);
+        Assert.Equal(1, innerRan);
+        Assert.Equal([1, 1], subject.Tags);
+        Assert.Equal(0, evaluator.Counters.Reentrant);
+
+        // Unbounded self-firing stops at the nesting limit and is counted.
+        subject.Clear();
+        int depth = 0;
+        subject.OnFire = eventType =>
+        {
+            depth++;
+            evaluator.Fire(state, subject, eventType, default, 1);
+        };
+        evaluator.Fire(state, subject, Ping, default, 1);
+        Assert.Equal(RuleEvaluator.MaxFireNesting, depth);
+        Assert.Equal(1, evaluator.Counters.Reentrant);
+    }
+
+    [Fact]
     public void FiringTheSameEventForAnotherSubject_FromAnAction_IsAllowed()
     {
         RuleCatalog catalog = BuildCatalog(new RuleContent

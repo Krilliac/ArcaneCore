@@ -199,6 +199,34 @@ public sealed class WorldEventHostTests
     }
 
     [Fact]
+    public void AnEntryReplacedDuringATick_GetsNoExtraUpdate_AndItsDelayedRunIsDropped()
+    {
+        // Rule 1 (event 7, on its first tick) restarts event 9; rule 2 (event 9, on start) says hello at once and bye after 100 ms.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 9)],
+            [Act(1, WorldEventRuleIds.StartEvent, 9), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
+        h.Control.OnStart = id =>
+        {
+            h.Runner.OnEventChanged(id, active: true, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        h.Runner.OnEventChanged(9, active: true, resume: false);
+        Assert.Equal(["say hello"], h.Control.Log);
+
+        h.Now = 200; // the first run's "bye" is due, but its entry is replaced by rule 1 earlier in this same tick
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 9", "say hello"], h.Control.Log);
+
+        h.Now = 400; // the replacement's own "bye" runs on the next tick, once
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 9", "say hello", "say bye"], h.Control.Log);
+        Assert.Equal(2, h.Runner.EntryCount);
+    }
+
+    [Fact]
     public void AnEventThatRestartsItself_IsCutAtTheNestingLimit()
     {
         var h = new Harness(Content([Rule(1, WorldEventRuleIds.Started, global: true, flags: RuleFlags.Repeatable)], [Act(1, WorldEventRuleIds.StartEvent, 7)]));

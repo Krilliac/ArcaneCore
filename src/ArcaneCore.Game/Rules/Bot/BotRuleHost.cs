@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Rules.Bot;
 /// <summary>
 /// One playerbot as the rule engine sees it. The bot host fires its events at the start of each out-of-combat goal-ladder pass and the
 /// <c>bot.propose_goal</c> and <c>bot.suppress_goal</c> actions leave their proposals here for the brain to rank
-/// (<c>PlayerbotRuleLadder</c> in the Playerbots pack). World thread only.
+/// (<c>PlayerbotRuleLadder</c> in the Playerbots pack). Thread affinity is the brain's: the thread that runs its think (the world thread, or the bot's map thread under World:Parallel:BotThinkPerMap).
 /// </summary>
 public interface IBotRuleSubject : IRuleSubject
 {

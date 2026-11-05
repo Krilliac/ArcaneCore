@@ -81,7 +81,8 @@ public sealed class RuleTracer
 }
 
 /// <summary>
-/// What the evaluator counted since it was created (diagnostics for its host). Written on the host thread only; a host registers them with
+/// What the evaluator counted since it was created (diagnostics for its host). Every counter is bumped with <c>Interlocked</c> by the evaluator, because one instance can be shared by evaluators
+/// on different threads (the bot ladder under per-map think); a host registers them with
 /// <see cref="RuleCountersRegistry"/> and <c>.rules stats</c> prints them (a plain 64-bit read from another thread is a snapshot, not a lock).
 /// </summary>
 public sealed class RuleEvaluatorCounters

@@ -89,8 +89,8 @@ public sealed class RuleCommandsTests
         Assert.Equal("2 rejected row(s).", all[^1]);
         Assert.Equal(4, all.Length);
 
-        string[] creature = await ConsoleAsync(host, ".rules check gameobject 99");
-        Assert.Equal(["rule 5: host 3 is not registered (registered: 1 bot, 2 creature, 5 world_event) [gameobject entry 99]", "1 rejected row(s)."], creature[1..]);
+        string[] gameObject = await ConsoleAsync(host, ".rules check gameobject 99");
+        Assert.Equal(["rule 5: host 3 is not registered (registered: 1 bot, 2 creature, 5 world_event) [gameobject entry 99]", "1 rejected row(s)."], gameObject[1..]);
         Assert.Equal("No rejected rule row matches.", (await ConsoleAsync(host, ".rules check gameobject 98"))[1]);
         Assert.StartsWith("Unknown rule host 'dragon'. Hosts: bot, creature,", (await ConsoleAsync(host, ".rules check dragon"))[0], StringComparison.Ordinal);
         Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules check gameobject x"))[0], StringComparison.Ordinal);
@@ -108,8 +108,8 @@ public sealed class RuleCommandsTests
         string[] bot = await ConsoleAsync(host, ".rules vocab bot");
         Assert.StartsWith("event 1 bot.goal_evaluate() [bot]: ", bot[0], StringComparison.Ordinal);
         Assert.Equal("11 primitive(s).", bot[^1]);
-        string[] creature = await ConsoleAsync(host, ".rules vocab gameobject");
-        Assert.Equal("Host gameobject is not registered in this build; its rules are rejected. The shared primitives follow.", creature[0]);
+        string[] gameObject = await ConsoleAsync(host, ".rules vocab gameobject");
+        Assert.Equal("Host gameobject is not registered in this build; its rules are rejected. The shared primitives follow.", gameObject[0]);
     }
 
     [Fact]

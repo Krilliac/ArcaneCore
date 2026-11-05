@@ -145,7 +145,7 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
         _ai = ai;
         _catalog = catalog;
         Context = ai.Engine.Context;
-        _evaluator = new RuleEvaluator(new HostRandom(this)) { Conditions = new Gate(this) };
+        _evaluator = new RuleEvaluator(new HostRandom(this)) { Conditions = new Gate(this), AllowSameEventNesting = true };
         _state = null!;
         Rebuild();
     }
