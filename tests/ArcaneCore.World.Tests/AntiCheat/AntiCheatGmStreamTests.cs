@@ -156,9 +156,9 @@ public sealed class AntiCheatGmStreamTests
     public void ThePacketLine_CarriesGuidAndAccount_WhenAPlayerExists_AndTheAccountAlone_WhenNot()
     {
         Assert.Equal("packet wrong-state (Player:77) account 5: text [Warning]",
-            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning));
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", new ObjectGuid(77), 5, "text", AnomalySeverity.Warning, PacketTraffic.Player));
         Assert.Equal("packet wrong-state account 5: text [Warning]",
-            PacketHeuristicsFeature.FormatPacketLine("wrong-state", default, 5, "text", AnomalySeverity.Warning));
+            PacketHeuristicsFeature.FormatPacketLine("wrong-state", default, 5, "text", AnomalySeverity.Warning, PacketTraffic.Player));
     }
 
     [Fact]

@@ -45,7 +45,7 @@ For a multi-target spell go, the `target` scope matches on the caster and the fi
 
 * At most 5 lines per second per GM across all channels (a token bucket holding one second's worth). Lines over the limit are dropped and
   counted; one notice, "N lines suppressed (limit 5/s)", follows. Only a GM whose scope matches an event spends a token for it.
-* A subscription turns itself off 10 minutes after it was last started or renewed, when you log out, and when you leave this world process through a committed cluster transfer; you are told when it times out. Each line is checked against your account rank when it is delivered: a GM demoted below GameMaster since subscribing receives nothing more and loses every subscription.
+* A subscription turns itself off 10 minutes after it was last started or renewed, when you log out, and when you leave this world process through a committed cluster transfer; you are told when it times out. A live session caches its rank at login and `account set-gmlevel` only applies at the next login, so the stream re-reads each subscribed GM's account from the account store about once a second, off the world thread: a GM whose stored rank is below GameMaster (or whose account is gone) loses every subscription on the next tick and receives nothing more. The feed therefore ends within about a second of the demotion plus one store read. If a store read fails, the cached rank stands and the read is retried at the next interval.
 * At most 8 channels per GM at a time.
 * Zero cost when nobody follows a channel: the producers check a lock-free flag before decoding or formatting anything. The limits, the
   timeout and the range are code defaults of `GmStreamOptions`; no configuration key binds them.

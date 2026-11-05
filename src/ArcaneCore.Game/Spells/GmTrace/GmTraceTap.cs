@@ -316,7 +316,7 @@ internal static class GmTraceTap
 
                     break;
                 default:
-                    // An entry of a type this tap does not decode ends the read: its length is unknown, so the rest cannot be located.
+                    // An entry of a type this tap does not decode ends the read: its length is fixed but this tap does not decode it, so the rest is not read.
                     // That includes the mana-leech entry (DrainAuras.cs, BuildManaLeechLog), which is therefore not traced.
                     return;
             }

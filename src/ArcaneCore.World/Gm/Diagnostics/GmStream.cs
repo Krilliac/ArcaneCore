@@ -204,6 +204,15 @@ public sealed class GmStream : IGmTraceSink
         }
     }
 
+    /// <summary>The GUIDs of every GM that holds at least one subscription right now (a snapshot).</summary>
+    public IReadOnlyList<ObjectGuid> Subscribers()
+    {
+        lock (_gate)
+        {
+            return [.. _subscribers.Keys];
+        }
+    }
+
     /// <summary>
     /// Replace the viewer snapshot of every subscribed GM with what <paramref name="resolve"/> reports (null: the GM is not in the
     /// world, so it has no viewer and only events that involve it by GUID or have the <see cref="GmStreamScope.All"/> scope match).

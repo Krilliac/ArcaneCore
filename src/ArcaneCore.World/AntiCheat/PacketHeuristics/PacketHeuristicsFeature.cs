@@ -474,7 +474,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     /// (<see cref="PacketTraffic.Tool"/>) or a bot sent (<see cref="PacketTraffic.Bot"/>) carries a <c>tool</c> or <c>bot</c> marker after the code, so
     /// the line does not read as the target player cheating; player and staff traffic carry no marker.
     /// </summary>
-    internal static string FormatPacketLine(string code, ObjectGuid guid, int account, string text, AnomalySeverity severity, PacketTraffic traffic = PacketTraffic.Player)
+    internal static string FormatPacketLine(string code, ObjectGuid guid, int account, string text, AnomalySeverity severity, PacketTraffic traffic)
     {
         string marker = traffic switch
         {
