@@ -485,7 +485,10 @@ public sealed class BattlegroundHolderWiringTests
         holder.PumpOnce();
         worker.PumpOnce();
 
-        clock.Advance(TimeSpan.FromSeconds(31));
+        // Keep the hub called during the wait (as a live holder's pump does), so it never sees a stall.
+        clock.Advance(TimeSpan.FromSeconds(20));
+        holder.PumpOnce();
+        clock.Advance(TimeSpan.FromSeconds(11));
         holder.PumpOnce();
 
         lock (sink)

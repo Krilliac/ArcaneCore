@@ -296,7 +296,7 @@ public sealed class BattlegroundFeatureClusterLinkTests
     }
 
     [Fact]
-    public async Task APlainWorkersBattlemasterList_NamesNoInstance_WhileTheHoldersListsItsRunningMatch()
+    public async Task APlainWorkersBattlemasterList_NamesTheHoldersRunningMatches_NotItsOwn()
     {
         var hub = new BattlegroundHub();
         using var holder = new Node(HolderNode, RealInstancesList, allowInstanceMaps: false, hub);
@@ -307,13 +307,17 @@ public sealed class BattlegroundFeatureClusterLinkTests
         await Eventually(() => holder.Link.IsHolder, holder, worker);
         int holderBracket = BattlegroundConstants.BracketOfLevel(holderPlayer.Level, 10);
         int workerBracket = BattlegroundConstants.BracketOfLevel(workerPlayer.Level, 10);
+        // Two running matches on the holder, one on the worker's own (stale) manager: the worker's player must see the holder's two.
+        Assert.NotNull(holder.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, holderBracket));
         Assert.NotNull(holder.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, holderBracket));
         Assert.NotNull(worker.Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, workerBracket));
 
         holder.Feature.SendBattlefieldList(holderPlayer, ObjectGuid.Empty, BattlegroundType.WarsongGulch);
         worker.Feature.SendBattlefieldList(workerPlayer, ObjectGuid.Empty, BattlegroundType.WarsongGulch);
 
-        Assert.Equal(1u, ListedInstances(holderSession));
-        Assert.Equal(0u, ListedInstances(workerSession));
+        Assert.Equal(2u, ListedInstances(holderSession));
+        // The worker's list arrives once the holder answered.
+        await Eventually(() => workerSession.Sent.Any(p => p.Opcode == WorldOpcode.SmsgBattlefieldList), holder, worker);
+        Assert.Equal(2u, ListedInstances(workerSession));
     }
 }

@@ -322,12 +322,21 @@ public sealed partial class BattlegroundFeature
         }
 
         int bracket = BattlegroundConstants.BracketOfLevel(player.Level, template.MinLevel);
-        // A node that does not hold the queue state (a plain worker, or a holder that stepped down) has no running matches of its own to list: its manager is empty or stale, so the
-        // client gets the empty list (a plain "join" window) instead of ids that name no match the holder runs.
-        IReadOnlyList<uint> ids = bracket < 0 || !HoldsQueueState ? [] : Manager.ClientInstanceIds(type, bracket);
-        player.Session.Send(WorldOpcode.SmsgBattlefieldList,
-            BattlegroundPackets.BuildBattlefieldList(source, template.MapId, (byte)Math.Max(bracket, 0), ids));
+        // A node that does not hold the queue state (a plain worker, or a holder that stepped down) has no running matches of its own to list: its manager is empty or stale. It asks the
+        // holder, which answers with a BattlegroundListNotice carrying its own client instance ids; the list is sent when that notice arrives (SendBattlefieldListPacket). A bracket the
+        // player has no battleground for gets the empty list at once.
+        if (bracket >= 0 && !HoldsQueueState && _worker is { } worker)
+        {
+            worker.RequestList(player.Guid, source, type, (byte)bracket);
+            return;
+        }
+
+        IReadOnlyList<uint> ids = bracket < 0 ? [] : Manager.ClientInstanceIds(type, bracket);
+        SendBattlefieldListPacket(player, source, template.MapId, (byte)Math.Max(bracket, 0), ids);
     }
+
+    private static void SendBattlefieldListPacket(Player player, ObjectGuid source, uint mapId, byte bracket, IReadOnlyList<uint> ids)
+        => player.Session.Send(WorldOpcode.SmsgBattlefieldList, BattlegroundPackets.BuildBattlefieldList(source, mapId, bracket, ids));
 
     /// <summary>The answer to CMSG_BATTLEFIELD_STATUS (vmangos HandleBattlefieldStatusOpcode): one status per occupied queue slot.</summary>
     public void SendStatusReports(Player player)

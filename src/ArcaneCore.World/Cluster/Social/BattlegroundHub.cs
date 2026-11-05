@@ -220,6 +220,17 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
 
             if (gone is not null)
             {
+                // Commands the dead worker left queued are purged: run after the gone item they would register a player nobody releases, and the gone item releases everything it served.
+                int queued = _commands.Count;
+                for (int i = 0; i < queued; i++)
+                {
+                    (BattlegroundQueuedCommand Item, int Size) entry = _commands.Dequeue();
+                    if (!gone.Contains(entry.Item.WorkerId))
+                    {
+                        _commands.Enqueue(entry);
+                    }
+                }
+
                 foreach (string worker in gone)
                 {
                     _workerSeen.Remove(worker);
@@ -227,6 +238,7 @@ public sealed class BattlegroundHub(TimeProvider? time = null, TimeSpan? holderT
                     batch.Add(new BattlegroundQueuedCommand(worker, new BattlegroundWorkerGoneCommand()));
                 }
             }
+
             while (_commands.Count > 0 && batch.Count < MaxBatchItems)
             {
                 int size = _commands.Peek().Size;

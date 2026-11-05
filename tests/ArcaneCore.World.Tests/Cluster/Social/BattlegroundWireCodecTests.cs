@@ -115,6 +115,28 @@ public sealed class BattlegroundWireCodecTests
     }
 
     [Fact]
+    public void TheBattlefieldListPair_HasTheDocumentedBytes_AndRoundTrips()
+    {
+        var notice = new BattlegroundListNotice(Nine, Nine, 489, 5, [1u, 2u]);
+        Assert.Equal(
+            Convert.FromHexString("07" + "0900000000000000" + "0900000000000000" + "E9010000" + "05" + "02000000" + "01000000" + "02000000"),
+            Bytes(w => BattlegroundWireCodec.WriteNotice(w, notice)));
+
+        var back = Assert.IsType<BattlegroundListNotice>(RoundTrip(notice));
+        Assert.Equal(Nine, back.Player);
+        Assert.Equal(Nine, back.Source);
+        Assert.Equal(489u, back.MapId);
+        Assert.Equal((byte)5, back.Bracket);
+        Assert.Equal(new[] { 1u, 2u }, back.InstanceIds);
+        Assert.Empty(Assert.IsType<BattlegroundListNotice>(RoundTrip(new BattlegroundListNotice(Nine, Nine, 489, 0, []))).InstanceIds);
+
+        var command = new BattlegroundListCommand(Nine, ObjectGuid.Player(10), BattlegroundType.WarsongGulch, 4);
+        byte[] bytes = Bytes(w => BattlegroundWireCodec.WriteCommand(w, command));
+        Assert.Equal(Convert.FromHexString("07" + "0900000000000000" + "0A00000000000000"), bytes[..17]);
+        Assert.Equal(command, RoundTrip(command));
+    }
+
+    [Fact]
     public void Lists_RoundTripWithTheirWorker()
     {
         BattlegroundQueuedNotice[] notices = [new("a", new BattlegroundPrepareToPortNotice(Nine)), new("b", new BattlegroundQueueLimitNotice(Nine, 3))];

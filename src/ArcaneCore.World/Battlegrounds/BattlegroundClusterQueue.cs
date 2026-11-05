@@ -24,6 +24,12 @@ public sealed record BattlegroundPortCommand(BattlegroundPortRequest Request) : 
 /// <summary>CMSG_BATTLEFIELD_STATUS: poll the queue slots.</summary>
 public sealed record BattlegroundStatusCommand(ObjectGuid Player, uint Level) : BattlegroundCommand;
 
+/// <summary>
+/// CMSG_BATTLEMASTER_HELLO of a player on a node that holds no queue state: the holder answers with the client instance ids of the running matches of <paramref name="Type"/>
+/// in <paramref name="Bracket"/> (<see cref="BattlegroundListNotice"/>). <paramref name="Source"/> is the battlemaster, echoed back for the packet.
+/// </summary>
+public sealed record BattlegroundListCommand(ObjectGuid Player, ObjectGuid Source, BattlegroundType Type, byte Bracket) : BattlegroundCommand;
+
 /// <summary>A player entered the world on the worker: the holder learns its team, level and deserter state (group queueing needs them) and where it is served.</summary>
 public sealed record BattlegroundLoginCommand(BattlegroundMember Member) : BattlegroundCommand;
 
@@ -42,6 +48,9 @@ public abstract record BattlegroundNotice(ObjectGuid Player);
 /// <summary>SMSG_BATTLEFIELD_STATUS for a queue slot.</summary>
 public sealed record BattlegroundStatusNotice(ObjectGuid Player, uint QueueSlot, BattlegroundStatusSubject Subject, BattlegroundStatus Status, uint Time1, uint Time2)
     : BattlegroundNotice(Player);
+
+/// <summary>SMSG_BATTLEFIELD_LIST content from the holder: the map, the bracket and the client instance ids of its running matches (the worker builds the packet).</summary>
+public sealed record BattlegroundListNotice(ObjectGuid Player, ObjectGuid Source, uint MapId, byte Bracket, IReadOnlyList<uint> InstanceIds) : BattlegroundNotice(Player);
 
 /// <summary>SMSG_GROUP_JOINED_BATTLEGROUND.</summary>
 public sealed record BattlegroundGroupJoinedNotice(ObjectGuid Player, uint Result) : BattlegroundNotice(Player);
@@ -171,6 +180,16 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
             case BattlegroundStatusCommand status:
                 Touch(workerId, status.Player, remote);
                 manager.SendStatusReports(status.Player, status.Level);
+                break;
+
+            case BattlegroundListCommand list:
+                Touch(workerId, list.Player, remote);
+                // A command of the holder's own node is answered by its feature from the local manager; only a remote player gets the notice.
+                if (remote && manager.TemplateOf(list.Type) is { } template)
+                {
+                    TryNotify(list.Player, () => new BattlegroundListNotice(list.Player, list.Source, template.MapId, list.Bracket, manager.ClientInstanceIds(list.Type, list.Bracket)));
+                }
+
                 break;
 
             case BattlegroundPortCommand port:
@@ -350,6 +369,8 @@ internal sealed class BattlegroundWorkerClient(string workerId, IBattlegroundHol
     public void Port(BattlegroundPortRequest request) => holder.Submit(WorkerId, new BattlegroundPortCommand(request));
 
     public void Poll(ObjectGuid player, uint level) => holder.Submit(WorkerId, new BattlegroundStatusCommand(player, level));
+
+    public void RequestList(ObjectGuid player, ObjectGuid source, BattlegroundType type, byte bracket) => holder.Submit(WorkerId, new BattlegroundListCommand(player, source, type, bracket));
 
     public void Login(BattlegroundMember member) => holder.Submit(WorkerId, new BattlegroundLoginCommand(member));
 

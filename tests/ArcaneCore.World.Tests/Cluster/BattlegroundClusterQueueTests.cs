@@ -327,6 +327,40 @@ public sealed class BattlegroundClusterQueueTests
     }
 
     [Fact]
+    public void ABattlefieldListRequest_IsAnsweredWithTheHoldersInstanceIds_ToTheAskingWorkerOnly()
+    {
+        var rig = new Rig();
+        Battleground first = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        Battleground second = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        ObjectGuid master = ObjectGuid.Player(77);
+        rig.A.Login(new BattlegroundMember(Alliance[0], Team.Alliance, 60, InWorld: true, Deserter: false));
+        rig.A.RequestList(Alliance[0], master, BattlegroundType.WarsongGulch, 5);
+
+        Assert.Equal(2, rig.Holder.Pump());
+
+        BattlegroundListNotice notice = Assert.Single(rig.Links.To<BattlegroundListNotice>(WorkerA));
+        Assert.Empty(rig.Links.To<BattlegroundListNotice>(WorkerB));
+        Assert.Equal(Alliance[0], notice.Player);
+        Assert.Equal(master, notice.Source);
+        Assert.Equal(WsgMap, notice.MapId);
+        Assert.Equal((byte)5, notice.Bracket);
+        Assert.Equal(new[] { first.ClientInstanceId, second.ClientInstanceId }.OrderBy(i => i), notice.InstanceIds);
+        Assert.Equal(2, notice.InstanceIds.Count);
+    }
+
+    [Fact]
+    public void ABattlefieldListRequestFromTheHoldersOwnNode_SendsNoNotice()
+    {
+        var rig = new Rig();
+        rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5);
+        rig.Holder.Submit(HolderId, new BattlegroundListCommand(Alliance[0], ObjectGuid.Empty, BattlegroundType.WarsongGulch, 5));
+
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Empty(rig.Links.Sent);
+    }
+
+    [Fact]
     public void AWorkerThatIsGone_LosesItsPlayersQueueSlots_AndNobodyElse()
     {
         var rig = new Rig();

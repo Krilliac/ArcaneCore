@@ -1151,6 +1151,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             case BattlegroundStatusNotice n:
                 host.SendStatus(n.Player, n.QueueSlot, n.Subject, n.Status, n.Time1, n.Time2);
                 break;
+            case BattlegroundListNotice n:
+                if (World.FindOnlinePlayer(n.Player) is { } listed)
+                {
+                    SendBattlefieldListPacket(listed, n.Source, n.MapId, n.Bracket, n.InstanceIds);
+                }
+
+                break;
             case BattlegroundGroupJoinedNotice n:
                 host.SendGroupJoined(n.Player, n.Result);
                 break;

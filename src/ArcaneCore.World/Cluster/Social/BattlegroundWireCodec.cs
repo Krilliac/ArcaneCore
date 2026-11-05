@@ -27,6 +27,7 @@ internal static class BattlegroundWireCodec
     private const byte CmdLogin = 4;
     private const byte CmdLogout = 5;
     private const byte CmdWorkerGone = 6;
+    private const byte CmdList = 7;
 
     private const byte NoticeStatus = 1;
     private const byte NoticeGroupJoined = 2;
@@ -34,6 +35,7 @@ internal static class BattlegroundWireCodec
     private const byte NoticeQueueLimit = 4;
     private const byte NoticePrepareToPort = 5;
     private const byte NoticeEnter = 6;
+    private const byte NoticeList = 7;
 
     // ---- members and places ---------------------------------------------------------------------------------------------------------------------
 
@@ -140,6 +142,14 @@ internal static class BattlegroundWireCodec
                 w.Write(status.Level);
                 break;
 
+            case BattlegroundListCommand list:
+                w.Write(CmdList);
+                WriteGuid(w, list.Player);
+                WriteGuid(w, list.Source);
+                w.Write((byte)list.Type);
+                w.Write(list.Bracket);
+                break;
+
             case BattlegroundLoginCommand login:
                 w.Write(CmdLogin);
                 WriteMember(w, login.Member);
@@ -186,6 +196,14 @@ internal static class BattlegroundWireCodec
 
             case CmdStatus:
                 return new BattlegroundStatusCommand(ReadGuid(r), r.ReadUInt32());
+
+            case CmdList:
+            {
+                ObjectGuid player = ReadGuid(r);
+                ObjectGuid source = ReadGuid(r);
+                var type = ReadEnum<BattlegroundType>(r, "battleground type");
+                return new BattlegroundListCommand(player, source, type, r.ReadByte());
+            }
 
             case CmdLogin:
                 return new BattlegroundLoginCommand(ReadMember(r));
@@ -255,6 +273,25 @@ internal static class BattlegroundWireCodec
                 w.Write(n.Orientation);
                 break;
 
+            case BattlegroundListNotice n:
+                if (n.InstanceIds.Count > MaxListCount)
+                {
+                    throw new ArgumentException($"a battlefield list names {n.InstanceIds.Count} instances (at most {MaxListCount})", nameof(notice));
+                }
+
+                w.Write(NoticeList);
+                WriteGuid(w, n.Player);
+                WriteGuid(w, n.Source);
+                w.Write(n.MapId);
+                w.Write(n.Bracket);
+                w.Write(n.InstanceIds.Count);
+                foreach (uint id in n.InstanceIds)
+                {
+                    w.Write(id);
+                }
+
+                break;
+
             default:
                 throw new ArgumentException($"battleground notice {notice.GetType().Name} has no wire form", nameof(notice));
         }
@@ -296,6 +333,22 @@ internal static class BattlegroundWireCodec
                 uint instance = r.ReadUInt32();
                 Team team = ReadTeam(r);
                 return new BattlegroundEnterNotice(player, map, instance, team, r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+            }
+
+            case NoticeList:
+            {
+                ObjectGuid player = ReadGuid(r);
+                ObjectGuid source = ReadGuid(r);
+                uint map = r.ReadUInt32();
+                byte bracket = r.ReadByte();
+                int count = ReadCount(r, MaxListCount);
+                var ids = new List<uint>(count);
+                for (int i = 0; i < count; i++)
+                {
+                    ids.Add(r.ReadUInt32());
+                }
+
+                return new BattlegroundListNotice(player, source, map, bracket, ids);
             }
 
             default:
