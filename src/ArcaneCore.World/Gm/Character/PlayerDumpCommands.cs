@@ -12,6 +12,7 @@ using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Pets;
+using ArcaneCore.World.RealmList;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -199,6 +200,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
                     Kernel.Characters.CharacterRecord record = (await db.Characters.FindAsync(load.CharacterId).ConfigureAwait(false))!;
                     world.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(record.Id, record.AccountId, record.Name,
                         record.Race, record.Gender, record.Class, record.Level, record.ZoneId));
+                    await RealmCharacterCounts.RefreshAsync(services, context.Session.Logger, owner.Id).ConfigureAwait(false); // an irreversible `account delete` trusts this count
                     ReplyLater(context, ImportSuccess);
                     break;
                 case DumpReturn.FileBroken or DumpReturn.UnexpectedEnd:
