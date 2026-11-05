@@ -894,9 +894,10 @@ public sealed partial class MapCombat
     private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim, bool touchOnly = false)
     {
         // vmangos Unit.cpp:6042-6053: the pulse needs a victim that is not the attacker's own (the player behind the victim, its owner or charmer,
-        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith).
+        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith) nor a free-for-all pair (both IsFFAPvP, Unit.cpp:6047).
         Player? victimPlayer = DuelRules.ControllingPlayer(victim);
-        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)))
+        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)
+            || ((attacker.Flags & PlayerFlags.FfaPvp) != 0 && (victimPlayer.Flags & PlayerFlags.FfaPvp) != 0)))
         {
             return;
         }

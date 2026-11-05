@@ -393,8 +393,10 @@ public sealed class SpellMagnetTests
     /// <summary>
     /// The production hook chain (ReputationCombatHooks over FactionCombatHooks) with a creature that a player owns and that carries the
     /// player-controlled flag, as a summoned totem does (TotemSystem), on the real self-friendly player template. The attacker and the victim are
-    /// same-team free-for-all players, and in every case the template reaction refuses the totem (the preconditions below), so only
-    /// IsFreeForAllOpponentOwned can let the redirect through. Grounding between free-for-all opponents must still redirect (mangos-classic
+    /// same-team free-for-all players. The reaction hooks read the free-for-all clause through the controlling players (the resolver and
+    /// CombatHooks.AreFreeForAllOpponents), so a totem of an ungrouped free-for-all owner is hostile to the attacker by the hooks themselves and an
+    /// owner who is not free-for-all, or who is grouped with the caster (the resolver gets the same group test), leaves it a friend. The exemption in
+    /// SelectMagnetTarget is pinned separately, against hooks that read the totem as a friend (ClientCast_FriendlyReadingTotem_*). Grounding between free-for-all opponents must still redirect (mangos-classic
     /// GetReactionTo, vmangos GetReactionTo: a pair of free-for-all controlling players is hostile); an owner who is not free-for-all, or who is
     /// grouped with the caster, keeps the totem unattackable.
     /// </summary>
@@ -421,7 +423,7 @@ public sealed class SpellMagnetTests
         }
 
         map.Combat.Hooks = new ReputationCombatHooks(new FactionCombatHooks(SelfFriendlyPlayerTemplate),
-            new ReputationReactionResolver(SelfFriendlyPlayerTemplate, ReputationFixtures.Factions, reputation.For));
+            new ReputationReactionResolver(SelfFriendlyPlayerTemplate, ReputationFixtures.Factions, reputation.For, (a, b) => ownerGroupedWithCaster && IsPair(a, b, attacker, owner)));
         kit.System.Relations = CombatHookRelations.Instance;
         kit.System.CombatRules = SpellCombatRules.Neutral;
 
@@ -434,7 +436,7 @@ public sealed class SpellMagnetTests
 
         if (ownerGroupedWithCaster)
         {
-            CombatHooks.RegisterSameGroup(kit.World, (a, b) => (ReferenceEquals(a, attacker) && ReferenceEquals(b, owner)) || (ReferenceEquals(a, owner) && ReferenceEquals(b, attacker)));
+            CombatHooks.RegisterSameGroup(kit.World, (a, b) => IsPair(a, b, attacker, owner));
         }
 
         Creature totem = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
@@ -444,14 +446,15 @@ public sealed class SpellMagnetTests
         totem.MaxHealth = totem.Health = 100;
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(totem, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
         Assert.True(kit.System.HasAura(victim, Protection));
+        bool redirected = ownerFreeForAll && !ownerGroupedWithCaster;
         Assert.True(CombatHookRelations.Instance.IsHostile(attacker, victim));
-        Assert.True(CombatHookRelations.Instance.IsFriendly(attacker, totem)); // the template reaction reads the team's totem as a friend...
-        Assert.False(CombatHookRelations.Instance.IsHostile(attacker, totem)); // ...so the explicit-hostile gate refuses it: the gap the exemption closes
+        Assert.Equal(redirected, CombatHookRelations.Instance.IsHostile(attacker, totem)); // an ungrouped free-for-all owner makes its totem hostile through the hooks
+        Assert.Equal(!redirected, CombatHookRelations.Instance.IsFriendly(attacker, totem)); // otherwise the template reaction reads the team's totem as a friend and the gate refuses it
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), false));
         kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
-        if (ownerFreeForAll && !ownerGroupedWithCaster)
+        if (redirected)
         {
             Assert.Equal(100u, victim.Health);
             Assert.Equal(85u, totem.Health);
@@ -463,5 +466,178 @@ public sealed class SpellMagnetTests
             Assert.Equal(100u, totem.Health);
             Assert.True(kit.System.HasAura(victim, Protection)); // no charge was spent on the refused redirect
         }
+    }
+
+    private static bool IsPair(Player a, Player b, Player first, Player second)
+        => (ReferenceEquals(a, first) && ReferenceEquals(b, second)) || (ReferenceEquals(a, second) && ReferenceEquals(b, first));
+
+    /// <summary>
+    /// Hooks whose reaction reads any pair that is not player-versus-player as friendly, as the template-only reaction did for a player's totem
+    /// (a totem copies its owner's faction template and the player templates are friendly to themselves). Only the free-for-all exemption in
+    /// SelectMagnetTarget can then let a redirect onto such a totem through.
+    /// </summary>
+    private sealed class TemplateFriendlyHooks : CombatHooks
+    {
+        public override bool IsFriendly(Unit a, Unit b) => a is Player && b is Player ? base.IsFriendly(a, b) : true;
+    }
+
+    private static (SpellTestKit Kit, Player Attacker, Player Victim, Creature Totem, Player Owner) FriendlyReadingTotemRig(bool casterFreeForAll, bool ownerFreeForAll)
+    {
+        var kit = new SpellTestKit(Protect(), Attack());
+        kit.System.MagnetRequiresAttackable = true;
+        Map map = kit.World.GetMap(0);
+        var creatures = new CreatureMapSystem(map, CreatureTestKit.Content([CreatureTestKit.Template(CreatureTestKit.WolfEntry)], []), random: new Random(1));
+        map.AddUpdater(creatures);
+        kit.System.Units = new MapObjectResolver();
+        (Player attacker, _) = kit.AddPlayer(1);                 // a Human
+        Player victim = kit.AddHostilePlayer(2, 5).Player;       // an Orc, PvP flagged: attackable by the Human
+        Player owner = kit.AddHostilePlayer(3, 6).Player;        // an Orc, PvP flagged: another team than the caster, so the relation says hostile
+        foreach (Player player in new[] { attacker, victim, owner })
+        {
+            player.MaxHealth = player.Health = 100;
+        }
+
+        map.Combat.Hooks = new TemplateFriendlyHooks();
+        kit.System.Relations = CombatHookRelations.Instance;
+        kit.System.CombatRules = SpellCombatRules.Neutral;
+        if (casterFreeForAll)
+        {
+            attacker.Flags |= PlayerFlags.FfaPvp;
+        }
+
+        if (ownerFreeForAll)
+        {
+            owner.Flags |= PlayerFlags.FfaPvp;
+        }
+
+        Creature totem = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
+        totem.SetOwnerGuid(owner.Guid);
+        totem.UnitFlags |= UnitFlags.PlayerControlled;
+        totem.MaxHealth = totem.Health = 100;
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(totem, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
+        Assert.True(kit.System.HasAura(victim, Protection));
+        Assert.True(CombatHookRelations.Instance.IsHostile(attacker, victim));
+        Assert.True(CombatHookRelations.Instance.IsFriendly(attacker, totem)); // the hooks read the totem as a friend: the gate alone would refuse it
+        Assert.False(CombatHookRelations.Instance.IsHostile(attacker, totem));
+        return (kit, attacker, victim, totem, owner);
+    }
+
+    /// <summary>
+    /// Each of the two flag tests of IsFreeForAllOpponentOwned is needed: the owner is a PvP-flagged Orc, so the relation between the caster and the owner
+    /// is hostile on teams alone, and only a pair of free-for-all players may take the redirect past a gate that reads the totem as a friend.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    public void ClientCast_FriendlyReadingTotem_IsRedirectedOnlyWhenBothControllingPlayersAreFreeForAll(bool casterFreeForAll, bool ownerFreeForAll, bool redirected)
+    {
+        (SpellTestKit kit, Player attacker, Player victim, Creature totem, Player owner) = FriendlyReadingTotemRig(casterFreeForAll, ownerFreeForAll);
+        using (kit)
+        {
+            Assert.True(CombatHookRelations.Instance.IsHostile(attacker, owner));
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), false));
+            kit.Advance(kit.System.SpellBatchWindowMs);
+
+            Assert.Equal(redirected ? 100u : 85u, victim.Health);
+            Assert.Equal(redirected ? 85u : 100u, totem.Health);
+            Assert.Equal(!redirected, kit.System.HasAura(victim, Protection));
+        }
+    }
+
+    /// <summary>mangos-classic Unit::CanAttack (Relations.cpp:351) refuses a magnet for its own state; the owners' free-for-all pair must not override that.</summary>
+    [Theory]
+    [InlineData(UnitFlags.NotAttackable1)]
+    [InlineData(UnitFlags.NonAttackable2)]
+    [InlineData(UnitFlags.TaxiFlight)]
+    public void ClientCast_FreeForAllOwnedTotemThatCannotBeAttacked_IsNotRedirectedOnto(UnitFlags state)
+    {
+        (SpellTestKit kit, Player attacker, Player victim, Creature totem, _) = FriendlyReadingTotemRig(true, true);
+        using (kit)
+        {
+            totem.UnitFlags |= state;
+            Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), false));
+            kit.Advance(kit.System.SpellBatchWindowMs);
+
+            Assert.Equal(85u, victim.Health);
+            Assert.Equal(100u, totem.Health);
+            Assert.True(kit.System.HasAura(victim, Protection)); // no charge was spent on the refused redirect
+        }
+    }
+
+    [Fact]
+    public void ServerChosenTriggeredCast_IsStillRedirectedOntoAMagnetTheCasterMayNotAttack_WithTheOptionOn()
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        kit.System.MagnetRequiresAttackable = true;
+        var (attacker, _, victim, magnet) = AddPlayers(kit);
+        ((FakeRelations)kit.System.Relations).Hostile.Add(magnet.Guid); // the magnet reads as a friend of the attacker, the victim as a foe
+
+        // The target is the server's own choice (not FromClient) and the cast is triggered: the gate does not apply (SelectMagnetTarget).
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, SpellCastTargets.ForUnit(victim.Guid), true));
+
+        Assert.Equal(85u, magnet.Health);
+        Assert.Equal(100u, victim.Health);
+        Assert.False(kit.System.HasAura(victim, Protection)); // the charge was spent
+    }
+
+    private sealed class CastAtFinish : ISpellCastObserver
+    {
+        public SpellCast? Seen { get; private set; }
+
+        public void OnFinished(SpellCast cast, bool completed) => Seen = cast;
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void ForUnitOfTheMagnet_InheritsTheClientOriginOnlyOfAClientNamedParent(bool clientNamed, bool expectedFromClient)
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        var (attacker, _, victim, magnet) = AddPlayers(kit);
+        var seen = new CastAtFinish();
+        kit.System.RegisterObserver(seen);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, clientNamed ? ClientNamed(victim.Guid) : SpellCastTargets.ForUnit(victim.Guid), true));
+
+        Assert.NotNull(seen.Seen);
+        Assert.Equal(magnet.Guid, seen.Seen!.Targets.Unit); // the redirect rewrote the block to the magnet
+        Assert.Equal(expectedFromClient, SpellCastTargets.ForUnit(magnet.Guid, seen.Seen).FromClient); // a child aimed at the magnet inherits the client origin
+        Assert.False(SpellCastTargets.ForUnit(victim.Guid, seen.Seen).FromClient); // the original victim is no longer the block's unit: a server choice
+    }
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void CreatureCaster_SkipsAMagnetItMayNotAttack_OnlyWhenTheOptionIsOn(bool optionOn, bool skipped)
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        kit.System.MagnetRequiresAttackable = optionOn;
+        Map map = kit.World.GetMap(0);
+        var creatures = new CreatureMapSystem(map, CreatureTestKit.Content([CreatureTestKit.Template(CreatureTestKit.WolfEntry)], []), random: new Random(1));
+        map.AddUpdater(creatures);
+        kit.System.Units = new MapObjectResolver();
+        Player victim = kit.AddPlayer(2, 5).Player;
+        Player magnet = kit.AddPlayer(3, 6).Player;
+        victim.MaxHealth = victim.Health = magnet.MaxHealth = magnet.Health = 100;
+        Creature caster = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
+        caster.MaxHealth = caster.Health = 100;
+        // The protection goes on first, while the default relations still let the magnet assist the victim (CanAssist reads IsHostile in
+        // both directions); only then are the relations installed that make the magnet hostile to the creature's victim.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(magnet, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
+        var relations = new FakeRelations();
+        relations.Hostile.Add(caster.Guid); // the creature is hostile to the victim...
+        relations.Hostile.Add(magnet.Guid); // ...and friendly to the magnet
+        kit.System.Relations = relations;
+        kit.System.CombatRules = SpellCombatRules.Neutral;
+
+        // A creature's own cast is not triggered, so the gate applies to it like to a player's (vmangos checks creature casts too).
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Bolt, SpellCastTargets.ForUnit(victim.Guid), false));
+        kit.Advance(kit.System.SpellBatchWindowMs);
+
+        Assert.Equal(skipped ? 85u : 100u, victim.Health);
+        Assert.Equal(skipped ? 100u : 85u, magnet.Health);
+        Assert.Equal(skipped, kit.System.HasAura(victim, Protection));
     }
 }
