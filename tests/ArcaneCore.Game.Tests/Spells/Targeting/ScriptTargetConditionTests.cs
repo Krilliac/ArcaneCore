@@ -28,6 +28,7 @@ public sealed class ScriptTargetConditionTests
     private const uint ObjectSourceAreaSpell = 990805;
     private const uint DestAreaSpell = 990806;
     private const uint ObjectDestAreaSpell = 990807;
+    private const uint ConeSpell = 990808;
     private const uint Listed = 990811;
     private const uint Firecracker = 990821;
     private const uint Door = 990822;
@@ -60,7 +61,8 @@ public sealed class ScriptTargetConditionTests
                 ObjectSpell(ObjectNearestSpell, 6, (SpellImplicitTarget)40),
                 ObjectSpell(ObjectSourceAreaSpell, 7, SpellImplicitTarget.LocationCasterSrc, (SpellImplicitTarget)51, 10),
                 Aura(DestAreaSpell, SpellImplicitTarget.LocationCasterDest, SpellImplicitTarget.EnumUnitsScriptAoeAtDestLoc, radius: 20),
-                ObjectSpell(ObjectDestAreaSpell, 7, SpellImplicitTarget.LocationCasterDest, (SpellImplicitTarget)52, 10)];
+                ObjectSpell(ObjectDestAreaSpell, 7, SpellImplicitTarget.LocationCasterDest, (SpellImplicitTarget)52, 10),
+                Aura(ConeSpell, (SpellImplicitTarget)SpellTargetSelectors.UnitsScriptInCone, radius: 20)];
             Kit = new SpellTestKit(spells);
             var map = Kit.World.GetMap(0);
             Objects = new GameObjectMapSystem(map, new GameObjectContent(
@@ -301,6 +303,24 @@ public sealed class ScriptTargetConditionTests
 
         Assert.True(rig.Has(first, DestAreaSpell));
         Assert.True(rig.Has(second, DestAreaSpell));
+    }
+
+    [Fact]
+    public void TheCone_IgnoresTheCondition_ButKeepsToTheArcInFrontOfTheCaster()
+    {
+        // vmangos target 60 (Spell.cpp:2702-2740) fills from the rows' entries inside the caster's frontal cone and reads no conditionId:
+        // both units in front are hit though neither is at 5 percent, and the one behind the caster is not.
+        using var rig = new Rig(new SpellStore.ScriptTarget(ConeSpell, 1, Listed, 0, AtMost5Percent));
+        rig.Caster.Orientation = 0f;
+        Creature first = rig.Spawn(2);
+        Creature second = rig.Spawn(18);
+        Creature behind = rig.Spawn(-6);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(ConeSpell));
+
+        Assert.True(rig.Has(first, ConeSpell));
+        Assert.True(rig.Has(second, ConeSpell));
+        Assert.False(rig.Has(behind, ConeSpell));
     }
 
     [Fact]
