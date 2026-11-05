@@ -429,6 +429,20 @@ public sealed class ConfigCatalogCompletenessTests
         ["DatabaseSettings"] = "A record of what the schema drift checker read from the live database (character set, encoding, storage engines); not an option.",
         ["PlayerDumpOptions"] = "An optional service the .pdump command reads (its directory); nothing registers or binds it from configuration, so the directory stays the default.",
         ["RuleBuildOptions"] = "A parameter of RuleCatalog.Build, constructed in code; nothing binds it from configuration.",
+        ["SchemaUpgradeOptions"] = "The parameter object of the schema bootstrapper, built in code by the daemons and the db tools from the catalogued Database:Upgrade keys (policy, lock timeout) and command-line switches.",
+        ["GroupRewardOptions"] = "A parameter of the kill-reward range, built in code at its call sites; nothing binds it from configuration.",
+        ["HonorOptions"] = "The runtime form of the catalogued World:Honor keys (HonorSettings); built from them, never bound itself.",
+        ["HonorMaintenanceOptions"] = "A parameter of the weekly honor maintenance, derived from HonorOptions.Maintenance.",
+        ["PathOptions"] = "A per-query parameter of the path finder, built in code at each call; not configuration.",
+        ["SkillOptions"] = "The runtime form of the catalogued Skills keys (SkillsFeatureOptions.ToSkillOptions); built from them, never bound itself.",
+        ["AccountSettings"] = "The per-account client data row (the account_data store); player data, not configuration.",
+        ["BulkheadOptions"] = "The runtime form of a catalogued Resilience bulkhead (BulkheadSettings.ToOptions); built from it, never bound itself.",
+        ["CircuitBreakerOptions"] = "The runtime form of a catalogued Resilience circuit breaker (CircuitBreakerSettings.ToOptions); built from it, never bound itself.",
+        ["RetryOptions"] = "A parameter of a retry policy, built in code at its call site (the schema lock poll); not configuration.",
+        ["GmStreamOptions"] = "The settings of the GM diagnostics stream, constructed with its defaults in code; nothing binds them from configuration.",
+        ["KvCacheConfig"] = "The sizing of the in-process model KV cache, built in code by the prefix store; nothing binds it from configuration.",
+        ["SchedulerConfig"] = "The inference scheduler budgets, built in code from the catalogued World:Playerbots:Chat serving keys (InProcessChatEngine.SchedulerConfigFor).",
+        ["ScenarioRunOptions"] = "A per-run parameter of the scenario runner (the scenario command), built in code; not configuration.",
     };
 
     private static ConfCatalog Embedded => ConfCatalog.Embedded;
