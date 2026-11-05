@@ -1218,6 +1218,7 @@ public sealed class PlayerbotPathShapingTests
             ShapeStats totalStats = default;
             int totalEmittedVerticesChecked = 0;
             int totalExceptionsEncountered = 0;
+            int gridClauseRuns = 0;
 
             for (int pathIdx = 0; pathIdx < TotalPaths; pathIdx++)
             {
@@ -1240,20 +1241,9 @@ public sealed class PlayerbotPathShapingTests
                     if (turn > MaxAllowedTurn)
                     {
                         totalExceptionsEncountered++;
-                        Assert.True(ExceptionApplies(input, shaped, j, A),
+                        Assert.True(ExceptionApplies(input, shaped, j, A, settings.TurnLeadYards, HadFallback(stats)),
                             $"Path {pathIdx} (pattern {pathIdx % 6}) vertex {j} of {shaped.Count} at {shaped[j]} turned {turn:F4} rad > {MaxAllowedTurn:F4} rad without a documented exception (E1/E2).");
-
-                        // The "raised by at most 0.3 rad" clause: an emitted vertex already above A is raised by at most 0.3 radians.
-                        for (int k = 1; k < input.Count - 1; k++)
-                        {
-                            if (input[k] == shaped[j] && k + 1 < input.Count)
-                            {
-                                float emittedTurn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), input[k + 1].XY());
-                                if (emittedTurn > A)
-                                    Assert.True(turn <= emittedTurn + 0.3f + 1e-4f, $"Vertex {j} turn {turn:F4} exceeded emittedTurn {emittedTurn:F4} + 0.3 rad");
-                                break;
-                            }
-                        }
+                        AssertKeptVertexClauses(input, shaped, j, turn, A, ref gridClauseRuns, $"Path {pathIdx} vertex {j}");
                     }
                 }
             }
@@ -1265,6 +1255,7 @@ public sealed class PlayerbotPathShapingTests
                 + $"Fallbacks {totalStats.Fallbacks}.");
             _output.WriteLine($"Exempted fraction: {exemptedFraction:P2} ({totalExceptionsEncountered}/{totalEmittedVerticesChecked})");
 
+            _output.WriteLine($"Grid fuzz: the 0.3 rad clause ran {gridClauseRuns} times.");
             Assert.InRange(exemptedFraction, 0.001f, 0.35f);
             Assert.True(totalStats.CornersShaped > 0, "Expected corners to be shaped in fuzz test");
             Assert.True(totalStats.CornersRounded > 0, "Expected corners to be rounded in fuzz test");
@@ -1286,6 +1277,10 @@ public sealed class PlayerbotPathShapingTests
             var rng = new Random(20261105);
             var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
             ShapeStats total = default;
+            int mustRoundPaths = 0;
+            int clauseRuns = 0;
+            Assert.True(settings.TurnLeadYards > 0f, "rounding must be on for the heading guarantee");
+            const float A = PlayerbotPathShaping.MaxHeadingStepRadians;
             for (int n = 0; n < 1500; n++)
             {
                 float heading = (float)rng.NextDouble() * MathF.Tau;
@@ -1307,10 +1302,117 @@ public sealed class PlayerbotPathShapingTests
                 Assert.All(shaped, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"path {n} theta {theta:F4}: non-finite point {p}"));
                 AssertInside(world, shaped);
                 AssertSegmentsSafe(map, shaped);
+
+                // The heading guarantee, decided from the input (not from what the shaper reports): a corner sharper than the heading step
+                // with room for an arc (lead of at least MinLeadYards, radius of at least MinArcRadiusYards, with a margin on each) must be
+                // rounded on this open ground, and every vertex of the result then turns at most the heading step. A shaper that stops
+                // rounding, or leaves a sharp vertex, fails here whatever its own counters say.
+                float inputTheta = Turn2(input[0].XY(), input[1].XY(), input[2].XY());
+                float lead = MathF.Min(settings.TurnLeadYards, 0.4f * MathF.Min(leg1, leg2));
+                bool mustRound = inputTheta > A + 0.01f && lead >= PlayerbotPathShaping.MinLeadYards + 0.01f
+                    && lead / MathF.Tan(inputTheta * 0.5f) >= PlayerbotPathShaping.MinArcRadiusYards * 1.05f;
+                if (mustRound)
+                {
+                    mustRoundPaths++;
+                    Assert.Equal(1, stats.CornersRounded);
+                    float shapedTurn = MaxTurn(shaped);
+                    Assert.True(shapedTurn <= A + 1e-3f,
+                        $"path {n} theta {theta:F4}: corner that must round turns {shapedTurn:F4} rad, over the heading step {A}");
+                }
+                else
+                {
+                    // No arc is possible (near a reversal the radius is below the floor): the sharp vertex is kept and is a documented
+                    // exception; the 0.3 rad clause and its companion are checked on it.
+                    for (int j = 1; j < shaped.Count - 1; j++)
+                    {
+                        float vertexTurn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), shaped[j + 1].XY());
+                        if (vertexTurn <= A + 1e-4f) continue;
+                        Assert.True(ExceptionApplies(input, shaped, j, A, settings.TurnLeadYards, HadFallback(stats)),
+                            $"path {n} theta {theta:F4}: vertex {j} turns {vertexTurn:F4} rad with no documented exception");
+                        AssertKeptVertexClauses(input, shaped, j, vertexTurn, A, ref clauseRuns, $"path {n} vertex {j}");
+                    }
+                }
             }
 
+            // theta is uniform over 0.6..3.1 and the radius floor excludes only the last few hundredths of it (lead 1.2..2.5 yd over tan(theta/2) at
+            // 0.1 yd): the input rule holds for about 95% of the paths, so a shaper that stops rounding most of them is caught by the count too.
+            Assert.True(mustRoundPaths >= 1300, $"only {mustRoundPaths} of 1500 paths had a corner that must round");
+            Assert.True(clauseRuns > 0, "the 0.3 rad clause was never exercised in the continuous-angle sweep");
             _output.WriteLine($"continuous-angle fuzz: shaped {total.CornersShaped} rounded {total.CornersRounded} fallbacks {total.Fallbacks}");
             Assert.True(total.CornersRounded > 0, "no corner was rounded in the continuous-angle sweep");
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task SeededContinuousMultiCornerFuzz_AroundAPillar_KeepsTheHeadingGuaranteeAndStaysSafe()
+    {
+        // Four to six random points with random legs and continuous turns (0.3..3.1 rad, both signs) on open ground with a 20 x 20 yd pillar in
+        // the middle, the start 14 to 30 yd from its centre: neighbours push, cap and split here, and corners near the pillar get clearance.
+        // A path whose input legs are not walkable is skipped. Every vertex above the heading step must be a documented exception.
+        Rect[] ring = [new(-200f, -200f, 200f, -10f), new(-200f, 10f, 200f, 200f), new(-200f, -10f, -10f, 10f), new(10f, -10f, 200f, 10f)];
+        await RunAsync(ring, (world, map, at) =>
+        {
+            const float A = PlayerbotPathShaping.MaxHeadingStepRadians;
+            var rng = new Random(20261106);
+            var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
+            Assert.True(settings.TurnLeadYards > 0f, "rounding must be on for the heading guarantee");
+            ShapeStats total = default;
+            int accepted = 0, exceptions = 0, clauseRuns = 0;
+            for (int n = 0; n < 1500; n++)
+            {
+                int count = 4 + rng.Next(3);
+                float bearing = (float)rng.NextDouble() * MathF.Tau;
+                float radius = 14f + ((float)rng.NextDouble() * 16f);
+                Vector2 cursor = new(MathF.Cos(bearing) * radius, MathF.Sin(bearing) * radius);
+                var local = new List<Vector2> { cursor };
+                float heading = (float)rng.NextDouble() * MathF.Tau;
+                for (int i = 1; i < count; i++)
+                {
+                    if (i > 1)
+                    {
+                        float step = 0.3f + ((float)rng.NextDouble() * 2.8f);
+                        heading += rng.Next(2) == 0 ? step : -step;
+                    }
+
+                    cursor += new Vector2(MathF.Cos(heading), MathF.Sin(heading)) * (4f + ((float)rng.NextDouble() * 14f));
+                    local.Add(cursor);
+                }
+
+                Vector3[] input = [.. local.Select(at)];
+                bool walkable = input.All(p => world.Contains(p.X, p.Y));
+                for (int i = 1; walkable && i < input.Length; i++)
+                    walkable = PlayerbotPathShaping.SegmentSafe(map, input[i - 1], input[i]);
+                if (!walkable) continue;
+                accepted++;
+
+                ShapeStats stats = default;
+                IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+                total.Add(in stats);
+
+                Assert.True(shaped.Count >= input.Length, $"path {n}: {shaped.Count} points from {input.Length}");
+                Assert.Equal(input[0], shaped[0]);
+                Assert.Equal(input[^1], shaped[^1]);
+                Assert.All(shaped, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"path {n}: non-finite point {p}"));
+                AssertInside(world, shaped);
+                AssertSegmentsSafe(map, shaped);
+
+                for (int j = 1; j < shaped.Count - 1; j++)
+                {
+                    float turn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), shaped[j + 1].XY());
+                    if (turn <= A + 1e-4f) continue;
+                    exceptions++;
+                    Assert.True(ExceptionApplies(input, shaped, j, A, settings.TurnLeadYards, HadFallback(stats)),
+                        $"path {n} vertex {j} of {shaped.Count} at {shaped[j]} turns {turn:F4} rad with no documented exception (E1/E2)");
+                    AssertKeptVertexClauses(input, shaped, j, turn, A, ref clauseRuns, $"path {n} vertex {j}");
+                }
+            }
+
+            _output.WriteLine($"multi-corner fuzz: {accepted} walkable paths, shaped {total.CornersShaped} rounded {total.CornersRounded} caps {total.NeighbourCaps} "
+                + $"splits {total.NeighbourSplits} auto {total.AutoRounded} fallbacks {total.Fallbacks}; {exceptions} exempt vertices, 0.3 rad clause ran {clauseRuns} times");
+            Assert.True(accepted >= 400, $"only {accepted} of 1500 random paths were walkable");
+            Assert.True(total.CornersShaped > 0, "no corner was shaped");
+            Assert.True(total.CornersRounded > 0, "no corner was rounded");
             return true;
         });
     }
@@ -1453,31 +1555,72 @@ public sealed class PlayerbotPathShapingTests
         return local.Select(at).ToList();
     }
 
+    private static bool HadFallback(in ShapeStats stats)
+        => stats.Fallbacks > 0 || stats.FallbackRoom > 0 || stats.FallbackGround > 0 || stats.FallbackSegment > 0
+            || stats.FallbackBudget > 0 || stats.FallbackArc > 0 || stats.BudgetStops > 0;
+
+    /// <summary>
+    /// The documented exceptions to the heading guarantee for the emitted vertex <paramref name="j"/> that turns more than A. It must be a mesh
+    /// corner kept unchanged: (E1) one whose own turn is already at least A (its arc was not possible); (E2) one whose own turn was below A, that the
+    /// previous corner's push widened past A as emitted, and that cannot be rounded (no lead or radius for an arc, or the shaper reported a fallback
+    /// for the path: no room, ground, leg, budget or arc).
+    /// </summary>
     private static bool ExceptionApplies(
         IReadOnlyList<Vector3> input,
         IReadOnlyList<Vector3> shaped,
         int j,
-        float a)
+        float a,
+        float turnLeadYards,
+        bool pathHadFallback)
     {
         Vector3 current = shaped[j];
 
-        // Exact match with an input corner (mesh corner kept unchanged)
         for (int k = 1; k < input.Count - 1; k++)
         {
-            if (input[k] == current)
-            {
-                float inputTurn = Turn2(input[k - 1].XY(), input[k].XY(), input[k + 1].XY());
-                // (E1) a corner sharper than A whose arc is not possible keeps a sharp turn
-                if (inputTurn > a - 1e-4f)
-                    return true;
+            if (input[k] != current)
+                continue;
 
-                // (E2) a mesh corner kept unchanged whose turn the previous corner's push widened past A and that cannot be rounded
-                if (shaped[j - 1] != input[k - 1])
-                    return true;
-            }
+            float inputTurn = Turn2(input[k - 1].XY(), input[k].XY(), input[k + 1].XY());
+            if (inputTurn > a - 1e-4f)
+                return true; // (E1)
+
+            // (E2) the previous point was moved or split off, and the turn as emitted is above A
+            if (shaped[j - 1] == input[k - 1])
+                return false;
+            float widened = Turn2(shaped[j - 1].XY(), current.XY(), input[k + 1].XY());
+            if (!(widened > a))
+                return false;
+            float lead = MathF.Min(turnLeadYards,
+                0.4f * MathF.Min(Vector2.Distance(shaped[j - 1].XY(), current.XY()), Vector2.Distance(current.XY(), input[k + 1].XY())));
+            bool roundable = turnLeadYards > 0f && lead >= PlayerbotPathShaping.MinLeadYards
+                && lead / MathF.Tan(widened * 0.5f) >= PlayerbotPathShaping.MinArcRadiusYards;
+            return !roundable || pathHadFallback;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The clauses on a mesh corner kept unchanged at emitted vertex <paramref name="j"/> that turns <paramref name="turn"/> more than A: the vertex is
+    /// raised above A only where it was already above A as emitted (companion: an emitted vertex at most A is never raised past A by a later
+    /// push), and then by at most 0.3 rad. <paramref name="clauseRuns"/> counts the runs of the 0.3 rad clause.
+    /// </summary>
+    private static void AssertKeptVertexClauses(IReadOnlyList<Vector3> input, IReadOnlyList<Vector3> shaped, int j, float turn, float a, ref int clauseRuns, string where)
+    {
+        for (int k = 1; k < input.Count - 1; k++)
+        {
+            if (input[k] != shaped[j])
+                continue;
+            float emittedTurn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), input[k + 1].XY());
+            Assert.True(emittedTurn > a - 1e-4f, $"{where}: turn {turn:F4} raised above A from an emitted turn {emittedTurn:F4} that was within A");
+            if (emittedTurn > a)
+            {
+                clauseRuns++;
+                Assert.True(turn <= emittedTurn + 0.3f + 1e-4f, $"{where}: turn {turn:F4} exceeded emittedTurn {emittedTurn:F4} + 0.3 rad");
+            }
+
+            return;
+        }
     }
 
     private void LogCost(string name, RegionWorld world, ShapeStats stats, IReadOnlyList<Vector3> shaped)
