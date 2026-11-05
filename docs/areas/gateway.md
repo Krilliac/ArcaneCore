@@ -69,7 +69,7 @@ After the two proofs, both directions switch to MAC-protected frames. Each end d
 with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
 direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
 reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
-The gateway contract version is 6 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`) and the peer link protocol version is 2, so a gateway or peer from before this change is
+The gateway contract version is 7 (3 added the link integrity described here; 4 added the worker status frame; 5 added the unified control frames 28-32; 6 added the handoff verb `RetireWrites`; 7 made `Promote` carry the slot the standby takes over and added the `LinkSlot` frame, 33, which names a worker link's slot right after admission) and the peer link protocol version is 2, so a gateway or peer from before this change is
 refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
 (`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
 
