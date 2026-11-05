@@ -8,7 +8,8 @@ namespace ArcaneCore.Game.Creatures;
 /// the pet distance and angle. Every second out of combat it checks the leader or a group member is within 100 yards (else it despawns),
 /// and despawns once <see cref="SetFollowComplete"/> was called without a post event. After a fight it walks back to where the fight began
 /// and follows again; a pause (<see cref="SetFollowPaused"/>) holds it where it is. Its death fails the quest for the leader's group.
-/// Not ported: AssistPlayerInCombat, which needs CREATURE_TYPEFLAGS_CAN_ASSIST, a template field ArcaneCore does not load.
+/// While it follows, a creature whose template has the CAN_ASSIST type flag takes on any enemy that is fighting a player within 100 yards and
+/// in sight (AssistPlayerInCombat, <see cref="CreatureMapSystem.AssistPlayerInCombat"/>).
 /// </summary>
 public abstract class FollowerAI(Creature creature) : CreatureAI(creature)
 {
@@ -44,6 +45,20 @@ public abstract class FollowerAI(Creature creature) : CreatureAI(creature)
     private void AddFollowState(FollowState state) => State |= state;
 
     private void RemoveFollowState(FollowState state) => State &= ~state;
+
+    /// <summary>
+    /// UnitAI::MoveInLineOfSight with FollowerAI::AssistPlayerInCombat first: while the follow is in progress the creature aids a player under
+    /// attack by a unit far outside its own aggro radius; otherwise the ordinary reaction.
+    /// </summary>
+    public override void MoveInLineOfSight(Unit who)
+    {
+        if (HasFollowState(FollowState.InProgress) && System is { } system && system.AssistPlayerInCombat(Me, who))
+        {
+            return;
+        }
+
+        base.MoveInLineOfSight(who);
+    }
 
     /// <summary>ScriptedAI::Reset: the first spawn, every evade and every respawn.</summary>
     protected virtual void Reset()

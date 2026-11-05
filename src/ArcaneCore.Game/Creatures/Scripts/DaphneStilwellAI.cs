@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Creatures.Scripts;
 
@@ -7,7 +8,7 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// <c>npc_daphne_stilwell</c> (eastern_kingdoms/westfall.cpp at 8ec338a). She runs to her hut, takes her rifle and holds at point 7 while three
 /// waves of Defias Raiders (3, 4 and 5, 50 s apart from point 4) come down the hill; once the last wave is dead she walks on, and point 16
 /// credits the group. She shoots (spell 6660, every 2 s) without chasing.
-/// Not ported: the rifle equip and sheath swap (no script equipment API here).
+/// At point 5 she takes her rifle (item 2511 in the ranged slot, ranged sheath) and at 12 puts it away again (her own equipment, unarmed sheath).
 /// </summary>
 public sealed class DaphneStilwellAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
@@ -15,6 +16,8 @@ public sealed class DaphneStilwellAI(Creature creature) : EscortAI(creature), IQ
     public const int YellDefiasStart = -1000412, YellDaphneStart = -1000413, SayStart = -1000293, SayDown3 = -1000296, SayPrologue = -1000297;
     private static readonly int[] s_waveDown = [-1000294, -1000295, -1000414];
     private const uint EmoteOneshotCheer = 4, EmoteOneshotRoar = 15, EmoteStateStand = 26, EmoteStateUseStanding = 69, EmoteStateUseStandingNoSheathe = 133;
+    private const int ItemRifle = 2511;
+    private const byte SheathUnarmed = 0, SheathRanged = 2;
     private const uint ShootCooldownMs = 2000, WaveIntervalMs = 50_000;
 
     private static readonly (float X, float Y, float Z)[] s_raider =
@@ -72,6 +75,8 @@ public sealed class DaphneStilwellAI(Creature creature) : EscortAI(creature), IQ
                 System?.PlayEmote(Me, EmoteStateUseStandingNoSheathe);
                 break;
             case 5:
+                Me.SetScriptEquipment(System?.AiServices.ItemTemplateOf, loadDefault: false, ranged: ItemRifle);
+                Me.SetByte(UpdateFields.UnitFieldBytes2, 0, SheathRanged);
                 System?.PlayEmote(Me, EmoteStateStand);
                 break;
             case 7:
@@ -89,6 +94,8 @@ public sealed class DaphneStilwellAI(Creature creature) : EscortAI(creature), IQ
                 CombatMovement = true;
                 break;
             case 12:
+                Me.SetScriptEquipment(System?.AiServices.ItemTemplateOf, loadDefault: true);
+                Me.SetByte(UpdateFields.UnitFieldBytes2, 0, SheathUnarmed);
                 System?.PlayEmote(Me, EmoteStateUseStanding);
                 break;
             case 13:

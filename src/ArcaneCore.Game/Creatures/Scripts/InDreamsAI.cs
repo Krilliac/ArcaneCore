@@ -10,7 +10,9 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// Taelan walks out of Scarlet keep, mounts and rides to the tower, where Grand Inquisitor Isillien and his elites come out. Isillien
 /// strikes Taelan down when he drops below half health and turns on the player; two minutes later (or when Isillien drops below 20%)
 /// Tirion rides in, kneels by his son, kills Isillien and then holds Taelan for the epilogue, which credits the quest.
-/// The Scarlet Subterfuge (5862) reward scene is not ported: ArcaneCore has no quest-rewarded hook for creature scripts.
+/// Rewarding "The Scarlet Subterfuge" (5862) to Taelan plays its closing scene (QuestRewarded_npc_taelan_fordring, AI_EVENT_CUSTOM_A): he
+/// kneels as the Scarlet cavaliers within 10 yd on his floor turn to him with their yells and gather round, then he stands, they turn on him
+/// and he evades; back home he casts his aura and takes his quest-giver flag back.
 /// </summary>
 public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
@@ -18,13 +20,23 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
     public const uint NpcIsillien = IsillienAI.Entry, NpcTirion = TirionFordringAI.Entry, NpcCrimsonElite = 12128;
     public const uint SpellDevotionAura = 17232, SpellCrusaderStrike = 14518, SpellHolyStrike = 17143, SpellHolyCleave = 18819,
         SpellHolyLight = 15493, SpellLayOnHands = 17233;
+    public const uint QuestScarletSubterfuge = 5862, NpcScarletCavalier = 1836, SpellTaelanSuffering = 18810;
+    public const int SayScarletComplete1 = -1001076, SayScarletComplete2 = -1001077;
     public const int SayEscortStart = -1001078, SayKillTaelan1 = -1001090, SayEpilog1 = -1001099;
     private const int TagTirionKneels = 1;
 
     private enum Speaker { None, Taelan, Isillien, Tirion }
 
+    /// <summary>aCavalierYells: the first four cavaliers each yell their own line.</summary>
+    private static readonly int[] s_cavalierYells = [-1001072, -1001073, -1001074, -1001075];
+
     private static readonly (int Entry, Speaker Speaker, uint Delay)[] s_dialogue =
     [
+        // Scarlet Subterfuge ending dialogue
+        ((int)NpcScarletCavalier, Speaker.None, 3000), ((int)QuestScarletSubterfuge, Speaker.None, 7000),
+        (SayScarletComplete1, Speaker.Taelan, 2000), ((int)QuestInDreams, Speaker.None, 0),
+        ((int)SpellDevotionAura, Speaker.None, 3000), (SayScarletComplete2, Speaker.Taelan, 0),
+        // In Dreams event dialogue
         (-1001079, Speaker.Taelan, 6000), (-1001080, Speaker.Taelan, 4000), ((int)ModelTaelanMount, Speaker.None, 0),
         (-1001081, Speaker.Taelan, 2000), (-1001082, Speaker.Isillien, 5000), (-1001083, Speaker.Taelan, 4000),
         (-1001084, Speaker.Taelan, 10000), (-1001085, Speaker.Isillien, 7000), (-1001086, Speaker.Isillien, 5000),
@@ -42,7 +54,8 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
 
     private readonly DialogueRunner _dialogue = new(Array.ConvertAll(s_dialogue, d => d.Delay));
 
-    private bool _fightStarted, _hasMount, _taelanDead;
+    private bool _fightStarted, _hasMount, _taelanDead, _scarletComplete;
+    private readonly List<Creature> _cavaliers = [];
     private Creature? _isillien, _tirion;
     private uint _holyCleaveMs, _holyStrikeMs, _crusaderStrikeMs, _holyLightMs;
 
@@ -74,6 +87,27 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
         Start(run: false, player: player, questId: questId);
         System?.SayText(Me, SayEscortStart);
         Me.FactionTemplate = FactionEscortNeutralFriendPassive;
+    }
+
+    /// <summary>QuestRewarded_npc_taelan_fordring: the Scarlet Subterfuge scene starts (AI_EVENT_CUSTOM_A with the player and the quest).</summary>
+    public override void OnQuestRewarded(Player player, uint questId)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (questId == QuestScarletSubterfuge)
+        {
+            StartDialogue(Index((int)NpcScarletCavalier));
+        }
+    }
+
+    /// <summary>JustReachedHome: after the cavaliers' attack he is home again and the scene ends with his aura and his last line.</summary>
+    public override void OnReachedHome()
+    {
+        base.OnReachedHome();
+        if (_scarletComplete)
+        {
+            StartDialogue(Index((int)SpellDevotionAura));
+            _scarletComplete = false;
+        }
     }
 
     protected override void Aggro(Unit target)
@@ -171,7 +205,7 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
         {
             case 26:
                 SetEscortPaused(true);
-                StartDialogue(0);
+                StartDialogue(Index(-1001079));
                 break;
             case 56:
                 SetEscortPaused(true);
@@ -211,6 +245,59 @@ public sealed class TaelanFordringAI(Creature creature) : EscortAI(creature), IQ
 
         switch (step.Entry)
         {
+            case (int)NpcScarletCavalier: // kneel and make everyone worried
+                Me.StandState = StandState.Kneel;
+                Me.NpcFlags &= ~(uint)NpcFlags.QuestGiver;
+                _cavaliers.Clear();
+                foreach (Creature cavalier in system.CreaturesOfEntryInRange(Me, NpcScarletCavalier, 10f))
+                {
+                    // Z above 164 keeps out the cavaliers of the floor below.
+                    if (cavalier.IsAlive && !cavalier.Combat.IsInCombat && cavalier.Z > 164f)
+                    {
+                        Face(cavalier, Me);
+                        if (_cavaliers.Count < s_cavalierYells.Length)
+                        {
+                            system.SayText(cavalier, s_cavalierYells[_cavaliers.Count]);
+                        }
+
+                        _cavaliers.Add(cavalier);
+                    }
+                }
+
+                break;
+            case (int)QuestScarletSubterfuge: // the cavaliers gather round him
+                foreach (Creature cavalier in _cavaliers)
+                {
+                    if (cavalier.IsAlive && cavalier.IsInWorld)
+                    {
+                        float a = MathF.Atan2(cavalier.Y - Me.Y, cavalier.X - Me.X);
+                        system.MoveTo(cavalier, Me.X + (2f * MathF.Cos(a)), Me.Y + (2f * MathF.Sin(a)), Me.Z, run: false, finalOrientation: null);
+                    }
+                }
+
+                break;
+            case SayScarletComplete1: // stand up, knocked down by the spell
+                Me.StandState = StandState.Stand;
+                DoCast(Me, SpellTaelanSuffering);
+                break;
+            case (int)QuestInDreams: // force attack
+                Me.SetFactionTemporary(FactionEscortNeutralFriendPassive, TemporaryFactionFlags.RestoreRespawn);
+                foreach (Creature cavalier in _cavaliers)
+                {
+                    if (cavalier.IsAlive && cavalier.IsInWorld)
+                    {
+                        cavalier.AI?.AttackStart(Me);
+                    }
+                }
+
+                _scarletComplete = true;
+                break;
+            case (int)SpellDevotionAura:
+                DoCast(Me, SpellDevotionAura);
+                break;
+            case SayScarletComplete2:
+                Me.NpcFlags |= (uint)NpcFlags.QuestGiver;
+                break;
             case (int)ModelTaelanMount: // mount when outside
                 _hasMount = true;
                 SetEscortPaused(false);

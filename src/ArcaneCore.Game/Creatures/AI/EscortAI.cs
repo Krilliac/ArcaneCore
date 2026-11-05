@@ -20,8 +20,10 @@ namespace ArcaneCore.Game.Creatures;
 /// <para>
 /// A player-linked escort (<see cref="Start"/> with a player and quest) checks every second that the player or a member of its group is
 /// within <see cref="MaxPlayerDistance"/>, and fails the quest for the group at death or when they are gone (vmangos npc_escortAI::JustDied,
-/// IsPlayerOrGroupInRange, UpdateAI and ResetEscort, ScriptedEscortAI.cpp:133-143, 180-300). Not ported: the assist of the player in combat
-/// and the aggro of passive escorts by nearby enemies.
+/// IsPlayerOrGroupInRange, UpdateAI and ResetEscort, ScriptedEscortAI.cpp:133-143, 180-300). While it escorts, enemies near a passive escort are
+/// made to attack it (the default <see cref="UpdateEscortAI"/>, as in vmangos; a script that overrides it without calling the base does without,
+/// as there), and a creature whose template has the CAN_ASSIST type flag takes on any enemy that is fighting a player within 100 yards and in
+/// sight (npc_escortAI::AssistPlayerInCombat, <see cref="CreatureMapSystem.AssistPlayerInCombat"/>).
 /// </para>
 /// </summary>
 public abstract class EscortAI : CreatureAI
@@ -41,6 +43,9 @@ public abstract class EscortAI : CreatureAI
     /// <summary>The default delay before the first waypoint (m_uiDelayBeforeTheFirstWaypoint, 2.5 s).</summary>
     public const uint DefaultDelayBeforeFirstWaypointMs = 2500;
 
+    /// <summary>How often an escort looks for a nearby enemy to aggro (vmangos does it at every update).</summary>
+    public const uint NearbyEnemyCheckMs = 500;
+
     /// <summary>vmangos ScriptedEscortAI.cpp DEFAULT_MAX_PLAYER_DISTANCE.</summary>
     public const float DefaultMaxPlayerDistance = 100f;
 
@@ -53,6 +58,7 @@ public abstract class EscortAI : CreatureAI
     private ObjectGuid _escortPlayerGuid;
     private uint _escortQuestId;
     private uint _playerCheckMs = 1000;
+    private uint _nearbyEnemyMs;
 
     protected EscortAI(Creature creature)
         : base(creature)
@@ -311,8 +317,39 @@ public abstract class EscortAI : CreatureAI
         Reset();
     }
 
+    /// <summary>
+    /// UnitAI::MoveInLineOfSight with npc_escortAI::AssistPlayerInCombat first: while escorting, the creature aids a player under attack by a
+    /// unit far outside its own aggro radius; otherwise the ordinary reaction.
+    /// </summary>
+    public override void MoveInLineOfSight(Unit who)
+    {
+        if (HasEscortState(EscortState.Escorting) && System is { } system && system.AssistPlayerInCombat(Me, who))
+        {
+            return;
+        }
+
+        base.MoveInLineOfSight(who);
+    }
+
     /// <summary>The script's own update, after the waypoint logic (vmangos UpdateEscortAI). By default it keeps the victim from the threat list.</summary>
-    protected virtual void UpdateEscortAI(uint diffMs) => UpdateVictim();
+    protected virtual void UpdateEscortAI(uint diffMs)
+    {
+        // vmangos npc_escortAI::UpdateEscortAI: make nearby enemies aggro passive escort npcs (looked for every half second, not every update).
+        if (HasEscortState(EscortState.Escorting) && !Me.Combat.IsInCombat)
+        {
+            if (_nearbyEnemyMs <= diffMs)
+            {
+                _nearbyEnemyMs = NearbyEnemyCheckMs;
+                System?.AggroNearestHostileCreature(Me);
+            }
+            else
+            {
+                _nearbyEnemyMs -= diffMs;
+            }
+        }
+
+        UpdateVictim();
+    }
 
     /// <summary>
     /// The creature entered the world alive for the first time with this AI (the work a ScriptDev script does in its constructor, which here

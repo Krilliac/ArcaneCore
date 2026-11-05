@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// Taking the quest sets him off with the player under the passive escort faction; at points 14 and 31 three Thistlefur furbolgs ambush him,
 /// at point 32 the quest's event objective is done for the player and the group near him, at 33 he bows, and at 36 he disappears (he is
 /// back at the next respawn). His bear form (spell 20514) is cast and dropped as the script does when a spell system is present.
-/// Not ported: SetImmuneToNPC around the turn-in (this server has no NPC-immunity flag handling for scripts).
+/// Other creatures leave him alone from point 32 (SetImmuneToNPC, UNIT_FLAG_IMMUNE_TO_NPC) until he leaves at point 36.
 /// </summary>
 public sealed class RuulSnowhoofAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
@@ -66,6 +66,7 @@ public sealed class RuulSnowhoofAI(Creature creature) : EscortAI(creature), IQue
                 SpawnAmbush(1);
                 break;
             case 32:
+                Me.UnitFlags |= UnitFlags.ImmuneToNpc;
                 System?.RemoveAuras(Me, SpellShapechange);
                 if (GetPlayerForEscort() is { } rewarded)
                 {
@@ -88,6 +89,7 @@ public sealed class RuulSnowhoofAI(Creature creature) : EscortAI(creature), IQue
                 DoCast(Me, SpellShapechange);
                 break;
             case 36:
+                Me.UnitFlags &= ~UnitFlags.ImmuneToNpc;
                 SetRun(false);
                 System?.ForcedDespawn(Me, 0);
                 break;

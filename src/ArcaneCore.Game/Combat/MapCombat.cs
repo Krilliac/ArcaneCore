@@ -122,15 +122,18 @@ public sealed partial class MapCombat : IMapUpdater
     /// <see cref="Spells.SpellSystem.IsFeigningDeath"/>. Without a spell system nothing can be feigning. Area effects keep using <see cref="CombatHooks.CanAttack"/>.
     /// </summary>
     public bool CanAttackSingleTarget(Unit attacker, Unit victim)
-    {
-        if (!attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsAlive
-            && victim.HasFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.Dead) && SpellMitigation?.IsFeigningDeath(victim) == true)
-        {
-            return false;
-        }
+        => !IsHiddenByFeignDeath(attacker, victim) && Hooks.CanAttack(attacker, victim);
 
-        return Hooks.CanAttack(attacker, victim);
-    }
+    /// <summary>
+    /// <see cref="CanAttackSingleTarget"/> without the ImmuneToPlayer / ImmuneToNpc clause (<see cref="CombatHooks.CanAttackIgnoringImmuneToFlags"/>),
+    /// for a script-forced attack and for keeping a started fight. The feign-death rule still applies.
+    /// </summary>
+    public bool CanAttackSingleTargetIgnoringImmuneToFlags(Unit attacker, Unit victim)
+        => !IsHiddenByFeignDeath(attacker, victim) && Hooks.CanAttackIgnoringImmuneToFlags(attacker, victim);
+
+    private bool IsHiddenByFeignDeath(Unit attacker, Unit victim)
+        => !attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsAlive
+            && victim.HasFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.Dead) && SpellMitigation?.IsFeigningDeath(victim) == true;
 
     /// <summary>
     /// The equipment and ability answers of the player stat system (docs/areas/stats.md). Null

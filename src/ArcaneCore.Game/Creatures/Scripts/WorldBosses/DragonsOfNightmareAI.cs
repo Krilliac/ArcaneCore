@@ -12,8 +12,9 @@ namespace ArcaneCore.Game.Creatures.Scripts.WorldBosses;
 /// (boss_dragon_of_nightmareAI). Mark of Nature on aggro, Aura of Nature every 3-5 s, Seeping Fog left and right every 2 min 0.3 s (the
 /// Dream Fog it summons is ClassicDB EventAI 15224), Noxious Breath, Tail Sweep, the special ability at 75/50/25 % health, and Summon Player
 /// (24776) on a victim that has been out of melee reach or out of sight for 6 s. On evade the guardians go and Mark of Nature is removed.
-/// Not ported: the vmangos weekly permutation of which dragon spawns where (sObjectMgr saved variables VAR_PERM_1..4 and HardcodedEvents);
-/// ClassicDB's spawns keep their own dragon.
+/// Which dragon stands at which portal is the vmangos weekly permutation (saved variables VAR_PERM_1..4, HardcodedEvents PermutateDragons and
+/// GetAI_boss_dragon_of_nightmare's UpdateEntry): the world feature NightmareDragonsFeature shuffles it when the last dragon is dead and
+/// spawns each portal's dragon with the entry its VAR_PERM_n names, so this AI is always built for the dragon that stands there.
 /// </summary>
 public abstract class DragonOfNightmareAI : RaidBossAI
 {
