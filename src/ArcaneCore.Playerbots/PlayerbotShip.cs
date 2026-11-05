@@ -1213,7 +1213,7 @@ internal static partial class PlayerbotShip
                 AllowPartial = true,
                 MaxSearchNodes = 64,
                 LoadTiles = true,
-                NonBlockingTiles = true, // a tile not in yet is read on the pool; the probe is then no point (TilesPending) and the next think asks again
+                NonBlockingTiles = true, // a tile not in yet is read on a background reader thread; the probe is then no point (TilesPending) and the next think asks again
             });
             if ((res.Type & PathType.TilesPending) != 0 || PlayerbotThinkProbe.LastQueryCapped) t_dockPending = true;
             if ((res.Type & (PathType.NoPath | PathType.NotUsingPath | PathType.TilesPending)) == 0

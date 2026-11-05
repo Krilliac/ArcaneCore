@@ -18,8 +18,8 @@ public sealed class NavTileNonBlockingTests : IDisposable
     private static readonly Vector3 To = new(18, 3, 0);
     private const int TileRow = 30;
 
-    // Guards against a hang, not behaviour: the gated reads never finish on their own, so a call that blocked would wait forever. Background
-    // the test thread and any pool continuations can be starved for many seconds by a busy full-suite run (other tests blocking pool threads).
+    // Guards against a hang, not behaviour: the gated reads never finish on their own, so a call that blocked would wait forever.
+    // The test thread and any pool continuations can be starved for many seconds by a busy full-suite run (other tests blocking pool threads).
     private static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(120);
 
     private readonly NavMeshFixture _fixture = new();
@@ -38,7 +38,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
         _fixture.Dispose();
     }
 
-    private NavMeshPathfinder Gated(int tiles = 1, ILogger? logger = null, bool failing = false, int concurrency = NavMeshPathfinder.DefaultConcurrentTileReads)
+    private NavMeshPathfinder Gated(int tiles = 1, ILogger? logger = null, bool failing = false, bool outOfMemory = false, int concurrency = NavMeshPathfinder.DefaultConcurrentTileReads)
     {
         _fixture.WriteParams(0);
         for (int x = 0; x < tiles; x++)
@@ -67,6 +67,7 @@ public sealed class NavTileNonBlockingTests : IDisposable
                 try
                 {
                     if (_gated(path)) _gate.Wait();
+                    if (failing && outOfMemory) throw new OutOfMemoryException("buffer");
                     return failing ? throw new IOException("disk gone") : File.ReadAllBytes(path);
                 }
                 finally
@@ -255,6 +256,30 @@ public sealed class NavTileNonBlockingTests : IDisposable
         Assert.Equal(1, _reads);
         Assert.Equal(1, nav.TileReadsStarted);
         Assert.False(nav.GetNavMesh(0)!.IsTerrainTileLoaded(31, 31));
+    }
+
+    [Fact]
+    public async Task ARead_ThatThrowsOutOfMemory_EndsAsALoggedFailure_AndReturnsItsSlot()
+    {
+        var logger = new CountingLogger();
+        NavMeshPathfinder nav = Gated(logger: logger, failing: true, outOfMemory: true);
+
+        Assert.Equal(PathType.TilesPending, (await Prompt(() => nav.FindPath(0, From, To, NonBlocking))).Type);
+        Task read = nav.PendingTileRead(0, 31, 31)!;
+        _gate.Set();
+        Assert.Same(read, await Task.WhenAny(read, Task.Delay(HangGuard)));
+        await read; // the read completed with its error as the result: it did not fault, and the reader thread (and the process) survived
+
+        Assert.Equal(nav.MaxConcurrentTileReads, nav.FreeTileReadSlots);
+        for (int i = 0; i < 3; i++)
+        {
+            Assert.Equal(PathType.Normal | PathType.NotUsingPath, nav.FindPath(0, From, To, NonBlocking).Type);
+        }
+
+        Assert.Equal(1, logger.Errors);
+        Assert.Equal(1, _reads);
+        Assert.False(nav.GetNavMesh(0)!.IsTerrainTileLoaded(31, 31));
+        Assert.Null(nav.PendingTileRead(0, 31, 31));
     }
 
     [Fact]

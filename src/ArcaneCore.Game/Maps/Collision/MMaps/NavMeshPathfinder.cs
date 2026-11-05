@@ -1192,7 +1192,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     private readonly Queue<Action> _readQueue = new();
     private int _readWorkers; // dedicated reader threads alive (guarded by _readLock)
     private int _readBusy;    // of them, reading a file (written under _readLock)
-    private static readonly int ReaderIdleMilliseconds = 60_000;
+    private const int ReaderIdleMilliseconds = 60_000;
     private long _asyncSequence;
 
     /// <summary>Background tile reads started (diagnostics and tests).</summary>
@@ -1224,7 +1224,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                 return TileReadState.Pending;
             }
 
-            TileRead done = entry.Read.IsCompletedSuccessfully ? entry.Read.Result : new TileRead(null, entry.Read.Exception);
+            TileRead done = entry.Read.Result; // a held read never faults (StartTileRead): a failure is its result
             if (done.Tile is { } ready)
             {
                 tile = ready;
@@ -1292,19 +1292,16 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         {
             FaultLedger.Shared.Record("nav.read", droppedError);
         }
-        else if (oldestTask is { IsFaulted: true, Exception: { } taskException })
-        {
-            FaultLedger.Shared.Record("nav.read", taskException);
-        }
 
         return true;
     }
 
     /// <summary>
     /// Queue the read and parse of one tile file for the dedicated reader threads, at most <see cref="MaxConcurrentTileReads"/> at a time.
-    /// Never faults: a failure is the result. Called on the world thread: it only enqueues (a lock and a pulse). A reader thread is created on
+    /// Never faults: a failure is the result (every exception, <see cref="OutOfMemoryException"/> too; a reader thread that cannot be
+    /// started fails the read the same way). Called on the world thread: it enqueues (a lock and a pulse). A reader thread is started on
     /// the caller only while fewer than <see cref="MaxConcurrentTileReads"/> exist and none is idle: once per slot, and again after one has
-    /// been idle for a minute and exited.
+    /// been idle for a minute and exited. Starting a thread waits for the OS to schedule it, which is not free on a loaded host.
     /// </summary>
     /// <remarks>
     /// Dedicated threads, not the shared pool: a read the world thread polls for must finish however busy the pool is (a saturated pool
@@ -1321,16 +1318,24 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         {
             _readQueue.Enqueue(() =>
             {
+                // Nothing may escape this item: it runs on a dedicated thread, where an unhandled exception ends the process. Every
+                // exception, an OutOfMemoryException from the buffer or the parse included, becomes the read's error result.
                 TileRead result;
-                try
+                if (completion.Task.IsCompleted)
                 {
-                    result = new TileRead(TryReadTileFile(path, reader, out NavMeshTile? tile) ? tile : null, null);
+                    result = default; // abandoned: its reader thread could not be started (below); the read already has its answer
                 }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
+                else
                 {
-                    FaultLedger.Shared.Record("collision.mmap-tile-read", ex);
-                    AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
-                    result = new TileRead(null, ex);
+                    try
+                    {
+                        result = new TileRead(TryReadTileFile(path, reader, out NavMeshTile? tile) ? tile : null, null);
+                    }
+                    catch (Exception ex)
+                    {
+                        result = new TileRead(null, ex);
+                        ReportTileReadFailure(path, ex);
+                    }
                 }
 
                 lock (_readLock)
@@ -1338,7 +1343,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                     _readBusy--; // the slot is free before anyone sees the result
                 }
 
-                completion.SetResult(result);
+                completion.TrySetResult(result);
             });
             spawn = _readWorkers < MaxConcurrentTileReads && _readWorkers - _readBusy < _readQueue.Count;
             if (spawn)
@@ -1353,10 +1358,39 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         if (spawn)
         {
-            new Thread(ReadWorker) { IsBackground = true, Name = "NavTileReader" }.Start();
+            try
+            {
+                // UnsafeStart: the reader does not inherit the world thread's ExecutionContext for its lifetime.
+                new Thread(ReadWorker) { IsBackground = true, Name = "NavTileReader" }.UnsafeStart();
+            }
+            catch (Exception ex)
+            {
+                // No thread: give the count back, and answer this read as failed rather than leave it queued for a reader that may never exist.
+                lock (_readLock)
+                {
+                    _readWorkers--;
+                }
+
+                ReportTileReadFailure(path, ex);
+                completion.TrySetResult(new TileRead(null, ex));
+            }
         }
 
         return completion.Task;
+    }
+
+    /// <summary>Record a failed background read. Never throws: it runs on a reader thread (or the world thread) where a fault would end the process.</summary>
+    private static void ReportTileReadFailure(string path, Exception ex)
+    {
+        try
+        {
+            FaultLedger.Shared.Record("collision.mmap-tile-read", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
+        }
+        catch (Exception)
+        {
+            // Bookkeeping only: the read's own error result still reaches the poller, which logs it.
+        }
     }
 
     /// <summary>A reader thread: takes queued reads until it has been idle for <see cref="ReaderIdleMilliseconds"/>.</summary>
