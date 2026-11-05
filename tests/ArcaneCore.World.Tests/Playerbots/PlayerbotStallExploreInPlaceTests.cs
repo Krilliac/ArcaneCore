@@ -147,9 +147,11 @@ public sealed class PlayerbotStallExploreInPlaceTests
     /// The motion's projected position (route position at the current time, <see cref="PlayerbotMotion.CurrentPosition"/>) runs ahead of the
     /// frozen stored position by the speed times the age of the last heartbeat; the check must not read it. The think's own motion step may
     /// send a heartbeat (the age passes the heartbeat interval), which moves the stored position, so it is put back to the start after every
-    /// think: the stored position is frozen at each check while the projection and the route's anchor run ahead. The motion is aged 300 ms
-    /// before each think (no heartbeat is due inside it, so the projection at the check is 300 ms of walking ahead) and 200 ms more after it,
-    /// where the pump sends the heartbeat that is put back.
+    /// think: the stored position is frozen at each check while the projection and the route's anchor run ahead. The motion is aged 100 ms
+    /// before each think and 400 ms more after it, where the pump sends the heartbeat that is put back. The small head start keeps a stalled
+    /// scheduler (the world clock is real time and keeps running between the calls) 400 ms short of a heartbeat inside the think, which would move
+    /// the stored position. The first think starts the walk (there is no motion to age before it, and the check runs before the walk exists), so
+    /// only from the second think on does a check see the projection ahead: the walk of the thinks before it, plus 100 ms.
     /// </summary>
     [Fact]
     public async Task AWalkWhoseProjectedPositionRunsAhead_ButWhoseStoredPositionIsFrozen_IsRefused()
@@ -171,9 +173,9 @@ public sealed class PlayerbotStallExploreInPlaceTests
                 await rig.OnWorld(() =>
                 {
                     session.ManagedBudget = new ManagedActionBudget(8);
-                    PlayerbotMotion.ElapseForTests(player, 300);
+                    PlayerbotMotion.ElapseForTests(player, 100);
                     brain.Update(500);
-                    PlayerbotMotion.ElapseForTests(player, 200);
+                    PlayerbotMotion.ElapseForTests(player, 400);
                     PlayerbotMotion.Pump(session, player, rig.Host.World.NowMs);
                     player.SetPosition(start.X, start.Y, start.Z, player.Orientation);
                     return 0;

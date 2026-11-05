@@ -31,7 +31,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 public sealed class PlayerbotSummonWorldTests
 {
     private const byte Human = 1, Warlock = 9, Warrior = 1;
-    private const uint RitualSpell = 990698, RitualEffectSpell = 990720, SoulShard = 6265, StoneEntry = 178828, StoneSpawn = 990030;
+    private const uint RitualSpell = 990698, PreparedSpell = 990699, PreparedCastTimeRow = 990, RitualEffectSpell = 990720, SoulShard = 6265, StoneEntry = 178828, StoneSpawn = 990030;
     private static readonly Vector3 Camp = new(StartX, StartY, StartZ);
     private static readonly Vector3 FarCamp = new(StartX + 300f, StartY, StartZ);
 
@@ -52,10 +52,16 @@ public sealed class PlayerbotSummonWorldTests
                 },
                 new SpellTemplateRow
                 {
+                    Id = PreparedSpell, SpellName = "Slow Ritual", RangeIndex = 1, CastingTimeIndex = PreparedCastTimeRow,
+                    Effect1 = 3, EffectImplicitTargetA1 = 1, EffectBaseDice1 = 1, EffectDieSides1 = 1,
+                },
+                new SpellTemplateRow
+                {
                     Id = RitualEffectSpell, SpellName = "Ritual of Summoning Effect", RangeIndex = 1,
                     Effect1 = 85, EffectImplicitTargetA1 = 25, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                 },
             ],
+            CastTimes = [.. duel.CastTimes, new SpellCastTimeRow { Id = PreparedCastTimeRow, CastTime = 5000, MinCastTime = 5000 }],
             Radii = [.. duel.Radii, new SpellRadiusRow { Id = 50, Radius = 2.0f }],
         }));
     }
@@ -172,7 +178,7 @@ public sealed class PlayerbotSummonWorldTests
         Assert.True(arrived, await world.TraceAsync());
         Assert.Equal(1, world.Bots.Summons.Started);
         Assert.True(world.Bots.Summons.Accepted >= 1, "the far member never answered a summon request"); // the bot answers within the tick the request lands in, so no tick boundary sees the pending request
-        Assert.True(helpers >= 2, $"{helpers} bots helped at the portal"); // the request itself proves the server counted all three participants (the portal template asks for three)
+        Assert.Equal(2, helpers); // the portal asks for three participants: the warlock and exactly two helpers (the request itself proves the server counted all three)
         Assert.Equal(2u, await world.OnWorldAsync(() => world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)));
     }
 
@@ -289,16 +295,47 @@ public sealed class PlayerbotSummonWorldTests
         Assert.True(await world.RunUntilAsync(180_000, () => state() == SpellCastState.Casting), await world.TraceAsync());
 
         // The think that ends a summon may have nothing left of the tick's shared budget; the channel must still end, or the warlock stays "casting" and cannot summon again.
-        SpellCastState? after = await world.OnWorldAsync(() =>
+        (SpellCastState? after, bool sent, bool budgetKept) = await world.OnWorldAsync(() =>
         {
             WorldSession session = world.Session(warlock.Id);
             ManagedActionBudget? saved = session.ManagedBudget;
-            session.ManagedBudget = new ManagedActionBudget(0);
-            try { PlayerbotSummons.StopRitual(session, world.Player(warlock.Id), RitualSpell); }
+            var spent = new ManagedActionBudget(0);
+            session.ManagedBudget = spent;
+            bool sentStop;
+            bool kept;
+            try
+            {
+                sentStop = PlayerbotSummons.StopRitual(session, world.Player(warlock.Id), RitualSpell);
+                kept = ReferenceEquals(session.ManagedBudget, spent); // the spent budget is put back, not dropped: the rest of the tick stays refused
+            }
             finally { session.ManagedBudget = saved; }
-            return state();
+
+            return (state(), sentStop, kept);
         });
-        Assert.NotEqual(SpellCastState.Casting, after);
+        Assert.True(sent, "the stop packet was refused");
+        Assert.True(budgetKept, "StopRitual did not restore the session's action budget");
+        Assert.Null(after);
+    }
+
+    [Fact]
+    public async Task StoppingARitualStillBeingPrepared_CancelsTheCast_WithCancelCast()
+    {
+        await using GroupTestWorld world = await StartAsync();
+        var warlock = await BotAsync(world, "Summonlockf", Warlock, Camp);
+        SpellSystem spells = world.World.Services.GetRequiredService<SpellFeature>().System;
+
+        (SpellCastState? before, bool sent, SpellCastState? after) = await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player(warlock.Id);
+            Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, PreparedSpell, SpellCastTargets.ForSelf(), triggered: false));
+            SpellCastState? preparing = spells.GetState(player.Guid)?.CurrentCast?.State;
+            bool sentStop = PlayerbotSummons.StopRitual(world.Session(warlock.Id), player, PreparedSpell);
+            return (preparing, sentStop, spells.GetState(player.Guid)?.CurrentCast?.State);
+        });
+
+        Assert.Equal(SpellCastState.Preparing, before); // a 5 s cast bar: the test proves nothing if it had already gone off
+        Assert.True(sent, "the cancel packet was refused");
+        Assert.Null(after);
     }
 
     [Fact]

@@ -104,6 +104,56 @@ public sealed class AuctionHouseConfigTests
         Assert.Empty(list);
     }
 
+    /// <summary>
+    /// The check judges a value by the binder's own converter: whatever the binder drops, the check calls an error, and whatever it keeps is not
+    /// called dropped (a sign, spaces and a hex prefix are the cases a stricter parser would get wrong).
+    /// </summary>
+    [Theory]
+    [InlineData("+5")]
+    [InlineData(" 5")]
+    [InlineData("5 ")]
+    [InlineData("0x10")]
+    [InlineData("5.0")]
+    [InlineData("")]
+    public void Check_AValueIsAnErrorExactlyWhenTheBinderDropsTheEntry(string text)
+    {
+        var list = new List<AuctionHouseEntry>();
+        Config(("AuctionHouses:0:Id", "7"), ("AuctionHouses:0:DepositPercent", text), ("AuctionHouses:0:CutPercent", "2")).GetSection("AuctionHouses").Bind(list);
+
+        IEnumerable<ConfigIssue> errors = new EconomyConfigChecks()
+            .Check(Config(("Economy:AuctionHouses:0:Id", "7"), ("Economy:AuctionHouses:0:DepositPercent", text), ("Economy:AuctionHouses:0:CutPercent", "2")))
+            .Where(i => i.Severity == ConfigSeverity.Error);
+
+        Assert.Equal(list.Count == 0, errors.Any());
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("3")]
+    [InlineData("99")]
+    public void Check_AnEntryForAHouseTheRulesNeverAsk_IsAWarning(string id)
+    {
+        ConfigIssue issue = Assert.Single(new EconomyConfigChecks().Check(Config(("Economy:AuctionHouses:0:Id", id), ("Economy:AuctionHouses:0:DepositPercent", "5"), ("Economy:AuctionHouses:0:CutPercent", "5"))));
+        Assert.Equal((ConfigSeverity.Warning, "Economy:AuctionHouses:0:Id"), (issue.Severity, issue.Key));
+    }
+
+    [Theory]
+    [InlineData("2")]
+    [InlineData("6")]
+    [InlineData("7")]
+    public void Check_AnEntryForADefaultHouse_IsNotWarnedAbout(string id)
+        => Assert.Empty(new EconomyConfigChecks().Check(Config(("Economy:AuctionHouses:0:Id", id), ("Economy:AuctionHouses:0:DepositPercent", "100"), ("Economy:AuctionHouses:0:CutPercent", "0"))));
+
+    [Theory]
+    [InlineData("DepositPercent")]
+    [InlineData("CutPercent")]
+    public void Check_APercentageOverOneHundred_IsAWarningNamingTheKey(string field)
+    {
+        (string, string)[] keys = [.. new[] { "DepositPercent", "CutPercent" }.Select(f => ("Economy:AuctionHouses:0:" + f, f == field ? "101" : "5")), ("Economy:AuctionHouses:0:Id", "7")];
+        ConfigIssue issue = Assert.Single(new EconomyConfigChecks().Check(Config(keys)));
+        Assert.Equal((ConfigSeverity.Warning, "Economy:AuctionHouses:0:" + field), (issue.Severity, issue.Key));
+    }
+
     /// <summary>The check is on the daemon's list, so the report that fails the start (Program.cs, exit 78) carries the error.</summary>
     [Fact]
     public void Check_RunsInTheStartupReport_AndMakesItInvalid()

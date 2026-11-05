@@ -43,7 +43,7 @@ internal static class ConfigDocOverrides
         ["RealmSeedEntry.Name"] = "The realm name shown on the realm-list screen.",
         ["RealmSeedEntry.Type"] = "The realm type (icon) shown on the realm-list screen; the numeric values are the build-5875 wire values.",
         ["RealmSeedEntry.Flags"] = "The realm flags stored with the row (offline, new players, recommended and so on). A seeded row starts stopped (offline in the realm list) until a world reports in.",
-        ["RealmSeedEntry.Population"] = "The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world resets it to 0 and then writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full.",
+        ["RealmSeedEntry.Population"] = "The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world (the gateway, in a split) resets it to 0 and then, when `World:Realm:PlayerLimit` is above 0, writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full. With a limit of 0 nothing is written after the reset, and bot sessions count, so 2 is not a ceiling.",
         ["RealmSeedEntry.Category"] = "The realm category (timezone group) id of the build-5875 realm-list layout.",
         ["NpcTemplateMetadata.Entry"] = "The creature_template entry the override applies to.",
         ["NpcTemplateMetadata.GossipMenuId"] = "Replaces the creature's gossip_menu_id.",
