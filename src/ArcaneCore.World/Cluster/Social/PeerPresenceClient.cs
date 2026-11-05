@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Cluster.Social;
 /// <summary>
 /// Presence and social routing of the Social lease holder as seen from another worker: every call is one request over the <see cref="PeerLinkClient"/> to the holder's
 /// <see cref="PresenceHolderService"/> (<see cref="PresenceWireCodec"/>). Implements the async <see cref="IPresenceAuthority"/> for the publisher and the synchronous
-/// <see cref="IRealmPresenceDirectory"/> / <see cref="IClusterSocialRouter"/> for readers such as <c>.cluster</c> commands; the synchronous members block the calling thread for
+/// <see cref="IRealmPresenceDirectory"/> / <see cref="IClusterSocialRouter"/> for readers on background tasks (the cluster sender and pump tasks, <c>CrossWorkerSocial</c>; the <c>.cluster</c> commands read <see cref="LeaseRoutedPresence"/>'s local counts instead); the synchronous members block the calling thread for
 /// up to the link's request timeout and must not be called on the world thread. A lost link, a timeout or a refusal surfaces as <see cref="IOException"/>,
 /// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.

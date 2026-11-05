@@ -172,7 +172,7 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
 
             if (!_holding)
             {
-                // The groups-table read runs off the tick; _holding stays false (nothing is written) until ReloadAuthority's apply runs on a later world tick.
+                // The groups-table read runs off the tick; _holding stays false (nothing is written) until ApplyReload runs on a later world tick. Limit: a group command that reaches the local authority between the gain and the apply (LeaseRoutedPresence routes locally as soon as the lease is held) is wiped by the apply's Reset; the window is the read time plus one tick, the old synchronous reload had up to one sweep.
                 BeginReloadAuthority(authority);
                 return;
             }

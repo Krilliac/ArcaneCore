@@ -355,18 +355,20 @@ packets (at most 256 packets and 256 KiB), opens a session on the target worker 
 replays the buffer to the source and closes the target session. Commit replays the buffer to the target in order, re-points the connection
 (link and generation) and retires the old generation, so packets still stamped with it are dropped. A buffer overflow frees the buffer, closes
 the target session and disconnects the client; the later commit is then a no-op. Node ids in the frames are the `Gateway:Workers:N:NodeId` values.
-Not built: the worker-side peer-link participant for the target, and the session of the target being resolvable by the shadow loader before
-stage 4 (the target session opens at stage 4, after the passive shadow install).
+The worker side is built: with `Cluster:Worker:Transfers:Enabled` the worker's production `WorkerTransferTarget` (`TransferHosting`) loads the character through
+`CharacterHooksShadowLoader`, and the source worker reaches that target through `RemoteTransferTargetWorker` on the control link. The target session opens at stage 4,
+after the passive shadow install, so the shadow load starts when the acceptor reports that session opening (`WorkerTransferTarget.OnSessionOpened`); if the acceptor was
+restarted without that hook, the install after the commit re-probes and loads at once. The probe and the loader match the session by account only.
 
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
-- The manifest's schema and content versions are operator labels, not read from the databases.
+- The manifest's schema and content versions are read from the databases by default (`Cluster:Worker:VersionsFromDatabase`); the gateway's own are the build's versions or the explicit `Gateway:*` labels.
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
 - Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process only, not on a real client.
 - The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
-- A gateway or World restart still drops every client. An authenticated operator trigger for the handoff is not built.
+- A gateway restart still drops every client, and so does a World restart unless it goes through the handoff: the operator trigger is `.cluster restart $worker` (Administrator, opt-in, see the handoff section above); it is exercised in process (`OperatorRestartRelayTests`) and not on a real client.
 - The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
   gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
   link client and the handoff router seam; those need their own split before the reference can go.

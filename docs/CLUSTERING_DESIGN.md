@@ -631,7 +631,7 @@ The roadmap owns phase status ([clustering phase status](ROADMAP.md#clustering-p
 
 ### Closure evidence
 
-Each closure clause above is mapped to the tests that cover it, cited as `Class.Method`. A clause is Verified when a named test covers it; otherwise its row names the gap that remains. `PhaseClosureTests` checks that every cited test exists, that every phase has rows, and that [the roadmap](ROADMAP.md#clustering-phase-status) agrees with this table. The E2E rows (`BaselineScenarioTests`, `CrossWorkerTransferTests`, `TransferCrashTests`, `TwoWorkerScenarioTests`) are Skipped unless `ARCANECORE_TEST_POSTGRES` names a PostgreSQL server.
+Each closure clause above is mapped to the tests that cover it, cited as `Class.Method`. A clause is Verified when a named test covers it; otherwise its row names the gap that remains. `PhaseClosureTests` checks that every cited test exists, that every phase has rows, and that [the roadmap](ROADMAP.md#clustering-phase-status) agrees with this table. The E2E rows (`BaselineScenarioTests`, `CrossWorkerTransferTests`, `TransferCrashTests`, `TwoWorkerScenarioTests`) are Skipped in a run that does not set `ARCANECORE_TEST_POSTGRES` to a PostgreSQL server; hosted CI (`ci.yml`) sets it, and `node-ci` sets it with `-WithDbProviders`.
 
 | Phase | Closure clause | Tests | Status |
 |---|---|---|---|

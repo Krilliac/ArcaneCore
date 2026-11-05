@@ -12,7 +12,7 @@ allowlist 0, section 4.6) is **built** on `claude/hr-2b`; 2c and 2d are planned.
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision store, standby mode, the drain protocol
 in process) is **built and tested** on `claude/hr3-standby` (section 5.6); the seamless reroute and the operator trigger
-are not.
+(`.cluster restart`) were built later and are tested in process only, not on a real client ([gateway.md](../areas/gateway.md)).
 All three lanes are merged on `claude/hr2-integrate`.
 "Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
@@ -566,9 +566,9 @@ Differences from 5.2 and what is left of 3a:
 - **Warden runs on the worker**, not the gateway: its opcodes are forwarded unchanged. Moving it to the gateway is needed
   before 3b (a handoff must not restart the Warden exchange).
 - **No real-client acceptance yet** (the 3a exit criterion in section 9).
-- Manifest schema and content versions are operator labels, not read from the databases.
-- The link protocol lives in `ArcaneCore.World`; the gateway references the whole World assembly until a shared protocol
-  assembly is split out.
+- Manifest schema and content versions are read from the databases by default (`Cluster:Worker:VersionsFromDatabase`), with operator labels as an explicit override.
+- The link protocol lives in `ArcaneCore.Cluster.Protocol`; the gateway still references `ArcaneCore.World` for the
+  `WorldSession` constants, the build protocols, the session link client and the handoff router seam.
 - The gateway's `Gateway:*` keys are not in the configuration catalog (no `ConfigDaemon` value, no `.conf.dist`, no
   `--check-config`) and it exports no metrics.
 - The gateway's session generation and `SessionRegistry`'s own generation are independent counters.
