@@ -29,6 +29,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>cmangos <c>Player::GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE</c> from a script; false without the quest seam.</summary>
     internal bool QuestIncomplete(Player player, uint questId) => _ai.ScriptQuests?.IsQuestIncomplete(player, questId) ?? false;
 
+    /// <summary>cmangos <c>Player::GetQuestStatus(questId) == QUEST_STATUS_COMPLETE</c> from a script; false without the quest seam.</summary>
+    internal bool QuestComplete(Player player, uint questId) => _ai.ScriptQuests?.IsQuestComplete(player, questId) ?? false;
+
     /// <summary>A player-linked escort failed (vmangos npc_escortAI::JustDied): its quest fails for the player's group.</summary>
     internal void FailEscortQuest(Player player, uint questId) => _ai.ScriptQuests?.GroupEventFailHappens(player, questId);
 

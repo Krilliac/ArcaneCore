@@ -3,6 +3,7 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Economy.AuctionBot;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
@@ -827,7 +828,9 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         if (_dynamicLevel == 0 || now - _dynamicLevelAt >= Options.DynamicRefreshMinutes * 60L)
         {
-            _dynamicLevel = AuctionBotItemPool.DynamicMaxLevel(world.OnlinePlayers.Select(p => (uint)p.Level),
+            _dynamicLevel = AuctionBotItemPool.DynamicMaxLevel(
+                AuctionBotItemPool.CountedOnlineLevels(
+                    world.OnlinePlayers.Select(p => ((uint)p.Level, p.Security > AccountSecurity.Player)), Options.DynamicIgnoreGmAccounts),
                 _dynamicLevel == 0 ? Options.MaxRequiredLevel : _dynamicLevel);
             _dynamicLevelAt = now;
         }

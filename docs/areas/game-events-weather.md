@@ -249,6 +249,8 @@ first pass. Notes list the events added, removed, changed (rescheduled) and stop
 through `GameEventFeature.ServiceCreated`; a listener must be added with `GameEventFeature.AddListener` to survive a reload (one added
 to the old service dies with it). The roll-back of a failing commit rebuilds the previous service from the previous tables.
 Limit: a manual `.event start` / `.event stop` schedule override does not survive a reload (the table decides again).
+Limit: the roll-back seeds the rebuilt service with the running set and does not notify listeners, so an event the failed swap had stopped runs again without a start or stop callback reaching them.
+
 
 ### Event creature data (`game-event-creature-data`, partial)
 

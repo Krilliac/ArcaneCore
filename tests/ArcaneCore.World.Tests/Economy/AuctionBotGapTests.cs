@@ -96,6 +96,20 @@ public sealed class AuctionBotGapTests
     }
 
     [Fact]
+    public void TheDynamicMaxLevel_CountsStaffAccountsUnlessIgnoreGmAccountsIsOn()
+    {
+        (uint, bool)[] online = [(20u, false), (60u, true), (35u, false)];
+
+        Assert.False(new AuctionBotOptions().DynamicIgnoreGmAccounts);
+        Assert.Equal(60u, AuctionBotItemPool.DynamicMaxLevel(AuctionBotItemPool.CountedOnlineLevels(online, false), 10));
+        Assert.Equal(35u, AuctionBotItemPool.DynamicMaxLevel(AuctionBotItemPool.CountedOnlineLevels(online, true), 10));
+        // Only staff online with the option on: the highest staff level is the fallback (cMaNGOS), not the cap in force.
+        Assert.Equal(60u, AuctionBotItemPool.DynamicMaxLevel(AuctionBotItemPool.CountedOnlineLevels([(60u, true), (30u, true)], true), 45));
+        // Nobody online: the cap in force stays.
+        Assert.Equal(45u, AuctionBotItemPool.DynamicMaxLevel(AuctionBotItemPool.CountedOnlineLevels([], true), 45));
+    }
+
+    [Fact]
     public void TheItemLevelCap_FollowsMaxItemLevel_ElseTheCmangosRule()
     {
         Assert.Equal(45u, AuctionBotItemPool.ItemLevelCap(40, 0));

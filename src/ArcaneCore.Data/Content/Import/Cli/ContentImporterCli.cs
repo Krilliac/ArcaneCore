@@ -140,7 +140,9 @@ public static partial class ContentImporterCli
           --player-stats-migrations-dir <dir>
                                            import: replay supported player-stat migrations in name order
                                            after base rows; source choice must be version checked
-          --replace                        import: empty the importers' tables first
+          --replace                        import: empty the importers' tables first; most importers empty a table
+                                           whatever the input carried, but the enchant-proc and reputation importers
+                                           empty a table only when the input had rows for it
           --dry-run                        import: read and count everything, write nothing
           --report <file>                  write the JSON report (outside the repository)
           --verbose                        plan/import: also list empty tables

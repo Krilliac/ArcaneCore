@@ -30,5 +30,8 @@ public sealed class ScriptQuestEvents(IServiceProvider services) : IScriptQuestE
     public bool IsQuestIncomplete(Player player, uint questId)
         => Quests?.StateOf(player)?.Quests.GetStatus(questId) == QuestStatus.Incomplete;
 
+    public bool IsQuestComplete(Player player, uint questId)
+        => Quests?.StateOf(player)?.Quests.GetStatus(questId) == QuestStatus.Complete;
+
     public IReadOnlyList<Player> GroupMembersOf(Player player) => Quests?.Deps.Party?.MembersOf(player) ?? [];
 }
