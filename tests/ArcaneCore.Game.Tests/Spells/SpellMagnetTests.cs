@@ -349,6 +349,6 @@ public sealed class SpellMagnetTests
         Assert.Equal(85u, magnet.Health);
         Assert.NotNull(seen.Seen);
         Assert.Equal(magnet.Guid, seen.Seen!.Unit);
-        Assert.True(seen.Seen.FromClient); // a child re-aimed at the magnet through ForUnit(guid, parent) is still client-named
+        Assert.True(seen.Seen.FromClient); // the redirected block stays client-named (SpellCastTargets.ForUnit(guid, parent) inherits the flag, see SpellCastTargets.cs)
     }
 }

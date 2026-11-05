@@ -12,9 +12,13 @@ public sealed partial class SpellSystem
     private const uint MagnetPoisonDispel = 4;
 
     /// <summary>
-    /// SpellCaster::SelectMagnetTarget (SpellCaster.cpp:31-68), re-implemented: only enemy
+    /// SpellCaster::SelectMagnetTarget (vmangos SpellCaster.cpp:31-68), re-implemented: only enemy
     /// explicit selectors consult SPELL_MAGNET; abilities, poisons and the no-redirection /
-    /// suppress-target-procs attributes bypass it. Charges are spent at selection, before hit
+    /// suppress-target-procs attributes bypass it. One deliberate addition over vmangos, taken from
+    /// mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924, <c>magnet->IsAlive() &amp;&amp; CanAttack(magnet)</c>):
+    /// a magnet the caster may not attack is skipped. vmangos has no such test; mangos-classic applies it to every
+    /// cast, here it is limited to the scope of the explicit-hostile gate in CheckCast (non-triggered casts and
+    /// client-named blocks). See the Discrepancies table in docs/areas/spells.md. Charges are spent at selection, before hit
     /// resolution, including misses. The caster ownership token prevents GUID reuse from
     /// transferring protection to a new unit. No extra range or LOS check is applied to the
     /// magnet: the source checks those against the original victim before selecting targets.
@@ -45,10 +49,11 @@ public sealed partial class SpellSystem
                 || (updateExplicitTarget && (!cast.IsTriggered || cast.Targets.FromClient)
                     && CheckExplicitHostileTargetRules(cast.Caster, spell, magnet) != SpellCastResult.CastOk))
             {
-                // The last test re-applies the explicit-hostile-target gate to the magnet itself: the landing CheckCast ran against the
-                // client's original unit, so a magnet the caster may not attack (a crafted block, a friendly or unflagged magnet) is
-                // skipped here instead of redirecting a hostile spell onto it. Same scope as CheckCast: non-triggered casts and
-                // client-named blocks; a server-chosen triggered cast is left alone.
+                // The last test is the mangos-classic CanAttack(magnet) rule (Unit.cpp:6924), expressed through the explicit-hostile-target
+                // gate. The landing CheckCast ran against the client's named unit (the victim), not the magnet, so a legitimately hostile
+                // victim that holds a magnet the caster may not attack (a friendly or unflagged owner's totem) is skipped here instead of
+                // being redirected onto it. This is a gameplay eligibility rule, not an anti-crafting protection: a client cannot choose the
+                // magnet. Scope: non-triggered casts and client-named blocks, like CheckCast; a server-chosen triggered cast is left alone.
                 continue;
             }
 
