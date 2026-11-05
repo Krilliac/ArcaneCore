@@ -38,7 +38,11 @@ public sealed class CrashDialogNativeTests : IDisposable
         Assert.True(shown);
         Assert.Null(failure);
         Assert.Equal(new[] { "CreateActCtx", "ActivateActCtx", "TaskDialogIndirect", "DeactivateActCtx", "ReleaseActCtx" }, _native.Calls.Where(static c => c is "CreateActCtx" or "ActivateActCtx" or "TaskDialogIndirect" or "DeactivateActCtx" or "ReleaseActCtx").ToArray());
-        Assert.Equal(ApartmentState.STA, _native.DialogApartment);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(ApartmentState.STA, _native.DialogApartment);
+        }
+
         Assert.Equal("the title", _native.DialogTitle);
         Assert.Equal("the text", _native.DialogContent);
         Assert.Equal(1u, _native.DialogButtonCount);

@@ -60,6 +60,7 @@ internal static class CrashDialogTaskDialog
         var created = new Win32Native();
         return Interlocked.CompareExchange(ref s_native, created, null) ?? created;
     }
+
     /// <summary>The id of the Copy button. Custom ids must not collide with the common buttons (IDOK is 1).</summary>
     internal const int CopyButtonId = 100;
 
@@ -153,7 +154,12 @@ internal static class CrashDialogTaskDialog
         };
         try
         {
-            thread.SetApartmentState(ApartmentState.STA);
+            if (OperatingSystem.IsWindows())
+            {
+                // The apartment state exists only on Windows (it throws PlatformNotSupportedException elsewhere); the box itself is Windows only.
+                thread.SetApartmentState(ApartmentState.STA);
+            }
+
             thread.Start();
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -357,13 +363,14 @@ internal static class CrashDialogTaskDialog
 
         private int Notify(IntPtr hwnd, uint message, UIntPtr wParam, IntPtr lParam, IntPtr refData)
         {
-            bool copyClick = message == TdnButtonClicked && (int)wParam.ToUInt32() == CopyButtonId;
+            bool copyClick = false;
 
             // Nothing may unwind out of this method: it is called from comctl32's native frames, and a managed exception, an OutOfMemoryException
             // included (a crash dialog opens exactly when memory may be short), would cross them. Every failure is swallowed here; the process is
             // already ending, so a lost clipboard copy (which beeps) costs less than the box dying under an unwinding native stack.
             try
             {
+                copyClick = message == TdnButtonClicked && (int)wParam.ToUInt32() == CopyButtonId;
                 if (message == TdnCreated)
                 {
                     // MB_TOPMOST | MB_SETFOREGROUND of the old message box.

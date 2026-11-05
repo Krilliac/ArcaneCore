@@ -54,7 +54,7 @@ public sealed class DiagnosticsOptions
 
     /// <summary>
     /// Log exceptions at the moment they are thrown (<c>AppDomain.FirstChanceException</c>), before any
-    /// handler sees it, at Debug level. The log is deduplicated per exception type and throw site, rate limited and capped, so a hot throw
+    /// handler sees them, at Debug level. The log is deduplicated per exception type and throw site, rate limited and capped, so a hot throw
     /// site cannot flood it; it is not a complete record of every throw. A development aid for finding swallowed exceptions; it is honoured
     /// only by a Debug build of the Kernel (the hook is compiled out of Release), where a Release daemon
     /// logs once that the key is ignored. Default off: the hook runs on every throw, caught or not.

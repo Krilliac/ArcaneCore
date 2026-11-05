@@ -36,8 +36,7 @@ it is called on every failure path and may be called directly.
 
 Defaults keep the process behaving as the .NET runtime does without this section, except that every event is now reported
 first. None of the keys is live (`.reload config` does not touch them). The world daemon's `check-config` validates the section
-(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78; the `CrashDump` subsection is checked the same way by every daemon, `CrashDumpConfigChecks`); the realm daemon's `check-config` (`RealmOpsCli.Validate`, run from `Realm/Program.cs`) validates it the same way, and
-`UseArcaneDiagnostics` itself writes the binder's message to standard error and exits 78 before anything
+(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78; the `CrashDump` subsection is checked the same way by every daemon, `CrashDumpConfigChecks`). The realm daemon's `check-config` (`RealmOpsCli.Validate`, run from `src/ArcaneCore.Realm/Program.cs`) covers only the `CrashDump` subsection, not `DiagnosticsConfigChecks`; the other Diagnostics keys are refused only by `UseArcaneDiagnostics`, which writes the binder's message to standard error and exits 78 before anything
 binds or touches a database.
 
 | Key | Default | Values | Fail-closed behaviour |
