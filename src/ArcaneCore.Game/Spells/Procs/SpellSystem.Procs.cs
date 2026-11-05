@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.Procs;
@@ -382,7 +384,14 @@ public sealed partial class SpellSystem
             chance = SpellModifiers.Apply(modOwner, aura, SpellModOp.ChanceOfSuccess, chance);
         }
 
-        return Random.NextDouble() * 100d < chance ? ProcTriggerCheck.Ok : ProcTriggerCheck.RollFailed;
+        double roll = Random.NextDouble() * 100d;
+        bool hit = roll < chance;
+        if (GmTraceGuard.Wants(owner.Map?.Runtime, GmStreamChannels.Procs, out IGmTraceSink? trace))
+        {
+            GmTraceTap.ProcRoll(trace, owner, target, aura, procFlag, isVictim, chance, roll, hit);
+        }
+
+        return hit ? ProcTriggerCheck.Ok : ProcTriggerCheck.RollFailed;
     }
 
     /// <summary>vmangos <c>Unit::GetPPMProcChance</c>: a weapon of <paramref name="attackTimeMs"/> procs <paramref name="ppm"/> times a minute.</summary>
@@ -413,7 +422,14 @@ public sealed partial class SpellSystem
             && (procExtra & (ProcFlagsEx.NormalHit | ProcFlagsEx.CriticalHit)) != 0
             && !(procSpell.Effects.Any(e => e.Effect == SpellEffectName.ApplyAura) && (procFlag & ProcFlags.DealHarmfulPeriodic) != 0))
         {
-            return Random.NextDouble() * 100d < aura.ProcChance ? ProcTriggerCheck.Ok : ProcTriggerCheck.RollFailed;
+            double roll = Random.NextDouble() * 100d;
+            bool hit = roll < aura.ProcChance;
+            if (GmTraceGuard.Wants(owner.Map?.Runtime, GmStreamChannels.Procs, out IGmTraceSink? trace))
+            {
+                GmTraceTap.ProcRoll(trace, owner, null, aura, procFlag, isVictim, aura.ProcChance, roll, hit);
+            }
+
+            return hit ? ProcTriggerCheck.Ok : ProcTriggerCheck.RollFailed;
         }
 
         // Omen of Clarity procs from swings only; a spell event never procs it (the swing case is the generic PPM path below).

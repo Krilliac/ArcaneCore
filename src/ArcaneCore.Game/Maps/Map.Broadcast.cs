@@ -27,6 +27,8 @@ public sealed partial class Map
     /// </summary>
     public void BroadcastToObservers(WorldObject source, WorldOpcode opcode, ReadOnlySpan<byte> payload, Player? except)
     {
+        if (_world.GmTrace is { IsActive: true } trace) ArcaneCore.Game.Spells.GmTraceTap.OnBroadcast(trace, this, source, opcode, payload);
+
         if (!_observers.TryGetValue(source.Guid, out HashSet<Player>? observers))
         {
             return;

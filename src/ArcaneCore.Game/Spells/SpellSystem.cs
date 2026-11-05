@@ -1,7 +1,9 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
@@ -2083,6 +2085,11 @@ public sealed partial class SpellSystem
     /// </summary>
     internal static void SendCastResult(Unit caster, SpellInfo spell, SpellCastResult result, bool triggered)
     {
+        if (result != SpellCastResult.CastOk && GmTraceGuard.Wants(caster.Map?.Runtime, GmStreamChannels.Spells, out IGmTraceSink? trace))
+        {
+            GmTraceTap.CastFailed(trace, caster, spell, result, triggered);
+        }
+
         if (caster is not Player player || triggered || spell.HasAttribute(SpellAttributesEx2.DoNotReportSpellFailure))
         {
             return;
