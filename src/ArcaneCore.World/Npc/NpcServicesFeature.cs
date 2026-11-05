@@ -132,7 +132,13 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
         }
 
         Flights = new TaxiFlightSystem(npcs, tables.PathNodes, MountDisplay, () => _world?.NowMs ?? 0, logger,
-            player => services.GetService<SpellFeature>()?.System.RemoveAurasByType(player, AuraType.Mounted));
+            player =>
+            {
+                // vmangos WorldSession::SendDoFlight (TaxiHandler.cpp:113-114): the flight start ends Feign Death, then the spell mount goes.
+                SpellSystem? spells = services.GetService<SpellFeature>()?.System;
+                spells?.BreakFeignDeath(player);
+                spells?.RemoveAurasByType(player, AuraType.Mounted);
+            });
         Flights.FlightEnded += OnFlightEnded;
         Flights.Landed += OnFlightLanded;
         return dependencies with

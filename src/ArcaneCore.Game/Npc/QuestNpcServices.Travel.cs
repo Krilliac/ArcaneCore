@@ -88,6 +88,8 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        BreakFeignDeath?.Invoke(player); // vmangos HandleTaxiQueryAvailableNodes (TaxiHandler.cpp:72-73), after the interactable check
+
         if (!LearnNewTaxiNode(s, npc))
         {
             SendTaxiMenu(s, npc);

@@ -44,9 +44,17 @@ public sealed partial class EconomyFeature
     {
         if (AuctioneerAccess.FindHouse(player, auctioneer) is { } house)
         {
+            BreakFeignDeath(player); // vmangos HandleAuctionHelloOpcode (AuctionHouseHandler.cpp:51-52)
             session.Send(WorldOpcode.MsgAuctionHello, EconomyPackets.AuctionHello(auctioneer.Value, house.Id));
         }
     }
+
+    /// <summary>
+    /// vmangos <c>if (HasUnitState(UNIT_STATE_FEIGN_DEATH)) RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c> at the top of the auction hello,
+    /// sell and bid handlers (AuctionHouseHandler.cpp:51-52, 299-300, 443-444): acting on the auction house ends Feign Death. Without a spell
+    /// feature nothing can be feigning.
+    /// </summary>
+    private void BreakFeignDeath(Player player) => _services.GetService<Spells.SpellFeature>()?.System.BreakFeignDeath(player);
 
     /// <summary>CMSG_AUCTION_LIST_ITEMS (vmangos AuctionHouseObject::BuildListAuctionItems).</summary>
     public void ListAuctions(WorldSession session, Player player, ObjectGuid auctioneer, AuctionQuery query)
@@ -189,6 +197,8 @@ public sealed partial class EconomyFeature
             return;
         }
 
+        BreakFeignDeath(player); // :299-300, after the duration switch
+
         if (itemGuid.IsEmpty)
         {
             Fail(AuctionError.ItemNotFound);
@@ -261,6 +271,8 @@ public sealed partial class EconomyFeature
         {
             return;
         }
+
+        BreakFeignDeath(player); // vmangos HandleAuctionPlaceBid (AuctionHouseHandler.cpp:443-444), after the house lookup
 
         void Fail(AuctionError error, AuctionRecord? current = null) => session.Send(WorldOpcode.SmsgAuctionCommandResult,
             EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.BidPlaced, error, auction: current));

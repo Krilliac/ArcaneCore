@@ -25,7 +25,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
         if (!_creatures.ContainsKey(creature.Guid) || !creature.IsAlive || creature.IsEvading
-            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.Hooks.CanAttack(creature, target)
+            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.Hooks.CanAttackSingleTarget(creature, target)
             || creature.ReactState == CreatureReactState.Passive) // vmangos CreatureAI::AttackStart (AI/CreatureAI.cpp:67-70)
         {
             return false;
@@ -634,7 +634,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
     private bool IsValidHostileTarget(Creature creature, Unit target)
         => target.IsAlive && ReferenceEquals(target.Map, Map)
-            && Map.Combat.Hooks.CanAttack(creature, target);
+            && Map.Combat.Hooks.CanAttackSingleTarget(creature, target);
 }
 
 /// <summary>The soft leash of one creature against one target (<see cref="CreatureMapSystem.GetLeashFacts"/>).</summary>
