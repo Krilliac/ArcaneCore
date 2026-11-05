@@ -805,12 +805,12 @@ Gateway.CharactersSchemaVersion = 75
 #                     is at that version. Set it only to pin an explicit override (then set the
 #                     worker's labels and Cluster:Worker:VersionsFromDatabase=false to match).
 #        Type: string
-#        Default: "world-schema-68"
+#        Default: "world-schema-69"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#gateway
 #
-Gateway.ContentRevision = "world-schema-68"
+Gateway.ContentRevision = "world-schema-69"
 
 #
 #    Gateway.LinkRetryDelay
@@ -978,12 +978,12 @@ Gateway.WorkerPort = 8095
 #        Description: The world schema version this gateway advertises; defaults to the version this
 #                     build targets. Explicit override only.
 #        Type: int
-#        Default: 68
+#        Default: 69
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#gateway
 #
-Gateway.WorldSchemaVersion = 68
+Gateway.WorldSchemaVersion = 69
 
 #----------------------------------------------------------------------------
 # Gateway:Control

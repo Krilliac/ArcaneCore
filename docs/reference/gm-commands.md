@@ -16,7 +16,7 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
 | `GameMaster` | 3 | 411 |
-| `Administrator` | 6 | 618 |
+| `Administrator` | 6 | 619 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -35,10 +35,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.account totp clear` | 6 | Administrator | stored level through the map | Syntax: .account totp clear $account |
 | `.account iplock` | 6 | Administrator | stored level through the map | Syntax: .account iplock $account on\|off |
 | `.cast` ... | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist. |
-| `.cast self` | 6 | Administrator | stored level through the map | Syntax: .cast self #spell [triggered] Make the selected unit cast a spell on itself. |
-| `.cast target` | 6 | Administrator | stored level through the map | Syntax: .cast target #spell [triggered] Make the selected unit cast a spell on its victim. |
-| `.cast back` | 6 | Administrator | stored level through the map | Syntax: .cast back #spell [triggered] Make the selected unit cast a spell on you. |
-| `.cast dist` | 6 | Administrator | stored level through the map | Syntax: .cast dist #spell #distance [triggered] Cast a spell at a point the given distance in front of you. |
+| `.cast self` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast self #spell [triggered] Make the selected unit cast a spell on itself. |
+| `.cast target` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast target #spell [triggered] Make the selected unit cast a spell on its victim. |
+| `.cast back` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast back #spell [triggered] Make the selected unit cast a spell on you. |
+| `.cast dist` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast dist #spell #distance [triggered] Cast a spell at a point the given distance in front of you. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character boost` | 6 | Administrator | stored level through the map | Syntax: .character boost [$playername] #level Bring the named online player, the selected player or yourself to the level: class trainer spells, a level-appropriate equipped gear kit, filled action bars and some money. |
@@ -452,6 +452,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
 | `.gmnotify` | 1 | Moderator | stored level through the map | Syntax: .gmnotify $message Send an on-screen notification to every staff member online. |
+| `.wiresample` | 6 | Administrator | stored level through the map | Syntax: .wiresample $name Send yourself one sample of a server packet no gameplay flow sends, to watch a real client's reaction. Names: character-profile, character-profile-realm-connected, chat-player-ambiguous, chat-restricted, clear-far-sight-immediate, compressed-moves, expected-spam-records, game-speed-set, game-time-set, gametimebias-set, ghostee-gone, group-cancel, invalid-promotion-code, item-query-multiple, loot-item-notify, minigame-move-failed, minigame-setup, minigame-state, npc-wont-talk, play-time-warning, player-bind-error, rwhois, script-message, spell-steal-log, spline-swim-start, spline-swim-stop, standstate-change-failure. |
 | `.fx` ... | 3 | GameMaster | stored level through the map | Syntax: .fx $subcommand Non-retail GM tooling: push music, sounds, spell visuals, cinematics, world states and screen text to a scope. |
 | `.fx music` | 3 | GameMaster | stored level through the map | Syntax: .fx music #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id as music (SMSG_PLAY_MUSIC). |
 | `.fx sound` | 3 | GameMaster | stored level through the map | Syntax: .fx sound #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id (SMSG_PLAY_SOUND). |

@@ -394,7 +394,7 @@ How to read the tables:
 | `Cluster:Worker:AllowInstanceMaps` | `bool` | `true` | - | With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty. |
 | `Cluster:Worker:BindAddress` | `string` | `"127.0.0.1"` | - | Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted. |
 | `Cluster:Worker:CharactersSchemaVersion` | `int` | `75` | - | Characters schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
-| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-68"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
+| `Cluster:Worker:ContentRevision` | `string` | `"world-schema-69"` | - | Content revision label both ends of the link must agree on; an override, used only while `VersionsFromDatabase` is false. |
 | `Cluster:Worker:Enabled` | `bool` | `false` | - | `true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change. The gateway reads this key too, only to attach the write fence to its own characters connection (the handoff and transfer journals), as it does for Cluster:Fencing:Enabled. |
 | `Cluster:Worker:LinkSecret` | `string` | `""` | - | Shared secret a gateway proves (HMAC-SHA256 of a per-link challenge) before it may open sessions; must equal Gateway:LinkSecret. Required in worker mode on every bind address, loopback included: at least 16 characters, or the world refuses to start. An admitted gateway opens sessions for any account it authenticated, so treat the secret like a database password. |
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
@@ -403,7 +403,7 @@ How to read the tables:
 | `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
 | `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock until promoted (promotion takes it and is refused while the old world holds it), open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
 | `Cluster:Worker:VersionsFromDatabase` | `bool` | `true` | - | `true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused. |
-| `Cluster:Worker:WorldSchemaVersion` | `int` | `68` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
+| `Cluster:Worker:WorldSchemaVersion` | `int` | `69` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
 
 ## `Cluster:Worker:Handoff`
 
@@ -609,6 +609,7 @@ How to read the tables:
 | `Economy:AuctionSilentRefusals` | `bool` | `true` | - | A bid the bidder cannot afford, or a cancellation whose cut the seller cannot pay, is answered with nothing, as vmangos does (AuctionHouseHandler.cpp:498-503, 592-594); false answers NOT_ENOUGH_MONEY. Default true. |
 | `Economy:CodExpireDays` | `uint` | `3` | - | Days before a cash-on-delivery letter expires (vmangos: 3). |
 | `Economy:ExpirySweepSeconds` | `uint` | `60` | - | Seconds between expiry sweeps of mail and auctions. |
+| `Economy:GmCrossTeamTrade` | `bool` | `true` | - | Whether a game master with GM mode on may start a trade with a player of the other team although `AllowCrossTeamTrade` is off (default true). An ArcaneCore extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no such rule, so false is the retail behaviour. Only the initiator is tested; a player who invites a game master of the other team is refused. |
 | `Economy:LetterItemEntry` | `uint` | `8383` | - | The Plain Letter item created by CMSG_MAIL_CREATE_TEXT_ITEM (vmangos MAIL_BODY_ITEM_TEMPLATE 8383). |
 | `Economy:MailBodyMaxLength` | `int` | `500` | - | Longest body in bytes; longer ones are dropped (vmangos MailHandler.cpp:158: 500). |
 | `Economy:MailDeliveryDelaySeconds` | `uint` | `3600` | - | Delivery delay of letters carrying an item or money, seconds (vmangos MailDeliveryDelay, World.cpp:691: 1 hour). |
@@ -652,7 +653,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `Gateway:BindAddress` | `string` | `"0.0.0.0"` | - | Address the client listener binds. |
 | `Gateway:CharactersSchemaVersion` | `int` | `75` | - | The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
-| `Gateway:ContentRevision` | `string` | `"world-schema-68"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
+| `Gateway:ContentRevision` | `string` | `"world-schema-69"` | - | The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (`GatewayManifestVersions.ContentRevisionFor`), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match). |
 | `Gateway:LinkRetryDelay` | `TimeSpan` | `00:00:01` | - | First wait before reconnecting a lost or refused worker link; doubles up to 30 s. |
 | `Gateway:LinkSecret` | `string` | `""` | - | The shared link secret (Cluster:Worker:LinkSecret on the worker): at least 16 characters, or the gateway refuses to start. |
 | `Gateway:LoginWorker` | `string` | `""` | - | Node id of the worker new sessions open on (it must name a `Workers` entry, or `LegacyWorkerNodeId` in single-worker mode). While it is down, sessions open on the ready link with the fewest sessions. Empty, the default, designates none: sessions always spread over the ready links. |
@@ -666,7 +667,7 @@ How to read the tables:
 | `Gateway:WorkerAddress` | `string` | `"127.0.0.1"` | - | Address of the world worker's gateway listener (Cluster:Worker:BindAddress). Used only while `Workers` is empty. |
 | `Gateway:WorkerPort` | `int` | `8095` | - | Port of the world worker's gateway listener (Cluster:Worker:Port). Used only while `Workers` is empty. |
 | `Gateway:Workers` | `List<GatewayWorkerEntry>` | `[]` | - | The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys `WorkerAddress` and `WorkerPort` describe one entry named `LegacyWorkerNodeId`; when set, those two keys are ignored. Every worker must accept the same `LinkSecret`, `RealmId` and manifest values. An entry may also name a standby process (StandbyNodeId, StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot (needs Gateway:Handoff:Enabled). |
-| `Gateway:WorldSchemaVersion` | `int` | `68` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+| `Gateway:WorldSchemaVersion` | `int` | `69` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
 
 ## `Gateway:Control`
 
@@ -1206,8 +1207,11 @@ How to read the tables:
 | `World:BindAddress` | `string` | `"0.0.0.0"` | restart | Interface to bind the world listener to. |
 | `World:CharactersPerRealm` | `int` | `10` | live | Characters an account may have on this realm (vmangos CharactersPerRealm: default 10, at most 10). |
 | `World:CommandTimeBudgetMs` | `int` | `5` | live | Maximum command-drain time per tick in milliseconds; 0 disables the time bound. |
+| `World:CompressMovementCount` | `int` | `0` | live | Movement packets a session must be sent within 10 seconds before further movement relays to it are batched into SMSG_COMPRESSED_MOVES (vmangos Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300, here 0 = never, which is what retail did). Packets over 253 bytes are never batched. A batch is flushed on the session's next tick. |
+| `World:ExpectedSpamRecords` | `string` | `""` | live | Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the day; '@' separates records, empty (the default) sends no packet. mangos-classic sends the rows of its spam_records table the same way (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the client's use of them is unconfirmed. |
 | `World:GmLevelInWhoList` | `AccountSecurity` | `Administrator` | live | Highest staff level ordinary players see in /who (vmangos/cmangos GM.InWhoList.Level default SEC_ADMINISTRATOR, i.e. every account). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
 | `World:InstantLogoutSecurity` | `AccountSecurity` | `Moderator` | live | Lowest security level that logs out instantly (vmangos/cmangos InstantLogout default SEC_MODERATOR). Values: `Player`, `Moderator`, `GameMaster`, `Administrator`. |
+| `World:LimitPlayTime` | `bool` | `false` | live | The consecutive-play-time limit (vmangos LimitPlayTime, CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that is not retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3 h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420). `ArcaneCore.Game.Entities.PlayTimeLimit`. |
 | `World:ListenRangeSay` | `float` | `25` | live | Distance /say reaches. vmangos and cmangos-classic World.cpp default to 25 (cmangos' shipped mangosd.conf keeps 25; vmangos' raises it to 40). 0 = the whole map. |
 | `World:ListenRangeTextEmote` | `float` | `25` | live | Distance /emote and text emotes reach (vmangos/cmangos ListenRange.TextEmote default 25). 0 = the whole map. |
 | `World:ListenRangeYell` | `float` | `300` | live | Distance /yell reaches (vmangos/cmangos ListenRange.Yell default 300). 0 = the whole map. |
@@ -1548,6 +1552,7 @@ How to read the tables:
 | `World:Honor:CityProtector` | `bool` | `false` | - | Assign the City Protector titles (vmangos default off). |
 | `World:Honor:DishonorableKills` | `bool` | `true` | - | Civilian kills below gray cost honor (vmangos CONFIG_BOOL_ENABLE_DK). |
 | `World:Honor:Enabled` | `bool` | `true` | - | Master switch of the honor system (kills, ranks, the weekly calculation). |
+| `World:Honor:GmCrossFactionInspect` | `bool` | `true` | - | A game master with GM mode on may inspect the other faction (default true, an ArcaneCore extension; false is the vmangos behaviour). |
 | `World:Honor:MaintenanceDay` | `uint` | `3` | - | Weekday of the weekly calculation (Sunday 0, clamped to 6). |
 | `World:Honor:MaintenanceMode` | `HonorMaintenanceMode` | `Startup` | - | When the weekly calculation runs: Startup (default) or Live (an opt-in in-process weekly job). Values: `Live`, `Startup`. |
 | `World:Honor:MinHonorKills` | `uint` | `0` | - | Honorable kills a week to be ranked; 0 selects 15 (MIN_HONOR_KILLS_POST_1_10). |

@@ -2,7 +2,7 @@
 
 Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-oracle histogram](../integration/wire-oracle-histogram-20261008.tsv). Regenerate with `ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`.
 
-`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `dropped (dev)` means a stripped developer, GM, cheat or debug opcode that the release client never sends: it is registered as a stripped entry (`StrippedDevOpcodes`), dropped unread with no reply, flagged `packet/dev-opcode` for a player (audited for staff) and kept out of the unhandled-opcode counters. `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.
+`handled` means a client-sent CMSG or MSG (MSG opcodes travel both ways and get both columns) has a registered handler, or is handled directly by the session read loop. `dropped (dev)` means a stripped developer, GM, cheat or debug opcode that the release client never sends: it is registered as a stripped entry (`StrippedDevOpcodes`), dropped unread with no reply, flagged `packet/dev-opcode` for a player (audited for staff) and kept out of the unhandled-opcode counters. `tripwire` means a client opcode the release client never sends that is registered as a forged-client tripwire (`ForgedClientOpcodes`): handled like `dropped (dev)` (dropped unread, no reply, a Warning-level `packet/dev-opcode` finding for a player). `unhandled` means it has no handler and is logged/dropped. The registry has no explicit ignore registration, so this snapshot has no `ignored` rows. SMSG counts are observed sends in the wave 8 test run, not a promise of live-client coverage.
 
 | Opcode | ID | CMSG status | SMSG emitted | Oracle |
 | --- | ---: | --- | ---: | --- |
@@ -29,7 +29,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_CREATEGAMEOBJECT` | `0x0014` | dropped (dev) | — | — |
 | `SMSG_CHECK_FOR_BOTS` | `0x0015` | — | 0 | — |
 | `CMSG_MAKEMONSTERATTACKGUID` | `0x0016` | dropped (dev) | — | — |
-| `CMSG_BOT_DETECTED2` | `0x0017` | unhandled | — | — |
+| `CMSG_BOT_DETECTED2` | `0x0017` | tripwire | — | — |
 | `CMSG_FORCEACTION` | `0x0018` | dropped (dev) | — | — |
 | `CMSG_FORCEACTIONONOTHER` | `0x0019` | dropped (dev) | — | — |
 | `CMSG_FORCEACTIONSHOW` | `0x001A` | dropped (dev) | — | — |
@@ -134,7 +134,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_GROUP_LIST` | `0x007D` | — | 252 | allowlisted |
 | `SMSG_PARTY_MEMBER_STATS` | `0x007E` | — | 19 | allowlisted |
 | `SMSG_PARTY_COMMAND_RESULT` | `0x007F` | — | 65 | decoded |
-| `MSG_UPDATE_GROUP_MEMBERS` | `0x0080` | unhandled | 0 | — |
+| `MSG_UPDATE_GROUP_MEMBERS` | `0x0080` | tripwire | 0 | — |
 | `CMSG_GUILD_CREATE` | `0x0081` | handled | — | — |
 | `CMSG_GUILD_INVITE` | `0x0082` | handled | — | — |
 | `SMSG_GUILD_INVITE` | `0x0083` | — | 0 | — |
@@ -154,7 +154,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_GUILD_MOTD` | `0x0091` | handled | — | — |
 | `SMSG_GUILD_EVENT` | `0x0092` | — | 28 | allowlisted |
 | `SMSG_GUILD_COMMAND_RESULT` | `0x0093` | — | 1 | decoded |
-| `MSG_UPDATE_GUILD` | `0x0094` | unhandled | 0 | — |
+| `MSG_UPDATE_GUILD` | `0x0094` | tripwire | 0 | — |
 | `CMSG_MESSAGECHAT` | `0x0095` | handled | — | — |
 | `SMSG_MESSAGECHAT` | `0x0096` | — | 4629 | allowlisted |
 | `CMSG_JOIN_CHANNEL` | `0x0097` | handled | — | — |
@@ -230,7 +230,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_MONSTER_MOVE` | `0x00DD` | — | 158 | mixed |
 | `SMSG_MOVE_WATER_WALK` | `0x00DE` | — | 59 | decoded |
 | `SMSG_MOVE_LAND_WALK` | `0x00DF` | — | 33 | decoded |
-| `MSG_MOVE_SET_RAW_POSITION_ACK` | `0x00E0` | unhandled | 0 | — |
+| `MSG_MOVE_SET_RAW_POSITION_ACK` | `0x00E0` | tripwire | 0 | — |
 | `CMSG_MOVE_SET_RAW_POSITION` | `0x00E1` | handled | — | — |
 | `SMSG_FORCE_RUN_SPEED_CHANGE` | `0x00E2` | — | 7 | decoded |
 | `CMSG_FORCE_RUN_SPEED_CHANGE_ACK` | `0x00E3` | handled | — | — |
@@ -268,17 +268,17 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_EMOTE` | `0x0103` | — | 224 | decoded |
 | `CMSG_TEXT_EMOTE` | `0x0104` | handled | — | — |
 | `SMSG_TEXT_EMOTE` | `0x0105` | — | 17 | decoded |
-| `CMSG_AUTOEQUIP_GROUND_ITEM` | `0x0106` | unhandled | — | — |
-| `CMSG_AUTOSTORE_GROUND_ITEM` | `0x0107` | unhandled | — | — |
+| `CMSG_AUTOEQUIP_GROUND_ITEM` | `0x0106` | tripwire | — | — |
+| `CMSG_AUTOSTORE_GROUND_ITEM` | `0x0107` | handled | — | — |
 | `CMSG_AUTOSTORE_LOOT_ITEM` | `0x0108` | handled | — | — |
-| `CMSG_STORE_LOOT_IN_SLOT` | `0x0109` | unhandled | — | — |
+| `CMSG_STORE_LOOT_IN_SLOT` | `0x0109` | handled | — | — |
 | `CMSG_AUTOEQUIP_ITEM` | `0x010A` | handled | — | — |
 | `CMSG_AUTOSTORE_BAG_ITEM` | `0x010B` | handled | — | — |
 | `CMSG_SWAP_ITEM` | `0x010C` | handled | — | — |
 | `CMSG_SWAP_INV_ITEM` | `0x010D` | handled | — | — |
 | `CMSG_SPLIT_ITEM` | `0x010E` | handled | — | — |
 | `CMSG_AUTOEQUIP_ITEM_SLOT` | `0x010F` | handled | — | — |
-| `CMSG_DROP_ITEM` | `0x0110` | unhandled | — | — |
+| `CMSG_DROP_ITEM` | `0x0110` | tripwire | — | — |
 | `CMSG_DESTROYITEM` | `0x0111` | handled | — | — |
 | `SMSG_INVENTORY_CHANGE_FAILURE` | `0x0112` | — | 18 | allowlisted |
 | `SMSG_OPEN_CONTAINER` | `0x0113` | — | 0 | — |
@@ -307,7 +307,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_INITIAL_SPELLS` | `0x012A` | — | 1961 | decoded |
 | `SMSG_LEARNED_SPELL` | `0x012B` | — | 120 | decoded |
 | `SMSG_SUPERCEDED_SPELL` | `0x012C` | — | 0 | — |
-| `CMSG_NEW_SPELL_SLOT` | `0x012D` | unhandled | — | — |
+| `CMSG_NEW_SPELL_SLOT` | `0x012D` | tripwire | — | — |
 | `CMSG_CAST_SPELL` | `0x012E` | handled | — | — |
 | `CMSG_CANCEL_CAST` | `0x012F` | handled | — | — |
 | `SMSG_CAST_RESULT` | `0x0130` | — | 187 | allowlisted |
@@ -516,7 +516,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_RWHOIS` | `0x01FD` | dropped (dev) | — | — |
 | `SMSG_RWHOIS` | `0x01FE` | — | 0 | — |
 | `MSG_LOOKING_FOR_GROUP` | `0x01FF` | handled | 0 | — |
-| `CMSG_SET_LOOKING_FOR_GROUP` | `0x0200` | unhandled | — | — |
+| `CMSG_SET_LOOKING_FOR_GROUP` | `0x0200` | handled | — | — |
 | `CMSG_UNLEARN_SPELL` | `0x0201` | dropped (dev) | — | — |
 | `CMSG_UNLEARN_SKILL` | `0x0202` | handled | — | — |
 | `SMSG_REMOVED_SPELL` | `0x0203` | — | 33 | decoded |
@@ -547,8 +547,8 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `CMSG_SPIRIT_HEALER_ACTIVATE` | `0x021C` | handled | — | — |
 | `CMSG_SET_STAT_CHEAT` | `0x021D` | dropped (dev) | — | — |
 | `SMSG_SET_REST_START` | `0x021E` | — | 1961 | decoded |
-| `CMSG_SKILL_BUY_STEP` | `0x021F` | unhandled | — | — |
-| `CMSG_SKILL_BUY_RANK` | `0x0220` | unhandled | — | — |
+| `CMSG_SKILL_BUY_STEP` | `0x021F` | handled | — | — |
+| `CMSG_SKILL_BUY_RANK` | `0x0220` | handled | — | — |
 | `CMSG_XP_CHEAT` | `0x0221` | dropped (dev) | — | — |
 | `SMSG_SPIRIT_HEALER_CONFIRM` | `0x0222` | — | 0 | — |
 | `CMSG_CHARACTER_POINT_CHEAT` | `0x0223` | dropped (dev) | — | — |
@@ -708,7 +708,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_DURABILITY_DAMAGE_DEATH` | `0x02BD` | — | 17 | decoded |
 | `CMSG_SET_EXPLORATION` | `0x02BE` | dropped (dev) | — | — |
 | `CMSG_SET_ACTIONBAR_TOGGLES` | `0x02BF` | handled | — | — |
-| `MSG_DELETE_GUILD_CHARTER` | `0x02C0` | unhandled | 0 | — |
+| `MSG_DELETE_GUILD_CHARTER` | `0x02C0` | tripwire | 0 | — |
 | `MSG_PETITION_RENAME` | `0x02C1` | handled | 0 | — |
 | `SMSG_INIT_WORLD_STATES` | `0x02C2` | — | 1992 | decoded |
 | `SMSG_UPDATE_WORLD_STATE` | `0x02C3` | — | 107 | decoded |
@@ -764,7 +764,7 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_PLAY_TIME_WARNING` | `0x02F5` | — | 0 | — |
 | `SMSG_MINIGAME_SETUP` | `0x02F6` | — | 0 | — |
 | `SMSG_MINIGAME_STATE` | `0x02F7` | — | 0 | — |
-| `CMSG_MINIGAME_MOVE` | `0x02F8` | unhandled | — | — |
+| `CMSG_MINIGAME_MOVE` | `0x02F8` | handled | — | — |
 | `SMSG_MINIGAME_MOVE_FAILED` | `0x02F9` | — | 0 | — |
 | `SMSG_RAID_INSTANCE_MESSAGE` | `0x02FA` | — | 0 | — |
 | `SMSG_COMPRESSED_MOVES` | `0x02FB` | — | 0 | — |
@@ -807,21 +807,21 @@ Generated from `WorldOpcode.g.cs`, the live `OpcodeTable`, and [the wave 8 wire-
 | `SMSG_UPDATE_LAST_INSTANCE` | `0x0320` | — | 1 | decoded |
 | `MSG_RAID_TARGET_UPDATE` | `0x0321` | handled | 0 | — |
 | `MSG_RAID_READY_CHECK` | `0x0322` | handled | 0 | — |
-| `CMSG_LUA_USAGE` | `0x0323` | unhandled | — | — |
+| `CMSG_LUA_USAGE` | `0x0323` | tripwire | — | — |
 | `SMSG_PET_ACTION_SOUND` | `0x0324` | — | 0 | — |
 | `SMSG_PET_DISMISS_SOUND` | `0x0325` | — | 0 | — |
 | `SMSG_GHOSTEE_GONE` | `0x0326` | — | 0 | — |
-| `CMSG_GM_UPDATE_TICKET_STATUS` | `0x0327` | unhandled | — | — |
+| `CMSG_GM_UPDATE_TICKET_STATUS` | `0x0327` | tripwire | — | — |
 | `SMSG_GM_TICKET_STATUS_UPDATE` | `0x0328` | — | 0 | — |
-| `MSG_SET_DUNGEON_DIFFICULTY` | `0x0329` | unhandled | 0 | — |
+| `MSG_SET_DUNGEON_DIFFICULTY` | `0x0329` | tripwire | 0 | — |
 | `CMSG_GMSURVEY_SUBMIT` | `0x032A` | handled | — | — |
 | `SMSG_UPDATE_INSTANCE_OWNERSHIP` | `0x032B` | — | 123 | decoded |
 | `CMSG_IGNORE_KNOCKBACK_CHEAT` | `0x032C` | dropped (dev) | — | — |
 | `SMSG_CHAT_PLAYER_AMBIGUOUS` | `0x032D` | — | 0 | — |
-| `MSG_DELAY_GHOST_TELEPORT` | `0x032E` | unhandled | 0 | — |
+| `MSG_DELAY_GHOST_TELEPORT` | `0x032E` | tripwire | 0 | — |
 | `SMSG_SPELLINSTAKILLLOG` | `0x032F` | — | 2 | decoded |
 | `SMSG_SPELL_UPDATE_CHAIN_TARGETS` | `0x0330` | — | 0 | — |
-| `CMSG_CHAT_FILTERED` | `0x0331` | unhandled | — | — |
+| `CMSG_CHAT_FILTERED` | `0x0331` | handled | — | — |
 | `SMSG_EXPECTED_SPAM_RECORDS` | `0x0332` | — | 0 | — |
 | `SMSG_SPELLSTEALLOG` | `0x0333` | — | 0 | — |
 | `CMSG_LOTTERY_QUERY_OBSOLETE` | `0x0334` | unhandled | — | — |
