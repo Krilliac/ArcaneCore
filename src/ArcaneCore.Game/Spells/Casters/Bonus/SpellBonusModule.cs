@@ -24,7 +24,7 @@ public interface ISpellBonusCoefficients
 /// <para>
 /// Damage done versus the victim's creature type (auras 168, 59, 180) is applied, and equipped-item restricted damage auras are left out of
 /// spells as the reference does. Not modelled (documented limits): the paladin seal exception for weapon-restricted percent auras,
-/// totems/pets using their owner (class script modifiers and Ignite are modelled), weapon-based periodic damage, and the melee class SCHOOL_DAMAGE spells' MeleeDamageBonusDone
+/// totems/pets using their owner's done auras (the class script modifiers and the talent spell mods do use the owner, and Ignite is modelled), weapon-based periodic damage, and the melee class SCHOOL_DAMAGE spells' MeleeDamageBonusDone
 /// (they take only the DAMAGE spell mod; weapon damage spells use <see cref="Combat.MeleeDamageBonus"/>).
 /// </para>
 /// </summary>
