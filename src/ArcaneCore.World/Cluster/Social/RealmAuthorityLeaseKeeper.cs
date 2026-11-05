@@ -140,7 +140,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     {
         lock (_gate)
         {
-            return !_lost && !_released && _held.ContainsKey(scope);
+            // A lease whose expiry has passed is not held, even if the renewal tick has not run yet to notice (a stalled process, a starved timer thread): the store may already have granted it to another node. Renewals move the expiry forward and the tick marks the loss before the deadline, so this only decides in that gap.
+            return !_lost && !_released && _held.TryGetValue(scope, out Held? held) && _time.GetUtcNow() < held.ExpiresAtUtc;
         }
     }
 

@@ -178,6 +178,17 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
         }
 
         Sync();
+
+        // The final write is queued: a loaded table is closed after it, whatever order the peer link and this feature stop in. A command acked from here on would be in no write, so it is refused (the peer answers "not the holder" and the sender keeps it).
+        if (_holding)
+        {
+            int unreplayed = _authority?.CloseTable() ?? 0;
+            if (unreplayed > 0)
+            {
+                _logger.LogWarning("Group table closed after the final write with {Count} commands still held; they are lost", unreplayed);
+            }
+        }
+
         await Writes.StopAsync().ConfigureAwait(false);
     }
 

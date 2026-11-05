@@ -274,8 +274,13 @@ public sealed class SocialGroupTakeoverTests
         Assert.Equal((byte)LootMethod.RoundRobin, Assert.Single(rig.Holder.Groups.Snapshots()).LootMethod);
         Assert.Equal((byte)LootMethod.RoundRobin, rig.Rows.Group(1)!.LootMethod); // the final write has it
 
-        rig.Holder.Groups.Execute("worker-c", invite); // a loaded table was not closed
-        Assert.Equal(0, rig.Holder.Groups.CommandsRefusedAfterClose);
+        // A loaded table is closed after the final write: a late peer command is refused, not acked into a table no write will cover.
+        int pendingAtStop = rig.Holder.Groups.PendingFor("worker-c");
+        Assert.False(rig.Holder.Groups.TryExecute("worker-c", invite));
+        rig.Holder.Groups.Execute("worker-c", invite);
+        Assert.Equal(1, rig.Holder.Groups.CommandsRefusedAfterClose);
+        Assert.Equal(pendingAtStop, rig.Holder.Groups.PendingFor("worker-c"));
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
     }
 
     [Fact]
@@ -303,6 +308,40 @@ public sealed class SocialGroupTakeoverTests
         await rig.Persistence.Writes!.FlushAsync();
 
         Assert.Equal([20, 21], rig.Rows.Group(1)!.Members.Select(m => m.CharacterId));
+    }
+
+    [Fact]
+    public async Task A_command_held_across_a_failed_read_is_kept_and_runs_on_the_table_the_retry_installs()
+    {
+        await using Rig rig = await Rig.CreateAsync();
+        rig.StoreCharacters(20, 21);
+        rig.Rows.Seed(Group(1, 20, 21));
+        rig.Routing.Forward(ConvertToRaid(20)); // worker-b holds: it waits in the routing queue, and the table is held from attach on a node without the lease
+
+        rig.Characters.FailNextRead();
+        rig.Characters.HoldReads();
+        rig.BlockWorld(); // the first tick starts the read only after the backlog has reached the table
+        rig.TakeOver();
+        await rig.Routing.FlushAsync().WaitAsync(Budget);
+        Assert.Equal(1, rig.Holder.Groups.HeldCommandCount);
+        rig.ReleaseWorld();
+        await rig.Characters.ReadFailed.WaitAsync(Budget);
+        await rig.Characters.ReadHeld.WaitAsync(Budget); // the retry, held
+
+        // The failed read installed nothing and discarded nothing: the command is still waiting, and nothing ran or was written.
+        Assert.False(await rig.OnWorld(() => rig.Persistence.AuthorityLoaded));
+        Assert.Equal(1, rig.Holder.Groups.HeldCommandCount);
+        Assert.Empty(rig.Holder.Groups.Snapshots());
+        await rig.Persistence.Writes!.FlushAsync();
+        Assert.Equal(0, rig.Rows.Writes);
+
+        rig.Characters.ReleaseReads();
+        await rig.WaitUntilLoadedAsync();
+        await rig.Persistence.Writes!.FlushAsync();
+
+        Assert.Equal(0, rig.Holder.Groups.HeldCommandCount);
+        Assert.True(Assert.Single(rig.Holder.Groups.Snapshots()).IsRaid);
+        Assert.True(rig.Rows.Group(1)!.IsRaid);
     }
 
     /// <summary>The group table as a worker reads it; a read can be held before it takes its rows, and writes are counted.</summary>

@@ -600,6 +600,67 @@ public sealed class ClusterGroupRoutingHoldTests
         Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
     }
 
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_stuck_at_the_head_past_the_age_limit_is_counted_and_logged_once(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        bool hung = true;
+        authority.LoseLink = _ => Volatile.Read(ref hung);
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(kind, 1));
+        await WaitForRetriesAsync(routing, 2);
+        Assert.Equal(0, routing.LoginLogoutStuckAtHead); // retried, but not yet past the limit
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        await WaitForRetriesAsync(routing, routing.SendRetried + 3); // several more failures past the limit
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Single(logger.AtLeast(LogLevel.Warning), static l => l.Text.Contains("head of the queue"));
+
+        Volatile.Write(ref hung, false);
+        await routing.FlushAsync().WaitAsync(Safety);
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+    }
+
+    [Fact]
+    public async Task A_login_held_for_an_unreachable_holder_past_the_age_limit_is_counted_when_it_goes()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Logout, 1));
+        await authority.Probed.WaitAsync(Safety);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(new[] { GroupCommandKind.Logout }, authority.Executed.Select(static c => c.Kind));
+    }
+
+    [Fact]
+    public async Task A_command_that_can_expire_is_never_counted_as_stuck()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await authority.Probed.WaitAsync(Safety);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(0, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(1, routing.Expired);
+    }
+
     private static async Task WaitForRetriesAsync(ClusterGroupRouting routing, long atLeast)
     {
         using var timeout = new CancellationTokenSource(Safety);

@@ -340,6 +340,21 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>
+    /// The node is stopping and this table has been written for the last time (the final sync after the replay): from now on nothing is applied, loaded or not. <see cref="TryExecute"/> answers false (a peer command is answered "not the holder", so its sender keeps it for the next holder) and <see cref="Execute"/> drops and counts
+    /// (<see cref="CommandsRefusedAfterClose"/>); a command acked after the final write would otherwise be lost with the table. Does not depend on the order the hosted services stop in. Returns how many held commands were discarded (none when the replay ran to its end). Idempotent.
+    /// </summary>
+    public int CloseTable()
+    {
+        lock (_gate)
+        {
+            int held = _heldForReload?.Count ?? 0;
+            _heldForReload = null;
+            _closed = true;
+            return held;
+        }
+    }
+
+    /// <summary>
     /// Install stored groups (same rules as <see cref="GroupManager.Restore"/>: a member whose character is gone, a duplicate, or one in a missing or full sub-group is skipped; a
     /// group whose leader is gone or with fewer than two members left is dropped and returned for its rows to be deleted). New ids continue above the highest stored one.
     /// </summary>

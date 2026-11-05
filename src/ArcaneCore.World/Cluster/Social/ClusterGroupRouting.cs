@@ -260,6 +260,8 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     private long _sendRetried;
     private long _relayDropped;
     private long _expired;
+    private long _stuckAtHead;
+    private long _stuckCountedId = -1; // sender task only: the command last counted in _stuckAtHead
     private long _nextCommandId;
     private int _started;
     private int _disposed;
@@ -308,6 +310,9 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
     /// <summary>Commands held through an outage and dropped, without a further send, because they had waited longer than <see cref="MaxHeldCommandAge"/>.</summary>
     public long Expired => Interlocked.Read(ref _expired);
+
+    /// <summary>Logins and Logouts that were still waiting at the head of the queue (held for an unreachable holder, or failing on an open link) after <see cref="MaxHeldCommandAge"/>, counted once each. They never expire, so a hung holder keeps them, and everything queued behind them, waiting; a value above zero that keeps growing means the Social holder is not answering.</summary>
+    public long LoginLogoutStuckAtHead => Interlocked.Read(ref _stuckAtHead);
 
     public void Forward(GroupCommand command)
     {
@@ -382,6 +387,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
                         inHand = 1;
                         await HoldUntilReachableAsync(reader, command).ConfigureAwait(false);
                         inHand = 0;
+                        NoteStuckAtHead(queued);
                     }
 
                     // Ages fall towards the back of the queue, so the first command under the limit, or queued after the hold ended, ends the outage's backlog. Only that backlog can expire.
@@ -418,6 +424,7 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
 
                             BeginFailing(reader, command);
                             Interlocked.Increment(ref _sendRetried);
+                            NoteStuckAtHead(queued);
                             _logger.LogDebug("Group command {Kind} of {Actor} failed ({Message}); it is sent again once the holder is reachable", command.Kind, command.Actor, ex.Message);
                             inHand = 1;
                             await Task.Delay(RetryDelay, _stop.Token).ConfigureAwait(false);
@@ -472,6 +479,21 @@ public sealed class ClusterGroupRouting : IGroupAuthorityLink, IAsyncDisposable
     }
 
     private bool TooOld(Queued queued) => _time.GetElapsedTime(queued.EnqueuedAt) > MaxHeldCommandAge;
+
+    /// <summary>Sender task only. A Login or Logout still in hand after the age limit (the only commands that never expire) is counted once and logged once, at Warning, because everything behind it waits for it.</summary>
+    private void NoteStuckAtHead(Queued queued)
+    {
+        if (CanExpire(queued.Command) || !TooOld(queued) || _stuckCountedId == queued.Id)
+        {
+            return;
+        }
+
+        _stuckCountedId = queued.Id;
+        Interlocked.Increment(ref _stuckAtHead);
+        _logger.LogWarning(
+            "Group command {Kind} of {Actor} has waited more than {Seconds} s at the head of the queue for the Social holder; it is kept, and the commands behind it wait for it",
+            queued.Command.Kind, queued.Command.Actor, (int)MaxHeldCommandAge.TotalSeconds);
+    }
 
     /// <summary>Login and Logout never expire (see the class remarks).</summary>
     private static bool CanExpire(GroupCommand command) => command.Kind is not (GroupCommandKind.Login or GroupCommandKind.Logout);
