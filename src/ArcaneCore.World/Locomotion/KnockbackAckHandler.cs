@@ -51,6 +51,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         // Known limit (docs/areas/anticheat.md): OnAcknowledgement re-baselines first, so the position of this block is not distance-checked; its flags are.
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: true);
         session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
+        // Judged like a movement packet before it is stored (vmangos MovementHandler.cpp:790-791).
         antiCheat?.JudgeAcknowledgedMovement(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement, MovementFlags.None);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);

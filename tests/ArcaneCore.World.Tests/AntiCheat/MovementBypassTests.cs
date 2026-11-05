@@ -65,6 +65,7 @@ public sealed class MovementBypassTests
     // --- B2: CMSG_MOVE_NOT_ACTIVE_MOVER for the player itself ----------------------------------------------------------------
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ANotActiveMoverNamingThePlayerItself_IsJudgedByTheAntiCheat_EveryTimeItIsReArmed()
     {
         await using var host = WorldTestHost.Start();
@@ -145,6 +146,7 @@ public sealed class MovementBypassTests
     // --- B3: a possessed unit moved by its controller ------------------------------------------------------------------------
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task APossessedCreature_BlinkedByItsController_IsScoredAgainstTheController()
     {
         await using var host = WorldTestHost.Start();
@@ -184,6 +186,7 @@ public sealed class MovementBypassTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task APossessedPlayer_BlinkedByItsController_IsScoredAgainstTheController_NotTheVictim()
     {
         await using var host = WorldTestHost.Start();
@@ -313,6 +316,7 @@ public sealed class MovementBypassTests
         (ulong guid, float x, float y, float z) = await host.OnWorldAsync(() =>
         {
             host.WorldServices.GetRequiredService<PetsFeature>().Service.Charms.ModPossess(player, victim, apply: true, AuraRemoveMode.Default, spell: null);
+            Assert.Same(victim, player.GetMover()); // the possession took: the block below really names a controlled unit
             return (victim.Guid.Value, victim.X, victim.Y, victim.Z);
         });
         await client.SendAsync(WorldOpcode.CmsgSetActiveMover, Guid64(guid));

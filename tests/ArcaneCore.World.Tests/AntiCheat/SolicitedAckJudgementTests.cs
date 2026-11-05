@@ -16,8 +16,10 @@ namespace ArcaneCore.World.Tests.AntiCheat;
 /// The movement block of a solicited acknowledgement (speed, flag, root, knockback, turn rate) is judged before it is stored, like a movement
 /// packet. Before, the handlers stored it and only advanced the stored-position marker (AfterMovement), so a client could carry any
 /// position or flag in the ack of an order the server really sent, and the next block was then measured from there. vmangos runs the
-/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes, MovementHandler.cpp:489-494).
+/// cheat tests on the block before relocating (HandleForceSpeedChangeAckOpcodes, MovementHandler.cpp:603-604 flag ack, :697-698 root ack, :790-791 knockback ack).
+/// The tests wait real time between packets (Task.Delay), so the class runs in the serial timing stage.
 /// </summary>
+[Trait("Category", "Timing")]
 public sealed class SolicitedAckJudgementTests
 {
     private const uint StartTime = 100_000;
@@ -153,6 +155,10 @@ public sealed class SolicitedAckJudgementTests
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Empty(scene.Seen);
+        // The ack was matched and honoured, not dropped: its block was stored and the order applied.
+        (float x, bool flag) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.Movement.HasFlag(FlagOf(type))));
+        Assert.Equal(scene.X + 1.4f, x, 0.01f);
+        Assert.True(flag);
     }
 
     [Fact]
@@ -183,9 +189,10 @@ public sealed class SolicitedAckJudgementTests
 
         await Task.Delay(100);
         scene.Time += 100;
+        uint counter = await scene.LastCounterAsync();
         var writer = new PacketWriter(64);
         writer.WriteUInt64(scene.Guid);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(counter);
         new MovementInfo
         {
             Flags = MovementFlags.Jumping | MovementFlags.Levitating, Time = scene.Time, X = scene.X + 0.7f, Y = scene.Y, Z = scene.Z,
@@ -250,6 +257,10 @@ public sealed class SolicitedAckJudgementTests
         await scene.Client.CollectThroughBarrierAsync();
 
         Assert.Empty(scene.Seen);
+        // The ack was matched, not dropped: its block was stored and the speed the order set stands.
+        (float x, float speed) = await scene.Host.OnWorldAsync(() => (scene.Player.X, scene.Player.RunSpeed));
+        Assert.Equal(scene.X + 1.4f, x, 0.01f);
+        Assert.Equal(target, speed, 0.001f);
     }
 
     [Fact]
