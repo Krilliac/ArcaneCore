@@ -322,8 +322,8 @@ public sealed partial class MapCombat
     /// map's instance, or a row from before the corpse instance was stored (instance 0) of an instanceable map with this map's id, goes
     /// here: the old code put such a body into the ghost's map whenever the map ids matched. A body on a continent goes into its
     /// map when this worker owns that map; on a continent another worker owns (a ghost that crossed workers) it stays out of every map
-    /// here, and the owner puts it back when the ghost returns. A dungeon body goes into its instance's map only when that map is loaded or a live instance owns it
-    /// (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); a corpse never creates an instance
+    /// here, and the owner puts it back when the ghost returns. A dungeon body goes into its instance's map only when that map is loaded, or a live instance owns it and this
+    /// worker owns that copy (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); on a worker without instance copies it stays out of every map too. A corpse never creates an instance
     /// map by itself, as vmangos never does.
     /// </summary>
     private MapCombat? ResolveCorpseMap(Kernel.Characters.CorpseSnapshot snapshot)
@@ -379,7 +379,7 @@ public sealed partial class MapCombat
         }
         else
         {
-            // Its instance is not loaded and no live instance owns it, or another worker owns its continent: the ghost keeps the body (and its
+            // Its instance is not loaded and no live instance owns it, or another worker owns its continent or its instance copy: the ghost keeps the body (and its
             // instance, for the next save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
             corpse.InstanceId = snapshot.InstanceId;
         }

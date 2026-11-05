@@ -295,25 +295,34 @@ public sealed class WorkerTransferTargetProductionTests
 
     /// <summary>
     /// A ghost entering the dungeon of its body (vmangos Player::TeleportTo, Player.cpp:1953-1966) is revived by the target once it has arrived: the source no longer does it, because a refused
-    /// transfer could not undo the revive. It comes back at half health and the body goes.
+    /// transfer could not undo the revive. It comes back at half health and the body goes. The whole way runs against a real dungeon template and the production allocator: the map is the
+    /// managed instance a worker reserves for an instance-0 request (never an unmanaged instance 0 of the dungeon), and the body lies in that instance.
     /// </summary>
     [Fact]
     public async Task AGhostArrivingInTheMapOfItsBody_IsRevivedOnTheTarget_AndItsBodyGoes()
     {
         const uint Dungeon = 36;
-        await using var host = WorldTestHost.Start();
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ArcaneCore.Kernel.WorldData.IMapDataStore, GridTerrain.InMemoryMapDataStore>());
         (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERREVIVE", "Ghostrevived", 0, 100f);
         await using AsyncServiceScope ownedScope = scope;
-        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var body = new CorpseSnapshot(Dungeon, -16f, -383f, 61f, 1f, now - 100, (byte)CorpseType.ResurrectablePve);
-        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        var instances = host.WorldServices.GetRequiredService<ArcaneCore.World.Instances.InstanceFeature>().Instances;
+        Assert.True(instances.IsInstancedMap(Dungeon)); // the registry holds the dungeon template: without it the arrival kicks the session
         TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
-        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices));
+        var target = new WorkerTransferTarget(
+            Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices), instances: new InstanceManagerTransferAllocator(instances));
         Guid id = Guid.NewGuid();
-        PlayerTransferBundle bundle = NewBundle(id, accountId, character, Dungeon, new TransferPosition(-16f, -383f, 61f, 0f)) with { SourceMapId = 0, Health = 1, IsGhost = true, Corpse = body };
+
+        TransferSlotReservation reservation = await target.ReserveSlotAsync(id, ObjectGuid.Player((uint)character.Id).Value, Dungeon, 0);
+        Assert.True(reservation.Reserved);
+        Assert.NotEqual(0u, reservation.InstanceId);
+
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var body = new CorpseSnapshot(Dungeon, -16f, -383f, 61f, 1f, now - 100, (byte)CorpseType.ResurrectablePve, reservation.InstanceId);
+        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, Dungeon, new TransferPosition(-16f, -383f, 61f, 0f))
+            with { TargetInstanceId = reservation.InstanceId, SourceMapId = 0, Health = 1, IsGhost = true, Corpse = body };
         ObjectGuid guid = new(bundle.CharacterGuid);
 
-        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, Dungeon, 0));
         await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
         await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
         Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
@@ -323,9 +332,10 @@ public sealed class WorkerTransferTargetProductionTests
         await host.OnWorldAsync(() =>
         {
             Assert.Equal(0u, (uint)(player.Flags & PlayerFlags.Ghost));
-            Assert.Equal(Dungeon, player.Map!.MapId);
+            Assert.Equal((Dungeon, reservation.InstanceId), (player.Map!.MapId, player.Map.InstanceId));
             Assert.True(player.Health > 1);
             Assert.Null(player.Combat.Corpse);
+            Assert.Empty(player.Map.Combat.Corpses);
         });
     }
 
