@@ -230,8 +230,8 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw
-    /// Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is
-    /// exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the
+    /// Hold tunnel) may hold and still need a crowd of bots for a shared world pin and be exempt from refusing a bot's pinned plan end (0..1000000; 0: no region is
+    /// exempt). The exemption judges the whole region, so a larger bound makes more real snags wait for that crowd. The default, 5000, keeps the
     /// Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps.
     /// Bots only; no retail behaviour depends on it.
     /// </summary>

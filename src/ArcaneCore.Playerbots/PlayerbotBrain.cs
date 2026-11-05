@@ -1827,8 +1827,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
             if (DeadEndPinShareBlock(player, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? pinGraph, out int pinRegion) is { } blocked)
             {
-                // Live 2026-10 (audit cid 44): 53 bots pinned one placement point and no world pin formed, and the two rules that keep a pin
-                // from being shared (the area flags, the cut-region exemption) could not be told apart from the logs. Say which one held it back.
+                // The area rule keeps this pin from the ledger altogether: say why, so it can be told from a pin that waits for more bots.
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-unshared", $"this bot's dead-end pin is not shared with the world: {blocked}", AnomalySeverity.Info);
             }
             else if (ReportWorldPin(player, now, pinGraph, pinRegion) is { } newPin)
@@ -1837,11 +1836,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             }
             else if (!_stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now))
             {
-                // Neither refused nor made a pin: the ledger holds this bot's report and waits for another bot (PlayerbotSharedPins.BotsToShare),
-                // or there is no ledger. Said once the cell is no pin, so a cell that stays unpinned for many stalls is told from a blocked one.
+                // Neither refused nor made a pin: the ledger holds this bot's report and waits for more bots, or there is no ledger. Said at each
+                // such pin of a cell that is no world pin yet, so a cell that stays unpinned for many stalls is told from a refused one.
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-pending",
-                    _stall.SharedPins is null ? "no shared pin ledger on this bot, so its dead-end pin cannot become a world pin"
-                        : $"reported to the shared pin ledger; the cell becomes a world pin when {PlayerbotSharedPins.BotsToShare} different bots have pinned it",
+                    DeadEndPinPendingDetail(_stall.SharedPins is not null, pinGraph, pinRegion, _options.CutRegionMaxPolygons, player.ZoneId),
                     AnomalySeverity.Info);
             }
         }
@@ -1995,11 +1993,11 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     }
 
     /// <summary>
-    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may. The area rule (<see cref="DeadEndPinAreaBlock"/>:
+    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may: the area rule (<see cref="DeadEndPinAreaBlock"/>:
     /// only an open-world map, never a dungeon, raid or battleground whose stalls are the instance's, and outside a capital or city, where
     /// bots crowd round quest givers and vendors and stall for reasons that say nothing about the ground; it fails closed when the area table
-    /// is missing) comes first, then the cut-region exemption (<see cref="PlayerbotNavigation.IsCutRegion"/>). The reason names the zone,
-    /// area, region and its polygon count so the rules can be told apart from the anomaly log. <paramref name="graph"/> and
+    /// is missing). The reason names the zone and area for the anomaly log. A cut region (<see cref="PlayerbotNavigation.IsCutRegion"/>) does not
+    /// refuse: such a pin counts towards a crowd (<see cref="PlayerbotSharedPins.CutRegionBotsToShare"/>). <paramref name="graph"/> and
     /// <paramref name="region"/> are the bot's region lookup once the area rule passed (else null and -1), for <see cref="ReportWorldPin"/>
     /// to reuse instead of looking the region up again.
     /// </summary>
@@ -2013,13 +2011,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         if (DeadEndPinAreaBlock(template, areas, player.ZoneId, area) is { } areaBlock)
             return string.Create(CultureInfo.InvariantCulture, $"{areaBlock} (zone {player.ZoneId}, area {area})");
         PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out graph, out region);
-        if (PlayerbotNavigation.IsCutRegion(graph, region, _options.CutRegionMaxPolygons))
-            return string.Create(CultureInfo.InvariantCulture,
-                $"cut region {region} of {graph!.RegionPolygons(region)} polygons (zone {player.ZoneId}, area {area}, at most {_options.CutRegionMaxPolygons} polygons are exempt)");
         return null;
     }
 
-    /// <summary>Tell the world this bot dead-end-pinned its cell, from <paramref name="region"/> of <paramref name="graph"/> (<see cref="DeadEndPinShareBlock"/>'s lookup), unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin(ulong, uint, uint, float, float, uint, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?, int, int)"/>).</summary>
+    /// <summary>
+    /// The <c>world-dead-end-pin-pending</c> text: no ledger, or how many different bots the cell takes. A cell in a cut region names the region and its
+    /// polygon count, since it takes <see cref="PlayerbotSharedPins.CutRegionBotsToShare"/> bots instead of <see cref="PlayerbotSharedPins.BotsToShare"/>.
+    /// </summary>
+    internal static string DeadEndPinPendingDetail(bool hasLedger, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons, uint zoneId)
+    {
+        if (!hasLedger) return "no shared pin ledger on this bot, so its dead-end pin cannot become a world pin";
+        return PlayerbotNavigation.IsCutRegion(graph, region, maxCutRegionPolygons)
+            ? string.Create(CultureInfo.InvariantCulture,
+                $"reported to the shared pin ledger from cut region {region} of {graph!.RegionPolygons(region)} polygons (zone {zoneId}); the cell becomes a world pin when {PlayerbotSharedPins.CutRegionBotsToShare} different bots have pinned it")
+            : $"reported to the shared pin ledger; the cell becomes a world pin when {PlayerbotSharedPins.BotsToShare} different bots have pinned it";
+    }
+
+    /// <summary>Tell the world this bot dead-end-pinned its cell, from <paramref name="region"/> of <paramref name="graph"/> (<see cref="DeadEndPinShareBlock"/>'s lookup); a pin in a cut region counts only towards a crowd (<see cref="PlayerbotStallWatch.ReportDeadEndPin(ulong, uint, uint, float, float, uint, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?, int, int)"/>).</summary>
     private string? ReportWorldPin(Player player, uint now, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region)
         => _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
 
