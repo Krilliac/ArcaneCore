@@ -59,18 +59,20 @@ public sealed class WorkerControlServiceTests
         await using Rig rig = await Rig.StartAsync(service);
         Guid id = journal.Add(WorldHandoffStage.AdmissionsStopped, PlayerTransferDecisionState.PreCommit);
 
-        Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze);
+        // A verb held by the gate has no reply until the test releases it, so it carries no budget of its own: its clock would otherwise run through
+        // everything the test does while it is held. Each reply is awaited with a fresh Budget after the gate opens.
+        Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze, budget: Timeout.InfiniteTimeSpan);
         await source.FreezeStarted.Task.WaitAsync(Budget);
         Assert.Equal(0, service.JoinedRepeats);
-        Task<ControlReply> second = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze);
+        Task<ControlReply> second = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze, budget: Timeout.InfiniteTimeSpan);
         // The repeat reaches the service while the first freeze still runs and joins it: the service counts the join (no sleep, no guess).
         await WaitUntilAsync(() => service.JoinedRepeats == 1);
         Assert.False(first.IsCompleted);
         Assert.False(second.IsCompleted);
         gate.SetResult();
 
-        Assert.Equal(ControlStatus.Ok, (await first).Status);
-        Assert.Equal(ControlStatus.Ok, (await second).Status);
+        Assert.Equal(ControlStatus.Ok, (await first.WaitAsync(Budget)).Status);
+        Assert.Equal(ControlStatus.Ok, (await second.WaitAsync(Budget)).Status);
         Assert.Equal(1, source.Freezes);
         Assert.Equal(1, service.JoinedRepeats);
     }
@@ -84,7 +86,8 @@ public sealed class WorkerControlServiceTests
         WorkerControlService service = HandoffService(journal, source, new FakeHandoffTarget());
         await using Rig rig = await Rig.StartAsync(service);
         Guid slow = journal.Add(WorldHandoffStage.AdmissionsStopped, PlayerTransferDecisionState.PreCommit);
-        Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze);
+        // No budget of its own while the gate holds it: the 600 sends below can take longer than any fixed wait on a loaded machine, and the reply only comes after them.
+        Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze, budget: Timeout.InfiniteTimeSpan);
         await source.FreezeStarted.Task.WaitAsync(Budget);
 
         // More finished operations than the service remembers: the oldest finished ones go, the running Freeze must stay.
@@ -104,12 +107,12 @@ public sealed class WorkerControlServiceTests
             }
         }
 
-        Task<ControlReply> repeat = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze);
+        Task<ControlReply> repeat = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze, budget: Timeout.InfiniteTimeSpan);
         await WaitUntilAsync(() => service.JoinedRepeats == 1);
         gate.SetResult();
 
-        Assert.Equal(ControlStatus.Ok, (await first).Status);
-        Assert.Equal(ControlStatus.Ok, (await repeat).Status);
+        Assert.Equal(ControlStatus.Ok, (await first.WaitAsync(Budget)).Status);
+        Assert.Equal(ControlStatus.Ok, (await repeat.WaitAsync(Budget)).Status);
         Assert.Equal(1, source.Freezes);
     }
 
@@ -604,13 +607,14 @@ public sealed class WorkerControlServiceTests
             return rig;
         }
 
-        public async Task<ControlReply> SendAsync(ControlKind kind, Guid operationId, ControlVerb verb, ControlArguments? arguments = null)
+        // budget: how long to wait for the reply, Budget when null; Timeout.InfiniteTimeSpan for a verb the test holds open on purpose.
+        public async Task<ControlReply> SendAsync(ControlKind kind, Guid operationId, ControlVerb verb, ControlArguments? arguments = null, TimeSpan? budget = null)
         {
             ulong id = (ulong)Interlocked.Increment(ref _nextRequest);
             var waiting = new TaskCompletionSource<ControlReply>(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending[id] = waiting;
             Assert.True(Client.SendControlRequest(new ControlRequest(id, kind, operationId, verb, arguments ?? ControlNoArguments.Instance)));
-            ControlReply reply = await waiting.Task.WaitAsync(Budget);
+            ControlReply reply = await waiting.Task.WaitAsync(budget ?? Budget);
             Assert.Equal(id, reply.RequestId);
             Assert.Equal(operationId, reply.OperationId);
             Assert.Equal(verb, reply.Verb);
