@@ -9,7 +9,9 @@ namespace ArcaneCore.Game.AntiCheat;
 /// a packet. Only low false-positive checks are here: the fork's acceleration gate and bot heuristic are not ported.
 /// <list type="bullet">
 /// <item>Speed and teleport: the distance of a step against the allowed speed over the step's time budget, which is the
-/// client's own elapsed time capped by the server's receive interval plus a latency slack. Lag bunching stretches neither.</item>
+/// client's own elapsed time capped by the server's receive interval plus a latency slack, and never more than
+/// <see cref="AntiCheatOptions.BaselineGapMs"/>. Lag bunching stretches neither. A distance budget (a bucket refilled by real receive time)
+/// also covers the yards over many packets, with a bounded credit for the packets a stall held.</item>
 /// <item>Fast clock: <see cref="SpeedHackDetector"/> over every packet.</item>
 /// <item>Flags: water walk, hover and slow fall without a grant (living players), levitate, fly while swimming, a fake transport.</item>
 /// <item>Root: moving or starting to move while an acknowledged root is in force.</item>
@@ -28,6 +30,9 @@ public sealed class MovementAntiCheat
 {
     private const float AirborneSpeedFactor = 1.25f;
     private const float StoredPositionTolerance = 0.5f;
+
+    /// <summary>How many times <see cref="AntiCheatOptions.BaselineGapMs"/> of real silence the distance bucket's ceiling may be lifted by (a stall's held packets).</summary>
+    private const long StallCreditFactor = 4;
     private const float NoClipMinStep = 4.0f;
     private const uint NoClipWindowMs = 5000;
     private const int SwimOutOfWaterPackets = 4;
@@ -645,8 +650,10 @@ public sealed class MovementAntiCheat
     /// adds the latency slack again for every packet. Here the yards stand in a bucket that the allowed speed (with the tolerance) refills
     /// by the REAL time that passed (the receive interval; no client stamp buys any refill, so stamps alternating far ahead and behind
     /// refill nothing but real time). The refill stops at a ceiling of <see cref="AntiCheatOptions.SpeedSlackYards"/> plus the speed over the
-    /// latency slack, or, after a genuine stall, the speed over the real silence (at most <see cref="AntiCheatOptions.BaselineGapMs"/>): the
-    /// packets a stall held arrive together and carry the distance covered while it lasted. A balance already above the ceiling never grows.
+    /// latency slack, or, after a genuine stall, the speed over the real silence (at most <see cref="StallCreditFactor"/> times
+    /// <see cref="AntiCheatOptions.BaselineGapMs"/>, 12 s by default): the packets a stall held arrive together and carry the distance covered
+    /// while it lasted, which is far more than one step's cap. The credit is bounded, so an hour of silence buys 12 s of movement at most.
+    /// A balance already above the ceiling never grows.
     /// Every step spends its horizontal distance; an overdraft is a Speed finding, and the bucket restarts empty.
     /// </summary>
     private void CheckDistanceBudget(in MovementSample sample, float speed, float horizontal, uint receivedDelta, List<AntiCheatFinding> findings)
@@ -659,7 +666,7 @@ public sealed class MovementAntiCheat
 
         float perSecond = speed * (1f + (Options.SpeedTolerancePercent / 100f));
         float refill = perSecond * (receivedDelta / 1000f);
-        long stallMs = Math.Min((long)receivedDelta, Math.Max(0, Options.BaselineGapMs));
+        long stallMs = Math.Min((long)receivedDelta, Math.Max(0L, Options.BaselineGapMs) * StallCreditFactor);
         float ceiling = Math.Max(Options.SpeedSlackYards + (perSecond * (Slack(sample.LatencyMs) / 1000f)), perSecond * (stallMs / 1000f));
         if (!_bucketActive)
         {

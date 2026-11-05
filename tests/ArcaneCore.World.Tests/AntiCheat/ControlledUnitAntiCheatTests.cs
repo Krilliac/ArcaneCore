@@ -103,7 +103,9 @@ public sealed class ControlledUnitAntiCheatTests
         await Task.Delay(500);
         if (otherPacketAfterSilence)
         {
-            await client.SendAsync(WorldOpcode.CmsgPlayedTime, []);
+            // A full barrier (its own CMSG_PLAYED_TIME, answered before this returns): the extra packet is handled and its answer consumed here,
+            // so the final barrier below can only be answered after the skip and the heartbeat, and the finding is recorded by then.
+            await client.CollectThroughBarrierAsync();
         }
 
         await client.SendAsync(WorldOpcode.CmsgMoveTimeSkipped, Skip(guid, 400));
@@ -151,7 +153,7 @@ public sealed class ControlledUnitAntiCheatTests
             return (victim.Guid.Value, victim.X, victim.Y, victim.Z);
         });
 
-        // The swimming flag with no water under the unit: the fifth judged block is the fourth in a row that claims water where there is none.
+        // The swimming flag with no water under the unit: the first block is judged (seeded from the server position), so the fourth judged block is the fourth in a row that claims water where there is none.
         await client.SendAsync(WorldOpcode.CmsgSetActiveMover, Guid64(guid));
         uint time = 100_000;
         MovementFlags swimming = MovementFlags.Forward | MovementFlags.Swimming;

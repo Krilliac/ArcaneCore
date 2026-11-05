@@ -292,6 +292,27 @@ public sealed class MovementAntiCheatTests
         Assert.DoesNotContain(client.All, f => f.Type is AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
     }
 
+    [Theory]
+    [InlineData(6)]
+    [InlineData(10)]
+    public void LagBunchedHonestSteps_AfterALongerStall_AreNotScored(int stallSeconds)
+    {
+        var client = new Client();
+        client.Send(WorldOpcode.MsgMoveStartForward);
+        client.RunFor(4, Run);
+
+        // The client sent a heartbeat every 500 ms through the stall; all of them arrive within a few milliseconds, the first after the whole
+        // silence. The distance they carry is what the client honestly covered over the stall (at run speed), well above one step's BaselineGapMs cap.
+        int heartbeats = stallSeconds * 2;
+        client.Step(500, Run * 0.5f, receivedMs: (uint)(stallSeconds * 1000));
+        for (int i = 1; i < heartbeats; i++)
+        {
+            client.Step(500, Run * 0.5f, receivedMs: 10);
+        }
+
+        Assert.DoesNotContain(client.All, f => f.Type is AntiCheatViolation.Speed or AntiCheatViolation.Teleport);
+    }
+
     [Fact]
     public void LagBunchedSteps_WithNoStallBehindThem_AreNotRefilledByTheClientClock()
     {
