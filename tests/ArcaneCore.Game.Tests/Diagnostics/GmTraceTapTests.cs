@@ -540,11 +540,7 @@ public sealed class GmTraceTapTests
         }
 
         Run(50); // JIT and static tables
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run(1000);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(() => Run(1000), 0, "the tap and the guard with no follower");
         Assert.Equal(0, sink.PublishCalls);
     }
 
