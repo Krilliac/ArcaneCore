@@ -19,11 +19,11 @@ namespace ArcaneCore.World.AntiCheat.PacketHeuristics;
 
 /// <summary>
 /// Report-only heuristics over the packets sessions send (docs/areas/packet-heuristics.md): wrong-state, unknown-opcode, malformed, shape,
-/// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. Off by default.
+/// cadence, replay, orphan-ack and incapacitated-action findings go to the anomaly ledger under subsystem <c>packet</c>. On by default.
 /// <para>
 /// The one rule: this class observes and never decides. No method here returns a verdict to the session, throws, blocks, drops, delays or alters
 /// a packet, kicks, or touches the AntiCheat score; a packet that dispatched before still dispatches and one that was dropped is still dropped.
-/// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off.
+/// The sessions call it through <c>WorldSession.PacketHeuristics.cs</c> and pay one volatile read when it is off (<c>Enabled</c> = false).
 /// </para>
 /// <para>
 /// Threads: the settings are an immutable snapshot swapped by reference (any thread); counters are <see cref="Interlocked"/>; per-session state
@@ -53,7 +53,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         if (problems.Count > 0)
         {
             _logger?.LogError("{Section} is invalid ({Problems}); packet heuristics stay off with the defaults", PacketHeuristicsOptions.SectionName, string.Join(" ", problems));
-            configured = new PacketHeuristicsOptions();
+            configured = new PacketHeuristicsOptions { Enabled = false };
         }
 
         _settings = new PacketHeuristicsSettings(configured);

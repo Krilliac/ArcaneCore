@@ -2,6 +2,7 @@ using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.PacketHeuristics;
@@ -10,11 +11,11 @@ namespace ArcaneCore.World.Tests.PacketHeuristics;
 public sealed class PacketHeuristicsUnitTests
 {
     [Fact]
-    public void TheDefaults_AreOff_ExemptBotsAndStaff_AndValid()
+    public void TheDefaults_AreOn_ExemptBotsAndStaff_AndValid()
     {
         var options = new PacketHeuristicsOptions();
 
-        Assert.False(options.Enabled);
+        Assert.True(options.Enabled);
         Assert.True(options.ExemptBots);
         Assert.True(options.ExemptStaff);
         Assert.Empty(options.Validate());
@@ -26,6 +27,52 @@ public sealed class PacketHeuristicsUnitTests
         Assert.Equal(5, options.ReplayCount);
         Assert.Equal(1000, options.ReplayWindowMs);
         Assert.Equal(10, options.ReportIntervalSeconds);
+    }
+
+    [Fact]
+    public void AFeatureWithNoConfiguredSection_IsActive()
+    {
+        using ServiceProvider services = new ServiceCollection().BuildServiceProvider();
+
+        Assert.True(new PacketHeuristicsFeature(services).Active);
+    }
+
+    [Fact]
+    public void AnExplicitFalse_InTheSection_SwitchesTheFeatureOff()
+    {
+        IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:PacketHeuristics:Enabled"] = "false",
+        }).Build();
+        var options = new PacketHeuristicsOptions();
+        configuration.GetSection(PacketHeuristicsOptions.SectionName).Bind(options);
+        using ServiceProvider services = new ServiceCollection().AddSingleton(Microsoft.Extensions.Options.Options.Create(options)).BuildServiceProvider();
+
+        Assert.False(options.Enabled);
+        Assert.False(new PacketHeuristicsFeature(services).Active);
+    }
+
+    [Fact]
+    public void AnEmptySection_LeavesTheDefaultOn()
+    {
+        IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:PacketHeuristics:ReplayCount"] = "7",
+        }).Build();
+        var options = new PacketHeuristicsOptions();
+
+        configuration.GetSection(PacketHeuristicsOptions.SectionName).Bind(options);
+
+        Assert.True(options.Enabled);
+    }
+
+    [Fact]
+    public void AnInvalidSection_FallsBackToOff_NotOn()
+    {
+        var invalid = new PacketHeuristicsOptions { ReplayCount = 1 };
+        using ServiceProvider services = new ServiceCollection().AddSingleton(Microsoft.Extensions.Options.Options.Create(invalid)).BuildServiceProvider();
+
+        Assert.False(new PacketHeuristicsFeature(services).Active);
     }
 
     [Theory]
