@@ -115,6 +115,15 @@ public enum QuestFailure : byte
 /// </summary>
 public interface IGameQaObserver
 {
+    /// <summary>Whether this observer reports anything at all (bot QA is on). A site that reports a gap another channel also reports picks one.</summary>
+    bool Reporting => false;
+
+    /// <summary>
+    /// Whether a refusal of <paramref name="player"/> would be reported (QA is on and the player is a managed playerbot). A call site that must
+    /// compute an argument for the report (an inventory lookup, a flag set as text) asks first, so a real player pays nothing for it.
+    /// </summary>
+    bool Observes(Player player) => false;
+
     /// <summary>A vendor, trainer, inventory or loot request of <paramref name="player"/> was refused.</summary>
     /// <param name="player">Who asked.</param>
     /// <param name="failure">The decision site.</param>

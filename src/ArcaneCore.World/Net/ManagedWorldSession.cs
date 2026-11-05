@@ -279,7 +279,8 @@ public sealed partial class WorldSession
         if (IsLeanBot && BotPolicy is { } policy && !policy.KeepsPacket(opcode) && !HasPacketObserver)
         {
             // Bot QA still needs the few quest and inventory packets the lean intake drops (the copy is made for those opcodes only).
-            if (IsPlayerbot && IManagedPacketTap.WantsOpcode(opcode)) QaTap.OnPacket(this, opcode, payload.ToArray());
+            // A lean session is a playerbot session already (IsLeanBot); the copy is made only when the tap is live, so QA off costs no allocation.
+            if (IManagedPacketTap.WantsOpcode(opcode) && QaTap is { } tap && !ReferenceEquals(tap, NoManagedPacketTap.Instance)) tap.OnPacket(this, opcode, payload.ToArray());
             BotLeanStats.SkippedRingPacket(payload.Length);
             Interlocked.Increment(ref _leanRingPacketsSkipped);
             return;

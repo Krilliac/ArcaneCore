@@ -32,7 +32,7 @@ internal static class PlayerbotQaInteractionRules
     /// <summary>The reason of an objective that never progressed (a kill, a loot, a used object): a <see cref="QaSignalKind.QuestBroken"/> made by the monitor.</summary>
     internal const string NoProgressKill = "no-progress-kill", NoProgressItem = "no-progress-item", NoProgressObject = "no-progress-object";
 
-    private static readonly FrozenDictionary<InteractionFailure, QaInteractionRule> s_interactions = new Dictionary<InteractionFailure, QaInteractionRule>
+    private static readonly FrozenDictionary<InteractionFailure, QaInteractionRule> Interactions = new Dictionary<InteractionFailure, QaInteractionRule>
     {
         [InteractionFailure.BuyItemTemplateMissing] = new(S, QaCause.MissingData, "buy-no-item-template", "item has no template",
             "the bot asked to buy an item that has no item_template row (BUY_ERR_CANT_FIND_ITEM): a vendor list names an item that does not exist"),
@@ -68,7 +68,7 @@ internal static class PlayerbotQaInteractionRules
             "the spell is listed, GREEN for the bot's class and level, and affordable, and the teaching cast failed: the trainer cannot teach it"),
     }.ToFrozenDictionary();
 
-    private static readonly FrozenSet<SellResult> s_suspiciousSells = new[] { SellResult.CantFindItem, SellResult.YouDontOwnThatItem, SellResult.Unk }.ToFrozenSet();
+    private static readonly FrozenSet<SellResult> SuspiciousSells = new[] { SellResult.CantFindItem, SellResult.YouDontOwnThatItem, SellResult.Unk }.ToFrozenSet();
 
     /// <summary>Inventory results a bot should never get from its own actions: it acted on an item or slot it does not have, or one its class can never use.</summary>
     internal static FrozenSet<InventoryResult> SuspiciousInventory { get; } = new[]
@@ -85,7 +85,7 @@ internal static class PlayerbotQaInteractionRules
             case InteractionFailure.SellRefused:
             {
                 var sell = (SellResult)code;
-                return s_suspiciousSells.Contains(sell)
+                return SuspiciousSells.Contains(sell)
                     ? new QaInteractionRule(S, sell == SellResult.Unk ? QaCause.NotImplemented : QaCause.BehaviourBug, "sell-refused", "sale refused",
                         $"the vendor refused the sale with {SellName(code)}: the bot sold an item it does not have, or the server could not say why")
                     : new QaInteractionRule(E, QaCause.BehaviourBug, "sell-refused", "sale refused", $"the vendor refused the sale with {SellName(code)}");
@@ -102,10 +102,10 @@ internal static class PlayerbotQaInteractionRules
                         "the loot could not be opened because the server cannot store it (LootResult.Unsupported): the corpse or chest gives nothing")
                     : new QaInteractionRule(E, QaCause.BehaviourBug, "loot", "loot refused", $"the loot was refused with {LootName(code)}");
             case InteractionFailure.BuyCannotStore or InteractionFailure.BuybackCannotStore when SuspiciousInventory.Contains((InventoryResult)code):
-                QaInteractionRule store = s_interactions[failure];
+                QaInteractionRule store = Interactions[failure];
                 return store with { Class = S, Why = store.Why + $" ({InventoryName(code)}, which a purchase should never get)" };
             default:
-                return s_interactions.TryGetValue(failure, out QaInteractionRule? rule)
+                return Interactions.TryGetValue(failure, out QaInteractionRule? rule)
                     ? rule
                     : new QaInteractionRule(S, QaCause.Unknown, "interaction-" + ((int)failure).ToString(CultureInfo.InvariantCulture), "refused", "an interaction refusal with no rule");
         }
@@ -114,7 +114,7 @@ internal static class PlayerbotQaInteractionRules
     /// <summary>The rule of a reason token (<see cref="QaSignal.Reason"/> of an interaction finding) and its code; null when no rule has the token.</summary>
     internal static QaInteractionRule? OfToken(string token, int code)
     {
-        foreach ((InteractionFailure failure, QaInteractionRule rule) in s_interactions)
+        foreach ((InteractionFailure failure, QaInteractionRule rule) in Interactions)
         {
             if (string.Equals(rule.Token, token, StringComparison.Ordinal)) return Of(failure, code);
         }

@@ -268,9 +268,16 @@ public sealed partial class CreatureMapSystem
         {
             _logger.LogWarning("creature_ai_scripts for creature {Entry} use unsupported {Unsupported}; those parts are skipped",
                 creature.Template.Entry, string.Join(", ", eventAi.Unsupported));
-            CreatureAnomalies.ReportScriptActionUnsupported(
-                creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
-            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "event-ai", 0, string.Join(", ", eventAi.Unsupported));
+            // One gap, one signal: bot QA's ScriptUnsupported when QA is reporting, else the anomaly (which QA would otherwise pick up a second time).
+            if (Qa is { Reporting: true } qa)
+            {
+                qa.OnCreatureAiGap(creature, creature.Template.Entry, "event-ai", 0, string.Join(", ", eventAi.Unsupported));
+            }
+            else
+            {
+                CreatureAnomalies.ReportScriptActionUnsupported(
+                    creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
+            }
         }
 
         creature.AI = ai;
