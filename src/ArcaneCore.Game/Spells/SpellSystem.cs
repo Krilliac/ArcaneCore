@@ -954,12 +954,50 @@ public sealed partial class SpellSystem
             }
         }
 
+        ApplyRequireAllTargets(cast, targetEffects);
+
         // Spell::WriteSpellGoTargets includes selected game objects alongside unit hits.
         if (cast.ObjectTargetsOrNull is { } selectedObjects)
         {
             foreach (ObjectGuid guid in selectedObjects.Values.SelectMany(guids => guids).Distinct())
             {
                 if (!hits.Contains(guid)) hits.Add(guid);
+            }
+        }
+    }
+
+    /// <summary>
+    /// vmangos Spell::FillTargetMap end (Spell.cpp:430-441): a spell with SPELL_ATTR_EX_REQUIRE_ALL_TARGETS whose explicit unit target
+    /// has a miss condition other than none loses every effect on every unit target. The entries stay, so SMSG_SPELL_GO and the miss
+    /// handling of the main target are unchanged. Game object carriers are not unit targets in the reference and keep their effects.
+    /// </summary>
+    private static void ApplyRequireAllTargets(SpellCast cast, Dictionary<Unit, SpellTargetEntry> targetEffects)
+    {
+        if (!cast.Spell.HasAttribute(SpellAttributesExCombat.RequireAllTargets) || cast.Targets.Unit.IsEmpty)
+        {
+            return;
+        }
+
+        bool mainMissed = false;
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
+        {
+            if (target.Guid == cast.Targets.Unit && entry.Miss != SpellMissInfo.None)
+            {
+                mainMissed = true;
+                break;
+            }
+        }
+
+        if (!mainMissed)
+        {
+            return;
+        }
+
+        foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
+        {
+            if (!IsCarrierOnlyEntry(cast, target, entry.EffectMask))
+            {
+                entry.EffectMask = 0;
             }
         }
     }
@@ -975,6 +1013,12 @@ public sealed partial class SpellSystem
         foreach ((Unit target, SpellTargetEntry entry) in targetEffects)
         {
             currentFaultTarget = target;
+            // A REQUIRE_ALL_TARGETS spell whose main target missed has no effect left on this unit (ApplyRequireAllTargets).
+            if (entry.EffectMask == 0 && entry.Miss is SpellMissInfo.None or SpellMissInfo.Reflect && spell.HasAttribute(SpellAttributesExCombat.RequireAllTargets))
+            {
+                continue;
+            }
+
             // vmangos Spell::DoAllEffectOnTarget (Spell.cpp:1129-1137): a persistent area aura runs once on the ground (HandleGroundEffects below),
             // never on the units its selector listed in SMSG_SPELL_GO.
             int unitMask = WithoutGroundEffects(spell, entry.EffectMask);

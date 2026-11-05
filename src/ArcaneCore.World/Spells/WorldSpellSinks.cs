@@ -16,7 +16,7 @@ internal sealed class WorldSpellUnitResolver : ISpellUnitResolver
 /// <summary>World-thread spell effects use map combat for damage, death and threat (<see cref="MapCombatDamageSink"/>).</summary>
 internal sealed class WorldSpellDamageSink : MapCombatDamageSink;
 
-/// <summary>Players use the shared teleport state machine; non-players only move within their map.</summary>
+/// <summary>Players use the shared teleport state machine; non-players only move within their map, through <see cref="NearTeleportSink"/> (a creature stops and its observers see the jump).</summary>
 internal sealed class WorldSpellTeleportSink(Func<TeleportService> teleports) : ITeleportSink
 {
     private readonly NearTeleportSink _near = new();

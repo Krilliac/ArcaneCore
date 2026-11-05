@@ -182,7 +182,7 @@ public sealed partial class SpellSystem
         [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
         [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),
         [SpellEffectName.DualWield] = static context => (context.Target as Player)?.StatState.SetCanDualWield(true),
-        [SpellEffectName.Spawn] = static context => Rules.CrowdControl.CcState.RefreshStun(context.System, context.Target),
+        [SpellEffectName.Spawn] = EffectSpawn,
         [SpellEffectName.Detect] = static _ => { },
         [SpellEffectName.TransDoor] = static _ => { },
         [SpellEffectName.Attack] = EffectAttack,
@@ -491,10 +491,30 @@ public sealed partial class SpellSystem
     /// <summary>
     /// vmangos Spell::EffectTeleportUnits: the destination comes from implicit target B —
     /// TARGET_LOCATION_DATABASE (spell_target_position) or TARGET_LOCATION_CASTER_HOME_BIND
-    /// (the player's bind point); <see cref="ITeleportSink"/> moves the unit.
+    /// (the player's bind point); <see cref="ITeleportSink"/> moves the unit. A unit on a taxi flight is skipped, and
+    /// TARGET_LOCATION_CASTER_DEST moves the caster to the target's position.
     /// </summary>
     private void EffectTeleportUnits(SpellEffectContext context)
     {
+        // vmangos SpellEffects.cpp:1597-1600: a unit on a taxi flight is never teleported.
+        if ((context.Target.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return;
+        }
+
+        // vmangos SpellEffects.cpp:1627-1636: with TARGET_LOCATION_CASTER_DEST the caster, not the target, is moved: to the
+        // target's position, keeping the caster's own orientation (spells 21463, 23139, 22935; 24700 is scripted, RenatakiVanishTeleportScript).
+        if (context.Effect.TargetB == SpellImplicitTarget.LocationCasterDest)
+        {
+            Unit mover = context.Caster;
+            if (!Teleports.Teleport(mover, mover.MapId, context.Target.X, context.Target.Y, context.Target.Z, mover.Orientation, keepCombat: true))
+            {
+                ReportUnsupported("teleport to map", mover.MapId, context.Spell.Id);
+            }
+
+            return;
+        }
+
         if (!TryResolveTeleportDestination(context.Spell, context.EffectIndex, context.Target, context.Cast.Targets,
                 out SpellTargetPosition d))
         {
@@ -509,9 +529,9 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// The destination <see cref="EffectTeleportUnits"/> would use for <paramref name="target"/>
-    /// (implicit target B of effect <paramref name="effectIndex"/>); no side effects. Quest reward
-    /// preflight shares it so that what is checked before the commit is what runs after it.
+    /// The destination for a unit teleported to a database position or the bind point (implicit target B of effect
+    /// <paramref name="effectIndex"/>); no side effects. Quest reward preflight uses it. <see cref="EffectTeleportUnits"/> does not
+    /// call it for TARGET_LOCATION_CASTER_DEST, where the caster moves to the target (the quest preflight keeps its own rule for that target).
     /// </summary>
     public bool TryResolveTeleportDestination(SpellInfo spell, int effectIndex, Unit target, SpellCastTargets targets,
         out SpellTargetPosition destination)
@@ -559,20 +579,54 @@ public sealed partial class SpellSystem
         LearnSpell(player, spellId);
     }
 
-    /// <summary>vmangos Spell::EffectTriggerSpell: the caster casts EffectTriggerSpell, triggered, at the same target.</summary>
+    /// <summary>
+    /// vmangos Spell::EffectSpawn (SpellEffects.cpp:2990-2998): a creature target leaves the spawn animation state
+    /// (UNIT_FLAG_SPAWNING is cleared and a visibility group other than ON is forced to ON through the map's
+    /// <see cref="ArcaneCore.Game.Stealth.StealthRegistry"/>, then re-evaluated for everyone near it, as vmangos Unit::SetVisibility does with
+    /// UpdateVisibilityAndView, Objects/Unit.cpp:6494-6500: nothing else shows a stationary creature to stationary viewers).
+    /// VISIBILITY_OFF, the third state the reference tests with the same <c>!= VISIBILITY_ON</c>, has no
+    /// <see cref="ArcaneCore.Game.Stealth.StealthVisibility"/> member and is not modelled. A player or other target is ignored.
+    /// </summary>
+    private static void EffectSpawn(SpellEffectContext context)
+    {
+        if (context.Target is Creatures.Creature creature)
+        {
+            creature.UnitFlags &= ~UnitFlags.Spawning;
+            if (creature.Map is { } map && ArcaneCore.Game.Stealth.StealthServices.Find(map)?.Registry is { } registry
+                && registry.VisibilityOf(creature) != ArcaneCore.Game.Stealth.StealthVisibility.On)
+            {
+                registry.SetVisibility(creature, ArcaneCore.Game.Stealth.StealthVisibility.On);
+                map.RefreshVisibility(creature);
+            }
+        }
+    }
+
+    /// <summary>Disarm, the spell 25852, 6607 and 25425 trigger.</summary>
+    private const uint DisarmTriggerSpell = 6608;
+
+    /// <summary>
+    /// vmangos Spell::EffectTriggerSpell (SpellEffects.cpp:1571,1576): the formal caster is the effect's target when the triggered
+    /// spell takes all its targets around the caster (<see cref="SpellCasterSourceTargets.IsCasterSourceTargetsOnly"/>), the cast's
+    /// caster otherwise; the cast is triggered, at the same target, on behalf of the original caster. Disarm (6608), triggered by
+    /// 25852, 6607 and 25425, always lands on the target: the data shape of 6608 (one named slot) fails the literal rule, and mangos-classic
+    /// hard-codes <c>case 6608: caster = unitTarget</c> (SpellEffects.cpp:1608-1612); retail disarms the target.
+    /// </summary>
     private void EffectTriggerSpell(SpellEffectContext context)
     {
         uint spellId = context.Effect.TriggerSpell;
-        if (Store.Get(spellId) is not null)
+        if (Store.Get(spellId) is not { } triggered)
         {
-            CastSpell(context.Caster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell,
-                originalCaster: context.Cast.OriginalCaster);
+            return;
         }
+
+        Unit formalCaster = triggered.Id == DisarmTriggerSpell || SpellCasterSourceTargets.IsCasterSourceTargetsOnly(triggered) ? context.Target : context.Caster;
+        CastSpell(formalCaster, spellId, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true, triggeringSpell: context.Spell,
+            originalCaster: context.Cast.OriginalCaster);
     }
 
     /// <summary>
     /// Teach a player a spell (vmangos Player::LearnSpell): stored through <see cref="ISpellbook"/>
-    /// and announced with SMSG_LEARNED_SPELL. Returns false when it was already known.
+    /// and announced with SMSG_LEARNED_SPELL (SMSG_SUPERCEDED_SPELL instead when it replaces a known rank). Returns false when it was already known.
     /// </summary>
     public bool LearnSpell(Player player, uint spellId)
     {
@@ -584,7 +638,24 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        AnnounceLearnedSpell(player, spellId);
+        // vmangos Player::AddSpell (Player.cpp:3637-3665): each known spell whose raw SkillLineAbility forward_spellid is this one is
+        // superseded (SMSG_SUPERCEDED_SPELL old, new). AddSpell then returns false (:3743) and Player::LearnSpell sends no
+        // SMSG_LEARNED_SPELL (:3774-3782, "prevent duplicated entires in spell book"): the client replaces the old rank by the new one.
+        bool superceded = false;
+        foreach (uint previousRank in RankChains.BookPredecessors(spellId))
+        {
+            if (Spellbook.HasSpell(player, previousRank))
+            {
+                player.Session.Send(WorldOpcode.SmsgSupercededSpell, SpellPackets.BuildSupercededSpell(previousRank, spellId));
+                superceded = true;
+            }
+        }
+
+        if (!superceded)
+        {
+            AnnounceLearnedSpell(player, spellId);
+        }
+
         CastLearnedPassive(player, spellId);
         NotifyAfterLearn(player, spellId);
         return true;

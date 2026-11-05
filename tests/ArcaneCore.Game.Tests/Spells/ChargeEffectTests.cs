@@ -782,4 +782,92 @@ public sealed class ChargeEffectTests
         caster.UnitFlags |= UnitFlags.TaxiFlight;
         Assert.Equal(SpellCastResult.NotOnTaxi, kit.System.HandleCastRequest(caster, FaceTeleport, SpellCastTargets.ForUnit(target.Guid)));
     }
+
+    // --- the charge delay and the path cap (vmangos Spell.cpp:8274-8275, :5931) -----------------------------------------------------
+
+    [Fact]
+    public void ChargeSwingDelay_AddsTwoHundredPlusFortyPerYardToBothHands()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        caster.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack, 100);
+        caster.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack, 0);
+
+        ChargeEffects.ChargeSwingDelay(caster, 10f);
+
+        Assert.Equal(700u, caster.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack));
+        Assert.Equal(600u, caster.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack));
+    }
+
+    [Fact]
+    public void ChargeHasNoPath_RefusesAPathLongerThanOnePointFiveTimesTheRangePlusOne_OnlyWhenARangeIsGiven()
+    {
+        using var dry = new Locomotion.HazardTestKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player target = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath(new Vector3(walker.X + 200f, walker.Y, walker.Z)));
+
+        Assert.True(ForcedMovement.ChargeHasNoPath(walker, target, maxRange: 25f));  // 200 yd out and back: far over (25 + 1) * 1.5 = 39
+        Assert.False(ForcedMovement.ChargeHasNoPath(walker, target));               // no range: uncapped, as before
+    }
+
+    [Fact]
+    public void ChargeHasNoPath_AcceptsAPathWithinTheCap()
+    {
+        using var dry = new Locomotion.HazardTestKit(null);
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player target = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath());
+
+        Assert.False(ForcedMovement.ChargeHasNoPath(walker, target, maxRange: 25f));
+    }
+
+    private static (Locomotion.HazardTestKit Kit, Player Walker, Player Prey) ChargeScene(IPathfinder pathfinder)
+    {
+        var dry = new Locomotion.HazardTestKit(null, ChargeSpells());
+        Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
+        Player prey = dry.AddHostilePlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        prey.Relocate(Locomotion.HazardTestKit.X + 10, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground, 0, 1);
+        dry.Kit.Spellbook.Teach(walker, Charge);
+        WorldCollision.Of(dry.Kit.World).Install(pathfinder: pathfinder);
+        return (dry, walker, prey);
+    }
+
+    [Fact]
+    public void Charge_ByAPlayer_DelaysBothSwingTimersByTwoHundredPlusFortyPerYardOfTheCastDistance()
+    {
+        (Locomotion.HazardTestKit dry, Player walker, Player prey) = ChargeScene(new FixedPath());
+        using (dry)
+        {
+            walker.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack, 0);
+            walker.Combat.SetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack, 0);
+            float distance = WorldGeometry.DistanceMinusRadii(walker, prey);
+            uint expected = (uint)(200f + (40f * distance));
+
+            Assert.Equal(SpellCastResult.CastOk, dry.Kit.System.HandleCastRequest(walker, Charge, SpellCastTargets.ForUnit(prey.Guid)));
+            FlushSpellBatch(dry.Kit);
+
+            Assert.True(walker.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack) >= expected,
+                $"main hand {walker.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.BaseAttack)} < {expected}");
+            Assert.True(walker.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack) >= expected,
+                $"off hand {walker.Combat.GetAttackTimer(ArcaneCore.Game.Combat.WeaponAttackType.OffAttack)} < {expected}");
+        }
+    }
+
+    [Fact]
+    public void Charge_OverAPathPastTheRangeCap_FailsTheCastWithNopath_AndAPathWithinItDoesNot()
+    {
+        // The spell's range is 30, so the cap is (30 + 1) * 1.5 = 46.5 yd of path; a path that runs 200 yd out and back is refused (vmangos Spell.cpp:5931).
+        (Locomotion.HazardTestKit far, Player farWalker, Player farPrey) = ChargeScene(new FixedPath(new Vector3(Locomotion.HazardTestKit.X + 200f, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground)));
+        using (far)
+        {
+            Assert.Equal(SpellCastResult.Nopath, far.Kit.System.HandleCastRequest(farWalker, Charge, SpellCastTargets.ForUnit(farPrey.Guid)));
+        }
+
+        (Locomotion.HazardTestKit near, Player nearWalker, Player nearPrey) = ChargeScene(new FixedPath());
+        using (near)
+        {
+            Assert.Equal(SpellCastResult.CastOk, near.Kit.System.HandleCastRequest(nearWalker, Charge, SpellCastTargets.ForUnit(nearPrey.Guid)));
+        }
+    }
 }
