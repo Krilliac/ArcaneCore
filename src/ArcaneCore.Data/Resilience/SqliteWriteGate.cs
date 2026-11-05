@@ -146,7 +146,9 @@ public sealed class SqliteWriteGate
             {
                 // Wake at least every poll (1 s) to release a stuck hold, so a leaked transaction cannot block for longer than max hold plus a poll.
                 // The waiter keeps its place in the queue across wake-ups.
+#pragma warning disable ARC0006 // the documented blocking entry point: the bounded slice wait is the contract (async callers use TryEnterAsync)
                 if (waiter!.Task.Wait(SliceMs(left))) return Entered(Granted(start, owner, contended: true));
+#pragma warning restore ARC0006
                 ReleaseIfStuck(maxHoldMs);
                 left = Advance(ref progress, timeoutMs, timeoutMs);
             }
