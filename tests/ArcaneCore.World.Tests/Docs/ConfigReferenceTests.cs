@@ -277,7 +277,7 @@ public sealed class ConfigReferenceTests
             Entry("Beta:X", "Beta:X:A"),
         ];
 
-        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(entries);
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(entries, []);
         Assert.Equal(
             ["alpha.md", "big.md", "small-sections.md", "world-core.md", "README.md"],
             pages.Select(p => p.Path.Replace(ConfigReferenceRenderer.AreaDirectory + "/", string.Empty, StringComparison.Ordinal)));
@@ -316,15 +316,85 @@ public sealed class ConfigReferenceTests
         // Every entry lands on exactly one page.
         int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
         Assert.Equal(entries.Count, rows);
-        Assert.Equal(pages.Select(p => p.Text), ConfigReferenceRenderer.RenderByArea(entries).Select(p => p.Text));
+        Assert.Equal(pages.Select(p => p.Text), ConfigReferenceRenderer.RenderByArea(entries, []).Select(p => p.Text));
     }
 
     [Fact]
     public void RenderByArea_EscapesPipesInTheCells_AndShowsTheDaemons()
     {
         ConfigEntry entry = new("Solo", "Solo:Mode", "FixtureMode", "Fast", "Either a \\| b.", "-", ConfigDaemon.Both | ConfigDaemon.Gateway, EnumValues: ["Off", "Fast"]);
-        string page = ConfigReferenceRenderer.RenderByArea([entry]).Single(p => p.Path.EndsWith("small-sections.md", StringComparison.Ordinal)).Text;
+        string page = ConfigReferenceRenderer.RenderByArea([entry], []).Single(p => p.Path.EndsWith("small-sections.md", StringComparison.Ordinal)).Text;
         Assert.Contains("| `Mode` | `FixtureMode` | `Fast` | Off \\| Fast | Both, Gateway | start | Either a \\| b. |\n", page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderByArea_IncludesTheKeysReadByName_InTheCountsTheGroupingAndTheRows()
+    {
+        List<ConfigEntry> entries =
+        [
+            .. new[] { "A", "B", "C", "D" }.Select(k => Entry("Items", "Items:" + k)),
+            Entry("Tiny", "Tiny:A"),
+        ];
+        AdHocKey[] adHoc =
+        [
+            new("Items:ByName", "string", "null", "Read by name | with a pipe.", ConfigDaemon.World),
+            new("Lone:Switch", "bool", "false", "A lone key read by name.", ConfigDaemon.Both),
+        ];
+
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(entries, adHoc);
+        string Page(string file) => pages.Single(p => p.Path == ConfigReferenceRenderer.AreaDirectory + "/" + file).Text;
+
+        // The ad-hoc key is the fifth key of Items, so the section gets its own page only because the key is counted.
+        string items = Page("items.md");
+        Assert.Contains("
+5 options.", items, StringComparison.Ordinal);
+        Assert.Contains("| `ByName` | `string` | `null` | ", items, StringComparison.Ordinal);
+        Assert.Contains(" | World | start | Read by name | with a pipe. |
+", items, StringComparison.Ordinal);
+
+        string small = Page("small-sections.md");
+        Assert.Contains("
+2 options.", small, StringComparison.Ordinal);
+        Assert.Contains("## `Lone`
+
+", small, StringComparison.Ordinal);
+        Assert.Contains("| `Switch` | `bool` | `false` | true \| false | Both | start | A lone key read by name. |
+", small, StringComparison.Ordinal);
+
+        Assert.Contains("7 options in 2 files.", Page("README.md"), StringComparison.Ordinal);
+        int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal)).Sum(p => p.Text.Split('
+').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
+        Assert.Equal(entries.Count + adHoc.Length, rows);
+        Assert.Equal(ConfCatalogGenerator.Build(entries, adHoc).Keys.Count, rows);
+    }
+
+    [Fact]
+    public void StrayFiles_FindsAnyFileThatIsNotAPage_AtAnyDepth()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "arcanecore-config-pages-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = [new("docs/reference/config/a.md", "a"), new("docs/reference/config/README.md", "r")];
+            Assert.Empty(ConfigReferenceRenderer.StrayFiles(root, pages));
+
+            Directory.CreateDirectory(Path.Combine(root, "sub"));
+            File.WriteAllText(Path.Combine(root, "a.md"), "a");
+            File.WriteAllText(Path.Combine(root, "README.md"), "r");
+            Assert.Empty(ConfigReferenceRenderer.StrayFiles(root, pages));
+
+            File.WriteAllText(Path.Combine(root, "gone.md"), "x");
+            File.WriteAllText(Path.Combine(root, "sub", "a.md"), "same name, wrong place");
+            Assert.Equal(
+                [Path.Combine(root, "gone.md"), Path.Combine(root, "sub", "a.md")],
+                ConfigReferenceRenderer.StrayFiles(root, pages));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ production
@@ -462,19 +532,17 @@ public sealed class ConfigReferenceTests
     [Fact]
     public void Production_ConfigurationByArea_MatchesTheCommittedPages()
     {
-        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(Production.Entries);
+        IReadOnlyList<ConfigReferenceRenderer.AreaPage> pages = ConfigReferenceRenderer.RenderByArea(Production.Entries, ConfigExceptionTable.AdHocKeys);
         Assert.True(pages.Count > 10, "the by-area split must produce many pages; it produced " + pages.Count);
         int rows = pages.Where(p => !p.Path.EndsWith("README.md", StringComparison.Ordinal))
             .Sum(p => p.Text.Split('\n').Count(l => l.StartsWith("| `", StringComparison.Ordinal)));
-        Assert.Equal(Production.Entries.Count, rows);
+        Assert.Equal(ConfCatalogGenerator.Build(Production.Entries, ConfigExceptionTable.AdHocKeys).Keys.Count, rows);
+        Assert.Equal(Production.Entries.Count + ConfigExceptionTable.AdHocKeys.Count, rows);
 
         // A page that no longer has an area (a section renamed or emptied) must not linger: it would describe options that are gone.
         string directory = Path.Combine(RepoRoot.Find(), ConfigReferenceRenderer.AreaDirectory.Replace('/', Path.DirectorySeparatorChar));
-        HashSet<string> expected = [.. pages.Select(p => Path.GetFileName(p.Path))];
         bool update = Environment.GetEnvironmentVariable(DocsGolden.UpdateVariable) == "1";
-        List<string> stray = Directory.Exists(directory)
-            ? [.. Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly).Where(f => !expected.Contains(Path.GetFileName(f)))]
-            : [];
+        IReadOnlyList<string> stray = ConfigReferenceRenderer.StrayFiles(directory, pages);
         if (update)
         {
             foreach (string file in stray)
@@ -485,7 +553,7 @@ public sealed class ConfigReferenceTests
         else
         {
             Assert.True(stray.Count == 0, "stale files with no area in " + ConfigReferenceRenderer.AreaDirectory + ": "
-                + string.Join(", ", stray.Select(Path.GetFileName)) + ". Remove them: " + DocsGolden.RegenerateCommand);
+                + string.Join(", ", stray.Select(f => Path.GetRelativePath(directory, f))) + ". Remove them: " + DocsGolden.RegenerateCommand);
         }
 
         var failures = new List<string>();

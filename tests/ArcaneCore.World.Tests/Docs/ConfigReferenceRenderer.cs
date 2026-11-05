@@ -168,19 +168,31 @@ internal static class ConfigReferenceRenderer
     /// <summary>
     /// Renders the per-area configuration pages and their index. One page per top-level section; <c>World:X</c> (the second path segment) gets its
     /// own page at <see cref="OwnPageMinimumKeys"/> or more keys and otherwise joins "World core" together with the keys directly under <c>World</c>;
-    /// any other top-level section below that size joins "Small sections". Every entry lands on exactly one page. The result is ordered by area name.
+    /// any other top-level section below that size joins "Small sections". Every option lands on exactly one page. The result is ordered by area name.
+    /// The keys read by name (<paramref name="adHoc"/>) are options too: they count, are grouped and get a row like the options-class entries, so the
+    /// pages list the same keys as the shipped catalog (<see cref="ConfCatalogGenerator.Build"/> with the same arguments). A <c>World:X</c> group and a
+    /// top-level section called <c>X</c> share the page file <c>x.md</c> (there is no per-area name override); today that is only <c>World:Items</c> and <c>Items</c>.
+    /// The pages leave out the "List and map element fields" tables of configuration.md; every page links to it.
     /// </summary>
-    public static IReadOnlyList<AreaPage> RenderByArea(IReadOnlyList<ConfigEntry> entries)
+    public static IReadOnlyList<AreaPage> RenderByArea(IReadOnlyList<ConfigEntry> entries, IReadOnlyList<AdHocKey> adHoc)
     {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(adHoc);
         Dictionary<string, string> allowed = [];
-        foreach (ConfKey key in ConfCatalogGenerator.Build(entries).Keys)
+        foreach (ConfKey key in ConfCatalogGenerator.Build(entries, adHoc).Keys)
         {
             allowed[key.Path] = key.Allowed;
         }
 
+        List<AreaRow> rows =
+        [
+            .. entries.Select(e => new AreaRow(e.Path, e.Section, e.TypeText, e.Default, allowed[e.Path], e.Daemons, e.Reload switch { "live" => "live", "restart" => "restart", _ => "start" }, e.Meaning)),
+            .. adHoc.Select(a => new AreaRow(a.Path, a.Path[..a.Path.LastIndexOf(':')], a.TypeText, a.Default, allowed[a.Path], a.Daemons, "start", a.Meaning)),
+        ];
+
         var worldGroupCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var topCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (ConfigEntry entry in entries)
+        foreach (AreaRow entry in rows)
         {
             string[] segments = entry.Path.Split(':');
             if (segments[0] == "World")
@@ -196,7 +208,7 @@ internal static class ConfigReferenceRenderer
             }
         }
 
-        string AreaOf(ConfigEntry entry)
+        string AreaOf(AreaRow entry)
         {
             string[] segments = entry.Path.Split(':');
             if (segments[0] == "World")
@@ -207,10 +219,10 @@ internal static class ConfigReferenceRenderer
             return topCounts[segments[0]] >= OwnPageMinimumKeys ? segments[0] : SmallSectionsArea;
         }
 
-        List<IGrouping<string, ConfigEntry>> areas = [.. entries.GroupBy(AreaOf, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)];
+        List<IGrouping<string, AreaRow>> areas = [.. rows.GroupBy(AreaOf, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)];
         var pages = new List<AreaPage>();
         var index = new List<(string Area, int Count, string File)>();
-        foreach (IGrouping<string, ConfigEntry> area in areas)
+        foreach (IGrouping<string, AreaRow> area in areas)
         {
             string file = AreaFileName(area.Key);
             var sb = new StringBuilder();
@@ -219,18 +231,17 @@ internal static class ConfigReferenceRenderer
             sb.Append("     Regenerate: ").Append(DocsGolden.RegenerateCommand).Append(" -->\n\n");
             sb.Append(area.Count()).Append(" options. Set them in the daemon's `.conf` file or `appsettings.json`. Full reference: [configuration.md](../configuration.md). All areas: [index](README.md).\n\n");
             sb.Append("Daemon says which server reads it. Reload says whether `.reload config` applies it: `live` is applied to the running server, `restart` keeps its value until the next start, `start` is read once when the daemon starts.\n\n");
-            foreach (IGrouping<string, ConfigEntry> section in area.GroupBy(e => e.Section, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+            foreach (IGrouping<string, AreaRow> section in area.GroupBy(e => e.Section, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
             {
                 sb.Append("## `").Append(section.Key).Append("`\n\n");
                 sb.Append("| Option | Type | Default | Allowed | Daemon | Reload | Meaning |\n|---|---|---|---|---|---|---|\n");
                 string prefix = section.Key + ":";
-                foreach (ConfigEntry entry in section.OrderBy(e => e.Path, StringComparer.Ordinal))
+                foreach (AreaRow entry in section.OrderBy(e => e.Path, StringComparer.Ordinal))
                 {
                     string option = entry.Path.StartsWith(prefix, StringComparison.Ordinal) ? entry.Path[prefix.Length..] : entry.Path;
-                    string reload = entry.Reload switch { "live" => "live", "restart" => "restart", _ => "start" };
                     sb.Append("| `").Append(option).Append("` | `").Append(entry.TypeText).Append("` | ").Append(Code(entry.Default)).Append(" | ")
-                        .Append(allowed[entry.Path].Replace("|", "\\|", StringComparison.Ordinal)).Append(" | ").Append(entry.Daemons).Append(" | ")
-                        .Append(reload).Append(" | ").Append(entry.Meaning).Append(" |\n");
+                        .Append(entry.Allowed.Replace("|", "\\|", StringComparison.Ordinal)).Append(" | ").Append(entry.Daemons).Append(" | ")
+                        .Append(entry.Reload).Append(" | ").Append(entry.Meaning).Append(" |\n");
                 }
 
                 sb.Append('\n');
@@ -244,8 +255,8 @@ internal static class ConfigReferenceRenderer
         readme.Append("# Server options by area\n\n");
         readme.Append("<!-- GENERATED by tests/ArcaneCore.World.Tests/Docs (ConfigReferenceRenderer.RenderByArea) from the options classes. Do not edit by hand.\n");
         readme.Append("     Regenerate: ").Append(DocsGolden.RegenerateCommand).Append(" -->\n\n");
-        readme.Append(entries.Count).Append(" options in ").Append(index.Count).Append(" files.\n\n");
-        readme.Append("The full reference, with every option on one page, is [configuration.md](../configuration.md). Both are generated from the same catalog.\n\n");
+        readme.Append(rows.Count).Append(" options in ").Append(index.Count).Append(" files.\n\n");
+        readme.Append("The full reference, with every option on one page, is [configuration.md](../configuration.md). configuration.md also carries the element fields of the list and map options, which these pages leave out. Both are generated from the same catalog, which includes the keys read by name.\n\n");
         readme.Append("| Area | Options | File |\n|---|---|---|\n");
         foreach ((string area, int count, string file) in index)
         {
@@ -254,6 +265,31 @@ internal static class ConfigReferenceRenderer
 
         pages.Add(new AreaPage(AreaDirectory + "/README.md", readme.ToString()));
         return pages;
+    }
+
+    /// <summary>One option as the area pages show it: an options-class entry or a key read by name.</summary>
+    private sealed record AreaRow(string Path, string Section, string TypeText, string Default, string Allowed, ConfigDaemon Daemons, string Reload, string Meaning);
+
+    /// <summary>
+    /// The files under <paramref name="directory"/> (any depth) that are not one of <paramref name="pages"/>: full paths, ordered. A page that no longer
+    /// has an area would describe options that are gone. Empty when the directory does not exist.
+    /// </summary>
+    internal static IReadOnlyList<string> StrayFiles(string directory, IEnumerable<AreaPage> pages)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        HashSet<string> expected = [.. pages.Select(p => System.IO.Path.GetFileName(p.Path))];
+        return
+        [
+            .. Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories)
+                .Where(f => !(System.IO.Path.GetDirectoryName(f) is { } parent
+                    && string.Equals(System.IO.Path.GetFullPath(parent), System.IO.Path.GetFullPath(directory).TrimEnd(System.IO.Path.DirectorySeparatorChar), StringComparison.Ordinal)
+                    && expected.Contains(System.IO.Path.GetFileName(f))))
+                .Order(StringComparer.Ordinal),
+        ];
     }
 
     /// <summary>The page file name of an area: lower-case words joined by hyphens ("GameObjects" is game-objects.md, "World core" is world-core.md).</summary>
