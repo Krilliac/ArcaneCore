@@ -559,7 +559,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             LoginPackets.BuildAccountDataMd5(session.Settings),
             LoginPackets.BuildTutorialFlags(session.Settings.Tutorials));
         WorldRuntime world = session.World;
-        world.Post(() => EnterWorld(session, world, character, player, account, claimService));
+        CharacterSaveQueue? saveQueue = session.Services.GetService<CharacterSaveQueue>();
+        QuestNpcFeature? questFeature = session.Services.GetService<QuestNpcFeature>();
+        world.Post(() => EnterWorld(session, world, character, player, account, claimService, saveQueue, questFeature));
     }
 
     /// <summary>
@@ -630,7 +632,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         => claims?.TicketOf(player) ?? 0;
 
     /// <summary>World thread: send the login sequence and put the player into its map.</summary>
-    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account, CharacterClaimService? claims)
+    private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account, CharacterClaimService? claims,
+        CharacterSaveQueue? saveQueue, QuestNpcFeature? questFeature)
     {
         if (world.IsOnline(player.Guid))
         {
@@ -695,8 +698,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // end of login, so a client that sees itself in the world can rely on its saves having
         // resumed. This runs on the world thread, so no state capture can interleave. The save
         // consumer may write the resumed slot at once, but the slot is empty at this point.
-        session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(character.Id);
-        session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(character.Id);
+        saveQueue?.ResumeCharacter(character.Id);
+        questFeature?.Persistence.ResumeCharacter(character.Id);
         LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
         session.Logger.LogInformation("[{Endpoint}] '{Account}' entered the world as '{Name}'",
             session.RemoteEndpoint, session.AccountName, player.Name);

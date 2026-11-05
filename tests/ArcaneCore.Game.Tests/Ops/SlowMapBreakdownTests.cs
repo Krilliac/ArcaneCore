@@ -83,8 +83,14 @@ public sealed class SlowMapBreakdownTests
         var log = new Capture();
         using WorldRuntime world = Create(log, 1);
         Map map = world.GetMap(1, 4);
-        // The only updater, so it is the slowest by construction. A second, faster updater would make "slowest" a wall-clock race
-        // (a descheduled 2 ms sleeper can out-time a 25 ms one on a loaded box); the ranking is covered with injected times below.
+        // The only updater (the default ones are removed first), so it is the slowest by construction. A second, faster updater would
+        // make "slowest" a wall-clock race (a descheduled 2 ms sleeper can out-time a 25 ms one on a loaded box); the ranking is covered
+        // with injected times below.
+        foreach (IMapUpdater defaultUpdater in map.Updaters.ToArray())
+        {
+            map.RemoveUpdater(defaultUpdater);
+        }
+
         map.AddUpdater(new Explaining(25));
 
         world.RunTick(50);

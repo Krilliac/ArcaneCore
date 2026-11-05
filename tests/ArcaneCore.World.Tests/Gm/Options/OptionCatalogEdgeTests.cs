@@ -334,7 +334,11 @@ public sealed class OptionCatalogEdgeTests
         await admin.SendChatAsync(ChatType.Say, Language.Common, bots0 ? ".packetcheck bots on" : ".packetcheck bots off");
         await admin.SendChatAsync(ChatType.Say, Language.Common, staff0 ? ".packetcheck staff on" : ".packetcheck staff off");
         await admin.SendChatAsync(ChatType.Say, Language.Common, enabled0 ? ".packetcheck off" : ".packetcheck on");
-        await admin.CollectAsync(TimeSpan.FromMilliseconds(600));
+        await host.WaitForWorldAsync(() =>
+        {
+            OptionScope scope = Scope(host);
+            return OptionCatalog.Create(scope).Diff(scope).Count == 3;
+        }, "the three packetcheck verbs to change the options");
 
         string[] tracked = await host.OnWorldAsync(() =>
         {

@@ -129,6 +129,54 @@ public abstract class SchemaStartupResilienceTestBase : IAsyncLifetime
     /// <summary>Every <paramref name="slices"/>-th row of <see cref="UpgradeSteps"/>, starting at row <paramref name="slice"/>: the slices together cover each row exactly once.</summary>
     public static IEnumerable<object[]> UpgradeStepsSlice(int slice, int slices) => UpgradeSteps().Where((_, index) => index % slices == slice);
 
+    public static IEnumerable<object[]> ProviderComponentsSlice(int slice, int slices) => ProviderComponents().Where((_, index) => index % slices == slice);
+
+    /// <summary>The body of the interrupted-fresh-create theory; the two share classes each run half of <see cref="ProviderComponents"/> through it, so the rows run in parallel.</summary>
+    private protected async Task RunInterruptedFreshCreateAsync(DatabaseProvider provider, string component)
+    {
+        var counter = new CommandTap();
+        await SchemaProbe.EnsureCurrentAsync(component, await _databases.CreateAsync(provider), counter);
+        int ddl = counter.Ddl;
+        Assert.True(ddl > 0);
+
+        // Die after each DDL statement, and just before the statement that records the version
+        // (the crash the historic bootstrapper left an empty version table for).
+        Func<string, bool> isVersionInsert = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
+            && CommandTap.IsWrite(sql, "INSERT");
+        var faults = new List<(string Label, Func<string, bool> When, int On, bool Before)>();
+        for (int k = 1; k <= ddl; k++)
+        {
+            faults.Add(($"after DDL #{k}", CommandTap.IsDdl, k, false));
+        }
+
+        faults.Add(("before the version write", isVersionInsert, 1, true));
+
+        await RunFaultsAsync(faults, FaultParallelism, async fault =>
+        {
+            (string label, Func<string, bool> when, int on, bool before) = fault;
+            DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+            try
+            {
+                var tap = new CommandTap(when, on, faultBeforeStatement: before);
+                await AssertInjectedAsync(() => SchemaProbe.EnsureCurrentAsync(component, connection, tap), $"{provider} {component} fresh create {label} (probe saw {ddl} DDL)", tap);
+                try
+                {
+                    await SchemaProbe.EnsureCurrentAsync(component, connection);
+                }
+                catch (Exception ex)
+                {
+                    throw new Xunit.Sdk.XunitException($"{component} fresh create interrupted {label}: restart failed: {ex.GetType().Name}: {ex.Message}");
+                }
+
+                await AssertConvergedAsync(component, connection, $"{component} fresh create {label}");
+            }
+            finally
+            {
+                await _databases.ReleaseAsync(connection);
+            }
+        });
+    }
+
     public Task InitializeAsync() => Task.CompletedTask;
 
     public Task DisposeAsync() => _databases.DisposeAsync().AsTask();

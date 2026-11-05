@@ -249,6 +249,7 @@ public sealed partial class WorldSession
         finally
         {
             Close();
+            await AwaitWorldCloseAsync().ConfigureAwait(false); // the caller ends the session's scope next
         }
     }
 
