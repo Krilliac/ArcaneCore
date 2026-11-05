@@ -11,7 +11,8 @@ namespace ArcaneCore.Game.Pets;
 /// (Pet.cpp:2051-2104) from <c>petcreateinfo_spell</c>. What needs data this build does not have (the
 /// <c>creature_classlevelstats</c> fallback) or another area's primitives (owner stat inheritance,
 /// <c>UpdateAllStats</c>, the skill-line passives, the teach spells) keeps the template values and is
-/// listed under the limits of docs/integration/pets.md.
+/// listed under the limits of docs/integration/pets.md. A hunter's pet is looked up under the shared creature id 1 rows of
+/// <c>pet_levelstats</c> (<see cref="HunterPetStatsEntry"/>), not its own entry.
 /// </summary>
 internal static class PetInitializer
 {
@@ -20,7 +21,10 @@ internal static class PetInitializer
     /// then, when <c>pet_levelstats</c> has a row for the creature at that level (levels above 60 use level
     /// 60, a missing level repeats the one below, <see cref="PetContent"/>): melee damage when both bounds
     /// are non-zero (<c>SetBaseWeaponDamage</c>), armor when non-zero, health, mana and the five stats
-    /// (<c>SetCreateHealth</c>, <c>SetCreateMana</c>, <c>SetCreateStat</c>). The rank health and damage
+    /// (<c>SetCreateHealth</c>, <c>SetCreateMana</c>, <c>SetCreateStat</c>). A hunter's pet (<see cref="PetPower.IsHunterPet"/>) reads the
+    /// shared creature id 1 rows instead (<see cref="HunterPetStatsEntry"/>, Pet.cpp:1289), takes health, armor and the stats from them but no
+    /// mana (vmangos never calls <c>SetCreateMana</c> for a HUNTER_PET), and its damage is the Nostalrius level formula
+    /// <c>level * 1.15 * 1.05 * attackTime / 2000</c> (minimum) and <c>level * 1.45 * 1.05 * ...</c> (maximum), not a row value. The rank health and damage
     /// rates of a non-player owner default to 1 in vmangos (<c>_GetHealthMod</c>, <c>_GetDamageMod</c>)
     /// and are not configurable here. The owner's player-controlled and PvP flags are copied last.
     /// Health and mana end full.
@@ -35,31 +39,42 @@ internal static class PetInitializer
 
         pet.Level = (byte)Math.Clamp(level, 1, byte.MaxValue);
 
-        if (FindStats(pet, owner, content, level) is { } row)
+        bool hunter = PetPower.IsHunterPet(pet);
+        if (hunter)
         {
-            if (row.MinDamage != 0 && row.MaxDamage != 0)
+            // HUNTER_PET (Pet.cpp:1409-1414): the damage comes from the Nostalrius level formula, never from pet_levelstats (the creature id 1 rows
+            // carry no damage, and classic-db has no damage columns for them); damageMod is 1 for a player owner. The weapon speed is the template's.
+            float attackTime = pet.GetUInt32(UpdateFields.UnitFieldBaseattacktime);
+            pet.SetFloat(UpdateFields.UnitFieldMindamage, (float)(level * 1.15 * 1.05 * attackTime / 2000));
+            pet.SetFloat(UpdateFields.UnitFieldMaxdamage, (float)(level * 1.45 * 1.05 * attackTime / 2000));
+        }
+
+        if (FindStats(pet, content, level, hunter) is { } row)
+        {
+            if (!hunter && row.MinDamage != 0 && row.MaxDamage != 0)
             {
                 pet.SetFloat(UpdateFields.UnitFieldMindamage, row.MinDamage);
                 pet.SetFloat(UpdateFields.UnitFieldMaxdamage, row.MaxDamage);
             }
 
-            if (row.Armor != 0)
+            // A hunter pet's armor is always the row's (Pet.cpp:1421 SetCreateResistance without the non-zero test).
+            if (hunter || row.Armor != 0)
             {
                 pet.SetUInt32(UpdateFields.UnitFieldResistances, row.Armor);
             }
 
             pet.MaxHealth = row.Health;
             pet.SetUInt32(UpdateFields.UnitFieldBaseHealth, row.Health);
-            pet.SetUInt32(UpdateFields.UnitFieldBaseMana, row.Mana);
-            if (row.Mana > 0)
+            if (!hunter)
             {
-                // A hunter pet keeps its Focus power type across a level-up (Creature::SetInitCreaturePowerType returns early for a HUNTER_PET, Creature.cpp:1757-1758).
-                if (!PetPower.IsHunterPet(pet, owner))
+                // The HUNTER_PET branch never calls SetCreateMana (Pet.cpp:1409-1426): the creature id 1 row's mana is not a pool, and a hunter
+                // pet's power is Focus (PetPower.InitHunterPet), so neither BaseMana nor the mana slot is written for it.
+                pet.SetUInt32(UpdateFields.UnitFieldBaseMana, row.Mana);
+                if (row.Mana > 0)
                 {
                     pet.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+                    pet.SetUInt32(UpdateFields.UnitFieldMaxpower1, row.Mana);
                 }
-
-                pet.SetUInt32(UpdateFields.UnitFieldMaxpower1, row.Mana);
             }
 
             pet.SetUInt32(UpdateFields.UnitFieldStat0, row.Strength);
@@ -72,7 +87,7 @@ internal static class PetInitializer
         CopyOwnerControlFlags(pet, owner);
 
         pet.Health = pet.MaxHealth;
-        if (pet.PowerType == PowerType.Mana || PetPower.IsHunterPet(pet, owner))
+        if (!hunter && pet.PowerType == PowerType.Mana)
         {
             pet.SetUInt32(UpdateFields.UnitFieldPower1, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
         }
@@ -83,11 +98,12 @@ internal static class PetInitializer
 
     /// <summary>
     /// The <c>pet_levelstats</c> row of <paramref name="pet"/>: a hunter's pet reads the shared creature id 1 rows (Pet.cpp:1289-1291); when the
-    /// database has none, or the pet is not a hunter pet, the pet's own entry is used, as before.
+    /// database has none, or the pet is not a hunter pet, the pet's own entry is used (vmangos would fall back to <c>creature_classlevelstats</c>,
+    /// which this build does not load).
     /// </summary>
-    private static PetLevelStats? FindStats(Creature pet, Unit owner, PetContent content, int level)
+    private static PetLevelStats? FindStats(Creature pet, PetContent content, int level, bool hunter)
     {
-        if (PetPower.IsHunterPet(pet, owner) && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
+        if (hunter && content.FindLevelStats(HunterPetStatsEntry, level) is { } shared)
         {
             return shared;
         }

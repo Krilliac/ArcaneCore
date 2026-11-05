@@ -158,7 +158,7 @@ the load in `World/Pets/PetsFeature.cs`.
   sta, inte, spi` (no damage columns: `DmgMin`/`DmgMax` stay 0, which keeps the creature's own damage) and
   the second one exactly `entry, Spell1..Spell4`. vmangos also gates `petcreateinfo_spell` rows by
   `patch_min`/`patch_max` (`ObjectMgr.cpp:6475`); classic-db has no such columns. The classic-db dump also
-  holds an entry `1` (the standard hunter pet stats); it is loaded like any other and used by nothing yet.
+  holds an entry `1` (the standard hunter pet stats); it is loaded like any other and is the row set every hunter pet reads (`PetInitializer.HunterPetStatsEntry`, vmangos `creatureId = HUNTER_PET ? 1 : cinfo->entry`, `Pet.cpp:1289`): health, armor and the five stats come from entry `1`, its `mana` column is ignored (vmangos never calls `SetCreateMana` for a HUNTER_PET; the power is Focus) and the damage is the Nostalrius level formula (`level * 1.15 * 1.05 * attackTime / 2000` minimum, `1.45` maximum, `Pet.cpp:1409-1414`), because the dump has no damage columns. A hunter pet is the pet marked by `Creature.MarkHunterPetKind` at a persistent spawn, not any pet of a hunter.
 * **PetContent** follows `LoadPetLevelInfo`/`GetPetLevelInfo` (`ObjectMgr.cpp:4406-4516`): levels outside
   1..60 are ignored (60 is the vmangos `MaxPlayerLevel` default), an entry without level 1 data is a hard error
   (vmangos exits; here the world refuses to start), a level without data repeats the level below it, a lookup
@@ -288,7 +288,7 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
 * **Reagents back (wave 2).** A pet whose owner dies, that lost its owner, was left beyond the leash or whose owner has no pet any
   more gives its summoning spell's reagents back (`Pet::Unsummon(PET_SAVE_REAGENTS)`, Pet.cpp:668-674, 1052-1075). Not done: the
   talent reset, taxi and far-control triggers of the same mode.
-* **Pet data gaps.** A pet whose creature has no `pet_levelstats` row keeps its template health, damage,
+* **Pet data gaps.** A hunter pet reads the creature id `1` rows of `pet_levelstats` (a hunter without that row falls back to the pet's own entry); any other pet whose creature has no `pet_levelstats` row keeps its template health, damage,
   armor and stats: vmangos falls back to `creature_classlevelstats` (`GetClassLevelStats`), a table of the
   stats lane that this build does not have. Not ported: the owner's stat inheritance and `UpdateAllStats`
   (the stats lane), the template's school resistances, `LearnPetPassives` (skill-line passives),

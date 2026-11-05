@@ -24,6 +24,25 @@ public sealed class PersistentPetOffThreadTests
     }
 
     [Fact]
+    public void QueueDetachedPetSave_CaptureFailure_ReportsAPersistenceAnomaly_AndWritesNothing()
+    {
+        (PetTestKit kit, Player player) = HunterWithPet();
+        using (kit)
+        {
+            int writes = 0;
+            kit.Service.SaveDetachedPersistence = (_, _) => { Interlocked.Increment(ref writes); return Task.CompletedTask; };
+            kit.Service.DetachedCaptureOverride = _ => throw new InvalidOperationException("synthetic capture failure");
+            using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "pet/persistence-fault" && n.Subject == "character 1");
+
+            // The capture runs synchronously on the calling thread, before the first await of the queued save.
+            kit.Service.QueueDetachedPetSave(player);
+
+            Assert.Equal(1, capture.Count("pet/persistence-fault"));
+            Assert.Equal(0, Volatile.Read(ref writes));
+        }
+    }
+
+    [Fact]
     public async Task QueueCurrentPetSave_DoesNotCallTheStoreOnTheCallingThread()
     {
         (PetTestKit kit, Player player) = HunterWithPet();
