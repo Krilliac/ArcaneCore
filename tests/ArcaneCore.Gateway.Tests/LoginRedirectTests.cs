@@ -189,7 +189,7 @@ public sealed class LoginRedirectTests
 
             await client.SendAsync((ushort)WorldOpcode.CmsgPlayerLogin, LoginPayload(character), cts.Token);
             var held = System.Diagnostics.Stopwatch.StartNew();
-            // The connection stays up while the login is held: the gateway answers PING in every state (each read has the mock client's own 5 s limit).
+            // The connection stays up while the login is held: the gateway answers PING in every state (each read is bounded by the mock client's per-operation deadline, 30 s in this suite).
             uint sequence = 0;
             while (held.Elapsed < TimeSpan.FromSeconds(20))
             {

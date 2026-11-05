@@ -70,7 +70,9 @@ internal sealed class ScenarioTestWorld : IAsyncDisposable
     /// <summary>
     /// Wall-clock hang bound of one scenario run, not a speed assertion: every wait keeps its own game-time budget. The run
     /// includes a cold first login and the world's ticks, which cost wall time in proportion to the host's load; 90 s cancelled
-    /// the ship crossing in its fourth step after a 44 s login on a loaded node (gate 0c90a0289, whole test 3.5 min).
+    /// the ship crossing in its fourth step after a 44 s login on a loaded node (gate 0c90a0289, whole test 3.5 min). In that log at least 8 other
+    /// heavy bot-world tests (1 to 3 minutes each) ran in the same process on a 14-core node, and about 2 minutes passed before the scenario clock
+    /// started; the evidence is CPU starvation by the suite's own parallelism, not a slow transport path (nothing was profiled).
     /// </summary>
     public static TimeSpan RunHangBound { get; } = TimeSpan.FromMinutes(5);
 

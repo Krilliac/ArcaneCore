@@ -894,7 +894,7 @@ public sealed class CharacterClaimWiringTests
                     }
 
                     // The read that follows is the one made after the claim: the record it returns names another race.
-                    if (await trip.ClaimedAsync() && await inner.GetByIdAsync(trip.CharacterId) is { } live)
+                    if (await trip.IsClaimedAsync() && await inner.GetByIdAsync(trip.CharacterId) is { } live)
                     {
                         lock (live)
                         {
@@ -931,6 +931,11 @@ public sealed class CharacterClaimWiringTests
 
         public CharacterOwnershipToken? HeldAtFault => _heldAtFault;
 
+        /// <summary>True while the claim row names this login. Records nothing: used where the test only alters state (not a fault), so <see cref="HeldAtFault"/> stays proof from inside a fault.</summary>
+        public async Task<bool> IsClaimedAsync()
+            => CharacterId != 0 && await store.GetActiveOwnershipAsync((ulong)CharacterId) is { } owner && owner == login;
+
+        /// <summary>The check a fault makes: like <see cref="IsClaimedAsync"/>, and it records the owner the fault saw.</summary>
         public async Task<bool> ClaimedAsync()
         {
             if (CharacterId == 0 || await store.GetActiveOwnershipAsync((ulong)CharacterId) is not { } owner || owner != login)
