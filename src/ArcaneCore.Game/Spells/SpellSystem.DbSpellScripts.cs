@@ -20,7 +20,12 @@ public sealed partial class SpellSystem
     /// SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>). Of the DUMMY-only ids with imported rows,
     /// 11886-11889 (CaptureDespawnScript) and 25716 (ForceBowScript) are claimed by an <see cref="ISpellScript"/>, so their rows never run;
     /// 9096, 11365, 11885, 16378, 19250, 21052, 21914, 21917 and 23359 have no code claim, so their rows are the only implementation. 29182 and
-    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Every SCRIPT_EFFECT effect starts the row (vmangos runs the trailing block once
+    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Audit of the full imported set of 21 ids (5784, 9096, 11365, 11885-11889, 13819,
+    /// 16378, 19250, 21052, 21914, 21917, 23161, 23214, 23359, 25716, 26608, 29182, 29188): a source search for each bare id finds no hard-coded
+    /// switch, dummy-aura case or handler except the <see cref="ISpellScript"/> claims named above and 26608 (also an <see cref="ISpellScript"/>,
+    /// claimed), so no row and code ever both act. 16378 appears only as a creature entry (GuardPostTable); 5784, 13819, 23161 and 23214 are the
+    /// mount spells and have no code claim.
+    /// Every SCRIPT_EFFECT effect starts the row (vmangos runs the trailing block once
     /// per effect); the cmangos priority rule let only the first of several SCRIPT_EFFECT effects start it.
     /// A spell with both a DUMMY and a SCRIPT_EFFECT effect starts its row from the SCRIPT_EFFECT only.
     /// </summary>
