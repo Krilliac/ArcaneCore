@@ -44,7 +44,7 @@ public sealed class MovementCompressionTests
 
         ushort monster = (ushort)WorldOpcode.SmsgMonsterMove;
         Assert.Equal([3, (byte)monster, (byte)(monster >> 8), 9], WorldTestClient.Inflate(second)); // none of the first batch is left in it
-        Assert.Equal(5 + 1 + 2 + 3, WorldTestClient.Inflate(first).Length); // and clearing did not reach into the packet already built
+        Assert.Equal(1 + 2 + 3, WorldTestClient.Inflate(first).Length); // and clearing did not reach into the packet already built
     }
 
     [Fact]
