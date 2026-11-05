@@ -275,6 +275,48 @@ public sealed class PublicFeedPoolTests
     }
 
     [Fact]
+    public async Task InProcessMode_SeedsTheTemplateSetFromCapsSummonTemplates_SoAWorldWithoutLinksStillKeepsTheBoarAndDropsThePet()
+    {
+        var rig = new Rig(inProcess: true);
+        rig.Feed.LinksSupported = false;
+        rig.Feed.CapsAnswer = new JsonObject
+        {
+            ["op"] = "result", ["ok"] = true, ["kind"] = "caps", ["actions"] = false, ["liveServer"] = false, ["role"] = "web",
+            ["templates"] = new JsonArray(), ["summonTemplates"] = new JsonArray(17, 18),
+        };
+        await rig.Pool.StartAsync(CancellationToken.None);
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity pet = Frames.Entity(500, LiveKind.Creature, "Wolf", 7771.5, 10.5, entry: 17);
+        LiveEntity totem = Frames.Entity(502, LiveKind.Creature, "Totem", 7775.5, 12.5, entry: 18);
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+
+        connection.PushFrame(FrameOf(1, pet, totem, boar));
+        connection.PushFrame(FrameOf(2, pet, totem, boar));
+
+        PublicMapStatus status = rig.Store.Status(0);
+        Assert.True(status.Reduced); // links is still missing
+        Assert.Equal([501UL], status.Projection!.Entities.Select(e => e.Guid).ToArray());
+        Assert.Equal([501UL], status.StaffProjection!.Entities.Select(e => e.Guid).ToArray());
+    }
+
+    [Fact]
+    public async Task InProcessMode_AnOlderWorldWithoutSummonTemplates_StillStartsAndSeedsNothing()
+    {
+        var rig = new Rig(inProcess: true);
+        rig.Feed.LinksSupported = false;
+        await rig.Pool.StartAsync(CancellationToken.None); // the default caps answer has no summonTemplates
+        using IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        FakeConnection connection = rig.Feed.Opened[0];
+        LiveEntity boar = Frames.Entity(501, LiveKind.Creature, "Boar", 30.5, 40.5, entry: 5);
+
+        connection.PushFrame(FrameOf(1, boar));
+        connection.PushFrame(FrameOf(2, boar));
+
+        Assert.Empty(rig.Store.Status(0).Projection!.Entities); // no template set is known: every creature is dropped
+    }
+
+    [Fact]
     public async Task AWorldWithoutLinks_GivesReducedGuestData()
     {
         var rig = new Rig();

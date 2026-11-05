@@ -354,6 +354,29 @@ public sealed class GuestFrameProjectorTests
         }
     }
 
+    [Fact]
+    public void SeededSummonEntries_ActAsTheTemplateSet_WhenLinksWasNeverAnswered()
+    {
+        var projector = new GuestFrameProjector(new PublicGuestOptions(), new ManualTime());
+        projector.SeedSummonEntries([17, 18]);
+        LiveFrame frame = Frames.Frame(
+            10,
+            Player(Zed, "Zed", 100.25, 100.5),
+            Frames.Entity(500, LiveKind.Creature, "IdlePet", 103.125, 101.5, motion: "idle", entry: 17),
+            Frames.Entity(501, LiveKind.Creature, "Totem", 112.75, 95.5, entry: 18),
+            Frames.Entity(502, LiveKind.Creature, "Boar", 4000.5, 4001.5, entry: 5));
+
+        GuestProjection projection = projector.Project(frame, LinksSnapshot.Unsupported);
+        string text = Bytes(projection);
+
+        Assert.True(projection.Reduced);
+        Assert.Equal([502UL], Guids(projection)); // the seeded entries are dropped, the unrelated boar stays
+        foreach (string x in new[] { "103.12", "112.75", "100.25" })
+        {
+            AssertPositionAbsent(text, x);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
