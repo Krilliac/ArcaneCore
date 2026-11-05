@@ -178,10 +178,12 @@ public sealed class PlayerbotBrainStallTests
     /// <see cref="Creature.IsEvadingUnreachable"/>) and regenerates to full as an evading creature does, so the fight never gets anywhere.
     /// Its health never falls and the bot makes no step, so after
     /// <see cref="PlayerbotBrain.FightNoProgressMs"/> the bot sets it aside, and for about a respawn (<see cref="PlayerbotBrain.StalledTargetMs"/>).
-    /// The thinks run under a probe on a frozen clock (<see cref="ThinkUntilOnAFrozenBudgetAsync"/>): the brain's optional think budget is
-    /// wall-clock, and a loaded host spent it before the bot fought (flake ledger #32); this test is about world time only.
+    /// The thinks run under a probe on a frozen clock (<see cref="ThinkUntilOnAFrozenBudgetAsync"/>), which pins the brain's wall-clock optional
+    /// think budget. Whether that budget caused the flake (ledger #32) is a hypothesis, not shown: the target comes from the combat path, which reads
+    /// no budget. The Timing tag stays until a gate shows the test stable.
     /// </summary>
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ATargetTheBotCannotHurt_IsSetAside_AndNotTakenBackSoon()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);
@@ -416,8 +418,8 @@ public sealed class PlayerbotBrainStallTests
 
     /// <summary>
     /// <see cref="RiskTestWorld.ThinkUntilAsync"/> with every think run under a probe whose clock never moves: the brain's optional work
-    /// (<see cref="PlayerbotBrain.HasOptionalThinkBudget"/>, 15 ms) reads the wall clock when no probe is running, so a loaded host spent the
-    /// budget before the bot had looked at its target. World time moves as in <see cref="RiskTestWorld.ThinkAsync"/>.
+    /// (<see cref="PlayerbotBrain.HasOptionalThinkBudget"/>, 15 ms) reads the wall clock when no probe is running; the helper removes that input
+    /// (hypothesis for the flake, not shown). World time moves as in <see cref="RiskTestWorld.ThinkAsync"/>.
     /// </summary>
     private static async Task<bool> ThinkUntilOnAFrozenBudgetAsync(RiskTestWorld world, uint maxMs, Func<bool> condition, Action each)
     {
