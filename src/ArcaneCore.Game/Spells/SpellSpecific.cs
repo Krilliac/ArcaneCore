@@ -382,6 +382,12 @@ public static class SpellSpecifics
     /// the same family flags, icon, visual, first effect and first aura (and, for an ADD_FLAT_MODIFIER, the same misc value). There is no
     /// spell_chain table here, so the name stands for the chain; an item set or talent passive that merely shares a name with another spell
     /// (Rapid Fire and its Cryptstalker bonus, Renew and the Vestments of Faith bonus) differs in these fields and is no rank of it.
+    /// Two clauses of the vmangos test are left out on purpose. SpellIconID &gt; 1 (the generic check does not hold for icon 0 or 1): the name
+    /// already stands for the chain and fixtures use icon 0; in the 5875 Spell.dbc the only aura pair with icon 0 or 1 is 28843 and 30440
+    /// (" Increased Spell Hit Chance", family 4), so were a script ever to grant both, the weaker 28843 would be refused here where vmangos
+    /// stacks them (28843 is a Dreadnaught's Battlegear set bonus; no item or item set grants 30440). The EffectItemType clause (a flat modifier
+    /// whose item type masks are disjoint falls back to the spell_chain test, SpellMgr.cpp:891-897) is also omitted: no flat modifier pair of
+    /// the 5875 Spell.dbc has disjoint item types.
     /// </summary>
     public static bool IsRankOf(SpellInfo first, SpellInfo second)
     {
