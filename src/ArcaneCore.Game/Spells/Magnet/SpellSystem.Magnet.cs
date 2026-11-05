@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 
@@ -47,13 +48,16 @@ public sealed partial class SpellSystem
                 || !ReferenceEquals(magnet.Map, cast.Caster.Map) || IsQuestSettlementPending(magnet)
                 || !IsMagnetTargetEligible(spell, magnet, casterSelector: !updateExplicitTarget)
                 || (updateExplicitTarget && (!cast.IsTriggered || cast.Targets.FromClient)
-                    && CheckExplicitHostileTargetRules(cast.Caster, spell, magnet) != SpellCastResult.CastOk))
+                    && CheckExplicitHostileTargetRules(cast.Caster, spell, magnet) != SpellCastResult.CastOk
+                    && !IsFreeForAllOpponentOwned(cast.Caster, magnet)))
             {
-                // The last test is the mangos-classic CanAttack(magnet) rule (Unit.cpp:6924), expressed through the explicit-hostile-target
+                // The last two tests are the mangos-classic CanAttack(magnet) rule (Unit.cpp:6924), expressed through the explicit-hostile-target
                 // gate. The landing CheckCast ran against the client's named unit (the victim), not the magnet, so a legitimately hostile
                 // victim that holds a magnet the caster may not attack (a friendly or unflagged owner's totem) is skipped here instead of
-                // being redirected onto it. This is a gameplay eligibility rule, not an anti-crafting protection: a client cannot choose the
-                // magnet. Scope: non-triggered casts and client-named blocks, like CheckCast; a server-chosen triggered cast is left alone.
+                // being redirected onto it. A magnet that a free-for-all opponent of the caster controls is attackable (see
+                // IsFreeForAllOpponentOwned) and is not skipped. This is a gameplay eligibility rule, not an anti-crafting protection: a client
+                // cannot choose the magnet. Scope: non-triggered casts and client-named blocks, like CheckCast; a server-chosen triggered cast
+                // is left alone. Like CheckCast it reads TargetA only: a spell with its enemy selector only in TargetB is not gated.
                 continue;
             }
 
@@ -84,6 +88,22 @@ public sealed partial class SpellSystem
 
         return victim;
     }
+
+    /// <summary>
+    /// A magnet (a totem, a pet) whose controlling player and the caster's controlling player are two free-for-all flagged players that the
+    /// relation treats as hostile (different players, not grouped) is attackable. mangos-classic GetReactionTo returns hostile for a pair of
+    /// free-for-all controlling players (Relations.cpp, IsPvPFreeForAll on the controlling players) and vmangos GetReactionTo has the same
+    /// clause on the affecting players (Object.cpp); the faction-template reaction used by <c>CombatHooks.CanAttack</c> for a player-controlled
+    /// unit has no such clause and reads the totem as a friend of its own team. The player pair itself is judged by the same relation, so a
+    /// group mate or the caster's own totem is not exempted. A magnet that is itself a player is judged by that relation already.
+    /// </summary>
+    private bool IsFreeForAllOpponentOwned(Unit caster, Unit magnet)
+        => DuelRules.ControllingPlayer(caster) is { } casterPlayer
+            && DuelRules.ControllingPlayer(magnet) is { } magnetPlayer
+            && !ReferenceEquals(casterPlayer, magnetPlayer)
+            && (casterPlayer.Flags & PlayerFlags.FfaPvp) != 0
+            && (magnetPlayer.Flags & PlayerFlags.FfaPvp) != 0
+            && Relations.IsHostile(casterPlayer, magnetPlayer);
 
     private bool IsMagnetTargetEligible(SpellInfo spell, Unit magnet, bool casterSelector)
     {

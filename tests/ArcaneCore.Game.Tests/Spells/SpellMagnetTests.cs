@@ -1,6 +1,13 @@
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Reputation;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -350,5 +357,76 @@ public sealed class SpellMagnetTests
         Assert.NotNull(seen.Seen);
         Assert.Equal(magnet.Guid, seen.Seen!.Unit);
         Assert.True(seen.Seen.FromClient); // the redirected block stays client-named (SpellCastTargets.ForUnit(guid, parent) inherits the flag, see SpellCastTargets.cs)
+    }
+
+    /// <summary>The world daemon's resolver (WorldSpellUnitResolver): players and creatures through the map's object registry.</summary>
+    private sealed class MapObjectResolver : ISpellUnitResolver
+    {
+        public Unit? Find(Unit reference, ObjectGuid guid)
+            => guid.IsEmpty ? null : reference.Guid == guid ? reference : reference.Map?.FindObject(guid) as Unit;
+    }
+
+    /// <summary>
+    /// The production hook chain (ReputationCombatHooks over FactionCombatHooks) with a creature that a player owns and that carries the
+    /// player-controlled flag, as a summoned totem does (TotemSystem). The attacker, the victim and (when flagged) the totem's owner are
+    /// same-team free-for-all players. Grounding between such opponents must still redirect (mangos-classic GetReactionTo, vmangos
+    /// GetReactionTo: a pair of free-for-all controlling players is hostile); an owner who is not free-for-all keeps the totem unattackable.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ClientCast_FreeForAllOpponentsTotem_IsRedirectedOnlyWhenItsOwnerIsFreeForAll(bool ownerFreeForAll)
+    {
+        using var kit = new SpellTestKit(Protect(), Attack());
+        Map map = kit.World.GetMap(0);
+        var creatures = new CreatureMapSystem(map, CreatureTestKit.Content([CreatureTestKit.Template(CreatureTestKit.WolfEntry)], []), random: new Random(1));
+        map.AddUpdater(creatures);
+        kit.System.Units = new MapObjectResolver();
+        (Player attacker, _) = kit.AddPlayer(1);
+        Player victim = kit.AddPlayer(2, 5).Player;
+        Player owner = kit.AddPlayer(3, 6).Player;
+        var reputation = new ReputationService(ReputationFixtures.Factions, roll: () => 0.0);
+        foreach (Player player in new[] { attacker, victim, owner })
+        {
+            reputation.Track(player, reputation.Create(player, CharacterReputationData.Empty));
+            player.MaxHealth = player.Health = 100;
+        }
+
+        map.Combat.Hooks = new ReputationCombatHooks(new FactionCombatHooks(ReputationFixtures.Templates),
+            new ReputationReactionResolver(ReputationFixtures.Templates, ReputationFixtures.Factions, reputation.For));
+        kit.System.Relations = CombatHookRelations.Instance;
+        kit.System.CombatRules = SpellCombatRules.Neutral;
+
+        attacker.Flags |= PlayerFlags.FfaPvp;
+        victim.Flags |= PlayerFlags.FfaPvp;
+        if (ownerFreeForAll)
+        {
+            owner.Flags |= PlayerFlags.FfaPvp;
+        }
+
+        Creature totem = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
+        totem.SetOwnerGuid(owner.Guid);
+        totem.UnitFlags |= UnitFlags.PlayerControlled;
+        totem.FactionTemplate = owner.FactionTemplate;
+        totem.MaxHealth = totem.Health = 100;
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(totem, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
+        Assert.True(kit.System.HasAura(victim, Protection));
+        Assert.True(CombatHookRelations.Instance.IsHostile(attacker, victim));
+        Assert.False(CombatHookRelations.Instance.IsHostile(attacker, totem)); // the template reaction reads the team's totem as a friend: the gap the exemption closes
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), false));
+
+        if (ownerFreeForAll)
+        {
+            Assert.Equal(100u, victim.Health);
+            Assert.Equal(85u, totem.Health);
+            Assert.False(kit.System.HasAura(victim, Protection)); // the charge was spent
+        }
+        else
+        {
+            Assert.Equal(85u, victim.Health);
+            Assert.Equal(100u, totem.Health);
+            Assert.True(kit.System.HasAura(victim, Protection)); // no charge was spent on the refused redirect
+        }
     }
 }
