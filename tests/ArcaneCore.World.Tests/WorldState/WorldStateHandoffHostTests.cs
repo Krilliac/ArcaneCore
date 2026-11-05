@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Persistence;
