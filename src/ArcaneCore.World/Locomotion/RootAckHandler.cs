@@ -57,6 +57,7 @@ public sealed class RootAckHandler : IOpcodeHandlerGroup
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
         session.SessionTrace?.Ack(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement.Time, knockback: false);
+        antiCheat?.JudgeAcknowledgedMovement(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement, MovementFlags.None);
         MovementHandlers.ApplyObserved(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);

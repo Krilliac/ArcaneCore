@@ -48,8 +48,10 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         // block that starts the launch does not start a fall: the fall tracking of the observers is undone after the block is stored.
         // The anticheat checks the acknowledgement's clock and starts a new baseline after the launch (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
+        // Known limit (docs/areas/anticheat.md): OnAcknowledgement re-baselines first, so the position of this block is not distance-checked; its flags are.
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: true);
         session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
+        antiCheat?.JudgeAcknowledgedMovement(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement, MovementFlags.None);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);
