@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Procs;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 
@@ -13,7 +14,7 @@ namespace ArcaneCore.Game.Tests.Spells.Effects;
 /// The effects the wiring review found without a handler (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (Mechanical Patch Kit 15057), EVADE 21
 /// (Evade (DND) 108) and NOSTALRIUS 131 (silent).
 /// </summary>
-public sealed class MechanicalAndAreaEffectsTests
+public sealed class HealMechanicalAndEvadeEffectTests
 {
     private const uint PatchKit = 15057, EvadeDnd = 962103, FriendHeal = 962104;
 
@@ -158,6 +159,23 @@ public sealed class MechanicalAndAreaEffectsTests
         List<ProcEvent> hits = events.Where(e => (e.Extra & ProcFlagsEx.CastEnd) == 0).ToList(); // the cast-end event is a separate one
         Assert.NotEmpty(hits); // the hit did fire a proc, or the amount check below would prove nothing
         Assert.All(hits, e => Assert.Equal(0u, e.Amount));
+    }
+
+    /// <summary>vmangos EffectHealMechanical (SpellEffects.cpp:1835): the effect value on another unit, with a heal log packet.</summary>
+    [Fact]
+    public void HealMechanical_OnAnotherPlayer_HealsByTheEffectValue_AndSendsOneHealLog()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddPlayer(2, 2);
+        target.MaxHealth = 2_000;
+        target.Health = 100;
+        session.Clear();
+
+        kit.System.CastSpell(caster, FriendHeal, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+
+        Assert.Equal(200u, target.Health);
+        Assert.Single(Packets(session, WorldOpcode.SmsgSpellheallog));
     }
 
     [Fact]

@@ -28,7 +28,7 @@ namespace ArcaneCore.Game.Tests.Instances;
 /// </summary>
 public sealed class NaxxramasSpellTests
 {
-    private const uint SummonBlizzard = 28560, MagneticPullA = 28338, ZombieChowSearch = 28236, CallAllZombieChow = 29682;
+    private const uint SummonBlizzard = 28560, MagneticPullA = 28338, MagneticPullB = 28339, ZombieChowSearch = 28236, CallAllZombieChow = 29682;
     private const uint CheckSpectralSide = 28749, CheckUnrelentingSide = 29875, SpectralSideAssault = 28781, UnrelentingSideAssault = 29874;
 
     /// <summary>Every spell of the lane (spell-lane-naxxramas-casts).</summary>
@@ -112,6 +112,37 @@ public sealed class NaxxramasSpellTests
 
         Assert.True(kit.System.HasAura(pulled, ThaddiusMagneticPullScript.MagneticPullJump));
         Assert.False(kit.System.HasAura(victim, ThaddiusMagneticPullScript.MagneticPullJump));
+    }
+
+    [Fact]
+    public void MagneticPullB_TheHitUnitCastsTheJumpAtTheCastersVictim()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(MagneticPullB, SpellImplicitTarget.Unit), Marker(ThaddiusMagneticPullScript.MagneticPullJump));
+        (Player victim, _) = kit.AddPlayer(1);
+        (Player pulled, _) = kit.AddPlayer(2, 2, 0);
+        Creature add = SpawnCreatures(kit, (CreatureTestKit.WolfEntry, 4))[0];
+        Assert.True(kit.World.GetMap(0).Combat.Attack(add, victim));
+        Assert.Same(victim, add.Combat.Victim);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(add, MagneticPullB, SpellCastTargets.ForUnit(pulled.Guid), triggered: true));
+        FlushSpellBatch(kit);
+
+        Assert.True(kit.System.HasAura(pulled, ThaddiusMagneticPullScript.MagneticPullJump));
+        Assert.False(kit.System.HasAura(victim, ThaddiusMagneticPullScript.MagneticPullJump));
+    }
+
+    [Fact]
+    public void MagneticPullB_WithoutAVictim_CastsNoJump()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(MagneticPullB, SpellImplicitTarget.Unit), Marker(ThaddiusMagneticPullScript.MagneticPullJump));
+        (Player pulled, _) = kit.AddPlayer(2, 2, 0);
+        Creature add = SpawnCreatures(kit, (CreatureTestKit.WolfEntry, 4))[0];
+        Assert.Null(add.Combat.Victim);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(add, MagneticPullB, SpellCastTargets.ForUnit(pulled.Guid), triggered: true));
+        FlushSpellBatch(kit);
+
+        Assert.False(kit.System.HasAura(pulled, ThaddiusMagneticPullScript.MagneticPullJump));
     }
 
     [Fact]

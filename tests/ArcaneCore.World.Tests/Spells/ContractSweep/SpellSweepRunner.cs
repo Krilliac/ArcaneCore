@@ -376,17 +376,27 @@ internal sealed class SpellSweepRunner
             return;
         }
 
-        uint heldIn = SpellSystem.BatchIndex(_rig.World.NowMs, window);
-        for (uint waited = 0; SpellSystem.BatchIndex(_rig.World.NowMs, window) == heldIn && waited <= window; waited += 50)
-        {
-            _rig.World.RunTick(50);
-        }
-
-        if (SpellSystem.BatchIndex(_rig.World.NowMs, window) == heldIn)
+        if (!WaitForBatchBoundary(window, () => _rig.World.NowMs, _rig.World.RunTick))
         {
             Violate(SweepCategory.BatchNotSettled, _current!.SpellId,
                 $"no batch boundary {window} ms after goes={_rig.System.PendingBatchedGoes} swings={(swings ? _rig.Map.Combat.PendingSwings : 0)} were held");
         }
+    }
+
+    /// <summary>
+    /// Tick in 50 ms steps until the clock is in a later batch than the one it started in, at most one window plus a tick. False when it
+    /// never got there (the clock stopped, or the window is not what the ticks advance by): <see cref="SettleBatch"/> reports that as
+    /// j.batch-not-settled. Static over a clock and a tick so a test can drive it with a stuck clock.
+    /// </summary>
+    internal static bool WaitForBatchBoundary(uint window, Func<uint> nowMs, Action<uint> tick)
+    {
+        uint heldIn = SpellSystem.BatchIndex(nowMs(), window);
+        for (uint waited = 0; SpellSystem.BatchIndex(nowMs(), window) == heldIn && waited <= window; waited += 50)
+        {
+            tick(50);
+        }
+
+        return SpellSystem.BatchIndex(nowMs(), window) != heldIn;
     }
 
     private Unit? FindAuraUnit(SweepScene scene)
