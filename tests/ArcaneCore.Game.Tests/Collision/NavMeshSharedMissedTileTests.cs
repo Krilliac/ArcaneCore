@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
@@ -66,6 +67,22 @@ public sealed class NavMeshSharedMissedTileTests
         nav.FindPathShared(MapId, From, new Vector3(58, 2, 0), new PathOptions { MaxSearchNodes = 4096 }, missed);
         Assert.NotEmpty(missed);
 
+        // When the file read ran, so a failure says which it was: a reader that never got to run, or a read that stalled in the file.
+        var clock = Stopwatch.StartNew();
+        long entered = -1, left = -1;
+        nav.FileReader = path =>
+        {
+            Interlocked.CompareExchange(ref entered, clock.ElapsedMilliseconds, -1);
+            try
+            {
+                return File.Exists(path) ? File.ReadAllBytes(path) : null;
+            }
+            finally
+            {
+                Interlocked.CompareExchange(ref left, clock.ElapsedMilliseconds, -1);
+            }
+        };
+
         SharedMissVerdict verdict = nav.ResolveSharedMisses(MapId, missed);
         var deadline = DateTime.UtcNow.AddSeconds(20);
         while (verdict == SharedMissVerdict.Pending && DateTime.UtcNow < deadline)
@@ -74,7 +91,10 @@ public sealed class NavMeshSharedMissedTileTests
             verdict = nav.ResolveSharedMisses(MapId, missed);
         }
 
-        Assert.Equal(SharedMissVerdict.Changed, verdict);
+        bool changed = verdict == SharedMissVerdict.Changed;
+        Assert.True(
+            changed,
+            $"{verdict} after {clock.ElapsedMilliseconds} ms; the file read entered at {Interlocked.Read(ref entered)} ms and left at {Interlocked.Read(ref left)} ms (-1: not yet)");
         // The tile is in: nothing is open any more.
         Assert.NotEqual(SharedMissVerdict.Pending, nav.ResolveSharedMisses(MapId, missed));
     }
