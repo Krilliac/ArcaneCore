@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
@@ -111,6 +112,24 @@ public sealed partial class MapCombat : IMapUpdater
     {
         get => _hooks ?? CombatHooks.For(_world);
         set => _hooks = value;
+    }
+
+    /// <summary>
+    /// <see cref="CombatHooks.CanAttack"/> for a single-target attack by a unit: additionally, a unit that is not a player or under a player's control
+    /// cannot target a victim that is successfully feigning death (vmangos Unit::IsTargetableBy, Unit.cpp:6158, the non-player attacker branch with
+    /// <c>!forAoE</c> and <c>!helpful</c>; UNIT_STATE_FEIGN_DEATH is added only when the feign was not resisted, Unit::SetFeignDeath, Unit.cpp:9240-9250).
+    /// The dead dynamic flag is only a cheap pre-filter (a resisted feign and some creature templates carry it too); the answer is
+    /// <see cref="Spells.SpellSystem.IsFeigningDeath"/>. Without a spell system nothing can be feigning. Area effects keep using <see cref="CombatHooks.CanAttack"/>.
+    /// </summary>
+    public bool CanAttackSingleTarget(Unit attacker, Unit victim)
+    {
+        if (!attacker.IsCharmerOrOwnerPlayerOrPlayerItself && victim.IsAlive
+            && victim.HasFlag(UpdateFields.UnitDynamicFlags, Ranged.UnitDynFlags.Dead) && SpellMitigation?.IsFeigningDeath(victim) == true)
+        {
+            return false;
+        }
+
+        return Hooks.CanAttack(attacker, victim);
     }
 
     /// <summary>

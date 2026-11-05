@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -38,6 +39,13 @@ public sealed partial class SpellSystem
             && effect.TargetA is SpellImplicitTarget.UnitEnemy or SpellImplicitTarget.LocationCasterTargetPosition))
         {
             return SpellCastResult.CastOk;
+        }
+
+        // vmangos Spell::CheckCast (Spell.cpp:6534) asks IsTargetableBy(caster, forAoE: false, ..., positive): a caster that is not a player or under a
+        // player's control cannot aim a single-target harmful spell at a unit successfully feigning death (Unit.cpp:6158). Area effects are not checked here.
+        if (!caster.IsCharmerOrOwnerPlayerOrPlayerItself && IsFeigningDeath(target))
+        {
+            return SpellCastResult.BadTargets;
         }
 
         return Relations.IsHostile(caster, target) ? SpellCastResult.CastOk : SpellCastResult.BadTargets;

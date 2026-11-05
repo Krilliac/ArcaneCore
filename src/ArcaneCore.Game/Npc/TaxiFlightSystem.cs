@@ -54,7 +54,7 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <param name="mountDisplay">Mount creature entry → display id (vmangos ObjectMgr::GetTaxiMountDisplayId; 0 = unknown).</param>
     /// <param name="nowMs">World time in milliseconds (movement timestamps).</param>
     /// <param name="logger">Diagnostics.</param>
-    /// <param name="beforeFlight">Removes a scripted flight's old spell mount after the route is validated.</param>
+    /// <param name="beforeFlight">Runs once the route is validated and paid, before the flight starts: ends Feign Death and removes a scripted flight's old spell mount.</param>
     public TaxiFlightSystem(NpcStore npcs, TaxiPathNodeCatalog pathNodes, Func<uint, uint> mountDisplay, Func<uint> nowMs, ILogger? logger = null, Action<Player>? beforeFlight = null)
     {
         _npcs = npcs;
@@ -134,8 +134,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
             return false;
         }
 
-        // vmangos Player::ActivateTaxiPathTo removes a spell mount before a scripted flight
-        // (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
+        // The before-flight step: vmangos SendDoFlight ends Feign Death (TaxiHandler.cpp:113-114), and Player::ActivateTaxiPathTo removes a
+        // spell mount before a scripted flight (Player.cpp:17889-17893). The flight-master path already rejects a mounted player.
         _beforeFlight?.Invoke(player);
 
         var flight = new Flight(player, map, hops, nodes.ToArray(), pathIds.ToArray(), legCosts.ToArray(), chargeLeg)

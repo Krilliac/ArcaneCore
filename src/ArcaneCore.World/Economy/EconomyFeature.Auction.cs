@@ -44,9 +44,18 @@ public sealed partial class EconomyFeature
     {
         if (AuctioneerAccess.FindHouse(player, auctioneer) is { } house)
         {
+            BreakFeignDeath(player); // vmangos HandleAuctionHelloOpcode (AuctionHouseHandler.cpp:51-52)
             session.Send(WorldOpcode.MsgAuctionHello, EconomyPackets.AuctionHello(auctioneer.Value, house.Id));
         }
     }
+
+    /// <summary>
+    /// vmangos <c>if (HasUnitState(UNIT_STATE_FEIGN_DEATH)) RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c> in the seven auction handlers
+    /// (AuctionHouseHandler.cpp:51-52 hello, 299-300 sell, 443-444 bid, 576-577 remove, 718-719 bidder list, 741-742 owner list, 777-778 item list):
+    /// acting on the auction house ends a successful Feign Death; a resisted one holds no such state and is left alone
+    /// (<see cref="Spells.SpellSystem.BreakSuccessfulFeignDeath"/>). Without a spell feature nothing can be feigning.
+    /// </summary>
+    private void BreakFeignDeath(Player player) => _services.GetService<Spells.SpellFeature>()?.System.BreakSuccessfulFeignDeath(player);
 
     /// <summary>CMSG_AUCTION_LIST_ITEMS (vmangos AuctionHouseObject::BuildListAuctionItems).</summary>
     public void ListAuctions(WorldSession session, Player player, ObjectGuid auctioneer, AuctionQuery query)
@@ -55,6 +64,8 @@ public sealed partial class EconomyFeature
         {
             return;
         }
+
+        BreakFeignDeath(player); // vmangos HandleAuctionListItems (AuctionHouseHandler.cpp:777-778), after the house lookup
 
         long now = Now;
         Dictionary<uint, AuctionView> byId = HouseAuctions(house.Id, now).ToDictionary(v => v.Auction.Id);
@@ -114,6 +125,7 @@ public sealed partial class EconomyFeature
     {
         if (AuctioneerAccess.FindHouse(player, auctioneer) is { } house)
         {
+            BreakFeignDeath(player); // vmangos HandleAuctionListOwnerItems (AuctionHouseHandler.cpp:741-742), after the house lookup
             SendPage(session, WorldOpcode.SmsgAuctionOwnerListResult, HouseAuctions(house.Id, Now).Where(v => v.Auction.SellerId == IdOf(player)), listFrom);
         }
     }
@@ -130,6 +142,8 @@ public sealed partial class EconomyFeature
         {
             return;
         }
+
+        BreakFeignDeath(player); // vmangos HandleAuctionListBidderItems (AuctionHouseHandler.cpp:718-719), after the house lookup
 
         List<AuctionView> open = [.. HouseAuctions(house.Id, Now)];
         int me = IdOf(player);
@@ -188,6 +202,8 @@ public sealed partial class EconomyFeature
             Fail(AuctionError.Database);
             return;
         }
+
+        BreakFeignDeath(player); // :299-300, after the duration switch
 
         if (itemGuid.IsEmpty)
         {
@@ -261,6 +277,8 @@ public sealed partial class EconomyFeature
         {
             return;
         }
+
+        BreakFeignDeath(player); // vmangos HandleAuctionPlaceBid (AuctionHouseHandler.cpp:443-444), after the house lookup
 
         void Fail(AuctionError error, AuctionRecord? current = null) => session.Send(WorldOpcode.SmsgAuctionCommandResult,
             EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.BidPlaced, error, auction: current));
@@ -397,6 +415,8 @@ public sealed partial class EconomyFeature
         {
             return;
         }
+
+        BreakFeignDeath(player); // vmangos HandleAuctionRemoveItem (AuctionHouseHandler.cpp:576-577), after the house lookup
 
         void Fail(AuctionError error) => session.Send(WorldOpcode.SmsgAuctionCommandResult,
             EconomyPackets.AuctionCommandResult(auctionId, AuctionAction.Removed, error));

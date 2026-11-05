@@ -25,7 +25,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         ArgumentNullException.ThrowIfNull(creature);
         ArgumentNullException.ThrowIfNull(target);
         if (!_creatures.ContainsKey(creature.Guid) || !creature.IsAlive || creature.IsEvading
-            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.Hooks.CanAttack(creature, target)
+            || !target.IsAlive || !ReferenceEquals(target.Map, Map) || !Map.Combat.CanAttackSingleTarget(creature, target)
             || creature.ReactState == CreatureReactState.Passive) // vmangos CreatureAI::AttackStart (AI/CreatureAI.cpp:67-70)
         {
             return false;
@@ -155,7 +155,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
     /// has a targetable attacker (a pet sent at a far target) returns false, and anything else evades (:7584-7611).
     /// Returns whether the creature still has a victim.
     /// <para>
-    /// Limits: stun / fear / confuse / feign death are read from the unit flags, not from aura holders; "prevents fleeing"
+    /// Limits: stun / fear / confuse are read from the unit flags, not from aura holders (a feigning victim is refused by <see cref="MapCombat.CanAttackSingleTarget"/>); "prevents fleeing"
     /// and the pending-stun state are not modelled; second-choice targets are feared or confused units only (damage-immune,
     /// breakable-CC and totem rules need the aura engine and a spell catalog the host does not have).
     /// </para>
@@ -634,7 +634,7 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
 
     private bool IsValidHostileTarget(Creature creature, Unit target)
         => target.IsAlive && ReferenceEquals(target.Map, Map)
-            && Map.Combat.Hooks.CanAttack(creature, target);
+            && Map.Combat.CanAttackSingleTarget(creature, target);
 }
 
 /// <summary>The soft leash of one creature against one target (<see cref="CreatureMapSystem.GetLeashFacts"/>).</summary>

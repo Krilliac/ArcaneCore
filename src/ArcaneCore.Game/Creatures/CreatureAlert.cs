@@ -23,7 +23,7 @@ public sealed partial class CreatureMapSystem
         }
 
         if (creature.Template.Civilian || (creature.Template.Behaviour & Kernel.WorldData.Creatures.CreatureBehaviourFlags.Civilian) != 0
-            || creature.ReactState == CreatureReactState.Passive || !who.IsAlive || !Map.Combat.Hooks.CanAttack(creature, who)
+            || creature.ReactState == CreatureReactState.Passive || !who.IsAlive || !Map.Combat.CanAttackSingleTarget(creature, who)
             || !_ai.Hostility.IsHostile(creature, who))
         {
             return false;

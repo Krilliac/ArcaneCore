@@ -2,6 +2,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
@@ -13,6 +15,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -111,6 +114,31 @@ public sealed class NpcServicesFeatureTaxiTests
         await rig.Npcs.RouteWrites!.FlushAsync().WaitAsync(Budget);
         Assert.Null(rig.Store.Saved(rig.CharacterId));
         Assert.Equal(["save 1", "delete 1"], rig.Store.Calls);
+    }
+
+    [Fact]
+    public async Task StartingAFlight_EndsASuccessfulFeignDeath_ThroughTheFeaturesBeforeFlightStep()
+    {
+        // vmangos WorldSession::SendDoFlight (TaxiHandler.cpp:113-114) ends Feign Death; the production wiring is the lambda NpcServicesFeature gives the flight system.
+        await using var rig = await Rig.CreateAsync(withSpells: true);
+        Player flyer = await rig.LoginAsync();
+        SpellSystem spells = rig.Services.GetRequiredService<SpellFeature>().System;
+        const uint feignSpell = 9909201;
+        spells.Store = new SpellStore([new SpellInfo
+        {
+            Id = feignSpell, Name = "Synthetic Feign Death", RangeIndex = SpellConstants.RangeIndexSelfOnly,
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.FeignDeath, BaseDice = 1, DieSides = 1,
+                TargetA = SpellImplicitTarget.UnitCaster }],
+        }], [], []);
+        RangedHandlers.Register(spells);
+        Assert.True(spells.AddAura(flyer, feignSpell, permanent: true));
+        Assert.True(spells.IsFeigningDeath(flyer));
+
+        Assert.True(rig.Npcs.Flights!.StartFlight(flyer, [1, 2], [10], Gryphon));
+
+        Assert.False(spells.IsFeigningDeath(flyer));
+        Assert.False(spells.HasAura(flyer, feignSpell));
+        Assert.True(rig.Npcs.Flights.IsFlying(flyer));
     }
 
     [Fact]
@@ -266,7 +294,7 @@ public sealed class NpcServicesFeatureTaxiTests
         public NpcServicesFeature Npcs { get; }
         public int CharacterId { get; }
 
-        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null)
+        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null, bool withSpells = false)
         {
             var store = new FakeTaxiStore();
             var characters = new InMemoryCharacterStore();
@@ -279,6 +307,11 @@ public sealed class NpcServicesFeatureTaxiTests
             if (drain is not null)
             {
                 collection.AddSingleton(drain);
+            }
+
+            if (withSpells)
+            {
+                collection.AddSingleton(sp => new SpellFeature(sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<SpellFeature>.Instance));
             }
 
             ServiceProvider services = collection

@@ -177,6 +177,23 @@ public sealed class NpcTravelServiceTests
         Assert.Equal(GryphonDisplay, rig.Player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
     }
 
+    [Fact] // TaxiHandler.cpp:72-73: after GetNPCIfCanInteractWith, the query ends Feign Death
+    public void TaxiQueryAvailableNodes_EndsFeignDeath_OnlyForAnInteractableFlightMaster()
+    {
+        using var rig = new TaxiRig();
+        NpcServiceTestKit kit = rig.Kit;
+        int breaks = 0;
+        kit.Services.BreakFeignDeath = _ => breaks++;
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 60 };
+        kit.Services.TaxiQueryAvailableNodes(kit.Player, kit.Npc.Guid);
+        Assert.Equal(0, breaks);
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 1 };
+        kit.Services.TaxiQueryAvailableNodes(kit.Player, kit.Npc.Guid);
+        Assert.Equal(1, breaks);
+    }
+
     [Fact]
     public void TaxiQueryAvailableNodes_LearnsTheNearestNodeFirstThenShowsTheMap()
     {

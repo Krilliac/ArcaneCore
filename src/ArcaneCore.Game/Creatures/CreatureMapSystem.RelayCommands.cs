@@ -429,7 +429,7 @@ public sealed partial class CreatureMapSystem
     private void HandleAssistanceCall(Creature receiver, Creature sender, Unit? invoker)
     {
         if (invoker is null || receiver.Template.CreatureType == CreatureAiFactory.CritterType || !receiver.IsAlive
-            || !_ai.Hostility.CanAssist(receiver, sender) || !Map.Combat.Hooks.CanAttack(receiver, invoker))
+            || !_ai.Hostility.CanAssist(receiver, sender) || !Map.Combat.CanAttackSingleTarget(receiver, invoker))
         {
             return;
         }

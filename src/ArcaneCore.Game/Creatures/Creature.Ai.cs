@@ -135,7 +135,7 @@ public sealed partial class Creature : Unit, ICombatCreature
             return;
         }
 
-        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.Hooks.CanAttack(this, attacker))
+        if (Map is not { } map || Combat.Victim is not null || !IsAlive || !map.Combat.CanAttackSingleTarget(this, attacker))
         {
             return;
         }

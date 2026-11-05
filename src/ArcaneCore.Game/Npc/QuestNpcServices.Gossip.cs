@@ -115,6 +115,14 @@ public sealed partial class QuestNpcServices
     public Action<Player>? InteractingCancels { get; set; }
 
     /// <summary>
+    /// Ends the player's Feign Death (vmangos <c>RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH)</c>) at the sites that guard it with the feign
+    /// state but, unlike <see cref="InteractingCancels"/>, do not cancel channels or other auras: HandleTaxiQueryAvailableNodes
+    /// (TaxiHandler.cpp:72-73). The flight start itself is the taxi flight system's before-flight step. Unset: nothing is ended. Set by
+    /// QuestNpcFeature when the spell system is available.
+    /// </summary>
+    public Action<Player>? BreakFeignDeath { get; set; }
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368; HandleQuestgiverHelloOpcode,
     /// QuestHandler.cpp:79-105): the creature pauses its movement (<see cref="PauseInteractionMovement"/>; NPCHandler.cpp:357-358,
     /// QuestHandler.cpp:93-95), a spirit guide sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (NPCHandler.cpp:360-361), then the
