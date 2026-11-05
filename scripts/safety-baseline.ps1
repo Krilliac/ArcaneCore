@@ -49,10 +49,10 @@ try {
     }
     finally { Pop-Location }
 
-    # Every warning is printed more than once (inline, then in the summary); one finding is one distinct "file(line,col): warning ARCnnnn" prefix.
+    # Every warning is printed more than once (inline, then in the summary); one finding is one distinct "file(line,col): warning ARCnnnn" prefix (an assembly-level finding has no location: "CSC : warning ARCnnnn", distinct by its key).
     $findings = @{}
     foreach ($line in Get-Content -LiteralPath $log) {
-        if ($line -match '^(?<where>.+?\(\d+,\d+\)): warning (?<id>ARC000\d): .*Baseline line: (?<key>ARC000\d\|[^|]+\|[^|]+\|[^|]+)\|1') {
+        if ($line -match '^(?<where>.+?\(\d+,\d+\)|CSC ?): warning (?<id>ARC000\d): .*Baseline line: (?<key>ARC000\d\|[^|]+\|[^|]+\|[^|]+)\|1') {
             $findings[$Matches.where + '|' + $Matches.key] = $Matches.key
         }
     }

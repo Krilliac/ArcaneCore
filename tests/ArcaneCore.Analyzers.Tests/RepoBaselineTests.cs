@@ -27,7 +27,8 @@ public sealed class RepoBaselineTests
             string[] parts = line.Split('|');
             Assert.True(parts.Length == 5 && int.TryParse(parts[4], out int count) && count >= 1, "malformed baseline line: " + line);
             Assert.Matches("^ARC000[1-6]$", parts[0]);
-            Assert.True(File.Exists(Path.Combine(root, parts[1])), "baseline names a missing file: " + parts[1]);
+            // "assembly:<Name>" is the assembly-level finding (AllowUnsafeBlocks without an assembly audit); it has no file.
+            Assert.True(parts[1].StartsWith("assembly:", StringComparison.Ordinal) ? parts[1].Length > "assembly:".Length : File.Exists(Path.Combine(root, parts[1])), "baseline names a missing file: " + parts[1]);
         }
 
         Assert.Equal(lines.Length, lines.Distinct(StringComparer.Ordinal).Count());

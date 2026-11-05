@@ -2,7 +2,7 @@
 
   <!-- Roslyn analyzer for the memory- and thread-safety rules (docs/ops/memory-safety.md). It loads inside the compiler, so it targets
        netstandard2.0 and is referenced by the other projects as an analyzer (Directory.Build.props), never as a runtime dependency.
-       Microsoft.CodeAnalysis.CSharp 4.8.0 is the version already in the repo's package cache; the analyzer needs nothing else. -->
+       Microsoft.CodeAnalysis.CSharp is pinned centrally (Directory.Packages.props); the analyzer needs nothing else. -->
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <RootNamespace>ArcaneCore.Analyzers</RootNamespace>
@@ -16,7 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.8.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

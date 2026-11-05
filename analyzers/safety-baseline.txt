@@ -21,6 +21,8 @@ ARC0002|src/ArcaneCore.World/Skills/SkillsFeature.cs|SkillsFeature.OnSpellbookLo
 ARC0002|src/ArcaneCore.World/Skills/SkillsFeature.cs|SkillsFeature.OnSpellbookLoadedAsync|Unit.Class|1
 ARC0002|src/ArcaneCore.World/Skills/SkillsFeature.cs|SkillsFeature.OnSpellbookLoadedAsync|Unit.Race|1
 ARC0002|src/ArcaneCore.World/Stats/StatsFeature.cs|StatsFeature.OnPlayerLoadingAsync|Player.Skills|1
+ARC0003|assembly:ArcaneCore.Playerbots|<assembly>|AllowUnsafeBlocks|1
+ARC0003|assembly:ArcaneCore.World|<assembly>|AllowUnsafeBlocks|1
 ARC0004|src/ArcaneCore.Game/Maps/Map.cs|Map.RentPlayerSnapshot|ArrayPool.Rent|1
 ARC0004|src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs|TickMonitor.Stats|ArrayPool.Rent|1
 ARC0006|src/ArcaneCore.Data/Content/Import/Cli/RepositoryPathGuard.cs|RepositoryPathGuard.Check|Task.Result|1

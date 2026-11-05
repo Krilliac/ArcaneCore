@@ -1,6 +1,6 @@
 # Memory and thread safety rules
 
-C# already gives memory safety (GC, bounds checks, nullable references as errors, no `AllowUnsafeBlocks` anywhere). What a game
+C# already gives memory safety (GC, bounds checks, nullable references as errors, `AllowUnsafeBlocks` only in World and Playerbots, each baselined as an `assembly:` finding). What a game
 server still needs from "Rust-like" safety is thread ownership, resource ownership, entity lifetime, exhaustiveness and audited
 `unsafe`. This page is what is enforced, by what, and where the limits are.
 
@@ -50,7 +50,7 @@ player.Inventory.Templates = templates;
 - A call, member read or indexer is positioned where it runs (after its receiver and arguments), and an assignment target where it is written: `e.Set(await x)`, `(await t).Level` and `e.Level = await x` are after the await. `nameof(e.Level)` is not an access.
 - ARC0005 follows straight-line statements in one block (and the statements after a `try` whose `finally` returns); conditional returns and loops are not followed.
 - Dependency injection, interfaces and reflection hide the callee; only symbols the compiler resolves are checked.
-- Test projects and vendored code are not analysed.
+- Test projects (`IsTestProject`) and vendored code are not analysed; `TestSupport`, `SupervisedChildFixture` and `ArcaneCore.Data.ProcessRunner` are, because they do not set it. `AllowUnsafeBlocks` in World and Playerbots is baselined as an `assembly:` entry, which keeps ARC0003 live inside those assemblies (an assembly-level `[AuditedUnsafe]` would switch it off).
 
 ## Exhaustiveness
 
@@ -63,7 +63,7 @@ compiler check; `IDE0010`/`IDE0072` would flag 549 existing sites (most have a d
 `ThreadAffinity` (`ArcaneCore.Kernel.Safety`) is the runtime half of `[WorldThreadOnly]`. `WorldObject.MarkChanged` (every real change to
 an update field of an object in a map) calls `Map.CheckWorldThread`; off the world thread that counts the violation and records the first 64 in
 `FaultLedger.Shared` as an `InvariantViolationException` with site `thread-affinity:WorldObject.MarkChanged`. It never throws. The ledger signature is built from the stack at the detection point (the exception is never thrown, so `FaultLedger.Record(site, exception, StackTrace)` is given the captured stack; methods marked `[StackTraceHidden]` are skipped), so it names the code that made the change. The count is the `arcanecore_thread_affinity_violations_total` metric. The pass
-path is one thread-id compare (`WorldRuntime.IsWorldThread`; a world that has no running thread, as in most tests, passes). `ThreadAffinity.Enabled = false`
+path is one thread-id compare, or a `[ThreadStatic]` read on parallel map threads (`WorldRuntime.IsWorldThread`; a world that has no running thread, as in most tests, passes). `ThreadAffinity.Enabled = false`
 turns the report off. `Map.OnObjectMoved` (every position change of an in-map object) makes the same check, site `thread-affinity:Map.OnObjectMoved`. Map add/remove and the other map mutators throw through `Map.EnsureWorldThread`.
 
 ## Stale entity references (design, not implemented)
