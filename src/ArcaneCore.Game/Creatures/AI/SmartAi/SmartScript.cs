@@ -728,8 +728,14 @@ public sealed class SmartScript
                     break;
                 }
                 case SmartAction.CloseGossip:
-                    // SmartScript.cpp:2010-2016 (SMART_ACTION_CLOSE_GOSSIP): every player target's gossip window closes (SMSG_GOSSIP_COMPLETE).
-                    foreach (Player closing in targets.OfType<Player>()) closing.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+                    // SmartScript.cpp:2010-2016 (SMART_ACTION_CLOSE_GOSSIP): every player target's gossip window closes (SMSG_GOSSIP_COMPLETE), and
+                    // the player's menu is forgotten (AzerothCore GossipDef.cpp:241 clears the sender), so a later CMSG_GOSSIP_SELECT_OPTION is refused.
+                    foreach (Player closing in targets.OfType<Player>())
+                    {
+                        closing.Session.Send(WorldOpcode.SmsgGossipComplete, []);
+                        System?.AiServices.ScriptQuests?.GossipClosed(closing);
+                    }
+
                     break;
                 case SmartAction.CallTimedActionList:
                 case SmartAction.CallRandomTimedActionList:

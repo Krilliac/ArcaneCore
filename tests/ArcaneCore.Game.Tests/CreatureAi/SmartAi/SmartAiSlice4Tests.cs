@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Tests.GameObjects;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -12,7 +13,6 @@ namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
 /// <summary>
 /// SmartAI slice 4: actions SET_DATA (45) and CLOSE_GOSSIP (72) (AzerothCore SmartScript.cpp:1469-1495 and :2010-2016). Rows use raw AzerothCore ids.
-/// Written in a lane that does not build or run tests; unproven until the integration gate.
 /// </summary>
 public sealed class SmartAiSlice4Tests
 {
@@ -125,5 +125,58 @@ public sealed class SmartAiSlice4Tests
         Assert.Equal(2, reasons.Length);
         Assert.Contains("action 45 is not supported for source type 2", reasons[0], StringComparison.Ordinal);
         Assert.Contains("action 72 is not supported for source type 2", reasons[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SetData_FromAGameObjectScript_ToACreature_RunsItsDataSetRow_WithANullSender()
+    {
+        using var rig = SmartRig.Start(
+            [
+                // Source type 1: JUST_CREATED -> action 45 aimed at the closest creature of entry Other -> that creature's event 38 sets its phase.
+                Make((int)SmartRig.ObjectEntry, 1, 0, 63, 45, 19, a1: 3, a2: 7, t1: SmartRig.Other, t2: 50),
+                Make((int)SmartRig.Other, 0, 0, 38, 22, 1, e1: 3, e2: 7, a1: 6),
+                Make((int)SmartRig.Other, 0, 1, 38, 22, 1, e1: 3, e2: 8, a1: 9),
+            ],
+            creatureSpawns: [Spawn(2, SmartRig.Other, 5, 0)],
+            objectSpawns: [GameObjectTestKit.GoSpawn(1, SmartRig.ObjectEntry, 0, 2)]);
+        Assert.Empty(rig.Catalog.Rejected);
+        Creature other = rig.Creatures.Creatures.Single(c => c.Entry == SmartRig.Other);
+
+        // The object's JUST_CREATED row ran when the rig started: the creature got (3, 7) from the game object, which a creature sender cannot name.
+        SmartScript script = SmartRig.AiOf(other).Script;
+        Assert.Equal(6u, script.Phase);
+        Assert.Null(script.LastInvoker);
+    }
+
+    [Fact]
+    public void SetData_ASelfLoop_IsStoppedByTheActionDepthGuard_AndDoesNotOverflowTheStack()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+        using var rig = SmartRig.Start(
+        [
+            Make(Wolf, 0, 0, 4, 45, 1, a1: 3, a2: 7),
+            Make(Wolf, 0, 1, 38, 45, 1, e1: 3, e2: 7, a1: 3, a2: 7),
+        ]);
+
+        rig.WolfAi.OnAggro(rig.Player);
+
+        Assert.Contains(capture.Failures, f => f.Message.Contains("SmartScript recursive action depth", StringComparison.Ordinal));
+        Assert.Equal(0, rig.Script.Unsupported.Count);
+    }
+
+    [Fact]
+    public void SetData_APingPongBetweenTwoCreatures_IsStoppedByTheActionDepthGuard()
+    {
+        using InvariantCapture capture = Invariant.Capture();
+        using var rig = SmartRig.Start(
+            [
+                Make(Wolf, 0, 0, 4, 45, 19, a1: 1, a2: 1, t1: SmartRig.Other, t2: 50),
+                Make(Wolf, 0, 1, 38, 45, 19, e1: 1, e2: 1, a1: 1, a2: 1, t1: SmartRig.Other, t2: 50),
+                Make((int)SmartRig.Other, 0, 0, 38, 45, 19, e1: 1, e2: 1, a1: 1, a2: 1, t1: (uint)Wolf, t2: 50),
+            ], creatureSpawns: [Spawn(2, SmartRig.Other, 5, 0)]);
+
+        rig.WolfAi.OnAggro(rig.Player);
+
+        Assert.Contains(capture.Failures, f => f.Message.Contains("SmartScript recursive action depth", StringComparison.Ordinal));
     }
 }

@@ -275,6 +275,12 @@ public sealed partial class QuestNpcServices
     /// </summary>
     public PacketWriter NpcTextQueryResponse(uint textId) => NpcPackets.NpcTextUpdate(textId, Npcs.Text(textId));
 
+    /// <summary>
+    /// A script closed the player's gossip window and sent SMSG_GOSSIP_COMPLETE itself: the menu goes too, so a late CMSG_GOSSIP_SELECT_OPTION for
+    /// it is refused (AzerothCore GossipDef.cpp:241 clears the sender). World thread only.
+    /// </summary>
+    public void ForgetGossipMenu(Player player) => StateOf(player)?.Menu.ClearMenus();
+
     /// <summary>vmangos Player::PrepareGossipMenu (creature source).</summary>
     internal void PrepareGossipMenu(PlayerNpcState s, NpcInfo npc, uint menuId)
     {
