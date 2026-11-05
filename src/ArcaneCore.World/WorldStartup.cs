@@ -110,7 +110,7 @@ internal static class WorldStartup
             return Finish(code, await DisposeAsync(host, logger).ConfigureAwait(false));
         }
 
-        bool disposeFailed = false;
+        bool failed = false;
         try
         {
             bool started = false;
@@ -125,15 +125,26 @@ internal static class WorldStartup
                     .LogWarning("Shutdown was requested while the world was starting; stopping in order");
             }
 
-            if (started) await host.WaitForShutdownAsync().ConfigureAwait(false);
-            else await host.StopAsync().ConfigureAwait(false);
+            // The stop runs here, not in the disposal: WaitForShutdownAsync stops the host once the shutdown was requested, and a failed start that was a stop request stops it directly.
+            // A hosted service that throws from its stop (WorldHost: "World feature shutdown failed") surfaces from this call; it is a failure of the run, not an unhandled crash.
+            try
+            {
+                if (started) await host.WaitForShutdownAsync().ConfigureAwait(false);
+                else await host.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                failed = true;
+                RecordFailure(logger, "world.host-stop", "Stopping the host failed", ex);
+            }
         }
         finally
         {
-            disposeFailed = await DisposeAsync(host, logger).ConfigureAwait(false);
+            // Disposal is still attempted after a failed stop (the container releases the writer lock and drains the log queue last).
+            failed |= await DisposeAsync(host, logger).ConfigureAwait(false);
         }
 
-        return Finish(exitCode(), disposeFailed);
+        return Finish(exitCode(), failed);
     }
 
     /// <summary>
@@ -158,12 +169,23 @@ internal static class WorldStartup
     }
 
     /// <summary>
-    /// Disposes the host. Disposing a started host stops it, so a failure of the stop (a hosted service that throws, a lease release that hangs and times out) escapes from here; unhandled out of
-    /// an async <c>Main</c> it becomes a fail-fast with a full dump and a restart delay, although the stop was already underway and nothing is left to protect. Any exception but OutOfMemoryException
-    /// is logged critical, recorded once in the <see cref="FaultLedger"/> (site <c>world.host-dispose</c>), turns a still-zero exit code into <see cref="ExitCodes.Failure"/> (so the supervisor
-    /// restarts the process; in Combined mode with no supervisor the process just ends with that code) and is NOT rethrown. Runtime errors elsewhere keep the crash handler's fail-fast.
+    /// A failure of the host's stop or of its disposal (the container disposing a service whose <c>Dispose</c> throws): logged critical, recorded once in the <see cref="FaultLedger"/> under <paramref name="site"/>, and
+    /// a still-zero <see cref="ExitCodes.Current"/> becomes <see cref="ExitCodes.Failure"/>, so the supervisor sees a failed run. Nothing is rethrown: an exception that escaped <c>Main</c> here would be turned by the crash
+    /// handler into a fail-fast with a full dump. That removes the dump, not the relaunch delay: a supervisor relaunches after exit code 1 with the same backoff it applies after a fail-fast. Combined mode with no supervisor just
+    /// ends with the code. Runtime errors elsewhere keep the crash handler's fail-fast.
     /// </summary>
-    /// <returns>True when the dispose threw.</returns>
+    private static void RecordFailure(ILogger logger, string site, string what, Exception ex)
+    {
+        logger.LogCritical(ex, "{What} ({Type}); exiting with a failure code instead of crashing", what, ex.GetType().Name);
+        FaultLedger.Shared.Record(site, ex);
+        if (ExitCodes.Current == ExitCodes.Success) ExitCodes.Current = ExitCodes.Failure;
+    }
+
+    /// <summary>
+    /// Disposes the host, which disposes the container and with it every service (the writer lock last). A service whose disposal throws escapes from here (the 2026-11-04 incident went through <c>Host.DisposeAsync</c>);
+    /// anything but OutOfMemoryException is handled by <see cref="RecordFailure"/> (site <c>world.host-dispose</c>) and not rethrown.
+    /// </summary>
+    /// <returns>True when the disposal threw.</returns>
     private static async Task<bool> DisposeAsync(IHost host, ILogger logger)
     {
         try
@@ -174,15 +196,13 @@ internal static class WorldStartup
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            logger.LogCritical(ex, "Disposing the host failed ({Type}); exiting with a failure code instead of crashing", ex.GetType().Name);
-            FaultLedger.Shared.Record("world.host-dispose", ex);
-            if (ExitCodes.Current == ExitCodes.Success) ExitCodes.Current = ExitCodes.Failure;
+            RecordFailure(logger, "world.host-dispose", "Disposing the host failed", ex);
             return true;
         }
     }
 
-    /// <summary>The code to return: the supervisor-visible one, but never 0 after a failed dispose.</summary>
-    private static int Finish(int code, bool disposeFailed) => disposeFailed && code == ExitCodes.Success ? ExitCodes.Failure : code;
+    /// <summary>The code to return: the supervisor-visible one, but never 0 after a failed stop or disposal.</summary>
+    private static int Finish(int code, bool failed) => failed && code == ExitCodes.Success ? ExitCodes.Failure : code;
 
     private sealed class SignalRegistrations(PosixSignalRegistration[] registrations) : IDisposable
     {

@@ -1,8 +1,10 @@
 using ArcaneCore.Data;
+using System.Data.Common;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Cluster.Social;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.Data.Characters.Cluster;
@@ -82,10 +84,19 @@ public sealed class RealmAuthorityLeaseDataModule : IDataModule, ICharacterDataC
 /// <see cref="IRealmAuthorityLeaseStore"/> over the characters database. Every call opens its own scope and context, so the store is a singleton
 /// that any thread may call; each decision is one conditional UPDATE inside a transaction, so two nodes on one database cannot both be granted.
 /// Fencing tokens are the row's high-water mark and only ever grow. <paramref name="commandTimeout"/> bounds every database command (null: the provider
-/// default), so a hung database fails a renewal in time for the keeper to stop the node before the lease lapses. With <paramref name="contextFactory"/> (see <see cref="DedicatedContextFactory"/>) every call uses a context of that factory instead of the general one, so the lease connections are their own pool.
-/// A renewal on PostgreSQL commits with <c>synchronous_commit = off</c> (see <see cref="TryRenew"/>).
+/// default), so a hung database fails a renewal in time for the keeper to stop the node before the lease lapses.
+/// <para>PostgreSQL only: with <paramref name="contextFactory"/> (acquire, renew, release) and <paramref name="readContextFactory"/> (<see cref="GetCurrent"/>, <see cref="ValidateFencingToken(string, string, long, DateTimeOffset)"/>)
+/// (see <see cref="DedicatedContextFactory"/>) the calls use contexts of those factories instead of the general context pool, so the lease connections are their own pools and a stalled general pool, or a burst of
+/// readers (the peer locator polls <see cref="GetCurrent"/> every second), cannot queue a renewal. MariaDB and SQLite keep the general pool, and MariaDB keeps the coupling described next.</para>
+/// <para>Row locks on PostgreSQL (the fence in <see cref="LeaseFencedWrite"/> takes <c>FOR KEY SHARE</c> on the lease row and holds it to the end of the writer's transaction): a renewal changes only
+/// <c>expires_at_unix_ms</c> (the primary key is <c>scope</c> alone, there is no other unique index), so its UPDATE takes <c>FOR NO KEY UPDATE</c>, which does not conflict with <c>FOR KEY SHARE</c>: a renewal never waits for a
+/// writer's commit. Every change of authority (owner, incarnation, fencing token, active: <see cref="TryAcquire"/>, which is also the takeover, and <see cref="TryRelease"/>) first takes <c>SELECT ... FOR UPDATE</c> on the row in the
+/// same transaction, which does conflict with <c>FOR KEY SHARE</c>, so it waits for in-flight fenced commits and a fenced write is always ordered wholly before or wholly after it. A plain UPDATE there would take only
+/// <c>FOR NO KEY UPDATE</c> and silently break the fence. On MariaDB the fence's shared lock still conflicts with every UPDATE of the row, so a renewal there still waits for in-flight fenced commits.</para>
+/// <para>A renewal on PostgreSQL commits with <c>synchronous_commit = off</c> (see <see cref="TryRenew"/>).</para>
 /// </summary>
-public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, TimeSpan? commandTimeout = null, Func<CharacterDbContext>? contextFactory = null) : IRealmAuthorityLeaseStore
+public sealed class EfRealmAuthorityLeaseStore(
+    IServiceScopeFactory scopes, TimeSpan? commandTimeout = null, Func<CharacterDbContext>? contextFactory = null, Func<CharacterDbContext>? readContextFactory = null) : IRealmAuthorityLeaseStore
 {
     /// <summary>A context for one call and what must be disposed with it: a scope of the general pool, or a context of the dedicated lease pool (the store's context factory).</summary>
     private sealed class LeaseDb(CharacterDbContext db, IServiceScope? scope) : IDisposable
@@ -100,13 +111,14 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         }
     }
 
-    private LeaseDb Open()
+    private LeaseDb Open(bool read = false)
     {
         IServiceScope? serviceScope = null;
         CharacterDbContext db;
-        if (contextFactory is not null)
+        Func<CharacterDbContext>? factory = read ? readContextFactory ?? contextFactory : contextFactory;
+        if (factory is not null)
         {
-            db = contextFactory();
+            db = factory();
         }
         else
         {
@@ -123,27 +135,51 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     }
 
     /// <summary>
-    /// A factory of contexts that connect through their OWN connection pool, or null when the provider is not PostgreSQL (then the store uses the general context pool). Npgsql pools connections per
-    /// connection string, so the string gets a distinct application name (visible in pg_stat_activity), a small <paramref name="maxPoolSize"/> and a short connect/pool-wait
-    /// <paramref name="connectTimeout"/>: a general pool that is saturated or stalled cannot starve a renewal, and the node's lease connections stay a handful (at most
-    /// <paramref name="maxPoolSize"/> per process). The contexts carry no interceptors: every lease call is exempt from the characters write fence anyway. The options are built once and shared.
+    /// A factory of contexts that connect through their OWN connection pool, or null when the provider is not PostgreSQL (then the store uses the general context pool; MariaDB is deliberately unchanged). Npgsql pools
+    /// connections per connection string, so the string gets a distinct application name (visible in pg_stat_activity), a small <paramref name="maxPoolSize"/> and a short connect/pool-wait timeout equal to
+    /// <paramref name="commandTimeout"/>, which is also the string's <c>Command Timeout</c>: EF's per-command timeout does not reach the internal commands (COMMIT, ROLLBACK), the string-level one does. A general pool that is
+    /// saturated or stalled cannot starve a renewal, and the node's lease connections stay a handful (at most <paramref name="maxPoolSize"/> per process and factory). The contexts carry no interceptors: every lease call
+    /// is exempt from the characters write fence anyway. The options are built once and shared.
     /// </summary>
-    public static Func<CharacterDbContext>? DedicatedContextFactory(DatabaseConnectionOptions connection, string applicationName, int maxPoolSize, TimeSpan connectTimeout)
+    public static Func<CharacterDbContext>? DedicatedContextFactory(DatabaseConnectionOptions connection, string applicationName, int maxPoolSize, TimeSpan commandTimeout)
     {
         ArgumentNullException.ThrowIfNull(connection);
         if (connection.Provider != DatabaseProvider.PostgreSql || string.IsNullOrWhiteSpace(connection.ConnectionString))
             return null;
 
+        int seconds = Math.Max(1, (int)Math.Ceiling(commandTimeout.TotalSeconds));
         var builder = new Npgsql.NpgsqlConnectionStringBuilder(connection.ConnectionString)
         {
             ApplicationName = applicationName,
             Pooling = true,
             MinPoolSize = 0,
             MaxPoolSize = Math.Max(1, maxPoolSize),
-            Timeout = Math.Max(1, (int)Math.Ceiling(connectTimeout.TotalSeconds)),
+            Timeout = seconds,
+            CommandTimeout = seconds,
         };
         DbContextOptions<CharacterDbContext> options = new DbContextOptionsBuilder<CharacterDbContext>().UseNpgsql(builder.ConnectionString).Options;
         return () => new CharacterDbContext(options);
+    }
+
+    /// <summary>
+    /// PostgreSQL only: <c>SELECT ... FOR UPDATE</c> on the scope's row in the current transaction. Every change of authority calls it first: <c>FOR UPDATE</c> conflicts with the fence's <c>FOR KEY SHARE</c>,
+    /// so the change waits for in-flight fenced commits (bounded by the command timeout). Nothing is selected when the row does not exist (the caller then reports the unknown scope).
+    /// </summary>
+    private static void LockRowForUpdate(CharacterDbContext db, string scope)
+    {
+        if (db.Database.ProviderName != "Npgsql.EntityFrameworkCore.PostgreSQL")
+            return;
+
+        using DbCommand command = db.Database.GetDbConnection().CreateCommand();
+        command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
+        if (db.Database.GetCommandTimeout() is { } seconds)
+            command.CommandTimeout = seconds;
+        command.CommandText = $"SELECT 1 FROM {RealmAuthorityLeaseDataModule.Table} WHERE scope = @scope FOR UPDATE";
+        DbParameter parameter = command.CreateParameter();
+        parameter.ParameterName = "@scope";
+        parameter.Value = scope;
+        command.Parameters.Add(parameter);
+        command.ExecuteScalar();
     }
 
     public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
@@ -156,6 +192,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
+        LockRowForUpdate(db, scope); // acquire and takeover change authority: wait for in-flight fenced commits (PostgreSQL)
 
         int renewed = db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && r.Active && r.ExpiresAtUnixMs > now && r.OwnerNode == ownerNodeId && r.OwnerIncarnation == incarnation)
@@ -214,11 +251,13 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     }
 
     /// <summary>
-    /// PostgreSQL only: this transaction's commit does not wait for the WAL flush (<c>SET LOCAL synchronous_commit = off</c>, scoped to the transaction). A stalled WAL disk made every commit take seconds and a
-    /// five-scope round outlast the keeper's deadline. It stays safe because a renewal's durability is not what fences: the row is visible to every session at once, and if PostgreSQL crashes the
-    /// renewal can be lost (for at most about three wal_writer_delay, roughly 0.6 s), which leaves the row showing an OLDER expiry than the node believes. A takeover (<see cref="TryAcquire"/>, which commits synchronously)
-    /// still needs <c>!active || expires &lt;= now</c> on the row and always increments the fencing token, and the commit fence (<see cref="LeaseFencedWrite"/>) compares the token and owner, never the expiry, so a node
-    /// whose lease was taken over is refused at commit whatever it believes. WAL is flushed in order, so a later synchronous commit (a takeover, a release) also makes every earlier renewal durable.
+    /// PostgreSQL only: this transaction's commit does not wait for the WAL flush (<c>SET LOCAL synchronous_commit = off</c>, scoped to the transaction, so it does not outlive it on a pooled connection). A stalled WAL disk made
+    /// every commit take seconds and a five-scope round outlast the keeper's deadline. It stays safe because a renewal's durability is not what fences: the row is visible to every session at once, and if PostgreSQL crashes
+    /// the renewals not yet flushed are lost, which leaves the row showing an OLDER expiry than the node believes. The loss is not bounded by time: normally the WAL writer flushes within about three
+    /// <c>wal_writer_delay</c> (200 ms by default), but while the WAL disk stalls the unflushed tail grows for as long as the stall lasts. What bounds the damage is not the flush: a takeover (<see cref="TryAcquire"/>, which commits
+    /// synchronously) still needs <c>!active || expires &lt;= now</c> on the row and always increments the fencing token; the commit fence (<see cref="LeaseFencedWrite"/>) compares token and owner, never the expiry,
+    /// so a deposed node is refused at commit by every fenced store; and the keeper stops the node at its own local deadline. A store with no commit check can write in the gap (see the residual in <see cref="LeaseFencedWrite"/>).
+    /// WAL is flushed in order, so a later synchronous commit (a takeover, a release) also makes every earlier renewal durable.
     /// </summary>
     private static void RelaxCommitDurability(CharacterDbContext db)
     {
@@ -234,6 +273,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
+        LockRowForUpdate(db, scope); // a release changes authority: wait for in-flight fenced commits (PostgreSQL)
 
         int released = db.Set<RealmAuthorityLeaseRow>()
             .Where(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.OwnerNode == ownerNodeId && r.OwnerIncarnation == incarnation)
@@ -253,7 +293,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
         if (string.IsNullOrWhiteSpace(scope) || string.IsNullOrWhiteSpace(ownerNodeId) || fencingToken <= 0)
             return false;
         long now = nowUtc.ToUnixTimeMilliseconds();
-        using LeaseDb lease = Open();
+        using LeaseDb lease = Open(read: true);
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
@@ -266,7 +306,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
             return false;
         long now = nowUtc.ToUnixTimeMilliseconds();
         string incarnation = ownerIncarnation.ToString("D");
-        using LeaseDb lease = Open();
+        using LeaseDb lease = Open(read: true);
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
@@ -278,7 +318,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     {
         if (string.IsNullOrWhiteSpace(scope))
             return null;
-        using LeaseDb lease = Open();
+        using LeaseDb lease = Open(read: true);
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope) is { } row ? ActiveLease(row, nowUtc.ToUnixTimeMilliseconds()) : null;
@@ -288,7 +328,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, Time
     {
         if (string.IsNullOrWhiteSpace(scope))
             return 0;
-        using LeaseDb lease = Open();
+        using LeaseDb lease = Open(read: true);
         CharacterDbContext db = lease.Db;
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope)?.FencingToken ?? 0;

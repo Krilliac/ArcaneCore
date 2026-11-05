@@ -63,6 +63,7 @@ public sealed class LeaseRenewalPoolTests : IAsyncLifetime
         Assert.Equal(2, lease.MaxPoolSize);
         Assert.Equal(0, lease.MinPoolSize);
         Assert.Equal(3, lease.Timeout);
+        Assert.Equal(3, lease.CommandTimeout); // the string-level timeout reaches COMMIT, EF's per-command one does not
         Assert.True(lease.Pooling);
         Assert.Equal("db.example.invalid", lease.Host);
         Assert.Equal("characters", lease.Database);

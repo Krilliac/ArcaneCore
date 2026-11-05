@@ -111,7 +111,9 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
 
     /// <summary>
     /// Whether this node is the live holder of <paramref name="scope"/>: it took the lease at start, has not given it back, and has not lost it (a lost lease keeps its old token in
-    /// <see cref="TokenFor"/> so the stores refuse the write, but the node is no longer the holder). The check realm sweeps make before each run. Cheap; safe from any thread.
+    /// <see cref="TokenFor"/> and <see cref="FenceFor"/>, but the node is no longer the holder). The answer behind <see cref="LeaseFencedWrite.RequireHeld"/> and <see cref="LeaseFencedWrite.IsHolder"/>: realm sweeps and every
+    /// write with no commit-time check of the lease row refuse on it. Stores that verify the row at commit (<see cref="LeaseFencedWrite.RequireFence"/>) ask <see cref="FenceFor"/> instead and let the commit fence decide.
+    /// Cheap; safe from any thread.
     /// </summary>
     public bool Holds(string scope)
     {
@@ -127,7 +129,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
     /// </summary>
     public static bool HeldOrUnclustered(RealmAuthorityLeaseKeeper? keeper, string scope) => keeper is null || keeper.Holds(scope);
 
-    /// <summary>The lease this node holds for <paramref name="scope"/> as a commit fence, or null when it holds none (also after a graceful release). A lease lost to a takeover keeps its old token here, which is what makes the stores refuse the write.</summary>
+    /// <summary>The lease this node holds for <paramref name="scope"/> as a commit fence, or null when it holds none (also after a graceful release). A lease marked lost (a takeover, or a renewal round that ran too long) keeps its old token here: a store that verifies the lease row at commit then lets the commit fence decide (refused exactly when another node took the lease over), while stores with no commit check refuse on <see cref="Holds"/>.</summary>
     public RealmLeaseFence? FenceFor(string scope)
     {
         lock (_gate)

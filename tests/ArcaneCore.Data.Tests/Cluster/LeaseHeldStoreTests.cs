@@ -419,6 +419,40 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
         Assert.Throws<RealmLeaseNotHeldException>(() => LeaseFencedWrite.RequireFence(new Source(_ => null, _ => false), RealmAuthorityScopes.Social));
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Holder_WritesAndSweeps_AtEverySite(DatabaseProvider provider)
+    {
+        Rig rig = await CreateAsync(provider);
+        foreach (Site site in Sites(rig))
+        {
+            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Seed(seed);
+            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Act(db, rig.Holder);
+
+            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
+            Assert.True(await site.Done(check), $"{site.Name}: the lease holder must write");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task HolderWhoseLeaseWasTakenOver_IsRefusedInTheTransaction_WhereTheStoreVerifiesTheLeaseRow(DatabaseProvider provider)
+    {
+        Rig rig = await CreateAsync(provider, takeOver: true);
+        foreach (Site site in Sites(rig).Where(s => s.Fenced))
+        {
+            await using (CharacterDbContext seed = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await site.Seed(seed);
+            await using (CharacterDbContext db = TestContexts.Create<CharacterDbContext>(rig.Connection))
+                await ExpectAsync<RealmLeaseFenceLostException>(site.Name, () => site.Act(db, rig.Holder));
+
+            await using CharacterDbContext check = TestContexts.Create<CharacterDbContext>(rig.Connection);
+            Assert.False(await site.Done(check), $"{site.Name}: a former holder must not write");
+        }
+    }
+
     [Fact]
     public void IsRealmSweep_IsTheShapeOfTheExpiryOperations_AndNothingElse()
     {

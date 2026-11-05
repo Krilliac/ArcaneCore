@@ -126,9 +126,13 @@ public sealed class RealmLeaseNotHeldException(string scope)
 /// <summary>
 /// Closes the gap between the lease keeper's fail-stop timer and the database: a realm-singleton write (economy, social, instances) verifies, inside the transaction
 /// that makes the write, that the <c>realm_authority_lease</c> row still carries the writer's fencing token, owner and incarnation, and holds that row against a takeover until the
-/// transaction ends (a row write on SQLite, whose single writer then excludes a takeover; a shared row lock on PostgreSQL and MariaDB, the way <c>CharacterOwnershipGuard</c> does).
+/// transaction ends (a row write on SQLite, whose single writer then excludes a takeover; a shared row lock on MariaDB, the way <c>CharacterOwnershipGuard</c> does; FOR KEY SHARE on PostgreSQL, which every change of authority excludes by taking FOR UPDATE first).
 /// A partitioned former holder whose lease was taken over is therefore refused at commit, whatever its clock says. The check ignores the lease expiry on purpose: an expired
 /// lease nobody has taken over yet is still the only one that could be written under, and the keeper's timer handles that case.
+/// <para>Two guards, by site: a write that verifies the lease row at commit uses <see cref="RequireFence"/> (the commit fence decides a node the keeper marked lost locally); a write with no commit check uses
+/// <see cref="RequireHeld"/>, which also refuses after a local loss. Known residual, accepted: a WAL stall that loses renewals (they commit with synchronous_commit off, see <see cref="EfRealmAuthorityLeaseStore"/>),
+/// plus a PostgreSQL crash, plus a concurrent start of another node can let that node take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
+/// <see cref="RequireHeld"/> (no commit check) can still write briefly after the takeover. Stores behind <see cref="RequireFence"/> are refused at commit.</para>
 /// <para>Stateless; every call works on the caller's context, which stays on the caller's logical call (a context is single-threaded).</para>
 /// </summary>
 public static class LeaseFencedWrite
@@ -262,7 +266,9 @@ public static class LeaseFencedWrite
         string lockClause = db.Database.ProviderName switch
         {
             "Pomelo.EntityFrameworkCore.MySql" => " LOCK IN SHARE MODE",
-            "Npgsql.EntityFrameworkCore.PostgreSQL" => " FOR SHARE",
+            // FOR KEY SHARE, not FOR SHARE: it conflicts with FOR UPDATE (every change of authority, see EfRealmAuthorityLeaseStore: acquire, takeover, release) but NOT with the FOR NO KEY UPDATE of a
+            // renewal (which changes only expires_at_unix_ms), so a renewal never waits for an in-flight fenced writer's commit, and a takeover still waits for it.
+            "Npgsql.EntityFrameworkCore.PostgreSQL" => " FOR KEY SHARE",
             _ => throw new NotSupportedException($"no lease fence lock for provider {db.Database.ProviderName}"),
         };
 
