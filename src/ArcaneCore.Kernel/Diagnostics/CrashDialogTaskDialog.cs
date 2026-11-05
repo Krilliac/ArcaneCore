@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.Kernel.Diagnostics;
 
@@ -21,6 +22,7 @@ namespace ArcaneCore.Kernel.Diagnostics;
 /// strings are unmanaged copies owned by <see cref="TryShow"/>.
 /// </para>
 /// </summary>
+[AuditedUnsafe("comctl32/kernel32 calls with unmanaged string, struct and delegate-pointer copies owned by TryShow and freed in its finally; Windows only behind OperatingSystem.IsWindows, results checked")]
 internal static class CrashDialogTaskDialog
 {
     private static ICrashDialogNative? s_native;
