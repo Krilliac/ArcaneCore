@@ -37,7 +37,7 @@ public sealed class PlayerbotRunMetersTests
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (ReferenceEquals(instrument, PlayerbotRunMeters.Runs)) l.EnableMeasurementEvents(instrument);
+            if (instrument.Meter.Name == "ArcaneCore.Playerbots.Runs" && instrument.Name == "arcanecore.playerbot.runs") l.EnableMeasurementEvents(instrument);
         };
         listener.SetMeasurementEventCallback<long>((_, value, tags, _) =>
         {

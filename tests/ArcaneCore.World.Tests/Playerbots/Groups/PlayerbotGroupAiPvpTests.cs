@@ -220,6 +220,31 @@ public sealed class PlayerbotGroupAiPvpTests
         Assert.Null(rig.Ai.TargetUnit);
     }), botLeads: true);
 
+    /// <summary>
+    /// The leash is centred on the waypoint, not on the bot: the attacker stands 7 yd from the bot but 32 yd from the waypoint (past the answer leash), so it is not chased.
+    /// A leash measured from the bot would take it (7 yd).
+    /// </summary>
+    [Fact]
+    public Task WaitingSiegeLeaderIgnoresAnAttackerBeyondTheAnswerLeashOfTheWaypoint_EvenWhenNearTheBot() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        WaitingLeader(rig, -25, answerSpent: false);
+        float fromWaypoint = Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z));
+        Assert.True(fromWaypoint > PlayerbotSiegeCommander.SiegeAnswerLeashYards);
+        rig.Think();
+        Assert.Null(rig.Ai.TargetUnit);
+    }), botLeads: true);
+
+    /// <summary>With the step's answer spent the waiting leader only defends within WaypointYards: an attacker 20 yd from the waypoint is not targeted.</summary>
+    [Fact]
+    public Task WaitingSiegeLeaderWithASpentAnswerIgnoresAnAttackerPastWaypointYards() => Run(rig => rig.Host.OnWorldAsync(() =>
+    {
+        WaitingLeader(rig, -13, answerSpent: true);
+        float fromWaypoint = Vector3.Distance(rig.Group.Siege!.MoveTo, new Vector3(rig.EnemyPlayer.X, rig.EnemyPlayer.Y, rig.EnemyPlayer.Z));
+        Assert.True(fromWaypoint > PlayerbotSiegeCommander.WaypointYards);
+        rig.Think();
+        Assert.Null(rig.Ai.TargetUnit);
+    }), botLeads: true);
+
     [Fact]
     public Task MemberPicksNoNewTargetWhileTheSiegeRaidRetreats_NeitherTheLeadersVictimNorAMarkedOne() => Run(rig => rig.Host.OnWorldAsync(() =>
     {
