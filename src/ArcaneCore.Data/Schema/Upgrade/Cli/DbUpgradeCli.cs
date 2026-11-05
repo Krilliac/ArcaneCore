@@ -771,17 +771,7 @@ public static partial class DbUpgradeCli
         private static readonly string[] ConnectionRefusedSqlStates = ["28000", "28P01", "28001", "3D000"];
 
         private static bool HasSqlState(Exception exception, string[] states)
-        {
-            for (Exception? current = exception; current is not null; current = current.InnerException)
-            {
-                if (current is DbException { SqlState: { } state } && Array.IndexOf(states, state) >= 0)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
+            => Resilience.DatabaseTransience.HasSqlState(exception, states);
 
         // MySQL/MariaDB server error numbers (MySqlException.ErrorCode): 1205 lock wait timeout (SQLSTATE HY000, so SQLSTATE alone cannot see it),
         // 1049 unknown database (SQLSTATE 42000, shared with syntax errors, so it is matched by number).

@@ -1,5 +1,4 @@
 using System.Data;
-using System.Data.Common;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Spells;
@@ -26,8 +25,17 @@ namespace ArcaneCore.Data.Quests;
 /// a provider serialization failure (SQLSTATE 40001) or deadlock (40P01) rolls back that attempt, and the store
 /// retries the whole attempt (writer lease, fenced transaction begin, every read and check) up to four attempts in all,
 /// 10-50 ms apart, stopping at once when the caller cancels. Each attempt starts from a cleared change tracker and a new
-/// transaction, so the durable guard is checked again on the retry. Only after the last attempt fails is the fault
-/// recorded and the exception thrown; any other failure is thrown at once without a retry.
+/// transaction, so the durable guard is checked again on the retry. Any other failure is thrown at once without a retry,
+/// and so is a failure whose rollback also failed (the connection may be gone).
+/// <para>
+/// What is recorded where: this store records <c>data-quest-reward.commit</c> once per call, for the error that ends it
+/// (the last attempt's, or the first non-retryable one; also the last serialization failure when the caller's budget
+/// expires during the retry delay), and <c>data-quest-reward.rollback</c> if a rollback fails. A retried attempt records
+/// nothing here (Debug log only). The write-fence interceptor is separate: it reports a failure of its own check inside
+/// the transaction begin (<c>data.character-write-fence</c>), so a 40001 raised at the fence's <c>FOR SHARE</c> is
+/// reported there once per attempt even when a later attempt succeeds. Lease-acquisition cancellation and failures
+/// are not recorded by this store.
+/// </para>
 /// Character and quest queues must be drained by the caller before invoking this store.
 /// </summary>
 public sealed class EfCharacterQuestRewardStore(CharacterDbContext db, ILogger<EfCharacterQuestRewardStore>? logger = null) : ICharacterQuestRewardStore
@@ -74,19 +82,31 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db, ILogger<E
             {
                 // The attempt rolled back and its transaction and tracked state are gone: the next attempt re-reads everything.
                 logger?.LogDebug(error, "Quest reward serialization failure on attempt {Attempt} of {Max}; retrying", attempt, MaxAttempts);
-                await Task.Delay(Random.Shared.Next(RetryDelayMinMs, RetryDelayMaxMs + 1), cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(Random.Shared.Next(RetryDelayMinMs, RetryDelayMaxMs + 1), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The budget ended the wait: the serialization failure is the real cause, so it is recorded before the cancellation propagates.
+                    Record(failure.Original ?? error);
+                    throw;
+                }
             }
             catch (Exception error)
             {
-                // Recorded once, after the last attempt (or at once for a failure that is not retried).
-                Exception original = failure.Original ?? error;
-                if (original is not OperationCanceledException and not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("data-quest-reward.commit", original);
-                }
-
+                // The error that ends the call: the last attempt's, or a failure that is not retried.
+                Record(failure.Original ?? error);
                 throw;
             }
+        }
+    }
+
+    private static void Record(Exception error)
+    {
+        if (error is not OperationCanceledException and not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("data-quest-reward.commit", error);
         }
     }
 
@@ -107,22 +127,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db, ILogger<E
     /// serialization failure (SQLSTATE 40001) or deadlock (40P01). SQLite carries no SqlState and never matches.
     /// </summary>
     internal static bool IsSerializationFailure(Exception? error)
-    {
-        for (Exception? current = error; current is not null; current = current.InnerException)
-        {
-            if (current is DbException { SqlState: "40001" or "40P01" })
-            {
-                return true;
-            }
-
-            if (current is AggregateException aggregate && aggregate.InnerExceptions.Any(IsSerializationFailure))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => Resilience.DatabaseTransience.HasSqlState(error, "40001", "40P01");
 
     private async Task<QuestRewardCommitResult> CommitOnceAsync(
         CharacterQuestRewardRequest request, IReadOnlyList<uint> learnedSpells, IReadOnlyList<CharacterReputationRow> reputationAfter,
@@ -326,7 +331,7 @@ public sealed class EfCharacterQuestRewardStore(CharacterDbContext db, ILogger<E
                 {
                     FaultLedger.Shared.Record("data-quest-reward.rollback", rollbackError);
                 }
-            }).ConfigureAwait(false);
+            }, logger).ConfigureAwait(false);
 
             throw;
         }

@@ -50,6 +50,29 @@ public static class DatabaseTransience
         return false;
     }
 
+    /// <summary>
+    /// True when <paramref name="exception"/>, or anything it wraps (inner exceptions, aggregate members), is a
+    /// <see cref="DbException"/> whose <see cref="DbException.SqlState"/> is one of <paramref name="states"/>.
+    /// Providers without SQLSTATE (SQLite) never match.
+    /// </summary>
+    internal static bool HasSqlState(Exception? exception, params string[] states)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is DbException { SqlState: { } state } && Array.IndexOf(states, state) >= 0)
+            {
+                return true;
+            }
+
+            if (current is AggregateException aggregate && aggregate.InnerExceptions.Any(inner => HasSqlState(inner, states)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>True when the failure means the database could not be reached, opened, or answered in time.</summary>
     public static bool IsTransient(Exception exception)
     {

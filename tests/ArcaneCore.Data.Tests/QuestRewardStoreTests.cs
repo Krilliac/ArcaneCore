@@ -521,20 +521,168 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Rollback_OfAnAlreadyCompletedTransaction_IsTolerated_ButARealRollbackFailureIsNot()
+    public async Task Rollback_OfACompletedTransaction_IsTolerated_OnlyAfterAServerError()
     {
-        var commitError = new FakeDbException("40001");
-        await StoreTransactionRollback.RollbackAfterFailureAsync(
-            new RollbackStub(new InvalidOperationException("This NpgsqlTransaction has completed; it is either committed or rolled back")),
-            commitError, "failed", _ => Assert.Fail("a completed transaction is not a rollback fault"));
+        // The driver's "transaction has completed" state is an InvalidOperationException; no message text is read.
+        var completed = new InvalidOperationException("driver wording is irrelevant");
+        var serverError = new FakeDbException("40001");
+        await StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(completed), serverError, "failed",
+            _ => Assert.Fail("a completed transaction is not a rollback fault"));
+        // A server error wrapped by EF (DbUpdateException) counts too.
+        await StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(completed),
+            new DbUpdateException("save", serverError), "failed", _ => Assert.Fail("tolerated"));
 
-        Exception? reported = null;
-        var real = new InvalidOperationException("connection is broken");
-        AggregateException aggregate = await Assert.ThrowsAsync<AggregateException>(() =>
-            StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(real), commitError, "failed", e => reported = e));
-        Assert.Same(real, reported);
-        Assert.Equal([commitError, real], aggregate.InnerExceptions);
-        Assert.True(EfCharacterQuestRewardStore.IsSerializationFailure(aggregate));
+        // No server answer (a lost connection surfaces as something else): the rollback failure is real.
+        foreach (Exception commitError in new Exception[] { new IOException("connection lost"), new TimeoutException(), new FakeDbException("") })
+        {
+            Exception? reported = null;
+            AggregateException aggregate = await Assert.ThrowsAsync<AggregateException>(() =>
+                StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(completed), commitError, "failed", e => reported = e));
+            Assert.Same(completed, reported);
+            Assert.Equal([commitError, completed], aggregate.InnerExceptions);
+        }
+
+        // A server error with a rollback failure that is not the completed state (or is a disposed object) still surfaces.
+        foreach (Exception rollbackError in new Exception[] { new IOException("reset"), new ObjectDisposedException("tx"), new FakeDbException("08006") })
+        {
+            Exception? reported = null;
+            AggregateException aggregate = await Assert.ThrowsAsync<AggregateException>(() =>
+                StoreTransactionRollback.RollbackAfterFailureAsync(new RollbackStub(rollbackError), serverError, "failed", e => reported = e));
+            Assert.Same(rollbackError, reported);
+            Assert.Equal([serverError, rollbackError], aggregate.InnerExceptions);
+        }
+
+        Assert.True(EfCharacterQuestRewardStore.IsSerializationFailure(new AggregateException(new IOException(), serverError)));
+        Assert.False(EfCharacterQuestRewardStore.IsSerializationFailure(new FakeDbException("23505")));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ProviderTransactionEndedByTheServer_ThenCommitFails40001_IsRetried_AndGrantsOnce(DatabaseProvider provider)
+    {
+        // The injected step ends the real provider transaction before throwing, so EF's rollback meets the driver's own "completed" error.
+        Seed seed = await CreateAsync(provider);
+        var fault = new InjectedFault("commit", failures: 1, () => new FakeDbException("40001")) { EndTransactionFirst = true };
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+            Assert.Empty(db.ChangeTracker.Entries());
+            Assert.Null(db.Database.CurrentTransaction);
+        }
+
+        Assert.Equal(2, fault.Attempts);
+        Assert.False(FaultLedger.WasRecorded(fault.Thrown[0]));
+        await AssertPersistedAsync(seed, rewarded: true);
+        Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(seed.Connection, seed.Request));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task FailedRollbackAfter40001_IsNotRetried_AndSurfacesTheAggregate(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        var lost = new IOException("connection lost during rollback");
+        var fault = new InjectedFault("commit", failures: int.MaxValue, () => new FakeDbException("40001")) { RollbackFailure = () => lost };
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            AggregateException aggregate = await Assert.ThrowsAsync<AggregateException>(
+                () => new EfCharacterQuestRewardStore(db).CommitAsync(seed.Request));
+            Assert.Same(fault.Thrown[0], aggregate.InnerExceptions[0]);
+            Assert.Same(lost, aggregate.InnerExceptions[1]);
+        }
+
+        Assert.Equal(1, fault.Attempts);
+        Assert.True(FaultLedger.WasRecorded(fault.Thrown[0]));
+        await AssertPersistedAsync(seed, rewarded: false);
+    }
+
+    [Theory]
+    [MemberData(nameof(RetryShapes))]
+    public async Task RetryThroughAGrantingRequest_WritesSpellsAndReputationOnce(DatabaseProvider provider, string shape)
+    {
+        Seed seed = await CreateAsync(provider);
+        var fault = new InjectedFault(shape, failures: 1, () => new FakeDbException("40001"));
+        await using (CharacterDbContext db = Context(seed.Connection, fault.Interceptors))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db).CommitAsync(Granting(seed)));
+        }
+
+        Assert.Equal(2, fault.Attempts);
+        await AssertPersistedAsync(seed, rewarded: true);
+        await AssertGrantsAsync(seed, committed: true);
+    }
+
+    [Fact]
+    public async Task RealPostgreSqlSerializationFailure_IsRetried_AndGrantsExactlyOnce()
+    {
+        // Needs ARCANECORE_TEST_POSTGRES; with no PostgreSQL configured it has nothing to exercise (like the provider theories, which then only run SQLite).
+        if (!Providers().Any(p => p[0] is DatabaseProvider.PostgreSql))
+        {
+            return;
+        }
+
+        Seed seed = await CreateAsync(DatabaseProvider.PostgreSql);
+        int id = seed.Request.Before.Id;
+        // Mid-attempt, a rival Serializable transaction reads the character row (which the reward writes) and inserts an
+        // unrelated quest row (the reward reads that table), then commits: a read/write dependency cycle the server resolves
+        // by failing the reward's transaction with 40001. The rival touches nothing the reward checks, so the retry passes.
+        var rival = new RivalOnFirstSave(async () =>
+        {
+            await using CharacterDbContext other = TestContexts.Create<CharacterDbContext>(seed.Connection);
+            await using var tx = await other.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            _ = await other.Characters.AsNoTracking().FirstAsync(c => c.Id == id);
+            other.Set<CharacterQuestStatusRow>().Add(new CharacterQuestStatusRow { CharacterId = id, Quest = 900002 });
+            await other.SaveChangesAsync();
+            await tx.CommitAsync();
+        });
+        var log = new CapturingLogger();
+        await using (CharacterDbContext db = Context(seed.Connection, rival))
+        {
+            Assert.Equal(QuestRewardCommitResult.Committed, await new EfCharacterQuestRewardStore(db, log).CommitAsync(seed.Request));
+        }
+
+        Assert.True(rival.Fired);
+        DbException serialization = Assert.IsAssignableFrom<DbException>(Assert.Single(log.Errors).GetBaseException());
+        Assert.Equal("40001", serialization.SqlState);
+        await using CharacterDbContext verify = TestContexts.Create<CharacterDbContext>(seed.Connection);
+        Assert.Equal(175u, (await new EfCharacterStore(verify).GetByIdAsync(id))!.Money);
+        Assert.True((await verify.Set<CharacterQuestStatusRow>().AsNoTracking().SingleAsync(r => r.CharacterId == id && r.Quest == 900001)).Rewarded);
+        Assert.Equal(QuestRewardCommitResult.AlreadyRewarded, await CommitAsync(seed.Connection, seed.Request));
+    }
+
+    private sealed class RivalOnFirstSave(Func<Task> rival) : SaveChangesInterceptor
+    {
+        public bool Fired { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            if (!Fired)
+            {
+                Fired = true;
+                await rival().ConfigureAwait(false);
+            }
+
+            return result;
+        }
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<EfCharacterQuestRewardStore>
+    {
+        public List<Exception> Errors { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (exception is not null)
+            {
+                Errors.Add(exception);
+            }
+        }
     }
 
     private sealed class RollbackStub(Exception toThrow) : Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction
@@ -546,81 +694,6 @@ public sealed class QuestRewardStoreTests : IAsyncLifetime
         public Task RollbackAsync(CancellationToken cancellationToken = default) => throw toThrow;
         public void Dispose() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
-
-    private sealed class FakeDbException(string sqlState) : DbException("injected " + sqlState)
-    {
-        public override string? SqlState => sqlState;
-    }
-
-    /// <summary>Throws from the begin, SaveChanges or commit step, the first <c>failures</c> times, counting the attempts that reach that step.</summary>
-    private sealed class InjectedFault
-    {
-        private readonly string _shape;
-        private readonly int _failures;
-        private readonly Func<Exception> _make;
-        private int _attempts;
-
-        public InjectedFault(string shape, int failures, Func<Exception> make)
-        {
-            _shape = shape;
-            _failures = failures;
-            _make = make;
-            Interceptors = [new Tx(this), new Save(this)];
-        }
-
-        public IInterceptor[] Interceptors { get; }
-
-        public List<Exception> Thrown { get; } = [];
-
-        public Action? OnThrow { get; set; }
-
-        public int Attempts => Volatile.Read(ref _attempts);
-
-        private void Hit(string step)
-        {
-            if (step != _shape)
-            {
-                return;
-            }
-
-            if (Interlocked.Increment(ref _attempts) <= _failures)
-            {
-                Exception error = _make();
-                Thrown.Add(error);
-                OnThrow?.Invoke();
-                throw error;
-            }
-        }
-
-        private sealed class Tx(InjectedFault owner) : DbTransactionInterceptor
-        {
-            public override ValueTask<InterceptionResult<DbTransaction>> TransactionStartingAsync(
-                DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result,
-                CancellationToken cancellationToken = default)
-            {
-                owner.Hit("begin");
-                return ValueTask.FromResult(result);
-            }
-
-            public override ValueTask<InterceptionResult> TransactionCommittingAsync(
-                DbTransaction transaction, TransactionEventData eventData, InterceptionResult result,
-                CancellationToken cancellationToken = default)
-            {
-                owner.Hit("commit");
-                return ValueTask.FromResult(result);
-            }
-        }
-
-        private sealed class Save(InjectedFault owner) : SaveChangesInterceptor
-        {
-            public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-                DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
-            {
-                owner.Hit("save");
-                return ValueTask.FromResult(result);
-            }
-        }
     }
 
     private static CharacterDbContext Context(DatabaseConnectionOptions connection, IInterceptor[] interceptors)
