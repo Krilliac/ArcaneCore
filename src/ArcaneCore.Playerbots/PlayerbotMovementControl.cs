@@ -19,16 +19,19 @@ internal static class PlayerbotMovementControl
         {
             case TeleportStage.Far:
                 PlayerbotMotion.Reset(player);
+                PlayerbotMotion.ForgetRejections(player);
                 session.TryManagedAction(WorldOpcode.MsgMoveWorldportAck, []);
                 return true;
             case TeleportStage.Near:
                 PlayerbotMotion.Reset(player);
+                PlayerbotMotion.ForgetRejections(player);
                 var teleport = new PacketWriter();
                 teleport.WriteUInt64(player.Guid.Value); teleport.WriteUInt32(0); teleport.WriteUInt32(session.World.NowMs);
                 session.TryManagedAction(WorldOpcode.MsgMoveTeleportAck, teleport.ToArray());
                 return true;
             case TeleportStage.FarScheduled or TeleportStage.Arriving:
                 PlayerbotMotion.Reset(player);
+                PlayerbotMotion.ForgetRejections(player);
                 return true;
         }
         PendingMovementChange? change = player.Locomotion.Pending.Changes.FirstOrDefault(c => c.Type != MovementChangeType.KnockBack);

@@ -105,8 +105,16 @@ internal static partial class PlayerbotMotion
         internal readonly List<(Vector3 Destination, uint UntilMs)> Blacklist = [];
         internal bool LoopPending;
         internal int LoopCount;
+        /// <summary>Times the consecutive-rejection guard fired (the count itself returns to 0 in the same call).</summary>
+        internal int RejectionTrips;
         internal int ConsecutiveRejections;
         internal Vector3 LastRejectedDestination;
+        /// <summary>Where the last rejected walk broke (the bot's anchor); a rejection at the same place counts as consecutive whatever the destination.</summary>
+        internal Vector3 LastRejectedAnchor;
+        /// <summary>Route corners a walk broke towards <see cref="MaxRejectionsBeforeLoop"/> times in a row, refused for <see cref="LoopBlacklistMs"/> (<see cref="CrossesRejectedPlace(Player, PlayerbotRoute)"/>); empty almost always.</summary>
+        internal readonly List<(Vector3 Place, uint UntilMs)> RejectedPlaces = [];
+        /// <summary>The map instance <see cref="LastRejectedAnchor"/> and <see cref="RejectedPlaces"/> belong to; null before the first rejection. Coordinates on another map are other places.</summary>
+        internal Map? RejectionsOn;
         internal uint Packets;
         /// <summary>The outcome checks' rate limits and samples (<see cref="PlayerbotMotionAnomalies"/>).</summary>
         internal readonly PlayerbotMotionAnomalies.MotionWatch Watch = new();
@@ -170,6 +178,9 @@ internal static partial class PlayerbotMotion
     /// <summary>Whether the bot is moving along a route this class drives.</summary>
     internal static bool IsActive(Player player) => States.TryGetValue(player, out MotionState? state) && state.Active;
 
+    /// <summary>Times the consecutive-rejection guard gave a destination up (inspection; ConsecutiveRejections is back to 0 by then).</summary>
+    internal static int RejectionTrips(Player player) => States.TryGetValue(player, out MotionState? state) ? state.RejectionTrips : 0;
+
     /// <summary>Loops detected so far (inspection).</summary>
     internal static int LoopCount(Player player) => States.TryGetValue(player, out MotionState? state) ? state.LoopCount : 0;
 
@@ -210,26 +221,50 @@ internal static partial class PlayerbotMotion
         if (!States.TryGetValue(player, out MotionState? state)) return;
         state.Loops.Reset();
         state.Blacklist.Clear();
+        state.RejectedPlaces.Clear();
         state.LoopPending = false;
         state.ConsecutiveRejections = 0;
         state.LastRejectedDestination = default;
+        state.LastRejectedAnchor = default;
     }
 
     /// <summary>
     /// Lifts the refusal of one place: removes the blacklist entries within <see cref="SamePlaceYards"/> of <paramref name="destination"/>
-    /// and nothing else. The other refused places, the loop pattern and the rejection count stay (<see cref="ForgetLoops"/> clears them
+    /// and the remembered rejected corners (<see cref="MotionState.RejectedPlaces"/>): a route to the destination may cross any of them, and a
+    /// caller that lifts the refusal (a group pushing through) wants the route walked. The other refused places, the loop pattern and the rejection count stay (<see cref="ForgetLoops"/> clears them
     /// all, which a caller that may run again and again would turn into a guard that never trips). It lifts every entry within that distance whichever goal put it there, so callers use it only for a place that is their own plan. Allocation-free. 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
     /// the rest of the motion state.
     /// </summary>
     internal static void Unblacklist(Player player, Vector3 destination)
     {
-        if (!States.TryGetValue(player, out MotionState? state) || state.Blacklist.Count == 0) return;
+        if (!States.TryGetValue(player, out MotionState? state)) return;
         var entries = state.Blacklist;
         Vector2 at = Flat(destination);
         for (int i = entries.Count - 1; i >= 0; i--)
         {
             if (Vector2.Distance(Flat(entries[i].Destination), at) <= SamePlaceYards) entries.RemoveAt(i);
         }
+
+        state.RejectedPlaces.Clear();
+    }
+
+    /// <summary>
+    /// Forgets where walks broke (<see cref="MotionState.RejectedPlaces"/>, the rejection count and its anchor): a teleport (<see cref="PlayerbotMovementControl"/>)
+    /// puts the bot somewhere else, where those places mean nothing. The refused destinations and the loop pattern stay. Thread affinity: the world update.
+    /// </summary>
+    internal static void ForgetRejections(Player player)
+    {
+        if (!States.TryGetValue(player, out MotionState? state)) return;
+        ClearRejections(state);
+        state.RejectedPlaces.Clear();
+        state.RejectionsOn = null;
+    }
+
+    private static void ClearRejections(MotionState state)
+    {
+        state.ConsecutiveRejections = 0;
+        state.LastRejectedDestination = default;
+        state.LastRejectedAnchor = default;
     }
 
     /// <summary>
@@ -247,6 +282,45 @@ internal static partial class PlayerbotMotion
         }
 
         state.LoopPending = true;
+    }
+
+    /// <summary>
+    /// Whether a corner of <paramref name="route"/> after its start lies within <see cref="SamePlaceYards"/> (2D, and within
+    /// <see cref="MeshFloorToleranceYards"/> in height: a bridge or floor above is another place) of a place the walk broke at
+    /// <see cref="MaxRejectionsBeforeLoop"/> times in a row and that is still remembered: a route through it breaks at the same corner whatever
+    /// its destination (bot-motion/route-blocked, #1485). A place within <see cref="SamePlaceYards"/> of the route's start is where the bot
+    /// stands, and a bot is never refused the way out of where it stands (navmesh corners are often 1-4 yards apart). Places remembered on
+    /// another map instance are dropped. Expired entries are dropped. Allocation-free (no closure over <c>now</c>). Thread affinity: the world update.
+    /// </summary>
+    internal static bool CrossesRejectedPlace(Player player, PlayerbotRoute route)
+        => States.TryGetValue(player, out MotionState? state) && state.RejectedPlaces.Count != 0 && state.World is { } world
+            && CrossesRejectedPlace(state, route, player.Map, world.NowMs);
+
+    private static bool CrossesRejectedPlace(MotionState state, PlayerbotRoute route, Map? map, uint now)
+    {
+        List<(Vector3 Place, uint UntilMs)> places = state.RejectedPlaces;
+        if (places.Count == 0) return false;
+        if (state.RejectionsOn is { } on && !ReferenceEquals(on, map))
+        {
+            places.Clear();
+            return false;
+        }
+
+        for (int index = places.Count - 1; index >= 0; index--)
+            if (unchecked((int)(places[index].UntilMs - now)) <= 0) places.RemoveAt(index);
+        if (places.Count == 0) return false;
+        Vector2 start = Flat(route.Points[0]);
+        for (int point = 1; point < route.Points.Count; point++)
+        {
+            Vector3 corner = route.Points[point];
+            foreach ((Vector3 place, _) in places)
+            {
+                if (Vector2.Distance(Flat(place), start) <= SamePlaceYards) continue;
+                if (Vector2.Distance(Flat(place), Flat(corner)) <= SamePlaceYards && MathF.Abs(place.Z - corner.Z) <= MeshFloorToleranceYards) return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Whether <paramref name="destination"/> was given up after a loop and is still refused.</summary>
@@ -298,7 +372,7 @@ internal static partial class PlayerbotMotion
             if (!keepMotion) Stop(session, player);
             return false;
         }
-        if (IsBlacklisted(player, route.Points[^1]))
+        if (IsBlacklisted(player, route.Points[^1]) || CrossesRejectedPlace(state, route, map, now))
         {
             if (!keepMotion) Stop(session, player);
             return false;
@@ -356,6 +430,18 @@ internal static partial class PlayerbotMotion
         else if (!moving && !route.LegsNavigated(route.NextPoint, route.NextPoint))
         {
             TrySnapDirectStepStart(map, player, ref current);
+        }
+
+        // A route resumed away from the leg it walks next (the bot left it for a chase, another goal's walk or a ride) has no proof
+        // for the straight line from here to that leg's corner: the mesh's legs are walkable, the way back onto them is not, and the
+        // navigated walk would cut through whatever stands between (#776). A clear straight line, else the mesh's way back, else a
+        // refusal: the caller drops the route and plans again from here.
+        if (OffRoute(route, current) && !PlayerbotMoveCheck.CanStep(map, current, route.Points[route.NextPoint])
+            && !PlayerbotNavigation.TryRejoin(map, route, current, options))
+        {
+            route.NextPoint = route.Points.Count; // dropped, as OnLeg drops a route too far off its leg: the brain must not read it as an explore cell to block
+            if (!keepMotion) Stop(session, player);
+            return false;
         }
 
         float skipDistance = moving ? 0.30f : 0.05f;
@@ -417,8 +503,8 @@ internal static partial class PlayerbotMotion
             {
                 string mode = MoveModeOf(route, route.NextPoint, probed);
                 TrySnapPlayerToFloor(map, player, ref current);
-                AdvancePastRejectedWaypoint(route, current);
-                int consecutive = NoteStepRejected(session, player, state, route, now);
+                Vector3 toward = AdvancePastRejectedWaypoint(route, current);
+                int consecutive = NoteStepRejected(session, player, state, route, current, toward, now);
                 PlayerbotMotionAnomalies.ReportStartBlocked(session, player, route, current, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
             }
 
@@ -438,8 +524,8 @@ internal static partial class PlayerbotMotion
             {
                 string mode = MoveModeOf(route, route.NextPoint, probed);
                 TrySnapPlayerToFloor(map, player, ref current);
-                AdvancePastRejectedWaypoint(route, current);
-                int consecutive = NoteStepRejected(session, player, state, route, now);
+                Vector3 toward = AdvancePastRejectedWaypoint(route, current);
+                int consecutive = NoteStepRejected(session, player, state, route, current, toward, now);
                 PlayerbotMotionAnomalies.ReportMoveRejected(session, player, opcode.ToString(), current, now, consecutive, "NoGroundSupport", mode);
                 route.NextPoint = route.Points.Count;
             }
@@ -452,6 +538,7 @@ internal static partial class PlayerbotMotion
         {
             state.ConsecutiveRejections = 0;
             state.LastRejectedDestination = default;
+            state.LastRejectedAnchor = default;
         }
         state.Route = route;
         route.Released = false;
@@ -539,8 +626,8 @@ internal static partial class PlayerbotMotion
                 // The last step is refused: the bot stays where the last packet put it, and the route is not complete (it is
                 // reported and damped like a refused heartbeat, so a brain that re-plans to the same target does not loop silently).
                 string arrivalMode = MoveModeOf(route, route.NextPoint, nextPoint);
-                AdvancePastRejectedWaypoint(route, state.Anchor);
-                int arrivalRejections = NoteStepRejected(session, player, state, route, now);
+                Vector3 arrivalToward = AdvancePastRejectedWaypoint(route, state.Anchor);
+                int arrivalRejections = NoteStepRejected(session, player, state, route, state.Anchor, arrivalToward, now);
                 PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now, arrivalRejections, arrivalReject ?? "NoGroundSupport", arrivalMode);
                 StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
                 return;
@@ -561,8 +648,8 @@ internal static partial class PlayerbotMotion
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
-            AdvancePastRejectedWaypoint(route, state.Anchor);
-            int consecutive = NoteStepRejected(session, player, state, route, now);
+            Vector3 toward = AdvancePastRejectedWaypoint(route, state.Anchor);
+            int consecutive = NoteStepRejected(session, player, state, route, state.Anchor, toward, now);
             PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now, consecutive, rejectReason ?? "NoGroundSupport", mode);
             route.NextPoint = route.Points.Count;
             StopAt(session, player, state, state.Anchor, state.Heading, route.Points.Count, now);
@@ -573,8 +660,8 @@ internal static partial class PlayerbotMotion
                 out valid, out bool swam, out bool swimNow))
         {
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
-            AdvancePastRejectedWaypoint(route, state.Anchor);
-            int consecutive = NoteStepRejected(session, player, state, route, now);
+            Vector3 toward = AdvancePastRejectedWaypoint(route, state.Anchor);
+            int consecutive = NoteStepRejected(session, player, state, route, state.Anchor, toward, now);
             PlayerbotMotionAnomalies.ReportMoveRejected(session, player, "a heartbeat", valid, now, consecutive, "NoGroundSupport", mode);
             route.NextPoint = route.Points.Count;
             state.Clear();
@@ -583,6 +670,7 @@ internal static partial class PlayerbotMotion
 
         state.ConsecutiveRejections = 0;
         state.LastRejectedDestination = default;
+        state.LastRejectedAnchor = default;
         int walkedFrom = route.NextPoint;
         route.NextPoint = nextPoint;
         float travelled = Vector2.Distance(Flat(state.Anchor), Flat(valid));
@@ -698,9 +786,11 @@ internal static partial class PlayerbotMotion
     {
         if (!States.TryGetValue(player, out MotionState? state)) return;
         state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(place)) <= SamePlaceYards * 2);
+        state.RejectedPlaces.RemoveAll(entry => Vector2.Distance(Flat(entry.Place), Flat(place)) <= SamePlaceYards * 2);
         state.LoopPending = false;
         state.ConsecutiveRejections = 0;
         state.LastRejectedDestination = default;
+        state.LastRejectedAnchor = default;
     }
 
     /// <summary>
@@ -1367,33 +1457,66 @@ internal static partial class PlayerbotMotion
         return validStart is not null;
     }
 
-    private static void AdvancePastRejectedWaypoint(PlayerbotRoute route, Vector3 from)
+    /// <summary>
+    /// Steps past the corner the bot stands at; returns the corner its walk was heading to after that (where the walk broke). Read after the
+    /// step: the corner the bot stands at is its own place, and remembering it would refuse every way out (<see cref="NoteStepRejected"/>).
+    /// </summary>
+    private static Vector3 AdvancePastRejectedWaypoint(PlayerbotRoute route, Vector3 from)
     {
         if (route.NextPoint < route.Points.Count - 1
             && Vector2.Distance(Flat(from), Flat(route.Points[route.NextPoint])) <= SamePlaceYards)
         {
             route.NextPoint++;
         }
+
+        return route.Points[Math.Clamp(route.NextPoint, 0, route.Points.Count - 1)];
     }
 
-    private static int NoteStepRejected(WorldSession session, Player player, MotionState state, PlayerbotRoute route, uint now)
+    /// <summary>
+    /// Counts a rejected step. It is consecutive with the one before when it has the same destination or broke at the same place
+    /// (<paramref name="anchor"/>, within <see cref="SamePlaceYards"/>): a bot that fails at one corner for goal after goal (live #1485: 234k
+    /// route-blocked from 256 bots at one spot) is stuck there, whatever it was walking to. At <see cref="MaxRejectionsBeforeLoop"/> the
+    /// destination and the corner ahead are given up and the corner the walk broke towards (<paramref name="toward"/>) is remembered (<see cref="CrossesRejectedPlace(Player, PlayerbotRoute)"/>).
+    /// </summary>
+    private static int NoteStepRejected(WorldSession session, Player player, MotionState state, PlayerbotRoute route, Vector3 anchor, Vector3 toward, uint now)
     {
         Vector3 destination = route.Points[^1];
-        if (state.ConsecutiveRejections > 0 && Vector2.Distance(Flat(state.LastRejectedDestination), Flat(destination)) <= SamePlaceYards)
+        if (!ReferenceEquals(state.RejectionsOn, player.Map))
+        {
+            // Another map instance: its coordinates are other places (the count, its anchor and the remembered corners belong to the old one).
+            ClearRejections(state);
+            state.RejectedPlaces.Clear();
+            state.RejectionsOn = player.Map;
+        }
+
+        if (state.ConsecutiveRejections > 0
+            && (Vector2.Distance(Flat(state.LastRejectedDestination), Flat(destination)) <= SamePlaceYards
+                || Vector2.Distance(Flat(state.LastRejectedAnchor), Flat(anchor)) <= SamePlaceYards))
         {
             state.ConsecutiveRejections++;
         }
         else
         {
             state.ConsecutiveRejections = 1;
-            state.LastRejectedDestination = destination;
         }
 
+        state.LastRejectedDestination = destination;
+        state.LastRejectedAnchor = anchor;
         int consecutive = state.ConsecutiveRejections;
         if (consecutive >= MaxRejectionsBeforeLoop)
         {
             Vector3 waypoint = route.Points[Math.Clamp(route.NextPoint, 0, route.Points.Count - 1)];
+            // Never the place the bot stands at: a route out of it has its first corner within SamePlaceYards, and refusing those traps the bot.
+            if (toward.IsFinite() && Vector2.Distance(Flat(toward), Flat(anchor)) > SamePlaceYards)
+            {
+                state.RejectedPlaces.RemoveAll(entry => Vector2.Distance(Flat(entry.Place), Flat(toward)) <= SamePlaceYards);
+                state.RejectedPlaces.Add((toward, unchecked(now + LoopBlacklistMs)));
+            }
+
             GiveUp(session, player, state, [destination, waypoint], now);
+            state.RejectionTrips++;
+            // The guard fired: the next goal from here gets its own MaxRejectionsBeforeLoop attempts, not one.
+            ClearRejections(state);
         }
 
         return consecutive;
@@ -1654,6 +1777,26 @@ internal static partial class PlayerbotMotion
         return difference > MathF.PI ? MathF.Tau - difference : difference;
     }
 
+    /// <summary>How far (yards, flat) a bot may stand from the navigated leg its route walks next and still walk on from there (<see cref="Follow"/>).</summary>
+    internal const float OffRouteYards = 0.5f;
+
+    /// <summary>
+    /// Whether <paramref name="at"/> is off the navigated leg <paramref name="route"/> walks next: more than <see cref="OffRouteYards"/>
+    /// beside it, or more than <see cref="MeshFloorToleranceYards"/> above or below it (another storey). A stepped leg is never off: its
+    /// every step keeps the floor and line-of-sight checks.
+    /// </summary>
+    internal static bool OffRoute(PlayerbotRoute route, Vector3 at)
+    {
+        if (route.Points.Count < 2) return false;
+        int next = Math.Clamp(route.NextPoint, 1, route.Points.Count - 1);
+        if (!route.LegsNavigated(next, next)) return false;
+        Vector3 from = route.Points[next - 1], to = route.Points[next];
+        Vector2 leg = Flat(to) - Flat(from);
+        float squared = leg.LengthSquared();
+        float along = squared < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(Flat(at) - Flat(from), leg) / squared, 0f, 1f);
+        Vector3 nearest = Vector3.Lerp(from, to, along);
+        return Vector2.Distance(Flat(at), Flat(nearest)) > OffRouteYards || MathF.Abs(at.Z - nearest.Z) > MeshFloorToleranceYards;
+    }
 }
 
 /// <summary>

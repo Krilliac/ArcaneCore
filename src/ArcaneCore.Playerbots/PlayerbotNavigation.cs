@@ -49,9 +49,9 @@ internal sealed class PlayerbotRoute
 
     private bool[]? _legs;
 
-    internal IReadOnlyList<Vector3> Points { get; }
+    internal IReadOnlyList<Vector3> Points { get; private set; }
     internal IReadOnlyList<Vector3>? MeshPoints { get; set; }
-    internal float Distance { get; }
+    internal float Distance { get; private set; }
 
     /// <summary>
     /// The corners came from the map's navigation mesh: every leg between them is walkable by construction (vmangos
@@ -60,7 +60,7 @@ internal sealed class PlayerbotRoute
     /// obstacle the mesh goes around (a pillar, a counter, a doorway's edge). Routes stepped over the terrain without a mesh
     /// (<see cref="PlayerbotNavigation.TryTerrainRoute"/>) carry no such proof and keep the line-of-sight check.
     /// </summary>
-    internal bool Navigated { get; }
+    internal bool Navigated { get; private set; }
 
     internal void SetLegNavigated(int legIndex, bool navigated)
     {
@@ -179,6 +179,38 @@ internal sealed class PlayerbotRoute
             Pathfinder = Pathfinder ?? next.Pathfinder,
             MeshPoints = MeshPoints is not null || next.MeshPoints is not null ? points : null,
         };
+    }
+
+    /// <summary>
+    /// Puts <paramref name="join"/> (the mesh's way from where the bot stands to point <see cref="NextPoint"/>) in front of this route's
+    /// unwalked rest, in place, so the motion and the goal holding this route walk on along the same route
+    /// (<see cref="PlayerbotNavigation.TryRejoin"/>). The join's legs are the mesh's; the rest keeps its own proof (<see cref="LegsNavigated"/>).
+    /// </summary>
+    internal void Rejoin(IReadOnlyList<Vector3> join)
+    {
+        int next = Math.Clamp(NextPoint, 1, Math.Max(1, Points.Count - 1));
+        var points = new List<Vector3>(join.Count + Points.Count - next) { join[0] };
+        var legs = new List<bool>(points.Capacity);
+        for (int i = 1; i < join.Count - 1; i++)
+        {
+            points.Add(join[i]);
+            legs.Add(true);
+        }
+
+        for (int i = next; i < Points.Count; i++)
+        {
+            points.Add(Points[i]);
+            legs.Add(i == next || LegNavigatedAt(i));
+        }
+
+        float distance = 0;
+        for (int i = 1; i < points.Count; i++) distance += Vector3.Distance(points[i - 1], points[i]);
+        Points = points;
+        Distance = distance;
+        _legs = legs.ToArray();
+        Navigated = legs.All(leg => leg);
+        if (MeshPoints is not null) MeshPoints = points;
+        NextPoint = 1;
     }
 }
 
@@ -1127,6 +1159,27 @@ internal static class PlayerbotNavigation
             : null;
     }
 
+    /// <summary>How near (yards, flat) the end of a join must come to the corner it was asked for (<see cref="TryRejoin"/>).</summary>
+    private const float RejoinCornerYards = 0.5f;
+
+    /// <summary>
+    /// The way back onto <paramref name="route"/> from <paramref name="here"/>, a position off the leg it walks next: the mesh's complete
+    /// path to that leg's corner, put in front of the route's rest (<see cref="PlayerbotRoute.Rejoin"/>). False, with the route unchanged,
+    /// when the mesh knows no complete way there.
+    /// </summary>
+    internal static bool TryRejoin(Map map, PlayerbotRoute route, Vector3 here, PlayerbotOptions options)
+    {
+        if (route.Complete) return false;
+        Vector3 corner = route.Points[route.NextPoint];
+        PathResult path = PlayerbotThinkProbe.Find(map.Collision, here, corner, new PathOptions { MaxPoints = Math.Max(2, options.MaxPathPoints),
+            Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, MaxSearchNodes = PathOptions.DefaultMaxSearchNodes, LoadTiles = true, NonBlockingTiles = true });
+        if (!IsUsablePath(path, options.MaxPathPoints, options.MaxRouteYards) || (path.Type & PathType.Incomplete) != 0 || path.Points.Count < 2
+            || Vector2.Distance(Flat(path.Points[^1]), Flat(corner)) > RejoinCornerYards)
+            return false;
+        route.Rejoin(path.Points);
+        return true;
+    }
+
     /// <summary>The route without the hazard check (<see cref="Plan"/>).</summary>
     private static bool PlanDirect(Player player, Vector3 destination, Vector3 goal, PlayerbotOptions options, bool partial,
         out PlayerbotRoute? route, out bool straightRefused, int? searchNodes = null, Vector3? from = null, bool noFallbacks = false,
@@ -1325,6 +1378,14 @@ internal static class PlayerbotNavigation
             return false;
 
         route = Bounded(path.Points, options, complete: Reaches(path) || EndsAt(path, destination));
+        // A corner the bot's walk broke at again and again (PlayerbotMotion.NoteStepRejected) is not walked through for a while: the goal picks another.
+        if (route is not null && PlayerbotMotion.CrossesRejectedPlace(player, route))
+        {
+            route = null;
+            t_nonPathRefusal = true;
+            return false;
+        }
+
         return route is not null;
     }
 

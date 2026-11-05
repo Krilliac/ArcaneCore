@@ -155,7 +155,7 @@ pay for leaves the corner at its mesh position. A path with no sharp corner cost
 route's proof covers its own legs only: a bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed it
 again walks a straight line from where it stands to the next point, and when it starts more than `OffLegYards` (5) off the leg
 that line is checked as a stepped one (floor and line of sight), so it no longer runs through hills and rocks at its own height
-(bot-motion/under-map in the Valley of Trials). Details and
+(bot-motion/under-map in the Valley of Trials). A start less than that far off the leg is not left to that check: a held route resumed beside the leg it walks next goes back onto it by a cleared straight line or the mesh's way (`PlayerbotNavigation.TryRejoin`), never by an unchecked one through a wall (#776). A walk that breaks at the same place again and again, whatever it was walking to, is counted together (`MaxRejectionsBeforeLoop`) and the corner it broke towards is refused for a while (`PlayerbotMotion.CrossesRejectedPlace`), so a bot is not caught in one spot by goal after goal (#1485). Details and
 the 2026-10-07 root causes: `docs/integration/playerbot-movement-and-tick-health.md`; whether
 real terrain/collision/navmesh data is needed: `docs/integration/maps-vmaps-mmaps.md`.
 

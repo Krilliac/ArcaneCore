@@ -581,13 +581,13 @@ public sealed class PlayerbotSiegeLeashWorldTests : PlayerbotSiegeWorldTestBase
                 // The leader's own walk back to the waypoint (a chase of the kiter's place may be refused by the loop watch for a while, which only keeps the leader at the waypoint).
                 string aiStep = raid.Group.Members.First(m => m.BotId == leaderBot).AI?.Step ?? string.Empty;
                 noPath |= aiStep.StartsWith("lead:", StringComparison.Ordinal) && aiStep.EndsWith(":no-path", StringComparison.Ordinal);
-                maxRejections = Math.Max(maxRejections, PlayerbotMotion.ConsecutiveRejections(leader));
+                maxRejections = Math.Max(maxRejections, PlayerbotMotion.RejectionTrips(leader));
             }
 
             return t > 25_000 || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0 || siege.Step > stepAtPush;
         });
 
-        async Task<string> Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} maxRejections={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
+        async Task<string> Story() => $"done={done} chased={chased} lagReset={lagReset} flipped={flipped} refused={refused} noPath={noPath} rejectionTrips={maxRejections} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} retreats={raid.Retreats} leaderOff={leaderOff:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail) + Environment.NewLine + await world.TraceAsync();
         if (attacker is null) Assert.Fail("the probe never fired: " + await Story());
         if (!chased) Assert.Fail("the leader never left the disk to answer the kiter: " + await Story());
@@ -596,7 +596,7 @@ public sealed class PlayerbotSiegeLeashWorldTests : PlayerbotSiegeWorldTestBase
         if (flipped) Assert.Fail("the raid read the leader as away from its waypoint while it answered or walked back: " + await Story());
         if (refused) Assert.Fail("the waypoint stayed blacklisted: " + await Story());
         if (noPath) Assert.Fail("the leader's walk to the waypoint found no path: " + await Story());
-        if (maxRejections >= PlayerbotMotion.MaxRejectionsBeforeLoop) Assert.Fail("the rejection guard was tripped: " + await Story());
+        if (maxRejections > 0) Assert.Fail("the rejection guard was tripped: " + await Story());
         if (raid.PushDeniedStep == stepAtPush) Assert.Fail("the push was denied: " + await Story());
     }
 
