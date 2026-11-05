@@ -744,10 +744,7 @@ public sealed class PetStableTests
 
         Task unstableTail = SaveTail(kit.Service, 1);
         release.SetResult(); // D fails; the barrier then queues its delete retry R behind U, whose store write is still gated
-        while (ReferenceEquals(SaveTail(kit.Service, 1), unstableTail))
-        {
-            await Task.Delay(1).WaitAsync(HangBound); // polls for R's queue slot: a state, not a timing
-        }
+        await pump.UntilAsync(() => !ReferenceEquals(SaveTail(kit.Service, 1), unstableTail)); // R's queue slot: a state, not a timing; one overall deadline
 
         unstableGate.SetResult(); // only now may U finish (and clear the owed delete), so R is guaranteed to have been queued first
         await pump.UntilAsync(() => session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgStableResult) && barrier.IsCompleted);
