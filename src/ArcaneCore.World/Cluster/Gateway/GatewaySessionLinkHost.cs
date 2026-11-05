@@ -279,7 +279,16 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     public void Start()
     {
-        _listener.Start();
+        try
+        {
+            _listener.Start();
+        }
+        catch (SocketException ex)
+        {
+            _listener.Stop();
+            throw WorldBindFailedException.For("gateway link port", _listener.LocalEndpoint.ToString()!, ex);
+        }
+
         _acceptTask = Task.Run(() => AcceptLoopAsync(_stop.Token));
     }
 

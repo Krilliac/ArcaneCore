@@ -650,7 +650,8 @@ public sealed class WorldHost(
         try { probe.Start(); }
         catch (SocketException ex)
         {
-            throw new Net.WorldPortInUseException($"the world port {address}:{options.Port} is already in use (another world process?); refusing to start before any playerbot is restored", ex);
+            // Any failed bind ends the start here, before the ownership claim and the bot restore: a clash is "in use", anything else (an address this host does not have, a privileged port) is reported as itself.
+            throw Net.WorldBindFailedException.For("world port", $"{address}:{options.Port}", ex, "refusing to start before any playerbot is restored");
         }
         finally { probe.Stop(); }
     }

@@ -33,7 +33,7 @@ internal sealed class PortReservations : IDisposable
 
     /// <summary>
     /// Claims <paramref name="port"/> until disposal. False when another holder has it, or when its lock file cannot be opened by this user (another user's file, EACCES: that user's run
-    /// may hold the port, so the caller takes the next candidate). True when claimed, or when reservation is disabled.
+    /// may hold the port, so the caller takes the next candidate). True when claimed, when reservation is disabled, or when the lock directory vanished and cannot be recreated (true without a lock: the caller's own listener probe decides).
     /// </summary>
     public bool TryReserve(int port)
     {
@@ -42,12 +42,33 @@ internal sealed class PortReservations : IDisposable
             return true;
         }
 
+        string path = Path.Combine(_directory, string.Create(CultureInfo.InvariantCulture, $"port-{port}.lock"));
         FileStream held;
         try
         {
-            held = new FileStream(
-                Path.Combine(_directory, string.Create(CultureInfo.InvariantCulture, $"port-{port}.lock")),
-                FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            held = Open(path);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The lock directory vanished after construction (a temp cleaner, a deleted run folder). That is not a held port: recreate it and retry once.
+            // If it cannot be recreated either, nothing can be reserved, so the caller's own listener probe decides (as when reservation is disabled) instead of every port counting as held.
+            try
+            {
+                Directory.CreateDirectory(_directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return true; // the directory cannot be recreated: nothing is reservable, and that is not a held port
+            }
+
+            try
+            {
+                held = Open(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false; // the directory is back, but the file is held or foreign (a sharing violation, no permission, or a second deletion race): not reservable here
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -61,6 +82,8 @@ internal sealed class PortReservations : IDisposable
 
         return true;
     }
+
+    private static FileStream Open(string path) => new(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
     public void Dispose()
     {

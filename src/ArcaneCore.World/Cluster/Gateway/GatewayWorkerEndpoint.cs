@@ -127,7 +127,7 @@ public sealed class GatewayWorkerEndpoint(
         // The far-teleport router (Cluster:Worker:Transfers:Enabled, non-empty OwnedMaps) receives the gateway's answers to its transfer requests and the outcome notices; null otherwise.
         _host.SubmitSink = rootServices?.GetService<Transfer.ClusterFarTeleportFeature>()?.Router;
         rootServices?.GetService<Control.ClusterRestartRelay>()?.Attach(_host, Acceptor ?? throw new InvalidOperationException("the session acceptor was not created"));
-        _host.Start();
+        _host.Start(); // a link port that cannot bind throws WorldBindFailedException (a clean failed start through WorldStartup.RunAsync); nothing else is started yet
         if (lifecycle is not null && _countdownHandler is null)
         {
             _countdownHandler = OnCountdownChanged;
