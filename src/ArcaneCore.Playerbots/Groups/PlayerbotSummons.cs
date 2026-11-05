@@ -354,7 +354,7 @@ internal sealed class PlayerbotSummons
         bool offered = target?.PendingSummon is { } pending && pending.Summoner == player.Guid && pending.ExpiresAtMs >= now;
         if (offered)
         {
-            if (job.Kind == SummonKind.Ritual && job.Cast is not null) PlayerbotTravelCast.CancelCast(session, player, job.Cast.SpellId);
+            if (job.Kind == SummonKind.Ritual && job.Cast is not null) StopRitual(session, player, job.Cast.SpellId);
             return End(player, job);
         }
 
@@ -521,8 +521,21 @@ internal sealed class PlayerbotSummons
 
     private bool Fail(WorldSession session, Player summoner, SummonJob job)
     {
-        if (job.Kind == SummonKind.Ritual && job.Cast is { Stage: TravelCastStage.Casting }) PlayerbotTravelCast.CancelCast(session, summoner, job.Cast.SpellId);
+        if (job.Kind == SummonKind.Ritual && job.Cast is { Stage: TravelCastStage.Casting }) StopRitual(session, summoner, job.Cast.SpellId);
         return End(summoner, job);
+    }
+
+    /// <summary>
+    /// Ends the summoner's own ritual cast. The ritual is a channel, and CMSG_CANCEL_CAST never interrupts one (vmangos HandleCancelCastOpcode keeps the channel
+    /// slot; <see cref="SpellSystem.CancelCast"/>), so a channel still running is stopped with CMSG_CANCEL_CHANNELLING, the packet a client sends. Left running it
+    /// would keep the warlock "casting" with its portal gone and bar it from any further summon.
+    /// </summary>
+    private static void StopRitual(WorldSession session, Player summoner, uint spellId)
+    {
+        if (session.Services.GetService<SpellFeature>()?.System is not { } spells) return;
+        PlayerbotTravelCast.CancelCast(session, summoner, spellId); // a cast still being prepared
+        if (spells.GetState(summoner.Guid)?.CurrentCast is { State: SpellCastState.Casting } running && running.Spell.Id == spellId)
+            session.TryManagedAction(WorldOpcode.CmsgCancelChannelling, BitConverter.GetBytes(spellId));
     }
 
     private void Forget(WorldSession session, Player player)

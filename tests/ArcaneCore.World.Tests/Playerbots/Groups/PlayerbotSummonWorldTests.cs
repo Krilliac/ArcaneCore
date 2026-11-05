@@ -268,7 +268,7 @@ public sealed class PlayerbotSummonWorldTests
         Assert.Equal(1, world.Bots.Summons.Started);
 
         // After the gap it may try again.
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync() + await world.OnWorldAsync(() => $"DIAG started={world.Bots.Summons.Started} active={world.Bots.Summons.Active} job={world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind} shards={world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)} portals={Portals(world).Count()} combat={world.Player(warlock.Id).Combat.IsInCombat} pending={Real(world, "Summonsilent").PendingSummon is not null} realAt={Real(world, "Summonsilent").X} moving={world.Player(warlock.Id).Movement.Flags} motion={PlayerbotMotion.IsActive(world.Player(warlock.Id))} cast={world.World.Services.GetRequiredService<SpellFeature>().System.GetState(world.Player(warlock.Id).Guid)?.CurrentCast?.State} h1={Distance(world.Player(helperOne.Id), world.Player(warlock.Id))} h1c={world.Player(helperOne.Id).Combat.IsInCombat} h2={Distance(world.Player(helperTwo.Id), world.Player(warlock.Id))} pd={world.Bots.IsPartyDriven(warlock.Id)} alive={world.Player(warlock.Id).IsAlive}"));
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Started == 2), await world.TraceAsync());
     }
 
     [Fact]
@@ -387,37 +387,5 @@ public sealed class PlayerbotSummonWorldTests
 
         // The other bots keep thinking: any of them drops the job (its summoner is gone) instead of holding still for it until the summoner thinks again.
         Assert.True(await world.RunUntilAsync(20_000, () => world.Bots.Summons.Active == 0), await world.TraceAsync());
-    }
-
-    [Fact]
-    public async Task ZzDiag()
-    {
-        await using GroupTestWorld world = await StartAsync(options => options.Summon.RetrySeconds = 120);
-        var warlock = await BotAsync(world, "Summonlockz", Warlock, Camp, ritual: true, shards: 3);
-        var helperOne = await BotAsync(world, "Summonhelpz", Warrior, Camp + new Vector3(4f, 4f, 0f));
-        var helperTwo = await BotAsync(world, "Summonhelpy", Warrior, Camp + new Vector3(-4f, 4f, 0f));
-        await using WorldTestClient player = await world.World.EnterWorldAsync("SUMMONZ", "Summonz", AccountSecurity.Player);
-        await GroupAsync(world, "Summonz", warlock, helperOne, helperTwo);
-        await PlaceRealAsync(world, "Summonz", FarCamp);
-        var log = new System.Text.StringBuilder();
-        string S() => $"started={world.Bots.Summons.Started} active={world.Bots.Summons.Active} job={world.Bots.Summons.JobOf(world.Player(warlock.Id).Guid)?.Kind} portals={Portals(world).Count()} pending={Real(world, "Summonz").PendingSummon is not null} cast={world.World.Services.GetRequiredService<SpellFeature>().System.GetState(world.Player(warlock.Id).Guid)?.CurrentCast?.State} shards={world.Player(warlock.Id).Inventory.GetItemCount(SoulShard)} now={world.World.Host.World.NowMs}";
-        for (int i = 0; i < 30; i++)
-        {
-            await world.RunAsync(2_000);
-            log.AppendLine($"t{i * 2} " + await world.OnWorldAsync(S));
-            if (await world.OnWorldAsync(() => Real(world, "Summonz").PendingSummon is not null))
-            {
-                log.AppendLine("CLEAR");
-                await world.OnWorldAsync(() => { Real(world, "Summonz").PendingSummon = null; return true; });
-            }
-        }
-
-        for (int i = 0; i < 20; i++)
-        {
-            await world.RunAsync(10_000);
-            log.AppendLine($"u{i * 10} " + await world.OnWorldAsync(S));
-        }
-
-        Assert.Fail(log.ToString());
     }
 }
