@@ -69,13 +69,8 @@ public sealed class CharacterClaimWiringTests
         await using WorldTestHost host = rig.StartWorld(a);
         (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE9", "Vanisher");
         host.ExpectSessionFaults = true; // a fault escaping the session lands in SessionFaults instead of vanishing
-        var disposedFaults = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        Action<ArcaneCore.Kernel.Diagnostics.FaultNotice> watch = n =>
-        {
-            if (n.ExceptionType.Contains(nameof(ObjectDisposedException), StringComparison.Ordinal))
-                disposedFaults.Enqueue(n.Site + ": " + n.Message);
-        };
-        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.FaultNoticed += watch; // world-thread and transfer faults go through the ledger
+        // FaultLedger.Shared is process-wide and throttles what it announces, so no handler is attached: the count of every recorded disposed-scope fault on a login path is read before and after instead.
+        long disposedBefore = LoginPathDisposedFaults();
 
         using var gate = new ManualResetEventSlim(false);
         using var blocked = new ManualResetEventSlim(false);
@@ -106,10 +101,16 @@ public sealed class CharacterClaimWiringTests
 
         await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)id)).GetAwaiter().GetResult() is null, "the unentered login's claim to be released");
         Assert.False(host.World.IsOnline(ObjectGuid.Player((uint)id)));
-        ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.FaultNoticed -= watch;
         Assert.Empty(host.SessionFaults);
-        Assert.Empty(disposedFaults);
+        Assert.Equal(disposedBefore, LoginPathDisposedFaults());
     }
+
+    /// <summary>Every recorded occurrence (throttling only limits what is logged, not what is counted) of an ObjectDisposedException whose frames pass through the login or claim path.</summary>
+    private static long LoginPathDisposedFaults() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+        .Where(f => f.ExceptionType.Contains(nameof(ObjectDisposedException), StringComparison.Ordinal)
+            && f.Frames.Any(frame => frame.Contains("CharacterHandlers", StringComparison.Ordinal) || frame.Contains("LoginSequence", StringComparison.Ordinal)
+                || frame.Contains("CharacterClaim", StringComparison.Ordinal) || frame.Contains("WorldSession", StringComparison.Ordinal)))
+        .Sum(f => f.Count);
 
     [Fact]
     public async Task ARealLogin_IsRefused_WhileAnotherLiveWorkerHoldsTheCharacter()
@@ -857,6 +858,80 @@ public sealed class CharacterClaimWiringTests
         await rig.Store.MarkCompletedAsync(transfer);
         await WorldTestHost.WaitForAsync(() => Task.Run(() => rig.Store.GetActiveOwnershipAsync((ulong)character)).GetAwaiter().GetResult() is null, "the received claim is released after the failed poll");
         await claims.DrainAsync();
+    }
+
+    /// <summary>A settle poll that keeps failing backs off: with a 10 ms poll, a second of a broken store makes a handful of attempts, not the hundred a fixed interval would.</summary>
+    [Fact]
+    public async Task AReceivedClaimsReleasePoll_BacksOff_WhileTheStoreKeepsFailing()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Backoff");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        await rig.CommitClaimMoveAsync(character, a, b);
+        var scopes = new FailingScopeFactory(rig.Services.GetRequiredService<IServiceScopeFactory>());
+        var flaky = new EfTransferDecisionStore(scopes);
+        using var claims = new CharacterClaimService(new StoreOverrideProvider(rig.Services, flaky)) { TransferSettlePoll = TimeSpan.FromMilliseconds(10) };
+
+        scopes.FailNext(int.MaxValue / 2);
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
+        await WorldTestHost.WaitForAsync(() => scopes.Failures >= 3, "the poll to fail and retry");
+        int atStart = scopes.Failures;
+        await Task.Delay(1000);
+
+        Assert.True(scopes.Failures - atStart < 20, $"{scopes.Failures - atStart} failed polls in one second: the interval did not grow");
+    }
+
+    /// <summary>A cancellation that is not the service's stop (a store timeout surfaces as one) is a failure: it is recorded and the pending marker is forgotten, not swallowed as a shutdown.</summary>
+    [Fact]
+    public async Task AReleaseThatEndsInAStoreCancellation_ThatIsNotTheStop_IsRecordedAsAFault()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Timeout");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        var scopes = new TimingOutScopeFactory(rig.Services.GetRequiredService<IServiceScopeFactory>());
+        var timingOut = new EfTransferDecisionStore(scopes);
+        using var claims = new CharacterClaimService(new StoreOverrideProvider(rig.Services, timingOut));
+        long before = ReleaseFaults();
+
+        scopes.Armed = true;
+        claims.ScheduleRelease(character, a, () => false);
+        await claims.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(scopes.Timeouts >= 1, "the release never reached the store");
+        Assert.Equal(before + 1, ReleaseFaults());
+        Assert.Equal(a.Scope, (await rig.Store.GetActiveOwnershipAsync((ulong)character))?.Scope); // nothing was released
+    }
+
+    private static long ReleaseFaults() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+        .Where(f => f.Site == "persist.character-claim-release" && f.ExceptionType.Contains(nameof(StoreTimedOut), StringComparison.Ordinal))
+        .Sum(f => f.Count);
+
+    private sealed class StoreTimedOut : OperationCanceledException;
+
+    /// <summary>A scope factory whose scope creation throws <see cref="StoreTimedOut"/> while armed, then delegates.</summary>
+    private sealed class TimingOutScopeFactory(IServiceScopeFactory inner) : IServiceScopeFactory
+    {
+        private int _timeouts;
+
+        public volatile bool Armed;
+
+        public int Timeouts => Volatile.Read(ref _timeouts);
+
+        public IServiceScope CreateScope()
+        {
+            if (Armed)
+            {
+                Interlocked.Increment(ref _timeouts);
+                throw new StoreTimedOut();
+            }
+
+            return inner.CreateScope();
+        }
     }
 
     /// <summary>A character this process gave away with a handoff is refused before anything is read, even under the token that holds its claim, and nothing is written.</summary>

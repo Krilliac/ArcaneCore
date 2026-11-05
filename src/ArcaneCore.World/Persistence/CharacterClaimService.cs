@@ -331,9 +331,9 @@ public sealed class CharacterClaimService(
                 gate.Release();
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
-            /* shutdown: the claim stays, this incarnation's death releases it */
+            /* shutdown: the claim stays, this incarnation's death releases it. A cancellation that is not the stop (a store timeout) falls to the handler below, which forgets the marker and records the fault. */
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -363,7 +363,7 @@ public sealed class CharacterClaimService(
     {
         long started = Environment.TickCount64;
         bool slowReported = false;
-        bool failing = false;
+        int failures = 0; // consecutive failed polls: the delay between polls grows with them, so a broken store is not hammered four times a second
         while (true)
         {
             lock (_pendingGate)
@@ -377,14 +377,14 @@ public sealed class CharacterClaimService(
                 if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
                     return true;
 
-                failing = false;
+                failures = 0;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            catch (Exception ex) when (!stop.IsCancellationRequested && ex is not OutOfMemoryException)
             {
-                // A failed poll says nothing about the transfer: keep polling, or the claim would stay and other workers refuse the character's logins.
-                if (!failing)
+                // A failed poll says nothing about the transfer: keep polling, or the claim would stay and other workers refuse the character's logins. A cancellation that is not the service's stop
+                // (a command timeout surfaces as one) is a failed poll too; the stop itself is not caught here and ends the wait.
+                if (failures++ == 0)
                 {
-                    failing = true;
                     logger?.LogWarning(ex, "polling the transfer of character {Character} failed; retrying", characterId);
                 }
             }
@@ -395,8 +395,17 @@ public sealed class CharacterClaimService(
                 logger?.LogWarning("the transfer that brought the claim of character {Character} has not settled after 60 s; the claim release keeps polling", characterId);
             }
 
-            await Task.Delay(TransferSettlePoll, stop).ConfigureAwait(false);
+            await Task.Delay(SettlePollDelay(failures), stop).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>The wait before the next settle poll: <see cref="TransferSettlePoll"/> after a good poll, doubled for each consecutive failed one up to 30 s.</summary>
+    private TimeSpan SettlePollDelay(int consecutiveFailures)
+    {
+        if (consecutiveFailures <= 0)
+            return TransferSettlePoll;
+        long grown = consecutiveFailures >= 8 ? TimeSpan.FromSeconds(30).Ticks : Math.Min(TransferSettlePoll.Ticks << consecutiveFailures, TimeSpan.FromSeconds(30).Ticks);
+        return TimeSpan.FromTicks(Math.Max(TransferSettlePoll.Ticks, grown));
     }
 
     private void ForgetPending(int characterId, object marker)

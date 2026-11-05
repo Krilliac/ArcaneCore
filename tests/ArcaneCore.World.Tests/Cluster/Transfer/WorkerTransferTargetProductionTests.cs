@@ -357,6 +357,47 @@ public sealed class WorkerTransferTargetProductionTests
         Assert.Null(honor.For(shadow));
     }
 
+    /// <summary>
+    /// A shadow load that ends because the client closed is the client leaving, not a fault: the install reports it to its caller and logs it, but does not add to the fault ledger.
+    /// The control in the same test: any other load failure is counted, so the zero below can fail. Counted per site and exception type, because the ledger is process-wide.
+    /// </summary>
+    [Fact]
+    public async Task AShadowLoadThatFoundTheClientClosed_IsNotCountedAsAFault_WhileAnyOtherLoadFailureIs()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, _, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERFAULTS", "Faultone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        Func<Exception> next = () => new TransferClientClosedException("the client closed", new ObjectDisposedException("scope"));
+        var target = new WorkerTransferTarget(Target, host.World, new ScriptedFailureLoader(() => next()), new WorldSessionTransferEntry(host.WorldServices));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+
+        long closedBefore = TargetFaults(nameof(TransferClientClosedException));
+        await Assert.ThrowsAsync<TransferClientClosedException>(() => target.InstallPassiveShadowAsync(id, bundle));
+        Assert.Equal(closedBefore, TargetFaults(nameof(TransferClientClosedException)));
+
+        next = () => new ShadowLoadBroke();
+        long brokeBefore = TargetFaults(nameof(ShadowLoadBroke));
+        await Assert.ThrowsAsync<ShadowLoadBroke>(() => target.InstallPassiveShadowAsync(id, bundle));
+        Assert.Equal(brokeBefore + 1, TargetFaults(nameof(ShadowLoadBroke)));
+    }
+
+    private static long TargetFaults(string exceptionType) => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+        .Where(f => f.Site == "cluster.transfer-target" && f.ExceptionType.Contains(exceptionType, StringComparison.Ordinal))
+        .Sum(f => f.Count);
+
+    private sealed class ShadowLoadBroke : InvalidOperationException;
+
+    private sealed class ScriptedFailureLoader(Func<Exception> error) : ITransferShadowLoader
+    {
+        public Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken) => Task.FromException<Player>(error());
+
+        public void Release(Player shadow)
+        {
+        }
+    }
+
     private sealed class RecordingOfflineArrival : ITransferOfflineArrival
     {
         private int _completions;
