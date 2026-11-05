@@ -62,6 +62,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private BattlegroundWorldHost? _host;
     private BattlegroundClusterQueue? _cluster;
     private BattlegroundWorkerClient? _worker;
+    private ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink? _link;
     private WorldRuntime? _world;
     private Task? _writer;
 
@@ -123,6 +124,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         _cluster = new BattlegroundClusterQueue(host, StoreEntryPointAt);
         _manager = new BattlegroundManager(Options, _cluster, host.BasePorts());
         _cluster.Bind(_manager);
+        _link = services.GetService<ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink>();   // registered in cluster mode only
         _writer = Task.Run(WriteLoopAsync);
 
         // Everything that needs the other features (they attach in type-name order, after this one): the first world command.
@@ -141,6 +143,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     {
         WorldRuntime world = World;
         RegisterTemplates();
+        ConfigureClusterLink();
 
         var resolver = new BattlegroundMapResolver(this);
         if (world.MapResolver is InstanceManager instances)
@@ -641,6 +644,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     public async Task StopAsync()
     {
         _writes.Writer.TryComplete();
+        if (_link is { } link)
+        {
+            await link.DisposeAsync().ConfigureAwait(false);
+        }
+
         if (_writer is { } writer)
         {
             await writer.ConfigureAwait(false);
@@ -1004,6 +1012,35 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// <summary>A worker's command arrived at the holder (any thread); it runs on the next world tick.</summary>
     internal void SubmitClusterCommand(string workerId, BattlegroundCommand command)
         => (_cluster ?? throw new InvalidOperationException("the battleground feature is not attached")).Submit(workerId, command);
+
+    /// <summary>
+    /// Cluster mode (the cluster hosting registered a <see cref="ArcaneCore.World.Cluster.Social.ClusterBattlegroundLink"/>): every node sends its players' queue commands to the
+    /// holder and applies its notices; a node that owns the maps of all three battlegrounds (so it can run a match) also offers itself as the holder, and the hub picks one.
+    /// World thread, from <see cref="Install"/>, before the first player queues.
+    /// </summary>
+    private void ConfigureClusterLink()
+    {
+        if (_link is not { } link)
+        {
+            return;
+        }
+
+        bool canHold = true;
+        foreach (BattlegroundType type in new[] { BattlegroundType.AlteracValley, BattlegroundType.WarsongGulch, BattlegroundType.ArathiBasin })
+        {
+            canHold &= World.Owns(BattlegroundManager.MapOfType(type), InstanceManager.FirstInstanceId);
+        }
+
+        ConfigureWorker(link.NodeId, link);
+        if (canHold)
+        {
+            ConfigureHolder(link.NodeId, link);
+        }
+
+        link.Bind(SubmitClusterCommand, ReceiveNotice, canHold);
+        link.Start(ArcaneCore.World.Cluster.Social.ClusterPresenceHosting.ChatPumpInterval);
+        _logger.LogInformation("battlegrounds: cluster queue link started as {Node} ({Role})", link.NodeId, canHold ? "eligible to be the holder" : "worker only");
+    }
 
     /// <summary>The holder's notice arrived at this worker (any thread); it is applied on the world thread.</summary>
     internal void ReceiveNotice(BattlegroundNotice notice)

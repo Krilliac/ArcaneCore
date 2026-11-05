@@ -13,7 +13,7 @@ namespace ArcaneCore.World.Cluster.Social;
 /// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.
 /// </summary>
-public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
+public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
     public const int MaxDrainBatches = 64;
@@ -63,6 +63,46 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GuildDrain, w => w.Write(workerId), GuildWireCodec.ReadEvents);
+
+    // ---- IBattlegroundHubTransport --------------------------------------------------------------------------------------------------------------
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands)
+        => Send(
+            PresenceOp.BattlegroundSubmit,
+            w =>
+            {
+                w.Write(workerId);
+                BattlegroundWireCodec.WriteCommands(w, [.. commands.Select(c => new BattlegroundQueuedCommand(workerId, c))]);
+            },
+            static r => r.ReadBoolean());
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId)
+        => Send(
+            PresenceOp.BattlegroundTake,
+            w => w.Write(nodeId),
+            static r =>
+            {
+                bool isHolder = r.ReadBoolean();
+                return new BattlegroundTakeResult(isHolder, BattlegroundWireCodec.ReadCommands(r));
+            });
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices)
+        => Send(
+            PresenceOp.BattlegroundPost,
+            w =>
+            {
+                w.Write(nodeId);
+                BattlegroundWireCodec.WriteNotices(w, notices);
+            },
+            static r => r.ReadBoolean());
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId)
+        => string.IsNullOrWhiteSpace(workerId)
+            ? []
+            : Send(
+                PresenceOp.BattlegroundDrain,
+                w => w.Write(workerId),
+                static r => (IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice>)[.. BattlegroundWireCodec.ReadNotices(r).Select(n => n.Notice)]);
 
     // ---- IPresenceAuthority --------------------------------------------------------------------------------------------------------------------
 
@@ -246,7 +286,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 /// Thread-safe if <c>holdsSocial</c> and <c>remote</c> are.
 /// </summary>
 public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> holdsSocial, Func<PeerPresenceClient?> remote)
-    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
+    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     private IPresenceAuthority Authority => holdsSocial() ? local : Remote;
 
@@ -299,6 +339,18 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
     }
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => holdsSocial() ? local.DrainGuildEvents(workerId) : Remote.DrainGuildEvents(workerId);
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands)
+        => holdsSocial() ? local.SubmitBattlegroundCommands(workerId, commands) : Remote.SubmitBattlegroundCommands(workerId, commands);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId)
+        => holdsSocial() ? local.TakeBattlegroundCommands(nodeId) : Remote.TakeBattlegroundCommands(nodeId);
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices)
+        => holdsSocial() ? local.PostBattlegroundNotices(nodeId, notices) : Remote.PostBattlegroundNotices(nodeId, notices);
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId)
+        => holdsSocial() ? local.DrainBattlegroundNotices(workerId) : Remote.DrainBattlegroundNotices(workerId);
 
     public int Count => Directory.Count;
 

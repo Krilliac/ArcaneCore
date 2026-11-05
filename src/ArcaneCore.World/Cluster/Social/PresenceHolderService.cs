@@ -46,7 +46,7 @@ public interface IPresenceAuthority
 /// <para>Thread-safety: one lock guards the generation, version and kick state; the directory and router have their own locks and are always taken after it (never the reverse).
 /// Memory: one long per account ever registered, one version floor, at most <see cref="MaxQueuedKicksPerWorker"/> kicks per worker (oldest dropped).</para>
 /// </summary>
-public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router) : IPresenceAuthority, IGroupAuthorityTransport, IGuildHolderTransport
+public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router) : IPresenceAuthority, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     /// <summary>Most undelivered kicks kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedKicksPerWorker = 1024;
@@ -75,6 +75,17 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
     public void ForwardGuildRequest(string workerId, long requestId, GuildRequest request) => Guilds.Submit(workerId, requestId, request);
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => Guilds.Drain(workerId);
+
+    /// <summary>The battleground queue mailbox: workers' queue commands wait here for the battleground holder (the node that owns the battleground maps) and its notices wait for the workers.</summary>
+    public BattlegroundHub Battlegrounds { get; } = new();
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands) => Battlegrounds.Submit(workerId, commands);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => Battlegrounds.Take(nodeId);
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices) => Battlegrounds.Post(nodeId, notices);
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId) => Battlegrounds.Drain(workerId);
 
     /// <summary>The authoritative router this service answers for.</summary>
     public IClusterSocialRouter Router { get; } = router ?? throw new ArgumentNullException(nameof(router));
