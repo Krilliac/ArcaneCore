@@ -192,10 +192,16 @@ public sealed class WorkerControlServiceTests
         Assert.Equal((1, 1, 1), (source.WriteRetires, source.Releases, source.Retires));
 
         // Promote needs the token the journal committed.
-        ControlReply stale = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlTokenArguments(SourceToken));
+        ControlReply stale = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlPromoteArguments(SourceToken, "slot-a"));
         Assert.Equal(ControlStatus.Refused, stale.Status);
         Assert.Equal(0, target.Promotes);
-        ControlReply promote = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlTokenArguments(TargetToken));
+
+        // A promotion that names no slot could not answer the gateway's transfers afterwards: it is refused, nothing promoted.
+        ControlReply noSlot = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlPromoteArguments(TargetToken, " "));
+        Assert.Equal(ControlStatus.Refused, noSlot.Status);
+        Assert.Equal(0, target.Promotes);
+
+        ControlReply promote = await rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Promote, new ControlPromoteArguments(TargetToken, "slot-a"));
         Assert.Equal(ControlStatus.Ok, promote.Status);
         Assert.Equal(1, target.Promotes);
     }

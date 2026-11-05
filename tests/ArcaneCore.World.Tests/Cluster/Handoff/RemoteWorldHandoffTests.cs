@@ -176,7 +176,7 @@ public sealed class RemoteWorldHandoffTests
         // The standby cannot be the draining source; the active world cannot be the standby target.
         InvalidOperationException notSource = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => RemoteWorldHandoffSource.ConnectAsync(pair.ChannelB, id, CancellationToken.None));
         Assert.Contains("standby", notSource.Message);
-        InvalidOperationException notTarget = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => RemoteWorldHandoffTarget.ConnectAsync(pair.ChannelA, id, CancellationToken.None));
+        InvalidOperationException notTarget = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => RemoteWorldHandoffTarget.ConnectAsync(pair.ChannelA, id, "slot-a", CancellationToken.None));
         Assert.Contains("not a standby", notTarget.Message);
     }
 
@@ -296,7 +296,7 @@ public sealed class RemoteWorldHandoffTests
         public async Task<WorldHandoffCoordinator> CoordinatorAsync(Guid handoffId)
         {
             RemoteWorldHandoffSource source = await RemoteWorldHandoffSource.ConnectAsync(ChannelA, handoffId, CancellationToken.None).WaitAsync(Budget);
-            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(ChannelB, handoffId, CancellationToken.None).WaitAsync(Budget);
+            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(ChannelB, handoffId, "slot-a", CancellationToken.None).WaitAsync(Budget);
             return new WorldHandoffCoordinator(Journal, source, target, new RecordingRouter(Events));
         }
 

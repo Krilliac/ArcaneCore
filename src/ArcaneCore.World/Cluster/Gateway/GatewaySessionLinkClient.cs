@@ -65,10 +65,14 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private volatile string _workerOwnedMaps = string.Empty;
     private volatile bool _workerAllowsInstanceMaps = true;
     private readonly GatewayWardenPosture? _wardenPosture;
+    private readonly string? _slotNode;
 
     /// <param name="wardenPosture">The gateway's Warden posture, sent to the worker right after admission and before any session opens. A worker that
     /// enforces a Warden posture refuses sessions on a link that sent none or a different one.</param>
-    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null, GatewayWardenPosture? wardenPosture = null)
+    /// <param name="slotNode">The slot this link serves, sent to the worker right after admission (the LinkSlot frame): every link-up tells the process behind it the name it answers transfers under, so a promoted
+    /// process relaunched with its own node id gets it back. Null on a link that does not reach a slot's active process (a standby's control link, a test's).</param>
+    public GatewaySessionLinkClient(
+        ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null, GatewayWardenPosture? wardenPosture = null, string? slotNode = null)
     {
         ArgumentNullException.ThrowIfNull(gatewayManifest);
         ArgumentNullException.ThrowIfNull(workerEndPoint);
@@ -84,6 +88,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _linkSecret = linkSecret;
         _logger = logger ?? NullLogger.Instance;
         _wardenPosture = wardenPosture;
+        _slotNode = slotNode;
     }
 
     /// <summary>The worker endpoint this link connects to.</summary>
@@ -139,6 +144,12 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         if (_wardenPosture is { } posture && !_channel.TryEnqueue(GatewaySessionWire.EncodeWardenPosture(posture)))
         {
             throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
+        }
+
+        // Before anything can use the name: the frames of one link arrive in order, so no control request of this link can overtake it.
+        if (_slotNode is { } slot && !_channel.TryEnqueue(GatewaySessionWire.EncodeLinkSlot(slot)))
+        {
+            throw new InvalidOperationException("the worker link closed before the slot could be named");
         }
 
         _workerOwnedMaps = ownedMaps;

@@ -102,17 +102,17 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     }
 
     [Fact]
-    public void ContractVersion6_RefusesAVersion5Peer_AtAdmission()
+    public void ContractVersion7_RefusesAVersion6Peer_AtAdmission()
     {
         ClusterNodeManifest worker = GatewayLinkManifest.Create(ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         ClusterNodeManifest gateway = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
-        Assert.Equal(6, GatewayLinkManifest.ContractVersion);
-        Assert.Equal(6, gateway.ContractVersion);
+        Assert.Equal(7, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(7, gateway.ContractVersion);
         Assert.True(worker.TryAdmit(gateway, out _));
-        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 5 }, out string? reason));
+        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 6 }, out string? reason));
         Assert.Contains("contract version mismatch", reason);
-        Assert.Contains("v5", reason);
-        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 5 }, out _));
+        Assert.Contains("v6", reason);
+        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 6 }, out _));
     }
 
     // ------------------------------------------------------------------ golden bytes
@@ -134,11 +134,11 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     }
 
     [Fact]
-    public void ControlRequest_Promote_GoldenBytes_CarryTheTokenAsScopeEpochIncarnation()
+    public void ControlRequest_Promote_GoldenBytes_CarryTheSlotThenTheTokenAsScopeEpochIncarnation()
     {
-        byte[] frame = ClusterControlWire.EncodeRequest(new ControlRequest(2, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlTokenArguments(Token)));
+        byte[] frame = ClusterControlWire.EncodeRequest(new ControlRequest(2, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(Token, "ek")));
         Assert.Equal(
-            Concat([28], [2, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [9], [5, 0, 0, 0], "world"u8.ToArray(), [7, 0, 0, 0, 0, 0, 0, 0], Inc.ToByteArray()),
+            Concat([28], [2, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [9], [2, 0, 0, 0], "ek"u8.ToArray(), [5, 0, 0, 0], "world"u8.ToArray(), [7, 0, 0, 0, 0, 0, 0, 0], Inc.ToByteArray()),
             frame);
     }
 
@@ -348,7 +348,8 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         ControlArguments args = verb switch
         {
             ControlVerb.Warm => new ControlWarmArguments(Inc),
-            ControlVerb.Promote or ControlVerb.Activate or ControlVerb.RetireSource => new ControlTokenArguments(Token),
+            ControlVerb.Promote => new ControlPromoteArguments(Token, "ek"),
+            ControlVerb.Activate or ControlVerb.RetireSource => new ControlTokenArguments(Token),
             ControlVerb.Reserve => new ControlReserveArguments(42, 1, 0),
             ControlVerb.Discard or ControlVerb.ResumeSource => new ControlReasonArguments("reason"),
             ControlVerb.Suspend => new ControlSuspendArguments(42, "world-b", 1, 3, Position),
@@ -456,7 +457,9 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
             1, ControlKind.PlayerTransfer, Op, ControlVerb.Suspend, new ControlSuspendArguments(1, longReason, 1, 0, Position))));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
-            1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlTokenArguments(new CharacterOwnershipToken(longReason, 1, Inc)))));
+            1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(new CharacterOwnershipToken(longReason, 1, Inc), "ek"))));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
+            1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(Token, longReason))));
     }
 
     // ------------------------------------------------------------------ the encoder refuses a frame the decoder would refuse
@@ -494,7 +497,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
             b => ClusterControlWire.DecodeRequest(b));
         yield return ("request-suspend", ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.PlayerTransfer, Op, ControlVerb.Suspend, new ControlSuspendArguments(1, "b", 1, 0, Position))),
             b => ClusterControlWire.DecodeRequest(b));
-        yield return ("request-promote", ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlTokenArguments(Token))),
+        yield return ("request-promote", ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(Token, "ek"))),
             b => ClusterControlWire.DecodeRequest(b));
         yield return ("reply-describe", ClusterControlWire.EncodeReply(new ControlReply(1, ControlKind.WorldHandoff, Op, ControlVerb.Describe, ControlStatus.Ok, "",
             new ControlDescribePayload("a", false, Inc, "n", "world", [1u], Token, 1, true))), b => ClusterControlWire.DecodeReply(b));
@@ -631,13 +634,13 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         infinity[^1] = 0x7F; // +infinity orientation
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(infinity));
 
-        byte[] promote = ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlTokenArguments(Token)))[1..];
+        byte[] promote = ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(Token, "ek")))[1..];
         int epochAt = promote.Length - 16 - 8;
         byte[] negativeEpoch = [.. promote];
         negativeEpoch[epochAt + 7] = 0x80;
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(negativeEpoch));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
-            1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlTokenArguments(new CharacterOwnershipToken("world", -1, Inc)))));
+            1, ControlKind.WorldHandoff, Op, ControlVerb.Promote, new ControlPromoteArguments(new CharacterOwnershipToken("world", -1, Inc), "ek"))));
     }
 
     [Fact]

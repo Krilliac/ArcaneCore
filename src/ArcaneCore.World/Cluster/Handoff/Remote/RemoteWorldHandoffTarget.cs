@@ -14,12 +14,14 @@ public sealed class RemoteWorldHandoffTarget : IWorldHandoffTarget
 {
     private readonly LinkControlChannel _channel;
     private readonly Guid _handoffId;
+    private readonly string _slotNode;
     private readonly uint[]? _ownedMaps;
 
-    private RemoteWorldHandoffTarget(LinkControlChannel channel, Guid handoffId, ControlDescribePayload describe)
+    private RemoteWorldHandoffTarget(LinkControlChannel channel, Guid handoffId, string slotNode, ControlDescribePayload describe)
     {
         _channel = channel;
         _handoffId = handoffId;
+        _slotNode = slotNode;
         WorkerId = new WorkerNodeId(describe.WorkerId);
         OwnerNode = describe.OwnerNode;
         Incarnation = describe.Incarnation;
@@ -40,18 +42,19 @@ public sealed class RemoteWorldHandoffTarget : IWorldHandoffTarget
 
     /// <summary>
     /// Sends <c>Describe</c> to the worker behind <paramref name="channel"/> and builds the proxy for handoff <paramref name="handoffId"/>. Throws, journalling nothing, when the worker
-    /// answers otherwise than as a standby target: control off, not a standby, or more than one admitted gateway.
+    /// answers otherwise than as a standby target: control off, not a standby, or more than one admitted gateway. <paramref name="slotNode"/> is the slot it stands behind: the promotion tells the worker that name.
     /// </summary>
-    public static async Task<RemoteWorldHandoffTarget> ConnectAsync(LinkControlChannel channel, Guid handoffId, CancellationToken cancellationToken)
+    public static async Task<RemoteWorldHandoffTarget> ConnectAsync(LinkControlChannel channel, Guid handoffId, string slotNode, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(channel);
+        ArgumentException.ThrowIfNullOrWhiteSpace(slotNode);
         ControlDescribePayload describe = await RemoteHandoffDescribe.DescribeAsync(channel, handoffId, cancellationToken).ConfigureAwait(false);
         if (!describe.IsStandby)
         {
             throw new InvalidOperationException($"worker {describe.WorkerId} is not a standby; it cannot be the target of a handoff");
         }
 
-        return new RemoteWorldHandoffTarget(channel, handoffId, describe);
+        return new RemoteWorldHandoffTarget(channel, handoffId, slotNode, describe);
     }
 
     /// <inheritdoc />
@@ -60,5 +63,5 @@ public sealed class RemoteWorldHandoffTarget : IWorldHandoffTarget
 
     /// <inheritdoc />
     public Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken) =>
-        _channel.CallAsync(ControlKind.WorldHandoff, _handoffId, ControlVerb.Promote, new ControlTokenArguments(takenOver), cancellationToken);
+        _channel.CallAsync(ControlKind.WorldHandoff, _handoffId, ControlVerb.Promote, new ControlPromoteArguments(takenOver, _slotNode), cancellationToken);
 }

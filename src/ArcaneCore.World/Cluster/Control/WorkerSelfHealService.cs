@@ -48,8 +48,8 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
     public const int MaxAttempts = 30;
 
     private readonly IGatewayControlHandler _inner;
-    private readonly WorkerControlHandoff? _handoff;
-    private readonly WorkerControlTransfer? _transfers;
+    private readonly Func<WorkerControlHandoff?> _handoffNow;
+    private readonly Func<WorkerControlTransfer?> _transfersNow;
     private readonly TimeSpan _interval;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
@@ -69,13 +69,25 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
         TimeSpan? interval = null,
         TimeProvider? timeProvider = null,
         ILogger? logger = null)
+        : this(inner, () => handoff, () => transfers, interval, timeProvider, logger)
+    {
+    }
+
+    /// <summary>As the public constructor, but the participants are read when a pass runs: a promoted standby attaches its source and transfer participants after this service was built (<see cref="WorkerControlService.Handoff"/>).</summary>
+    private WorkerSelfHealService(
+        IGatewayControlHandler inner,
+        Func<WorkerControlHandoff?> handoffNow,
+        Func<WorkerControlTransfer?> transfersNow,
+        TimeSpan? interval,
+        TimeProvider? timeProvider,
+        ILogger? logger)
     {
         ArgumentNullException.ThrowIfNull(inner);
         TimeSpan every = interval ?? DefaultInterval;
         ArgumentOutOfRangeException.ThrowIfLessThan(every, MinInterval);
         _inner = inner;
-        _handoff = handoff;
-        _transfers = transfers;
+        _handoffNow = handoffNow;
+        _transfersNow = transfersNow;
         _interval = every;
         _time = timeProvider ?? TimeProvider.System;
         _logger = logger ?? NullLogger.Instance;
@@ -85,7 +97,7 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
     public static WorkerSelfHealService For(WorkerControlService control, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(control);
-        return new WorkerSelfHealService(control, control.Handoff, control.Transfers, logger: logger);
+        return new WorkerSelfHealService(control, () => control.Handoff, () => control.Transfers, null, null, logger);
     }
 
     /// <summary>The factory <c>AddWorkerControl</c> registers next to the control service; the endpoint installs the result as the link host's control handler.</summary>
@@ -233,7 +245,7 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
 
     private async Task<HealResult> HealHandoffAsync(Guid operation, CancellationToken ct)
     {
-        if (_handoff is not { Source: { } source } handoff)
+        if (_handoffNow() is not { Source: { } source } handoff)
         {
             return HealResult.Gone;
         }
@@ -267,7 +279,7 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
 
     private async Task<HealResult> HealTransferAsync(Guid operation, CancellationToken ct)
     {
-        if (_transfers is not { Source: { } source } transfers)
+        if (_transfersNow() is not { Source: { } source } transfers)
         {
             return HealResult.Gone;
         }

@@ -1048,7 +1048,7 @@ public sealed class GatewayWorkerLink
         {
             IPEndPoint worker = _target;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
-            var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
+            var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture, NodeId);
             string node = NodeId;
             GatewayRealmLiveness? liveness = _realmLiveness;
             bool linkEnded = false; // guarded by _statusGate: a report that arrives after this link went down must not repopulate _lastReport

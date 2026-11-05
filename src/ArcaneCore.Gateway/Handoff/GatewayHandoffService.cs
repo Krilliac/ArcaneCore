@@ -506,7 +506,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
                 ?? throw new WorldHandoffUnavailableException($"the standby link of slot '{slotNode}' is down");
             Guid id = handoffId is { } chosen && chosen != Guid.Empty ? chosen : Guid.NewGuid();
             RemoteWorldHandoffSource described = await RemoteWorldHandoffSource.ConnectAsync(active, id, token).ConfigureAwait(false);
-            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, token).ConfigureAwait(false);
+            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, slot.SlotNode, token).ConfigureAwait(false);
             if (!slot.IsActive(described.WorkerId.Value) || !slot.IsStandby(target.WorkerId.Value))
             {
                 throw new InvalidOperationException(
@@ -693,8 +693,8 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         }
 
         // The active process is the one that does not report Standby (design 3.3; Describe's flag is the one WorkerStatus carries). A retired source is not a Standby either, so after a gateway restart
-        // that followed a completed handoff, or a crash between MarkRerouted and Retire, both processes can report "not standby": the promoted standby is then the one that never held a source world
-        // (a standby has no handoff source, so its HeldSourceToken is always null) while the retired source still names the ownership it held.
+        // that followed a completed handoff, or a crash between MarkRerouted and Retire, both processes can report "not standby": the promoted standby is then the one that holds the higher
+        // ownership epoch (it attaches a draining source of its own at promotion, so both report a token) while the retired source still names the older ownership it held.
         ActiveSide side = ChooseActive(a, b);
         if (side == ActiveSide.Worker)
         {
@@ -739,14 +739,24 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
         if (!worker.IsStandby && !standby.IsStandby)
         {
-            if (worker.HeldSourceToken is not null && standby.HeldSourceToken is null)
+            // Both name a held ownership once the promoted standby has its draining source attached, so the ownership generation decides: the process that took the scope over holds the higher
+            // epoch, the retired source (or a source that was never retired after a crash) the lower one. When only one side holds a token (a promoted standby whose source reports none), the
+            // side holding one is the former source.
+            CharacterOwnershipToken? w = worker.HeldSourceToken;
+            CharacterOwnershipToken? s = standby.HeldSourceToken;
+            if (w is not null && s is null)
             {
                 return ActiveSide.Standby;
             }
 
-            if (worker.HeldSourceToken is null && standby.HeldSourceToken is not null)
+            if (w is null && s is not null)
             {
                 return ActiveSide.Worker;
+            }
+
+            if (w is not null && s is not null && w.Epoch != s.Epoch)
+            {
+                return w.Epoch > s.Epoch ? ActiveSide.Worker : ActiveSide.Standby;
             }
         }
 
@@ -841,7 +851,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         public async Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
         {
             LinkControlChannel channel = await RequireAsync(cancellationToken).ConfigureAwait(false);
-            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlTokenArguments(takenOver), cancellationToken).ConfigureAwait(false);
+            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlPromoteArguments(takenOver, slot.SlotNode), cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LinkControlChannel> RequireAsync(CancellationToken cancellationToken) =>

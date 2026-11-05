@@ -324,6 +324,38 @@ public static class GatewaySessionWire
         return BinaryPrimitives.ReadUInt32LittleEndian(body);
     }
 
+    /// <summary>
+    /// The slot a worker link serves (gateway to worker), sent once right after the link is admitted, before any session or control frame. Body: the slot's <c>Gateway:Workers:N:NodeId</c> as length-prefixed
+    /// UTF-8. The worker answers transfers under this name (journal rows, bundles and transfer verbs name the slot), whatever its own <c>Cluster:Worker:NodeId</c> is.
+    /// </summary>
+    internal static byte[] EncodeLinkSlot(string slotNode)
+    {
+        byte[] name = Encoding.UTF8.GetBytes(slotNode);
+        if (name.Length is 0 or > MaxTextBytes)
+        {
+            throw new ArgumentException($"a slot name of {name.Length} B does not fit a LinkSlot frame (1 to {MaxTextBytes} B)", nameof(slotNode));
+        }
+
+        byte[] buffer = new byte[1 + 4 + name.Length];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.LinkSlot);
+        writer.Text(name);
+        return buffer;
+    }
+
+    internal static string DecodeLinkSlot(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "LinkSlot");
+        string slotNode = reader.Text();
+        reader.End();
+        if (string.IsNullOrWhiteSpace(slotNode))
+        {
+            throw new InvalidDataException("LinkSlot frame names no slot");
+        }
+
+        return slotNode;
+    }
+
     /// <summary>The envelope of a packet frame body; the payload is a slice of <paramref name="body"/> (no copy).</summary>
     internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => GatewayLinkFraming.DeserializeSessionPacket(body);
 

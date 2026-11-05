@@ -700,7 +700,7 @@ workers. It is a separate process from every world, so the coordinators it hosts
   `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
   `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
   once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
-  120 s `Promote`). The link contract version is 6, so a gateway and its workers upgrade together.
+  120 s `Promote`). The link contract version is 7, so a gateway and its workers upgrade together.
 - **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
   `ResumeSource` is refused once the row is Committed; `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
   its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
@@ -728,6 +728,11 @@ workers. It is a separate process from every world, so the coordinators it hosts
   slot's next standby (`--Cluster:Worker:Standby=true`); the supervisor persists the swapped roles, so a supervisor restart keeps them.
   `.cluster restart $worker` (Administrator, re-checked by the gateway against the auth database) starts this through the gateway; "started" is
   answered at once and the verdict reaches the same client after it has moved. `.cluster handoff status [id]` reads the journal.
+  Once its promotion has completed, a promoted standby runs player transfers, answering them under its slot (transfer rows name slots, and a standby's own node id differs), and is the draining source of the next gateway-driven handoff (its control service attaches both then). It has no local
+  handoff coordinator, in-flight tracker or start-up recovery (those are registered only for a worker that started active), so it cannot coordinate or recover a handoff on its own; the gateway drives it.
+  The slot name comes from the gateway: `Promote` carries it, and every worker link sends it right after admission (frame 33, `LinkSlot`). So when the supervisor relaunches the promoted process as active (a crash or hang,
+  or a restart without the standby argument), it starts with its own `Cluster:Worker:NodeId` and no `Promote` arrives, but the gateway's link names the slot before any transfer verb reaches it, and it runs transfers again as soon as that link is back.
+  Started active, it also has the coordinator, tracker and recovery above. Handoff rows keep naming the process.
   The promoted standby is the same process that was started as the standby, so the launcher gives standbys the worlds' hang timeout and hang
   capture: the supervisor's hang watch is armed by the first world-tick beat of whichever process beats (a standby that never beats is warned
   about once, never killed for silence). When a world that holds the supervisor `RealmId` (the lease-holder slot) is restarted as a standby, the
