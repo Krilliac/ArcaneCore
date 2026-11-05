@@ -416,20 +416,27 @@ public sealed class RemoteAdminServer : IHostedService
     }
 
     /// <summary>
-    /// Checks the one-line <c>@login user password [code]</c>: tries the whole text as the password first, then the text before the last space as the
-    /// password and the last word as the PIN/TOTP code.
+    /// Checks the one-line <c>@login user password [code]</c>. The account is looked up first to learn whether it has a PIN/TOTP: an account with a
+    /// factor can only log in with a code, so its text is split at the last space (password, then code); any other account takes the whole text as the
+    /// password and a trailing word is part of that password, never a code to ignore. One SRP verifier computation either way.
     /// </summary>
     private async Task<Login?> CheckAccountAsync(string name, string password, bool splitCode, bool automation, string endpoint, CancellationToken token)
     {
         if (name.Length is 0 or > 32 || password.Length is 0 or > 128 + 16) return null;
-        Login? login = await CheckAccountAsync(name, password, code: null, automation, endpoint, token).ConfigureAwait(false);
-        int cut = password.LastIndexOf(' ');
-        if (login is null && splitCode && cut > 0 && cut < password.Length - 1)
+        bool factor = false;
+        if (splitCode)
         {
-            login = await CheckAccountAsync(name, password[..cut].TrimEnd(), password[(cut + 1)..], automation, endpoint, token).ConfigureAwait(false);
+            await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+            IAccountStore? accounts = scope.ServiceProvider.GetService<IAccountStore>();
+            if (accounts is null) return null;
+            Account? found = await accounts.FindByUsernameAsync(name, token).ConfigureAwait(false);
+            factor = found is not null && SecondFactorChecker.HasFactor(found);
         }
 
-        return login;
+        if (!factor) return await CheckAccountAsync(name, password, code: null, automation, endpoint, token).ConfigureAwait(false);
+        int cut = password.LastIndexOf(' ');
+        if (cut <= 0 || cut >= password.Length - 1) return null;
+        return await CheckAccountAsync(name, password[..cut].TrimEnd(), password[(cut + 1)..], automation, endpoint, token).ConfigureAwait(false);
     }
 
     private async Task<Login?> CheckAccountAsync(string name, string password, string? code, bool automation, string endpoint, CancellationToken token)
@@ -453,7 +460,7 @@ public sealed class RemoteAdminServer : IHostedService
             return null;
         }
 
-        // IP lock and the second factor (vmangos AuthSocket.cpp:393-414,497-517; ArcaneCore.Realm LogonSession): an IP-locked account
+        // IP lock and the second factor (vmangos AuthSocket.cpp:414-437 IP lock, 697-749 PIN/TOTP check; ArcaneCore.Realm LogonSession): an IP-locked account
         // from another address needs a configured factor, and a configured PIN/TOTP is always required. (The realm asks for a factor only
         // when the address moved or ALWAYS_ENFORCE is set; RA, like the web login, is stricter.) The factor and the replay record are
         // the ones the web login uses (SecondFactorChecker), so a code spent there is spent here.

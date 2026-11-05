@@ -4,6 +4,7 @@ using System.Text;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Cryptography;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.MapFeed;
 using ArcaneCore.World.Ops.RemoteAdmin;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
@@ -313,6 +314,46 @@ public sealed class RemoteAdminServerTests
     }
 
     [Fact]
+    public async Task AccountLogin_AnAccountWithoutAFactor_DoesNotIgnoreATrailingWord()
+    {
+        // "@login u secret junk": the account has no PIN/TOTP, so the whole text is its password ("secret junk" is wrong); the last word must not be
+        // peeled off as a code that is then ignored.
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RANOFACTOR");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RANOFACTOR secret junk"));
+            Assert.Equal("+Logged in as RANOFACTOR (Administrator).", await TryLoginAsync(server, "@login RANOFACTOR secret"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_AnAccountWithAFactor_RefusesAWrongCodeAndAWordlessLine()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RAPINWORD", AccountLockFlags.FixedPin, "1234");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret"));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret 9999"));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPINWORD secret 1234 extra"));
+            Assert.Equal("+Logged in as RAPINWORD (Administrator).", await TryLoginAsync(server, "@login RAPINWORD secret 1234"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task AccountLogin_ATotpCodeSpentThroughTheSharedChecker_IsRefusedHere()
     {
         // The web login and RA share one SecondFactorChecker, so a step spent on one surface is spent on the other.
@@ -429,5 +470,20 @@ public sealed class RemoteAdminServerTests
         Assert.Equal("127.0.0.1", options.BindAddress);
         Assert.Equal(AccountSecurity.Administrator, options.MinSecurity);
         Assert.Contains(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) && d.ImplementationType == typeof(RemoteAdminServer));
+    }
+
+    [Fact]
+    public void RemoteAdminAndTheWebLogin_ShareOneSecondFactorCheckerSingleton()
+    {
+        var services = new ServiceCollection();
+        services.AddRemoteAdmin(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        services.AddMapFeedWebLogin();
+        Assert.Single(services, d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));
+        Assert.Equal(ServiceLifetime.Singleton, services.Single(d => d.ServiceType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker)).Lifetime);
+        using ServiceProvider provider = services.BuildServiceProvider();
+        Assert.Same(provider.GetRequiredService<ArcaneCore.World.Ops.Accounts.SecondFactorChecker>(), provider.GetRequiredService<ArcaneCore.World.Ops.Accounts.SecondFactorChecker>());
+
+        // The remote admin server takes that type by constructor injection; the web login resolves it from the container (MapFeedLogin ctor).
+        Assert.Contains(typeof(RemoteAdminServer).GetConstructors().Single().GetParameters(), p => p.ParameterType == typeof(ArcaneCore.World.Ops.Accounts.SecondFactorChecker));
     }
 }
