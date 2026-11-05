@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Bots;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Population;
@@ -371,8 +372,9 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     }
 
     [Fact]
-    public async Task AStart_WhoseFaultRowConflicts_ReturnsTheRevisionConflictCode_AndCountsNoFault()
+    public async Task AnOperatorStart_WhoseFaultRowConflicts_ReturnsTheRevisionConflictCode()
     {
+        // An operator start never counts a fault, so this pins the returned code only; the fault accounting is the restore test below.
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
         await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
             extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()));
@@ -389,8 +391,55 @@ public sealed class ManagedPlayerbotLiveOwnerTests
 
         Assert.False(result.Success);
         Assert.Equal("managed-revision-conflict", result.Code); // one code for both conflict paths, not start-failed
-        Assert.Equal(0, feature.QuarantineCount);
         Assert.False(feature.IsActive(id));
+    }
+
+    [Fact]
+    public async Task ARestoreStart_WhoseFaultRowConflicts_ReturnsTheRevisionConflictCode_CountsNoFault_AndReportsNoLifecycleAnomaly()
+    {
+        // A restore (and a population retry, StartForRetryAsync) counts a fault for a failed start. When the fault row loses to another writer the row is theirs: no count, no quarantine
+        // entry (so no retry is scheduled for a row this worker does not own) and no quarantined/disabled/operation-fault anomaly.
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()), configure: o => o.MaxFaults = 1); // one fault would already disable the bot (an Error anomaly)
+        host.World.Ownership = Owning(1); // the login map (0) is not owned here: the login is refused and no worker holds the character, so the start faults
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Faultconflictrestore", 1, 1)).BotId!.Value;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-lifecycle" && n.Detail.Contains(id.ToString("D"), StringComparison.Ordinal));
+        owners.BeforeUpdate = (bot, _) =>
+        {
+            if (bot.State == ManagedPlayerbotState.Faulted) owners.RefuseUpdatesOf(id); // another writer took the row between the Starting write and the fault row
+            return Task.CompletedTask;
+        };
+
+        PlayerbotOperationResult result = await feature.StartForRetryAsync(id, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("managed-revision-conflict", result.Code);
+        Assert.Equal(0, feature.QuarantineCount);
+        Assert.Empty(capture.Notices); // no quarantined, disabled or operation-fault report for a row another writer owns
+        Assert.False(feature.IsActive(id));
+    }
+
+    [Fact]
+    public async Task ARestoreStart_WhoseFaultRowIsWritten_CountsTheFault_AndReportsItAfterTheWrite()
+    {
+        // Positive control for the test above: the same start with a fault row that lands is counted and reported.
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), owners,
+            extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()), configure: o => o.FaultBackoffSeconds = 3600);
+        host.World.Ownership = Owning(1);
+        ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        Guid id = (await feature.CreateAsync("Faultwrittenrestore", 1, 1)).BotId!.Value;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-lifecycle" && n.Detail.Contains(id.ToString("D"), StringComparison.Ordinal));
+
+        PlayerbotOperationResult result = await feature.StartForRetryAsync(id, CancellationToken.None);
+
+        Assert.Equal("start-failed", result.Code);
+        Assert.Equal(1, feature.QuarantineCount);
+        Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key("lifecycle", "quarantined")));
+        Assert.Equal(ManagedPlayerbotState.Faulted, owners.Peek(id)!.State);
+        Assert.StartsWith("quarantined (fault 1/", owners.Peek(id)!.ErrorCode, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -523,7 +572,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
     }
 
     // The feature contains a failed fault-row write (the start reports start-failed), so this proves the pass goes on through a poisoned row, not the population's retry catch:
-    // that catch (a start that still throws, such as a failed put-back write after a raced login refusal) has no test yet.
+    // that catch (a start that still throws, an unexpected fault) is covered by the tests that use BeforeRetryStartForTests below.
     [Fact]
     public async Task ARetryWhoseFaultRowCannotBeWritten_ReportsStartFailed_SoNewBotsAreStillCreated()
     {
@@ -536,6 +585,151 @@ public sealed class ManagedPlayerbotLiveOwnerTests
 
         Assert.False(status.Reason.Contains("the pass failed"), "the pass must not fault: " + status.Reason);
         Assert.True(world.Bots.Snapshot().Count > before, "a new bot was created in the same pass; " + status.Reason);
+    }
+
+    [Fact]
+    public async Task ARetryThatThrowsAnUnexpectedFault_IsContained_CountsAsAnAttempt_AndTheRestOfThePassRuns()
+    {
+        (PopulationTestHost world, _, Guid poisoned, _) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        int retries = 0;
+        world.Feature.BeforeRetryStartForTests = _ =>
+        {
+            Interlocked.Increment(ref retries);
+            throw new InvalidOperationException("injected-retry-fault");
+        };
+        int before = world.Bots.Snapshot().Count;
+
+        PopulationStatus status = await PassAndStatusAsync(world, 1_000_000);
+
+        Assert.Equal(1, Volatile.Read(ref retries));
+        Assert.False(status.Reason.Contains("the pass failed"), "the pass must not fault: " + status.Reason);
+        Assert.True(world.Bots.Snapshot().Count > before, "a new bot was created in the same pass; " + status.Reason);
+        await PassAfterAsync(world, 0);
+        Assert.Equal(1, Volatile.Read(ref retries)); // the contained fault used up an attempt: its wait has not passed
+        await PassAfterAsync(world, 1000);
+        Assert.Equal(2, Volatile.Read(ref retries)); // and it is retried once the wait did
+        Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(poisoned)!.State);
+    }
+
+    [Fact]
+    public async Task ARetryCancelledByATimeoutOfItsOwn_FaultsThePass_AndCountsAsAnAttempt()
+    {
+        // A cancellation that is not the caller's (the pass token is live) is not a refusal that did nothing: it ends the pass as a pass fault (RunAsync's generic catch) and the attempt stands.
+        (PopulationTestHost world, _, Guid poisoned, _) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        int retries = 0;
+        world.Feature.BeforeRetryStartForTests = _ =>
+        {
+            Interlocked.Increment(ref retries);
+            throw new OperationCanceledException("injected-timeout");
+        };
+
+        PopulationStatus status = await PassAndStatusAsync(world, 1_000_000);
+
+        Assert.Equal(1, Volatile.Read(ref retries));
+        Assert.Contains("the pass failed", status.Reason, StringComparison.Ordinal);
+        Assert.Contains("OperationCanceledException", status.LastError ?? string.Empty, StringComparison.Ordinal);
+        await PassAfterAsync(world, 0);
+        Assert.Equal(1, Volatile.Read(ref retries)); // stamped
+        await PassAfterAsync(world, 1000);
+        Assert.Equal(2, Volatile.Read(ref retries));
+        Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(poisoned)!.State);
+    }
+
+    [Fact]
+    public async Task ARetryRefusedByASplitBrainLatch_EndsThePassQuietly_AndUsesNoAttempt()
+    {
+        // The latch is set just before the retry's start, as a checkpoint latching mid-pass would: the start refuses, the pass ends with no fault of its own, and nothing was done to the bot.
+        (PopulationTestHost world, _, Guid poisoned, _) = await RestartedFaultedBotAsync(1000);
+        await using PopulationTestHost owned = world;
+        ManagedPlayerbot before = world.Owners.Peek(poisoned)!;
+        int retries = 0;
+        world.Feature.BeforeRetryStartForTests = async _ =>
+        {
+            Interlocked.Increment(ref retries);
+            await world.Bots.ForceSplitBrainForTests();
+        };
+
+        PopulationStatus status = await PassAndStatusAsync(world, 1_000_000);
+
+        Assert.Equal(1, Volatile.Read(ref retries));
+        Assert.DoesNotContain("the pass failed", status.Reason, StringComparison.Ordinal);
+        Assert.Null(status.LastError);
+        Assert.Equal(before, world.Owners.Peek(poisoned));
+        world.Feature.BeforeRetryStartForTests = _ =>
+        {
+            Interlocked.Increment(ref retries);
+            return Task.CompletedTask;
+        };
+        Assert.True((await world.Bots.ClearSplitBrainAsync()).WasSet);
+        await PassAfterAsync(world, 0);
+        Assert.Equal(2, Volatile.Read(ref retries)); // the refused retry used no attempt: the same instant is not a wait
+    }
+
+    private static async Task<(PopulationTestHost World, FakeLiveOwners Live, ManagedPlayerbot Before, Func<int> Retries)> RacedRetryAsync(long baseMs, long foreignMs)
+    {
+        // The retry's pick passes the ownership check (map 0 is owned); while its Starting row is written another worker takes the claim and this worker stops owning the login map, so the login is refused
+        // and the second probe finds the holder: the raced-login path of the start, reached through a whole pass.
+        (PopulationTestHost world, FakeLiveOwners live, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(baseMs);
+        world.Feature.ForeignBotMemoryMs = foreignMs;
+        ManagedPlayerbot before = world.Owners.Peek(poisoned)!;
+        int retries = 0;
+        world.Feature.BeforeRetryStartForTests = _ =>
+        {
+            Interlocked.Increment(ref retries);
+            return Task.CompletedTask;
+        };
+        bool raced = false;
+        world.Owners.BeforeUpdate = (bot, _) =>
+        {
+            if (!raced && bot.State == ManagedPlayerbotState.Starting)
+            {
+                raced = true;
+                world.Host.World.Ownership = Owning(1);
+                live.Holders[record.CharacterId] = "worker:Kalimdor";
+            }
+
+            return Task.CompletedTask;
+        };
+        return (world, live, before, () => Volatile.Read(ref retries));
+    }
+
+    [Fact]
+    public async Task ARetryWhoseLoginRaced_PutsTheRowBack_AndIsStampedAsAnAttempt()
+    {
+        (PopulationTestHost world, FakeLiveOwners live, ManagedPlayerbot before, Func<int> retries) = await RacedRetryAsync(baseMs: 1000, foreignMs: 500);
+        await using PopulationTestHost owned = world;
+        int baseline = live.CallsFor(before.CharacterId);
+
+        PopulationStatus status = await PassAndStatusAsync(world, 1_000_000);
+
+        Assert.Equal(1, retries());
+        Assert.Null(status.LastError);
+        ManagedPlayerbot after = world.Owners.Peek(before.BotId)!;
+        Assert.Equal(before with { Revision = after.Revision, UpdatedUnix = after.UpdatedUnix }, after); // put back as it was: still Faulted/start-failed, no fault written on top
+        Assert.Equal(baseline + 2, live.CallsFor(before.CharacterId)); // the check, then the probe after the refused login
+        world.Host.World.Ownership = Owning(0, 1);
+        await PassAfterAsync(world, 500); // the foreign memory (500 ms) is over, the attempt's wait (1000 ms) is not
+        Assert.Equal(1, retries());
+        await PassAfterAsync(world, 500);
+        Assert.Equal(2, retries()); // the wait is over: the next attempt
+    }
+
+    [Fact]
+    public async Task ARetryWhoseLoginRaced_IsRememberedAsAnotherWorkersBot()
+    {
+        (PopulationTestHost world, _, ManagedPlayerbot before, Func<int> retries) = await RacedRetryAsync(baseMs: 1000, foreignMs: 1500);
+        await using PopulationTestHost owned = world;
+
+        await PassAndStatusAsync(world, 1_000_000);
+        Assert.Equal(1, retries());
+        world.Host.World.Ownership = Owning(0, 1);
+        await PassAfterAsync(world, 1000); // the attempt's wait is over, the foreign memory (1500 ms) is not: the bot is skipped without a read
+        Assert.Equal(1, retries());
+        await PassAfterAsync(world, 500);
+        Assert.Equal(2, retries());
+        Assert.Equal(ManagedPlayerbotState.Faulted, world.Owners.Peek(before.BotId)!.State);
     }
 
     [Fact]

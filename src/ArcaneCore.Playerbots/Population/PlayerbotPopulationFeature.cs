@@ -1474,6 +1474,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         => code is "playerbot-capacity" or ManagedPlayerbotFeature.LiveOnOtherWorker or ManagedPlayerbotFeature.LiveOwnerUnknown
             or "fleet-reset-running" or "playerbots-stopping" or "playerbots-disabled" or ManagedPlayerbotFeature.PlayerbotsDetaching;
 
+    /// <summary>Test seam: awaited before each fault retry's start, inside the retry's containment (null in production).</summary>
+    internal Func<Guid, Task>? BeforeRetryStartForTests { get; set; }
+
     /// <summary>An attempt was made at <paramref name="nowMs"/>: count it and set the wait before the next one.</summary>
     private void StampFaultRetry(Guid botId, long nowMs)
     {
@@ -1553,17 +1556,25 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             {
                 // Counted when a start was really attempted, not when the bot was picked: a refusal that did nothing to the bot (MadeNoStartAttempt) uses no attempt, any other result does
                 // (a refusal that writes nothing, such as an owner the account store refuses, included, so that bot is bounded too).
-                // A start that throws (the feature contains a failed fault-row write, so this is a failed put-back write after a raced login refusal or an unexpected fault) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
-                // the pass (the remaining restarts and every creation), so one bot whose fault row cannot be written would hold the worker's population back at each of its attempts. In split scope
+                // A start that throws (the feature contains failed fault-row and put-back writes, so this is an unexpected fault) would, uncaught, end the whole pass: AddAsync's exception reaches RunAsync's catch, which logs it and drops the rest of
+                // the pass (the remaining restarts and every creation), so one bot that faults unexpectedly would hold the worker's population back at each of its attempts. In split scope
                 // (the only place a retry happens) the exception is contained: logged once, counted as a failed attempt, and the pass goes on. A cancellation and a split-brain latch still end the pass.
-                bool attempted = true;
+                // A latch or the caller's own cancellation did nothing to the bot and uses no attempt; a cancellation that is not the caller's (the start's own timeout) is a start that was made, so it does.
+                bool attempted = false;
                 try
                 {
+                    if (BeforeRetryStartForTests is { } beforeRetry) await beforeRetry(member.BotId).ConfigureAwait(false);
                     result = Checked(await managed.StartForRetryAsync(member.BotId, ct).ConfigureAwait(false));
                     attempted = !MadeNoStartAttempt(result.Code);
                 }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    attempted = true;
+                    throw;
+                }
                 catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException and not ManagedPlayerbotFeature.PlayerbotSplitBrainException)
                 {
+                    attempted = true;
                     logger.LogFault("playerbot.population", ex, "Playerbot population: the retry start of {Bot} failed ({Type}: {Message}); the pass goes on", member.BotId, ex.GetType().Name, ex.Message);
                     result = new PlayerbotOperationResult(false, "retry-faulted", member.BotId);
                 }

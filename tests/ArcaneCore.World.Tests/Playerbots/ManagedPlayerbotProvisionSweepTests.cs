@@ -382,6 +382,51 @@ public sealed class ManagedPlayerbotProvisionSweepTests
     }
 
     [Fact]
+    public async Task ASweep_LatchedBetweenItsUnlockedCheckAndTheLock_IssuesNoWrites_AndDoesNotUseUpTheInterval()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPRECHK", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        bots.SweepAfterUnlockedCheckForTests = () => bots.ForceSplitBrainForTests(); // the latch lands after the unlocked check passed: only the check under the lock can see it
+
+        await bots.SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(0, shared.Provisions.LoadPendingCalls);
+        Assert.Equal(0, shared.Provisions.RollbackCount);
+        bots.SweepAfterUnlockedCheckForTests = null;
+        await bots.ClearSplitBrainAsync();
+        await bots.SweepStaleProvisionsAsync(default); // the refused sweep did not stamp the slot
+        Assert.Equal(1, shared.Provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task ASweep_StampsTheSlotWithTheClockReadUnderTheLock_NotTheOneReadBeforeTheWait()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPCLOCK", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        long clock = 1_000;
+        bots.ProvisionSweepClock = () => Interlocked.Read(ref clock);
+        bots.SweepAfterUnlockedCheckForTests = () =>
+        {
+            Interlocked.Add(ref clock, 5_000); // time passes while the sweep waits for the lock
+            return Task.CompletedTask;
+        };
+
+        await bots.SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(1, shared.Provisions.RollbackCount); // it ran
+        bots.SweepAfterUnlockedCheckForTests = null;
+        long interval = bots.ProvisionSweepIntervalMs;
+        Interlocked.Exchange(ref clock, 6_000 + interval - 1);
+        Assert.False(bots.TakeProvisionSweepSlot()); // stamped at 6000, not 1000: the interval is not over yet
+        Interlocked.Exchange(ref clock, 6_000 + interval);
+        Assert.True(bots.TakeProvisionSweepSlot());
+    }
+
+    [Fact]
     public async Task ASweepCancelledDuringTheReconcile_Propagates_ReleasesTheLock_AndUsesUpTheInterval()
     {
         var shared = new Shared();
