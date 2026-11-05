@@ -7,6 +7,7 @@ using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Reputation;
+using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -367,15 +368,25 @@ public sealed class SpellMagnetTests
     }
 
     /// <summary>
+    /// FactionTemplate.dbc (5875) row 1, the Human player template: faction 1, flags 72, own mask 3, friendly mask 2, hostile mask 12. Unlike
+    /// ReputationFixtures.PlayerTemplate (own 1, friendly 2) it is friendly to itself, so a totem that copied its owner's template reads as a friend
+    /// of every player on that template, as it does on real data.
+    /// </summary>
+    private static readonly FactionTemplateCatalog SelfFriendlyPlayerTemplate = new([new FactionTemplateRecord(1, 1, 72, 3, 2, 12)]);
+
+    /// <summary>
     /// The production hook chain (ReputationCombatHooks over FactionCombatHooks) with a creature that a player owns and that carries the
-    /// player-controlled flag, as a summoned totem does (TotemSystem). The attacker, the victim and (when flagged) the totem's owner are
-    /// same-team free-for-all players. Grounding between such opponents must still redirect (mangos-classic GetReactionTo, vmangos
-    /// GetReactionTo: a pair of free-for-all controlling players is hostile); an owner who is not free-for-all keeps the totem unattackable.
+    /// player-controlled flag, as a summoned totem does (TotemSystem), on the real self-friendly player template. The attacker and the victim are
+    /// same-team free-for-all players, and in every case the template reaction refuses the totem (the preconditions below), so only
+    /// IsFreeForAllOpponentOwned can let the redirect through. Grounding between free-for-all opponents must still redirect (mangos-classic
+    /// GetReactionTo, vmangos GetReactionTo: a pair of free-for-all controlling players is hostile); an owner who is not free-for-all, or who is
+    /// grouped with the caster, keeps the totem unattackable.
     /// </summary>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void ClientCast_FreeForAllOpponentsTotem_IsRedirectedOnlyWhenItsOwnerIsFreeForAll(bool ownerFreeForAll)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void ClientCast_TeamTotem_IsRedirectedOnlyWhenItsOwnerIsAnUngroupedFreeForAllOpponent(bool ownerFreeForAll, bool ownerGroupedWithCaster)
     {
         using var kit = new SpellTestKit(Protect(), Attack());
         Map map = kit.World.GetMap(0);
@@ -392,8 +403,8 @@ public sealed class SpellMagnetTests
             player.MaxHealth = player.Health = 100;
         }
 
-        map.Combat.Hooks = new ReputationCombatHooks(new FactionCombatHooks(ReputationFixtures.Templates),
-            new ReputationReactionResolver(ReputationFixtures.Templates, ReputationFixtures.Factions, reputation.For));
+        map.Combat.Hooks = new ReputationCombatHooks(new FactionCombatHooks(SelfFriendlyPlayerTemplate),
+            new ReputationReactionResolver(SelfFriendlyPlayerTemplate, ReputationFixtures.Factions, reputation.For));
         kit.System.Relations = CombatHookRelations.Instance;
         kit.System.CombatRules = SpellCombatRules.Neutral;
 
@@ -404,6 +415,11 @@ public sealed class SpellMagnetTests
             owner.Flags |= PlayerFlags.FfaPvp;
         }
 
+        if (ownerGroupedWithCaster)
+        {
+            CombatHooks.RegisterSameGroup(kit.World, (a, b) => (ReferenceEquals(a, attacker) && ReferenceEquals(b, owner)) || (ReferenceEquals(a, owner) && ReferenceEquals(b, attacker)));
+        }
+
         Creature totem = creatures.SpawnTemporary(CreatureTestKit.Template(CreatureTestKit.WolfEntry), 4, 0, 83.5f, 0);
         totem.SetOwnerGuid(owner.Guid);
         totem.UnitFlags |= UnitFlags.PlayerControlled;
@@ -412,11 +428,13 @@ public sealed class SpellMagnetTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(totem, Protection, SpellCastTargets.ForUnit(victim.Guid), true));
         Assert.True(kit.System.HasAura(victim, Protection));
         Assert.True(CombatHookRelations.Instance.IsHostile(attacker, victim));
-        Assert.False(CombatHookRelations.Instance.IsHostile(attacker, totem)); // the template reaction reads the team's totem as a friend: the gap the exemption closes
+        Assert.True(CombatHookRelations.Instance.IsFriendly(attacker, totem)); // the template reaction reads the team's totem as a friend...
+        Assert.False(CombatHookRelations.Instance.IsHostile(attacker, totem)); // ...so the explicit-hostile gate refuses it: the gap the exemption closes
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(attacker, Bolt, ClientNamed(victim.Guid), false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
-        if (ownerFreeForAll)
+        if (ownerFreeForAll && !ownerGroupedWithCaster)
         {
             Assert.Equal(100u, victim.Health);
             Assert.Equal(85u, totem.Health);
