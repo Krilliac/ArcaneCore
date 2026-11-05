@@ -427,7 +427,7 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
             }
 
             Ledger.Report(PacketChecks.Subsystem, PacketChecks.Code(check), SubjectOf(session, traffic), text, severity);
-            TraceToGmStream(session, check, severity, text);
+            TraceToGmStream(session, check, severity, text, traffic);
         }
 
         // Counted last: a reader that sees the count also finds the ledger report of that occurrence (when it was not held back).
@@ -438,9 +438,10 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
     /// The report that just went to the ledger, to GMs following the <c>anticheat</c> channel. The subject is the session's player by GUID
     /// only (no position): this runs on the reporting thread, which need not own the player's map, so nothing of the map is read. The line
     /// carries the GUID and the account id, never a player or account name: <c>packet CODE (Player:guid) account N: text [Severity]</c>, and
-    /// <c>packet CODE account N: text [Severity]</c> while the session has no player yet (the account id alone identifies it).
+    /// <c>packet CODE account N: text [Severity]</c> while the session has no player yet (the account id alone identifies it); injected tool and bot
+    /// traffic add a <c>tool</c> or <c>bot</c> marker after CODE (<see cref="FormatPacketLine"/>).
     /// </summary>
-    private void TraceToGmStream(WorldSession session, PacketCheck check, AnomalySeverity severity, string text)
+    private void TraceToGmStream(WorldSession session, PacketCheck check, AnomalySeverity severity, string text, PacketTraffic traffic)
     {
         if (!GmTraceGuard.Wants(Volatile.Read(ref _world), GmStreamChannels.AntiCheat, out IGmTraceSink? sink))
         {
@@ -451,8 +452,8 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         {
             ObjectGuid guid = session.Player?.Guid ?? default;
             sink.Publish(GmStreamChannels.AntiCheat, new GmTraceSubject(guid, default, 0, 0, 0f, 0f, 0f, HasPosition: false),
-                (Guid: guid, Account: session.AccountId, Code: PacketChecks.Code(check), Severity: severity, Text: text),
-                static s => FormatPacketLine(s.Code, s.Guid, s.Account, s.Text, s.Severity));
+                (Guid: guid, Account: session.AccountId, Code: PacketChecks.Code(check), Severity: severity, Text: text, Traffic: traffic),
+                static s => FormatPacketLine(s.Code, s.Guid, s.Account, s.Text, s.Severity, s.Traffic));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -468,11 +469,23 @@ public sealed class PacketHeuristicsFeature : IWorldFeature
         }
     }
 
-    /// <summary>The GM stream line of a packet report: GUID (when the session has a player) and account id, no name.</summary>
-    internal static string FormatPacketLine(string code, ObjectGuid guid, int account, string text, AnomalySeverity severity)
-        => guid == default
-            ? string.Create(CultureInfo.InvariantCulture, $"packet {code} account {account}: {text} [{severity}]")
-            : string.Create(CultureInfo.InvariantCulture, $"packet {code} (Player:{guid.Low}) account {account}: {text} [{severity}]");
+    /// <summary>
+    /// The GM stream line of a packet report: GUID (when the session has a player) and account id, no name. A packet an operator's tool injected
+    /// (<see cref="PacketTraffic.Tool"/>) or a bot sent (<see cref="PacketTraffic.Bot"/>) carries a <c>tool</c> or <c>bot</c> marker after the code, so
+    /// the line does not read as the target player cheating; player and staff traffic carry no marker.
+    /// </summary>
+    internal static string FormatPacketLine(string code, ObjectGuid guid, int account, string text, AnomalySeverity severity, PacketTraffic traffic)
+    {
+        string marker = traffic switch
+        {
+            PacketTraffic.Tool => " tool",
+            PacketTraffic.Bot => " bot",
+            _ => string.Empty,
+        };
+        return guid == default
+            ? string.Create(CultureInfo.InvariantCulture, $"packet {code}{marker} account {account}: {text} [{severity}]")
+            : string.Create(CultureInfo.InvariantCulture, $"packet {code}{marker} (Player:{guid.Low}) account {account}: {text} [{severity}]");
+    }
 
     /// <summary>The ledger subject: <c>account N</c> for a player or staff session, <c>botname NAME</c> for a managed bot, <c>tool N</c> (the target's account) for a packet a packet tool injected. Never the <c>bot-</c> subsystem prefix that files bot QA issues, and not a leading <c>bot </c> either: PlayerbotPolicyTelemetry counts every anomaly subject that starts with that.</summary>
     private static string SubjectOf(WorldSession session, PacketTraffic traffic)

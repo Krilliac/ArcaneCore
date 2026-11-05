@@ -12,7 +12,7 @@ public static class GmStreamChannels
     /// <summary>Damage and heals (melee swings, spell damage, periodic ticks, heals, environmental damage).</summary>
     public const string Damage = "damage";
 
-    /// <summary>Proc chance rolls.</summary>
+    /// <summary>Proc chance rolls of the generic aura-proc path only (SpellSystem.Procs.cs); the rolls of the built-in proc handlers, reflect and spell procs are not traced.</summary>
     public const string Procs = "procs";
 
     /// <summary>Spell casts: start, failure, go with its hits and misses, spell misses.</summary>

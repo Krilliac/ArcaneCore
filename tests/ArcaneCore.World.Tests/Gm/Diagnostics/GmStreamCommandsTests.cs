@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Gm.Diagnostics;
@@ -98,6 +99,7 @@ public sealed class GmStreamCommandsTests
         Assert.Equal(["gm stream moves", "gm stream procs"], all.Select(e => e.Target));
         Assert.All(all, e => Assert.Equal(("subscribed", "on", "off", DebugWriteScope.Live), (e.Field, e.OldValue, e.NewValue, e.Scope)));
     }
+
     [Fact]
     public async Task On_TakesAScope_RefusesAllForMoves_RejectsUnknownChannelsAndScopes_AndResubscribingChangesTheScope()
     {
@@ -135,5 +137,55 @@ public sealed class GmStreamCommandsTests
         Assert.Equal("Available channels (.arcane stream on <channel> [scope]):", lines[1]);
         Assert.Equal(["damage [target|near|all]", "procs [target|near|all]", "spells [target|near|all]", "moves [target|near]", "anticheat [target|near|all]"],
             lines.Skip(2).Select(l => l[..l.IndexOf(':', StringComparison.Ordinal)]));
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task ADemotedGm_LosesTheSubscriptionsAndTheFeed_AfterTheAccountStoreRankDrops()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        GmStream stream = host.WorldServices.GetRequiredService<GmStreamFeature>().Stream;
+        Player player = await host.PlayerAsync("Gmaaa");
+        ArcaneCore.Game.ObjectGuid guid = player.Guid;
+        Assert.True(stream.Subscribe(guid, "alpha"));
+        Assert.True(stream.Subscribe(guid, "beta"));
+
+        // Before the demotion the feed arrives (so the later silence means something).
+        stream.Publish("alpha", "before the demotion");
+        Assert.Equal(["[alpha] before the demotion"], await gm.CollectChatLinesAsync(1));
+
+        // Demote through the account store, the way the realm console's set-gmlevel does. The live session keeps its login-time rank.
+        Assert.True(await host.Accounts.UpdateSecurityAsync("GMA", AccountSecurity.Player));
+        Assert.Equal(AccountSecurity.GameMaster, player.Security);
+        await WorldTestHost.WaitForAsync(() => stream.Subscriptions(guid).Count == 0, "the demoted GM's subscriptions to end after the stored rank is re-read");
+
+        // The session still caches GameMaster, so the GM can ask for the feed again: it must be refused and nothing delivered.
+        Assert.True(stream.Subscribe(guid, "alpha"));
+        stream.Publish("alpha", "after the demotion");
+        await WorldTestHost.WaitForAsync(() => stream.Subscriptions(guid).Count == 0, "the re-subscription of a demoted GM to be ended");
+        Assert.DoesNotContain(await gm.CollectAsync(), p => p.Opcode == ArcaneCore.Protocol.WorldOpcode.SmsgMessagechat);
+        Assert.False(stream.IsActive);
+    }
+
+    [Fact]
+    public async Task AGmWhoLeavesThroughACommittedClusterTransfer_LosesEverySubscription()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GMA", "Gmaaa", AccountSecurity.GameMaster);
+        await gm.CollectAsync();
+        GmStream stream = host.WorldServices.GetRequiredService<GmStreamFeature>().Stream;
+        Player player = await host.PlayerAsync("Gmaaa");
+        Assert.True(stream.Subscribe(player.Guid, "alpha"));
+        Assert.True(stream.Subscribe(player.Guid, "moves"));
+
+        // The capture detaches the player; the subscriptions survive an aborted transfer (the player is re-added), and end when the commit retires it.
+        Assert.True(await host.OnWorldAsync(() => host.World.DetachPlayerForTransfer(player)));
+        Assert.Equal(2, stream.Subscriptions(player.Guid).Count);
+        Assert.True(await host.OnWorldAsync(() => host.World.RetireDetachedPlayer(player)));
+
+        Assert.Empty(stream.Subscriptions(player.Guid));
+        Assert.False(stream.IsActive);
     }
 }
