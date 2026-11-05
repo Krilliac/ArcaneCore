@@ -176,6 +176,7 @@ public sealed class NaxxramasSpellTests
         (Player player, _) = kit.AddPlayer(1);
         Creature boss = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, 83.5f, 0);
         Assert.True(kit.Map.Combat.Attack(boss, player));
+        boss.Combat.Threat.AddThreat(player, 1f);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastSpell(boss, SummonBlizzard, SpellCastTargets.ForUnit(player.Guid), triggered: true));
         FlushSpellBatch(kit.Spells);
@@ -192,6 +193,7 @@ public sealed class NaxxramasSpellTests
         (Player player, _) = kit.AddPlayer(1);
         Creature boss = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.NpcCasterEntry)!, 0, 0, 83.5f, 0);
         Assert.True(kit.Map.Combat.Attack(boss, player));
+        boss.Combat.Threat.AddThreat(player, 1f);
         Creature blizzard = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(BlizzardEntry)!, 3, 0, 83.5f, 0);
         Creature other = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(PetTestKit.WildEntry)!, 4, 0, 83.5f, 0);
 
