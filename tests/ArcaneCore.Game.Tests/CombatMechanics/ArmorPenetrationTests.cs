@@ -34,6 +34,8 @@ public sealed class ArmorPenetrationTests
         (Player victim, _) = kit.AddPlayer(2, 2); // faces away from the attacker: no dodge, parry or block
         attacker.Level = 60;
         victim.Level = 60;
+        victim.MaxHealth = 100_000; // the sink clamps Dealt to current health; keep the victim alive past every expected amount
+        victim.Health = 100_000;
         victim.SetInt32(UpdateFields.UnitFieldResistances, VictimArmor);
         if (auraSpell is { } id)
         {

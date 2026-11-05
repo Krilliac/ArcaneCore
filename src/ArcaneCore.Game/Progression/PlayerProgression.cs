@@ -134,7 +134,8 @@ public sealed partial class PlayerProgression : IQuestExperience
             // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires once per level (oldLevel
             // counts up). It runs after LevelChanged and PLAYER_XP, like GiveLevel, so a script sees talents, skills and XP already
             // updated; Level is the final level for every call.
-            for (byte oldLevel = firstOldLevel; oldLevel < player.Level; oldLevel++)
+            byte finalLevel = player.Level;
+            for (byte oldLevel = firstOldLevel; oldLevel < finalLevel; oldLevel++)
             {
                 player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
             }
