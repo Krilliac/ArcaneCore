@@ -15,7 +15,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Cluster;
 
 /// <summary>
-/// The unified control wire (C3 of _wf/handoff-control-DESIGN.md): frames 28-32 (<see cref="ClusterControlWire"/>), contract 5 and the shared
+/// The unified control wire (C3 of _wf/handoff-control-DESIGN.md): frames 28-32 (<see cref="ClusterControlWire"/>), contract 6 and the shared
 /// bundle JSON. Golden bytes pin the layout, every verb round-trips, every malformed shape is refused with <see cref="InvalidDataException"/>
 /// (the exception a gateway link host's receive loop turns into a closed link once C4 dispatches these frames; no host calls the decoders yet), and a bundle crosses the journal and the wire identically.
 /// </summary>
@@ -468,7 +468,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     public void Encoders_RefuseMismatchedKinds_Arguments_Payloads_AndOversizedBundles()
     {
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.PlayerTransfer, Op, ControlVerb.Freeze, ControlNoArguments.Instance)));
-        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, (ControlVerb)10, ControlNoArguments.Instance)));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, (ControlVerb)11, ControlNoArguments.Instance)));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Warm, ControlNoArguments.Instance)));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(1, ControlKind.WorldHandoff, Op, ControlVerb.Freeze, new ControlWarmArguments(Inc))));
         Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeRequest(new ControlRequest(
@@ -544,7 +544,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badKind));
 
         byte[] badVerb = [.. body];
-        badVerb[verbAt] = 10;
+        badVerb[verbAt] = 11; // 10 is RetireWrites; 11 is the first unassigned handoff value
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badVerb));
         badVerb[verbAt] = 0;
         Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeRequest(badVerb));
