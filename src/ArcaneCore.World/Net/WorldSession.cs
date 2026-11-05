@@ -66,9 +66,11 @@ public sealed class WorldSessionOptions
     internal TimeSpan EffectiveWriterDrainBound => WriterDrainGrace > TimeSpan.Zero ? WriterDrainGrace : DefaultWriterDrainBound;
 
     /// <summary>
-    /// How long a closing session waits for its close command to run on the world thread (so a login or other command queued
-    /// before it finishes while the session's DI scope is still alive). <see cref="TimeSpan.Zero"/>, the default, means the
-    /// built-in 10 s bound; the wait is never unbounded and a timeout is logged. It is skipped when the world thread is not running.
+    /// How long a closing session waits for its close command to run on the world thread, behind the commands it queued earlier (an
+    /// EnterWorld already past its claim check, a handler mid-run), so they finish while the session's DI scope is still alive.
+    /// <see cref="TimeSpan.Zero"/>, the default, means the built-in 10 s bound; the wait is never unbounded and a timeout is logged
+    /// (the scope then ends anyway). It is skipped when no world thread runs. vmangos has no per-connection scope and so no such
+    /// wait. Bound from World:WorldCloseGrace (for example "00:00:05").
     /// </summary>
     public TimeSpan WorldCloseGrace { get; set; } = TimeSpan.Zero;
 
@@ -324,12 +326,14 @@ public sealed partial class WorldSession : IPlayerSession
     /// <summary>
     /// Wait (bounded by <see cref="WorldSessionOptions.EffectiveWorldCloseBound"/>) until the close command <see cref="Close"/> posted has run
     /// on the world thread. Commands the session queued earlier (EnterWorld resolves services from the session's scope) run before it, so
-    /// the caller may end the scope afterwards. Never waits on the world thread itself or when no world thread runs (nothing would complete
-    /// it); a timeout is logged and the caller proceeds, so a stalled or stopped world cannot hang disconnect or shutdown.
+    /// the caller may end the scope afterwards. Not waited for when no world thread runs, which covers a stopped world (<c>Stop</c> retires the
+    /// thread before it marks the world stopped, so nothing would complete the close), nor on the world thread itself (the close command is
+    /// queued behind the running one, so a caller that blocked on this task there would deadlock the thread that has to run it). A timeout is logged and the caller proceeds, so a stalled world
+    /// cannot hang disconnect or shutdown.
     /// </summary>
     internal async Task AwaitWorldCloseAsync()
     {
-        if (!_worldCloseQueued || World.IsMainWorldThread || World.IsStopped || _worldClosed.Task.IsCompleted)
+        if (!_worldCloseQueued || World.IsMainWorldThread || _worldClosed.Task.IsCompleted)
         {
             return;
         }
