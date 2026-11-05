@@ -479,7 +479,9 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
 
             entry.State = loaded;
 
+#pragma warning disable ARC0002 // this lambda is the Post continuation (WorldRuntime.Post in production), so it already runs on the world thread
             if (player.IsInWorld && ReferenceEquals(_entries.GetValueOrDefault(id), entry))
+#pragma warning restore ARC0002
             {
                 next(loaded);
             }
