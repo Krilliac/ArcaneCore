@@ -247,7 +247,7 @@ public sealed partial class ManagedPlayerbotFeature
                     if (counts.Forgotten.Count > 0)
                     {
                         await using AsyncServiceScope relationScope = scopes.CreateAsyncScope();
-                        // A bot is listed from its first deleted character: one whose later character was refused (or whose reset was cancelled) still exists and is not retired.
+                        // A bot is listed from its first deleted character: one whose later character was refused (or whose reset was cancelled) was not deleted as a whole (a character of it is gone but its deletion did not finish) and is not retired.
                         HashSet<Guid> stillExisting = [.. counts.Forgotten.Select(f => f.BotId).Where(id => !counts.Removed.Contains(id))];
                         await ForgetRelationsAsync(relationScope.ServiceProvider, counts.Forgotten, stillExisting).ConfigureAwait(false);
                     }

@@ -246,19 +246,17 @@ public sealed class PopulationRushTests
         o.MaxBots = 8;
     }
 
-    // A park, not a bot that has merely not reached Running yet: a created bot is Starting and then Running, never Stopped, so a Stopped or
-    // Stopping bot is one the shed pass stopped, and the pass publishes it in OwnedParked.
+    // A park, not a bot that has merely not reached Running yet. Only the population feature's OwnedParked proves it: a created bot's row starts
+    // Stopped (ManagedPlayerbotFeature publishes it at creation), so a Stopped bot in the snapshot says nothing about a shed pass.
     private static async Task AssertABotWasParkedAsync(PopulationTestHost world)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!world.Bots.Snapshot().Any(s => s.State is ManagedPlayerbotState.Stopped or ManagedPlayerbotState.Stopping) || world.Feature.Status.OwnedParked < 1)
+        while (world.Feature.Status.OwnedParked < 1)
         {
             Assert.True(DateTime.UtcNow < deadline,
                 $"no bot was parked: {world.RunningCount} running of {world.Feature.RushStatus.Created} created, status parked {world.Feature.Status.OwnedParked}");
             await Task.Delay(100);
         }
-
-        Assert.True(world.Feature.RushStatus.Created > world.RunningCount);
     }
 
     [Fact]

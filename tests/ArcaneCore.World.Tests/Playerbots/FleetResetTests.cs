@@ -215,6 +215,92 @@ public sealed class FleetResetTests
     }
 
     [Fact]
+    public async Task ACancelledReset_DoesNotRetireTheBotWhoseDeletionDidNotFinish_SoALaterForgetStillClearsItsRelationAndTradeRows()
+    {
+        var relations = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
+        var trades = new CountingTradeStore();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.Enabled = false;
+            o.MaxBots = 6;
+        }, configureServices: services =>
+        {
+            services.AddSingleton<IPlayerbotRelationStore>(relations);
+            services.AddSingleton<IPlayerbotTradeRecordStore>(trades);
+        });
+        Guid[] ids = await CreateBotsAsync(world, 3, started: 0);
+        ManagedPlayerbot[] registry = [.. await world.Owners.LoadAllAsync()];
+        var memory = world.Bots.Social.Memory;
+        var ledger = Assert.IsType<ArcaneCore.World.Playerbots.BotSocial.PlayerbotTradeLedger>(world.Bots.Social.Ledger);
+
+        // The reset is cancelled while the third bot is being deleted: its character is gone, its registry row (and so its entry in Removed) is not.
+        using var cancel = new CancellationTokenSource();
+        var order = new List<Guid>();
+        world.Members.OnDelete = id =>
+        {
+            order.Add(id);
+            if (order.Count != 3) return;
+            cancel.Cancel();
+            throw new OperationCanceledException(cancel.Token);
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => world.Bots.ResetFleetAsync(new FleetResetPromise(3, 3), _ => { }, cancel.Token));
+
+        Assert.Equal(3, order.Count);
+        Guid half = order[2];
+        int halfCharacter = registry.Single(b => b.BotId == half).CharacterId;
+        Assert.False(world.Bots.HasRelationGate(order[0]), "a fully deleted bot's write gate was kept");
+        Assert.False(world.Bots.HasRelationGate(order[1]), "a fully deleted bot's write gate was kept");
+        Assert.True(world.Bots.HasRelationGate(half), "the unfinished bot was retired by the reset");
+        Assert.Equal(1, trades.EmptyWrites(half));
+
+        // The deletion is finished later: it gets rows again (written meanwhile) and the forget must still remove them in both stores.
+        memory.Note(half, halfCharacter, 4242, false, ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEvent.Grouped);
+        await relations.ReplaceAsync(half, memory.Snapshot(half));
+        ledger.NoteScam(half, halfCharacter, 4343);
+        await trades.ReplaceAsync(half, ledger.Snapshot(half));
+        Assert.Contains(await relations.LoadAllAsync(), r => r.BotId == half);
+        Assert.Contains(await trades.LoadAllAsync(), r => r.BotId == half);
+
+        await using AsyncServiceScope scope = world.Host.WorldServices.CreateAsyncScope();
+        await world.Bots.ForgetRelationsAsync(scope.ServiceProvider, half, halfCharacter);
+
+        Assert.DoesNotContain(await relations.LoadAllAsync(), r => r.BotId == half);
+        Assert.DoesNotContain(await trades.LoadAllAsync(), r => r.BotId == half);
+        Assert.Equal(2, trades.EmptyWrites(half)); // the reset's delete, then this forget's (a retired bot would have been skipped)
+    }
+
+    private sealed class CountingTradeStore : IPlayerbotTradeRecordStore
+    {
+        private readonly Dictionary<Guid, PlayerbotTradeRecord[]> _rows = [];
+        private readonly Dictionary<Guid, int> _empty = [];
+
+        public int EmptyWrites(Guid botId)
+        {
+            lock (_rows) return _empty.GetValueOrDefault(botId);
+        }
+
+        public Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default)
+        {
+            lock (_rows) return Task.FromResult<IReadOnlyList<PlayerbotTradeRecord>>([.. _rows.Values.SelectMany(rows => rows)]);
+        }
+
+        public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
+        {
+            lock (_rows)
+            {
+                if (rows.Count == 0)
+                {
+                    _empty[botId] = _empty.GetValueOrDefault(botId) + 1;
+                    _rows.Remove(botId);
+                }
+                else _rows[botId] = [.. rows];
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task ASurvivorWrittenByAForget_HasItsSavedVersionMovedWithTheWrite_SoTheNextCheckpointSkipsIt()
     {
         var store = new ArcaneCore.World.Tests.Playerbots.Social.PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();

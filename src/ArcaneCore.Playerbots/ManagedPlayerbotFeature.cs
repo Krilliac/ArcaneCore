@@ -1621,7 +1621,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         bool anyActive = false;
         // A home saved again with the same place changes nothing for the brain: AreaOf builds a new area object each call, and a brain given a new object drops its
-        // intent and releases its festival spot, so an unchanged home is not applied again.
+        // intent and releases its festival spot, so an unchanged home is not applied again, except when the brain's area is zone-clipped and found no zone (it caches that, and setting the home again is the documented way to look again).
         HashSet<Guid> moved = [];
         foreach (PlayerbotHome home in saved)
         {
@@ -1636,7 +1636,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 await world.InvokeAsync(() =>
                 {
                     foreach (PlayerbotHome home in saved)
-                        if (moved.Contains(home.BotId) && _active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused) active.Brain.Home = AreaOf(home.BotId);
+                        if (_active.TryGetValue(home.BotId, out ActiveBot? active) && !active.Paused
+                            && (moved.Contains(home.BotId) || active.Brain.Home is { ZoneFoundUnknown: true })) active.Brain.Home = AreaOf(home.BotId);
                     lock (_snapshotGate) _snapshotEpoch++;
                     return true;
                 }).ConfigureAwait(false);
