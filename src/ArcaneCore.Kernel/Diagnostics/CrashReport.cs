@@ -31,7 +31,9 @@ public enum CrashKind
 /// </summary>
 public static class CrashReport
 {
-    private static readonly DateTime StartedUtc = DateTime.UtcNow;
+    // The process's own start, not the first use of this type: a field initialised with DateTime.UtcNow was set when the first report was
+    // rendered, after that report's own timestamp was read, so uptimes were short and the first one negative.
+    private static readonly DateTime StartedUtc = ReadProcessStart();
     private static readonly string CachedProcessName = ReadProcessName();
 
     private static string ReadProcessName()
@@ -44,6 +46,19 @@ public static class CrashReport
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return "(unknown)";
+        }
+    }
+
+    private static DateTime ReadProcessStart()
+    {
+        try
+        {
+            using Process process = Process.GetCurrentProcess();
+            return process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return DateTime.UtcNow; // cannot read it: measure from the first report instead (clamped at zero below)
         }
     }
 
@@ -125,7 +140,7 @@ public static class CrashReport
         Guarded(sb, "pid", static () => Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         Guarded(sb, "name", static () => CachedProcessName);
         // Never the command line: it may carry --Database:ConnectionString=... with a password.
-        Guarded(sb, "uptime", () => (nowUtc - StartedUtc).ToString("c", CultureInfo.InvariantCulture));
+        Guarded(sb, "uptime", () => (nowUtc > StartedUtc ? nowUtc - StartedUtc : TimeSpan.Zero).ToString("c", CultureInfo.InvariantCulture));
         Guarded(sb, "exit code set", static () => ExitCodes.Current.ToString(CultureInfo.InvariantCulture));
         Guarded(sb, "runtime", static () => RuntimeInformation.FrameworkDescription);
         Guarded(sb, "os", static () => RuntimeInformation.OSDescription + " (" + RuntimeInformation.OSArchitecture + ")");
