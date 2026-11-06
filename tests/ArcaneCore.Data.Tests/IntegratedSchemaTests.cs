@@ -56,6 +56,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(AccountLoginSecurityDataModule), DatabaseComponent.Auth, AccountLoginSecurityDataModule.Version),
             (typeof(AccountLoginInfoDataModule), DatabaseComponent.Auth, AccountLoginInfoDataModule.Version),
             (typeof(RealmLivenessDataModule), DatabaseComponent.Auth, RealmLivenessDataModule.Version),
+            (typeof(SessionTokenDataModule), DatabaseComponent.Auth, SessionTokenDataModule.Version),
             (typeof(ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule), DatabaseComponent.Auth, ArcaneCore.Data.Auth.Playerbots.ManagedPlayerbotProvisionDataModule.Version),
             (typeof(CreatureDataModule), DatabaseComponent.World, 2),
             (typeof(MapDataModule), DatabaseComponent.World, 3),
@@ -225,7 +226,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
         Assert.Equal(67, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53), game_event_playerbot_* bot scenarios (54), wmo_area_template (55), creature_equip_template and creature_template.EquipmentTemplateId (56), creature_template magic resistances (57), the rule engine tables (58), playerbot_goal (59), npc_text_broadcast_text (60), creature_immunities and creature_template.MechanicImmuneMask/SchoolImmuneMask (61), holiday_flavour (62), the tuning tables (63), the shipped bot goal catalogue and ladder rules (64), dbscripts_on_spell (65), spell_effect_mod (66), WorldPvp bot goal row (67)
         Assert.Equal(74, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61), cluster transfer journal (62), hunter pet stable (63), playerbot relations (64), cluster transfer state index (65), playerbot trade ledger (66), realm authority leases (67), game object respawn times (68), helm and cloak show flags (69), loot state random property (70), playerbot trade counters (71), per-worker-shard ownership (72), cluster handoff open scope (73), cluster transfer target scope (74)
-        Assert.Equal(7, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5), account last-login info (6), realm liveness and character counts (7)
+        Assert.Equal(8, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5), account last-login info (6), realm liveness and character counts (7), Lanternfall session tokens (8)
 
         foreach (DatabaseComponent component in new[] { DatabaseComponent.Characters, DatabaseComponent.World })
         {
