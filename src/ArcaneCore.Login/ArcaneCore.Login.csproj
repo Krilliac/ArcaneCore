@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ArcaneCore.Login</RootNamespace>
+    <AssemblyName>ArcaneCore.Login</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Cryptography\ArcaneCore.Cryptography.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Data\ArcaneCore.Data.csproj" />
+  </ItemGroup>
+</Project>

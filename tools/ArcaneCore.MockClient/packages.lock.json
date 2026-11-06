@@ -2,6 +2,11 @@
   "version": 2,
   "dependencies": {
     "net11.0": {
+      "Konscious.Security.Cryptography.Blake2": {
+        "type": "Transitive",
+        "resolved": "1.1.1",
+        "contentHash": "odwOyzj/J/lHJZNwFWJGU/LRecBShupAJ2S8TQqZfhUe9niHzu/voBYK5wuVKsvSpzbfupKQYZguVyIk1sgOkQ=="
+      },
       "Microsoft.EntityFrameworkCore.Abstractions": {
         "type": "Transitive",
         "resolved": "9.0.21",
@@ -176,7 +181,8 @@
       "arcanecore.cryptography": {
         "type": "Project",
         "dependencies": {
-          "ArcaneCore.Kernel": "[1.0.0, )"
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "Konscious.Security.Cryptography.Argon2": "[1.3.1, )"
         }
       },
       "arcanecore.data": {
@@ -257,6 +263,15 @@
         "type": "Project",
         "dependencies": {
           "ArcaneCore.Game": "[1.0.0, )"
+        }
+      },
+      "Konscious.Security.Cryptography.Argon2": {
+        "type": "CentralTransitive",
+        "requested": "[1.3.1, )",
+        "resolved": "1.3.1",
+        "contentHash": "T+OAGwzYYXftahpOxO7J4xA5K6urxwGnWQf3M+Jpi+76Azv/0T3M5SuN+h7/QvXuiqNw3ZEZ5QqVLI5ygDAylw==",
+        "dependencies": {
+          "Konscious.Security.Cryptography.Blake2": "1.1.1"
         }
       },
       "Microsoft.Data.Sqlite.Core": {

@@ -6,6 +6,7 @@
     <Project Path="src/ArcaneCore.Gateway/ArcaneCore.Gateway.csproj" />
     <Project Path="src/ArcaneCore.Game/ArcaneCore.Game.csproj" />
     <Project Path="src/ArcaneCore.Kernel/ArcaneCore.Kernel.csproj" />
+    <Project Path="src/ArcaneCore.Login/ArcaneCore.Login.csproj" />
     <Project Path="src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj" />
     <Project Path="src/ArcaneCore.Protocol/ArcaneCore.Protocol.csproj" />
     <Project Path="src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" />
@@ -21,6 +22,7 @@
     <Project Path="tests/ArcaneCore.Game.Tests/ArcaneCore.Game.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Gateway.Tests/ArcaneCore.Gateway.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Kernel.Tests/ArcaneCore.Kernel.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.Login.Tests/ArcaneCore.Login.Tests.csproj" />
     <Project Path="tests/ArcaneCore.MockClient.Tests/ArcaneCore.MockClient.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Realm.Tests/ArcaneCore.Realm.Tests.csproj" />
     <Project Path="tests/ArcaneCore.TestSupport/ArcaneCore.TestSupport.csproj" />

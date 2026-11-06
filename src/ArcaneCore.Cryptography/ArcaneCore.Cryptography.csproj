@@ -9,6 +9,7 @@
        invariant facility (ArcaneCore.Kernel.Diagnostics.Invariant; the Kernel references no project). -->
 
   <ItemGroup>
+    <PackageReference Include="Konscious.Security.Cryptography.Argon2" />
     <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
   </ItemGroup>
 

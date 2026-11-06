@@ -89,4 +89,16 @@ public sealed class RealmEntry
     /// A lower account sees it offline (vmangos AuthSocket.cpp:1088-1090).
     /// </summary>
     public byte AllowedSecurityLevel { get; set; }
+
+    /// <summary>Lanternfall protocol version accepted by this realm; zero means the profile is unavailable.</summary>
+    public uint ProtocolVersion { get; set; }
+
+    /// <summary>Lanternfall queue length exposed by the login service.</summary>
+    public uint QueueLength { get; set; }
+
+    /// <summary>TLS DNS name for Lanternfall clients; legacy <see cref="Address"/> remains unchanged.</summary>
+    public string Host { get; set; } = string.Empty;
+
+    /// <summary>Lanternfall TLS listener port; zero means unavailable.</summary>
+    public ushort Port { get; set; }
 }
