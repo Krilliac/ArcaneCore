@@ -141,9 +141,9 @@ public sealed partial class WorldSession : IPlayerSession
     private readonly NetProtectionOptions _protection;
     private readonly IpKey? _address;
     // The client build's wire protocol (multi-version design S0). Pre-auth framing uses ClientProtocols.PreAuth;
-    // CMSG_AUTH_SESSION binds the build's protocol once. Only build 5875 exists, so the cipher instance never changes.
+    // CMSG_AUTH_SESSION binds the build's protocol and its cipher together under _sendLock.
     private IClientProtocol _protocol = ClientProtocols.PreAuth;
-    private readonly IWorldHeaderCrypt _crypt = ClientProtocols.PreAuth.CreateHeaderCrypt();
+    private IWorldHeaderCrypt _crypt = ClientProtocols.PreAuth.CreateHeaderCrypt();
     private readonly object _sendLock = new();
     // True from sending SMSG_NEW_WORLD until the read loop parses the client's MSG_MOVE_WORLDPORT_ACK: bad-header diagnostics only
     // (the read loop is off the world thread, so it cannot ask TeleportService).
@@ -363,7 +363,7 @@ public sealed partial class WorldSession : IPlayerSession
     /// <summary>Queue a packet. Thread-safe; drops silently once the session is closed.</summary>
     public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
-        if (payload.Length > MaxServerPayload)
+        if (payload.Length > _protocol.Frame.MaxServerPayloadBytes)
         {
             throw new ArgumentException($"{WorldOpcodeNames.GetName(opcode)} payload of {payload.Length} bytes exceeds the SMSG size field");
         }
@@ -391,12 +391,7 @@ public sealed partial class WorldSession : IPlayerSession
             return;
         }
 
-        int headerLength = _crypt.OutgoingHeaderLength;
-        byte[] frame = new byte[headerLength + payload.Length];
-        WorldFrameCodec.WriteServerSize(frame, payload.Length);
-        WorldFrameCodec.WriteServerOpcode(frame, _protocol.Opcodes.ToWire(opcode));
-        payload.CopyTo(frame.AsSpan(headerLength));
-
+        byte[] frame;
         lock (_sendLock)
         {
             if (_state == SessionState.Closed)
@@ -404,6 +399,22 @@ public sealed partial class WorldSession : IPlayerSession
                 NoteSendAfterClose(opcode);
                 return;
             }
+
+            // Authentication binds the profile and cipher under this same lock. Build and encrypt
+            // using one binding so a concurrent send cannot mix two profiles' headers and cipher.
+            IWorldFrameCodec codec = _protocol.Frame;
+            int headerLength = codec.OutgoingHeaderLength;
+            if (_crypt.OutgoingHeaderLength != headerLength)
+            {
+                throw new InvalidOperationException("protocol frame and header cipher outgoing lengths disagree");
+            }
+            if (payload.Length > codec.MaxServerPayloadBytes)
+            {
+                throw new ArgumentException($"{WorldOpcodeNames.GetName(opcode)} payload of {payload.Length} bytes exceeds the SMSG size field");
+            }
+            frame = new byte[headerLength + payload.Length];
+            codec.WriteServerHeader(frame, payload.Length, _protocol.Opcodes.ToWire(opcode));
+            payload.CopyTo(frame.AsSpan(headerLength));
 
             // Observed before the header is encrypted and the frame is queued: the writer loop does not take _sendLock, so once TryWrite
             // returns the client can already hold this packet, and an observer that records state "at the moment of the send" would race the
@@ -700,8 +711,8 @@ public sealed partial class WorldSession : IPlayerSession
 
     private async Task ReadLoopAsync(CancellationToken token)
     {
-        byte[] header = new byte[_crypt.IncomingHeaderLength];
-        byte[] cipherHeader = new byte[header.Length]; // the header as received, kept for the bad-header diagnostics
+        byte[] header = [];
+        byte[] cipherHeader = []; // the header as received, kept for the bad-header diagnostics
         var trail = new ClientFrameTrail();
 
         // Net:Protection:FrameReadTimeout: once the first byte of a header is in, the rest of the
@@ -712,6 +723,17 @@ public sealed partial class WorldSession : IPlayerSession
         using var deadline = new ReadDeadline(token, _protection.FrameReadTimeout);
         while (true)
         {
+            int incomingHeaderLength = _protocol.Frame.IncomingHeaderLength;
+            if (_crypt.IncomingHeaderLength != incomingHeaderLength)
+            {
+                _logger.LogError("[{Endpoint}] protocol frame and header cipher incoming lengths disagree; closing", RemoteEndpoint);
+                return;
+            }
+            if (header.Length != incomingHeaderLength)
+            {
+                header = new byte[incomingHeaderLength];
+                cipherHeader = new byte[incomingHeaderLength];
+            }
             int read = await _stream.ReadAsync(header.AsMemory(0, 1), token).ConfigureAwait(false);
             if (read == 0)
             {
@@ -731,14 +753,13 @@ public sealed partial class WorldSession : IPlayerSession
                 _crypt.DecryptHeader(header);
 
                 // The size is checked against the frame bound before anything is allocated for it.
-                if (!WorldFrameCodec.TryParseClientHeader(header, out ushort size, out rawOpcode))
+                if (!_protocol.Frame.TryParseClientHeader(header, out int size, out rawOpcode, out int payloadLength))
                 {
-                    LogBadHeader(size, rawOpcode, cipherHeader, header, position, trail);
+                    LogBadHeader((ushort)Math.Min(size, ushort.MaxValue), rawOpcode, cipherHeader, header, position, trail);
                     HeuristicsBadHeader(size, rawOpcode);
                     return;
                 }
 
-                int payloadLength = size - 4;
                 payload = payloadLength > 0 ? new byte[payloadLength] : [];
                 if (payloadLength > 0)
                 {
@@ -1163,6 +1184,13 @@ public sealed partial class WorldSession : IPlayerSession
             }
 
             _protocol = protocol;
+            _crypt = protocol.CreateHeaderCrypt();
+            if (_crypt.OutgoingHeaderLength != _protocol.Frame.OutgoingHeaderLength
+                || _crypt.IncomingHeaderLength != _protocol.Frame.IncomingHeaderLength)
+            {
+                _logger.LogError("[{Endpoint}] selected protocol frame and header cipher lengths disagree; refusing authentication", RemoteEndpoint);
+                return false;
+            }
             _crypt.Initialize(stored.SessionKey);
             _state = SessionState.CharacterSelect;
         }

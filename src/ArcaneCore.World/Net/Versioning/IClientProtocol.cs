@@ -19,6 +19,8 @@ public interface IClientProtocol
 
     IUpdateFieldLayout UpdateFields { get; }
 
+    IWorldFrameCodec Frame { get; }
+
     /// <summary>A fresh, uninitialised header cipher for one connection.</summary>
     IWorldHeaderCrypt CreateHeaderCrypt();
 }

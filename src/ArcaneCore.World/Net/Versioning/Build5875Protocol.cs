@@ -26,6 +26,8 @@ public sealed class Build5875Protocol : IClientProtocol
 
     public IUpdateFieldLayout UpdateFields => Build5875UpdateFieldLayout.Instance;
 
+    public IWorldFrameCodec Frame => Vanilla112FrameCodec.Instance;
+
     public IWorldHeaderCrypt CreateHeaderCrypt() => new WorldHeaderCrypt();
 
     private sealed class Vanilla5875AuthCodec : IWorldAuthCodec
