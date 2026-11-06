@@ -104,7 +104,18 @@ public sealed class EfSessionTokenStore(AuthDbContext db) : ISessionTokenStore
         }
     }
     private static void ValidateRequest(SessionTokenConsumeRequest request)
-    { if (request is null || request.RealmId <= 0 || request.ClientBuild == 0 || request.TokenSha256 is null || request.ResumeTokenId is null || request.ResumeSha256 is null || request.Ip is null || request.UtcNow.Kind != DateTimeKind.Utc || request.TokenSha256.Length != 32 || request.ResumeTokenId.Length != 16 || request.ResumeSha256.Length != 32 || request.Kind is not (SessionTokenKind.Login or SessionTokenKind.Resume) || request.Kind == SessionTokenKind.Login && request.TokenId?.Length != 16 || NormalizeIp(request.Ip) is null) throw new ArgumentException("Invalid token consume request.", nameof(request)); }
+    {
+        if (request is null || request.RealmId <= 0 || request.ClientBuild == 0
+            || request.TokenSha256 is null || request.ResumeTokenId is null || request.ResumeSha256 is null
+            || request.Ip is null || request.UtcNow.Kind != DateTimeKind.Utc
+            || request.TokenSha256.Length != 32 || request.ResumeTokenId.Length != 16
+            || request.ResumeSha256.Length != 32 || request.Kind is not (SessionTokenKind.Login or SessionTokenKind.Resume)
+            || request.Kind == SessionTokenKind.Login && request.TokenId?.Length != 16
+            || NormalizeIp(request.Ip) is null)
+        {
+            throw new ArgumentException("Invalid token consume request.", nameof(request));
+        }
+    }
     private static string NormalizeIp(string ip) => AccountBanEvaluator.NormalizeIp(ip) ?? throw new ArgumentException("Invalid IP address.", nameof(ip));
     private static DateTime RequireUtc(DateTime value, string name)
     {

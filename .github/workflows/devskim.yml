@@ -48,7 +48,8 @@ jobs:
       # - This file itself: the patterns below name the files they cover (Sha1.cs).
       # - DS173237/DS117838 "secrets": schema-snapshot and takeover-accounting hashes, and protocol hex vectors in tests.
       # - DS173239: the fake GitHub tokens the QA redactor tests redact.
-      # - DS197836: cache keys built from a file's length and time, not a security hash.
+      # - DS197836: cache keys built from a file's length and time, not a security hash; generated schema descriptions naming
+      #   timestamp and token-hash columns on one JSON line (no runtime hashing occurs in schema metadata).
       # - DS137138 http://: the local Prometheus listener prefixes, the compose stack's internal URLs, and test URLs.
       # - DS154189: printf in the offline vmap oracle tool, which only reads trusted extracted data.
       # - DS162092 localhost/127.0.0.1: loopback defaults and test endpoints, which are the safe default.
@@ -98,6 +99,7 @@ jobs:
             -**/src/ArcaneCore.Kernel/Configuration/Conf/conf-catalog.json:DS176209
             -**/sql/updates/**/schema-snapshot.json:DS173237
             -**/sql/updates/**/schema-snapshot.json:DS117838
+            -**/sql/updates/**/schema-snapshot.json:DS197836
             -**/docs/integration/takeover-accounting-*.json:DS173237
             -**/tests/ArcaneCore.Data.Tests/CandidateBaseline.cs:DS173237
             -**/tests/ArcaneCore.Game.Tests/SpellRules/SpellRulePacketTests.cs:DS173237
