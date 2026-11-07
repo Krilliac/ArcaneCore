@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 7 | `account`, `realmlist` |
-| `characters` | 75 | `characters` |
-| `world` | 69 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 77 | `characters` |
+| `world` | 72 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -102,6 +102,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 73 | `Characters.Transfers.ClusterHandoffScopeDataModule` | adds columns `cluster_world_handoff.open_scope`; repairs the model's indexes of `cluster_world_handoff` | yes |
 | 74 | `Characters.Transfers.ClusterTransferTargetScopeDataModule` | adds columns `cluster_transfer_decision.target_scope` | yes |
 | 75 | `Characters.Ownership.CharacterOwnershipHeartbeatDataModule` | creates `character_ownership_heartbeat` | yes |
+| 76 | `Characters.Pets.PetUntrainAndDemonDataModule` | adds columns `character_pet.CreatedBySpell`, `character_pet.ResetTalentsCost`, `character_pet.ResetTalentsTime` | yes |
+| 77 | `Honor.HonorCpOperationDataModule` | adds columns `character_honor_cp.operation_id`; repairs the model's indexes of `character_honor_cp` | yes |
 
 ## `world`
 
@@ -175,5 +177,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 67 | `World.Rules.PlayerbotWorldPvpGoalDataModule` | no changes |
 | 68 | `World.Creatures.CreatureSpellListDataModule` | creates `creature_spell_list_entry`, `creature_spell_list`, `creature_spell_targeting`, `combat_condition`, `unit_condition`; adds columns `creature_template.SpellList` |
 | 69 | `World.Creatures.SpellScriptTargetConditionDataModule` | adds columns `spell_script_target.TargetCondition` |
+| 70 | `Content.Items.ItemTextWorldDataModule` | creates `page_text`, `item_enchantment_template` |
+| 71 | `World.Creatures.DbGameObjectScriptDataModule` | creates `dbscripts_on_go_use`, `dbscripts_on_go_template_use` |
+| 72 | `World.Pets.PetNameGenerationWorldDataModule` | creates `pet_name_generation` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.
