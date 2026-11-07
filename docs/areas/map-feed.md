@@ -221,3 +221,12 @@ thread or whichever thread sends), at the cost of one array read when no tap is 
 payload and tries a bounded queue of 256 packets; a packet that does not fit is dropped and counted (`dropped` in `tapEnd`). The
 connection's own pump task writes the queue into `packet` lines through the connection's bounded outbound queue. A tool that stops
 reading therefore loses packets; the world thread, the session's reader and its senders never wait for it.
+
+## Mock client observer
+
+`arcane-mock playbot --observe true` serves what the mock client itself sees (the objects whose positions its connection has read from the world, and itself) as a map feed of its own, in protocol 1 above, on the pipe `arcanecore-mapfeed-{pid}` of the mock client's process id. Atlas connects to it as to a daemon, so the client's view can be drawn next to the server's, with these differences: the feed publishes the map the client logged in on and does not follow a later map change, a wrong protocol in `hello` is refused but the connection stays open, and `unknown-op` and refused queries carry the request's id when it has one. Code: `tools/ArcaneCore.MockClient/Observer`; tests: `ObserverFeedTests`.
+
+* Frames carry kinds `player` (the client), `creature` (units and pets) and `gameobject` (objects and static transports; a moving transport guid, such as a ship or zeppelin, is left out), each with guid, position and, for a creature or object, the template entry from its guid. There are no names, health, motion, splines or routes: the client does not have them. `hello` answers revision 1.
+* A `query` is refused `not-loaded`: the mock client holds no terrain, model or navmesh data. `subscribe` for a map other than the client's is refused `map-not-loaded`.
+* One Atlas at a time; the pipe is current-user-only. The view is published by the thread that reads world frames, about every 250 ms, so it can lag the world by that much.
+* Off unless asked for; it opens a pipe, and only for the bounded run of the playbot.

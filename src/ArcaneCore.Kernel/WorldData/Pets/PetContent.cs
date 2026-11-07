@@ -124,6 +124,9 @@ public sealed class PetContent
         return first[random.Next(first.Length)] + second[random.Next(second.Length)];
     }
 
+    /// <summary>Every creature entry that has level stats or create spells (a summoned pet or guardian template), in no particular order, possibly with repeats.</summary>
+    public IEnumerable<uint> Entries => _levelStats.Keys.Concat(_createSpells.Keys);
+
     /// <summary>vmangos ObjectMgr::GetPetLevelInfo: the stats of <paramref name="entry"/> at <paramref name="level"/> (capped at <see cref="MaxLevel"/>), or null.</summary>
     public PetLevelStats? FindLevelStats(uint entry, int level)
         => _levelStats.TryGetValue(entry, out PetLevelStats[]? levels) ? levels[Math.Clamp(level, 1, MaxLevel) - 1] : null;

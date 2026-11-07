@@ -177,6 +177,7 @@ internal sealed class MapFeedActions : IFeedExtension
         FeedRole role = connection.Role;
         string? operatorName = role == FeedRole.Local ? connection.Identity.Operator : null;
         int settleSeconds = _options.SettleSeconds;
+        uint[] summonTemplates = MapFeedSummonTemplates.Compute(_services);
         await connection.QueueAsync(FeedExtensionJson.Result(id, ok: true, "caps", writer =>
         {
             writer.WriteBoolean("actions"u8, gate.On);
@@ -202,6 +203,14 @@ internal sealed class MapFeedActions : IFeedExtension
                 {
                     writer.WriteStringValue(template.Id);
                 }
+            }
+
+            writer.WriteEndArray();
+            // The static summon/totem template set (MapFeedSummonTemplates): the public listener's fallback when links cannot be asked.
+            writer.WriteStartArray("summonTemplates"u8);
+            foreach (uint entry in summonTemplates)
+            {
+                writer.WriteNumberValue(entry);
             }
 
             writer.WriteEndArray();

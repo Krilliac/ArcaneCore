@@ -27,6 +27,9 @@ public sealed class TotemFeature(IServiceProvider services, ILogger<TotemFeature
     /// <summary>The totem system; null until attached or when disabled.</summary>
     public TotemSystem? System { get; private set; }
 
+    /// <summary>The loaded <c>totem_spell</c> rows (empty until attached); read by the map feed's <c>caps</c> answer for the static totem template set.</summary>
+    public TotemContent Content { get; private set; } = TotemContent.Empty;
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
@@ -43,6 +46,7 @@ public sealed class TotemFeature(IServiceProvider services, ILogger<TotemFeature
             }
         }
 
+        Content = content;
         var system = new TotemSystem(
             spells.System,
             map => creatures.GetOrCreateSystem(map),
