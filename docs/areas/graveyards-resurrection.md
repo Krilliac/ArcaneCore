@@ -144,7 +144,9 @@ own wording.
   master), then loses the aura right before it comes back at full health without its corpse (`MapCombat.ResurrectBySpiritGuide`, so a
   refused resurrection keeps the aura), and its pet comes back (`SpellSystem.PlayerSpiritHealed`, docs/integration/pets.md).
 - **Hot reload and GM link editing.** `WorldGraveyards.Build`/`Replace` swap the catalog atomically, but nothing registers a
-  `.reload game_graveyard_zone` yet, and `.linkgrave` (which writes the database in vmangos) and the dead `.unstuck` branch are not provided.
+  `.reload game_graveyard_zone` yet, and `.linkgrave` (which writes the database in vmangos) is not provided. The dead `.unstuck` branch is: sickness, a one-hour Undying Soul cooldown and a plain teleport
+  (`GraveyardRepopService.TeleportGhostToGraveyard`) to the closest linked graveyard, else Westfall (safe location 4, Alliance) or the Barrens (10, Horde), as
+  vmangos HandleUnstuckCommand (TeleportCommands.cpp:1068-1105). It does not go through `RepopAtGraveyard`, so a ghost that claims `OnTransport` is not resurrected.
 - **Offline `.revive`** answers "Player not found!" (vmangos converts the offline corpse); the pet branch of RESURRECT_NEW (a dead pet target)
   is not modelled; the request is in memory only.
 - **Durability** is not skipped for `SPELL_ATTR_EX3_NO_DURABILITY_LOSS` spells (`Kill` is not told the spell).
