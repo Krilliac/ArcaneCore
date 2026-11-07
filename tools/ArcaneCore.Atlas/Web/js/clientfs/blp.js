@@ -54,8 +54,8 @@ export function parseBlpHeader(file) {
         hasMips: file[11],
         width,
         height,
-        offsets: new Array(MAX_LISTED_LEVELS),
-        sizes: new Array(MAX_LISTED_LEVELS),
+        offsets: Array.from({ length: MAX_LISTED_LEVELS }),
+        sizes: Array.from({ length: MAX_LISTED_LEVELS }),
         fullLevelCount: 0,
         validLevelCount: 0,
     };

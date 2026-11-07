@@ -46,7 +46,7 @@ function m2Bytes({ vertices, lookup, triangles, boundingIndices = [], boundingVe
     }));
     const lookupOffset = put(() => lookup.forEach((v) => body.u16(v)));
     const triangleOffset = put(() => triangles.forEach((v) => body.u16(v)));
-    const viewOffset = put(() => body.u32(lookup.length).u32(lookupOffset).u32(triangles.length).u32(triangleOffset).raw(new Array(28).fill(0)));
+    const viewOffset = put(() => body.u32(lookup.length).u32(lookupOffset).u32(triangles.length).u32(triangleOffset).raw(Array.from({ length: 28 }, () => 0)));
     const bIndexOffset = put(() => boundingIndices.forEach((v) => body.u16(v)));
     const bVertexOffset = put(() => boundingVertices.forEach(([x, y, z]) => body.f32(x).f32(y).f32(z)));
     hv.setUint32(0x08, name.length + 1, true);
