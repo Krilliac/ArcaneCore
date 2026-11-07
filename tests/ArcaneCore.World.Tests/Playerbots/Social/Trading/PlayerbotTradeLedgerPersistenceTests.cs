@@ -246,7 +246,7 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
             extraServices: services => services.AddSingleton<IPlayerbotTradeRecordStore>(store));
         var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
-        Guid survivor = Assert.IsType<Guid>((await feature.CreateAsync("Survivorledger", 1, 1)).BotId);
+        Guid survivor = Assert.IsType<Guid>((await feature.CreateAsync("Survledger", 1, 1)).BotId);
         Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Goneledger", 1, 1)).BotId);
         int survivorCharacter = (await owners.FindAsync(survivor))!.CharacterId, goneCharacter = (await owners.FindAsync(gone))!.CharacterId;
         ulong aboutGone = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;

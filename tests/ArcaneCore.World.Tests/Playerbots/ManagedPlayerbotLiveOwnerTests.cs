@@ -380,7 +380,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
             extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()));
         host.World.Ownership = Owning(1);
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
-        Guid id = (await feature.CreateAsync("Faultconflict", 1, 1)).BotId!.Value;
+        Guid id = (await feature.CreateAsync("Faultconf", 1, 1)).BotId!.Value;
         owners.BeforeUpdate = (bot, _) =>
         {
             if (bot.State == ManagedPlayerbotState.Faulted) owners.RefuseUpdatesOf(id); // another writer took the row between the Starting write and the fault row
@@ -404,7 +404,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
             extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()), configure: o => o.MaxFaults = 1); // one fault would already disable the bot (an Error anomaly)
         host.World.Ownership = Owning(1); // the login map (0) is not owned here: the login is refused and no worker holds the character, so the start faults
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
-        Guid id = (await feature.CreateAsync("Faultconflictrestore", 1, 1)).BotId!.Value;
+        Guid id = (await feature.CreateAsync("Faultconfres", 1, 1)).BotId!.Value;
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-lifecycle" && n.Detail.Contains(id.ToString("D"), StringComparison.Ordinal));
         owners.BeforeUpdate = (bot, _) =>
         {
@@ -430,7 +430,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
             extraServices: s => s.AddSingleton<IPlayerbotLiveOwnerProbe>(new FakeLiveOwners()), configure: o => o.FaultBackoffSeconds = 3600);
         host.World.Ownership = Owning(1);
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
-        Guid id = (await feature.CreateAsync("Faultwrittenrestore", 1, 1)).BotId!.Value;
+        Guid id = (await feature.CreateAsync("Faultwrres", 1, 1)).BotId!.Value;
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subsystem == "bot-lifecycle" && n.Detail.Contains(id.ToString("D"), StringComparison.Ordinal));
 
         PlayerbotOperationResult result = await feature.StartForRetryAsync(id, CancellationToken.None);

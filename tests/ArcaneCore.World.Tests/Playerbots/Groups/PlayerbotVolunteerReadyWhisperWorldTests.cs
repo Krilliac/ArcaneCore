@@ -66,7 +66,7 @@ public sealed class PlayerbotVolunteerReadyWhisperWorldTests : PlayerbotVoluntee
             options.Groups.LevelRange = range;
         });
         await world.World.PrepareCharacterAsync("VOLHIVOICE", "Volhivoice", AccountSecurity.Player);
-        var bot = await WaitingBotAsync(world, "Volhivoicebot", Warrior, 1, []);
+        var bot = await WaitingBotAsync(world, "Volhivbot", Warrior, 1, []);
         await using WorldTestClient player = await world.World.EnterWorldAsync("VOLHIVOICE", "Volhivoice", AccountSecurity.Player);
         await world.OnWorldAsync(() =>
         {
