@@ -43,7 +43,7 @@ documented server policy rather than an assertion of vanilla fidelity.
   `Player.cpp:18746-18787` corroborates selection and `SaveToDB` omits the offer.
 - The developer requested [WoWWiki's patch 1.12.1 archive](https://wowwiki-archive.fandom.com/wiki/Patch_1.12.1)
   and [Wowhead Classic](https://www.wowhead.com/classic) on 2026-10-04. They are
-  now in charter §4 and the roadmap's reference catalog, with patch/version,
+  now in the reference rules of [contributing](../guide/contributing.md) and the roadmap's reference catalog, with patch/version,
   date and vanilla-corroboration rules.
 - [Wowhead's Classic item 19290](https://www.wowhead.com/classic/item=19290/darkmoon-card-twisting-nether)
   corroborates the item's ten-percent resurrection tooltip. Its comments

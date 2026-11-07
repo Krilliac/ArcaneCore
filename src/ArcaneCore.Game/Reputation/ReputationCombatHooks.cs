@@ -1,5 +1,8 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Reputation;
 
@@ -50,5 +53,45 @@ public sealed class ReputationCombatHooks(CombatHooks fallback, ReputationReacti
         }
 
         return _resolver.TryCanAttack(attacker, victim, out bool canAttack) ? canAttack : _fallback.CanAttack(attacker, victim);
+    }
+
+    /// <summary>
+    /// vmangos Creature::OnEnterCombat (Creature.cpp:3678-3686), for a creature that just entered combat with <paramref name="player"/>: its faction
+    /// (faction template row, then the faction's reputation list slot, Creature.cpp:639-642) is set at war so the player can attack back, remembered as
+    /// temporary, and the client told (SMSG_SET_FACTION_ATWAR, Player::SendFactionAtWar). Nothing happens for a faction with no reputation slot or
+    /// one that is already at war. World thread.
+    /// </summary>
+    public void OnCreatureEnteredCombat(Unit creature, Player player)
+    {
+        ArgumentNullException.ThrowIfNull(creature);
+        ArgumentNullException.ThrowIfNull(player);
+        // vmangos fixes m_reputationId from the creature's spawn template faction (Creature.cpp:639-642), so a charmed or scripted faction change
+        // does not move it; a unit that is no Creature (no spawn template) has only its current faction template.
+        FactionTemplateRecord? factionTemplate = creature is Creature spawned ? _resolver.Templates.Find(spawned.Template.Faction) : _resolver.TemplateOf(creature);
+        if (factionTemplate is not { } template || _resolver.Factions.Find(template.Faction) is not { CanHaveReputation: true } faction
+            || _resolver.ReputationOf(player) is not { } reputation || !reputation.StartTemporaryAtWar(faction))
+        {
+            return;
+        }
+
+        player.Session.Send(WorldOpcode.SmsgSetFactionAtwar, ReputationPackets.SetFactionAtWar(faction.ReputationListId, atWar: true));
+    }
+
+    /// <summary>
+    /// vmangos Unit::ClearInCombat for a player (Unit.cpp:6111-6121) runs Player::ClearTemporaryWarWithFactions: the factions that went to war
+    /// through <see cref="OnCreatureEnteredCombat"/> are made peaceful again (when above Hostile) and the client is told per faction. World thread.
+    /// </summary>
+    public void OnPlayerLeftCombat(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_resolver.ReputationOf(player) is not { } reputation)
+        {
+            return;
+        }
+
+        foreach (int listId in reputation.ClearTemporaryAtWar())
+        {
+            player.Session.Send(WorldOpcode.SmsgSetFactionAtwar, ReputationPackets.SetFactionAtWar(listId, atWar: false));
+        }
     }
 }

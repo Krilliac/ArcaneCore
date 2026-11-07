@@ -19,6 +19,9 @@ public sealed class SpellBonusWiringTests
     private const uint FlashHeal = 4003;
     private const uint RenewLike = 4004;
     private const uint FireDot = 4005;
+    private const uint IgniteLike = 4006;
+    private const uint MageDotOtherFlag = 4007;
+    private const uint PriestDotIgniteFlag = 4008;
     private const uint BonusDamageFrost = 4101;
     private const uint BonusDamageFire = 4102;
     private const uint BonusHealing = 4103;
@@ -29,10 +32,14 @@ public sealed class SpellBonusWiringTests
     private const uint HealingTakenDown = 4108;
     private const uint SpiritHealing = 4109;
     private const uint MeleeDot = 4110;
+    private const uint FireDamagePercent = 4111;
     private const uint RangedBolt = 4202;
     private const int FrostMask = 0x10;
     private const int FireMask = 0x04;
     private const int AllSchools = 0x7F;
+    private const uint MageFamily = 3;
+    private const uint PriestFamily = 6;
+    private const ulong IgniteFlag = 1UL << 27; // vmangos SpellClassMask.h CF_MAGE_IGNITE; 12654 is the only spell with it in family 3 (build 5875)
 
     private sealed class RecordingSink : IDamageSink
     {
@@ -82,6 +89,18 @@ public sealed class SpellBonusWiringTests
         Range = new SpellRange(0, 30),
     };
 
+    private static SpellInfo FamilyFireDot(uint id, uint family, ulong flags) => SpellTestKit.Spell(
+        id, SpellTestKit.Effect(SpellEffectName.ApplyAura, 20, SpellImplicitTarget.UnitEnemy, AuraType.PeriodicDamage, amplitude: 3000)) with
+    {
+        Duration = new SpellDuration(12000, 0, 12000),
+        School = SpellSchool.Fire,
+        SpellFamilyName = family,
+        SpellFamilyFlags = flags,
+        SpellVisual = 1,
+        RangeIndex = 4,
+        Range = new SpellRange(0, 30),
+    };
+
     private static SpellTestKit NewKit(bool install = true, CasterOptions? options = null)
     {
         var kit = new SpellTestKit(
@@ -116,6 +135,10 @@ public sealed class SpellBonusWiringTests
                 RangeIndex = 4,
                 Range = new SpellRange(0, 30),
             },
+            FamilyFireDot(IgniteLike, MageFamily, IgniteFlag),
+            FamilyFireDot(MageDotOtherFlag, MageFamily, 1UL << 26),
+            FamilyFireDot(PriestDotIgniteFlag, PriestFamily, IgniteFlag),
+            Aura(FireDamagePercent, AuraType.ModDamagePercentDone, 50, FireMask),
             Aura(BonusDamageFrost, AuraType.ModDamageDone, 100, FrostMask),
             Aura(BonusDamageFire, AuraType.ModDamageDone, 100, FireMask),
             Aura(BonusHealing, AuraType.ModHealingDone, 110, AllSchools),
@@ -233,6 +256,40 @@ public sealed class SpellBonusWiringTests
 
         // Amplify Magic +60 on the target: 40 + 60 * 0.2 = 52 per tick.
         Assert.Equal([52u], sink.Damage);
+    }
+
+    // vmangos SpellCaster.cpp:1571-1573 "Ignite damage already includes modifiers". IgniteScript casts 12654 with CastCustomSpell, so the amount reaches the
+    // snapshot like any damage over time; dmgClass 0 keeps it off the melee route and attributesEx3 0 off IgnoresCasterModifiers.
+    [Theory]
+    [InlineData(IgniteLike, 30)] // the share as given
+    [InlineData(MageDotOtherFlag, 75)] // (30 + 100 * 0.2) * 1.5
+    [InlineData(PriestDotIgniteFlag, 75)]
+    public void IgniteDamageOverTime_SkipsTheDoneSide_OnlyForTheMageFamilyFlag(uint spell, int expected)
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, _) = Setup(kit);
+        Cast(kit, caster, BonusDamageFire, caster);
+        Cast(kit, caster, FireDamagePercent, caster);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastCustomSpell(caster, spell, SpellCastTargets.ForUnit(target.Guid), 30));
+
+        SpellAura aura = kit.System.GetAuras(target).Single(h => h.Spell.Id == spell).Auras.OfType<SpellAura>().Single();
+        Assert.Equal(expected, aura.Amount);
+    }
+
+    [Fact]
+    public void IgniteDamageOverTime_KeepsTheTargetSideOnItsTicks()
+    {
+        using SpellTestKit kit = NewKit();
+        (Player caster, Player target, RecordingSink sink) = Setup(kit);
+        Cast(kit, caster, BonusDamageFire, caster);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastCustomSpell(caster, IgniteLike, SpellCastTargets.ForUnit(target.Guid), 30));
+
+        Cast(kit, target, AmplifyLike, target);
+        kit.Advance(3000);
+
+        // Amplify Magic +60 on the target: 30 + 60 * 0.2 = 42 per tick; the caster's +100 fire stays out.
+        Assert.Equal([42u], sink.Damage);
     }
 
     [Fact]

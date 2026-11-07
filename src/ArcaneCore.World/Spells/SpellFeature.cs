@@ -99,6 +99,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         _world = world;
         System.Units = new WorldSpellUnitResolver();
         System.Damage = new WorldSpellDamageSink();
+        System.HasChannelKit = visual => ArcaneCore.World.Gm.Events.LiveFxData.Of(world).Visuals?.Find(visual) is { ChannelKit: > 0 };
 
         // Attach runs once before the world thread starts, so blocking on the startup loads is
         // safe (WorldHost loads the character name cache the same way, just before this).
@@ -118,7 +119,12 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             System.CombatRules = scope.ServiceProvider.GetService<ISpellCombatRules>() ?? new VanillaSpellCombatRules();
             System.Summons = scope.ServiceProvider.GetService<ISpellSummonSink>();
             SocialFeature? social = scope.ServiceProvider.GetService<SocialFeature>();
-            System.Groups = social is null ? NoGroupResolver.Instance : new WorldSpellGroups(() => social.Context.Groups);
+            var worldGroups = new WorldSpellGroups(() => social?.Context.Groups);
+            System.Groups = social is null ? NoGroupResolver.Instance : worldGroups;
+            if (social is not null)
+            {
+                CombatHooks.RegisterSameGroup(world, worldGroups.AreInSameGroup);
+            }
             System.Teleports = new WorldSpellTeleportSink(() => teleports.Teleports);
             FactionTemplateCatalog? factionTemplates = scope.ServiceProvider.GetService<FactionTemplateCatalog>();
             if (factionTemplates is null)

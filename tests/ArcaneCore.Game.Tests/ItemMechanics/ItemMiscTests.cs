@@ -107,6 +107,15 @@ public sealed class ItemMiscTests
     }
 
     [Fact]
+    public void OpenContainer_Layout_IsTheBagGuidAlone()
+    {
+        // vmangos Server/Packets/Item.cpp:204-212: SMSG_OPEN_CONTAINER carries one u64 GUID.
+        byte[] payload = ItemMiscPackets.OpenContainer(ObjectGuid.Item(77));
+        Assert.Equal(8, payload.Length);
+        Assert.Equal(ObjectGuid.Item(77).Value, BitConverter.ToUInt64(payload, 0));
+    }
+
+    [Fact]
     public void ReadItemFailed_Layout_GuidReasonGuid()
     {
         byte[] payload = ItemMiscPackets.ReadItemFailed(ObjectGuid.Item(5));

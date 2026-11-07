@@ -29,14 +29,33 @@ public sealed partial class GameObjectMapSystem
             return GameObjectUseResult.Ok;
         }
 
+        StartTemplateUseScript(user, go); // dbscripts_on_go_template_use (GameObject.cpp:1489-1490), whatever the type
         switch (go.Type)
         {
             case GameObjectType.Door:
-                return ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+            {
+                // A player user asks the instance script first, as GameObject::Use does for any player (scriptReturnValue); it then skips the
+                // guid script (GameObject.cpp:1505).
+                bool tookUse = user is Player doorUser && InstanceScriptTookUse(doorUser, go);
+                GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
+                if (!tookUse)
+                {
+                    StartGuidUseScript(user, go); // GameObject.cpp:1506
+                }
+
+                return result;
+            }
+
             case GameObjectType.Button:
             {
+                bool tookUse = user is Player buttonUser && InstanceScriptTookUse(buttonUser, go); // GameObject.cpp:1528
                 GameObjectUseResult result = ActivateDoorOrButton(go, go.Template.AutoCloseSeconds());
                 TriggerLinkedTrap(go, user);
+                if (!tookUse)
+                {
+                    StartGuidUseScript(user, go); // GameObject.cpp:1529
+                }
+
                 return result;
             }
 
@@ -49,7 +68,7 @@ public sealed partial class GameObjectMapSystem
             case GameObjectType.Goober:
                 return UseGooberByUnit(user, go);
             default:
-                return GameObjectUseResult.Unsupported;
+                return Unsupported(user, go, "unit-use");
         }
     }
 

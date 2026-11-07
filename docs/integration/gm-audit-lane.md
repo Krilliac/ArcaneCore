@@ -118,8 +118,8 @@ and say so.
   a second ticket answers CREATE_ERROR (3), not ALREADY_EXIST (1, which vmangos' 1.12 handler never sends); a create sends no time
   response (only get-ticket does); withdrawing without a ticket answers nothing. Escalation and "read by a GM" are always 0 (no
   escalation queue, viewing is not tracked). A create shorter than the fixed part is still answered with the create-error code; the
-  position fields are skipped and the server's own position stored. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328) is a later-client opcode and
-  is not sent. vmangos' "completed ticket" (the GM answer appended to the status text) has no counterpart: a response here leaves the
+  position fields are skipped and the server's own position stored. `SMSG_GM_TICKET_STATUS_UPDATE` (0x328, in vmangos Opcodes_1_12_1.h:809) is
+  sent to an online owner: status 1 on `.ticket respond`, status 2 on `.ticket close` and `.ticket delete` (no survey status). vmangos' "completed ticket" (the GM answer appended to the status text) has no counterpart: a response here leaves the
   ticket open.
 * **Deferred:** `.gm visible` (needs a GM-invisibility concept in the visibility code); the cores' full-account `.gm list` (needs an
   account-listing method on `IAccountAdmin`, whose lane is also editing the ban seam); `mute` of an offline character (needs the account
@@ -134,3 +134,31 @@ and say so.
 host, with an in-memory `IGmAuditStore` that can be told to fail) and `tests/ArcaneCore.Data.Tests/Gm/GmAuditStoreTests.cs` (SQLite,
 MariaDB and PostgreSQL). The generated references (`docs/reference/*`: command, configuration and schema pages) are not regenerated here; their
 three comparison tests fail until the orchestrator does that after the merge.
+
+## The ticket assistant
+
+ArcaneCore only, off by default (`World:GmTicketAssistant:Enabled`). `GmTicketAssistant` (`src/ArcaneCore.World/Gm/TicketAssistant`) polls the open
+tickets and handles one at a time, skipping any it has handled or a GM has answered. A model, when the playerbot chat stack has one
+(`PlayerbotTicketAssistantModel`, behind the `ITicketAssistantModel` seam), chooses the category (`TicketCategory`, parsed strictly: anything else is `Other`) and, for a Question ticket, also writes the player-visible answer that closes it. `World:GmTicketAssistant:UseModel` is false by default: with no model, or on a failure, a keyword classifier chooses and defaults to `Other`, and no answer is drafted, so a Question ticket is left to a GM. A drafted answer passes `GmTicketAssistant.ScreenDraft` (length, no client escapes or links, only dot commands the FAQ names) before it is sent. The ticket text is untrusted. Players on a map other than the two continents (dungeons, raids, battlegrounds) are never touched.
+
+What the assistant does is decided by code from the category and the facts (`TicketPolicy`), each action behind a named evidence predicate, only
+for the ticket's author, limited per account (`MaxActionsPerAccountPerDay`, `ActionCooldownSeconds`) and written to the GM audit tail
+(`.arcane gmlog`) with the assistant as actor:
+
+| Category | Action | Evidence |
+|---|---|---|
+| Question | an FAQ answer from the model (moderated, redacted), then close | the model drafted one |
+| Stuck | the `.unstuck` path, then close. A ghost is sent to the graveyard first and pays the sickness and the cooldown only when the teleport starts; with no graveyard or a refused teleport nothing changes and the ticket stays open for a GM (`.unstuck` itself keeps the vmangos reply and penalty in that case) | no movement for `StuckIdleSeconds` |
+| Stuck | clear the combat state, then close | in combat for `StaleCombatSeconds` with no attacker, victim or threat |
+| DeadCantRes | the ghost is sent to the graveyard a released spirit would go to and resurrected once it stands there, with sickness and durability loss (the spirit healer rules), then close. No graveyard for the ghost, a refused teleport, or a ghost on a transport: nothing happens and the ticket goes to a GM | seen dead for `DeadSeconds` (counted from the assistant's first sight of the death, not from the release) and a ghost; an unreleased body is left to release its spirit |
+| anything else | "logged for a GM", an internal note (`.ticket show`), the ticket stays open | none |
+
+An `under-map` anomaly is the client's own movement packet as the server applied it (AntiCheat defaults to Log), so one crafted packet can produce it. It is shown to the GM in the ticket's note and is never evidence for a teleport or a resurrection: the assistant does not teleport an author to the bind point or resurrect anyone in place.
+
+With `UseModel` off the category comes from keywords alone. "stuck" and "trapped" count only when the text names no quest and no stronger phrase matched, so "my quest is stuck" is a quest ticket (left to a GM) and not a Stuck one that would cast Undying Soul, which kills a living player when it ends. A model can still call such a ticket Stuck, so weigh that, and `StuckIdleSeconds`, before setting `Enabled` with `UseModel` on.
+
+The ticket is read again on the world thread just before the fix and again just before the answer is written: a ticket a GM answered or the player withdrew in between is not acted on, or not written to (the outcome is still audited). The model's one-line summary (GM note, audit line) passes the same screen as a drafted answer (no client escape, link, bare or spelled-out domain, slash command or unknown dot command; with the playerbot chat stack it is also stripped of personal data and screened by the local output filter), and a summary that fails is dropped while the category stays. The playerbot model moderates, and sends, the same first 255 characters of the ticket. Stale combat is never read for a duel, a player any creature still holds on its threat list (a dead or out-of-range holder counts too, so such a player escalates instead of being cleared), or a player carrying another caster's periodic damage aura (whatever its polarity). A forced run (`.ticket assistant run`) only overrides the answer seen when the ticket was picked: an answer that arrives while the model thinks is never overwritten. Limits: under `-Topology Split` an author on another worker reads as offline and is escalated, and a ghost whose graveyard is on another worker counts as sent when the transfer starts (a refused transfer leaves a ghost that paid the unstuck cost; the daily and cooldown limits bound it); the evidence log hears the process-wide anomaly ledger, which only matters to several hosts in one process.
+
+Never given by any action: items, gold, experience, reputation, levels; never done: bans, kicks, mutes or account changes. Not delivered:
+a stuck taxi flight, transport passenger, cast, loot window or trade window reset (no clean API for the evidence), a visible persona on GM
+Island, and tickets from whispers. `.ticket assistant status|on|off|run $id` switches and tests it: `status` needs a Game Master, `on`, `off` and `run` an Administrator.

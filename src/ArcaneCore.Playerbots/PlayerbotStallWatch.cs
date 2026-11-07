@@ -285,16 +285,17 @@ internal sealed partial class PlayerbotStallWatch
     /// <summary>
     /// This bot dead-end-pinned the cell containing <c>(x, y)</c>: tell the world. Returns what newly became a world pin, or null.
     /// <paramref name="inCutRegion"/> (the cell lies in a region that joins two large parts of the mesh,
-    /// <see cref="PlayerbotNavigation.IsCutRegionAt"/>) tells nothing: stalls in a tunnel are bots in each other's way, and a world pin
-    /// there would have every bot avoid the only way between the two parts (Timbermaw Hold, issues #1478 and #1479).
+    /// <see cref="PlayerbotNavigation.IsCutRegionAt"/>) tells little: stalls in a tunnel are bots in each other's way (Timbermaw Hold, issues #1478
+    /// and #1479), so it counts only towards a crowd (<see cref="PlayerbotSharedPins.CutRegionBotsToShare"/>). Dropping it outright let a spot in such a
+    /// region stall 53 bots with no world pin (Deadwind Pass, audit cid 44): a cut region is often open ground, and a world pin refuses no plan.
     /// </summary>
     internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs, bool inCutRegion = false)
-        => inCutRegion ? null : SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs);
+        => SharedPins?.Report(mapId, instanceId, x, y, bot, nowMs, inCutRegion);
 
     /// <summary>
     /// <see cref="ReportDeadEndPin(ulong, uint, uint, float, float, uint, bool)"/> for a cell in <paramref name="region"/> of
     /// <paramref name="graph"/> (null: not built; -1: none): a cut region of at most <paramref name="maxCutRegionPolygons"/> polygons
-    /// (<see cref="PlayerbotNavigation.IsCutRegion"/>, <see cref="PlayerbotOptions.CutRegionMaxPolygons"/>) tells nothing.
+    /// (<see cref="PlayerbotNavigation.IsCutRegion"/>, <see cref="PlayerbotOptions.CutRegionMaxPolygons"/>) counts only towards a crowd.
     /// </summary>
     internal string? ReportDeadEndPin(ulong bot, uint mapId, uint instanceId, float x, float y, uint nowMs,
         ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region, int maxCutRegionPolygons)

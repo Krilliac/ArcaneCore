@@ -100,7 +100,7 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   1–99 (miss = SPELL_MISS_RESIST); melee/ranged spells roll miss/dodge/parry from the combat
   area's roll input. A miss sends SMSG_SPELLLOGMISS, lists the target as missed in SMSG_SPELL_GO
   and deals 0 damage to a hostile target so combat starts.
-- Crit: magic = 5% player base + `MOD_SPELL_CRIT_CHANCE(_SCHOOL)`, ×1.5; melee/ranged =
+- Crit: magic = base + `MOD_SPELL_CRIT_CHANCE(_SCHOOL)` (+ `MOD_ATTACKER_SPELL_CRIT_CHANCE` on a hostile target), ×1.5; the base is the intellect table value for players when `IntellectSpellCritSource` is installed (the world daemon installs it; see stats.md) and a flat 5% otherwise (`PlayerBaseSpellCrit`); melee/ranged =
   `PLAYER_(RANGED_)CRIT_PERCENTAGE` (creatures 5%) + `MOD_CRIT_PERCENT`, ×2; `CANT_CRIT` and
   damage class NONE never crit. Heals can crit. The damage log carries hitInfo 0x2.
 - Partial resist (magic, non-holy, non-binary spells, direct and periodic): average fraction =
@@ -166,19 +166,16 @@ and `DmgMultiplier1-3`), `SpellFeature.cs`, the spell test kits and `SpellTestSe
   an earlier packed-GUID form was a protocol-audit finding, see docs/integration/protocol-audit-codex.md).
 - No SMSG_SPELLDISPELLOG and no dispel resistance; the interrupt's SMSG_SPELL_COOLDOWN names only
   the interrupted spell, not every spell of the school.
-- Summon is a seam only: no creature/pet/totem summoning exists yet (without a sink the effect is
-  reported as not implemented).
-- Player base spell crit is a flat 5% until the stats area provides intellect-based crit; the
-  resist distribution is the simplified two-step spread; binary spells get no extra resist chance
-  (they are only excluded from partial resists); no spell penetration or hit-from-gear.
-- Saves happen on logout only: no periodic autosave or crash-safe save of auras/cooldowns.
+- Summon goes through `ISpellSummonSink` (implemented by `SummonService`); without a sink the effect is
+  reported as not implemented.
+- Player base spell crit comes from the intellect table (`IntellectSpellCritSource`); the
+  partial-resist distribution is the retail table when `SpellRuleOptions.ResistTablePath` loads one and a mean-preserving quarter-step approximation otherwise; spell hit comes from `ModSpellHitChance` auras, `ModTargetResistance` auras act as spell penetration, and binary spells scale their hit chance by the victim's resist chance (`SpellCombatRules.MagicHitPercent`).
+- Auras and cooldowns are saved at logout and at a cluster transfer capture only. The periodic character autosave (`WorldRuntime.Autosave.cs`) snapshots the character state without them, so a crash loses them.
 - Line of sight covers static models only (vmap-los limits: no terrain or game-object LOS).
-- Proc charges are persisted and restored but nothing consumes them yet (no proc system).
+- Proc charges are persisted and restored; the proc system lives in `Spells/Procs` (`SpellSystem.Procs.cs`, `BuiltInProcHandlers.cs`) and runs a per-spell `IProcScript` first (for example Ignite) and then the built-in handler for the aura type; an aura type with neither procs as OK and spends a charge, as vmangos `HandleNULLProc` does (see `docs/areas/procs.md`).
 - Melee damage forwarding needs the combat area's `MapCombat`; units that take damage outside it
   call `SpellSystem.OnDamageTaken` themselves.
 
 ## Suggested next slice
 
-Proc system (`PROC_FLAG_*`, charges consumption, `SPELL_AURA_PROC_TRIGGER_SPELL`), stat-driven
-spell crit/hit, totems and summoned creatures through `ISpellSummonSink`, and an autosave hook so
-auras/cooldowns survive a crash.
+Save auras and cooldowns from the periodic autosave so they survive a crash. Stat-driven spell crit (`IntellectSpellCritSource`) and spell hit (`ModSpellHitChance`) already exist.

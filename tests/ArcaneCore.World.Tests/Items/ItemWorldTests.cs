@@ -106,6 +106,36 @@ public sealed class ItemWorldTests
     }
 
     [Fact]
+    public async Task AutoEquippingABag_SendsOpenContainerWithTheBagGuid_AndAutoEquippingASwordDoesNot()
+    {
+        // vmangos HandleAutoEquipItemOpcode (ItemHandler.cpp:225-227): a bag that ends up in a bag slot is opened on the client.
+        const uint pouch = 4496;
+        ItemTestContent content = Content();
+        content.Templates.Templates.Add(new ItemTemplate { Entry = pouch, Class = 1, Name = "Small Brown Pouch", DisplayId = 3, Quality = 1, InventoryType = 18, ContainerSlots = 6 });
+        await using WorldTestHost host = Start(content);
+        await using WorldTestClient client = await host.EnterWorldAsync(Account, Name);
+
+        // A sword: unequip it, equip it again; nothing opens.
+        await client.SendAsync(WorldOpcode.CmsgSwapItem, [InventorySlots.Bag0, 25, InventorySlots.Bag0, InventorySlots.MainHand]);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(Name)!.Inventory.GetItem(InventorySlots.Bag0, 25)?.Entry == 25, "sword unequipped");
+        await client.SendAsync(WorldOpcode.CmsgAutoequipItem, [InventorySlots.Bag0, 25]);
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer(Name)!.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.MainHand)?.Entry == 25, "sword equipped");
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgOpenContainer);
+
+        // A bag: it lands in a bag slot and the client is told to open it.
+        (ulong bagGuid, byte bagSlot) = await host.PlayerStateAsync(Name, p =>
+        {
+            Assert.Equal(InventoryResult.Ok, p.Inventory.AddItem(pouch, 1, out Item? bag));
+            return (bag!.Guid.Value, bag.Slot);
+        });
+        await client.SendAsync(WorldOpcode.CmsgAutoequipItem, [InventorySlots.Bag0, bagSlot]);
+
+        byte[] open = await client.ReadUntilAsync(WorldOpcode.SmsgOpenContainer);
+        Assert.Equal(bagGuid, BinaryPrimitives.ReadUInt64LittleEndian(open));
+        Assert.Equal(8, open.Length);
+    }
+
+    [Fact]
     public async Task InvalidInventoryDestination_ReportsSlotError_WithoutMovingItems()
     {
         ItemTestContent content = Content();

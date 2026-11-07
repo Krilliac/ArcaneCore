@@ -4,6 +4,7 @@ using System.Net;
 using System.Text.Json;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.MockClient.Observer;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
@@ -11,7 +12,7 @@ using ArcaneCore.Protocol;
 namespace ArcaneCore.MockClient.Playbots;
 
 internal sealed record PlaybotRunOptions(IPEndPoint Realm, string Account, string Password, string Character,
-    int Seconds = 120, int Steps = 120, uint AttackEntry = 0, bool Movement = true);
+    int Seconds = 120, int Steps = 120, uint AttackEntry = 0, bool Movement = true, bool Observe = false);
 internal sealed record PlaybotStep(int Index, string Action, string Provider, string? Fallback, uint? Health,
     ulong Target, int Frames, long Bytes)
 {
@@ -56,6 +57,8 @@ internal static class AutonomousPlaybot
         List<uint> logoutRefusals = [];
         string? failure = null;
         string outcome = "budget-complete";
+        ObserverFeedServer? observer = null;
+        ObserverSnapshot? observed = null;
         using var run = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         run.CancelAfter(TimeSpan.FromSeconds(options.Seconds));
         CancellationToken ct = run.Token;
@@ -81,6 +84,13 @@ internal static class AutonomousPlaybot
             self = chosen.Guid;
             var origin = new MockPosition(login.Location.X, login.Location.Y, login.Location.Z);
             var position = origin;
+            if (options.Observe)
+            {
+                // The observer channel (docs/areas/map-feed.md, "Mock client observer"): Atlas connects to this process like to a daemon.
+                var snapshot = new ObserverSnapshot(ObserverFrames.ViewOf(login.Location.Map, chosen.Guid, origin, []));
+                observed = snapshot;
+                observer = ObserverFeedServer.Start(ObserverFrames.PipeName(Environment.ProcessId), Environment.ProcessId, () => snapshot.Current);
+            }
             var queried = new HashSet<ulong>();
             var looted = new HashSet<ulong>();
             bool released = false, heroicQueued = false;
@@ -100,6 +110,9 @@ internal static class AutonomousPlaybot
                 IReadOnlyDictionary<int, uint> self = connection.FieldsOf(chosen.Guid);
                 uint? Field(int field) => self.TryGetValue(field, out uint value) ? value : null;
                 uint? flags = Field(UpdateFields.UnitFieldFlags);
+                // Published from the one thread that reads frames, so the observer thread never walks a table that is being written.
+                observed?.Publish(ObserverFrames.ViewOf(login.Location.Map, chosen.Guid, position,
+                    connection.ObserveObjects(4096).Select(o => (o.Guid, o.Position))));
                 return new(revision, Field(UpdateFields.UnitFieldHealth), Field(UpdateFields.UnitFieldMaxhealth),
                     flags is { } f ? (f & (uint)UnitFlags.InCombat) != 0 : null,
                     position, origin, connection.ObserveObjects(256).Select(o => new PlaybotObject(o.Guid,
@@ -273,6 +286,7 @@ internal static class AutonomousPlaybot
         }
         finally
         {
+            if (observer is not null) await observer.DisposeAsync().ConfigureAwait(false);
             if (entered && connection is not null)
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));

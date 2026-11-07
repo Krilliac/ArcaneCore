@@ -6,7 +6,7 @@ namespace ArcaneCore.Atlas.Reference.Navmesh;
 
 /// <summary>
 /// The DotRecast reference navmesh: the <c>ref.nav.poly</c> and <c>ref.nav.links</c> layers, the <c>ref.query.path</c>,
-/// <c>ref.query.nearest</c> and <c>ref.nav.tile</c> commands, and a <see cref="ReferenceNavMeshService"/> other modules (the
+/// <c>ref.query.nearest</c>, <c>ref.nav.tile</c> and <c>ref.nav.go</c> (the transports' <c>go*.mmtile</c> files) commands, and a <see cref="ReferenceNavMeshService"/> other modules (the
 /// navmesh diff) can read.
 /// </summary>
 public sealed class ReferenceNavmeshModule : IAtlasModule
@@ -24,7 +24,7 @@ public sealed class ReferenceNavmeshModule : IAtlasModule
         var service = new ReferenceNavMeshService(context.Paths.MMapsDirectory, context.Loggers.CreateLogger<ReferenceNavMeshService>());
         context.Services.Add(service);
         context.Layers.Add(new ReferenceNavLayerSource(service));
-        foreach (CommandDefinition command in NavCommands.Definitions)
+        foreach (CommandDefinition command in NavCommands.Definitions.Concat(GoNavCommands.Definitions))
         {
             context.Commands.Register(command);
         }

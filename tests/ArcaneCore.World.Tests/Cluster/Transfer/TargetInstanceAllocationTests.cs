@@ -510,7 +510,7 @@ public sealed class TargetInstanceJournalTests : IAsyncLifetime
     {
         ITransferDecisionStore store = await OpenStoreAsync(durable);
         var token = new CharacterOwnershipToken("char:4242", 7, Guid.NewGuid());
-        store.SeedCharacterOwnership(4242UL, token);
+        await store.SeedCharacterOwnershipAsync(4242UL, token);
         Guid id = Guid.NewGuid();
         await store.CreateReservationAsync(id, 4242UL, 5, 9, SourceWorker, TargetWorker, 0, 0, 33, 0, token);
 
@@ -544,7 +544,7 @@ public sealed class TargetInstanceJournalTests : IAsyncLifetime
         table.AssignStaticMap(0, SourceWorker);
         table.AssignStaticMap(33, TargetWorker);
         var token = new CharacterOwnershipToken("char:4242", 7, Guid.NewGuid());
-        store.SeedCharacterOwnership(4242UL, token);
+        await store.SeedCharacterOwnershipAsync(4242UL, token);
         var coordinator = new PlayerTransferCoordinator(table, store, new UnusedGateway(), [source], [target]);
         Guid id = Guid.NewGuid();
         var request = new PlayerTransferRequest(

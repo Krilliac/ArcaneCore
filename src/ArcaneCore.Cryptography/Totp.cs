@@ -3,8 +3,8 @@ using System.Security.Cryptography;
 
 namespace ArcaneCore.Cryptography;
 
-/// <summary>RFC 6238 HMAC-SHA1, 30-second TOTP; vmangos AuthSocket.cpp:1274-1301
-/// accepts offsets -2 through +1. The secret is RFC 4648 Base32 without padding.</summary>
+/// <summary>RFC 6238 HMAC-SHA1, 30-second TOTP; vmangos AuthSocket.cpp:729-737 (the
+/// factor check) accepts offsets -2 through +1 of GenerateTotpPin (1291). The secret is RFC 4648 Base32 without padding.</summary>
 public static class Totp
 {
     private const string Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

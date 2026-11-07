@@ -253,8 +253,9 @@ public sealed partial class PlayerInventory
     /// Add <paramref name="count"/> new items of <paramref name="entry"/> wherever they fit (all
     /// or nothing) and tell the client with SMSG_ITEM_PUSH_RESULT (vmangos StoreNewItem +
     /// SendNewItem). On failure nothing changes; the caller reports the result (SendEquipError).
+    /// <paramref name="randomPropertyId"/> null rolls a fresh random property as usual; a value (0 none) is applied as given, with no roll.
     /// </summary>
-    public InventoryResult AddItem(uint entry, uint count, out Item? item, bool received = false, bool created = false, bool showInChat = true)
+    public InventoryResult AddItem(uint entry, uint count, out Item? item, bool received = false, bool created = false, bool showInChat = true, int? randomPropertyId = null)
     {
         item = null;
         if (Player is { CanMutateQuestSettlementState: false })
@@ -269,7 +270,7 @@ public sealed partial class PlayerInventory
             return result;
         }
 
-        item = StoreNewItem(dest, Templates.Find(entry)!, count);
+        item = StoreNewItem(dest, Templates.Find(entry)!, count, randomPropertyId);
         if (Player is { IsInWorld: true } player)
         {
             player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, item, count, received, created, showInChat));

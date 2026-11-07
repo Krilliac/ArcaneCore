@@ -128,6 +128,8 @@ taken on where it stands. A bot taken by a controller is forgotten where it stan
 * **Off the match's map** (bound to it but elsewhere) the bot stands: the objectives are coordinates of the battleground map.
 * **Idle.** A living bot out of combat that stood still for 15 s although its Warsong Gulch order sends it somewhere, or an enemy its
   order names is near, is idle: `bot-bg/idle-in-match`, once per match (`PlayerbotWarsongTactics.IsIdle`).
+* **Refused walk.** A walk the navigation refuses is `bot-bg/objective-unreachable`, once per (goal, origin) 10-yard cell pair and at most 4
+  pairs (`PlayerbotObjectiveReports.MaxReports`) per bot per match, so the count of that key is not comparable with counts from before the cap.
 * **Death.** The bot releases (`PlayerbotRecovery`); the server casts Waiting to Resurrect on release and puts the ghost at the match's
   graveyard (in Arathi Basin the nearest node its team occupies, else its start: vmangos `BattleGroundAB::GetClosestGraveYard`). A
   battleground ghost waits within 15 yards of the graveyard's spirit guide for its resurrection wave instead of running to its body (the

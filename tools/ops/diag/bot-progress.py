@@ -35,8 +35,8 @@ def main() -> int:
     ap.add_argument("--count", type=int, default=1, help="number of snapshots to take")
     args = ap.parse_args()
 
-    profile = Path(args.profile) if args.profile else opsenv.live_profile()
-    out = Path(args.out) if args.out else (opsenv.lanes_root() / "_diag" / "bot-progress")
+    profile = Path(args.profile) if args.profile else opsenv.live_profile("--profile")
+    out = Path(args.out) if args.out else (opsenv.lanes_root("--out") / "_diag" / "bot-progress")
     out.mkdir(parents=True, exist_ok=True)
     snapshots = out / "snapshots.jsonl"
     first_levels_path = out / "first-levels.json"

@@ -249,7 +249,7 @@ public sealed class WorldGameObjectScriptTests : IDisposable
         Assert.Equal(GameObjectLootState.Ready, coffer.LootState);
         _world.RunTick(1);
         Assert.Equal(GameObjectLootState.Activated, coffer.LootState); // the button was used and toggled
-        // dbscripts_on_go_template_use 122088 (command 40, despawn self) is not imported and UseByUnit runs no object script, so the coffer stays.
+        // dbscripts_on_go_template_use 122088 (command 40, despawn self) is imported on a content refresh and UseByUnit runs it; this fixture loads no script row, so the coffer stays.
         Assert.True(coffer.IsSpawned);
     }
 

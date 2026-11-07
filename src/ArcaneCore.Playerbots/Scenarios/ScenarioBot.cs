@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Safety;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 
@@ -67,7 +68,7 @@ public sealed class ScenarioBot : IPlayerbotController
     public long Mark() => ScenarioPacketLog.NextSequence;
 
     /// <summary>Read this bot's player on the world thread.</summary>
-    public Task<T> ReadAsync<T>(Func<Player, T> read) => _context.World.InvokeAsync(() => read(RequirePlayer()));
+    public Task<T> ReadAsync<T>([RunsOnWorldThread] Func<Player, T> read) => _context.World.InvokeAsync(() => read(RequirePlayer()));
 
     /// <summary>Run one client opcode through its world handler (world thread). False: refused by the transport gate.</summary>
     public Task<bool> SendAsync(WorldOpcode opcode, byte[] payload)

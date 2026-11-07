@@ -20,6 +20,11 @@ internal sealed class RecordingManagerHost : IBattlegroundManagerHost
     public readonly List<Battleground> Deleted = [];
     public uint NextInstance = 101;
 
+    /// <summary>Maps this host refuses to build a match on (a split worker that does not own them).</summary>
+    public readonly HashSet<uint> UnownedMaps = [];
+
+    public bool CanCreateMatch(uint mapId) => !UnownedMaps.Contains(mapId);
+
     /// <summary>Called after each recorded status (a test's re-entrant host reaction).</summary>
     public Action<ObjectGuid, BattlegroundStatus>? OnStatus;
 
@@ -93,6 +98,17 @@ public sealed class BattlegroundManagerTests
         Solo(mgr, Alliance[1], Team.Alliance);
         Solo(mgr, Horde[0], Team.Horde);
         Solo(mgr, Horde[1], Team.Horde);
+    }
+
+    [Fact]
+    public void NoMatchIsBuiltOnAMapThisWorkerDoesNotOwn()
+    {
+        (BattlegroundManager mgr, RecordingManagerHost host, _) = NewManager();
+        host.UnownedMaps.Add(BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch));
+
+        Assert.Null(mgr.CreateNewBattleground(BattlegroundType.WarsongGulch, 0));
+        Assert.Empty(host.Created);
+        Assert.Equal(101u, host.NextInstance);   // no instance id was burned
     }
 
     // ---------------------------------------------------------------- types and templates

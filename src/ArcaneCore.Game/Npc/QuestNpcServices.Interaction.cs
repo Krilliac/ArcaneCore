@@ -231,7 +231,7 @@ public sealed partial class QuestNpcServices
         {
             if (refusal.Message is { } reason)
             {
-                Send(player, WorldOpcode.SmsgQuestgiverQuestInvalid, QuestPackets.QuestInvalid(reason));
+                QuestInvalid(player, quest.Id, reason);
             }
 
             return false;
@@ -239,6 +239,12 @@ public sealed partial class QuestNpcServices
 
         if (!((state.Quests.Get(quest.Id)?.Rewarded != true || quest.IsRepeatable) && AcceptableQuest(quest)))
         {
+            if (Deps.Qa is { } qa && qa.Observes(player) && !AcceptableQuest(quest))
+            {
+                // Withheld without a word to the client: a quest whose behaviour this server lacks (bot QA reports it, docs/areas/playbots-qa.md).
+                qa.OnQuestRefused(player, quest.Id, Diagnostics.QuestFailure.Unsupported, 0, MissingAdapters(quest).ToString());
+            }
+
             return false;
         }
 
@@ -270,9 +276,10 @@ public sealed partial class QuestNpcServices
         data.Explored = false;
         Array.Clear(data.CreatureOrGOCount);
         Array.Clear(data.ItemCount);
+        long nowUnix = UnixNow; // one reading: UnixNow is a live clock, and a shared end must not land a second early
         data.TimerEndUnix = !quest.HasSpecialFlag(QuestSpecialFlags.Timed) ? 0
-            : sharedTimerEnd is { } shared ? checked(UnixNow + Math.Max(0, shared - UnixNow))
-            : checked(UnixNow + quest.Template.LimitTime);
+            : sharedTimerEnd is { } shared ? checked(nowUnix + Math.Max(0, shared - nowUnix))
+            : checked(nowUnix + quest.Template.LimitTime);
         if (data.TimerEndUnix != 0)
         {
             state.Quests.AddTimed(quest.Id);

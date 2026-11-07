@@ -63,9 +63,12 @@ public sealed class ManagedPlayerbotHomeTests
         Assert.Equal("bot-not-found", (await feature.StartAsync(bot.BotId.ToString())).Code);
     }
 
-    // Timing: the restarted bot walks home under a wall-clock wait on the real managed-session think; a loaded host times out (flake ledger 2026-10-29).
+    /// <summary>
+    /// The real managed session thinks on the wall clock, so the waits below carry a hang guard (<see cref="WaitForWorldLongAsync"/>), not the
+    /// 10 s of <see cref="WorldTestHost.WaitForWorldAsync"/>: a loaded host took longer than that to log the restarted bot in and think once
+    /// (flake ledger 2026-10-29). Each wait is on a condition that holds once the bot has thought; none asserts a time.
+    /// </summary>
     [Fact]
-    [Trait("Category", "Timing")]
     public async Task SetHome_PersistsAndAppliesToTheRunningBrain_AndSurvivesARestart()
     {
         var accounts = new InMemoryAccountStore();
@@ -89,9 +92,9 @@ public sealed class ManagedPlayerbotHomeTests
             Assert.Equal(row0, feature.HomeOf(id));
 
             Assert.True((await feature.StartAsync(id.ToString())).Success);
-            await first.WaitForWorldAsync(() => first.World.FindOnlinePlayer("Homeone") is { IsInWorld: true }, "bot in world");
+            await WaitForWorldLongAsync(first, () => first.World.FindOnlinePlayer("Homeone") is { IsInWorld: true }, "bot in world");
             // The bot starts in Northshire, about 1,500 yards from Stormwind (map 0): outside, so it walks back.
-            await first.WaitForWorldAsync(() => feature.Snapshot().Single(s => s.BotId == id).Home?.StartsWith("returning:", StringComparison.Ordinal) == true
+            await WaitForWorldLongAsync(first, () => feature.Snapshot().Single(s => s.BotId == id).Home?.StartsWith("returning:", StringComparison.Ordinal) == true
                 || feature.Snapshot().Single(s => s.BotId == id).Home?.StartsWith("blocked:", StringComparison.Ordinal) == true,
                 "the running bot's home line");
             await feature.ShutdownBeforeWorldStopAsync();
@@ -110,10 +113,87 @@ public sealed class ManagedPlayerbotHomeTests
         Assert.Equal("stopped", Assert.Single(restarted.Snapshot(), s => s.BotId == id).Home);
         Assert.Equal(row, restarted.HomeOf(id));
         Assert.True((await restarted.StartAsync(id.ToString())).Success);
-        await second.WaitForWorldAsync(() => restarted.Snapshot().Single(s => s.BotId == id) is { State: ManagedPlayerbotState.Running, Home: { } home }
+        await WaitForWorldLongAsync(second, () => restarted.Snapshot().Single(s => s.BotId == id) is { State: ManagedPlayerbotState.Running, Home: { } home }
             && (home.StartsWith("returning:", StringComparison.Ordinal) || home.StartsWith("blocked:", StringComparison.Ordinal)),
             "the restarted bot walks to its stored home");
         await restarted.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public void SameHomeArea_IgnoresTheTimeItWasSet_AndSeesEveryOtherChange()
+    {
+        var id = Guid.NewGuid();
+        var home = new PlayerbotHome(id, 7, 0, -8913.23f, 554.633f, 93.7944f, 300f, "Stormwind", 1000);
+
+        Assert.True(ManagedPlayerbotFeature.SameHomeArea(home, home with { SetUnix = 2000 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { MapId = 1 }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { X = -8913f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Y = 555f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Z = 94f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Radius = 301f }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = "Ironforge" }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { Place = null }));
+        Assert.False(ManagedPlayerbotFeature.SameHomeArea(home, home with { ZoneClipped = false }));
+    }
+
+    [Fact]
+    public async Task SettingTheSameHomeAgain_KeepsTheBrainsArea_AndAChangedPlaceSwapsIt()
+    {
+        var homes = new MemoryHomeStore();
+        await using WorldTestHost host = StartHost(homes);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid bot = await BotAsync(feature, host, "Hmresave");
+        var centre = new Vector3(-8913.23f, 554.633f, 93.7944f);
+
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        PlayerbotHomeArea? first = feature.FindBrain(bot)!.Home;
+        Assert.NotNull(first);
+
+        // The same place again (only the time it was set differs): the brain keeps its area object, so its festival spot and intent stay.
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.Same(first, feature.FindBrain(bot)!.Home);
+
+        // A changed radius, then a changed place: each swaps the area.
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 400f, "Stormwind")).Set);
+        PlayerbotHomeArea? wider = feature.FindBrain(bot)!.Home;
+        Assert.NotSame(first, wider);
+        Assert.Equal(400f, wider!.Radius);
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 400f, "Ironforge")).Set);
+        PlayerbotHomeArea? moved = feature.FindBrain(bot)!.Home;
+        Assert.NotSame(wider, moved);
+        Assert.Equal("Ironforge", moved!.Place);
+        await feature.ShutdownBeforeWorldStopAsync();
+    }
+
+    [Fact]
+    public async Task SettingTheSameHomeAgain_ReappliesAZoneClippedAreaThatFoundNoZone_SoTheWarningsAdviceHolds()
+    {
+        var homes = new MemoryHomeStore();
+        uint zone = 0;
+        await using WorldTestHost host = StartHost(homes, zones: (x, y, z) => zone);
+        ManagedPlayerbotFeature feature = PartyTestHost.Feature(host);
+        await feature.StartupAsync(default);
+        Guid bot = await BotAsync(feature, host, "Hmnozone");
+        var centre = new Vector3(-8913.23f, 554.633f, 93.7944f);
+
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        // Reading the line looks the zone up on the area: it is cached as unknown.
+        Assert.Contains(" zone=unknown ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+        PlayerbotHomeArea dead = feature.FindBrain(bot)!.Home!;
+        Assert.True(dead.ZoneFoundUnknown);
+
+        // The terrain now knows the zone (a content reload): the same home set again looks it up afresh.
+        zone = FixtureZone;
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.NotSame(dead, feature.FindBrain(bot)!.Home);
+        Assert.Contains(" zone=12 ", (await feature.InspectAsync(bot.ToString()))!.Home, StringComparison.Ordinal);
+
+        // A known zone is kept: the next identical set leaves the area alone.
+        PlayerbotHomeArea live = feature.FindBrain(bot)!.Home!;
+        Assert.Equal(1, (await feature.SetHomesAsync([new(bot, 0, centre)], 300f, "Stormwind")).Set);
+        Assert.Same(live, feature.FindBrain(bot)!.Home);
+        await feature.ShutdownBeforeWorldStopAsync();
     }
 
     [Fact]
@@ -491,6 +571,17 @@ public sealed class ManagedPlayerbotHomeTests
         PlayerbotZoneLookup lookup = new(zones ?? ((x, y, z) => FixtureZone));
         PartyTestHost.Feature(host).ZoneLookups = _ => lookup;
         return host;
+    }
+
+    /// <summary>Polls <paramref name="condition"/> on the world thread until it holds; fails only after a 120 s hang guard, so load cannot fail it.</summary>
+    private static async Task WaitForWorldLongAsync(WorldTestHost host, Func<bool> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(120);
+        while (!await host.World.InvokeAsync(condition))
+        {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException($"timed out waiting for: {what}");
+            await Task.Delay(10);
+        }
     }
 
     private static WorldTestHost StartPersisted(InMemoryAccountStore accounts, InMemoryCharacterStore characters,

@@ -87,6 +87,7 @@ public sealed class SnufflenoseGopherProductionTests
         kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [],
             [new SpellStore.ScriptTarget(SnufflenoseGopherAi.CommandSpell, 1, SnufflenoseGopherAi.Entry, 0)]);
         (Player player, _) = kit.AddPlayer(1);
-        Assert.Equal(SpellCastResult.CastOk, kit.Cast(player, SnufflenoseGopherAi.CommandSpell));
+        // No listed gopher within range: the cast is refused (vmangos Spell.cpp:603-616), silently (DONT_REPORT) for a triggered cast, which the kit's Cast is.
+        Assert.Equal(SpellCastResult.DontReport, kit.Cast(player, SnufflenoseGopherAi.CommandSpell));
     }
 }

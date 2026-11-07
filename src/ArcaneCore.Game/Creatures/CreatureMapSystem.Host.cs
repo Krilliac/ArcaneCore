@@ -252,6 +252,7 @@ public sealed partial class CreatureMapSystem
         {
             creature.AI = scripted; // a script AI of this map for the entry (CreatureMapSystem.ScriptedAi.cs)
             ResetGuardCall(creature);
+            BindSpellList(creature);
             return;
         }
 
@@ -260,18 +261,28 @@ public sealed partial class CreatureMapSystem
         if (unknown && _reportedAi.Add($"name:{aiName}"))
         {
             _logger.LogWarning("creature_template {Entry} uses unknown AIName '{AIName}'; using the default AI", creature.Template.Entry, aiName);
+            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "ai-name", 0, aiName);
         }
 
         if (ai is CreatureEventAI eventAi && _options.EventAi.ReportUnsupported && eventAi.Unsupported.Count > 0 && _reportedAi.Add($"eventai:{creature.Template.Entry}"))
         {
             _logger.LogWarning("creature_ai_scripts for creature {Entry} use unsupported {Unsupported}; those parts are skipped",
                 creature.Template.Entry, string.Join(", ", eventAi.Unsupported));
-            CreatureAnomalies.ReportScriptActionUnsupported(
-                creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
+            // One gap, one signal: bot QA's ScriptUnsupported when QA is reporting, else the anomaly (which QA would otherwise pick up a second time).
+            if (Qa is { Reporting: true } qa)
+            {
+                qa.OnCreatureAiGap(creature, creature.Template.Entry, "event-ai", 0, string.Join(", ", eventAi.Unsupported));
+            }
+            else
+            {
+                CreatureAnomalies.ReportScriptActionUnsupported(
+                    creature, $"creature_ai_scripts for creature {creature.Template.Entry} use unsupported {string.Join(", ", eventAi.Unsupported)}");
+            }
         }
 
         creature.AI = ai;
         ResetGuardCall(creature);
+        BindSpellList(creature);
     }
 
     /// <summary>The AI half of a creature's tick: aggro scan over the map's players, then the script.</summary>
@@ -298,6 +309,7 @@ public sealed partial class CreatureMapSystem
         if (creature.IsAlive && _creatures.ContainsKey(creature.Guid))
         {
             ai.OnUpdate(diffMs);
+            UpdateSpellList(creature, diffMs); // cmangos UnitAI::UpdateAI order: the script's actions, then the spell lists
         }
     }
 

@@ -394,6 +394,11 @@ public sealed class GuildHolderService(IRealmPresenceDirectory directory, ILogge
 /// dropped is refused the same way (callback false) with one log line per outage. Door refusals are counted in <see cref="DoorRefused"/> and log once per outage at Warning; a
 /// request that has no waiting player and is not kept (petition puts, character-deleted notices) logs a Warning each time naming what was lost.
 /// </para>
+/// <para>
+/// A worker that gains the lease at run time holds a replica, and a save stores a whole guild or petition, so the lease alone does not make it the holder here. From <see cref="MarkReloadPending"/> until
+/// <see cref="ReloadFinished"/> <see cref="IsHolder"/> stays false whatever the lease says: the managers keep acting as a replica and store nothing, forwarded requests are not served, and with the lease held there is no
+/// one to forward to, so requests are refused at the door exactly as while the old holder was out of reach.
+/// </para>
 /// Ownership: owns the sender and pump tasks; <see cref="DisposeAsync"/> stops both. Thread-safety: all members are safe from any thread except where noted (Deliver, the
 /// replication calls and FindOnline are made on the holder's world thread, which is the contract of <see cref="IGuildHolderLink"/>).
 /// </summary>
@@ -437,6 +442,7 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     private long _doorRefused;
     private int _started;
     private int _disposed;
+    private volatile bool _reloadPending;
 
     public PeerGuildHolderLink(IGuildHolderTransport transport, GuildHolderService local, string workerId, Func<bool> holdsSocial, ILogger? logger = null)
     {
@@ -476,10 +482,22 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
         _local.Bind(_workerId, guilds, petitions, world.Post);
     }
 
-    public bool IsHolder => _holdsSocial();
+    public bool IsHolder => !_reloadPending && _holdsSocial();
 
-    /// <summary>True when <see cref="Forward"/> would accept a request now: not disposed, no failed contact with the holder pending, and the transport reachable. Never blocks.</summary>
-    public bool CanForward => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _unreachable) == 0 && _transport.IsAuthorityReachable;
+    /// <summary>True while what this worker holds has not been reread for a lease it gains or has gained.</summary>
+    public bool ReloadPending => _reloadPending;
+
+    /// <summary>True when the lease is held and storage must be read before this worker is the holder.</summary>
+    public bool ReloadDue => _reloadPending && _holdsSocial();
+
+    /// <summary>What this worker holds is a replica: it does not become the holder with the lease, only at <see cref="ReloadFinished"/>. Call before storage is read at attach on a worker that does not hold the lease.</summary>
+    public void MarkReloadPending() => _reloadPending = true;
+
+    /// <summary>Storage has been read: from here the lease alone decides <see cref="IsHolder"/>. World thread, just before the read rows are installed, so that their repairs are written and their state published.</summary>
+    public void ReloadFinished() => _reloadPending = false;
+
+    /// <summary>True when <see cref="Forward"/> would accept a request now: not disposed, no failed contact with the holder pending, the transport reachable and a holder other than this node. Never blocks.</summary>
+    public bool CanForward => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _unreachable) == 0 && _transport.IsAuthorityReachable && !ReloadDue;
 
     /// <summary>Requests refused at <see cref="Forward"/> because there was no link to the holder (nothing was queued).</summary>
     public long DoorRefused => Interlocked.Read(ref _doorRefused);
@@ -648,7 +666,7 @@ public sealed class PeerGuildHolderLink : IGuildHolderLink, IAsyncDisposable
     public int PumpOnce()
     {
         SweepWaiting();
-        if (IsHolder || _world is null || !_transport.IsAuthorityReachable)
+        if (IsHolder || ReloadDue || _world is null || !_transport.IsAuthorityReachable)
         {
             return 0;
         }

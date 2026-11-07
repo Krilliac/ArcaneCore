@@ -202,4 +202,71 @@ public sealed class PlayerbotTradeLedgerPersistenceTests
         PlayerbotTradeRecord stored = Assert.Single(await backing.LoadAllAsync());
         Assert.Equal((runningId, 4242UL), (stored.BotId, stored.OtherGuid));
     }
+
+    /// <summary>Fails the first empty write for one bot (the delete of a removed bot's rows), and counts every empty write per bot.</summary>
+    private sealed class FlakyDeleteTradeRecordStore(MemoryTradeRecordStore inner) : IPlayerbotTradeRecordStore
+    {
+        private readonly Dictionary<Guid, int> _emptyWrites = [];
+        private Guid _failFirstEmptyFor = Guid.Empty;
+
+        public void FailFirstEmptyWriteFor(Guid botId) => _failFirstEmptyFor = botId;
+
+        public int EmptyWrites(Guid botId)
+        {
+            lock (_emptyWrites) return _emptyWrites.GetValueOrDefault(botId);
+        }
+
+        public Task<IReadOnlyList<PlayerbotTradeRecord>> LoadAllAsync(CancellationToken cancellationToken = default) => inner.LoadAllAsync(cancellationToken);
+
+        public Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotTradeRecord> rows, CancellationToken cancellationToken = default)
+        {
+            if (rows.Count == 0)
+            {
+                lock (_emptyWrites) _emptyWrites[botId] = _emptyWrites.GetValueOrDefault(botId) + 1;
+                if (botId == _failFirstEmptyFor)
+                {
+                    _failFirstEmptyFor = Guid.Empty;
+                    throw new InvalidOperationException("the delete of the removed bot's rows failed");
+                }
+            }
+
+            return inner.ReplaceAsync(botId, rows, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task AFailedDeleteOfARemovedBotsRows_DoesNotSkipTheSurvivorsRewrite_IsRetriedByTheNextForget_AndASucceededOneIsNotRepeated()
+    {
+        var accounts = new InMemoryAccountStore();
+        var characters = new InMemoryCharacterStore();
+        var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
+        var backing = new MemoryTradeRecordStore();
+        var store = new FlakyDeleteTradeRecordStore(backing);
+        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
+            extraServices: services => services.AddSingleton<IPlayerbotTradeRecordStore>(store));
+        var feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
+        await feature.StartupAsync(default);
+        Guid survivor = Assert.IsType<Guid>((await feature.CreateAsync("Survledger", 1, 1)).BotId);
+        Guid gone = Assert.IsType<Guid>((await feature.CreateAsync("Goneledger", 1, 1)).BotId);
+        int survivorCharacter = (await owners.FindAsync(survivor))!.CharacterId, goneCharacter = (await owners.FindAsync(gone))!.CharacterId;
+        ulong aboutGone = ArcaneCore.Game.ObjectGuid.Player((uint)goneCharacter).Value;
+        PlayerbotTradeLedger ledger = Assert.IsType<PlayerbotTradeLedger>(feature.Social.Ledger);
+        ledger.NoteScam(survivor, survivorCharacter, aboutGone);
+        ledger.NoteScam(survivor, survivorCharacter, 4242);
+        ledger.NoteScam(gone, goneCharacter, 4343);
+
+        // The delete of the removed bot's rows fails: the cleanup must still rewrite the survivor without the row about the removed character.
+        store.FailFirstEmptyWriteFor(gone);
+        await feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
+
+        Assert.Equal(1, store.EmptyWrites(gone));
+        PlayerbotTradeRecord rewritten = Assert.Single(await backing.LoadAllAsync(), r => r.BotId == survivor);
+        Assert.Equal(4242UL, rewritten.OtherGuid);
+
+        // Not retired by the failure: the next forget deletes it again, and once it went through the one after that leaves the store alone.
+        await feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
+        Assert.Equal(2, store.EmptyWrites(gone));
+        await feature.ForgetRelationsAsync(host.WorldServices, gone, goneCharacter);
+        Assert.Equal(2, store.EmptyWrites(gone));
+    }
 }

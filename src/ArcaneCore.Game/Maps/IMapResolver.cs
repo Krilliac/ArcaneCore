@@ -43,8 +43,8 @@ public interface IMapResolver
 
     /// <summary>
     /// The map a restored body left in instance <paramref name="instanceId"/> of <paramref name="mapId"/> goes into when that
-    /// instance is not loaded: the instance's map when a live instance owns that id (created the way an entry creates it), or
-    /// null to keep the body out of every map. Never a map nobody manages: vmangos keeps such a corpse aside and adds it to the
+    /// instance is not loaded: the instance's map when a live instance owns that id and this process owns that map copy (created the
+    /// way an entry creates it), or null to keep the body out of every map. Never throws for a copy another worker owns. Never a map nobody manages: vmangos keeps such a corpse aside and adds it to the
     /// grid only when its instance's map is next created; it never creates an instance map for a corpse. The default (a resolver
     /// with no instances of its own) is null.
     /// </summary>

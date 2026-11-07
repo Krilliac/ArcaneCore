@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 410 |
-| `Administrator` | 6 | 613 |
+| `GameMaster` | 3 | 411 |
+| `Administrator` | 6 | 619 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -34,7 +34,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.account totp set` | 6 | Administrator | stored level through the map | Syntax: .account totp set $account |
 | `.account totp clear` | 6 | Administrator | stored level through the map | Syntax: .account totp clear $account |
 | `.account iplock` | 6 | Administrator | stored level through the map | Syntax: .account iplock $account on\|off |
-| `.cast` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. |
+| `.cast` ... | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast #spell — cast a spell (triggered) on the selected player or yourself. Variants: .cast self, .cast target, .cast back, .cast dist. |
+| `.cast self` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast self #spell [triggered] Make the selected unit cast a spell on itself. |
+| `.cast target` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast target #spell [triggered] Make the selected unit cast a spell on its victim. |
+| `.cast back` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast back #spell [triggered] Make the selected unit cast a spell on you. |
+| `.cast dist` | 5 | Administrator | retail table (RetailCommandLevels cites Chat.cpp) | Syntax: .cast dist #spell #distance [triggered] Cast a spell at a point the given distance in front of you. |
 | `.character` ... | 2 | GameMaster | declared retail level | Syntax: .character $subcommand |
 | `.character reputation` | 2 | GameMaster | declared retail level | Syntax: .character reputation [$player_name] Shows the reputation of the selected player or of the named online player. |
 | `.character boost` | 6 | Administrator | stored level through the map | Syntax: .character boost [$playername] #level Bring the named online player, the selected player or yourself to the level: class trainer spells, a level-appropriate equipped gear kit, filled action bars and some money. |
@@ -360,6 +364,7 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.ticket respond` | 3 | GameMaster | stored level through the map | Syntax: .ticket respond $id $text Answer an open ticket; the player is told at once if online. The ticket stays open. |
 | `.ticket close` | 3 | GameMaster | stored level through the map | Syntax: .ticket close $id [$text] Close an open ticket, with an optional final answer. The player is told if online. |
 | `.ticket delete` | 6 | Administrator | stored level through the map | Syntax: .ticket delete $id Delete an open ticket without trace (the row is removed). |
+| `.ticket assistant` | 3 | GameMaster | stored level through the map | Syntax: .ticket assistant status\|on\|off\|run $id status: whether the ticket assistant is on and what it has done (Game Master). on/off/run: Administrator only; on/off switch it until the daemon restarts, run $id handles that open ticket now. |
 | `.maxskill` | 3 | GameMaster | stored level through the map | Syntax: .maxskill — set every level-dependent skill of the selected player (or yourself) to its maximum for the level. |
 | `.setskill` | 3 | GameMaster | stored level through the map | Syntax: .setskill #skill #level [#max] — set a skill the selected player (or yourself) already has. |
 | `.whispers` | 1 | Moderator | stored level through the map | Syntax: .whispers on\|off  Enable/disable accepting whispers by GM from players. By default use the World:Chat:GmWhisperingTo setting. |
@@ -438,15 +443,16 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.arcane dbc` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane dbc Show how each client DBC the server reads was resolved (loaded, missing or format mismatch) and where from. |
 | `.arcane dbc validate` | 6 | Administrator | stored level through the map | Syntax: .arcane dbc validate Check the world database's spell, map, area, faction, display ... ids against the DBCs in ClientData:DbcDirectory and report the dangling ones. |
 | `.arcane cluster` | 3 | GameMaster | stored level through the map | Syntax: .arcane cluster [status\|node\|routes\|nodes\|leases\|social\|diag\|restart] Inspect cluster node identity, map/instance worker routing, authority leases, social presence, and diagnostics. |
-| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat. Each subscription turns itself off after a few minutes and when you log out. |
-| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel Follow $channel (letters, digits, '-' and '_'); running it again renews the timeout. |
+| `.arcane stream` ... | 3 | GameMaster | stored level through the map | Syntax: .arcane stream [on\|off\|list] Follow a live debug channel in chat (damage, procs, spells, moves, anticheat). With no argument it lists what you follow and the available channels. Each subscription turns itself off after a few minutes and when you log out. |
+| `.arcane stream on` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream on $channel [target\|near\|all] Follow $channel: damage, procs, spells, moves or anticheat (anticheat: movement findings with score and verdict, packet-heuristics reports with severity only). Scope target (default) shows events of you or your selected unit nearby, near shows every event nearby, all shows every event (not for moves). Running it again renews the timeout and sets the scope. |
 | `.arcane stream off` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream off $channel\|all Stop following $channel, or every channel. |
-| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow and when each turns off. |
+| `.arcane stream list` | 3 | GameMaster | stored level through the map | Syntax: .arcane stream list Show the channels you follow with scope and when each turns off, then the channels available. |
 | `.arcane content` | 3 | GameMaster | stored level through the map | Syntax: .arcane content Show how many rows of each content table are loaded. From the console, the items line reads "not loaded yet" while item content loads in the background; run the command again shortly. |
 | `.arcane maps` | 3 | GameMaster | stored level through the map | Syntax: .arcane maps Show the players, objects and in-transit objects of every running map. |
 | `.arcane reloads` | 3 | GameMaster | stored level through the map | Syntax: .arcane reloads Show how each reloadable content table last ended, and the creature definitions generation. |
 | `.gmannounce` | 1 | Moderator | stored level through the map | Syntax: .gmannounce $message Send a chat message to every staff member online. |
 | `.gmnotify` | 1 | Moderator | stored level through the map | Syntax: .gmnotify $message Send an on-screen notification to every staff member online. |
+| `.wiresample` | 6 | Administrator | stored level through the map | Syntax: .wiresample $name Send yourself one sample of a server packet no gameplay flow sends, to watch a real client's reaction. Names: character-profile, character-profile-realm-connected, chat-player-ambiguous, chat-restricted, clear-far-sight-immediate, compressed-moves, expected-spam-records, game-speed-set, game-time-set, gametimebias-set, ghostee-gone, group-cancel, invalid-promotion-code, item-query-multiple, loot-item-notify, minigame-move-failed, minigame-setup, minigame-state, npc-wont-talk, play-time-warning, player-bind-error, rwhois, script-message, spell-steal-log, spline-swim-start, spline-swim-stop, standstate-change-failure. |
 | `.fx` ... | 3 | GameMaster | stored level through the map | Syntax: .fx $subcommand Non-retail GM tooling: push music, sounds, spell visuals, cinematics, world states and screen text to a scope. |
 | `.fx music` | 3 | GameMaster | stored level through the map | Syntax: .fx music #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id as music (SMSG_PLAY_MUSIC). |
 | `.fx sound` | 3 | GameMaster | stored level through the map | Syntax: .fx sound #soundid [self\|target\|zone\|map\|server] (default self; map and server need an Administrator) Play a SoundEntries id (SMSG_PLAY_SOUND). |

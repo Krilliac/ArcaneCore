@@ -13,7 +13,7 @@ public sealed class ActivateObjectEffect : ISpellHandlerModule
         if (context.Caster.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects)
             return;
 
-        IReadOnlyList<ObjectGuid> targets = context.Cast.ObjectTargetsByEffect.TryGetValue(context.EffectIndex, out ObjectGuid[]? selected)
+        IReadOnlyList<ObjectGuid> targets = context.Cast.ObjectTargetsOrNull is { } selectedByEffect && selectedByEffect.TryGetValue(context.EffectIndex, out ObjectGuid[]? selected)
             ? selected : context.Cast.Targets.GameObject.IsEmpty ? [] : [context.Cast.Targets.GameObject];
         foreach (ObjectGuid guid in targets)
         {

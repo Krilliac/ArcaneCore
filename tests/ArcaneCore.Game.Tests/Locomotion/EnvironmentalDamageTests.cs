@@ -85,6 +85,10 @@ public sealed class EnvironmentalDamageTests
     {
         (WorldRuntime world, Player victim, FakeSession mine, FakeSession theirs) = Setup(AccountSecurity.GameMaster);
         victim.SetGameMaster(true);
+        // GM mode leaves all fighting (vmangos Player::SetGameMaster, Player.cpp:2640, CombatStopWithPets), and Unit::CombatStop always sends
+        // SendAttackSwingCancelAttack to a player: that SMSG_CANCEL_COMBAT belongs to the GM toggle, not to the environmental damage below.
+        mine.Clear();
+        theirs.Clear();
 
         Assert.Equal(0u, EnvironmentalDamage.Apply(world, victim, EnvironmentalDamageType.Fall, 500));
         Assert.Equal(1000u, victim.Health);

@@ -16,6 +16,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+// A supervised child takes the supervisor's per-run token out of the environment before anything copies it (the host's configuration builder,
+// processes this one starts); the protocol readers get it from here (SupervisorProtocol.ProcessEnvironment). No supervisor: nothing happens.
+ArcaneCore.Kernel.Ops.ServerConsole.SupervisorProtocol.CaptureProcessToken();
+
 // The command line is read before anything is built: --help, a mistyped command and a mistyped option are answered here (exit 64) instead of
 // starting a live server against the live profile, because the host's command-line provider drops them silently (docs/guide/configuration.md).
 DaemonCommand command = DaemonCommandLine.Parse(args, ConfigDaemon.World, ConfCatalog.Embedded);

@@ -5,28 +5,36 @@ using ArcaneCore.World.Cluster.Peer;
 
 namespace ArcaneCore.World.Cluster.Social;
 
+/// <summary>The authority answered over a live link that it will not do this: sending it again would get the same answer.</summary>
+public sealed class PresenceRefusedException(string message) : InvalidOperationException(message);
+
+/// <summary>The node reached does not hold the Social lease, so it executed nothing: a link failure as far as the sender goes, which keeps the command and tries again.</summary>
+public sealed class PresenceNotHolderException() : IOException("the node reached does not hold the Social lease");
+
 /// <summary>
 /// Presence and social routing of the Social lease holder as seen from another worker: every call is one request over the <see cref="PeerLinkClient"/> to the holder's
 /// <see cref="PresenceHolderService"/> (<see cref="PresenceWireCodec"/>). Implements the async <see cref="IPresenceAuthority"/> for the publisher and the synchronous
-/// <see cref="IRealmPresenceDirectory"/> / <see cref="IClusterSocialRouter"/> for readers such as <c>.cluster</c> commands; the synchronous members block the calling thread for
+/// <see cref="IRealmPresenceDirectory"/> / <see cref="IClusterSocialRouter"/> for readers on background tasks (the cluster sender and pump tasks, <c>CrossWorkerSocial</c>; the <c>.cluster</c> commands read <see cref="LeaseRoutedPresence"/>'s local counts instead); the synchronous members block the calling thread for
 /// up to the link's request timeout and must not be called on the world thread. A lost link, a timeout or a refusal surfaces as <see cref="IOException"/>,
-/// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
+/// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/> (a refusal by the authority is <see cref="PresenceRefusedException"/>; a node without the lease is <see cref="PresenceNotHolderException"/>, an <see cref="IOException"/>). A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.
 /// </summary>
-public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
+public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
     public const int MaxDrainBatches = 64;
 
-    private async Task<BinaryReader> SendAsync(PresenceOp op, Action<BinaryWriter>? write, CancellationToken cancellationToken = default)
+    private async Task<BinaryReader> SendAsync(PresenceOp op, Action<BinaryWriter>? write, CancellationToken cancellationToken = default, long? idempotencyId = null)
     {
-        byte[] reply = await link.EchoAsync(PresenceWireCodec.EncodeRequest(op, write), cancellationToken: cancellationToken).ConfigureAwait(false);
+        byte[] reply = await link.EchoAsync(PresenceWireCodec.EncodeRequest(op, write), idempotencyId, cancellationToken: cancellationToken).ConfigureAwait(false);
         return PresenceWireCodec.OpenReply(reply);
     }
 
-    private T Send<T>(PresenceOp op, Action<BinaryWriter>? write, Func<BinaryReader, T> read)
+    private T Send<T>(PresenceOp op, Action<BinaryWriter>? write, Func<BinaryReader, T> read, long? idempotencyId = null)
     {
-        using BinaryReader r = Task.Run(() => SendAsync(op, write)).GetAwaiter().GetResult();
+#pragma warning disable ARC0006 // the documented synchronous entry point: its callers are the cluster sender and pump tasks and CrossWorkerSocial's Task.Run (the .cluster commands deliberately do not reach it: they read LeaseRoutedPresence.TryGetLocalCount on the world thread), Task.Run keeps the await off any captured context, and the link request timeout bounds the wait
+        using BinaryReader r = Task.Run(() => SendAsync(op, write, idempotencyId: idempotencyId)).GetAwaiter().GetResult();
+#pragma warning restore ARC0006
         return read(r);
     }
 
@@ -35,7 +43,8 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     // ---- IGroupAuthorityTransport --------------------------------------------------------------------------------------------------------------
 
-    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+    /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
         => Send(
             PresenceOp.GroupCommand,
             w =>
@@ -43,7 +52,8 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
                 w.Write(workerId);
                 GroupWireCodec.WriteCommand(w, command);
             },
-            static _ => true);
+            static _ => true,
+            idempotencyId: -commandId); // negative: the link's own ids count up from 1
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GroupDrain, w => w.Write(workerId), GroupWireCodec.ReadEvents);
@@ -63,6 +73,52 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GuildDrain, w => w.Write(workerId), GuildWireCodec.ReadEvents);
+
+    // ---- IBattlegroundHubTransport --------------------------------------------------------------------------------------------------------------
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands)
+        => Send(
+            PresenceOp.BattlegroundSubmit,
+            w =>
+            {
+                w.Write(workerId);
+                BattlegroundWireCodec.WriteCommands(w, [.. commands.Select(c => new BattlegroundQueuedCommand(workerId, c))]);
+            },
+            static r => r.ReadBoolean());
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => TakeBattlegroundCommands(nodeId, preferred: false);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred)
+        => Send(
+            PresenceOp.BattlegroundTake,
+            w =>
+            {
+                w.Write(nodeId);
+                w.Write(preferred);
+            },
+            static r =>
+            {
+                bool isHolder = r.ReadBoolean();
+                return new BattlegroundTakeResult(isHolder, BattlegroundWireCodec.ReadCommands(r));
+            });
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices)
+        => Send(
+            PresenceOp.BattlegroundPost,
+            w =>
+            {
+                w.Write(nodeId);
+                BattlegroundWireCodec.WriteNotices(w, notices);
+            },
+            static r => r.ReadBoolean());
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId)
+        => string.IsNullOrWhiteSpace(workerId)
+            ? []
+            : Send(
+                PresenceOp.BattlegroundDrain,
+                w => w.Write(workerId),
+                static r => (IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice>)[.. BattlegroundWireCodec.ReadNotices(r).Select(n => n.Notice)]);
 
     // ---- IPresenceAuthority --------------------------------------------------------------------------------------------------------------------
 
@@ -246,7 +302,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 /// Thread-safe if <c>holdsSocial</c> and <c>remote</c> are.
 /// </summary>
 public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> holdsSocial, Func<PeerPresenceClient?> remote)
-    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
+    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport, IBattlegroundHubTransport
 {
     private IPresenceAuthority Authority => holdsSocial() ? local : Remote;
 
@@ -272,15 +328,16 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
 
     public Task<IReadOnlyList<PresenceKick>> DrainKicksAsync(string workerId, CancellationToken cancellationToken = default) => Authority.DrainKicksAsync(workerId, cancellationToken);
 
-    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+    /// <inheritdoc cref="IGroupAuthorityTransport.ExecuteGroupCommand"/>
+    public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
     {
         if (holdsSocial())
         {
-            local.ExecuteGroupCommand(workerId, command);
+            local.ExecuteGroupCommand(workerId, command, commandId);
         }
         else
         {
-            Remote.ExecuteGroupCommand(workerId, command);
+            Remote.ExecuteGroupCommand(workerId, command, commandId);
         }
     }
 
@@ -299,6 +356,21 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
     }
 
     public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => holdsSocial() ? local.DrainGuildEvents(workerId) : Remote.DrainGuildEvents(workerId);
+
+    public bool SubmitBattlegroundCommands(string workerId, IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundCommand> commands)
+        => holdsSocial() ? local.SubmitBattlegroundCommands(workerId, commands) : Remote.SubmitBattlegroundCommands(workerId, commands);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId)
+        => holdsSocial() ? local.TakeBattlegroundCommands(nodeId) : Remote.TakeBattlegroundCommands(nodeId);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred)
+        => holdsSocial() ? local.TakeBattlegroundCommands(nodeId, preferred) : Remote.TakeBattlegroundCommands(nodeId, preferred);
+
+    public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices)
+        => holdsSocial() ? local.PostBattlegroundNotices(nodeId, notices) : Remote.PostBattlegroundNotices(nodeId, notices);
+
+    public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId)
+        => holdsSocial() ? local.DrainBattlegroundNotices(workerId) : Remote.DrainBattlegroundNotices(workerId);
 
     public int Count => Directory.Count;
 

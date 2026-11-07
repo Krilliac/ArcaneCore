@@ -13,6 +13,8 @@ public sealed class RuleVocabularyTests
 
         Assert.Contains("bot", vocabulary.Hosts.Select(h => h.Name));
         Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
+        Assert.Contains("creature", vocabulary.Hosts.Select(h => h.Name));
+        Assert.Contains(vocabulary.Primitives, p => p.Host == RuleHostKind.Creature && p.Name == "creature.say");
         Assert.Equal(
             ["event 1 world_event.started", "event 2 world_event.stopped", "event 3 world_event.update", "action 100 world_event.start_event", "action 101 world_event.stop_event"],
             vocabulary.Primitives.Where(p => p.Host == RuleHostKind.WorldEvent).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));

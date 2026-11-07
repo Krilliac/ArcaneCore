@@ -87,6 +87,19 @@ public class CombatHooks
     /// <summary>The hooks registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static CombatHooks For(Maps.WorldRuntime world) => s_registered.TryGetValue(world, out CombatHooks? hooks) ? hooks : Default;
 
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Maps.WorldRuntime, Func<Player, Player, bool>> s_sameGroup = new();
+
+    /// <summary>
+    /// The group test the free-for-all rule needs (vmangos Unit::IsInRaidWith, Unit.h:1173, called by GetReactionTo at Object.cpp:3655): two players of one group stay friends in an arena.
+    /// Per world; without one nobody is grouped. Called by the spell feature when it attaches and the social area is present.
+    /// </summary>
+    public static void RegisterSameGroup(Maps.WorldRuntime world, Func<Player, Player, bool> sameGroup)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        ArgumentNullException.ThrowIfNull(sameGroup);
+        s_sameGroup.AddOrUpdate(world, sameGroup);
+    }
+
     /// <summary>
     /// vmangos Unit::IsFriendlyTo. Default until faction templates are loaded: players of the
     /// same team are friendly; everything else is not.
@@ -114,20 +127,119 @@ public class CombatHooks
     internal static bool BothResolveToPlayers(Unit a, Unit b) => DuelRules.ControllingPlayer(a) is not null && DuelRules.ControllingPlayer(b) is not null;
 
     /// <summary>
-    /// Player pair friendliness. Uncharmed players share a team (<c>Player.Team</c> never changes under charm, so it is not trusted
-    /// for a charmed one). When either is charmed, each side is resolved to the player controlling it (vmangos GetAffectingPlayer)
-    /// and those players' teams are compared; a side with no controlling player (charmed by a creature) is not friendly.
-    /// vmangos adds same group or raid (IsInRaidWith, Object.cpp:3654-3664); no group resolver is reachable from the hooks, so teams stand in.
+    /// Player pair friendliness (vmangos WorldObject::GetReactionTo, Object.cpp:3614-3666). Each side is resolved to the player it acts for
+    /// (GetAffectingPlayer): a mind-controlled player acts for its charmer, whatever its own race says, and one charmed by a creature
+    /// resolves to none and is not friendly. The player himself and a group mate are friends first; two free-for-all flagged players
+    /// (an arena or a free-for-all realm) are then hostile whatever their teams; otherwise the same team is friendly.
+    /// <see cref="Player.Team"/> never changes under charm, so the teams compared are those of the controlling players.
     /// </summary>
     private static bool PlayersFriendly(Player pa, Player pb)
     {
-        if (!EitherCharmed(pa, pb))
+        if (DuelRules.ControllingPlayer(pa) is not { } ca || DuelRules.ControllingPlayer(pb) is not { } cb)
         {
-            return pa.Team == pb.Team;
+            return false;
         }
 
-        return DuelRules.ControllingPlayer(pa) is { } ca && DuelRules.ControllingPlayer(pb) is { } cb && ca.Team == cb.Team;
+        if (ReferenceEquals(ca, cb))
+        {
+            return true;
+        }
+
+        // The cheap tests come first: the group answer can only change the result when the pair is otherwise not friendly (two
+        // free-for-all players, or two teams), so the common same-team pair never reads the group manager. CanAttack runs on map
+        // threads; the group manager is written by packet handlers and bots under the world's serial gate (in-world packets run inside
+        // Map.Update), so its reads and writes must both be inside that gate or on the world thread. InSameGroup enforces that: a read
+        // from a thread outside the gate during the parallel phase is reported and made to take the gate (WorldRuntime.EnterSerialForRead).
+        if (!AreBothFreeForAll(ca, cb) && ca.Team == cb.Team)
+        {
+            return true;
+        }
+
+        return InSameGroup(pa, ca, cb);
     }
+
+    /// <summary>
+    /// The victim's own state allows an attack whoever the attacker is (the flag mask of vmangos IsValidAttackTarget, a GM in GM mode,
+    /// a creature in evade mode): not non-attackable, spawning, on a taxi, not selectable. <see cref="CanAttack"/> and the magnet
+    /// redirect share it (mangos-classic Unit::CanAttack, Relations.cpp:351).
+    /// </summary>
+    internal static bool IsAttackableState(Unit victim)
+    {
+        const UnitFlags notAttackable = UnitFlags.NonAttackable2 | UnitFlags.Spawning | UnitFlags.TaxiFlight
+            | UnitFlags.NotAttackable1 | UnitFlags.NotSelectable;
+        return (victim.UnitFlags & notAttackable) == 0
+            && victim is not Player { IsGameMaster: true }
+            && victim is not ICombatCreature { IsInEvadeMode: true };
+    }
+
+    /// <summary>
+    /// UNIT_FLAG_IMMUNE_TO_PLAYER / UNIT_FLAG_IMMUNE_TO_NPC in the attack check (mangos-classic Unit::CanAttack, Relations.cpp:376-385): a
+    /// victim immune to players refuses an attacker a player controls (acts for), one immune to NPCs refuses every other attacker; the same
+    /// test with the roles swapped on the attacker's own flags, judged by who controls the victim. The shape of
+    /// <see cref="ArcaneCore.Game.Combat.Threat.ThreatRules.CanPullPetOwner"/>.
+    /// </summary>
+    private static bool IsBlockedByImmuneToFlags(Unit attacker, Unit victim)
+    {
+        if (t_ignoreImmuneToFlags > 0)
+        {
+            return false;
+        }
+
+        if (((attacker.UnitFlags | victim.UnitFlags) & (UnitFlags.ImmuneToPlayer | UnitFlags.ImmuneToNpc)) == 0)
+        {
+            return false;
+        }
+
+        UnitFlags victimBlocks = attacker.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        UnitFlags attackerBlocks = victim.IsCharmerOrOwnerPlayerOrPlayerItself ? UnitFlags.ImmuneToPlayer : UnitFlags.ImmuneToNpc;
+        return (victim.UnitFlags & victimBlocks) != 0 || (attacker.UnitFlags & attackerBlocks) != 0;
+    }
+
+    [ThreadStatic]
+    private static int t_ignoreImmuneToFlags;
+
+    /// <summary>
+    /// <see cref="CanAttack"/> without the ImmuneToPlayer / ImmuneToNpc clause, for a script-forced attack and for keeping a started fight.
+    /// mangos-classic <c>UnitAI::AttackStart</c> (UnitAI.cpp:283-294) goes straight to <c>Unit::Attack</c>, which has no CanAttack or immunity check
+    /// (Unit.cpp:6259), and vmangos silithus.cpp:1463-1470 fights with UNIT_FLAG_IMMUNE_TO_NPC set. On-sight, assist, target-selection and spell paths
+    /// keep using <see cref="CanAttack"/>. Runs on the calling thread only; the bypass is scoped to this call (virtual overrides are included).
+    /// </summary>
+    public bool CanAttackIgnoringImmuneToFlags(Unit attacker, Unit victim)
+    {
+        t_ignoreImmuneToFlags++;
+        try
+        {
+            return CanAttack(attacker, victim);
+        }
+        finally
+        {
+            t_ignoreImmuneToFlags--;
+        }
+    }
+
+    private static bool InSameGroup(Unit mapOf, Player a, Player b)
+    {
+        if (mapOf.Map?.World is not { } world || !s_sameGroup.TryGetValue(world, out Func<Player, Player, bool>? sameGroup))
+        {
+            return false;
+        }
+
+        using Maps.WorldRuntime.SerialScope gate = world.EnterSerialForRead("GroupManager");
+        return sameGroup(a, b);
+    }
+
+    /// <summary>
+    /// The free-for-all hostile clause of GetReactionTo (vmangos Object.cpp:3661-3662) for any two units: the players they act for
+    /// (<see cref="DuelRules.ControllingPlayer"/>) are two different, ungrouped players who both carry the free-for-all flag. Hunter traps,
+    /// pets and totems of such a player therefore treat the other one's side as hostile whatever the teams. False when a side acts for no player.
+    /// </summary>
+    internal static bool AreFreeForAllOpponents(Unit a, Unit b)
+        => DuelRules.ControllingPlayer(a) is { } ca && DuelRules.ControllingPlayer(b) is { } cb
+            && !ReferenceEquals(ca, cb) && AreBothFreeForAll(ca, cb) && !InSameGroup(a, ca, cb);
+
+    /// <summary>Both players carry the free-for-all PvP flag (vmangos IsFFAPvP on each, GetReactionTo and IsValidAttackTarget).</summary>
+    private static bool AreBothFreeForAll(Player a, Player b)
+        => (a.Flags & PlayerFlags.FfaPvp) != 0 && (b.Flags & PlayerFlags.FfaPvp) != 0;
 
     /// <summary>
     /// vmangos Unit::IsHostileTo (GetReactionTo(target) &lt;= REP_HOSTILE): the FACTION reaction, which unlike
@@ -140,7 +252,7 @@ public class CombatHooks
     /// <summary>
     /// Whether <paramref name="attacker"/> may attack <paramref name="victim"/> (the parts of
     /// vmangos Unit::IsValidAttackTarget / IsTargetableBy that do not need factions): both in
-    /// the same map, the victim alive and not flagged non-attackable, not a GM in GM mode, not
+    /// the same map, the victim in the world and not flagged non-attackable, not a GM in GM mode, not
     /// friendly, and an enemy player must be PvP-flagged.
     /// </summary>
     public virtual bool CanAttack(Unit attacker, Unit victim)
@@ -150,19 +262,12 @@ public class CombatHooks
             return false;
         }
 
-        const UnitFlags notAttackable = UnitFlags.NonAttackable2 | UnitFlags.Spawning | UnitFlags.TaxiFlight
-            | UnitFlags.NotAttackable1 | UnitFlags.NotSelectable;
-        if ((victim.UnitFlags & notAttackable) != 0)
+        if (!IsAttackableState(victim))
         {
             return false;
         }
 
-        if (victim is Player { IsGameMaster: true })
-        {
-            return false;
-        }
-
-        if (victim is ICombatCreature { IsInEvadeMode: true })
+        if (IsBlockedByImmuneToFlags(attacker, victim))
         {
             return false;
         }
@@ -175,7 +280,7 @@ public class CombatHooks
         // Player vs player outside duels needs the victim flagged for PvP (vmangos
         // Unit::IsValidAttackTarget → player targets must be IsPvP unless FFA/duel). A started duel is
         // checked first and does not test Finished (Object.cpp:3797-3800), so it holds for the whole finishing tick.
-        if (DuelRules.ControllingPlayer(attacker) is { } pa && DuelRules.ControllingPlayer(victim) is { } pv && !ReferenceEquals(pa, pv) && (pv.UnitFlags & UnitFlags.Pvp) == 0 && !DuelRules.IsInDuelWith(pa, pv))
+        if (DuelRules.ControllingPlayer(attacker) is { } pa && DuelRules.ControllingPlayer(victim) is { } pv && !ReferenceEquals(pa, pv) && (pv.UnitFlags & UnitFlags.Pvp) == 0 && !AreBothFreeForAll(pa, pv) && !DuelRules.IsInDuelWith(pa, pv))
         {
             return false;
         }

@@ -29,7 +29,7 @@ export const SHADING_OPTIONS = [
 ];
 
 export class TopBar {
-    constructor(app, viewport, { onPalette, onShortcuts }) {
+    constructor(app, viewport, { onPalette, onShortcuts, onClientFiles = null }) {
         this.app = app;
         this.viewport = viewport;
         this.shadingMode = 0;
@@ -106,6 +106,9 @@ export class TopBar {
         });
         this.paletteButton = h('button', { class: 'button', type: 'button', title: 'Command palette (Ctrl+K)', on: { click: () => onPalette() } },
             h('span', { text: 'Commands' }), h('kbd', { class: 'kbd', text: 'Ctrl K' }));
+        this.clientFilesButton = onClientFiles === null
+            ? null
+            : h('button', { class: 'button', type: 'button', text: 'Client files', title: 'Draw textures from your own WoW 1.12.1 folder (read in this browser only)', on: { click: () => onClientFiles() } });
         this.helpButton = h('button', { class: 'button icon-button', type: 'button', text: '?', title: 'Keyboard shortcuts (?)', aria: { label: 'Keyboard shortcuts' }, on: { click: () => onShortcuts() } });
 
         this.element = h('header', { class: 'topbar', role: 'banner' },
@@ -118,7 +121,7 @@ export class TopBar {
             h('div', { class: 'topbar-group tb-group-shading' }, this.shading.element, this.contoursButton),
             h('div', { class: 'topbar-spacer' }),
             h('div', { class: 'topbar-group popover-host' }, this.captureButton, this.capturePanel),
-            h('div', { class: 'topbar-group' }, this.themeButton, this.hudButton, this.paletteButton, this.helpButton));
+            h('div', { class: 'topbar-group' }, ...(this.clientFilesButton === null ? [] : [this.clientFilesButton]), this.themeButton, this.hudButton, this.paletteButton, this.helpButton));
         this.mapSelect.id = 'map-select';
 
         const refresh = () => this.update();

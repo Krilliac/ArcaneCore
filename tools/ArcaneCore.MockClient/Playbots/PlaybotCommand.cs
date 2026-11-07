@@ -9,7 +9,7 @@ internal static class PlaybotCommand
     internal const string Usage = "arcane-mock playbot --account NAME --character NAME --password-env VAR"
         + " [--realm 127.0.0.1:3724] [--duration-s 120] [--steps 120] [--attack-entry 6]"
         + " [--movement true] [--llm false] [--model qwen3.5:4b] [--model-endpoint http://127.0.0.1:11435/]"
-        + " [--report NEW_FILE.json]";
+        + " [--observe false] [--report NEW_FILE.json]";
 
     internal sealed record Options(PlaybotRunOptions Run, bool Llm, string Model, Uri Endpoint, string? Report);
 
@@ -18,7 +18,7 @@ internal static class PlaybotCommand
         List<string> login = [];
         int seconds = 120, steps = 120;
         uint entry = 0;
-        bool movement = true, llm = false;
+        bool movement = true, llm = false, observe = false;
         string model = "qwen3.5:4b", endpoint = "http://127.0.0.1:11435/";
         string? report = null;
         for (int i = 0; i < args.Length; i++)
@@ -38,6 +38,7 @@ internal static class PlaybotCommand
                     break;
                 case "--movement": movement = Boolean(value); break;
                 case "--llm": llm = Boolean(value); break;
+                case "--observe": observe = Boolean(value); break;
                 case "--model": model = value; break;
                 case "--model-endpoint": endpoint = value; break;
                 case "--report": report = Path.GetFullPath(value); break;
@@ -46,7 +47,7 @@ internal static class PlaybotCommand
         }
         if (!login.Contains("--character")) throw new ArgumentException("An explicit disposable --character is required.");
         LiveSession.Options auth = LiveSession.Parse(login.ToArray());
-        var run = new PlaybotRunOptions(auth.Realm, auth.Account, auth.Password, auth.Character, seconds, steps, entry, movement);
+        var run = new PlaybotRunOptions(auth.Realm, auth.Account, auth.Password, auth.Character, seconds, steps, entry, movement, observe);
         AutonomousPlaybot.Validate(run);
         if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? uri)) throw new ArgumentException("Invalid model endpoint.");
         OllamaPlaybotSelector.ValidateEndpoint(uri);

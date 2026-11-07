@@ -146,6 +146,38 @@ public sealed class TravelTriggerPortalPlanTests
         });
     }
 
+    /// <summary>
+    /// The wiring of <c>PlayerbotTravel.BuildFacts</c>: with no mesh
+    /// deciding, the walkable test of the facts knows the tall trigger's two levels, so the planner takes the trigger instead of one
+    /// walk that fails only after thousands of yards. Passing no trigger portals to the walkable test would plan the walk.
+    /// </summary>
+    [Fact]
+    public async Task WithNoMeshDeciding_ATallTriggersTwoLevelsAreNotWalked_TheTriggerIsTaken()
+    {
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync();
+        await world.PlaceAsync(0, ShipTestWorld.Start);
+        PlayerbotOptions options = TravelJourneyShipTests.Options();
+        TravelPlace low = new(0, new Vector3(8700f, 900f, 10f)), low2 = new(0, new Vector3(8900f, 1000f, 30f)), high = new(0, new Vector3(9800f, 2000f, 1320f));
+        TravelRoute? route = await world.OnWorldAsync(() =>
+        {
+            WorldMaps maps = WorldMaps.Of(world.Host.World);
+            maps.ReplaceAreaTriggerTables(maps.BuildAreaTriggerTables(InMemoryMapDataStore.Content with
+            {
+                AreaTriggers = [Sphere(Ruttheran, 0, new Vector3(8799.41f, 969.787f, 30.24f))],
+                AreaTriggerTeleports = [Teleport(Ruttheran, 0, new Vector3(9946.25f, 2612.97f, 1316.49f))],
+            }));
+            TravelFacts facts = PlayerbotTravel.BuildFacts(world.Session, world.Player, options);
+            Assert.Single(facts.TriggerPortals);
+            Assert.False(facts.Walkable!(low, high));
+            Assert.False(facts.Walkable!(high, low));
+            Assert.True(facts.Walkable!(low, low2));
+            return PlayerbotTravelPlanner.Plan(facts, low, high);
+        });
+        Assert.NotNull(route);
+        Assert.Equal([TravelMeans.Walk, TravelMeans.AreaTrigger, TravelMeans.Walk], Means(route));
+        Assert.Equal(Ruttheran, route.Legs[1].TriggerId);
+    }
+
     // --- requirements prefilter (BuildFacts leaves out a trigger the bot cannot pass) ------------------------------------
 
     private static AreaTriggerTeleport Row(byte level = 0, uint item = 0, uint item2 = 0, uint quest = 0, uint condition = 0)

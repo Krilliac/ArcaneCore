@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -128,6 +129,41 @@ public sealed class KeyedStoreWriteQueueTests
         await rig.Queue.RetryRetainedAsync().WaitAsync(Wait);
         Assert.Equal(["group:1=1"], rig.Store.Log);
         Assert.Empty(rig.Queue.RetainedKeys);
+    }
+
+    /// <summary>
+    /// The flush's retry checks only what it can owe (OwedKeys leaves a lease refusal out), so it must not re-run a lease-refused key either: that would spend the handoff's single shared budget
+    /// (MaxAttempts, RetryDelay each) on writes the flush never reports. The stop still retries every retained key once, so a regained lease lands it.
+    /// </summary>
+    [Fact]
+    public async Task AFlushRetry_DoesNotReRunALeaseRefusedKey_ButStillRetriesAGenuineFailure_AndTheStopRetriesBoth()
+    {
+        await using Rig rig = Rig.Create();
+        int refused = 0;
+        rig.Queue.Save("ticket:1", _ =>
+        {
+            Interlocked.Increment(ref refused);
+            return Task.FromException(new RealmLeaseNotHeldException("social"));
+        });
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+        Assert.Equal(3, Volatile.Read(ref refused)); // the first write: MaxAttempts
+        Assert.Equal(["ticket:1"], rig.Queue.RetainedKeys);
+
+        await rig.Queue.RetryRetainedAsync().WaitAsync(Wait); // completes: a lease refusal is not checked
+        Assert.Equal(3, Volatile.Read(ref refused)); // and not re-run
+        Assert.Equal(["ticket:1"], rig.Queue.RetainedKeys);
+
+        rig.Store.FailNext(1000);
+        rig.Queue.Save("group:2", s => s.SetAsync("group:2", 2));
+        await rig.Queue.FlushAsync().WaitAsync(Wait);
+        int attemptsBefore = rig.Store.Attempts;
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Queue.RetryRetainedAsync().WaitAsync(Wait));
+        Assert.Equal("group writes are not durable: group:2", error.Message); // names the genuine key only
+        Assert.True(rig.Store.Attempts > attemptsBefore, "the genuine failure was not retried");
+        Assert.Equal(3, Volatile.Read(ref refused)); // still untouched
+
+        await Assert.ThrowsAsync<InvalidOperationException>(rig.Queue.StopAsync);
+        Assert.Equal(4, Volatile.Read(ref refused)); // the stop's final retry tried it once
     }
 
     [Fact]

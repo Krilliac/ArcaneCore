@@ -52,10 +52,10 @@ public sealed class PlayerbotQuestGoalsTests
             };
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(1, queries);
             quest.Session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             return true;
         });
@@ -69,7 +69,7 @@ public sealed class PlayerbotQuestGoalsTests
         {
             Player player = quest.Session.Player!;
             Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
-            Assert.False(new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }).HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true }).HasCandidate(player)));
             return true;
         });
     }
@@ -83,7 +83,7 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = quest.Session.Player!;
             Assert.True(quest.Feature.Services.CanTakeQuest(player, QuestInteractionFixture.QuestId));
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            for (int think = 0; think < 10; think++) Assert.False(goals.HasCandidate(player));
+            for (int think = 0; think < 10; think++) Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             Assert.Equal(1, goals.TripEvaluations);
             return true;
         });
@@ -114,7 +114,7 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.True(goals.AbandonDistantCompletedQuest(player));
             Assert.Equal(QuestStatus.None, state.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             Assert.Equal(QuestConstants.MaxQuestLogSize, state.Quests.FindSlot(QuestInteractionFixture.QuestId));
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt));
             // The unreachable-ender mark lasts a minute first (PlayerbotDeferLedger), then ends: a repeat is what makes it longer.
             Assert.True(suspensions.IsQuestSuspended(QuestInteractionFixture.QuestId, markedAt + 59_000));
@@ -151,10 +151,10 @@ public sealed class PlayerbotQuestGoalsTests
             {
                 float before = player.X;
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                brain.Update(500);
+                OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 PlayerbotMotion.ElapseForTests(player, 500);
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                brain.Update(500);
+                OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 Assert.True(player.X < before, "the completed quest must begin the return walk");
                 Assert.Equal(PlayerbotGoalKind.Quest, brain.Goal);
                 Assert.Equal(QuestInteractionFixture.QuestId, brain.QuestId);
@@ -170,7 +170,7 @@ public sealed class PlayerbotQuestGoalsTests
                 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded == false; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
             Assert.True(quest.Feature.PendingSettlementCount > 0
                 || quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded,
@@ -497,7 +497,7 @@ public sealed class PlayerbotQuestGoalsTests
             quest.Host.WorldServices.GetRequiredService<GameObjectLootFeature>().ReplaceLootContent(new LootContent(
                 [(LootTableKind.Creature, new LootStoreRow(3127, 4886, -40f, 0, 1, 1))], []));
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            Assert.True(goals.HasCandidate(quest.Session.Player!));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(quest.Session.Player!)));
             return true;
         });
     }
@@ -529,12 +529,12 @@ public sealed class PlayerbotQuestGoalsTests
             quest.Feature.Options.OrdinaryRewardQuestIds = [];
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
             Player player = quest.Session.Player!;
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             for (int i = 0; i < 3; i++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
             quest.Feature.Options.OrdinaryRewardQuestIds = [QuestInteractionFixture.QuestId];
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             return true;
         });
     }
@@ -561,13 +561,13 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = session.Player!;
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             // The bags fill once the exchange has begun: a giver of a source item the full bags cannot take is not asked at all (c2f3484f).
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
                 Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
             for (int think = 0; think < 3; think++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(1, queries);
             Assert.Null(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // refused
             return true;
@@ -579,7 +579,7 @@ public sealed class PlayerbotQuestGoalsTests
             await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
             {
                 for (int think = 0; think < 2; think++)
-                { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(session.Player!, 500); }
+                { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(session.Player!, 500)); }
                 return true;
             }));
         }
@@ -587,7 +587,7 @@ public sealed class PlayerbotQuestGoalsTests
         await quest.Host.OnWorldAsync(() => OnFrozenThinkClock(() =>
         {
             Assert.Equal(1, queries);
-            Assert.False(goals.HasCandidate(session.Player!));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(session.Player!)));
             return true;
         }));
     }
@@ -641,7 +641,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 5; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.False(goals.Update(player, 500));
+                Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             }
 
             Assert.Equal(0, chooseRewardSent);
@@ -685,7 +685,7 @@ public sealed class PlayerbotQuestGoalsTests
                 for (int think = 0; think < 3; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(1);
-                    brain.Update(500);
+                    OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 }
 
                 Assert.True(brain.QuestGoals.IsRefused(QuestInteractionFixture.QuestId));
@@ -732,7 +732,7 @@ public sealed class PlayerbotQuestGoalsTests
                 for (int think = 0; think < 3; think++)
                 {
                     session.ManagedBudget = new ManagedActionBudget(1);
-                    brain.Update(500);
+                    OnFrozenThinkClock(() => { brain.Update(500); return true; });
                 }
 
                 Assert.True(paths.PartialQueries > 0, "the exact plan failed and a toward-leg was asked");
@@ -785,7 +785,7 @@ public sealed class PlayerbotQuestGoalsTests
             // First think sends CmsgQuestgiverCompleteQuest and transitions to CompleteResponse,
             // while the server immediately queues SmsgQuestgiverRequestItems into the session's managed inbox:
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal("CompleteResponse", goals.StageName);
             return true;
         });
@@ -800,7 +800,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int i = 0; i < 3; i++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.Null(goals.LastTurnInRefusal);
@@ -843,18 +843,18 @@ public sealed class PlayerbotQuestGoalsTests
             configure(feature);
             var player = session.Player!;
             session.ManagedBudget = new ManagedActionBudget(0);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Null(feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
             for (int i = 0; i < 2; i++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(QuestStatus.Incomplete, feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
-            session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500);
+            session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(90u, goals.PreferredCreatureEntry);
             Assert.False(feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded);
             // A producer event supplies completed progress; the bot never fabricates it.
             feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
             for (int i = 0; i < 3; i++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.True(feature.PendingSettlementCount > 0 || feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)!.Rewarded,
                 "Reward stage=" + goals.StageName + "; packets=" + string.Join(',', session.DrainManagedPackets().Select(p => p.Opcode)));
             return true;
@@ -920,7 +920,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.False(goals.Update(player, 500));
+                Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
                 Assert.Equal(0u, goals.QuestId);
                 Assert.Equal(0u, goals.TargetEntry);
             }
@@ -946,7 +946,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.Equal(QuestStatus.Complete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
@@ -971,7 +971,7 @@ public sealed class PlayerbotQuestGoalsTests
         {
             Player player = session.Player!;
             session.ManagedBudget = new ManagedActionBudget(1);
-            Assert.False(goals.Update(player, 500));
+            Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
             return true;
         });
@@ -1004,7 +1004,7 @@ public sealed class PlayerbotQuestGoalsTests
                 && !quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             return true;
@@ -1016,7 +1016,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int i = 0; i < 6 && suspensions.Ledger.Strikes(new DeferKey(DeferKind.UnreachableQuest, Q)) != 0; i++)
             {
                 quest.Session.ManagedBudget = new ManagedActionBudget(1);
-                goals!.Update(player, 500);
+                OnFrozenThinkClock(() => goals!.Update(player, 500));
             }
 
             Assert.True(quest.Feature.Services.StateOf(player)!.Quests.Get(Q)!.Rewarded);
@@ -1082,25 +1082,30 @@ public sealed class PlayerbotQuestGoalsTests
     /// <summary>
     /// The quest giver's fixture with a full journal's worth of quests (<see cref="Filler"/>, kill quests of creature 90 no giver offers)
     /// and, at the fixture's giver instead of its own quest, <see cref="Offered"/>: a level 10 quest, worth taking for a level 10 bot.
+    /// With <c>offeredRequiredClasses</c> the offered quest is class-restricted (<see cref="AllClasses"/> is every class, so the bot qualifies).
     /// The first <c>grey</c> fillers are grey to a level 10 bot (grey level 4): levels 3, 2, 2, ...
     /// </summary>
-    private sealed class FullLogQuests(QuestInteractionFixture original, int grey) : IQuestContentStore
+    private sealed class FullLogQuests(QuestInteractionFixture original, int grey, int exemptIndex = -1, uint requiredClasses = 0, int prevQuest = 0, uint offeredRequiredClasses = 0, int offeredLevel = 10, int offeredPrevQuest = 0) : IQuestContentStore
     {
         public const uint Filler = 910_000;
         public const uint Offered = 910_100;
 
+        /// <summary>A RequiredClasses mask covering every 1.12 class (a superset): nonzero (so the quest counts as class-restricted) and satisfied by any bot.</summary>
+        public const uint AllClasses = 0x5FF;
+
         public async Task<QuestContent> LoadAsync(CancellationToken cancellationToken = default)
         {
             QuestContent content = await ((IQuestContentStore)original).LoadAsync(cancellationToken);
-            static QuestTemplate Kill(uint entry, int level) => new()
+            static QuestTemplate Kill(uint entry, int level, uint classes = 0, int prev = 0) => new()
             {
                 Entry = entry, Method = 2, MinLevel = 1, QuestLevel = level, Title = "Quest " + entry, Details = "Kill one.",
                 RequestItemsText = "Kill one.", ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 1,
+                RequiredClasses = classes, PrevQuestId = prev,
             };
             var templates = new List<QuestTemplate>(content.Templates);
             for (int i = 0; i < QuestConstants.MaxQuestLogSize; i++)
-                templates.Add(Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
-            templates.Add(Kill(Offered, 10));
+                templates.Add(i == exemptIndex ? Kill(Filler + (uint)i, 3, requiredClasses, prevQuest) : Kill(Filler + (uint)i, i < grey ? (i == 0 ? 3 : 2) : 10));
+            templates.Add(Kill(Offered, offeredLevel, offeredRequiredClasses, offeredPrevQuest));
             var offered = new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = Offered };
             return new QuestContent(templates, [.. content.Starters.Where(r => r.Quest != QuestInteractionFixture.QuestId), offered],
                 [.. content.Enders, offered]);
@@ -1137,7 +1142,7 @@ public sealed class PlayerbotQuestGoalsTests
         int abandons = 0;
         quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
         quest.Session.ManagedBudget = new ManagedActionBudget(1);
-        goals.Update(player, 500);
+        OnFrozenThinkClock(() => goals.Update(player, 500));
         return abandons;
     }
 
@@ -1178,6 +1183,89 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    /// <summary>A grey class-restricted quest (class ability, totem, form or pet quest) is never abandoned, and is still hunted.</summary>
+    [Fact]
+    public async Task AGreyClassRestrictedQuest_IsNeitherDroppedNorSkippedForHunting()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!));
+            Assert.Equal(0u, PlayerbotQuestGoals.GreyQuestToDrop(player, quest.Feature.Services, state));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals, player)));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.False(goals.IsRefused(FullLogQuests.Filler));
+            goals.RefreshObjectiveEntry(player, quest.Feature.Services, state);
+            Assert.Equal(90u, goals.PreferredCreatureEntry);
+            return true;
+        });
+    }
+
+    /// <summary>A grey chain step (a quest with a previous quest) is kept like a class quest.</summary>
+    [Fact]
+    public async Task AGreyChainStep_IsNotDropped()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, prevQuest: (int)FullLogQuests.Filler + 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            Assert.NotEqual(0, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!.Template.PrevQuestId);
+            Assert.Equal(0u, PlayerbotQuestGoals.GreyQuestToDrop(player, quest.Feature.Services, state));
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals, player)));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>With DropGreyQuests on, a full log does not shed a grey class quest (nothing to shed, so no room and the offer is not taken).</summary>
+    [Fact]
+    public async Task AFullLog_DoesNotShedAGreyClassQuest_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            Assert.Equal(FullLogQuests.Filler, PlayerbotQuestGoals.LowValueQuestToShed(player, quest.Feature.Services, state));
+            Assert.Equal(0u, PlayerbotQuestGoals.LowValueQuestToShed(player, quest.Feature.Services, state, keepClassAndChain: true));
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 4; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(0, abandons);
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.Null(state.Quests.Get(FullLogQuests.Offered));
+            return true;
+        });
+    }
+
+    /// <summary>Control for the test above: with DropGreyQuests off the full log sheds the grey class quest and takes the offer.</summary>
+    [Fact]
+    public async Task AFullLog_ShedsAGreyClassQuest_WhenDropGreyQuestsIsOff()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1, exemptIndex: 0, requiredClasses: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+            for (int think = 0; think < 4 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(1, abandons);
+            Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task WithDropGreyQuestsOff_AGreyQuestIsKeptAndStillHunted()
     {
@@ -1212,6 +1300,59 @@ public sealed class PlayerbotQuestGoalsTests
         });
     }
 
+    /// <summary>NowMs wraps (WorldRuntime.NowMs); a bot that logs in while it is past 2^31 must still drop grey quests: 0 is "never shed", not a deadline.</summary>
+    [Fact]
+    public async Task AGreyQuest_IsDropped_WhenTheWorldClockIsPastTwoToTheThirtyOne()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 3), manualClock: true, clockStartMs: 3_000_000_000L);
+        PlayerbotQuestGoals? goals = null;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.True(quest.Host.World.NowMs >= int.MaxValue);
+            PlayerNpcState state = AddFillers(quest, player, 3);
+            goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(1, OnFrozenThinkClock(() => Think(quest, goals!, player))); // the unfixed gate never opens here: 0
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals!, player))); // the deadline set at this now still holds
+            Assert.Equal(2, Fillers(state));
+            return true;
+        });
+        // The bot may also have started taking the fixture's offered quest (its giver never answers here), and a shed waits for that stage to
+        // time out (15 s, then a 2 s backoff). So step the clock and think until the second grey quest goes; it must not go before one interval.
+        uint firstShedMs = 0;
+        await quest.Host.OnWorldAsync(() => { firstShedMs = quest.Host.World.NowMs; return true; });
+        int shed = 0;
+        string diagnostics = "";
+        // Just short of one interval nothing may be shed (the gate holds whatever the accept stage does); then the clock steps one second at a
+        // time and the shed happens as soon as the pending accept stage and its backoff are over.
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs - 1000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            Assert.Equal(0, OnFrozenThinkClock(() => Think(quest, goals!, player)));
+            Assert.Equal(2, Fillers(quest.Feature.Services.StateOf(player)!));
+            return true;
+        });
+        for (int step = 0; step < 40 && shed == 0; step++)
+        {
+            await quest.Host.World.AdvanceClockAsync(1000);
+            await quest.Host.OnWorldAsync(() =>
+            {
+                Player player = quest.Session.Player!;
+                PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+                uint now = quest.Host.World.NowMs;
+                diagnostics = $"alive={player.IsAlive} combat={player.Combat.IsInCombat} settling={player.IsQuestSettlementPending} fillers={Fillers(state)} "
+                    + $"now={now} backingOff={goals!.IsBackingOff(now)}";
+                shed = OnFrozenThinkClock(() => Think(quest, goals!, player));
+                if (shed != 0)
+                    Assert.True(unchecked(now - firstShedMs) >= PlayerbotQuestGoals.GreyShedIntervalMs, $"second shed came early: {unchecked(now - firstShedMs)} ms");
+                return true;
+            });
+        }
+
+        Assert.True(shed == 1, $"expected the second grey quest to be shed after the interval; {diagnostics}");
+    }
+
     /// <summary>One abandon per think, and the next one waits <see cref="PlayerbotQuestGoals.GreyShedIntervalMs"/>.</summary>
     [Fact]
     public async Task GreyQuests_AreDroppedOnePerThink_AndRateLimited()
@@ -1228,14 +1369,14 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(2, Fillers(state));
             return true;
         });
-        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs / 2); // still inside the interval
+        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs - 1000); // still inside the interval, just short of the boundary
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = quest.Session.Player!;
             Assert.Equal(0, Think(quest, goals!, player));
             return true;
         });
-        await quest.Host.World.AdvanceClockAsync(PlayerbotQuestGoals.GreyShedIntervalMs);
+        await quest.Host.World.AdvanceClockAsync(1000); // the interval is now complete
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = quest.Session.Player!;
@@ -1244,6 +1385,165 @@ public sealed class PlayerbotQuestGoalsTests
             Assert.Equal(1, Fillers(state));
             return true;
         });
+    }
+
+    [Fact]
+    public void DropGreyQuests_DefaultsToOn()
+        => Assert.True(new PlayerbotOptions().DropGreyQuests);
+
+    [Fact]
+    public async Task ADeadBot_DoesNotDropAGreyQuest()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 1));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = AddFillers(quest, player, 1);
+            player.Health = 0;
+            player.Map!.Combat.KillPlayer(player);
+            Assert.False(player.IsAlive);
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
+            Assert.Equal(0, Think(quest, goals, player));
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>With a free slot a giver's grey quest is skipped (never asked for) when DropGreyQuests is on.</summary>
+    [Fact]
+    public async Task AGreyQuestAtAGiver_WithAFreeSlot_IsNotTaken_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20; // the offered level 10 quest is grey now (grey level 13)
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            int asks = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode is WorldOpcode.CmsgQuestgiverQueryQuest or WorldOpcode.CmsgQuestgiverAcceptQuest) asks++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 6; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(0, asks);
+            Assert.Null(state.Quests.Get(FullLogQuests.Offered));
+            return true;
+        });
+    }
+
+    /// <summary>Control for the test above: the same grey offer is taken when DropGreyQuests is off, so the skip is the option's doing.</summary>
+    [Fact]
+    public async Task AGreyQuestAtAGiver_WithAFreeSlot_IsTaken_WhenDropGreyQuestsIsOff()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20;
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+            for (int think = 0; think < 6 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>The giver-side exemption: a grey class-restricted offer is still taken with DropGreyQuests on (FindCandidate skips only droppable grey quests).</summary>
+    [Fact]
+    public async Task AGreyClassQuestAtAGiver_WithAFreeSlot_IsStillTaken_WhenDropGreyQuestsIsOn()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0, offeredRequiredClasses: FullLogQuests.AllClasses));
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            player.Level = 20; // the offered level 10 quest is grey now
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Offered)!));
+            PlayerNpcState state = quest.Feature.Services.StateOf(player)!;
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 6 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// Full log, DropGreyQuests on: a grey class-restricted or chain offer counts as worth taking (IsGreyForBot false at both FindCandidate sites), so it
+    /// wants room and the failed quest in the log is abandoned (TryMakeRoomInFullLog); a plain grey offer wants no room (the control below). Reverting either
+    /// IsGreyForBot site in FindCandidate to IsGrey fails the first two cases.
+    /// </summary>
+    [Theory]
+    [InlineData(FullLogQuests.AllClasses, 0)]
+    [InlineData(0u, -((int)FullLogQuests.Filler + 1))]
+    public async Task AFullLog_ShedsItsFailedQuest_ForAGreyClassOrChainOffer_WhenDropGreyQuestsIsOn(uint offeredClasses, int offeredPrev)
+    {
+        Assert.True(await FullLogAbandonsAFailedQuestForAGreyOffer(offeredClasses, offeredPrev));
+    }
+
+    [Fact]
+    public async Task AFullLog_DoesNotShedItsFailedQuest_ForAPlainGreyOffer_WhenDropGreyQuestsIsOn()
+        => Assert.False(await FullLogAbandonsAFailedQuestForAGreyOffer(0, 0));
+
+    private static async Task<bool> FullLogAbandonsAFailedQuestForAGreyOffer(uint offeredClasses, int offeredPrev)
+    {
+        // Level 10 bot: grey level 4, so the level 3 offer is grey while the level 10 fillers are not (the grey shed has nothing to drop).
+        await using QuestHost quest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 0,
+            offeredRequiredClasses: offeredClasses, offeredLevel: 3, offeredPrevQuest: offeredPrev));
+        bool abandoned = false;
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = quest.Session.Player!;
+            PlayerNpcState state = FillTheLog(quest, player);
+            Assert.True(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Offered)!));
+            Assert.False(PlayerbotQuestGoals.IsGrey(player, quest.Feature.Services.Quests.Get(FullLogQuests.Filler)!));
+            Assert.True(quest.Feature.Services.CanTakeQuest(player, FullLogQuests.Offered)); // precondition: the offer is takeable, so it wants room (negative prev = current quest)
+            state.Quests.Get(FullLogQuests.Filler)!.Status = QuestStatus.Failed;
+            int abandons = 0;
+            quest.Session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++; };
+            var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+            for (int think = 0; think < 4 && abandons == 0; think++)
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
+            abandoned = abandons > 0;
+            if (abandoned) Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler)?.Status);
+            return true;
+        });
+        return abandoned;
+    }
+
+    /// <summary>IsDroppableGrey and IsGreyForBot: a plain grey quest is grey for the bot either way; a grey class or chain quest only with DropGreyQuests off.</summary>
+    [Fact]
+    public async Task IsDroppableGreyAndIsGreyForBot_ExemptGreyClassAndChainQuests_OnlyWithDropGreyQuestsOn()
+    {
+        await using QuestHost classQuest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 2, exemptIndex: 0, requiredClasses: 1));
+        await classQuest.Host.OnWorldAsync(() =>
+        {
+            Player player = classQuest.Session.Player!;
+            player.Level = 10;
+            AssertGreyRules(classQuest, player, classQuest.Feature.Services.Quests.Get(FullLogQuests.Filler)!, classQuest.Feature.Services.Quests.Get(FullLogQuests.Filler + 1)!);
+            return true;
+        });
+        await using QuestHost chainQuest = await QuestHost.StartAsync(quests: original => new FullLogQuests(original, grey: 2, exemptIndex: 0, prevQuest: (int)FullLogQuests.Filler + 1));
+        await chainQuest.Host.OnWorldAsync(() =>
+        {
+            Player player = chainQuest.Session.Player!;
+            player.Level = 10;
+            AssertGreyRules(chainQuest, player, chainQuest.Feature.Services.Quests.Get(FullLogQuests.Filler)!, chainQuest.Feature.Services.Quests.Get(FullLogQuests.Filler + 1)!);
+            return true;
+        });
+    }
+
+    private static void AssertGreyRules(QuestHost quest, Player player, Quest exemptGrey, Quest plainGrey)
+    {
+        Assert.True(PlayerbotQuestGoals.IsGrey(player, exemptGrey));
+        Assert.True(PlayerbotQuestGoals.IsGrey(player, plainGrey));
+        Assert.False(PlayerbotQuestGoals.IsDroppableGrey(player, exemptGrey));
+        Assert.True(PlayerbotQuestGoals.IsDroppableGrey(player, plainGrey));
+        var on = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = true });
+        var off = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
+        Assert.False(on.IsGreyForBot(player, exemptGrey));
+        Assert.True(on.IsGreyForBot(player, plainGrey));
+        Assert.True(off.IsGreyForBot(player, exemptGrey));
+        Assert.True(off.IsGreyForBot(player, plainGrey));
     }
 
     /// <summary>While the drop is rate-limited a grey quest still in the log gives the bot no kill objective to hunt.</summary>
@@ -1286,9 +1586,9 @@ public sealed class PlayerbotQuestGoalsTests
                 if (opcode == WorldOpcode.CmsgQuestlogRemoveQuest) abandons++;
             };
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(OnFrozenThinkClock(() => goals.HasCandidate(player)));
             for (int think = 0; think < 4; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(0, asks);
             Assert.Equal(0, abandons);
             Assert.Null(state.Quests.Get(FullLogQuests.Offered));
@@ -1314,7 +1614,7 @@ public sealed class PlayerbotQuestGoalsTests
             using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true });
             for (int think = 0; think < 4 && state.Quests.Get(FullLogQuests.Offered) is null; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
 
             Assert.Equal(QuestStatus.Incomplete, state.Quests.Get(FullLogQuests.Offered)?.Status);
             Assert.Equal(QuestStatus.None, state.Quests.Get(FullLogQuests.Filler + 1)?.Status); // the one shed
@@ -1345,7 +1645,7 @@ public sealed class PlayerbotQuestGoalsTests
             };
             var goals = new PlayerbotQuestGoals(quest.Session, new PlayerbotOptions { Enabled = true, DropGreyQuests = false });
             for (int think = 0; think < 4; think++)
-            { quest.Session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { quest.Session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(0, abandons);
             Assert.Equal(0, asks);
             return true;
@@ -1371,7 +1671,7 @@ public sealed class PlayerbotQuestGoalsTests
             (homeX, homeY, homeZ) = (player.X, player.Y, player.Z);
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             session.ManagedBudget = new ManagedActionBudget(1);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.Equal(1, queries);
             Assert.Equal("AcceptDetails", goals.StageName);
             // Pulled away before the response was read: 44 yards off, as in the live report.
@@ -1386,7 +1686,7 @@ public sealed class PlayerbotQuestGoalsTests
             Player player = session.Player!;
             using ArcaneCore.Kernel.Diagnostics.AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             session.ManagedBudget = new ManagedActionBudget(0);
-            goals.Update(player, 500);
+            OnFrozenThinkClock(() => goals.Update(player, 500));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "accept-refused")), capture.Describe());
             Assert.False(goals.IsRefused(QuestInteractionFixture.QuestId));
             Assert.False(goals.Busy);
@@ -1394,7 +1694,7 @@ public sealed class PlayerbotQuestGoalsTests
             // Back at the giver it asks again and takes the quest.
             player.Relocate(homeX, homeY, homeZ, player.Orientation, quest.Host.World.NowMs);
             for (int think = 0; think < 4 && quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId) is null; think++)
-            { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(player, 500); }
+            { session.ManagedBudget = new ManagedActionBudget(1); OnFrozenThinkClock(() => goals.Update(player, 500)); }
             Assert.Equal(2, queries);
             Assert.Equal(QuestStatus.Incomplete, quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)?.Status);
             return true;
@@ -1492,7 +1792,7 @@ public sealed class PlayerbotQuestGoalsTests
             };
 
             session.ManagedBudget = new ManagedActionBudget(1);
-            Assert.True(goals.Update(player, 500));
+            Assert.True(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.Contains(WorldOpcode.CmsgQuestgiverCompleteQuest, opcodes);
             Assert.DoesNotContain(WorldOpcode.CmsgQuestgiverQueryQuest, opcodes);
             Assert.Equal(QuestInteractionFixture.QuestId, goals.QuestId);
@@ -1528,7 +1828,7 @@ public sealed class PlayerbotQuestGoalsTests
             for (int think = 0; think < 3; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
 
             Assert.True(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
@@ -1588,7 +1888,7 @@ public sealed class PlayerbotQuestGoalsTests
 
             Assert.Equal(0u, goals.CompletedReturnQuest(player));
             session.ManagedBudget = new ManagedActionBudget(4);
-            Assert.False(goals.Update(player, 500));
+            Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
 
             session.ManagedBudget = new ManagedActionBudget(4);
@@ -1657,6 +1957,7 @@ public sealed class PlayerbotQuestGoalsTests
     /// </summary>
     private static T OnFrozenThinkClock<T>(Func<T> body)
     {
+        if (PlayerbotThinkProbe.Active is not null) return body(); // already inside a think (a nested call from an outer frozen one)
         var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
         probe.Begin();
         try { return body(); }
@@ -1705,7 +2006,7 @@ public sealed class PlayerbotQuestGoalsTests
             try
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                goals.Update(player, 500);
+                OnFrozenThinkClock(() => goals.Update(player, 500));
             }
             finally
             {
@@ -1750,7 +2051,7 @@ public sealed class PlayerbotQuestGoalsTests
         public QuestNpcFeature Feature => Host.WorldServices.GetRequiredService<QuestNpcFeature>();
 
         public static async Task<QuestHost> StartAsync(QuestInteractionFixture? questFixture = null, bool manualClock = false,
-            Func<QuestInteractionFixture, IQuestContentStore>? quests = null)
+            Func<QuestInteractionFixture, IQuestContentStore>? quests = null, long? clockStartMs = null)
         {
             QuestInteractionFixture fixture = questFixture ?? new QuestInteractionFixture();
             string databasePath = Path.Combine(Path.GetTempPath(), "arcane-playerbot-quest-" + Guid.NewGuid().ToString("N") + ".db");
@@ -1767,7 +2068,7 @@ public sealed class PlayerbotQuestGoalsTests
                 host = WorldTestHost.Start(configureServices: services =>
                 {
                     services.AddCharacterDatabase(configuration);
-                    if (manualClock) services.AddSingleton<IWorldFeature, ManualClock>();
+                    if (manualClock) services.AddSingleton<IWorldFeature>(new ManualClock(clockStartMs));
                     if (quests is not null) services.AddSingleton(quests(fixture));
                 });
             }
@@ -1777,9 +2078,9 @@ public sealed class PlayerbotQuestGoalsTests
             return new QuestHost(host, session);
         }
 
-        private sealed class ManualClock : IWorldFeature
+        private sealed class ManualClock(long? startAtMs) : IWorldFeature
         {
-            public void Attach(WorldRuntime world) => world.UseManualClock();
+            public void Attach(WorldRuntime world) { if (startAtMs is { } start) world.UseManualClockFrom(start); else world.UseManualClock(); }
         }
 
         public async ValueTask DisposeAsync()

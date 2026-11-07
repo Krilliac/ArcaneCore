@@ -113,7 +113,7 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
     private Action<int>? _announcer;
 
     public HeartbeatWriter(WatchdogOptions options, IEnumerable<ILivenessSource> sources, CounterRegistry counters, ILogger<HeartbeatWriter> logger, IHostEnvironment? environment = null)
-        : this(options.Heartbeat, sources, counters, logger, () => HeartbeatPlan.Resolve(options.Heartbeat, Environment.GetEnvironmentVariable, Environment.ProcessId, environment?.ContentRootPath ?? AppContext.BaseDirectory, Console.Out))
+        : this(options.Heartbeat, sources, counters, logger, () => HeartbeatPlan.Resolve(options.Heartbeat, SupervisorProtocol.ProcessEnvironment, Environment.ProcessId, environment?.ContentRootPath ?? AppContext.BaseDirectory, Console.Out))
     {
     }
 

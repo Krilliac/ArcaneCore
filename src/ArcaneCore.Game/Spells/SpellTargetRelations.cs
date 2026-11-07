@@ -127,9 +127,8 @@ public sealed class NoGroupResolver : ISpellGroupResolver
 }
 
 /// <summary>
-/// SPELL_EFFECT_SUMMON (vmangos Spell::EffectSummon / DoSummon*). Creature AI and temporary
-/// summons belong to the creatures area; until it installs a sink the effect is reported as
-/// not implemented (a stub, docs/integration/spells-persistence.md).
+/// SPELL_EFFECT_SUMMON (vmangos Spell::EffectSummon / DoSummon*). The implementation is
+/// <c>SummonService</c> (Pets), installed by the pets feature; a spell system built without a sink reports the effect as unsupported.
 /// </summary>
 public interface ISpellSummonSink
 {

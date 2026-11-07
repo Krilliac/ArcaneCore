@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Lfg;
 using ArcaneCore.Game.Maps;
@@ -75,6 +76,22 @@ public sealed class MeetingStoneFeature(IServiceProvider services, ILogger<Meeti
         groups.MemberAdded += queue.OnMemberJoined;
         groups.MemberLeft += queue.OnMemberRemoved;
         groups.Disbanding += (group, _) => queue.OnDisbanding(group);
+
+        // The non-vanilla summoning use of a stone (MeetingStoneSummon, PlayerbotSummonOptions.MeetingStones): a handler on each map's object system.
+        var summon = new MeetingStoneSummon(services, world);
+        void Register(Map map)
+        {
+            if (services.GetService<GameObjectLootFeature>()?.GetOrCreateSystem(map) is { } objects)
+            {
+                objects.RegisterUseHandler(GameObjectType.MeetingStone, summon.Use);
+            }
+        }
+
+        world.MapCreated += Register;
+        foreach (Map map in world.Maps.ToArray())
+        {
+            Register(map);
+        }
     }
 
     /// <summary>The social feature's <see cref="GroupManager"/> behind <see cref="ILfgGroups"/>.</summary>

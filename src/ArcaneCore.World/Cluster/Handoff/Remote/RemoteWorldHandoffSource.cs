@@ -67,6 +67,9 @@ public sealed class RemoteWorldHandoffSource : IWorldHandoffSource
     public Task RetireAsync(CancellationToken cancellationToken) => Call(ControlVerb.Retire, cancellationToken);
 
     /// <inheritdoc />
+    public Task RetireWritesAsync(CancellationToken cancellationToken) => Call(ControlVerb.RetireWrites, cancellationToken);
+
+    /// <inheritdoc />
     public Task ReleaseWriterLockAsync(CancellationToken cancellationToken) => Call(ControlVerb.ReleaseWriterLock, cancellationToken);
 
     private Task Call(ControlVerb verb, CancellationToken cancellationToken) =>

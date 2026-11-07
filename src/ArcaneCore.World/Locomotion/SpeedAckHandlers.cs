@@ -56,7 +56,8 @@ public sealed class SpeedAckHandlers : IOpcodeHandlerGroup
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
         session.SessionTrace?.Ack(session, player, SpeedPackets.AckOpcode(type), ack.Movement.Time, knockback: false);
         UnitSpeed.SetReal(player, type, ack.Speed);
-        MovementHandlers.ApplyObserved(session, player, SpeedPackets.AckOpcode(type), ack.Movement);
+        antiCheat?.JudgeAcknowledgedMovement(session, player, SpeedPackets.AckOpcode(type), ack.Movement, MovementFlags.None);
+        MovementHandlers.ApplyObservedAck(session, player, SpeedPackets.AckOpcode(type), ack.Movement);
         antiCheat?.AfterMovement(player);
         session.SessionTrace?.AfterMovement(player);
         player.Map?.BroadcastToObservers(player, SpeedPackets.ObserverOpcode(type), SpeedPackets.BuildObserver(player.Guid.Value, player.Movement, ack.Speed));

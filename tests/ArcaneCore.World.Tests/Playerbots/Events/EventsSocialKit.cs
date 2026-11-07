@@ -84,6 +84,21 @@ internal static class EventsSocialKit
             return Board(world).Claims.TryClaim(anchor, spot, id, Town, (uint)player.Team, WideCaps, nowMs);
         });
 
+    /// <summary>
+    /// Like <see cref="ClaimAsync"/>, but the spot lies <paramref name="spotDx"/> yards east of the bot (it has not walked there) and the
+    /// anchor <paramref name="anchorDx"/> yards east of the bot. World thread; true when the board granted it.
+    /// </summary>
+    internal static Task<bool> ClaimAtOffsetAsync(SocialWorld world, string bot, ushort root, long nowMs, float spotDx, float anchorDx, ulong anchorGuid = 5000)
+        => world.Host.OnWorldAsync(() =>
+        {
+            Player player = HelpTestKit.Online(world, bot);
+            Guid id = world.Bots[bot];
+            var spot = new Vector3(player.X + spotDx, player.Y, player.Z);
+            var anchor = new PlayerbotFestivalAnchor(anchorGuid, 15310, new Vector3(player.X + anchorDx, player.Y, player.Z), PlayerbotAnchorKind.Gossip, root);
+            Board(world).Claims.Release(id);
+            return Board(world).Claims.TryClaim(anchor, spot, id, Town, (uint)player.Team, WideCaps, nowMs);
+        });
+
     /// <summary>A held think of every bot that holds a claim: each renews its own.</summary>
     internal static Task RenewAllAsync(SocialWorld world, long nowMs)
         => world.Host.OnWorldAsync(() =>

@@ -52,6 +52,32 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
         Assert.NotNull(said);
     }
 
+    /// <summary>A volunteer noted earlier is dropped when the same player is later refused with LevelHigh: "nothing is kept" holds for a repeat request too.</summary>
+    [Fact]
+    public async Task ANotedVolunteer_WhoIsLaterToldLevelHigh_IsNoLongerKept()
+    {
+        const int range = 5;
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Quiet(options);
+            options.Groups.LevelRange = range;
+        });
+        await world.World.PrepareCharacterAsync("VOLFORG", "Volforg", AccountSecurity.Player);
+        var bot = await WaitingBotAsync(world, "Volforgbot", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLFORG", "Volforg", AccountSecurity.Player);
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, (await VolunteerAsync(world, bot.Id, "Volforg")).Outcome);
+        Assert.True(world.Coordinator.VolunteerRemainingMs(Online(world, "Volforg").Guid) > 0);
+        await world.OnWorldAsync(() =>
+        {
+            Online(world, "Volforg").Level = (byte)(1 + range + 1);
+            return true;
+        });
+
+        Assert.Equal(PlayerbotVolunteerOutcome.LevelHigh, (await VolunteerAsync(world, bot.Id, "Volforg")).Outcome);
+
+        Assert.Equal(0, world.Coordinator.VolunteerRemainingMs(Online(world, "Volforg").Guid));
+    }
+
     /// <summary>Only a volunteer who is still free is told: one with an invitation pending or in a group of their own hears nothing.</summary>
     [Theory]
     [InlineData(Engaged.Ungrouped)]

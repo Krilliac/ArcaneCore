@@ -69,6 +69,16 @@ internal sealed class GuestFrameProjector(PublicGuestOptions options, TimeProvid
     private readonly HashSet<uint> _knownOwnedObjectEntries = [];
     private long _lastHistoryStamp = long.MinValue;
 
+    /// <summary>
+    /// Adds <paramref name="entries"/> to the creature template set kept for when <c>links</c> cannot be asked: the world's static summon and totem
+    /// templates from its <c>caps</c> answer, known before any <c>links</c> answer. Never removes an entry.
+    /// </summary>
+    public void SeedSummonEntries(IEnumerable<uint> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        _knownSummonEntries.UnionWith(entries);
+    }
+
     /// <summary>Projects <paramref name="frame"/> for guests using the latest <paramref name="links"/> answer.</summary>
     public GuestProjection Project(LiveFrame frame, LinksSnapshot links)
     {

@@ -33,6 +33,33 @@ internal static class ConfigDocOverrides
         ["ReputationOptions.RateGain"] = "Multiplier on every reputation gain; the vmangos key `Rate.Reputation.Gain` (default 1, mangosd.conf.dist.in:2831).",
         ["ReputationOptions.RateLowLevelKill"] = "Multiplier on reputation gained from killing low-level creatures; the vmangos key `Rate.Reputation.LowLevel.Kill` (default 0.2, mangosd.conf.dist.in:2832).",
 
+        // Entry fields of the list and map options (the groups of keys below Auth:IntegrityHashes, Auth:AutoPatch:Patches, Realms:Seed, NpcServices:NpcTemplates,
+        // Quests:AreaTriggerQuests, Economy:AuctionHouses and Warden:Checks). The properties of these entry classes carry no /// summary in the source.
+        ["ClientIntegrityHashOptions.Build"] = "The client build this entry is for (for example 5875); it must equal the build the client reported in its logon challenge.",
+        ["ClientIntegrityHashOptions.Os"] = "The client operating system string, as the client reports it in the logon challenge; compared ignoring case.",
+        ["ClientIntegrityHashOptions.Platform"] = "The client platform string, as the client reports it in the logon challenge; compared ignoring case.",
+        ["ClientIntegrityHashOptions.Hash"] = "The 20-byte integrity hash as 40 hex digits. An entry whose text is not 40 characters is skipped, a malformed one is skipped with a warning, and an all-zero hash accepts that client tuple without a check.",
+        ["AutoPatchEntry.Build"] = "The client build this patch upgrades (for example 5875); the entry applies to a client of exactly this build.",
+        ["RealmSeedEntry.Name"] = "The realm name shown on the realm-list screen.",
+        ["RealmSeedEntry.Type"] = "The realm type (icon) shown on the realm-list screen; the numeric values are the build-5875 wire values.",
+        ["RealmSeedEntry.Flags"] = "The realm flags stored with the row (offline, new players, recommended and so on). A seeded row starts stopped (offline in the realm list) until a world reports in.",
+        ["RealmSeedEntry.Population"] = "The population value stored with the row and sent in the realm list as it is. It holds only until a world reports in: with realm liveness on, the world (the gateway, in a split) resets it to 0 and then, when `World:Realm:PlayerLimit` is above 0, writes sessions / player limit * 2, so on that scale 0 is empty and 2 is full. With a limit of 0 nothing is written after the reset, and bot sessions count, so 2 is not a ceiling.",
+        ["RealmSeedEntry.Category"] = "The realm category (timezone group) id of the build-5875 realm-list layout.",
+        ["NpcTemplateMetadata.Entry"] = "The creature_template entry the override applies to.",
+        ["NpcTemplateMetadata.GossipMenuId"] = "Replaces the creature's gossip_menu_id.",
+        ["NpcTemplateMetadata.TrainerType"] = "Replaces the creature's trainer_type.",
+        ["NpcTemplateMetadata.TrainerClass"] = "Replaces the creature's trainer_class.",
+        ["NpcTemplateMetadata.TrainerRace"] = "Replaces the creature's trainer_race.",
+        ["NpcTemplateMetadata.TrainerSpell"] = "Replaces the creature's trainer_spell.",
+        ["QuestAreaTrigger.TriggerId"] = "The AreaTrigger id (areatrigger_involvedrelation id) that the player enters.",
+        ["QuestAreaTrigger.QuestId"] = "The quest that is explored or completed by entering the trigger.",
+        ["AuctionHouseEntry.Id"] = "The AuctionHouse.dbc id of the house: 2 is the Alliance house, 6 the Horde house, 7 the neutral house.",
+        ["AuctionHouseEntry.DepositPercent"] = "The deposit percentage of the house (AuctionHouse.dbc deposit rate).",
+        ["AuctionHouseEntry.CutPercent"] = "The consignment cut percentage the house keeps from a sale (AuctionHouse.dbc consignment rate).",
+        ["WardenCheckOptions.Id"] = "The scan id, unique within `Warden:Checks`; an entry replaces the `warden_checks` row with the same id.",
+        ["WardenCheckOptions.Kind"] = "Which kind of scan this is; it decides which of the other fields apply.",
+        ["WardenCheckOptions.Comment"] = "Free text naming the scan in logs and staff notices; empty shows the kind instead.",
+
         // Skills (src/ArcaneCore.World/Skills/SkillsFeatureOptions.cs; the SkillsMode enum summary carries the per-value text).
         ["SkillsFeatureOptions.Mode"] = "Which skill implementation the daemon runs. `Retail` (default) is the vmangos skill system and needs the build-5875 skill DBC paths below (without them the daemon logs an error banner and falls back to `Legacy`); `Legacy` is the pre-skill stand-ins for development hosts only.",
     };

@@ -344,6 +344,8 @@ public sealed class SlowCommandInterceptorTests : IDisposable
         Assert.Equal(2, logs.Entries.Count(e => e.Message.Contains(nameof(SlowCommandInterceptorTests), StringComparison.Ordinal)));
     }
 
+    private const string LockWaitBoundMs = "30000";
+
     private async Task<(string Connection, int Id)> NewDatabaseAsync()
     {
         string connection = new SqliteConnectionStringBuilder { DataSource = Path.Combine(_directory, Guid.NewGuid().ToString("N") + ".db"), Pooling = false }.ToString();
@@ -400,6 +402,10 @@ public sealed class SlowCommandInterceptorTests : IDisposable
             ["Database:ConnectionString"] = connection,
             ["Database:SlowCommandWarnMs"] = commandMs,
             ["Database:SlowTransactionWarnMs"] = transactionMs,
+            // The held lock is released by a 1.5 s timer on the thread pool; the write waits inside SQLite for it. A generous bound (the default 5 s leaves
+            // 3.5 s of slack) so a loaded host starving the pool cannot turn a late release into "database is locked".
+            ["Database:SqliteBusyTimeoutMs"] = LockWaitBoundMs,
+            ["Database:SqliteWriteTimeoutMs"] = LockWaitBoundMs,
         });
 
     private static ServiceProvider Build(CaptureProvider? logs, Dictionary<string, string?> values)

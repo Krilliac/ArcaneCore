@@ -236,7 +236,7 @@ internal static class StartingZoneCombat
     }
 
     internal static bool IsHeroicExecution(AttackerState state, bool castSuccess, uint healthBefore, uint healthAfter)
-        => castSuccess && state.MeleeSpellId == 78 && state.School == 1 && state.TotalDamage > 0
+        => castSuccess && state.MeleeSpellId == 78 && state.School == 0 && state.TotalDamage > 0
             && healthAfter < healthBefore;
 
     internal static ulong? SelectActiveEligibleAttacker(IEnumerable<ulong> incomingAttackers, ulong character,

@@ -86,6 +86,14 @@ public sealed partial class WorldSession
     /// <summary>Test tap: sees every client opcode a managed action dispatches to its handler (<see cref="TryManagedAction"/>), before the handler runs.</summary>
     internal Action<WorldOpcode>? ManagedDispatchObserver { get; set; }
 
+    private IManagedPacketTap? _qaTap;
+
+    /// <summary>
+    /// Bot QA's tap (<see cref="IManagedPacketTap"/>, docs/areas/playbots-qa.md): resolved on a playerbot's first packet; the inert tap when QA is off or
+    /// not registered, so a server without QA pays one interface call per bot packet.
+    /// </summary>
+    private IManagedPacketTap QaTap => _qaTap ??= Services.GetService<IManagedPacketTap>() is { Active: true } tap ? tap : NoManagedPacketTap.Instance;
+
     internal static async Task<WorldSession> CreateManagedAsync(Account owner, int? characterId,
         IServiceProvider services, OpcodeTable opcodes, WorldRuntime world, SessionRegistry registry,
         WorldSessionOptions options, ILogger logger, CancellationToken cancellationToken = default, Guid? botId = null)
@@ -138,12 +146,23 @@ public sealed partial class WorldSession
     {
         if (!_managed || !World.IsWorldThread || _kick.IsCancellationRequested || !IsCurrentSession || _state != SessionState.InWorld
             || Player is not { } player || player.IsQuestSettlementPending
-            || payload.Length > MaxClientPacketSize - 4
-            || !_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.World is null
-            || !handler.AllowsState(_state)
-            || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck))
+            || payload.Length > MaxClientPacketSize - 4)
         {
             NoteManagedRejected(opcode, payload.Length); // report only: the refusal is unchanged (a stripped dev opcode is dropped and flagged there)
+            return false;
+        }
+
+        if (!_opcodes.TryGet(opcode, out OpcodeHandler? handler) || handler.World is null)
+        {
+            // A bot asked for an opcode the world thread cannot run (no handler, or a session-task one): bot QA hears of it.
+            if (IsPlayerbot) QaTap.OnUnhandledOpcode(this, opcode, sessionOnly: handler is not null);
+            NoteManagedRejected(opcode, payload.Length);
+            return false;
+        }
+
+        if (!handler.AllowsState(_state) || (player.Map is null && opcode != WorldOpcode.MsgMoveWorldportAck))
+        {
+            NoteManagedRejected(opcode, payload.Length);
             return false;
         }
 
@@ -152,7 +171,7 @@ public sealed partial class WorldSession
         BotPolicy?.BeforeAction(this, player, opcode);
         CapturePacket(true, opcode, payload);
         ManagedDispatchObserver?.Invoke(opcode);
-        _currentPacketReceivedMs = (uint)Kernel.Logging.Clock.Milliseconds();
+        _currentPacketReceivedMs = ManagedReceiveClock?.Invoke() ?? (uint)Kernel.Logging.Clock.Milliseconds();
         try
         {
             handler.World(this, player, payload);
@@ -164,6 +183,14 @@ public sealed partial class WorldSession
 
         return _state == SessionState.InWorld && IsCurrentSession;
     }
+
+    /// <summary>
+    /// Test seam (never configuration-bound, null outside tests): the clock <see cref="TryManagedAction"/> stamps a packet's receive time with,
+    /// instead of the real monotonic one. A bot's own movement clock is the world's game clock, and on the manual clock game time runs far ahead of
+    /// real time, so a harness that lets the anticheat judge a bot must stamp from the game clock too: the checks compare the two, and the distance budget
+    /// refills from the receive interval alone. Only for a harness with no reject window: <c>MovementCheats</c> arms that on the real clock.
+    /// </summary>
+    internal Func<uint>? ManagedReceiveClock { get; set; }
 
     private byte[]? _managedScratch;
     private bool _managedScratchBusy;
@@ -251,6 +278,9 @@ public sealed partial class WorldSession
         // Lean bot: nothing reads this packet back, so it is neither copied nor queued (the ring is not read for other opcodes).
         if (IsLeanBot && BotPolicy is { } policy && !policy.KeepsPacket(opcode) && !HasPacketObserver)
         {
+            // Bot QA still needs the few quest and inventory packets the lean intake drops (the copy is made for those opcodes only).
+            // A lean session is a playerbot session already (IsLeanBot); the copy is made only when the tap is live, so QA off costs no allocation.
+            if (IManagedPacketTap.WantsOpcode(opcode) && QaTap is { } tap && !ReferenceEquals(tap, NoManagedPacketTap.Instance)) tap.OnPacket(this, opcode, payload.ToArray());
             BotLeanStats.SkippedRingPacket(payload.Length);
             Interlocked.Increment(ref _leanRingPacketsSkipped);
             return;
@@ -263,6 +293,7 @@ public sealed partial class WorldSession
             CapturePacket(false, opcode, payload);
             ManagedPacketObserver?.Invoke(opcode, copy);
             _outboundPacketObserver?.Observe(opcode, copy);
+            if (IsPlayerbot) QaTap.OnPacket(this, opcode, copy); // bot QA: switches on the opcode, returns at once for all but four (a lean bot's skipped packets reach it above)
             // Bounded transport: no socket writer or unconsumed unbounded channel exists for bots.
             while (_managedPackets.Count > 0 && (_managedPackets.Count >= 128 || _managedPacketBytes + payload.Length > 1_048_576))
                 _managedPacketBytes -= _managedPackets.Dequeue().Payload.Length;

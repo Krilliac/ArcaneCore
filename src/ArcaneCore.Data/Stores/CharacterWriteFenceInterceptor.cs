@@ -25,11 +25,16 @@ namespace ArcaneCore.Data.Stores;
 /// every context; thread-safe. In Worker fencing scope (the verifying token's scope is <c>worker:&lt;shard&gt;</c>) and under a <see cref="CharacterWriteClaim"/>
 /// scope it also proves, in the same transaction, that this worker still holds the per-character claim of each named character
 /// (<see cref="CharacterClaimGuard"/>); a refused claim throws <see cref="CharacterClaimRejectedException"/>. In Realm scope, or with no claim scope in force, it issues no claim SQL.
+/// A synchronous transaction (<c>SaveChanges</c>, <c>Database.BeginTransaction</c>) cannot be verified, because the guard and the claim check have no synchronous form: <see cref="TransactionStarted"/> rolls it back and throws <see cref="NotSupportedException"/> (fail closed) unless the work is <see cref="CharacterWriteFence.Exempt"/>.
 /// Registered only when <c>Cluster:Fencing:Enabled</c> is true, so a fence-off context has no interceptor and issues the same SQL as before. A store save that carries a snapshot token (only a fenced world mints one) pays one scope object per transaction.
 /// </para>
 /// </summary>
 public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ownership) : DbTransactionInterceptor, ISaveChangesInterceptor
 {
+    /// <summary>
+    /// Asynchronous transaction start: runs the ownership guard (and, in Worker scope under a claim scope, the per-character claim check) inside the new transaction before the
+    /// caller's first statement. A refusal or failure is reported, the transaction is rolled back and the exception rethrown. Exempt work passes through unchecked.
+    /// </summary>
     public override async ValueTask<DbTransaction> TransactionStartedAsync(
         DbConnection connection, TransactionEndEventData eventData, DbTransaction result, CancellationToken cancellationToken = default)
     {
@@ -51,25 +56,34 @@ public sealed class CharacterWriteFenceInterceptor(ICharacterOwnershipContext ow
         return result;
     }
 
+    /// <summary>
+    /// Synchronous transaction start on a characters context: refused. It is rolled back and a <see cref="NotSupportedException"/> is thrown, because the ownership guard and the claim
+    /// check have no synchronous form and blocking a pool thread on them risks a deadlock. Exempt work (<see cref="CharacterWriteFence.IsExempt"/>) passes through unchecked.
+    /// </summary>
     public override DbTransaction TransactionStarted(DbConnection connection, TransactionEndEventData eventData, DbTransaction result)
     {
         if (CharacterWriteFence.IsExempt)
             return result;
 
+        // A synchronous transaction cannot be verified: the guard and the claim check have no synchronous form, and blocking a pool thread on them risks a deadlock. Fail closed.
+        var refusal = new NotSupportedException("characters writes must use the async API (SaveChangesAsync / BeginTransactionAsync); the write fence cannot verify a synchronous transaction.");
         try
         {
-            // A synchronous SaveChanges: the guard has no synchronous form, and the connection is not shared with a synchronization context.
-            CharacterOwnershipGuard.VerifyOnTransactionAsync(Require(eventData), connection, result, Token(), CancellationToken.None).GetAwaiter().GetResult();
-            VerifyClaimAsync(eventData, connection, result, CancellationToken.None).GetAwaiter().GetResult();
+            result.Rollback();
         }
         catch (Exception ex)
         {
-            Report(ex);
-            AbandonAsync(result).AsTask().GetAwaiter().GetResult();
-            throw;
+            // The refusal is the error to report; a failed rollback of a transaction that is being discarded must not replace it.
+            FaultLedger.Shared.Record("data.character-write-fence-rollback", ex);
+            AnomalyLedger.Shared.Report("database", "pragma-failed", "character-write-fence-rollback", ex.Message, AnomalySeverity.Warning);
+        }
+        finally
+        {
+            result.Dispose();
         }
 
-        return result;
+        Report(refusal);
+        throw refusal;
     }
 
     InterceptionResult<int> ISaveChangesInterceptor.SavingChanges(DbContextEventData eventData, InterceptionResult<int> result)

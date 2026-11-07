@@ -56,9 +56,6 @@ public sealed class CharacterClaimService(
     /// <summary>Poll interval of a received claim's release while the transfer that brought it is still in flight (test seam).</summary>
     internal TimeSpan TransferSettlePoll { get; init; } = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>How long a received claim's release waits for the transfer that brought it to be marked completed before it leaves the claim in place (test seam).</summary>
-    internal TimeSpan TransferSettleWait { get; init; } = TimeSpan.FromSeconds(60);
-
     /// <summary>True when the verdict lets the login proceed: the character is claimed, or no claim exists in this mode.</summary>
     public static bool Admits(CharacterClaimResult result)
     {
@@ -168,7 +165,8 @@ public sealed class CharacterClaimService(
     /// ever release it, and while it stays, logins of the character on other workers are refused as <see cref="CharacterClaimOutcome.RefusedLiveOwner"/>. Takes a ticket for the
     /// received claim (<see cref="IssueTicketForReceivedClaim"/>), so a release of an older login cannot delete it and a login that claims after this call keeps it, then releases
     /// like <see cref="ScheduleRelease"/> once the transfer that brought the claim is marked completed (the claim row holds no transfer; until then the release would delete nothing).
-    /// If it is still in flight after <see cref="TransferSettleWait"/>, the claim stays and the next login of the character on this worker refreshes it. Call it after the arrival
+    /// While the transfer is still in flight the release keeps polling, until the claim settles, a login of the character supersedes it, or the service is disposed (then the claim
+    /// stays; this incarnation's death releases it), so a slow commit cannot strand the claim. While the store keeps failing the polls back off to 30 s apart, so the release can lag a recovered store by up to that long, and logins of the character on other workers are refused meanwhile. Call it after the arrival
     /// was written. A no-op without a worker-shard token or a store. <paramref name="isOnline"/> (thread-safe) keeps the claim of a character that is online here by then.
     /// </summary>
     public void ScheduleReleaseOfReceivedClaim(int characterId, CharacterOwnershipToken? token, Func<bool>? isOnline = null)
@@ -301,46 +299,65 @@ public sealed class CharacterClaimService(
             }
 
             SemaphoreSlim gate = GateOf(characterId);
-            await gate.WaitAsync(stop).ConfigureAwait(false);
-            try
+            for (int release = 1; ; release++)
             {
-                lock (_pendingGate)
+                await gate.WaitAsync(stop).ConfigureAwait(false);
+                try
                 {
-                    if (!_pendingReleases.TryGetValue(characterId, out object? current) || !ReferenceEquals(current, marker))
-                        return; // a login claimed the character meanwhile: the claim is that session's now
-                    if (ticket != 0 && !IsNewestLive(characterId, ticket))
+                    lock (_pendingGate)
                     {
+                        if (!_pendingReleases.TryGetValue(characterId, out object? current) || !ReferenceEquals(current, marker))
+                            return; // a login claimed the character meanwhile: the claim is that session's now
+                        if (ticket != 0 && !IsNewestLive(characterId, ticket))
+                        {
+                            _pendingReleases.Remove(characterId);
+                            return; // a newer login holds a newer ticket: the claim is that login's
+                        }
+
+                        if (ticket == 0 && _liveTickets.ContainsKey(characterId))
+                        {
+                            _pendingReleases.Remove(characterId);
+                            return; // a release without a ticket (an abandoned login's) never deletes a claim a live login holds
+                        }
+
                         _pendingReleases.Remove(characterId);
-                        return; // a newer login holds a newer ticket: the claim is that login's
                     }
 
-                    if (ticket == 0 && _liveTickets.ContainsKey(characterId))
-                    {
-                        _pendingReleases.Remove(characterId);
-                        return; // a release without a ticket (an abandoned login's) never deletes a claim a live login holds
-                    }
+                    if (isOnline?.Invoke() == true)
+                        return; // the character is in the world again: its claim stays
 
-                    _pendingReleases.Remove(characterId);
+                    await store.ReleaseCharacterClaimAsync((ulong)characterId, token, stop).ConfigureAwait(false);
+                    return;
+                }
+                catch (OperationCanceledException ex) when (!stop.IsCancellationRequested && release < ReleaseAttempts)
+                {
+                    // A cancellation that is not the service's stop (a linked or timeout token inside the store call, if the provider raises one) says nothing about the claim: it is
+                    // still there, and other workers refuse the character's logins while it is. The marker is registered again (when nothing replaced it) and the checks above run again, so a
+                    // login that claimed meanwhile still wins; after ReleaseAttempts the failure goes to the handler below.
+                    logger?.LogWarning(ex, "releasing the claim of character {Character} was cancelled (attempt {Attempt}); retrying", characterId, release);
+                    lock (_pendingGate)
+                    {
+                        _pendingReleases.TryAdd(characterId, marker);
+                    }
+                }
+                finally
+                {
+                    gate.Release();
                 }
 
-                if (isOnline?.Invoke() == true)
-                    return; // the character is in the world again: its claim stays
-
-                await store.ReleaseCharacterClaimAsync((ulong)characterId, token, stop).ConfigureAwait(false);
-            }
-            finally
-            {
-                gate.Release();
+                await Task.Delay(ReleaseRetryDelay * release, stop).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
         {
-            /* shutdown: the claim stays, this incarnation's death releases it */
+            /* shutdown: the claim stays, this incarnation's death releases it. A cancellation that is not the stop and outlasted the retries falls to the handler below, which forgets the marker and records the fault. */
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             ForgetPending(characterId, marker);
-            if (logger is not null)
+            if (_stop.IsCancellationRequested)
+                logger?.LogWarning(ex, "releasing the claim of character {Character} failed during shutdown; it stays until this incarnation's death releases it", characterId);
+            else if (logger is not null)
                 logger.LogFault("persist.character-claim-release", ex, "releasing the claim of character {Character} failed; it stays until the next login refreshes it", characterId);
             else
                 FaultLedger.Shared.Record("persist.character-claim-release", ex);
@@ -358,12 +375,14 @@ public sealed class CharacterClaimService(
     }
 
     /// <summary>
-    /// Waits until the claim row of <paramref name="characterId"/> held by <paramref name="token"/> carries no transfer. False when the release must not go on: a login superseded it
-    /// (its marker is gone) or the transfer is still in flight after <see cref="TransferSettleWait"/> (then the pending marker is forgotten and the claim stays).
+    /// Waits until the claim row of <paramref name="characterId"/> held by <paramref name="token"/> carries no transfer, with no time limit (disposal cancels <paramref name="stop"/>).
+    /// False when the release must not go on: a login superseded it (its marker is gone).
     /// </summary>
     private async Task<bool> WaitForTransferSettledAsync(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, CancellationToken stop)
     {
-        DateTime deadline = DateTime.UtcNow + TransferSettleWait;
+        long started = Environment.TickCount64;
+        bool slowReported = false;
+        int failures = 0; // consecutive failed polls: the delay between polls grows with them, so a broken store is not hammered four times a second
         while (true)
         {
             lock (_pendingGate)
@@ -372,18 +391,48 @@ public sealed class CharacterClaimService(
                     return false; // a login claimed the character meanwhile: the claim is that session's now
             }
 
-            if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
-                return true;
-
-            if (DateTime.UtcNow >= deadline)
+            try
             {
-                logger?.LogWarning("character {Character} received claim kept: the transfer that brought it is still in flight after {Seconds} s; the next login of the character on this shard refreshes it",
-                    characterId, (int)TransferSettleWait.TotalSeconds);
-                ForgetPending(characterId, marker);
-                return false;
+                if (!await store.IsCharacterClaimInTransferAsync((ulong)characterId, token, stop).ConfigureAwait(false))
+                    return true;
+
+                failures = 0;
+            }
+            catch (Exception ex) when (!stop.IsCancellationRequested && ex is not OutOfMemoryException)
+            {
+                // A failed poll says nothing about the transfer: keep polling, or the claim would stay and other workers refuse the character's logins. A cancellation that is not the service's stop
+                // (a linked or timeout token inside the store call, if the provider raises one) is a failed poll too; the stop itself is not caught here and ends the wait.
+                if (failures++ == 0)
+                {
+                    logger?.LogWarning(ex, "polling the transfer of character {Character} failed; retrying", characterId);
+                }
             }
 
-            await Task.Delay(TransferSettlePoll, stop).ConfigureAwait(false);
+            if (!slowReported && Environment.TickCount64 - started >= 60_000)
+            {
+                slowReported = true;
+                logger?.LogWarning("the transfer that brought the claim of character {Character} has not settled after 60 s; the claim release keeps polling", characterId);
+            }
+
+            await Task.Delay(SettlePollDelay(failures), stop).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The wait before the next settle poll: <see cref="TransferSettlePoll"/> after a good poll, doubled for each consecutive failed one up to 30 s.</summary>
+    private TimeSpan SettlePollDelay(int consecutiveFailures)
+    {
+        if (consecutiveFailures <= 0)
+            return TransferSettlePoll;
+        long grown = consecutiveFailures >= 8 ? TimeSpan.FromSeconds(30).Ticks : Math.Min(TransferSettlePoll.Ticks << consecutiveFailures, TimeSpan.FromSeconds(30).Ticks);
+        return TimeSpan.FromTicks(Math.Max(TransferSettlePoll.Ticks, grown));
+    }
+
+    /// <summary>The login tickets still live, ascending (any thread; takes the pending gate). For tests.</summary>
+    internal long[] LiveTicketsSnapshot()
+    {
+        lock (_pendingGate)
+        {
+            return [.. _liveTickets.Values.SelectMany(tickets => tickets).Order()];
         }
     }
 

@@ -734,6 +734,9 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
                     Fatal?.Invoke(problem);
                     throw new PublicFeedException(problem);
                 }
+
+                // The world's static summon and totem templates (absent on an older daemon): the fallback template set for a links outage.
+                _store.SeedSummonTemplates(Entries(caps["summonTemplates"]));
             }
         }
         catch (CommandException e)

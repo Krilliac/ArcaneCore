@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,7 +12,7 @@ namespace ArcaneCore.Data.GameObjects;
 /// written by MapPersistentState::SaveGORespawnTime, Maps/MapPersistentStateMgr.cpp:103-123). The key is the spawn guid within a map
 /// instance (0 = the shared world copy).
 /// </summary>
-public sealed class GameObjectRespawnRow
+public sealed class GameObjectRespawnRow : IRespawnRow
 {
     public int InstanceId { get; set; }
 
@@ -24,7 +25,8 @@ public sealed class GameObjectRespawnRow
 }
 
 /// <summary>
-/// Game object respawn times of the characters database: a restart no longer brings a looted chest or a mined node back at once. The
+/// Game object respawn times of the characters database: a restart no longer brings a looted chest or a mined node back at once, for a spawn
+/// that is not a pool or spawn-group member (pool members, which most ore nodes and chests are, are not stored). The
 /// counterpart of <see cref="Creatures.CreatureRespawnDataModule"/> (docs/areas/creature-movement-spawns.md).
 /// <para>
 /// <b>Characters version 68</b>: the next free number after realm authority leases (67). It is named once here; tests read

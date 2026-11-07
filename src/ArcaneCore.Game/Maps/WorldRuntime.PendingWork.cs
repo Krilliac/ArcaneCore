@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ArcaneCore.Kernel.Characters;
 
 namespace ArcaneCore.Game.Maps;
 
@@ -84,6 +85,24 @@ public sealed partial class WorldRuntime
     /// <see cref="PendingWorkHangException"/> naming the work. Default 60 s.
     /// </summary>
     public TimeSpan PendingWorkHangGuard { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Queue <paramref name="snapshot"/> for saving and register the save as pending work until the queue says it has settled (<see cref="ICharacterSaveQueue.Enqueue(CharacterState, Action)"/>), so the
+    /// manual clock does not move game time past a save still on its way to the database. On the real clock the registration only counts. World thread (or after Stop).
+    /// </summary>
+    private void EnqueueSave(CharacterState snapshot)
+    {
+        IDisposable work = PendingWork.Begin($"save of character {snapshot.Id}");
+        try
+        {
+            _saveQueue.Enqueue(snapshot, work.Dispose);
+        }
+        catch
+        {
+            work.Dispose(); // idempotent: the queue may have settled it before it threw
+            throw;
+        }
+    }
 
     private long _heldSinceTimestamp; // world thread only; 0 = not holding
     private bool _manualHeld;         // world thread only: the tick just chosen was held for pending work

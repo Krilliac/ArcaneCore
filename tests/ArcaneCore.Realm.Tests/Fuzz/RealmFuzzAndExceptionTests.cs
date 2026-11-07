@@ -706,15 +706,14 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             byte[] orphanReply = await ReadExactAsync(client, 2);
             Assert.Equal([(byte)AuthCommand.LogonProof, (byte)AuthResult.UnknownAccount], orphanReply);
 
-            // 2. Out-of-order RealmList before authentication -> ignored without reply.
-            await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 });
+            // Not a step: out-of-order RealmList before authentication closes the connection (PreAuthRefusalCloseTests), so it is not sent mid-sequence.
 
-            // 3. Degenerate SRP account -> FailNoAccess.
+            // 2. Degenerate SRP account -> FailNoAccess.
             await client.WriteAsync(BuildChallengePacket("DEGENERATE"));
             byte[] degReply = await ReadExactAsync(client, 3);
             Assert.Equal((byte)AuthResult.FailNoAccess, degReply[2]);
 
-            // 4. Account with invalid FixedPin digits -> challenge succeeds with PIN prompt, proof fails with UnknownAccount.
+            // 3. Account with invalid FixedPin digits -> challenge succeeds with PIN prompt, proof fails with UnknownAccount.
             await client.WriteAsync(BuildChallengePacket("BADPIN"));
             (byte pinChalResult, byte[] pinB, byte[] pinS) = await ReadChallengeReplyWithPinAsync(client);
             Assert.Equal((byte)AuthResult.Success, pinChalResult);
@@ -723,7 +722,7 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             byte[] pinProofReply = await ReadExactAsync(client, 2);
             Assert.Equal([(byte)AuthCommand.LogonProof, (byte)AuthResult.UnknownAccount], pinProofReply);
 
-            // 5. Challenge + Proof with unsupported SecurityFlags (0x02) -> UnknownAccount.
+            // 4. Challenge + Proof with unsupported SecurityFlags (0x02) -> UnknownAccount.
             await client.WriteAsync(BuildChallengePacket(Username));
             (byte chalRes1, byte[] b1, byte[] s1) = await ReadChallengeReplyAsync(client);
             Assert.Equal((byte)AuthResult.Success, chalRes1);
@@ -732,7 +731,7 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             byte[] badFlagsReply = await ReadExactAsync(client, 2);
             Assert.Equal([(byte)AuthCommand.LogonProof, (byte)AuthResult.UnknownAccount], badFlagsReply);
 
-            // 6. Challenge + Proof with valid SRP math but malformed IntegrityHashes hex under StrictVersionCheck -> VersionInvalid.
+            // 5. Challenge + Proof with valid SRP math but malformed IntegrityHashes hex under StrictVersionCheck -> VersionInvalid.
             await client.WriteAsync(BuildChallengePacket(Username));
             (byte chalRes2, byte[] b2, byte[] s2) = await ReadChallengeReplyAsync(client);
             Assert.Equal((byte)AuthResult.Success, chalRes2);
@@ -741,12 +740,12 @@ public sealed class RealmFuzzAndExceptionTests : IDisposable
             byte[] badIntegrityReply = await ReadExactAsync(client, 2);
             Assert.Equal([(byte)AuthCommand.LogonProof, (byte)AuthResult.VersionInvalid], badIntegrityReply);
 
-            // 7. Out-of-order XferCancel without an offered patch -> closes connection.
+            // 6. Out-of-order XferCancel without an offered patch -> closes connection.
             await client.WriteAsync(new byte[] { (byte)AuthCommand.XferCancel });
             Assert.True(await ReadsEofAsync(client));
         }
 
-        // 8. Out-of-bounds XferResume offset (>= patch.Size) closes connection cleanly.
+        // 7. Out-of-bounds XferResume offset (>= patch.Size) closes connection cleanly.
         string patchFile = Path.Combine(_tempDir, "5464enUS.mpq");
         File.WriteAllBytes(patchFile, [1, 2, 3, 4, 5, 6, 7, 8]);
         var catalog = new PatchCatalog(() => new AutoPatchOptions { Enabled = true, Directory = _tempDir });

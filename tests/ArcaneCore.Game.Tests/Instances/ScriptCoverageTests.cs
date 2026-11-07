@@ -32,11 +32,7 @@ public sealed class ScriptCoverageTests(ITestOutputHelper output)
     /// Each is a content gap: a ScriptDev2 script that is not ported. Remove a row when its script lands.
     /// </summary>
     private static readonly (uint Map, uint Entry, string Script)[] KnownMissing =
-    [
-        (230, 16079, "npc_theldren_trigger"),
-        // Doom'rel has his gossip (DoomrelGossip, an INpcGossipScript registered by DungeonEventFeature) but no AI; the catalogue answers for AIs.
-        (230, 9039, "boss_doomrel"),
-    ];
+    [];
 
     [WorldFixtureFact]
     public void EveryDungeonAndRaidScriptName_ResolvesOrIsListedMissing()

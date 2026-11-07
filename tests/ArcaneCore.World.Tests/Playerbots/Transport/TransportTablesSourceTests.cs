@@ -21,6 +21,13 @@ public sealed class TransportTablesSourceTests
     }
 
     [Fact]
+    public void The_shared_transport_tables_cannot_be_written_by_a_caller()
+    {
+        Assert.IsAssignableFrom<System.Collections.Frozen.FrozenDictionary<uint, ShipClass>>(PlayerbotShipNetwork.Classic);
+        Assert.IsType<System.Collections.Immutable.ImmutableArray<ElevatorRegions>>(ElevatorRegions.Known);
+    }
+
+    [Fact]
     public void A_catalog_changes_what_the_readers_derive_from_it()
     {
         TuningCatalog catalog = TuningCatalog.Build(TuningDefaults.Content with

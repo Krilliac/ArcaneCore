@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
@@ -52,5 +53,33 @@ public sealed class ScriptActionUnsupportedAnomalyTests
         Assert.Single(system.Creatures);
 
         Assert.False(capture.Any(Key), capture.Describe());
+    }
+
+    private sealed class GapRecorder(bool reporting) : IGameQaObserver
+    {
+        public List<(uint Entry, string Gap, string Detail)> Gaps { get; } = [];
+
+        public bool Reporting => reporting;
+
+        public void OnCreatureAiGap(Creature? creature, uint entry, string gap, uint value, string detail) => Gaps.Add((entry, gap, detail));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OneEventAiGap_RaisesOneSignal_TheObserversWhenQaReports_ElseTheAnomaly(bool reporting)
+    {
+        CreatureContent content = Content(Row(1, (byte)EventAiEventType.Aggro, new CreatureAiAction(99, 0, 0, 0)));
+        using AnomalyCapture capture = CaptureOurs();
+        var recorder = new GapRecorder(reporting);
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(0, 0);
+        var system = new CreatureMapSystem(map, content, null, random: new Random(1), aiServices: new CreatureAiServices(), qa: recorder);
+        map.AddUpdater(system);
+        AddPlayer(world, 1, 0, 0);
+        Assert.Single(system.Creatures);
+
+        Assert.Equal(reporting ? 1 : 0, recorder.Gaps.Count(g => g.Entry == Entry && g.Gap == "event-ai"));
+        Assert.Equal(reporting ? 0 : 1, capture.Notices.Count);
     }
 }

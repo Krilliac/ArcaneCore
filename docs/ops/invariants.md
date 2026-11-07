@@ -35,19 +35,33 @@ it is called on every failure path and may be called directly.
 ## The `Diagnostics` section
 
 Defaults keep the process behaving as the .NET runtime does without this section, except that every event is now reported
-first. None of the keys is live (`.reload config` does not touch them). The world daemon's `check-config` validates the section
-(`DiagnosticsConfigChecks`: unknown policy names, non-boolean flags, a negative limit are errors, exit 78); the realm daemon has
-no `check-config`, so `UseArcaneDiagnostics` itself writes the binder's message to standard error and exits 78 before anything
-binds or touches a database.
+first. None of the keys is live (`.reload config` does not touch them).
+
+Bad values are refused in layers, and the layers differ by daemon. Each check below runs from `check-config` and again at every
+normal start, before the crash hooks are installed; an error is exit 78.
+
+- `ConfKeyCheck` (all three daemons: the world, the realm through `RealmOpsCli.Validate`, the gateway) reads only what is written in
+  the daemon's `.conf` file. There, an unknown policy name, a flag that is not `true` or `false`, and a limit that is not an integer are errors.
+  `ConfValue` tests the form of the value and nothing else: it takes a negative limit, and it takes any integer in place of a policy name.
+- `CrashDumpConfigChecks` (all three daemons) checks the `CrashDump` subsection, from every configuration source.
+- `DiagnosticsConfigChecks` (the world daemon only) checks the three policies, the boolean flags and `InvariantLogLimit` from every
+  configuration source and adds the two rules `ConfValue` lacks: a policy must be a named member, and the limit must not be negative.
+
+What those checks do not see falls to `UseArcaneDiagnostics`, at start only: a value from another configuration source
+(`appsettings.json`, the environment, the command line) that the binder cannot convert, on the realm and the gateway for any key
+outside `CrashDump`, on the world for a key `DiagnosticsConfigChecks` does not list. `check-config` does not report it; the start
+writes the binder's message to standard error and exits 78 before anything binds or touches a database.
+`UseArcaneDiagnostics` has no rule of its own, so it does not refuse a negative limit: the realm and the gateway accept one from any
+source and `Invariant.Configure` treats it as `0`. No check on those two daemons tests that an integer given as a policy names a member.
 
 | Key | Default | Values | Fail-closed behaviour |
 |---|---|---|---|
 | `Diagnostics:OnInvariant` | `Continue` | `Continue`, `FailFast` | unknown name: exit 78 at start. `Continue`: the caller's own refusal runs (drop the packet, refuse the login, throw `SchemaMismatchException`). `FailFast`: the process aborts with the site and message |
 | `Diagnostics:BreakOnInvariant` | `false` | `true`, `false` | acts only with a debugger attached, so an unattended process never waits on a prompt |
-| `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error (exit 78); a hot-path check that fails per packet cannot flood the log |
+| `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error on the world daemon (exit 78), while the realm and the gateway accept it and treat it as `0`; a hot-path check that fails per packet cannot flood the log |
 | `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match. Either way the daemon writes a dump of itself first (`Diagnostics:CrashDump`, [below](#the-crash-dump)) |
 | `Diagnostics:OnUnobservedTask` | `Log` | `Log`, `Exit`, `FailFast` | `Log` is the runtime's own behaviour (the exception is marked observed) made visible at Error level. `Exit`/`FailFast` as above. Default stays `Log` so a fire-and-forget task that faulted silently before this lane does not start killing production servers |
-| `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Logs every throw, caught or not, at Debug level; the hook is re-entrancy guarded |
+| `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Reports throws, caught or not, at Debug level; the hook is re-entrancy guarded. Each exception object is reported once (a rethrow through the next awaiting frame is not reported again), one exception type and origin frame at most once a minute, and at most 20 reports a minute in all; a report says what it suppressed and carries a `[throw site]` section with the throwing thread's stack, so an exception whose own stack is only the rethrow frame (a `Task.WaitAsync` timeout) still names the method that awaited it (`FirstChanceThrottle`, `FirstChanceSite`) |
 | `Diagnostics:CrashDialog` | `false` | `true`, `false` | a Windows message box for a crash that ends the process, after the report and the fault record and before the exit policy, which it never changes ([the crash dialog](#the-crash-dialog)). Only an interactive Windows console session opens one; anywhere else the key does nothing |
 | `Diagnostics:FaultDialog` | `false` | `true`, `false` | also a message box for the first occurrence of each new fault-ledger signature, on a background thread, one box at a time ([the crash dialog](#the-crash-dialog)) |
 
@@ -99,7 +113,7 @@ ends. The dump is requested from the process's own diagnostics endpoint, the mec
 | `Diagnostics:CrashDump:Directory` | empty | empty: `dumps` beside the log file (`logs/dumps`), the directory `.debug dump` uses; without file logging, `dumps` in the daemon's directory |
 | `Diagnostics:CrashDump:MaxFiles` | `5` | the newest N files of the pattern are kept; 0 keeps all. Other files in the directory are never touched |
 | `Diagnostics:CrashDump:FullMinFreeGB` | `16` | below this much free space on the volume Full starts at Heap (the launcher's threshold) |
-| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. 1 to 3600, checked at start by every daemon (`CrashDumpConfigChecks`), so three times it cannot overflow. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
 
 The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names the path that writes the dump in a `[crash dump]` section
 ("written in-process by ArcaneCore", "written by the runtime", or "none"), and the log carries one line per attempt, failure and prune. When
@@ -319,8 +333,11 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   lanes this one may not edit.
 - `Invariant.Check` under `Continue` cannot force a caller to refuse; each site above states its own refusal. New sites must do the
   same (return false, throw, drop) or they are decoration.
-- The first-chance hook exists only in a Debug Kernel build; CI builds Release, so it is covered by the Debug run of
-  `CrashReportTests.FirstChanceHook_FollowsTheKernelBuild` only.
+- The first-chance hook exists only in a Debug Kernel build; CI builds Release, so its attachment is covered by the Debug run of
+  `CrashReportTests.FirstChanceHook_FollowsTheKernelBuild` only. Its body (`CrashHandler.ReportFirstChance`: deduplication, throttle,
+  throw site) is public and driven directly by `FirstChanceThrottleTests` in either build.
+- The report's `uptime` is measured from the process start (`Process.StartTime`); it used to be measured from the first use of
+  `CrashReport`, so it ran short and the first report's could be negative (`CrashReportUptimeTests`).
 - `Environment.FailFast` exit statuses are the runtime's; the process tests assert "not 0 and not 70" rather than 134, because
   Windows reports a different code.
 - The in-process crash dump cannot cover a native crash, a stack overflow or a fatal runtime error: those never reach a managed handler,

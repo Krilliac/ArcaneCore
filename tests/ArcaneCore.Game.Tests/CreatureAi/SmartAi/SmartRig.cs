@@ -135,9 +135,10 @@ internal sealed class SmartRig : IDisposable
     /// <param name="rows">The smart_scripts rows; the catalog is built without references.</param>
     /// <param name="conditions">Wire the table evaluator over <see cref="Conditions"/>; false leaves the creature AI services without one.</param>
     /// <param name="creatureSpawns">Further creature spawns (entries <see cref="Other"/> smart and friendly, <see cref="Speaker"/> plain and friendly, <see cref="Grark"/>).</param>
+    /// <param name="scriptQuests">The quest-service seam of the creature AI services (null: none), e.g. to let CLOSE_GOSSIP reach a quest service.</param>
     /// <param name="objectSpawns">Game object spawns of the goober templates <see cref="ObjectEntry"/> and <see cref="ObjectEntry2"/>; null builds no object system.</param>
     public static SmartRig Start(IEnumerable<SmartScriptRow> rows, bool conditions = false, IEnumerable<CreatureSpawn>? creatureSpawns = null,
-        IEnumerable<GameObjectSpawn>? objectSpawns = null, float playerX = 0)
+        IEnumerable<GameObjectSpawn>? objectSpawns = null, float playerX = 0, IScriptQuestEvents? scriptQuests = null)
     {
         var catalog = new SmartScriptCatalog(rows);
         var content = new CreatureContent(
@@ -154,12 +155,13 @@ internal sealed class SmartRig : IDisposable
                 [], EventAiDialect.CMangos, [])
             { SmartScripts = catalog });
         var spells = new FakeCaster();
-        var services = new CreatureAiServices { Spells = spells };
+        var services = new CreatureAiServices { Spells = spells, ScriptQuests = scriptQuests };
         if (conditions)
         {
             services = new CreatureAiServices
             {
                 Spells = spells,
+                ScriptQuests = scriptQuests,
                 Conditions = new ForwardingConditions(new ConditionEvaluator(ConditionTable.Build(Conditions), new ConditionContext())),
             };
         }

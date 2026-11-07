@@ -29,7 +29,7 @@ public sealed class ControlRefusedException(ControlReply reply)
 /// </summary>
 public sealed record LinkControlTimeouts
 {
-    /// <summary>Describe, Warm, StopAdmissions, Resume, ReleaseWriterLock, Retire, TargetDescribe, Reserve, Install, Discard, ResumeSource, RetireSource.</summary>
+    /// <summary>Describe, Warm, StopAdmissions, Resume, ReleaseWriterLock, RetireWrites, Retire, TargetDescribe, Reserve, Install, Discard, ResumeSource, RetireSource.</summary>
     public TimeSpan Default { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>Freeze and Suspend: the world thread plus a durable flush.</summary>

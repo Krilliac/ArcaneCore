@@ -26,8 +26,8 @@ unreachable. Two items should be fixed or corrected before release (F1, F2); the
   top-level key is gone from src, docs and appsettings. `CreatureMapSystem.Evade.cs:53-60` honours it; `EvadeHealthTests` and
   `EvadeFidelityTests` assert both directions on the real regen tick.
 - **ReputationChanged.** One implementation (`Npc/QuestNpcServices.Reputation.cs:14`), called directly by `ReputationFeature.OnReputationChanged`
-  (`World/Reputation/ReputationFeature.cs:178-179`). `ReputationService` does not implement `IReputationChangeSource`, so `QuestReputationBinding`
-  never subscribes and cannot double-deliver; the only effect is the one startup information line the integrator already noted.
+  (`World/Reputation/ReputationFeature.cs:178-179`). Nothing registers an `IReputationChangeSource` in the container, so `QuestReputationBinding`
+  never subscribed and could not double-deliver; its only effect was a startup information line, and it has since been removed.
 - **Price rounding.** `ReputationPricing.Round` (`Reputation/ReputationPricing.cs:11-19`) is `(uint)((float)price * discount + 0.5f)`, clamped.
   Its callers are every discounted amount: vendor list (`QuestNpcServices.Vendor.cs:297`), vendor buy (`:118`, `BuyPrice * count`, vmangos
   Player.cpp:18445 multiplies before the discount), repair (`InventoryItemService.cs:105`), trainer list and buy (`Trainer.cs:59,110`), each taxi leg

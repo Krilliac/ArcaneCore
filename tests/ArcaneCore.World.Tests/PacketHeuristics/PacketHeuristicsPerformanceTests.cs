@@ -123,6 +123,78 @@ public sealed class PacketHeuristicsPerformanceTests(ITestOutputHelper output)
         output.WriteLine($"PERF off: ns/packet={off.TotalMilliseconds * 1_000_000d / packets:F1}");
     }
 
+    [Fact]
+    public async Task TheWorldPacketHook_PaysAdmitAndTheOpcodeMask_AndAllocatesNothing()
+    {
+        await using var host = WorldTestHost.Start();
+        long fakeNow = 1_000_000;
+        (PacketHeuristicsFeature feature, _) = PacketHeuristicsTestKit.Enable(host, o => o.ExemptBots = false, () => fakeNow);
+
+        var sessions = new WorldSession[Sessions];
+        for (int i = 0; i < sessions.Length; i++)
+        {
+            sessions[i] = await PacketHeuristicsTestKit.NewBotAtCharacterScreenAsync(host, "PERFW" + i);
+        }
+
+        // An opcode with no incapacitated-action entry returns after the mask lookup and never reads the player, so the price measured is
+        // Admit (settings read, session flags, state lookup) plus the mask lookup: the part every world packet pays.
+        const WorldOpcode Opcode = WorldOpcode.CmsgSetSelection;
+        Assert.Equal(PacketOpcodeClasses.Incapacity.None, PacketOpcodeClasses.ActionMask(Opcode));
+
+        // The first network-path packet of each session creates its state (the world hook alone would too, through Admit).
+        byte[] payload = new byte[8];
+        for (int s = 0; s < sessions.Length; s++)
+        {
+            feature.OnClientPacket(sessions[s], Opcode, payload);
+        }
+
+        for (int r = 0; r < 16; r++)
+        {
+            for (int s = 0; s < sessions.Length; s++)
+            {
+                feature.OnWorldPacket(sessions[s], null!, Opcode);
+            }
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        long leastAllocated = long.MaxValue;
+        TimeSpan? bestCpu = null;
+        long bestTicks = long.MaxValue;
+        for (int pass = 0; pass < 3; pass++)
+        {
+            TimeSpan? startCpu = ThreadCpuTime.Now();
+            long beforeAlloc = GC.GetAllocatedBytesForCurrentThread();
+            long start = Stopwatch.GetTimestamp();
+            for (int r = 0; r < Rounds; r++)
+            {
+                for (int s = 0; s < sessions.Length; s++)
+                {
+                    feature.OnWorldPacket(sessions[s], null!, Opcode);
+                }
+            }
+
+            long ticks = Stopwatch.GetTimestamp() - start;
+            long afterAlloc = GC.GetAllocatedBytesForCurrentThread();
+            TimeSpan? endCpu = ThreadCpuTime.Now();
+            if (startCpu is { } c0 && endCpu is { } c1 && (bestCpu is null || c1 - c0 < bestCpu))
+                bestCpu = c1 - c0;
+            leastAllocated = Math.Min(leastAllocated, afterAlloc - beforeAlloc);
+            bestTicks = Math.Min(bestTicks, ticks);
+        }
+
+        TimeSpan wall = Stopwatch.GetElapsedTime(0, bestTicks);
+        TimeSpan cost = bestCpu ?? wall;
+        string clock = bestCpu is null ? "wall" : "thread-cpu";
+        double nsPerPacket = cost.TotalMilliseconds * 1_000_000d / ((double)Sessions * Rounds);
+        output.WriteLine($"PERF world-hook ns/packet={nsPerPacket:F1} ({clock}) wall={wall.TotalMilliseconds:F1} ms allocatedBytes={leastAllocated}");
+
+        Assert.Equal(0, leastAllocated);
+        Assert.True(nsPerPacket < 5_000, $"{nsPerPacket:F1} ns per world packet ({clock})");
+    }
+
     private static long Total(PacketHeuristicsFeature feature)
     {
         long total = 0;

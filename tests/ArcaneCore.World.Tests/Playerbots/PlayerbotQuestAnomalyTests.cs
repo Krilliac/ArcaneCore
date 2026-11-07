@@ -40,10 +40,24 @@ public sealed class PlayerbotQuestAnomalyTests
 
     private static bool AnyQuestAnomaly(AnomalyCapture c) => c.Any(AcceptRefused) || c.Any(GiverNotFound) || c.Any(NoProgress);
 
+    /// <summary>
+    /// Runs <paramref name="body"/> under a think probe on a manual clock: the quest phase has a 25 ms wall budget (a giver looked at after it is
+    /// spent is skipped), and a test thread the OS held back that long saw no candidate. A frozen clock makes the outcome load-independent.
+    /// </summary>
+    private static T OnFrozenThinkClock<T>(Func<T> body)
+    {
+        var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
+        probe.Begin();
+        try { return body(); }
+        finally { probe.End(); }
+    }
+
+    private static bool HasCandidate(PlayerbotQuestGoals goals, Player player) => OnFrozenThinkClock(() => goals.HasCandidate(player));
+
     private static void Think(WorldSession session, PlayerbotQuestGoals goals)
     {
         session.ManagedBudget = new ManagedActionBudget(1);
-        goals.Update(session.Player!, 500);
+        OnFrozenThinkClock(() => goals.Update(session.Player!, 500));
     }
 
     [Fact]
@@ -60,7 +74,7 @@ public sealed class PlayerbotQuestAnomalyTests
         {
             Player player = session.Player!;
             AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(HasCandidate(goals, player));
             Think(session, goals); // the exchange starts with room in the bags; they fill before the accept
             while (PlayerbotTownGoals.FreeBagSlots(player) > 0)
                 Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
@@ -106,7 +120,7 @@ public sealed class PlayerbotQuestAnomalyTests
             var sent = new List<WorldOpcode>();
             session.ManagedDispatchObserver = opcode => sent.Add(opcode);
             using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(HasCandidate(goals, player));
             Think(session, goals); // the query goes out
             Assert.True(goals.Busy);
             _ = session.DrainManagedPackets(); // its answer is lost
@@ -191,11 +205,11 @@ public sealed class PlayerbotQuestAnomalyTests
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(HasCandidate(goals, player));
             for (int think = 0; think < 3; think++)
             {
                 session.ManagedBudget = new ManagedActionBudget(1);
-                Assert.False(goals.Update(player, 500));
+                Assert.False(OnFrozenThinkClock(() => goals.Update(player, 500)));
             }
 
             Assert.Equal(1, queries);
@@ -207,7 +221,7 @@ public sealed class PlayerbotQuestAnomalyTests
         {
             Player player = session.Player!;
             Assert.False(goals.IsGiverWait(QuestInteractionFixture.QuestId));
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(HasCandidate(goals, player));
             for (int think = 0; think < 6; think++) Think(session, goals);
             Assert.True(queries >= 2, "the bot went back to the giver");
             Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId)); // and accepted
@@ -238,7 +252,7 @@ public sealed class PlayerbotQuestAnomalyTests
         await quest.Host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
-            Assert.True(goals.HasCandidate(player)); // the giver is seen alive after the wait: the episode is over
+            Assert.True(HasCandidate(goals, player)); // the giver is seen alive after the wait: the episode is over
             Think(session, goals); // the query goes out again
             Assert.True(goals.Busy);
             _ = session.DrainManagedPackets();
@@ -517,7 +531,7 @@ public sealed class PlayerbotQuestAnomalyTests
             await quest.Host.OnWorldAsync(() =>
             {
                 Player player = session.Player!;
-                Assert.False(goals.HasCandidate(player));
+                Assert.False(HasCandidate(goals, player));
                 Think(session, goals);
                 return true;
             });
@@ -607,7 +621,7 @@ public sealed class PlayerbotQuestAnomalyTests
                 Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(9502, 1, out _));
             session.ManagedDispatchObserver = opcode => { if (opcode == WorldOpcode.CmsgQuestgiverQueryQuest) queries++; };
             AnomalyCapture c = PlayerbotAnomalies.CaptureFor(player);
-            Assert.False(goals.HasCandidate(player));
+            Assert.False(HasCandidate(goals, player));
             Think(session, goals, 4);
             return c;
         });
@@ -667,7 +681,7 @@ public sealed class PlayerbotQuestAnomalyTests
         {
             Assert.Equal(1, queries);
             Assert.Equal(1, capture.Count(AcceptRefused));
-            Assert.False(goals.HasCandidate(session.Player!));
+            Assert.False(HasCandidate(goals, session.Player!));
             return true;
         });
 
@@ -677,7 +691,7 @@ public sealed class PlayerbotQuestAnomalyTests
             Player player = session.Player!;
             Assert.Equal(1u, player.Inventory.DestroyItemCount(9502, 1));
             Think(session, goals, 1);
-            Assert.True(goals.HasCandidate(player));
+            Assert.True(HasCandidate(goals, player));
             return true;
         });
     }

@@ -438,7 +438,7 @@ public sealed class TalentPersistence : IAsyncDisposable
                     await pending.Write(store).ConfigureAwait(false);
                     pending.Done?.TrySetResult();
                 }
-                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.Drops(Retirement, QueueName, movedId))
+                catch (CharacterOwnershipRejectedException) when (pending.CharacterId is { } movedId && CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, movedId))
                 {
                     lock (_lock)
                     {

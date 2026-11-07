@@ -99,6 +99,52 @@ public sealed partial class Creature
         }
     }
 
+    /// <summary>The "leave this slot alone" value of <see cref="SetScriptEquipment"/> (cmangos EQUIP_NO_CHANGE).</summary>
+    public const int EquipNoChange = -1;
+
+    /// <summary>
+    /// cmangos ScriptedAI/CreatureAI <c>SetEquipmentSlots</c> as a script uses it: with <paramref name="loadDefault"/> the equipment the
+    /// creature had before its first script change comes back (a creature a script never changed keeps what it has); otherwise each of
+    /// <paramref name="mainHand"/>, <paramref name="offHand"/> and <paramref name="ranged"/> is an item entry to show in that slot,
+    /// <see cref="EquipNoChange"/> leaves the slot alone and 0 empties it. An item <paramref name="lookup"/> does not know leaves its slot as
+    /// it was. The first change saves the default, the same one a DB script's SET_EQUIPMENT_SLOTS step saves and restores.
+    /// </summary>
+    public void SetScriptEquipment(Func<uint, ItemTemplate?>? lookup, bool loadDefault, int mainHand = EquipNoChange, int offHand = EquipNoChange, int ranged = EquipNoChange)
+    {
+        if (loadDefault)
+        {
+            if (ScriptEquipmentDefault is { } saved)
+            {
+                RestoreVirtualItems(saved);
+                ScriptEquipmentDefault = null;
+            }
+
+            return;
+        }
+
+        ReadOnlySpan<int> items = [mainHand, offHand, ranged];
+        for (int slot = 0; slot < VirtualItemSlotCount; slot++)
+        {
+            if (items[slot] < 0)
+            {
+                continue;
+            }
+
+            ItemTemplate? item = null;
+            if (items[slot] != 0)
+            {
+                item = lookup?.Invoke((uint)items[slot]);
+                if (item is null)
+                {
+                    continue;
+                }
+            }
+
+            ScriptEquipmentDefault ??= SnapshotVirtualItems();
+            SetVirtualItem(slot, item);
+        }
+    }
+
     /// <summary>Set the equipment id a game event forces (0: none) and show it at once on a living creature; a dead one shows it from its respawn.</summary>
     internal void SetEventEquipment(uint equipmentId)
     {

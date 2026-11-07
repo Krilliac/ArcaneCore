@@ -549,7 +549,11 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// <item>Walkable: the same map, not separated by the water of Teldrassil (<c>SeparatedByWater</c>, #1466), and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
     /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
-    /// failure then replans. The goal reads its tile at once (<see cref="BlockingLocates"/>), so a goal on a tile not read yet is placed.
+    /// failure then replans. The exception is the two levels of a same-map trigger that moves the bot by more than 150 yards in height (<see cref="TriggerSeparates"/>):
+    /// two places at those two levels, at least one of them unplaced, are not joined, so the planner takes the trigger (two placed places answer by component alone). The first same-map place the planner asks about after the start
+    /// reads its tile at once (<see cref="BlockingLocates"/>); on a cross-map goal the walkable test returns early (the maps differ) and locates nothing for it, so it is the first same-map node the planner asks about
+    /// (a port, a mage place, a trigger end, a bind point or a teleport destination), not the goal. A same-map goal that the water of Teldrassil separates from the start also returns
+    /// at <c>Separated</c> before locating, so the blocking read goes to the next same-map node the planner asks about, not to that goal.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
     /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
@@ -624,7 +628,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             Portals = portals,
             Ships = ships,
             TriggerPortals = triggerPortals,
-            Walkable = WalkableFor(player),
+            Walkable = WalkableFor(player, triggerPortals),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
     }
@@ -652,8 +656,11 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     private static readonly PathOptions BlockingDryWalkingLocate = DryWalkingLocate with { NonBlockingTiles = false };
 
     /// <summary>
-    /// How many places one set of facts locates with a blocking tile read: the first place that is not the bot's own, which the planner asks
-    /// about right after the start, so the goal. A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// How many places one set of facts locates with a blocking tile read: the first same-map place that is not the bot's own, which the planner asks
+    /// about right after the start. That is the goal when the goal is on the bot's map and not separated from the start by water; a same-map goal
+    /// that <c>Separated</c> (the water of Teldrassil on map 1) cuts off returns before locating anything, and for a goal on another map the walkable test returns early
+    /// (the maps differ) the same way, so in both cases the blocking read goes to the next same-map node the planner asks about
+    /// (a port, a mage place, a trigger end, a bind point or a teleport destination). A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
     /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
     /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
     /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
@@ -667,9 +674,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         => Population.PopulationTownProgression.SeparatedByWater(a.MapId, a.Position.X, a.Position.Y, b.MapId, b.Position.X, b.Position.Y);
 
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
-    internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
+    internal static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player, IReadOnlyList<TriggerPortal>? triggers = null)
     {
-        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId && !Separated(a, b);
+        if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return (a, b) => a.MapId == b.MapId && !Separated(a, b) && !TriggerSeparates(a, b, triggers);
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
         int blocking = 0;
         var self = new TravelPlace(player.MapId, new Vector3(player.X, player.Y, player.Z));
@@ -702,9 +709,45 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             if (a.MapId != b.MapId || Separated(a, b)) return false;
             (int ca, bool da) = Locate(a);
             (int cb, bool db) = Locate(b);
-            return !da || !db || ca == cb;
+            return Joined(a, b, ca, da, cb, db, triggers);
         };
     }
+
+    /// <summary>A same-map trigger that moves the bot up or down by more than this many yards joins two levels no walk joins (Rut'theran to Teldrassil's upper ground).</summary>
+    private const float TriggerLevelYards = 150f;
+
+    /// <summary>A place stands on a trigger's level when its height is within this many yards of the trigger's end.</summary>
+    private const float OnLevelYards = 75f;
+
+    /// <summary>
+    /// Whether two places of one map (not separated by water) count as walkable from each other, given what the region graph answered for
+    /// each (<c>d*</c>: it placed the place in component <c>c*</c>). Two placed places are joined when they share a component. When at least one
+    /// of the two is unplaced (the graph could not place it) they count as joined, except between the two levels a same-map teleport trigger joins
+    /// (<see cref="TriggerSeparates"/>): a walk planned there fails only after thousands of yards, and the trigger is the way.
+    /// </summary>
+    internal static bool Joined(TravelPlace a, TravelPlace b, int ca, bool da, int cb, bool db, IReadOnlyList<TriggerPortal>? triggers)
+    {
+        if (da && db) return ca == cb;
+        return !TriggerSeparates(a, b, triggers);
+    }
+
+    /// <summary>Whether a trigger that changes the bot's height by more than <see cref="TriggerLevelYards"/> has one place at its entrance's height and the other at its exit's (either way round).</summary>
+    internal static bool TriggerSeparates(TravelPlace a, TravelPlace b, IReadOnlyList<TriggerPortal>? triggers)
+    {
+        if (triggers is null) return false;
+        for (int i = 0; i < triggers.Count; i++)
+        {
+            TriggerPortal t = triggers[i];
+            // A trigger separates the levels of its own map only; a place of another map is never on its levels.
+            if (a.MapId != t.Entrance.MapId || b.MapId != t.Entrance.MapId || t.Exit.MapId != t.Entrance.MapId) continue;
+            if (MathF.Abs(t.Entrance.Position.Z - t.Exit.Position.Z) <= TriggerLevelYards) continue;
+            if ((OnLevel(a, t.Entrance) && OnLevel(b, t.Exit)) || (OnLevel(a, t.Exit) && OnLevel(b, t.Entrance))) return true;
+        }
+
+        return false;
+    }
+
+    private static bool OnLevel(TravelPlace place, TravelPlace end) => MathF.Abs(place.Position.Z - end.Position.Z) <= OnLevelYards;
 
     /// <summary>The flight estimate of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>, or null without the taxi data.</summary>
     private static Func<TravelPlace, TravelPlace, (float Seconds, uint Copper)?>? FlightFor(WorldSession session, Player player, PlayerbotOptions options,
@@ -1116,6 +1159,13 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 if (player.Combat.IsInCombat) return StepResult.Yield;
                 return Walk(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.AreaTrigger:
+                if (SwitchOf(leg.Means, options) is { } triggerOff)
+                {
+                    PlayerbotMovementControl.Stop(session, player);
+                    why = triggerOff;
+                    return StepResult.SwitchedOff;
+                }
+
                 if (player.Combat.IsInCombat) return StepResult.Yield;
                 return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Boat:

@@ -217,13 +217,13 @@ public sealed class EconomyAuctionAccountLimitRaceTests
         public static async Task<Harness> StartAsync(Mode mode)
         {
             var control = new Control(mode);
-            using var startup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
             SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
             {
                 services.AddSingleton<IAuctioneerAccess>(new OwnedAuctioneer());
                 services.AddScoped<IEconomyStore>(provider => new ControlledStore(
                     new EfEconomyStore(provider.GetRequiredService<CharacterDbContext>()), control));
-            }, startup.Token);
+            });
             var harness = new Harness(server, control);
             harness.Economy.Options.AuctionAccountConcurrentLimit = 1;
             await server.AddAccountAsync(Account, Password, harness.Token);

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Grid;
@@ -26,7 +27,7 @@ public sealed class TerrainManager
     private readonly List<uint> _unloadRequests = [];
     private readonly ILogger _logger;
     private readonly string? _mapsDirectory;
-    private readonly TilePrefetchCache<TerrainTile> _prefetch = new();
+    private readonly TilePrefetchCache<TerrainTile> _prefetch = new(SyncReadFile.Terrain);
 
     public TerrainManager(string? dataDirectory, ILogger? logger = null)
     {
@@ -165,6 +166,15 @@ public sealed class TerrainManager
 
     /// <summary>Prefetches the loader took instead of reading the file itself (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>Untaken approach prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchEvictions => _prefetch.Evictions;
+
+    /// <summary>Untaken arrival prefetches dropped to make room (diagnostics and tests).</summary>
+    internal int PrefetchArrivalEvictions => _prefetch.ArrivalEvictions;
+
+    /// <summary>Untaken prefetches dropped because they expired (diagnostics and tests).</summary>
+    internal int PrefetchExpiries => _prefetch.Expiries;
 
     /// <summary>Whether a prefetch of the tile is waiting to be taken (<paramref name="finished"/>: its read is done) (diagnostics and tests).</summary>
     internal bool IsPrefetched(uint mapId, int tileX, int tileY, out bool finished)
@@ -510,7 +520,23 @@ public sealed class TerrainManager
             return prefetched;
         }
 
-        string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
+        // A prefetch miss: the file is read and parsed on this thread, inside whatever tick asked. Counted per caller kind, and reported
+        // as an anomaly past SyncTileReadCounters.AnomalyMs. A missing file is no read.
+        long started = Stopwatch.GetTimestamp();
+        TerrainTile loaded = ReadTileOnThisThread(mapId, tileX, tileY, out bool fileRead);
+        if (fileRead)
+        {
+            SyncTileReadCounters.Record(SyncReadFile.Terrain, Stopwatch.GetTimestamp() - started, mapId, tileX, tileY);
+        }
+
+        return loaded;
+    }
+
+    /// <summary>The synchronous half of <see cref="LoadTile"/>; <paramref name="fileRead"/> is false when there was no file to read.</summary>
+    private TerrainTile ReadTileOnThisThread(uint mapId, int tileX, int tileY, out bool fileRead)
+    {
+        fileRead = false;
+        string path = Path.Combine(_mapsDirectory!, TerrainTile.FileName(mapId, tileX, tileY));
         byte[] bytes;
         try
         {
@@ -519,6 +545,7 @@ public sealed class TerrainManager
                 return TerrainTile.Empty;
             }
 
+            fileRead = true;
             bytes = File.ReadAllBytes(path);
         }
         catch (IOException ex)

@@ -187,10 +187,18 @@ public sealed partial class MapCombat
     /// (vmangos Player::TeleportTo, Player.cpp:1953-1966: DEAD, map above 1, a different map, the corpse in the target map).
     /// Returns whether it happened.
     /// </summary>
-    internal bool ReviveForDungeonEntry(Player player, uint targetMapId)
+    internal bool ReviveForDungeonEntry(Player player, uint targetMapId) => player.MapId != targetMapId && ReviveWithBodyIn(player, targetMapId);
+
+    /// <summary>
+    /// <see cref="ReviveForDungeonEntry"/> for a ghost that came from another worker: the same rule, applied once the player is in the map (its body put back) and read against the map
+    /// it left (<paramref name="sourceMapId"/>). The source does not revive: the transfer can still be refused or aborted there, and a revive cannot be taken back, so a refusal would be
+    /// a free resurrection. Returns whether it happened.
+    /// </summary>
+    internal bool ReviveAfterTransferArrival(Player player, uint sourceMapId) => player.MapId != sourceMapId && ReviveWithBodyIn(player, player.MapId);
+
+    private bool ReviveWithBodyIn(Player player, uint mapId)
     {
-        if (player.Combat.DeathState != DeathState.Dead || targetMapId <= 1 || player.MapId == targetMapId
-            || player.Combat.Corpse is not { } corpse || corpse.MapId != targetMapId)
+        if (player.Combat.DeathState != DeathState.Dead || mapId <= 1 || player.Combat.Corpse is not { } corpse || corpse.MapId != mapId)
         {
             return false;
         }
@@ -210,7 +218,8 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// A spirit released on a transport is taken off it and comes back alive at the graveyard (vmangos Player::RepopAtGraveyard,
-    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body is not left behind in the world.
+    /// Player.cpp:5000-5005: RemovePassenger + ResurrectPlayer(1.0f)); its body leaves the world too, unless removing the corpse faults
+    /// (<see cref="RemoveResurrectedCorpse"/> records that and leaves the corpse referenced and in the world).
     /// </summary>
     internal void ResurrectFromTransport(Player player)
     {
@@ -312,8 +321,9 @@ public sealed partial class MapCombat
     /// The map a restored body goes back into (vmangos <c>corpse.instance</c>), or null to keep it out of every map. A body in this
     /// map's instance, or a row from before the corpse instance was stored (instance 0) of an instanceable map with this map's id, goes
     /// here: the old code put such a body into the ghost's map whenever the map ids matched. A body on a continent goes into its
-    /// map. A dungeon body goes into its instance's map only when that map is loaded or a live instance owns it
-    /// (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); a corpse never creates an instance
+    /// map when this worker owns that map; on a continent another worker owns (a ghost that crossed workers) it stays out of every map
+    /// here, and the owner puts it back when the ghost returns. A dungeon body goes into its instance's map only when that map is loaded, or a live instance owns it and this
+    /// worker owns that copy (<see cref="Maps.IMapResolver.ResolveCorpseMap"/>, which creates it the managed way); on a worker without instance copies it stays out of every map too. A corpse never creates an instance
     /// map by itself, as vmangos never does.
     /// </summary>
     private MapCombat? ResolveCorpseMap(Kernel.Characters.CorpseSnapshot snapshot)
@@ -326,7 +336,7 @@ public sealed partial class MapCombat
 
         if (!instanceable)
         {
-            return _world.GetMap(snapshot.MapId).Combat;
+            return _world.TryGetMap(snapshot.MapId, 0, out Maps.Map? continent) == Maps.MapAccessResult.Granted ? continent!.Combat : null;
         }
 
         Maps.Map? map = _world.FindMap(snapshot.MapId, snapshot.InstanceId)
@@ -369,8 +379,8 @@ public sealed partial class MapCombat
         }
         else
         {
-            // Its instance is not loaded and no live instance owns it: the ghost keeps the body (and its instance, for the next
-            // save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
+            // Its instance is not loaded and no live instance owns it, or another worker owns its continent or its instance copy: the ghost keeps the body (and its
+            // instance, for the next save) outside every map. Entering that dungeon still revives it (ReviveForDungeonEntry); the spirit healer still works.
             corpse.InstanceId = snapshot.InstanceId;
         }
 
@@ -427,8 +437,10 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Player::ResurrectPlayer: ALIVE, ghost form removed, unrooted, health/mana/energy
-    /// restored to <paramref name="restorePercent"/> and rage emptied (when &gt; 0).
+    /// vmangos Player::ResurrectPlayer: casts on the player are interrupted, ALIVE, ghost form removed, unrooted, health/mana/energy
+    /// restored to <paramref name="restorePercent"/> and rage emptied (when &gt; 0). Atomic past the quest-settlement check: a fault in a
+    /// step is recorded and the remaining steps still run; the player ends fully alive, or fully dead when the Alive step itself fails.
+    /// The corpse is not part of it (see <see cref="RemoveResurrectedCorpse"/>).
     /// </summary>
     public void ResurrectPlayer(Player player, float restorePercent, bool applySickness)
     {
@@ -439,7 +451,8 @@ public sealed partial class MapCombat
 
         // Atomic (vmangos Player::ResurrectPlayer runs to its end, Player.cpp:4638-4667): past the quest-settlement check nothing below
         // throws. A fault in a step is recorded once and the remaining steps still run; the player ends fully alive, or still fully
-        // dead when the step that sets Alive fails. Alive never keeps PLAYER_FLAGS_GHOST or the ghost aura.
+        // dead when the step that sets Alive fails. Alive never keeps PLAYER_FLAGS_GHOST; the ghost auras are stripped directly only when the
+        // ghost-form hook fails and a spell system is attached.
         Action<Player, ResurrectStep>? inject = ResurrectFaultInjection;
         bool wasGhost = (player.Flags & PlayerFlags.Ghost) != 0;
 
@@ -597,7 +610,10 @@ public sealed partial class MapCombat
     private void LogResurrectFault(string site, Exception ex, Player player)
         => _map.Logger.LogFault(site, ex, "resurrection step failed for player {Player} (guid={Guid}); the resurrection continues", player.Name, player.Guid.Low);
 
-    /// <summary>The steps of <see cref="ResurrectPlayer"/>, in order; the argument of <see cref="ResurrectFaultInjection"/>.</summary>
+    /// <summary>
+    /// The steps of <see cref="ResurrectPlayer"/> in order, then <c>RemoveCorpse</c>, which <see cref="RemoveResurrectedCorpse"/> runs
+    /// separately after it; the argument of <see cref="ResurrectFaultInjection"/>.
+    /// </summary>
     internal enum ResurrectStep
     {
         InterruptCasts,
@@ -878,9 +894,10 @@ public sealed partial class MapCombat
     private static void TogglePlayerPvpFlagOnAttackVictim(Player attacker, Unit victim, bool touchOnly = false)
     {
         // vmangos Unit.cpp:6042-6053: the pulse needs a victim that is not the attacker's own (the player behind the victim, its owner or charmer,
-        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith).
+        // must differ from the attacker, so a player's own pet or charm never pulses) and that is not a duel opponent (!IsInDuelWith) nor a free-for-all pair (both IsFFAPvP, Unit.cpp:6047).
         Player? victimPlayer = DuelRules.ControllingPlayer(victim);
-        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)))
+        if (victimPlayer is not null && (ReferenceEquals(victimPlayer, attacker) || DuelRules.IsInDuelWith(attacker, victimPlayer)
+            || ((attacker.Flags & PlayerFlags.FfaPvp) != 0 && (victimPlayer.Flags & PlayerFlags.FfaPvp) != 0)))
         {
             return;
         }

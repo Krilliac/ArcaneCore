@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using Microsoft.Extensions.DependencyInjection;
@@ -27,6 +28,18 @@ internal sealed class ItemWorldTestServices : IWorldTestServices
         var inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
         services.AddSingleton<ICharacterStore>(new InventorySavingCharacterStore(inner, content.Items));
     }
+}
+
+/// <summary>The <c>page_text</c> rows of a test host (register it as <see cref="IPageTextStore"/>).</summary>
+internal sealed class InMemoryPageTextStore(IReadOnlyList<PageTextRecord> rows) : IPageTextStore
+{
+    public Task<IReadOnlyList<PageTextRecord>> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(rows);
+}
+
+/// <summary>The <c>item_enchantment_template</c> rows of a test host (register it as <see cref="IItemEnchantmentTemplateStore"/>).</summary>
+internal sealed class InMemoryItemEnchantmentTemplateStore(IReadOnlyList<ItemEnchantmentChance> rows) : IItemEnchantmentTemplateStore
+{
+    public Task<IReadOnlyList<ItemEnchantmentChance>> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(rows);
 }
 
 /// <summary>The item content and stored inventories of one test host.</summary>

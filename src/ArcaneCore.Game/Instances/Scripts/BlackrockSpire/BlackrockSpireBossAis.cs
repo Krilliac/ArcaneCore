@@ -650,7 +650,7 @@ public sealed class UrokChallengeAI : IGameObjectAi
         // Everyone in the map who is not its friend is its enemy at once.
         foreach (Player player in objects.Map.Players.ToArray())
         {
-            if (player.IsAlive && objects.Map.Combat.Hooks.CanAttack(summoned, player))
+            if (player.IsAlive && objects.Map.Combat.CanAttackSingleTarget(summoned, player))
             {
                 summoned.AI?.AttackStart(player);
             }

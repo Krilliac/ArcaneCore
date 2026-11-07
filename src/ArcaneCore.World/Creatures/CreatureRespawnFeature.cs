@@ -14,7 +14,7 @@ namespace ArcaneCore.World.Creatures;
 /// Durable creature respawn times in the world daemon (an <see cref="IWorldFeature"/>, discovered): loads the stored times from
 /// <see cref="ICreatureRespawnStore"/> when the world starts (rows that expired, or belong to a dungeon instance that is gone, are dropped by the
 /// store), hands them to every map's <see cref="CreatureMapSystem"/> through <see cref="Persistence"/>, and drains the write queue at shutdown after
-/// every system saved the creatures that are still dead (it throws if a write is still not durable), and clears a deleted instance's times through <see cref="CreatureRespawnQueue.ForgetInstance"/>. Inactive without a store or with <c>Creatures:Respawn:Persist=false</c>: the timers are then
+/// every system saved the creatures that are still dead (it throws if a write is still not durable), and clears a deleted instance's times through <see cref="RespawnWriteQueue{TRecord, TKey, TStore}.ForgetInstance"/>. Inactive without a store or with <c>Creatures:Respawn:Persist=false</c>: the timers are then
 /// kept in memory only, as before.
 /// </summary>
 public sealed class CreatureRespawnFeature(IServiceProvider services, ILogger<CreatureRespawnFeature> logger) : IWorldFeature

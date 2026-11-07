@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Instances;
 using ArcaneCore.World.Persistence;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -16,8 +17,8 @@ namespace ArcaneCore.World.GameObjects;
 /// (vmangos MapPersistentStateManager::LoadGameobjectRespawnTimes, Maps/MapPersistentStateMgr.cpp:1149-1156; rows that expired, or belong to a
 /// dungeon instance that is gone, are dropped by the store), hands them to every map's <see cref="GameObjectMapSystem"/> through
 /// <see cref="Persistence"/>, drains the write queue at shutdown after every system saved the objects that are still despawned (it throws if a
-/// write is still not durable), and clears a deleted instance's times through <see cref="GameObjectRespawnQueue.ForgetInstance"/>.
-/// Inactive without a store: the timers are then kept in memory only, as before. The clock is the creature feature's
+/// write is still not durable), and clears a deleted instance's times through <see cref="RespawnWriteQueue{TRecord, TKey, TStore}.ForgetInstance"/>.
+/// Inactive without a store or with <c>GameObjects:PersistRespawn=false</c>: the timers are then kept in memory only, as before. The clock is the creature feature's
 /// <see cref="IRespawnClock"/> registration, else the system clock.
 /// </summary>
 public sealed class GameObjectRespawnFeature(IServiceProvider services, ILogger<GameObjectRespawnFeature> logger) : IWorldFeature
@@ -38,6 +39,14 @@ public sealed class GameObjectRespawnFeature(IServiceProvider services, ILogger<
 
     public void Attach(WorldRuntime world)
     {
+        var options = new GameObjectOptions();
+        services.GetService<IConfiguration>()?.GetSection(GameObjectOptions.SectionName).Bind(options);
+        if (!options.PersistRespawn)
+        {
+            logger.LogInformation("game object respawn persistence is off (GameObjects:PersistRespawn)");
+            return;
+        }
+
         IReadOnlyList<GameObjectRespawnRecord> stored = [];
         IServiceScopeFactory scopes = services.GetRequiredService<IServiceScopeFactory>();
         using (IServiceScope scope = scopes.CreateScope())

@@ -28,7 +28,8 @@ public sealed class HolidayFlavourRow
 /// <summary>
 /// World schema 62: <c>holiday_flavour</c>, how each client holiday is told in bot speech and emotes (line-template key, name, the crowd's text
 /// emotes, whether bots gather), read by the playerbot pack at start-up. Holiday id 0 is the flavour of a holiday the table does not name. The
-/// rows ship as content (<c>sql/content/world/&lt;provider&gt;/0002_holiday_flavour.sql</c>); the schema step bundles none. The version is the
+/// rows ship as content (<c>sql/content/world/&lt;provider&gt;/0002_holiday_flavour.sql</c>); the schema step bundles none, and the world database
+/// initializer seeds the shipped rows into an empty table at the next world start (not under policy Never or a validate-only start). The version is the
 /// next free world step (the integrator renumbers this one constant).
 /// </summary>
 public sealed class HolidayFlavourDataModule : IDataModule

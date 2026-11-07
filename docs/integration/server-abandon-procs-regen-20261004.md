@@ -24,8 +24,8 @@ development evidence, separate from the corrected candidate's passing gate.
 Characters schema remains23. Source is local, unstaged and uncommitted on
 `codex/server-continue-20261004`, base
 `7313b9eb089197b253dc51bd8bb5ceb803adcc6b`. Original-client acceptance,
-proprietary fixtures and external database providers remain pending. The charter
-continues to include version-checked WoWWiki 1.12.1 and Wowhead Classic research.
+proprietary fixtures and external database providers remain pending. The reference policy
+continues to include version-checked WoWWiki 1.12.1 and Wowhead Classic research (the policy now lives in [contributing](../guide/contributing.md#retired-rules); the charter that first held it is since retired).
 
 Pinned behavioral references: vmangos `0e3ff01e76d4758e8a7c3108b2717cc785ed56fa`,
 mangos-classic `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f`; packet cross-checks

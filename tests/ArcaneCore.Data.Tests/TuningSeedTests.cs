@@ -9,7 +9,7 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// World version 62 tuning tables: the world initializer seeds <see cref="TuningDefaults"/> into each empty table (a fresh or upgraded
+/// World version 63 tuning tables: the world initializer seeds <see cref="TuningDefaults"/> into each empty table (a fresh or upgraded
 /// database does not start with empty tables, so no behaviour changes), and leaves a table an operator edited alone.
 /// </summary>
 public sealed class TuningSeedTests : IAsyncLifetime

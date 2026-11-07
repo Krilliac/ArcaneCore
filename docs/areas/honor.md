@@ -7,7 +7,7 @@ Code: `src/ArcaneCore.Game/Honor/` (rules and world-thread state), `src/ArcaneCo
 schema renumbering note: [integration/honor.md](../integration/honor.md).
 
 Evidence: automated tests against the references cited below, loopback clients through the real world host, and SQLite for the stores.
-**Not verified against a real 1.12.1 client** (charter 1.3); the checklist at the end is what a client pass has to confirm.
+**Not verified against a real 1.12.1 client** (see [real-client acceptance](../guide/client-acceptance.md)); the checklist at the end is what a client pass has to confirm.
 **MariaDB and PostgreSQL were not exercised on this machine** (no server): the store tests are provider theories that run on hosted CI, and
 the SQLite results do not prove the other two (see "Hosted CI").
 
@@ -43,7 +43,7 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
 - **PvP flag completion** (the `overriding` form of `UpdatePvP`, propagation to pets/totems, group status, the contested flag and its 30 s timer, assist
   pulses, `ForcePvp` for PvP-type quests) and **taxi and Honorless Target rules** (flight start clears the flag, landing in an enforced area casts spell
   2479): not done. They edit `MapCombat.Death.cs`/`Melee.cs` regions other wave-4 lanes (threat, aura engine, graveyards) also touch. The existing flag logic
-  is unchanged; only its two persisted bits are new. The teleport-arrival Honorless cast additionally needs an arrival hook `TeleportService` does not have.
+  is unchanged; only its two persisted bits are new. The teleport-arrival Honorless cast is raised by `TeleportService` through `HonorlessTargetDue` on a far-teleport arrival.
 - **Hall of Legends / Champions' Hall rank gate** (areatriggers 2527, 2532, visual rank 6): present in mangos-classic, absent in vmangos, and there is no
   area-trigger requirement framework on the base. A later lane can read `IPlayerHonor.VisualRank`.
 - **Creature honor follows the tap, with a simplified tap.** `HonorKillRewards` taps a non-pet creature on the first damage from a player (or a player's pet
@@ -58,20 +58,24 @@ the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after
 - **CHARACTER_FLAG_HAS_PVP_RANK** in the character list is not delivered (ArcaneCore has no `character_flags` column).
 - **The honor tab refreshes on `Add`, login, GM commands and the weekly job**, not at the game-day rollover or before every autosave (the same as vmangos,
   which refreshes only on those events and before a save). The derived fields are not persisted.
-- **Contribution rows are written at least once, not exactly once.** A batch is one transaction; if a commit succeeds but its acknowledgement is lost, the
-  retry appends the batch again. A write queued while the weekly calculation runs can overwrite an online player's new numbers with older ones (the job
+- **Contribution rows are written exactly once per queued row.** `HonorWriteQueue.AppendCp` stamps every row with an operation id (`HonorCpRecord.OperationId`)
+  when it takes it, and a retained or retried write carries the same ids. `EfHonorStore.AppendCpAsync` skips a row whose id is already stored in
+  `character_honor_cp.operation_id` (unique together with the character id, schema 76), so a commit whose acknowledgement was lost does not add the batch a second time; a concurrent
+  attempt that wins the race trips the unique index and the second pass finds the rows stored. A row without an id (not queued through the write queue) is
+  always appended. Rows written before schema 76 have a null id. A write queued while the weekly calculation runs can overwrite an online player's new numbers with older ones (the job
   re-queues the post-maintenance state to narrow that window).
 - `.reset honor` (SEC_DEVELOPER, a separate vmangos command) is not provided; `.honor reset` is the same `HonorMgr::Reset`.
 
 ## Schema
 
 Characters schema **version 23** (allocated as 21 by the lane; renumbered at wave-4 integration) (`CharacterHonorDataModule.Version`, the next free number in this tree; the integrator renumbers it, tests use the constant).
-Three new tables, nothing existing changes:
+Three new tables, nothing existing changes. Characters schema **version 76** (`HonorCpOperationDataModule.Version`, renumbered by the integrator like the others)
+adds `character_honor_cp.operation_id` and its unique (character, operation id) index to databases created at 23 or later:
 
 | Table | Columns | Replaces (vmangos) |
 |---|---|---|
 | `character_honor` | `character_id` PK, `rank_points` float, `highest_rank`, `standing`, `last_week_hk`, `last_week_cp`, `stored_hk`, `stored_dk`, `pvp_flags`, `city_protector` | `characters.honor_*`, `extra_flags` bit 0x0400 |
-| `character_honor_cp` | `id` bigint identity PK, `character_id`, `victim_type`, `victim_id`, `cp` float, `date`, `type`; indexes `(character_id, date)` and `(date)` | `character_honor_cp` |
+| `character_honor_cp` | `id` bigint identity PK, `character_id`, `victim_type`, `victim_id`, `cp` float, `date`, `type`, `operation_id` varchar(36) null (unique, added by schema 76); indexes `(character_id, date)` and `(date)` | `character_honor_cp` |
 | `honor_maintenance` | `id` PK (always 1), `last_day`, `next_day`, `marker` | `saved_variables.honor_*` |
 
 Contribution points and rank points are stored with one decimal, as vmangos writes them with `%.1f`; an exact tie (x.25, x.75) rounds to even.
@@ -107,6 +111,7 @@ Every default is the retail 1.12 value; a different value is a deliberate deviat
   Reachable only through GM commands.
 - Standing ties are broken by character id (vmangos `std::sort` is unstable).
 - WorldDefense: vmangos needs internal rank 15, mangos-classic visual rank 11; these are the same rank under two numberings, so there is no difference to choose.
+- A far teleport that cannot enter its map returns to the origin, then to the bind point, each as a new far teleport (loading screen and own worldport ack) when the map id differs from the one the client loaded; the arrival Honorless Target cast is due only when the fallback arrives through such a new far teleport (its worldport ack, vmangos `MovementHandler.cpp:193-195`); a direct entry on the loaded map id has no cast (return order: vmangos `HandleReturnOnTeleportFail`, Player.cpp:2122-2135).
 
 ## Hosted CI
 

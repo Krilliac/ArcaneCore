@@ -80,4 +80,65 @@ public sealed class PlayerbotOverlappingThreatTests
             return true;
         });
     }
+
+    [Fact]
+    public async Task AutonomousWalk_DoesNotCrossAnUnchosenLethalPack()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        (byte level, uint health) = await world.OnWorldAsync(() => (world.Player.Level, world.Player.MaxHealth));
+        // One creature alone stays within what the bot accepts (0.6 of the 0.9 ceiling); two summed (1.2) pass it, which is what
+        // marks an overlapping pair strong (PlayerbotRisk.BeyondStrengthWithNearby).
+        float damage = health * 0.6f * PlayerbotRiskModel.PriorBotDps(level) / 60f * 2f;
+        CreatureTemplate template = RiskTestWorld.Template(991093, level, health: 60, minDamage: damage, maxDamage: damage)
+            with { ExtraFlagsDialect = CreatureExtraFlagsDialect.VMangos, CallForHelp = 0 };
+        var first = await world.OnWorldAsync(() => world.Spawn(template, 30, 0));
+        await world.SeeAsync(first);
+        bool loneRoute = await world.OnWorldAsync(() =>
+        {
+            world.Brain.Risk.ScanHazards(world.Player);
+            PlayerbotNavigation.Guard(world.Player, world.Brain.Risk);
+            bool planned = PlayerbotNavigation.TryPlan(world.Player,
+                new Vector3(world.Player.X + 60, world.Player.Y, world.Player.Z), world.Options, out _);
+            PlayerbotNavigation.Guard(world.Player, null);
+            return planned;
+        });
+        Assert.True(loneRoute, "one survivable creature must not close an ordinary route");
+
+        var second = await world.OnWorldAsync(() => world.Spawn(template with { Entry = 991094 }, 33, 0));
+        // Past the first look's phase and period so the second scan really looks; still under StrongHazardLifeMs.
+        await world.Host.World.AdvanceClockAsync(2 * PlayerbotRisk.HazardScanMs);
+        await world.SeeAsync(first, second);
+
+        // The guarded planner walks round the overlapping pair (PlayerbotNavigation.HazardDetourYards: a corner before and past the hazard,
+        // each its radius plus 5, 15 or 28 yards off to either side) on this flat ground, where every offset is open: a refusal would be a
+        // planner that closes a route it can walk round, and a route straight through the pair would cross it. Both are failures.
+        (bool planned, bool crossesPair, float maxSideYards) = await world.OnWorldAsync(() =>
+        {
+            Player bot = world.Player;
+            var destination = new Vector3(bot.X + 60, bot.Y, bot.Z);
+            world.Brain.Risk.ScanHazards(bot);
+            PlayerbotNavigation.Guard(bot, world.Brain.Risk);
+            bool found = PlayerbotNavigation.TryPlan(bot, destination, world.Options, out PlayerbotRoute? route);
+            PlayerbotNavigation.Guard(bot, null);
+            if (!found || route is null) return (false, false, 0f);
+            var threats = PlayerbotRecovery.Threats(bot);
+            bool crosses = false;
+            float side = 0f;
+            for (int i = 0; i < route.Points.Count; i++)
+            {
+                side = MathF.Max(side, MathF.Abs(route.Points[i].Y - bot.Y));
+                if (i == 0) continue;
+                Vector3 from = route.Points[i - 1], to = route.Points[i];
+                int steps = Math.Max(1, (int)MathF.Ceiling(Vector3.Distance(from, to) / 2f));
+                for (int step = 0; step <= steps; step++)
+                    if (threats.Count(t => t.Reaches(Vector3.Lerp(from, to, (float)step / steps), 0)) >= 2)
+                        crosses = true;
+            }
+
+            return (true, crosses, side);
+        });
+        Assert.True(planned, "the planner refused a walk it can take round the pair");
+        Assert.False(crossesPair, "the unchosen walk enters two creatures' simultaneous aggro reach");
+        Assert.True(maxSideYards > 4f, $"the route runs straight past the pair (widest sideways step {maxSideYards:F1} yd)");
+    }
 }

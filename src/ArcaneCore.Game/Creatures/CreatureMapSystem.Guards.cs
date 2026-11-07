@@ -44,7 +44,7 @@ public sealed partial class CreatureMapSystem
 
         float range = creature.Template.Detection;
         return WorldGeometry.DistanceSq3D(creature, who) <= range * range
-            && Map.Combat.Hooks.CanAttack(creature, who)
+            && Map.Combat.CanAttackSingleTarget(creature, who)
             && _ai.Hostility.IsHostile(creature, who)
             && CanSeeForAggro(creature, who);
     }
@@ -166,7 +166,7 @@ public sealed partial class CreatureMapSystem
             }
         }
 
-        if (nearest?.AI is { } ai && Map.Combat.Hooks.CanAttack(nearest, enemy))
+        if (nearest?.AI is { } ai && Map.Combat.CanAttackSingleTarget(nearest, enemy))
         {
             ai.AttackStart(enemy);
         }

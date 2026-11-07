@@ -171,6 +171,17 @@ public sealed class QuestShareTests
     }
 
     [Fact]
+    public void ASharedTimedQuest_EndsWithTheSharer_WhenTheClockMovesBetweenReads()
+    {
+        long reading = 100;
+        using var kit = new ShareKit(Templates(), unixNow: () => reading++); // a second boundary between any two reads
+        kit.Take(kit.Sharer, Timed, timerEnd: 1000);
+        kit.Push(Timed);
+        Assert.True(kit.Services.AcceptQuest(kit.Member, kit.Sharer.Guid, Timed));
+        Assert.Equal(1000, kit.Services.StateOf(kit.Member)!.Quests.Get(Timed)!.TimerEndUnix);
+    }
+
+    [Fact]
     public void APartyAcceptQuest_ConfirmsToEligibleMembersOnTheSameMap_AndTheyCanAcceptIt()
     {
         using var kit = new ShareKit(Templates(), withThird: true);
@@ -311,7 +322,7 @@ public sealed class QuestShareTests
     {
         private readonly Dictionary<Player, FakeSession> _sessions = [];
 
-        public ShareKit(IReadOnlyList<QuestTemplate> templates, Action<QuestNpcOptions>? configure = null, bool withThird = false, bool withFourth = false)
+        public ShareKit(IReadOnlyList<QuestTemplate> templates, Action<QuestNpcOptions>? configure = null, bool withThird = false, bool withFourth = false, Func<long>? unixNow = null)
         {
             Sharer = Add(1, 0);
             Member = Add(2, 3);
@@ -321,7 +332,7 @@ public sealed class QuestShareTests
             var options = new QuestNpcOptions();
             configure?.Invoke(options);
             Services = new QuestNpcServices(new QuestStore(new QuestContent(templates, [], [])), NpcStore.Empty,
-                new QuestNpcDependencies(Party: Party), options, new QuestFlowTestKit.RecordingSink(), () => 100,
+                new QuestNpcDependencies(Party: Party), options, new QuestFlowTestKit.RecordingSink(), unixNow ?? (() => 100),
                 Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
             foreach (Player player in _sessions.Keys)
             {

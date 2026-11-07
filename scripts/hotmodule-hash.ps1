@@ -3,8 +3,9 @@
   Compute the SHA-256 of a hot module dll and (optionally) approve it in a module allowlist file, for a deployed server.
 
 .DESCRIPTION
-  The module lane (World:HotCode:Modules) refuses any dll whose SHA-256 is not in the allowlist file
-  (World:HotCode:Modules:Allowlist). This script does the two operator steps for a production instance, without a dev runner:
+  The module lane (World:HotCode:Modules) refuses any module dll, and any private dependency dll the module loads from its folder,
+  whose SHA-256 is not in the allowlist file (World:HotCode:Modules:Allowlist). The default target is the entry dll; run the script
+  again with -Dll <path> for each private dependency dll. This script does the two operator steps for a production instance, without a dev runner:
     1. prints the hash of <ModuleDirectory>\<Name>\<Name>.dll (the exact bytes the server will hash and load);
     2. with -Allowlist, appends "<hash>  <Name> <date> <label>" to that file unless the hash is already listed, creating the file
        with a comment header if it does not exist. The file is read on every load, so no restart is needed.

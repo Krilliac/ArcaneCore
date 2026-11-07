@@ -127,7 +127,7 @@ public sealed class CharacterRenameTests
 
             // A refused rename invalidates nothing.
             Assert.Equal(Code(CreateError), await RenameAsync(client, 1, "Another"));
-            await watcher.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+            await watcher.AssertNoPacketsAsync(WorldOpcode.SmsgInvalidatePlayer);
         }
     }
 

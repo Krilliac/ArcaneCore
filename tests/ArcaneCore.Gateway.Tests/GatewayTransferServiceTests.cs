@@ -338,7 +338,7 @@ public sealed class GatewayTransferServiceTests
     {
         var handoffJournal = new FakeHandoffJournal();
         var store = new InMemoryTransferDecisionStore();
-        store.SeedCharacterOwnership(Character, SourceToken);
+        await store.SeedCharacterOwnershipAsync(Character, SourceToken);
         var options = new GatewayOptions
         {
             LinkSecret = StandbyWorkerTests.Secret,
@@ -679,8 +679,8 @@ public sealed class GatewayTransferServiceTests
             Routes.LinkUp("kal", null, true);
             Views["ek"] = new GatewayWorkerView(true, null);
             Views["kal"] = new GatewayWorkerView(true, null);
-            Store.SeedCharacterOwnership(Character, SourceToken);
-            Store.SeedCharacterOwnership(OtherCharacter, SourceToken);
+            Store.SeedCharacterOwnershipAsync(Character, SourceToken).GetAwaiter().GetResult();
+            Store.SeedCharacterOwnershipAsync(OtherCharacter, SourceToken).GetAwaiter().GetResult();
 
             ITransferGatewayRouter gateway = Gateway;
             if (useRealRouter)
@@ -814,7 +814,7 @@ public sealed class GatewayTransferServiceTests
         {
             using var cts = new CancellationTokenSource(Budget);
             var store = new InMemoryTransferDecisionStore();
-            store.SeedCharacterOwnership(Character, SourceToken);
+            await store.SeedCharacterOwnershipAsync(Character, SourceToken);
             var ek = new FakeNode("ek");
             var kal = new FakeNode("kal");
             GatewaySessionLinkHost ekHost = StartHost("ek", new WorkerControlService(

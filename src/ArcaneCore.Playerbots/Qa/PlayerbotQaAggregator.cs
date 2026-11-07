@@ -1234,6 +1234,8 @@ internal sealed class PlayerbotQaAggregator(int maxFindings, int maxSamples, byt
             QaSignalKind.TickHang => "world tick hung in " + (s.Stage.Length != 0 ? s.Stage : "unknown phase") + ": " + (s.Reason.Length != 0 ? s.Reason : "unknown work"),
             QaSignalKind.Anomaly => (s.Goal.Length != 0 ? s.Goal : "bot") + "/" + (s.Reason.Length != 0 ? s.Reason : "anomaly")
                 + (s.Detail.Length != 0 ? ": " + PlayerbotQaFingerprint.Readable(s.Detail, 120) : string.Empty),
+            QaSignalKind.InteractionFailed or QaSignalKind.QuestBroken or QaSignalKind.ObjectUnsupported or QaSignalKind.ScriptUnsupported
+                or QaSignalKind.OpcodeUnhandled => PlayerbotQaInteractionText.Subject(s, questTitle),
             _ => s.Kind.ToString(),
         };
     }

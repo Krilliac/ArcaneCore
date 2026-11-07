@@ -60,6 +60,7 @@ internal sealed class MemoryHonorStore : IHonorStore
     private readonly Lock _lock = new();
     private readonly Dictionary<int, CharacterHonorState> _states = [];
     private readonly Dictionary<int, List<HonorCpRecord>> _rows = [];
+    private readonly HashSet<Guid> _storedOperations = [];
     private HonorMaintenanceState? _maintenance;
     private int _writeAttempts;
 
@@ -68,6 +69,9 @@ internal sealed class MemoryHonorStore : IHonorStore
 
     /// <summary>The number of upcoming writes that fail as SQLite reports a file another writer holds (a lock that clears by itself).</summary>
     public int LockedWrites;
+
+    /// <summary>The number of upcoming row appends that commit and then fail (an acknowledgement lost after the commit), so the caller retries a batch that is already stored.</summary>
+    public int AckLostAppends;
 
     /// <summary>Milliseconds every write call blocks before it succeeds or fails (a store that is slow because the database is contended).</summary>
     public int WriteDelayMs;
@@ -174,7 +178,26 @@ internal sealed class MemoryHonorStore : IHonorStore
                 _rows[characterId] = list = [];
             }
 
-            list.AddRange(rows.Select(r => r with { Cp = HonorRounding.OneDecimal(r.Cp) }));
+            // As EfHonorStore: a row whose operation id is stored is skipped.
+            foreach (HonorCpRecord row in rows)
+            {
+                if (row.OperationId == Guid.Empty || !_storedOperations.Contains(row.OperationId))
+                {
+                    list.Add(row with { Cp = HonorRounding.OneDecimal(row.Cp) });
+                    _storedOperations.Add(row.OperationId);
+                }
+            }
+
+            int ackLost;
+            do
+            {
+                ackLost = Volatile.Read(ref AckLostAppends);
+            }
+            while (ackLost > 0 && Interlocked.CompareExchange(ref AckLostAppends, ackLost - 1, ackLost) != ackLost);
+            if (ackLost > 0)
+            {
+                throw new IOException("the commit succeeded but its acknowledgement was lost");
+            }
         }
 
         return Task.CompletedTask;

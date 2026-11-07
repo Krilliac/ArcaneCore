@@ -122,7 +122,7 @@ docker pull ghcr.io/krilliac/arcanecore-realm:edge-release
 docker pull ghcr.io/krilliac/arcanecore-tools:edge-release
 ```
 
-`edge` and `edge-release` follow the nightly build. `sha-<7 hex>-debug` and `sha-<7 hex>-release` pin the commit a nightly built; a version
+`edge` and `edge-release` follow the nightly build. `sha-<7 hex>-debug` and `sha-<7 hex>-release` pin the commit a nightly built (kept 30 days once pruning is on); a version
 tag `v*` is the Release image and `<tag>-debug` its Debug twin. Running them: [Docker guide](docs/guide/docker.md).
 
 ## Build from source

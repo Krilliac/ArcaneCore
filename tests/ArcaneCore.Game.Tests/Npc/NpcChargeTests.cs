@@ -30,4 +30,29 @@ public sealed class NpcChargeTests
         Assert.Equal(0u, kit.Player.Money);
         Assert.True(kit.Sink.CharacterChanges > 0);
     }
+
+    [Fact]
+    public void ChargeFlightLeg_ClampsAtZeroAndNeverRefuses()
+    {
+        // vmangos FlightPathMovementGenerator::Update calls ModifyMoney(-cost) at a leg boundary, which clamps at zero (Player.h:1025-1031).
+        using var kit = new NpcServiceTestKit(NpcFlags.Petitioner);
+        kit.Player.Money = 30;
+        int saves = kit.Sink.CharacterChanges;
+
+        Assert.True(kit.Services.ChargeFlightLeg(kit.Player, 50));
+
+        Assert.Equal(0u, kit.Player.Money);
+        Assert.True(kit.Sink.CharacterChanges > saves);
+    }
+
+    [Fact]
+    public void ChargeFlightLeg_SubtractsTheFareWhenThePlayerCanPay()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Petitioner);
+        kit.Player.Money = 120;
+
+        Assert.True(kit.Services.ChargeFlightLeg(kit.Player, 50));
+
+        Assert.Equal(70u, kit.Player.Money);
+    }
 }

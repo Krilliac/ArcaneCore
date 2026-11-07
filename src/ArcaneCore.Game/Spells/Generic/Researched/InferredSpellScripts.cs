@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Spells.Scripts;
 
@@ -85,7 +86,7 @@ public sealed class SilithystCapRewardScript : ISpellScript
 /// caster as target B, radius index 10 = 30 yd (SpellRadius.dbc), so the effect runs once on every friendly unit within 30 yd of the soldier. The name
 /// says the drones aggro. The Vekniss Drone is creature entry 15300 (classic-db Updates 4689_TDB-0518_charm_immunity.sql names "Vekniss Drone" as
 /// entry 15300). Each living Vekniss Drone the effect reaches that is not in combat starts attacking the soldier's current victim; a drone that is
-/// dead, evading or already fighting is left alone. The radius is the spell's own, so the script chose none.
+/// dead, evading, already fighting, charmed or owned is left alone. The radius is the spell's own, so the script chose none.
 /// </para>
 /// The attack goes through the drone's AI <c>AttackStart</c> (the call a taunt makes), or the creature system's when the drone has no AI, so the drone
 /// gets threat on the victim, enters combat and its aggro hooks and normal assistance run.
@@ -100,7 +101,8 @@ public sealed class AgroDronesEffectScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         if (context.Target is not Creature { Entry: VeknissDroneEntry, IsAlive: true } drone || context.Caster.Combat.Victim is not { IsAlive: true } victim
-            || drone.IsEvading || drone.Combat.IsInCombat || drone.Combat.Victim is not null)
+            || drone.IsEvading || drone.Combat.IsInCombat || drone.Combat.Victim is not null
+            || !drone.CharmerOrOwnerGuid.IsEmpty)
         {
             return;
         }

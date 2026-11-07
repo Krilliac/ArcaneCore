@@ -155,6 +155,19 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
             _writer.Directory, options.MaxFiles, options.MaxFileBytes, options.OutcomeMinutes);
     }
 
+    /// <summary>
+    /// The folder one process writes: the configured folder in combined mode, and in a split cluster a subfolder named for the maps this worker owns
+    /// (worker map ranges are disjoint, so the names differ, and a restart of a worker reuses its own folder). Each writer then prunes only its own files,
+    /// so the per-folder bound holds and a reader's open file never blocks another worker's rotation.
+    /// </summary>
+    internal static string WorkerDirectory(string directory, ArcaneCore.Game.Maps.MapOwnership ownership)
+    {
+        ArgumentNullException.ThrowIfNull(ownership);
+        return ownership.OwnsEverything
+            ? directory
+            : Path.Combine(directory, "maps-" + string.Join('_', ownership.Ranges.Select(r => r.ToString())));
+    }
+
     internal uint WindowMs => (uint)_options.OutcomeMinutes * 60_000u;
 
     /// <summary>The combat-decision records (fights and turned-down pulls), written with these.</summary>
@@ -393,14 +406,18 @@ internal sealed class PlayerbotPolicyTelemetry : IAsyncDisposable
 
 /// <summary>
 /// Bounded rotating telemetry files: <c>policy-NNNNNNNN.jsonl</c> in one folder, each at most <c>maxFileBytes</c>, at most
-/// <c>maxFiles</c> of them (the oldest is deleted first, before the next is made), so the folder never holds more than their product: when
-/// an old file cannot be deleted (a reader holds it), no new file is made and the lines are refused until it can be. Not thread-safe:
-/// the caller serialises.
+/// <c>maxFiles</c> of them (the oldest is deleted first, before the next is made), so a folder written by one writer never holds more than
+/// their product: when an old file cannot be deleted (a reader holds it), no new file is made and the lines are refused until it can be.
+/// Writers of different processes must use different folders (<see cref="PlayerbotPolicyTelemetry.WorkerDirectory"/>): the bound is per
+/// writer, and a reader's open file in a folder another process prunes would stall that process's rotation. A writer that shares a folder
+/// anyway still never collides on a file name (it takes the next number on disk and skips one made between its scan and its create), but the
+/// folder may then hold the sum of the writers' bounds. Not thread-safe: the caller serialises.
 /// </summary>
 internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
 {
     private const string Prefix = "policy-";
     private const string Suffix = ".jsonl";
+    private const int MaxCreateAttempts = 16;
     private readonly long _maxFileBytes;
     private readonly int _maxFiles;
     private FileStream? _current;
@@ -456,10 +473,30 @@ internal sealed class PlayerbotPolicyTelemetryWriter : IDisposable
             catch (UnauthorizedAccessException) { break; }
         }
         if (kept > _maxFiles - 1) return false;
-        string path = Path.Combine(Directory, Prefix + (++_sequence).ToString("D8", CultureInfo.InvariantCulture) + Suffix);
-        _current = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        return true;
+        // Workers normally write separate folders (WorkerDirectory); where several processes still share one (an operator pointing two at the same path), the next number is the highest on disk,
+        // not the highest this writer made, and a file another process made between the scan and the create is skipped, not an error.
+        if (files.Length > 0) _sequence = Math.Max(_sequence, SequenceOf(files[^1]));
+        // At most MaxCreateAttempts creates; when every number was taken by another process the line is refused (no file), not an exception.
+        for (int attempt = 0; attempt < MaxCreateAttempts; attempt++)
+        {
+            string path = Path.Combine(Directory, Prefix + (++_sequence).ToString("D8", CultureInfo.InvariantCulture) + Suffix);
+            BeforeCreate?.Invoke(path);
+            try
+            {
+                _current = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                return true;
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                // Another process made this number between the scan and the create: the next number is tried.
+            }
+        }
+
+        return false;
     }
+
+    /// <summary>Test seam: called with the path just before each create attempt (a test makes the file there to stand in for another process).</summary>
+    internal Action<string>? BeforeCreate { get; set; }
 
     internal IEnumerable<string> Files() => System.IO.Directory.EnumerateFiles(Directory, Prefix + "*" + Suffix).Where(file => SequenceOf(file) > 0);
 

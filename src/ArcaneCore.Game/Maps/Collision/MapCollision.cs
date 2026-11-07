@@ -69,6 +69,28 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
             map.Grids.GridCreated += OnGridCreated;
             map.Grids.GridUnloaded += OnGridUnloaded;
             map.Grids.GridApproaching += OnGridApproaching;
+            PrefetchNavigationParameters();
+        }
+    }
+
+    /// <summary>
+    /// Map creation: start reading the pathfinder's per-map parameter file in the background, so the first path query does not. A pathfinder
+    /// keeps the bytes per map id, so once they are in, another instance of the map and every query take them (one read per map). A query
+    /// that arrives while the read is still running does not wait for it: it reads the file itself, so that one map can be read twice. A detached view (<c>followGrids</c> false) prefetches nothing.
+    /// </summary>
+    private void PrefetchNavigationParameters()
+    {
+        try
+        {
+            if (_services.Pathfinder is ICollisionMapPrefetch prefetch)
+            {
+                prefetch.PrefetchMap(Map.MapId);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("collision.map-prefetch", ex);
+            Map.Logger.LogFault("map-collision", ex, "MapCollision fault prefetching navigation parameters on map {MapId}", Map.MapId);
         }
     }
 

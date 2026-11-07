@@ -28,11 +28,17 @@ public sealed class ClusterGroupRoutingHoldTests
 
         public ConcurrentQueue<GroupCommand> Executed { get; } = new();
 
-        /// <summary>Throws an <see cref="InvalidOperationException"/> refusal for a command this selects.</summary>
+        /// <summary>Every call, with the command id it carried, whatever came of it.</summary>
+        public ConcurrentQueue<(ulong Actor, long Id)> Attempts { get; } = new();
+
+        /// <summary>Throws a <see cref="PresenceRefusedException"/> for a command this selects.</summary>
         public Func<GroupCommand, bool>? Refuse { get; set; }
 
         /// <summary>Throws an <see cref="IOException"/> (a link lost mid-call) for a command this selects.</summary>
         public Func<GroupCommand, bool>? LoseLink { get; set; }
+
+        /// <summary>Throws what the peer client throws when it has no link at that moment, though the check before the call said reachable.</summary>
+        public Func<GroupCommand, bool>? LinkVanished { get; set; }
 
         public int ExpectedCount { get; set; } = -1;
 
@@ -71,8 +77,9 @@ public sealed class ClusterGroupRoutingHoldTests
             }
         }
 
-        public void ExecuteGroupCommand(string workerId, GroupCommand command)
+        public void ExecuteGroupCommand(string workerId, GroupCommand command, long commandId)
         {
+            Attempts.Enqueue((command.Actor, commandId));
             _executing.TrySetResult();
             bool linked = Volatile.Read(ref _reachable) != 0; // as the sender saw it before the call started
             _gate.Wait();
@@ -87,9 +94,14 @@ public sealed class ClusterGroupRoutingHoldTests
                 throw new IOException("the peer link was lost");
             }
 
+            if (LinkVanished?.Invoke(command) == true)
+            {
+                throw new InvalidOperationException("the peer link is not connected");
+            }
+
             if (Refuse?.Invoke(command) == true)
             {
-                throw new InvalidOperationException("the presence authority refused the request: test");
+                throw new PresenceRefusedException("the presence authority refused the request: test");
             }
 
             Executed.Enqueue(command);
@@ -444,26 +456,323 @@ public sealed class ClusterGroupRoutingHoldTests
     }
 
     [Fact]
-    public async Task A_link_lost_mid_send_drops_that_command_then_the_next_ones_are_held_and_sent_after_the_resume()
+    public async Task A_link_lost_mid_send_keeps_that_command_at_the_head_and_sends_it_again_once_the_holder_is_reachable()
     {
         var authority = new SwitchableAuthority();
         authority.SetReachable(true);
-        authority.LoseLink = static c => c.Actor == 1;
+        int calls = 0;
+        authority.LoseLink = c =>
+        {
+            if (c.Actor == 1 && Interlocked.Increment(ref calls) == 1)
+            {
+                authority.SetReachable(false); // the holder died with the call in flight
+                return true;
+            }
+
+            return false;
+        };
         await using var routing = new ClusterGroupRouting(authority, "worker-a");
         routing.Forward(Command(GroupCommandKind.Invite, 1));
-        await routing.FlushAsync().WaitAsync(Safety);
-        Assert.Equal(1, routing.SendFailed);
-        Assert.Empty(authority.Executed);
-
-        authority.SetReachable(false);
         routing.Forward(Command(GroupCommandKind.Login, 2));
         routing.Forward(Command(GroupCommandKind.Logout, 3));
         await authority.Probed.WaitAsync(Safety);
+        Assert.Empty(authority.Executed);
+
+        authority.SetReachable(true); // the new holder
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new ulong[] { 1, 2, 3 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(0, routing.SendFailed);
+        Assert.Equal(1, routing.SendRetried);
+    }
+
+    [Fact]
+    public async Task A_send_that_fails_while_the_link_stays_open_is_sent_again_and_a_command_that_keeps_failing_is_dropped_after_the_age_limit()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true); // a hung holder: the link reads as open, every call times out
+        authority.LoseLink = static c => c.Actor == 1;
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Invite, 1));
+        routing.Forward(Command(GroupCommandKind.Login, 2));
+        using var timeout = new CancellationTokenSource(Safety);
+        while (routing.SendRetried < 2)
+        {
+            await Task.Delay(10, timeout.Token); // it keeps the command and tries again
+        }
+
+        Assert.Empty(authority.Executed);
+        Assert.Equal(0, routing.SendFailed);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(1, routing.SendFailed);
+        Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
+    }
+
+    /// <summary>Fails the first send of actor 1 and takes the link down with it: the holder died with the call in flight.</summary>
+    private static void DieDuringTheFirstSendOfActor1(SwitchableAuthority authority)
+    {
+        int calls = 0;
+        authority.LoseLink = c =>
+        {
+            if (c.Actor == 1 && Interlocked.Increment(ref calls) == 1)
+            {
+                authority.SetReachable(false);
+                return true;
+            }
+
+            return false;
+        };
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Leave)]
+    [InlineData(GroupCommandKind.Kick)]
+    public async Task A_head_command_that_failed_mid_send_and_sat_out_an_outage_past_the_age_limit_is_dropped_after_the_hold(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        DieDuringTheFirstSendOfActor1(authority);
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(kind, 1));
+        await authority.Probed.WaitAsync(Safety);
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        routing.Forward(Command(GroupCommandKind.Leave, 2)); // queued just now: it did not sit through this outage
+
         authority.SetReachable(true);
         await routing.FlushAsync().WaitAsync(Safety);
 
-        Assert.Equal(new ulong[] { 2, 3 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(1, routing.Expired);
+        Assert.Equal(0, routing.SendFailed);
+        Assert.Contains(logger.AtLeast(LogLevel.Information), static l => l.Text.Contains("resume") && l.Text.Contains("1 older than 120 s"));
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_that_failed_mid_send_and_sat_out_an_outage_past_the_age_limit_is_still_sent(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        DieDuringTheFirstSendOfActor1(authority);
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(kind, 1));
+        await authority.Probed.WaitAsync(Safety);
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+        Assert.Equal(0, routing.Expired);
+        Assert.Equal(0, routing.SendFailed);
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_that_keeps_failing_on_an_open_link_is_never_dropped(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        bool hung = true;
+        authority.LoseLink = _ => Volatile.Read(ref hung);
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(kind, 1));
+        await WaitForRetriesAsync(routing, 2);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        long before = routing.SendRetried;
+        await WaitForRetriesAsync(routing, before + 2); // past the limit, and still going
+        Assert.Equal(0, routing.SendFailed);
+        Assert.Equal(0, routing.Expired);
+
+        Volatile.Write(ref hung, false);
+        await routing.FlushAsync().WaitAsync(Safety);
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_stuck_at_the_head_past_the_age_limit_is_counted_and_logged_once(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        bool hung = true;
+        authority.LoseLink = _ => Volatile.Read(ref hung);
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(kind, 1));
+        await WaitForRetriesAsync(routing, 2);
+        Assert.Equal(0, routing.LoginLogoutStuckAtHead); // retried, but not yet past the limit
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        await WaitForRetriesAsync(routing, routing.SendRetried + 3); // several more failures past the limit
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Single(logger.AtLeast(LogLevel.Warning), static l => l.Text.Contains("head of the queue"));
+
+        Volatile.Write(ref hung, false);
+        await routing.FlushAsync().WaitAsync(Safety);
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+    }
+
+    [Theory]
+    [InlineData(GroupCommandKind.Login)]
+    [InlineData(GroupCommandKind.Logout)]
+    public async Task A_login_or_logout_held_for_an_unreachable_holder_past_the_age_limit_is_counted_when_it_goes(GroupCommandKind kind)
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(kind, 1));
+        await authority.Probed.WaitAsync(Safety);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(1, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(new[] { kind }, authority.Executed.Select(static c => c.Kind));
+    }
+
+    [Fact]
+    public async Task A_command_that_can_expire_is_never_counted_as_stuck()
+    {
+        var authority = new SwitchableAuthority();
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await authority.Probed.WaitAsync(Safety);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        authority.SetReachable(true);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(0, routing.LoginLogoutStuckAtHead);
+        Assert.Equal(1, routing.Expired);
+    }
+
+    private static async Task WaitForRetriesAsync(ClusterGroupRouting routing, long atLeast)
+    {
+        using var timeout = new CancellationTokenSource(Safety);
+        while (routing.SendRetried < atLeast)
+        {
+            await Task.Delay(5, timeout.Token);
+        }
+    }
+
+    [Fact]
+    public async Task A_hung_holder_is_one_failure_window_so_what_waited_behind_the_head_expires_without_a_send()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        bool hung = true;
+        authority.LoseLink = _ => Volatile.Read(ref hung);
+        var time = new SteppedTimeProvider();
+        var logger = new CapturingLogger();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", logger, time);
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        routing.Forward(Command(GroupCommandKind.Leave, 2));
+        routing.Forward(Command(GroupCommandKind.Kick, 3));
+        await WaitForRetriesAsync(routing, 1);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        Task flushed = routing.FlushAsync(); // 1 gives up at its next failure; 2 and 3 are as old, so they go without a send
+        await flushed.WaitAsync(Safety);
+        Volatile.Write(ref hung, false);
+        routing.Forward(Command(GroupCommandKind.Leave, 4)); // fresh: the holder is back
+        await routing.FlushAsync().WaitAsync(Safety);
+
         Assert.Equal(1, routing.SendFailed);
+        Assert.Equal(2, routing.Expired);
+        Assert.DoesNotContain(authority.Attempts, static a => a.Actor is 2 or 3);
+        Assert.Equal(new ulong[] { 4 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Single(logger.AtLeast(LogLevel.Information), static l => l.Text.Contains("are held"));
+        Assert.Single(logger.AtLeast(LogLevel.Information), static l => l.Text.Contains("resume"));
+    }
+
+    [Fact]
+    public async Task What_waited_behind_a_logout_on_a_hung_holder_expires_when_the_logout_finally_goes()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        bool hung = true;
+        authority.LoseLink = _ => Volatile.Read(ref hung);
+        var time = new SteppedTimeProvider();
+        await using var routing = new ClusterGroupRouting(authority, "worker-a", null, time);
+        routing.Forward(Command(GroupCommandKind.Logout, 1));
+        routing.Forward(Command(GroupCommandKind.Leave, 2));
+        await WaitForRetriesAsync(routing, 1);
+
+        time.Advance(ClusterGroupRouting.MaxHeldCommandAge + TimeSpan.FromSeconds(10));
+        Volatile.Write(ref hung, false);
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new ulong[] { 1 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(1, routing.Expired);
+    }
+
+    [Fact]
+    public async Task A_retry_carries_the_id_of_the_first_attempt_and_every_command_has_its_own()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        int failures = 0;
+        authority.LoseLink = c => c.Actor == 1 && Interlocked.Increment(ref failures) <= 2;
+        await using var routing = new ClusterGroupRouting(authority, "worker-a");
+        routing.Forward(Command(GroupCommandKind.SwapSubGroup, 1));
+        routing.Forward(Command(GroupCommandKind.SwapSubGroup, 2));
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        long[] first = [.. authority.Attempts.Where(static a => a.Actor == 1).Select(static a => a.Id)];
+        long second = Assert.Single(authority.Attempts, static a => a.Actor == 2).Id;
+        Assert.Equal(3, first.Length);
+        Assert.Single(first.Distinct());
+        Assert.NotEqual(first[0], second);
+        Assert.All(authority.Attempts, static a => Assert.True(a.Id > 0));
+    }
+
+    [Fact]
+    public async Task A_link_that_vanished_between_the_check_and_the_call_is_not_read_as_a_refusal()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true); // reachable again by the time the failure is looked at: a redial, or a takeover here
+        int calls = 0;
+        authority.LinkVanished = c => c.Actor == 1 && Interlocked.Increment(ref calls) == 1;
+        await using var routing = new ClusterGroupRouting(authority, "worker-a");
+        routing.Forward(Command(GroupCommandKind.Leave, 1));
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(new ulong[] { 1 }, authority.Executed.Select(static c => c.Actor));
+        Assert.Equal(0, routing.SendFailed);
+        Assert.Equal(1, routing.SendRetried);
+    }
+
+    [Fact]
+    public async Task A_relay_whose_send_fails_is_dropped_not_retried()
+    {
+        var authority = new SwitchableAuthority();
+        authority.SetReachable(true);
+        authority.LoseLink = static c => c.Kind == GroupCommandKind.Relay;
+        await using var routing = new ClusterGroupRouting(authority, "worker-a");
+        routing.Forward(Command(GroupCommandKind.Relay, 1));
+        routing.Forward(Command(GroupCommandKind.Login, 2));
+        await routing.FlushAsync().WaitAsync(Safety);
+
+        Assert.Equal(1, routing.SendFailed);
+        Assert.Equal(0, routing.SendRetried);
+        Assert.Equal(new ulong[] { 2 }, authority.Executed.Select(static c => c.Actor));
     }
 
     [Fact]

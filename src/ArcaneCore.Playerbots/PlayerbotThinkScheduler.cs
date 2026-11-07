@@ -161,7 +161,7 @@ internal sealed class PlayerbotThinkScheduler<TBot> where TBot : class
 
     /// <summary>
     /// One tick of one map: <paramref name="driver"/> (built over <see cref="BotsOf"/> of this map) is walked by the map's own rotation in
-    /// two lanes, within the map's <see cref="ShareMs"/> of <paramref name="totalBudgetMs"/>. Marks the map as thought for this pass.
+    /// two lanes, within the map's <see cref="ShareMs"/> of <paramref name="totalBudgetMs"/>. Marks the map as thought for this pass; a second call for the same key before the next <see cref="Assign"/> does nothing and returns 0.
     /// Returns the thinks made (0 for a map without bots); <paramref name="timeLimited"/> is whether the time ran out before the walk did.
     /// </summary>
     internal int ThinkMap<TDriver>(ulong mapKey, double totalBudgetMs, double priorityShare, double priorityScale, ref TDriver driver, out bool timeLimited)
@@ -171,6 +171,11 @@ internal sealed class PlayerbotThinkScheduler<TBot> where TBot : class
         if (!_groups.TryGetValue(mapKey, out Group? group) || group.Bots.Length == 0)
         {
             return 0;
+        }
+
+        if (group.Thought)
+        {
+            return 0; // already served this pass: a second walk would classify bots that thought in the first one against the same frame time
         }
 
         group.Thought = true;

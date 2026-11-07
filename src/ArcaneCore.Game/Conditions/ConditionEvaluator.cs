@@ -23,9 +23,9 @@ public sealed record ConditionSummary(int Total, int Evaluable, IReadOnlyDiction
 /// reversed (Conditions.cpp:115-122), and <see cref="ConditionFlags.ReverseResult"/> negates last.
 /// </para>
 /// <para>
-/// Fail closed: a type this server cannot decide (encounter, world-state and other
-/// conditions that are not about a player at an NPC; a type whose collaborator is missing; a creature
-/// target whose race, class, level or gender the NPC contract does not carry) is unknown, not false.
+/// Fail closed: a leaf this server cannot decide (a type with no case here; a type whose collaborator
+/// is missing or has no answer for this evaluation; a creature target whose race, class, level or
+/// gender the NPC contract does not carry) is unknown, not false.
 /// Unknown propagates with three-valued logic (NOT unknown is unknown; AND with a false is false; OR
 /// with a true is true) and the final answer is "not satisfied", counted in
 /// <see cref="Unavailable"/> and reported by <see cref="Summarize"/>. It is never reversed into a pass.
@@ -218,6 +218,9 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
                 result = DecidableById(entry.Value1, cache) && DecidableById(entry.Value2, cache)
                     && (entry.Value3 == 0 || DecidableById(entry.Value3, cache))
                     && (entry.Value4 == 0 || DecidableById(entry.Value4, cache));
+                break;
+            case ConditionType.DeadOrAway when entry.Value1 is 1 or 2:
+                result = Context.DeadOrAwayGroup is not null;
                 break;
             default:
                 result = IsTypeAvailable(entry.Type);

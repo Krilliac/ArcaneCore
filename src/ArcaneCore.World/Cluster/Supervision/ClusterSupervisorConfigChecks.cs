@@ -46,13 +46,14 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         if (options.Enabled)
         {
             issues.AddRange(CheckFencing(options, configuration));
+            issues.AddRange(CheckRealmRowLabels(options));
         }
 
         return issues;
     }
 
     /// <summary>
-    /// A supervisor that runs more than one world-type child (role combined or worker), or a child that sets <c>Cluster:Node:Role</c> to something but Combined, has several
+    /// A supervisor that runs more than one world-type child (role combined, worker, social or coordinator: the last two are labels on a World executable), or a child that sets <c>Cluster:Node:Role</c> to something but Combined, has several
     /// writers on one characters database: each must run with <c>Cluster:Fencing:Enabled=true</c> (an unfenced world skips <c>PrimeDurableIdAllocatorsAsync</c> and collides on the
     /// in-memory id counters), and each needs its own <c>Cluster:Fencing:OwnerNode</c> and <c>Cluster:Worker:NodeId</c>. A child's value is its command-line argument
     /// (<c>--Key=value</c>, as <c>tools/ops/live/start-cluster.ps1</c> passes them) or else the supervisor's own configuration, which the children inherit.
@@ -62,7 +63,9 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
     {
         var worlds = options.Processes
             .Where(p => string.Equals(p.Value.Role, SupervisedRoles.Combined, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(p.Value.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+                || string.Equals(p.Value.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(p.Value.Role, SupervisedRoles.Social, StringComparison.OrdinalIgnoreCase) // social and coordinator are labels on a World executable (ClusterNodeOptions.Validate refuses a
+                || string.Equals(p.Value.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase)) // dedicated social node), so such a child is a whole Combined world: a writer like any other
             .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
             .ToList();
         bool several = worlds.Count > 1;
@@ -161,6 +164,123 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                     $"standby child '{standbyKey}' names the shard '{standbyShard}', but no active world child uses that shard, so it has no world to stand behind.",
                     "set the standby's --Cluster:Fencing:Shard to the shard (--Cluster:Fencing:Shard, else --Cluster:Worker:NodeId) of the active world it is to take over from");
             }
+        }
+    }
+
+    /// <summary>
+    /// Fail closed on the realm-list row: a child labelled social or coordinator is a whole World executable (see <see cref="CheckFencing"/>), so with
+    /// <c>World:Realm:Id</c> above 0 (the default is 1) it could flip the realm's row Online and Offline beside the world that really serves it. Such a child
+    /// must carry <c>--World:Realm:Id=0</c> in its own Arguments: the supervisor does not forward its own command line or configuration, and the child may
+    /// have another working directory and conf, so the shared configuration is not trusted. Any mention of the key that is not the exact <c>--Key=value</c>
+    /// form (space form, slash form, inside a quoted value, or right after a <c>--Key</c> that has no <c>=</c>) is unreadable here and refused, as is a value that is not 0.
+    /// </summary>
+    private static IEnumerable<ConfigIssue> CheckRealmRowLabels(ClusterSupervisorOptions options)
+    {
+        foreach ((string key, SupervisedProcessConfig process) in options.Processes.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(process.Role, SupervisedRoles.Social, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(process.Role, SupervisedRoles.Coordinator, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string resolved = ResolveChildRealmId(process.Arguments ?? string.Empty, out bool writesRow);
+            if (writesRow)
+            {
+                yield return new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Processes:{key}:Arguments",
+                    $"world child '{key}' is labelled {process.Role} but its own Arguments do not set World:Realm:Id=0 (found {resolved}), so a world with a realm id above 0 could write that realm's realm-list row (Online, Offline, population) beside the world that serves the realm.",
+                    "pass --World:Realm:Id=0 in the child's Arguments (exact --Key=value form), so only the combined world or the gateway writes the realm row");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The realm id the child's Arguments set, for the message; <paramref name="writesRow"/> is false only when every mention of the key is an exact <c>--World:Realm:Id=0</c>.
+    /// The line is split the way the child's command line is (whitespace outside double quotes, the quotes themselves removed), so a mention that sits inside a quoted
+    /// value of another key is not a setting of its own and is refused as unreadable, and so is a mention that follows a <c>--Key</c> with no <c>=</c>
+    /// (the configuration command-line provider takes that next word as the key's value, not as a key). With several mentions the message names the offending
+    /// value (the first that is not 0), not the last one. A bare <c>/Key</c> counts like a bare <c>--Key</c> (the command-line provider reads both the same way), and a line holding a
+    /// line break (the child's argv splits only at space and tab) or a backslash before a double quote is refused outright (the operating system's escape rules are not modelled here). The check is deliberately over-strict: <c>--A --B --World:Realm:Id=0</c>
+    /// is refused although the provider gives <c>--A</c> the value <c>--B</c> and does read the id; that fails closed.
+    /// </summary>
+    internal static string ResolveChildRealmId(string arguments, out bool writesRow)
+    {
+        const string KeyName = "World:Realm:Id";
+        string prefix = "--" + KeyName + "=";
+        string? last = null;
+        string? offending = null;
+        bool unreadable = false;
+        bool previousWasBareKey = false;
+
+        // The Arguments string reaches the child raw and the operating system's argument parsing treats a backslash before a double quote as an escape, which this
+        // splitter does not model; a line holding one cannot be read reliably here, so it is refused rather than guessed at.
+        // A line break is refused too: the child's argv splits only at space and tab, so a CR or LF keeps "--A=x<LF>--World:Realm:Id=0" one argument (a mention inside another key's value).
+        if (arguments.Contains("\\\"", StringComparison.Ordinal) || arguments.AsSpan().IndexOfAny('\r', '\n') >= 0)
+        {
+            writesRow = true;
+            return "an argument form the supervisor cannot read";
+        }
+
+        foreach (string text in SplitCommandLine(arguments))
+        {
+            bool mentions = text.Contains(KeyName, StringComparison.OrdinalIgnoreCase);
+            if (mentions)
+            {
+                if (previousWasBareKey || !text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    unreadable = true;
+                }
+                else
+                {
+                    string value = text[prefix.Length..];
+                    last = value;
+                    if (offending is null
+                        && (!int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int id) || id != 0))
+                    {
+                        offending = value;
+                    }
+                }
+            }
+
+            previousWasBareKey = (text.StartsWith("--", StringComparison.Ordinal) || text.StartsWith('/')) && !text.Contains('=', StringComparison.Ordinal);
+        }
+
+        writesRow = last is null || unreadable || offending is not null;
+        return unreadable ? "an argument form the supervisor cannot read" : offending ?? last ?? "no value, so the default 1";
+    }
+
+    /// <summary>Splits a command line at whitespace outside double quotes; the quote characters are dropped, as the operating system's argument parsing drops them.</summary>
+    private static IEnumerable<string> SplitCommandLine(string arguments)
+    {
+        var current = new System.Text.StringBuilder();
+        bool inQuote = false;
+        bool started = false;
+        foreach (char c in arguments)
+        {
+            if (c == '"')
+            {
+                inQuote = !inQuote;
+                started = true;
+            }
+            else if (!inQuote && (c == ' ' || c == '\t'))
+            {
+                if (started)
+                {
+                    yield return current.ToString();
+                    current.Clear();
+                    started = false;
+                }
+            }
+            else
+            {
+                current.Append(c);
+                started = true;
+            }
+        }
+
+        if (started)
+        {
+            yield return current.ToString();
         }
     }
 

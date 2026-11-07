@@ -25,9 +25,13 @@ internal static class PetPower
     /// <summary>UNIT_BYTES_0 gender byte value GENDER_NONE (vmangos Pet.cpp:1298).</summary>
     private const byte GenderNone = 2;
 
-    /// <summary>Whether <paramref name="pet"/> is the permanent pet of a hunter (vmangos GetPetType() == HUNTER_PET).</summary>
-    public static bool IsHunterPet(Creature pet, Unit owner)
-        => owner is Player { Class: Class.Hunter } && pet.Summon is { Kind: SummonKind.Pet };
+    /// <summary>
+    /// Whether <paramref name="pet"/> is a hunter's permanent pet (vmangos GetPetType() == HUNTER_PET): the pet's own kind, marked by
+    /// <see cref="Creature.MarkHunterPetKind"/> when a persistent pet spawns, and not the owner's class, so a Summon-effect pet with an explicit
+    /// entry that a hunter casts is not one.
+    /// </summary>
+    public static bool IsHunterPet(Creature pet)
+        => pet.IsHunterPetKind && pet.Summon is { Kind: SummonKind.Pet };
 
     /// <summary>
     /// vmangos Pet::LoadPetFromDB (Pet.cpp:382-384) and CreateBaseAtCreature (Pet.cpp:1245-1258): the happiness maximum and current value,

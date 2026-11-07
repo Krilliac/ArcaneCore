@@ -495,6 +495,76 @@ public sealed class PlayerbotBattlegroundAnomalyTests
         });
     }
 
+    private sealed class RefuseEverythingPathfinder : ArcaneCore.Game.Maps.Collision.IPathfinder, ArcaneCore.Game.Maps.Collision.IMeshFloorQuery
+    {
+        public bool Enabled => true;
+
+        public System.Numerics.Vector3? FirstEnd { get; private set; }
+
+        public int Queries { get; private set; }
+
+        public ArcaneCore.Game.Maps.Collision.PathResult FindPath(
+            uint mapId, System.Numerics.Vector3 start, System.Numerics.Vector3 end, ArcaneCore.Game.Maps.Collision.PathOptions? options = null)
+        {
+            if (start == end) return ArcaneCore.Game.Maps.Collision.PathResult.None(start);
+            Queries++;
+            FirstEnd ??= end;
+            return new ArcaneCore.Game.Maps.Collision.PathResult(ArcaneCore.Game.Maps.Collision.PathType.NoPath, []);
+        }
+
+        public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float downYards, float upYards, out float meshZ)
+        {
+            meshZ = mapId == 489 ? 307f : StartZ;
+            return z - downYards <= meshZ && meshZ <= z + upYards;
+        }
+    }
+
+    /// <summary>
+    /// #1498: a refused battleground walk is held by the route-plan watch with the duty policy: the mesh is not asked again inside the hold
+    /// and the goal is not blacklisted (the default policy blacklists it for 60 s). Fails if <c>WalkTo</c> stops passing
+    /// <c>PlayerbotRoutePlanWatch.Policy.Duty</c>.
+    /// </summary>
+    [Fact]
+    public async Task Wsg_RefusedWalk_IsHeldByTheDutyPolicy_NotBlacklisted_AndReportedOncePerPair()
+    {
+        await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAsync();
+        await RunAsync(world, "bg-anomaly-duty-hold", async context =>
+        {
+            ScenarioBot ally = await AutonomousAsync(context, "Bganomduty", race: 1);
+            ScenarioBot horde = await ScriptedHordeQueuesAsync(context, "Bganomdutyh", BattlegroundType.WarsongGulch, Content.HordeWsgMaster);
+            PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
+            await PortScriptedAsync(context, horde, 489, (Content.HordeParking.X, Content.HordeParking.Y, Content.HordeParking.Z));
+            await context.WaitUntilAsync("the Alliance bot is in the match", () => coordinator.Find(ally.BotId)?.Phase == PlayerbotBattlegroundPhase.InMatch, TimeSpan.FromSeconds(60));
+            var wsg = (WarsongGulch)(await context.BattlegroundOfAsync(ally))!;
+            await context.WaitUntilAsync("the gates open", () => wsg.Status == BattlegroundStatus.InProgress, StartWait);
+            using AnomalyCapture capture = await CaptureAsync(ally);
+            var refuse = new RefuseEverythingPathfinder();
+            await context.ReadAsync(() =>
+            {
+                ArcaneCore.Game.Maps.Collision.WorldCollision.Of(context.World).Install(lineOfSight: new MidfieldStumpLos(), pathfinder: refuse);
+                Player player = ally.RequirePlayer();
+                var buildMethod = typeof(PlayerbotBattlegroundCoordinator).GetMethod(
+                    "BuildWarsongPicture", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+                object picture = buildMethod.Invoke(coordinator, [wsg, Team.Alliance, player])!;
+                var midfield = (System.Numerics.Vector3)picture.GetType().GetProperty("Midfield")!.GetValue(picture)!;
+                var ai = new PlayerbotBattlegroundAI(ally.Session!, new PlayerbotOptions { Enabled = true, ThinkIntervalMs = 500 });
+                var order = new PlayerbotWsgOrder(PlayerbotWsgDuty.Midfield, ObjectGuid.Empty, midfield);
+                for (int i = 0; i < 8; i++) ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, order);
+                int frozen = refuse.Queries;
+                for (int i = 0; i < 4; i++) ai.Play(player, wsg, Team.Alliance, PlayerbotBattlegroundRole.Attacker, 1_000, order);
+
+                ScenarioContext.Expect(refuse.FirstEnd is not null, "the walk planned at all");
+                ScenarioContext.Expect(frozen >= PlayerbotRoutePlanWatch.MaxConsecutiveRefusals, $"the walk was refused until the watch held it (queries {frozen})");
+                ScenarioContext.Expect(PlayerbotRoutePlanWatch.ShouldRefuse(player, PlayerbotMotion.CurrentPosition(player), refuse.FirstEnd!.Value, ally.Session!.World.NowMs),
+                    $"the watch holds the refused goal (queries {frozen}, goal {refuse.FirstEnd}, at {PlayerbotMotion.CurrentPosition(player)})");
+                ScenarioContext.ExpectEqual(frozen, refuse.Queries, "inside the hold the mesh is not asked again");
+                ScenarioContext.Expect(!PlayerbotMotion.IsBlacklisted(player, refuse.FirstEnd!.Value), "a battleground duty goal is not blacklisted");
+                ScenarioContext.ExpectEqual(1, capture.Count(ObjectiveUnreachable), "one report for the one (goal, origin) pair: " + Dump(capture, ObjectiveUnreachable));
+                return true;
+            });
+        });
+    }
+
     [Fact]
     public async Task QueueActionFailed_Fires_WhenBattlemasterHelloOrJoinCannotBeDispatched()
     {

@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
+using ArcaneCore.Game.Diagnostics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Locomotion;
@@ -53,6 +55,19 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     private readonly LogGate _lineGate = new(TimeSpan.FromSeconds(10));
     private readonly LogGate _flushGate = new(TimeSpan.FromSeconds(60));
     private readonly List<AntiCheatFinding> _scratch = [];
+    private readonly ConcurrentQueue<PacketScoreRequest> _packetScores = new();
+    private int _packetScoresQueued;
+    private long _packetScoresDropped;
+
+    /// <summary>The most packet-heuristics score requests held between two world ticks; more are dropped (and counted), so a flood cannot grow the queue.</summary>
+    internal const int MaxQueuedPacketScores = 512;
+
+    private readonly record struct PacketScoreRequest(WorldSession Session, float Weight, string Detail);
+
+    /// <summary>Tests only: the terrain probe used instead of the map's own (the test host holds no client data). Null in production.</summary>
+    internal Func<Map, IAntiCheatTerrain?>? TerrainProbe { get; set; }
+
+    private IAntiCheatTerrain? TerrainFor(PlayerState state, Map map) => TerrainProbe is { } probe ? probe(map) : state.TerrainOf(map);
     private AntiCheatOptions _options = new();
     private WorldRuntime? _world;
     private IOpsAnnouncer? _announcer;
@@ -145,9 +160,44 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     /// <summary>A client movement block of the player's own unit, before it is stored.</summary>
     public void BeforeMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement)
+        => Judge(session, player, opcode, movement, acknowledgement: false, MovementFlags.None);
+
+    /// <summary>
+    /// The movement block of an honoured solicited acknowledgement (speed, flag, root, knockback, turn rate), judged before it is stored
+    /// exactly like a movement packet (vmangos runs the cheat tests on an acknowledgement's block before relocating:
+    /// HandleForceSpeedChangeAckOpcodes :492-493 speed ack, and in MovementHandler.cpp :603-604 flag ack, :697-698 root ack (HandleMoveRootAck),
+    /// :790-791 knockback ack). <paramref name="orderGrant"/> is the flag the acknowledged order itself switches on (the order is no longer pending,
+    /// so the block carrying it is not a forgery). Only the acknowledgement of an unroot order is exempt from the rooted-while-moving check (the
+    /// client's own clock decides when it stops moving, vmangos MovementAnticheat.cpp:777-780 skips CMSG_FORCE_MOVE_UNROOT_ACK alone); every other
+    /// acknowledgement, a root ack included, is checked like a movement packet.
+    /// During a taxi flight nothing is judged: the flight relocates the player on every step, so the position checks would take the client's block as a
+    /// new baseline and last-valid position (a client-chosen rubberband target). vmangos likewise runs no cheat test on an ack while a spline is
+    /// pending (the HasPendingSplineDone gates, MovementHandler.cpp :489 speed, :589 flag, :683 root, :778 knockback).
+    /// </summary>
+    public void JudgeAcknowledgedMovement(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, MovementFlags orderGrant)
+    {
+        if (IsOnTaxi(player))
+        {
+            return;
+        }
+
+        Judge(session, player, opcode, movement, acknowledgement: true, orderGrant);
+    }
+
+    private static bool IsOnTaxi(Player player) => (player.UnitFlags & UnitFlags.TaxiFlight) != 0;
+
+    /// <summary>The yards the distance budget of this player's own unit has judged since its checks were built (diagnostics, world thread).</summary>
+    internal float BudgetedYardsOf(Player player) => _players.TryGetValue(player.Guid, out PlayerState? state) ? state.Checks.BudgetedYards : 0f;
+
+    /// <summary>The X of this player's rubberband target, null when it has none (diagnostics, world thread).</summary>
+    internal float? LastValidXOf(Player player)
+        => _players.TryGetValue(player.Guid, out PlayerState? state) && state.Checks.TryGetLastValid(out float x, out _, out _, out _) ? x : null;
+
+    private void Judge(WorldSession session, Player player, WorldOpcode opcode, in MovementInfo movement, bool acknowledgement, MovementFlags extraGrants)
     {
         if (IsExempt(session, player))
         {
+            ForgetBaselineWhileExempt(player);
             return;
         }
 
@@ -161,11 +211,17 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             LatencyMs = session.LatencyMs,
             AllowedSpeed = AllowedSpeed(player),
             Alive = player.IsAlive,
-            Rooted = player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root),
-            GrantedFlags = GrantedFlags(player, state),
+            // An honoured root ack is judged before MovementControl.ApplyReal sets the Root flag, so the server does not hold the root yet; the order it
+            // acknowledges is what the block is held to (a client that stops on a root order never acknowledges it with a moving block). A later root or unroot order still pending
+            // exempts it, as in vmangos (MovementAnticheat.cpp:777-780 scores ROOT_MOVE only without a pending root change, after the acked order was erased).
+            // Unlike vmangos, which needs a current or last Root flag there and kicks an apply ack without the Root flag unless the client is jumping or falling
+            // (MovementHandler.cpp:719-731), the root ack need not carry Root here: a root ack with Forward scores Physics.
+            Rooted = (acknowledgement && opcode == WorldOpcode.CmsgForceMoveRootAck && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root))
+                || (!(acknowledgement && opcode == WorldOpcode.CmsgForceMoveUnrootAck) && player.IsRooted && player.Movement.HasFlag(MovementFlags.Root) && !player.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root)),
+            GrantedFlags = GrantedFlags(player, state.ExplicitGrants) | extraGrants,
             ServerControlled = (player.UnitFlags & UnitFlags.ServerControlled) != 0,
             Transport = ClaimOf(player, movement),
-            Terrain = _options.TerrainChecks && player.Map is { } map ? state.TerrainOf(map) : null,
+            Terrain = _options.TerrainChecks && player.Map is { } map ? TerrainFor(state, map) : null,
         };
 
         _scratch.Clear();
@@ -173,16 +229,125 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         RecordAll(session, player, state);
     }
 
-    /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds.</summary>
+    /// <summary>
+    /// A block of an exempt player is stored without being judged, and <see cref="AfterMovement"/> records its position as the one the server holds,
+    /// so the next judged block would not look relocated and would be measured from the last position judged before the exemption began
+    /// (a false teleport when a GM leaves GM mode far from where it entered it). The next judged block is a new baseline instead.
+    /// </summary>
+    private void ForgetBaselineWhileExempt(Player player)
+    {
+        if (_players.TryGetValue(player.Guid, out PlayerState? state))
+        {
+            state.Checks.NotifyServerRelocation();
+        }
+    }
+
+    /// <summary>The same for a unit the player controls: an exempt controller's block is stored unjudged, so the unit's checks start afresh at the next judged block.</summary>
+    private void ForgetControlledBaselineWhileExempt(Player controller, Unit unit)
+    {
+        if (_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            state.ControlledChecksIfFor(unit.Guid)?.NotifyServerRelocation();
+        }
+    }
+
+    /// <summary>
+    /// After a block (movement or acknowledgement) was stored: the position the server now holds. During a taxi flight no block was stored
+    /// (<c>MovementHandlers.ApplyObservedAck</c>) and the position is the flight's, so the marker stays where the last judged block left it: it is the only
+    /// thing that tells the checks the flight moved the player (nothing notifies them at its end). Advanced here, a flight ending within
+    /// the stored-position tolerance of an ack would pass <see cref="MovementAntiCheat.CheckServerPosition"/> and the next block would be measured from before the flight.
+    /// </summary>
     public void AfterMovement(Player player)
     {
+        if (IsOnTaxi(player))
+        {
+            return;
+        }
+
         if (_players.TryGetValue(player.Guid, out PlayerState? state))
         {
             state.Checks.NotifyStored(player.X, player.Y, player.Z);
         }
     }
 
-    /// <summary>An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline.</summary>
+    /// <summary>
+    /// A client movement block of a unit the controller possesses (a possessed creature or player), before it is stored. Judged by a
+    /// second set of checks kept on the controller's state, with a fresh baseline for each new unit, against the unit's own position,
+    /// speeds and flags (the server holds the capability flags of a possessed creature itself, so none is scored there; a possessed player's flags are scored against that player's own auras, pending orders and grants). A finding scores the
+    /// controller, whose client sent the block, and never rubberbands (the rubberband target is the controller's own position).
+    /// </summary>
+    public void BeforeControlledMovement(WorldSession session, Player controller, Unit unit, WorldOpcode opcode, in MovementInfo movement)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (IsExempt(session, controller))
+        {
+            ForgetControlledBaselineWhileExempt(controller, unit);
+            return;
+        }
+
+        PlayerState state = StateOf(controller);
+        MovementAntiCheat checks = state.ControlledChecksFor(unit.Guid, _options);
+        // Judged against the position the server holds for the unit: the first block of a possession, and any block after the server moved
+        // the unit, is never a baseline of the client's own coordinates (that would let a client relocate the unit anywhere unscored).
+        checks.SeedFromServerPosition(unit.X, unit.Y, unit.Z, session.CurrentPacketReceivedMs, movement.Time);
+        float allowed;
+        bool alive;
+        bool rooted;
+        MovementFlags granted;
+        bool serverControlled;
+        if (unit is Player unitPlayer)
+        {
+            allowed = AllowedSpeed(unitPlayer);
+            alive = unitPlayer.IsAlive;
+            rooted = unitPlayer.IsRooted && unitPlayer.Movement.HasFlag(MovementFlags.Root) && !unitPlayer.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
+            // The possessed player's own grants (a GM tool's Grant on the victim), not the controller's.
+            granted = GrantedFlags(unitPlayer, _players.TryGetValue(unitPlayer.Guid, out PlayerState? victimState) ? victimState.ExplicitGrants : MovementFlags.None);
+            serverControlled = (unitPlayer.UnitFlags & UnitFlags.ServerControlled) != 0;
+        }
+        else
+        {
+            allowed = Math.Max(Math.Max(unit.RunSpeed, unit.WalkSpeed), Math.Max(Math.Max(unit.RunBackSpeed, unit.SwimSpeed), unit.SwimBackSpeed));
+            alive = false;
+            rooted = false;
+            granted = MovementFlags.WaterWalking | MovementFlags.Hover | MovementFlags.SafeFall | MovementFlags.Levitating | MovementFlags.Flying;
+            serverControlled = true;
+        }
+
+        TransportClaim claim = ClaimOf(unit, movement);
+
+        var sample = new MovementSample
+        {
+            Opcode = opcode,
+            Movement = movement,
+            ReceivedMs = session.CurrentPacketReceivedMs,
+            LatencyMs = session.LatencyMs,
+            AllowedSpeed = allowed,
+            Alive = alive,
+            Rooted = rooted,
+            GrantedFlags = granted,
+            ServerControlled = serverControlled,
+            Transport = claim,
+            Terrain = _options.TerrainChecks && unit.Map is { } unitMap ? TerrainFor(state, unitMap) : null,
+        };
+
+        _scratch.Clear();
+        checks.Observe(sample, _scratch);
+        RecordAll(session, controller, state, controlledUnit: unit.Guid.Low);
+    }
+
+    /// <summary>After a controlled unit's block was stored: the position the server now holds for it.</summary>
+    public void AfterControlledMovement(Player controller, Unit unit)
+    {
+        if (_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            state.ControlledChecksIfFor(unit.Guid)?.NotifyStored(unit.X, unit.Y, unit.Z);
+        }
+    }
+
+    /// <summary>
+    /// An honoured movement acknowledgement: its timestamp is checked, and a knockback starts a new baseline. A knockback acknowledged during a
+    /// taxi flight launched nothing (the flight keeps the position), so it opens no baseline and no knockback window.
+    /// </summary>
     public void OnAcknowledgement(WorldSession session, Player player, uint clientTime, bool knockback)
     {
         if (IsExempt(session, player))
@@ -193,7 +358,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         PlayerState state = StateOf(player);
         _scratch.Clear();
         state.Checks.NotifyAcknowledgement(clientTime, session.CurrentPacketReceivedMs, _scratch);
-        if (knockback)
+        if (knockback && !IsOnTaxi(player))
         {
             state.Checks.NotifyKnockback();
         }
@@ -211,8 +376,30 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
         PlayerState state = StateOf(player);
         _scratch.Clear();
-        state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, _scratch);
+        state.Checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
         RecordAll(session, player, state);
+    }
+
+    /// <summary>
+    /// CMSG_MOVE_TIME_SKIPPED naming a unit the player controls (the client reports the stall per mover): judged against that unit's checks only
+    /// (a unit no longer controlled has none, and is ignored). The skip scores the controller like any controlled finding.
+    /// </summary>
+    public void OnControlledTimeSkipped(WorldSession session, Player controller, Unit unit, uint skippedMs)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (IsExempt(session, controller) || !_players.TryGetValue(controller.Guid, out PlayerState? state))
+        {
+            return;
+        }
+
+        if (state.ControlledChecksIfFor(unit.Guid) is not { } checks)
+        {
+            return;
+        }
+
+        _scratch.Clear();
+        checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, session.PreviousPacketReceivedMs, _scratch);
+        RecordAll(session, controller, state, controlledUnit: unit.Guid.Low);
     }
 
     /// <summary>The server moved the player (teleport events): the next client packet is trusted.</summary>
@@ -221,6 +408,45 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         if (_players.TryGetValue(player.Guid, out PlayerState? state))
         {
             state.Checks.NotifyServerRelocation();
+        }
+    }
+
+    // --- packet heuristics feed ---------------------------------------------------------------------------------------
+
+    /// <summary>Packet-heuristics score requests dropped because the queue was full (diagnostics and tests).</summary>
+    internal long PacketScoresDropped => Interlocked.Read(ref _packetScoresDropped);
+
+    /// <summary>
+    /// A packet-heuristics finding of <paramref name="session"/>'s player (<c>World:PacketHeuristics:FeedAntiCheatScore</c>). Callable from any thread:
+    /// the request is queued and applied on the world thread at the next tick, through <see cref="OnRejected"/> (so the exemptions and the
+    /// score, escalation and log apply as for a rejected request). A session that has no player in the world by then scores nothing. False when the
+    /// queue is full (<see cref="MaxQueuedPacketScores"/>). <paramref name="detail"/> must be a constant.
+    /// </summary>
+    public bool EnqueuePacketFinding(WorldSession session, float weight, string detail)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(detail);
+        if (Interlocked.Increment(ref _packetScoresQueued) > MaxQueuedPacketScores)
+        {
+            Interlocked.Decrement(ref _packetScoresQueued);
+            Interlocked.Increment(ref _packetScoresDropped);
+            return false;
+        }
+
+        _packetScores.Enqueue(new PacketScoreRequest(session, weight, detail));
+        return true;
+    }
+
+    /// <summary>World thread: applies the queued packet-heuristics score requests.</summary>
+    internal void DrainPacketScores()
+    {
+        while (_packetScores.TryDequeue(out PacketScoreRequest request))
+        {
+            Interlocked.Decrement(ref _packetScoresQueued);
+            if (request.Session.Player is { IsInWorld: true } player)
+            {
+                OnRejected(request.Session, player, AntiCheatViolation.Packet, request.Weight, request.Detail);
+            }
         }
     }
 
@@ -271,17 +497,25 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
 
     // --- scoring and escalation ---------------------------------------------------------------------------------------
 
-    private void RecordAll(WorldSession session, Player player, PlayerState state)
+    private void RecordAll(WorldSession session, Player player, PlayerState state, uint controlledUnit = 0)
     {
         foreach (AntiCheatFinding finding in _scratch)
         {
-            Record(session, player, state, finding);
+            if (controlledUnit != 0)
+            {
+                string detail = string.Create(CultureInfo.InvariantCulture, $"controlled unit {controlledUnit}: {finding.Detail}");
+                Record(session, player, state, finding with { Detail = detail }, controlled: true);
+            }
+            else
+            {
+                Record(session, player, state, finding);
+            }
         }
 
         _scratch.Clear();
     }
 
-    private void Record(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding)
+    private void Record(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, bool controlled = false)
     {
         AntiCheatOptions options = _options;
         uint now = _world?.NowMs ?? 0;
@@ -299,6 +533,25 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             {
                 FaultLedger.Shared.Record("anticheat.finding", ex);
                 logger.LogFault("anticheat.finding", ex, "AntiCheat: FindingRecorded subscriber threw for player {Player}", player.Name);
+            }
+        }
+
+        if (GmTraceGuard.Wants(_world, GmStreamChannels.AntiCheat, out IGmTraceSink? sink))
+        {
+            // Every finding with its running score and the verdict, None included: the log and the staff alert below only see acted-on ones.
+            // The subject is the player by GUID, and the line carries the GUID and the account id only, never the player's name.
+            try
+            {
+                sink.Publish(GmStreamChannels.AntiCheat, GmTraceGuard.SubjectOf(player, default),
+                    (Guid: player.Guid.Low, Account: session.AccountId, finding.Type, finding.Detail, finding.Weight, Score: score, Action: action,
+                        player.MapId, player.X, player.Y, player.Z),
+                    static s => string.Create(CultureInfo.InvariantCulture,
+                        $"(Player:{s.Guid}) account {s.Account}: {s.Type} '{s.Detail}' weight {s.Weight:0.#} score {s.Score:0} -> {s.Action} at map {s.MapId} ({s.X:0.0}, {s.Y:0.0}, {s.Z:0.0})"));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // Tracing never changes what the anticheat records or decides.
+                logger.LogFault("gm.trace-anticheat", ex, "AntiCheat: GM stream publish threw for account {Account}", session.AccountId);
             }
         }
 
@@ -320,11 +573,11 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
                 player.Name, session.AccountId, finding.Type, finding.Detail, finding.Weight, score, action, suppressed);
         }
 
-        Escalate(session, player, state, finding, score, action);
+        Escalate(session, player, state, finding, score, action, controlled);
     }
 
     /// <summary>The escalation itself (the fork's Apply, the only place a countermeasure happens), already capped by the ceiling.</summary>
-    private void Escalate(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, float score, AntiCheatAction action)
+    private void Escalate(WorldSession session, Player player, PlayerState state, AntiCheatFinding finding, float score, AntiCheatAction action, bool controlled = false)
     {
         AntiCheatOptions options = _options;
         uint now = _world?.NowMs ?? 0;
@@ -334,7 +587,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
             AlertStaff(player, finding, score, action);
         }
 
-        if (action == AntiCheatAction.Rubberband && Elapsed(ref state.LastRubberbandMs, now, (uint)options.RubberbandIntervalMs))
+        if (action == AntiCheatAction.Rubberband && !controlled && Elapsed(ref state.LastRubberbandMs, now, (uint)options.RubberbandIntervalMs))
         {
             Rubberband(player, state);
         }
@@ -523,6 +776,8 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
                 }
             }
 
+            DrainPacketScores();
+
             // A kick or autoban window that ended with lines held back: one summary line per account and kind.
             foreach (SuppressedNotices held in _staffLimiter.TakeExpired())
             {
@@ -650,9 +905,9 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// The flags the server stands behind: an aura that grants them, any order of that kind still waiting for its ack (the
     /// client may assert the flag until it has the order), and the explicit grants of <see cref="Grant"/>.
     /// </summary>
-    private static MovementFlags GrantedFlags(Player player, PlayerState state)
+    private static MovementFlags GrantedFlags(Player player, MovementFlags explicitGrants)
     {
-        MovementFlags granted = state.ExplicitGrants | MovementCheats.GrantedFlags(player);
+        MovementFlags granted = explicitGrants | MovementCheats.GrantedFlags(player);
         LocomotionState locomotion = player.Locomotion;
         if (locomotion.Auras.Has(AuraType.WaterWalk) || locomotion.Pending.HasPendingOfType(MovementChangeType.WaterWalk))
         {
@@ -677,7 +932,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
     /// map near the player; an elevator or tram (a TRANSPORT game object) must exist on the map near the player, measured from
     /// where its animation puts it now (its spawn without one); any other GUID is fake. Without a transport system or game object system the claim cannot be judged and is never scored.
     /// </summary>
-    private TransportClaim ClaimOf(Player player, in MovementInfo movement)
+    private TransportClaim ClaimOf(Unit player, in MovementInfo movement)
     {
         if (!movement.HasFlag(MovementFlags.OnTransport))
         {
@@ -741,6 +996,24 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
         public uint? LastAlertMs;
 
         public uint? LastRubberbandMs;
+
+        private MovementAntiCheat? _controlled;
+        private ObjectGuid _controlledGuid;
+
+        /// <summary>The checks of the unit the player controls: new for each unit and each options object (a fresh baseline).</summary>
+        public MovementAntiCheat ControlledChecksFor(ObjectGuid unit, AntiCheatOptions options)
+        {
+            if (_controlled is null || _controlledGuid != unit || !ReferenceEquals(_controlled.Options, options))
+            {
+                _controlled = new MovementAntiCheat(options);
+                _controlledGuid = unit;
+            }
+
+            return _controlled;
+        }
+
+        /// <summary>The checks of that unit when they exist, else null.</summary>
+        public MovementAntiCheat? ControlledChecksIfFor(ObjectGuid unit) => _controlled is not null && _controlledGuid == unit ? _controlled : null;
 
         private MapAntiCheatTerrain? _terrain;
         private Map? _terrainMap;

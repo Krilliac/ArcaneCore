@@ -394,12 +394,15 @@ Add-Type -TypeDefinition $code -Language CSharp
 $debugLog = [LiveWin32DebuggerV2]::new($LogPath)   # per run: its own queues, writer threads, log file and drop counters
 try {
     $threads = @()
-    if ($RealmPid) { $threads += $debugLog.AttachAsync($RealmPid, "Realm:$RealmPid") }
-    if ($WorldPid) { $threads += $debugLog.AttachAsync($WorldPid, "World:$WorldPid") }
+    # Pids attached up front by -RealmPid/-WorldPid. Watch mode starts from this map, so a supervisor child that is also named by one of them
+    # is not attached a second time (two debuggers on one process refuse each other, and the log showed three failure lines).
+    $preAttached = @{}
+    if ($RealmPid) { $realmThread = $debugLog.AttachAsync($RealmPid, "Realm:$RealmPid"); $threads += $realmThread; $preAttached[[int]$RealmPid] = $realmThread }
+    if ($WorldPid) { $worldThread = $debugLog.AttachAsync($WorldPid, "World:$WorldPid"); $threads += $worldThread; $preAttached[[int]$WorldPid] = $worldThread }
     if ($SupervisorPid) {
         # Watch mode. $attached maps a pid to its debug thread; a thread that ended while its process still runs (the attach was refused) is
         # retried a few times, then left alone so a refusal does not spam the log every poll.
-        $attached = @{}
+        $attached = $preAttached
         $attempts = @{}
         # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
         # A reused PID is not the supervisor: remember its start time and treat a different one as gone.

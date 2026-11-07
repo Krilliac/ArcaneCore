@@ -57,4 +57,34 @@ public static class RealmCharacterCounts
             session.Logger.LogFault("realm.character-count", ex, "[{Endpoint}] could not store the character count of account {Account} for the realm list", session.RemoteEndpoint, session.AccountId);
         }
     }
+
+    /// <summary>
+    /// Recount an account on this realm and store it, for a caller that already holds a scope (the player-dump import, which adds a character
+    /// without a client session). Same rules as <see cref="RefreshAsync(WorldSession, int?)"/>: nothing for realm id 0 or no auth database, and a
+    /// failed write is logged and never thrown.
+    /// </summary>
+    public static async Task RefreshAsync(IServiceProvider scoped, ILogger logger, int accountId)
+    {
+        ArgumentNullException.ThrowIfNull(scoped);
+        ArgumentNullException.ThrowIfNull(logger);
+        int realmId = scoped.GetService<IOptions<RealmStatusOptions>>()?.Value.Id ?? 0;
+        if (realmId <= 0 || scoped.GetService<IRealmCharacterCountStore>() is not { } store)
+        {
+            return;
+        }
+
+        try
+        {
+            int count = await scoped.GetRequiredService<ICharacterStore>().CountByAccountAsync(accountId).ConfigureAwait(false);
+            await store.SetCountAsync(realmId, accountId, count).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // the world is going away
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("realm.character-count", ex, "could not store the character count of account {Account} for the realm list", accountId);
+        }
+    }
 }

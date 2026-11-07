@@ -145,21 +145,17 @@ public sealed class DevOpcodeTests
         (0x032C, WorldOpcode.CmsgIgnoreKnockbackCheat),
     ];
 
-    /// <summary>Class (b): real gameplay opcodes with no handler; they must keep going through the unhandled path.</summary>
+    /// <summary>Class (b): opcodes with no handler (MSG_CHANNEL_START and MSG_CHANNEL_UPDATE only travel server to client in vmangos); they must keep going through the unhandled path.</summary>
     private static readonly (ushort Value, WorldOpcode Opcode)[] GameplayGaps =
     [
-        (0x0109, WorldOpcode.CmsgStoreLootInSlot),
-        (0x021F, WorldOpcode.CmsgSkillBuyStep),
+        (0x0139, WorldOpcode.MsgChannelStart),
+        (0x013A, WorldOpcode.MsgChannelUpdate),
     ];
 
     /// <summary>Class (c) samples (obsolete / server-to-client / doubtful), kept unhandled on purpose so a doubtful name never raises a finding.</summary>
     private static readonly WorldOpcode[] ObsoleteSamples =
     [
-        WorldOpcode.CmsgNewSpellSlot, // 0x012D obsolete (vmangos Opcodes.cpp:382)
         WorldOpcode.MsgMoveTimeSkipped, // 0x0319 only ever broadcast by the server (vmangos MovementHandler.cpp:1014)
-        WorldOpcode.CmsgChatFiltered, // 0x0331 INVALID_PACKET Unhandled (vmangos Opcodes.cpp:932), no handler on purpose
-        WorldOpcode.CmsgGmUpdateTicketStatus, // 0x0327 INVALID_PACKET Unhandled (vmangos Opcodes.cpp:920), no handler on purpose
-        WorldOpcode.MsgDelayGhostTeleport, // 0x032E INVALID_PACKET Unhandled (vmangos Opcodes.cpp:927), no handler on purpose
     ];
 
     private static WorldOpcode[] Stripped => [.. StrippedInventory.Select(i => i.Opcode)];
@@ -559,15 +555,15 @@ public sealed class DevOpcodeTests
         await using (client)
         {
             await client.SendAsync(WorldOpcode.CmsgBootme, []);
-            await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []);
+            await client.SendAsync(WorldOpcode.MsgChannelStart, []);
             await client.SendAsync(WorldOpcode.CmsgBootme, []);
             await PacketHeuristicsTestKit.SettleAsync(host, client, session);
 
-            Assert.Equal([new UnhandledOpcodeCount("CMSG_NEW_SPELL_SLOT", 1)], unhandled.Snapshot());
+            Assert.Equal([new UnhandledOpcodeCount("MSG_CHANNEL_START", 1)], unhandled.Snapshot());
             Assert.Equal(2, dev.Total);
 
             WiringReport report = host.WorldServices.GetRequiredService<WiringAudit>().Run();
-            Assert.Contains(report.Findings, f => f is { Category: WiringAudit.UnhandledOpcode, Subject: "CMSG_NEW_SPELL_SLOT" });
+            Assert.Contains(report.Findings, f => f is { Category: WiringAudit.UnhandledOpcode, Subject: "MSG_CHANNEL_START" });
             Assert.DoesNotContain(report.Findings, f => f.Subject == "CMSG_BOOTME");
 
             await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
@@ -586,7 +582,7 @@ public sealed class DevOpcodeTests
                 output = [.. lines];
             }
 
-            Assert.Contains(output, l => l.Contains("[unhandled-opcode] CMSG_NEW_SPELL_SLOT", StringComparison.Ordinal));
+            Assert.Contains(output, l => l.Contains("[unhandled-opcode] MSG_CHANNEL_START", StringComparison.Ordinal));
             Assert.DoesNotContain(output, l => l.Contains("[unhandled-opcode] CMSG_BOOTME", StringComparison.Ordinal));
             Assert.Contains(output, l => l.Contains("dev opcodes dropped: 2", StringComparison.Ordinal) && l.Contains("CMSG_BOOTME", StringComparison.Ordinal));
         }

@@ -26,7 +26,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// </para>
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
-public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch, ISharedTiledPathSearch,
+public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ICollisionMapPrefetch, ISharedPathSearch, ISharedTiledPathSearch,
     ISharedMeshPointQuery, ISharedMeshFloorQuery, ICollisionTileDemand
 {
     /// <summary>
@@ -56,6 +56,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     public NavMeshDatasetDescriptor Dataset { get; }
     private readonly Dictionary<uint, NavMesh?> _meshes = [];
     private readonly TilePrefetchCache<NavMeshTile> _prefetch = new();
+    private readonly ConcurrentDictionary<uint, Task<byte[]?>> _paramsPrefetch = new();
 
     /// <summary>
     /// Held for reading by every <see cref="FindPathShared"/> search (path-job workers) and for writing by every change of the loaded
@@ -279,7 +280,6 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         _directory = Path.GetFullPath(directory);
         _logger = logger ?? NullLogger.Instance;
         MaxConcurrentTileReads = Math.Clamp(maxConcurrentTileReads, 1, 16);
-        _tileReadSlots = new SemaphoreSlim(MaxConcurrentTileReads, MaxConcurrentTileReads);
         Dataset = new(_directory, identity);
     }
 
@@ -319,7 +319,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         NavMesh? mesh = null;
         string path = Path.Combine(_directory, NavMeshFormat.ParamsFileName(mapId));
-        if (ReadFile(path) is { } bytes)
+        if (ReadParams(mapId, path) is { } bytes)
         {
             try
             {
@@ -346,6 +346,31 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
         return mesh;
     }
+
+    /// <summary>
+    /// Read <c>NNN.mmap</c> on the thread pool (called when the map is created), so that <see cref="GetNavMesh"/>'s first call for the map
+    /// finds the bytes instead of reading the file on the calling thread. A read still running when the first query comes is not waited
+    /// for: the query reads the file itself, as it always did. Any thread.
+    /// </summary>
+    public void PrefetchMap(uint mapId)
+    {
+        if (_paramsPrefetch.ContainsKey(mapId))
+        {
+            return;
+        }
+
+        string path = Path.Combine(_directory, NavMeshFormat.ParamsFileName(mapId));
+        _paramsPrefetch.TryAdd(mapId, Task.Run(() => ReadFile(path)));
+    }
+
+    /// <summary>The map's prefetch read (null when none was started); tests await it.</summary>
+    internal Task<byte[]?>? MapPrefetch(uint mapId) => _paramsPrefetch.GetValueOrDefault(mapId);
+
+    /// <summary>The map's <c>.mmap</c> bytes: the finished prefetch's, else read here (no prefetch, or it has not finished). The entry stays, so a second instance of the map does not read the file again.</summary>
+    private byte[]? ReadParams(uint mapId, string path)
+#pragma warning disable ARC0006 // the task is already completed successfully (checked in the same condition), so Result does not block
+        => _paramsPrefetch.TryGetValue(mapId, out Task<byte[]?>? read) && read.IsCompletedSuccessfully ? read.Result : ReadFile(path);
+#pragma warning restore ARC0006
 
     /// <summary>Load a terrain tile's navmesh tile (vmangos <c>MMapManager::loadMap</c>). False when nothing was loaded.</summary>
     public bool LoadTile(uint mapId, int tileX, int tileY)
@@ -539,6 +564,13 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>Prefetched tiles the loader took instead of reading them (diagnostics and tests).</summary>
     internal int PrefetchHits => _prefetch.Hits;
+
+    /// <summary>Starts a prefetch's work (<see cref="TilePrefetchCache{T}.Start"/>; tests hold it to stand for a busy pool).</summary>
+    internal Func<Func<NavMeshTile?>, Task<NavMeshTile?>> PrefetchStart
+    {
+        get => _prefetch.Start;
+        set => _prefetch.Start = value;
+    }
 
     /// <summary>Whether a prefetch of the tile was asked for, is finished and has not been taken (diagnostics and tests).</summary>
     internal bool IsPrefetchFinished(uint mapId, int tileX, int tileY) => _prefetch.Contains(mapId, tileX, tileY) && !_prefetch.IsRunning(mapId, tileX, tileY);
@@ -1010,7 +1042,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     }
 
     /// <summary>
-    /// Whether a tile this query asked for is still unread (in flight, waiting for a read slot, or not yet installed).
+    /// Whether a tile this query asked for is still unread (in flight, queued for a reader thread, or not yet installed).
     /// A tile already known to be missing has settled and is not open.
     /// </summary>
     private bool QueryTileStillOpen()
@@ -1032,7 +1064,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// Make sure the navigation tile under world position <paramref name="at"/> is loaded for this query (<see cref="PathOptions.LoadTiles"/>),
     /// within <see cref="MaxTilesPerQuery"/> and <see cref="MaxOnDemandTiles"/>. False when it is not (no such tile, or over a bound).
     /// With <paramref name="nonBlocking"/> (<see cref="PathOptions.NonBlockingTiles"/>) the file is never read here: the tile is read on
-    /// the pool (<see cref="PollTileRead"/>), a tile whose read has not finished counts as pending
+    /// a reader thread (<see cref="PollTileRead"/>), a tile whose read has not finished counts as pending
     /// (<see cref="PathSearchCounters.TilesPending"/>) and is false, and one whose read has finished is installed.
     /// </summary>
     private bool EnsureTile(uint mapId, Vector3 at, bool nonBlocking, CancellationToken cancellationToken = default)
@@ -1141,7 +1173,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         /// <summary>The tile was read; it is returned.</summary>
         Ready,
 
-        /// <summary>A read of it is under way (or was just requested, or waits for a free read slot).</summary>
+        /// <summary>A read of it is under way (or was just requested, or is queued for a reader thread).</summary>
         Pending,
 
         /// <summary>It does not exist or could not be read (reported once); the tile is treated as absent.</summary>
@@ -1150,6 +1182,9 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>One background tile read: the parsed tile, null when the file does not exist, or why it failed.</summary>
     private readonly record struct TileRead(NavMeshTile? Tile, Exception? Error);
+
+    /// <summary>A tile read queued for a reader thread: the file, the test seam's reader at the time it was asked for, and where its answer goes.</summary>
+    private readonly record struct TileReadRequest(string TilePath, Func<string, byte[]?>? Reader, TaskCompletionSource<TileRead> Completion);
 
     /// <summary>
     /// The most tile reads in flight or finished and waiting at once (<see cref="_async"/>). A request over it is pending without starting a
@@ -1160,19 +1195,52 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     /// <summary>The default for <see cref="MaxConcurrentTileReads"/> (<see cref="CollisionOptions.NavTileReadConcurrency"/>).</summary>
     public const int DefaultConcurrentTileReads = 2;
 
-    /// <summary>The most tile files read at the same time; further reads wait for a slot without holding a thread.</summary>
+    /// <summary>The most tile files read at the same time; further reads queue for a reader thread.</summary>
     public int MaxConcurrentTileReads { get; }
 
     /// <summary>Held reads by tile: the read, and the sequence number of the last time a query asked for it (least recently asked is dropped first).</summary>
     private readonly Dictionary<(uint Map, int X, int Y), (Task<TileRead> Read, long Sequence)> _async = [];
-    private readonly SemaphoreSlim _tileReadSlots;
+    private readonly object _readLock = new();
+    private readonly Queue<TileReadRequest> _readQueue = new();
+    private int _readWorkers; // dedicated reader threads alive (guarded by _readLock)
+    private int _readBusy;    // of them, reading a file (written under _readLock)
     private long _asyncSequence;
+
+    /// <summary>How long a reader thread with nothing to read stays alive (<see cref="ReadWorker"/>); a shorter wait is for tests.</summary>
+    internal int ReaderIdleMilliseconds { get; set; } = 60_000;
+
+    /// <summary>Starts a reader thread in place of a dedicated background <see cref="Thread"/> (tests: a thread that cannot be started).</summary>
+    internal Action<ThreadStart>? ReaderThreadStart { get; set; }
+
+    /// <summary>Reader threads alive (tests).</summary>
+    internal int TileReaderThreads
+    {
+        get
+        {
+            lock (_readLock)
+            {
+                return _readWorkers;
+            }
+        }
+    }
+
+    /// <summary>Tile reads queued for a reader thread (tests).</summary>
+    internal int QueuedTileReads
+    {
+        get
+        {
+            lock (_readLock)
+            {
+                return _readQueue.Count;
+            }
+        }
+    }
 
     /// <summary>Background tile reads started (diagnostics and tests).</summary>
     internal int TileReadsStarted { get; private set; }
 
     /// <summary>Tile reads that can still start before the concurrency bound is reached (<see cref="MaxConcurrentTileReads"/>; tests).</summary>
-    internal int FreeTileReadSlots => _tileReadSlots.CurrentCount;
+    internal int FreeTileReadSlots => MaxConcurrentTileReads - Volatile.Read(ref _readBusy);
 
     /// <summary>The background read of a tile, or null when none is held (tests await it).</summary>
     internal Task? PendingTileRead(uint mapId, int tileX, int tileY)
@@ -1180,8 +1248,8 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
 
     /// <summary>
     /// Where the background read of a terrain tile stands, starting it when none exists (World thread; the only writer of
-    /// <see cref="_async"/>). A tile the grid prefetch (<see cref="Prefetch"/>) is already reading is waited for, not read twice. The read
-    /// itself runs on the pool and touches nothing but the file and its own result; the tile is added to the navmesh, which the world
+    /// <see cref="_async"/>). A tile the grid prefetch (<see cref="Prefetch"/>) is already reading is waited for, not read twice; one
+    /// still queued for a pool thread is taken back and read here instead, so a poll never waits on the pool. The read itself runs on a dedicated reader thread (see <see cref="StartTileRead"/>) and touches nothing but the file and its own result; the tile is added to the navmesh, which the world
     /// thread owns, by <see cref="InstallReadTile"/> on a later query. A failed read is logged once (the caller then remembers the
     /// tile as missing, so nothing asks again).
     /// </summary>
@@ -1197,7 +1265,9 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
                 return TileReadState.Pending;
             }
 
-            TileRead done = entry.Read.IsCompletedSuccessfully ? entry.Read.Result : new TileRead(null, entry.Read.Exception);
+#pragma warning disable ARC0006 // completed (checked above), and a held read never faults (StartTileRead: a failure is its result), so Result does not block
+            TileRead done = entry.Read.Result;
+#pragma warning restore ARC0006
             if (done.Tile is { } ready)
             {
                 tile = ready;
@@ -1215,13 +1285,15 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             return TileReadState.Unavailable;
         }
 
-        if (_prefetch.IsRunning(mapId, tileX, tileY))
+        // A prefetch that is reading holds its pool thread and needs nothing more from the pool: it is waited for. One still queued has no
+        // thread yet and would wait as long as the pool is busy, so it is taken back and the read goes to a reader thread below.
+        if (_prefetch.IsRunning(mapId, tileX, tileY) && !_prefetch.TryClaimQueued(mapId, tileX, tileY))
         {
             return TileReadState.Pending;
         }
 
         // The held reads are bounded whatever their source (a prefetched tile is held until installed, as a read is): with the table
-        // full and no finished read to drop, nothing starts and nothing is taken from the prefetch cache; the answer is pending.
+        // full and no finished read to drop, nothing starts and no finished prefetch is taken; the answer is pending.
         if (_async.Count >= MaxPendingTileReads && !DropLeastRecentFinishedRead())
         {
             return TileReadState.Pending;
@@ -1261,41 +1333,165 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             return false;
         }
 
+#pragma warning disable ARC0006 // the pattern checks IsCompletedSuccessfully first, so Result does not block
         if (oldestTask is { IsCompletedSuccessfully: true, Result.Error: { } droppedError })
+#pragma warning restore ARC0006
         {
             FaultLedger.Shared.Record("nav.read", droppedError);
-        }
-        else if (oldestTask is { IsFaulted: true, Exception: { } taskException })
-        {
-            FaultLedger.Shared.Record("nav.read", taskException);
         }
 
         return true;
     }
 
-    /// <summary>Read and parse one tile file on the pool, at most <see cref="MaxConcurrentTileReads"/> at a time. Never faults: a failure is the result.</summary>
+    /// <summary>
+    /// Queue the read and parse of one tile file for the dedicated reader threads, at most <see cref="MaxConcurrentTileReads"/> at a time.
+    /// Never faults: a failure is the result (every exception, <see cref="OutOfMemoryException"/> too; a read left with no reader because
+    /// none can be started fails the same way). Called on the world thread: it enqueues (a lock and a pulse). A reader thread is started on
+    /// the caller only while fewer than <see cref="MaxConcurrentTileReads"/> exist and none is idle: once per slot, and again after one has
+    /// been idle for <see cref="ReaderIdleMilliseconds"/> and exited. Starting a thread waits for the OS to schedule it, which is not free
+    /// on a loaded host (the cost is not measured).
+    /// </summary>
+    /// <remarks>
+    /// Dedicated threads, not the shared pool: a read the world thread polls for must finish however busy the pool is (a saturated pool
+    /// injects threads slowly, and a pooled read would sit queued behind unrelated work). A prefetch (<see cref="_prefetch"/>) is still read
+    /// on the pool, but a poll only waits for one that already has its thread (<see cref="PollTileRead"/>). Reads waiting for a reader hold
+    /// no thread, only their queue entry.
+    /// </remarks>
     private Task<TileRead> StartTileRead(string path)
     {
-        Func<string, byte[]?>? reader = FileReader;
-        SemaphoreSlim slots = _tileReadSlots;
-        return Task.Run(async () =>
+        var completion = new TaskCompletionSource<TileRead>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool spawn;
+        lock (_readLock)
         {
-            await slots.WaitAsync().ConfigureAwait(false);
-            try
+            _readQueue.Enqueue(new TileReadRequest(path, FileReader, completion));
+            spawn = _readWorkers < MaxConcurrentTileReads && _readWorkers - _readBusy < _readQueue.Count;
+            if (spawn)
             {
-                return new TileRead(TryReadTileFile(path, reader, out NavMeshTile? tile) ? tile : null, null);
+                _readWorkers++;
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            else
             {
-                FaultLedger.Shared.Record("collision.mmap-tile-read", ex);
-                AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
-                return new TileRead(null, ex);
+                Monitor.Pulse(_readLock);
             }
-            finally
+        }
+
+        if (spawn)
+        {
+            StartReaderThread();
+        }
+
+        return completion.Task;
+    }
+
+    /// <summary>
+    /// Start the reader thread already counted in <see cref="_readWorkers"/>. When it cannot start the count is given back; the queue stays
+    /// with the readers still alive, and with none left every queued read is taken out and answered as failed, so nothing stays pending
+    /// for a reader that does not exist.
+    /// </summary>
+    private void StartReaderThread()
+    {
+        try
+        {
+            if (ReaderThreadStart is { } start)
             {
-                slots.Release();
+                start(ReadWorker);
             }
-        });
+            else
+            {
+                // UnsafeStart: the reader does not inherit the world thread's ExecutionContext for its lifetime.
+                new Thread(ReadWorker) { IsBackground = true, Name = "NavTileReader" }.UnsafeStart();
+            }
+        }
+        catch (Exception ex)
+        {
+            TileReadRequest[] orphaned = [];
+            int readers;
+            lock (_readLock)
+            {
+                readers = --_readWorkers;
+                if (readers == 0)
+                {
+                    orphaned = _readQueue.ToArray();
+                    _readQueue.Clear();
+                }
+            }
+
+            if (readers > 0)
+            {
+                _logger.LogError(ex, "MMaps: a tile reader thread could not be started; the {Readers} running take its reads", readers);
+            }
+
+            foreach (TileReadRequest request in orphaned)
+            {
+                ReportTileReadFailure(request.TilePath, ex);
+                request.Completion.TrySetResult(new TileRead(null, ex));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Read one queued tile on a reader thread. An exception leaving a dedicated thread ends the process, so every exception from the read
+    /// and the parse, an <see cref="OutOfMemoryException"/> from the buffer included, becomes the read's error result.
+    /// </summary>
+    /// <remarks>The lock and the completion after the try are outside that: they are not expected to throw, and one that did would still end the process.</remarks>
+    private void RunTileRead(TileReadRequest request)
+    {
+        TileRead result;
+        try
+        {
+            result = new TileRead(TryReadTileFile(request.TilePath, request.Reader, out NavMeshTile? tile) ? tile : null, null);
+        }
+        catch (Exception ex)
+        {
+            result = new TileRead(null, ex);
+            ReportTileReadFailure(request.TilePath, ex);
+        }
+
+        lock (_readLock)
+        {
+            _readBusy--; // the slot is free before anyone sees the result
+        }
+
+        request.Completion.TrySetResult(result);
+    }
+
+    /// <summary>Record a failed background read. Never throws: it runs on a reader thread (or the world thread) where a fault would end the process.</summary>
+    private static void ReportTileReadFailure(string path, Exception ex)
+    {
+        try
+        {
+            FaultLedger.Shared.Record("collision.mmap-tile-read", ex);
+            AnomalyLedger.Shared.Report("collision", "tile-load-failed", path, ex.Message);
+        }
+        catch (Exception)
+        {
+            // Bookkeeping only: the read's own error result still reaches the poller, which logs it.
+        }
+    }
+
+    /// <summary>A reader thread: takes queued reads until it has been idle for <see cref="ReaderIdleMilliseconds"/>.</summary>
+    private void ReadWorker()
+    {
+        while (true)
+        {
+            TileReadRequest request;
+            lock (_readLock)
+            {
+                while (_readQueue.Count == 0)
+                {
+                    if (!Monitor.Wait(_readLock, ReaderIdleMilliseconds) && _readQueue.Count == 0)
+                    {
+                        _readWorkers--;
+                        return;
+                    }
+                }
+
+                request = _readQueue.Dequeue();
+                _readBusy++;
+            }
+
+            RunTileRead(request);
+        }
     }
 
     /// <summary>Add a tile read in the background to the navmesh (world thread), dropping its held read. False when its Detour slot is taken.</summary>
@@ -1445,7 +1641,7 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
         return wide && mesh.TryFindNearestPoly(position, WideExtents, include, exclude, out poly, out onMesh);
     }
 
-    /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on the pool.</summary>
+    /// <summary>Reads a navmesh file's bytes (null when it does not exist); the disk unless a test substitutes it. Runs on the world thread or, for background tile reads, on a dedicated reader thread.</summary>
     /// <remarks>Null (production): tile files are read into a pooled buffer by <see cref="TryReadTileFile"/>, the small <c>.mmap</c> parameters with <see cref="File.ReadAllBytes(string)"/>.</remarks>
     internal Func<string, byte[]?>? FileReader { get; set; }
 

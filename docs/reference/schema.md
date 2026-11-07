@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 7 | `account`, `realmlist` |
-| `characters` | 74 | `characters` |
-| `world` | 67 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 75 | `characters` |
+| `world` | 69 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -101,6 +101,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 72 | `Characters.Ownership.CharacterOwnershipShardDataModule` | adds columns `character_ownership.owned_maps`, `character_ownership.heartbeat_at_ms` | yes |
 | 73 | `Characters.Transfers.ClusterHandoffScopeDataModule` | adds columns `cluster_world_handoff.open_scope`; repairs the model's indexes of `cluster_world_handoff` | yes |
 | 74 | `Characters.Transfers.ClusterTransferTargetScopeDataModule` | adds columns `cluster_transfer_decision.target_scope` | yes |
+| 75 | `Characters.Ownership.CharacterOwnershipHeartbeatDataModule` | creates `character_ownership_heartbeat` | yes |
 
 ## `world`
 
@@ -172,5 +173,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 65 | `World.Creatures.DbSpellScriptDataModule` | creates `dbscripts_on_spell` |
 | 66 | `Content.Spells.SpellEffectModDataModule` | creates `spell_effect_mod` |
 | 67 | `World.Rules.PlayerbotWorldPvpGoalDataModule` | no changes |
+| 68 | `World.Creatures.CreatureSpellListDataModule` | creates `creature_spell_list_entry`, `creature_spell_list`, `creature_spell_targeting`, `combat_condition`, `unit_condition`; adds columns `creature_template.SpellList` |
+| 69 | `World.Creatures.SpellScriptTargetConditionDataModule` | adds columns `spell_script_target.TargetCondition` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

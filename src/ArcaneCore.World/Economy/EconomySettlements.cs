@@ -210,6 +210,18 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         return true;
     }
 
+    /// <summary>The characters taking part in an operation that is in flight, ascending.</summary>
+    public IReadOnlyCollection<int> SettlingCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _operations.SelectMany(o => o.Actors.Select(a => a.Id)).Distinct().Order()];
+            }
+        }
+    }
+
     /// <summary>Completes when no operation involving the character is in flight.</summary>
     public Task WaitForCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {

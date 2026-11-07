@@ -195,8 +195,13 @@ AntiCheat.Autoban.Threshold = 25
 
 #
 #    AntiCheat.BaselineGapMs
-#        Description: A gap this long (milliseconds) between two movement packets starts a new
-#                     baseline (loading screen, AFK). Default 3000.
+#        Description: Caps the time-skip credit (milliseconds): all the skips the evidence supports
+#                     in ten seconds together earn at most this much. It also caps the time budget
+#                     of any single step (a silence buys at most this much movement in one step)
+#                     and, times four, the extra distance the multi-packet budget grants after a
+#                     stall (the packets a stall held arrive together). A silence between two
+#                     movement packets is never a free baseline; the step after it is judged against
+#                     the time that passed. Default 3000.
 #        Type: int
 #        Default: 3000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -490,6 +495,27 @@ AntiCheat.SpeedClock.CooldownMs = 10000
 AntiCheat.SpeedClock.Enabled = true
 
 #
+#    AntiCheat.SpeedClock.LongTermDriftMs
+#        Description: Long-term drift: when the client clock has gained this many milliseconds on
+#                     the server's receive clock (the client time elapsed since the last restart of
+#                     the count, a teleport or a previous fire, minus the real time elapsed, over
+#                     every packet pair), a clock that runs fast by less than TolerancePercent is
+#                     reported too. 0 switches it off, which is the default (the sliding window
+#                     alone, as before); otherwise 1000 to 3600000. Honest play stays near zero: lag
+#                     and the catch-up burst cancel. The excess is floored at minus twice the limit,
+#                     so a stall (or two close together) longer than about three times the limit
+#                     leaves an honest running player at or above the limit: choose the limit at no
+#                     less than a third of the longest stall you expect (3000 survives a 9 second
+#                     spike).
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#anticheat
+#
+AntiCheat.SpeedClock.LongTermDriftMs = 0
+
+#
 #    AntiCheat.SpeedClock.MaxGapMs
 #        Description: A pair further apart than this (milliseconds) is ignored (the player stood
 #                     still or the client froze). Default 3000.
@@ -753,6 +779,21 @@ AuctionHouseBot.DailyBuyBudgetCopper = 10000000
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
 AuctionHouseBot.DailyItemBudget = 5000
+
+#
+#    AuctionHouseBot.DynamicIgnoreGmAccounts
+#        Description: With DynamicMaxRequiredLevel, leave characters of staff accounts (security
+#                     above player) out of the highest-level count (cMaNGOS
+#                     AuctionHouseBot.Level.IgnoreGmAccounts, default false). When only staff
+#                     characters are online the highest of their levels is the fallback, as in
+#                     cMaNGOS.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#auctionhousebot
+#
+AuctionHouseBot.DynamicIgnoreGmAccounts = false
 
 #
 #    AuctionHouseBot.DynamicMaxRequiredLevel
@@ -1795,7 +1836,9 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #                     Cluster:Supervisor that runs more than one world: an unfenced world skips the
 #                     durable id allocator priming and collides on in-memory id counters. Each world
 #                     of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a
-#                     PostgreSQL or MariaDB characters database.
+#                     PostgreSQL or MariaDB characters database. The gateway reads this key too:
+#                     with it or Cluster:Worker:Enabled true, the write fence is attached to the
+#                     gateway's own characters connection (the handoff and transfer journals).
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1988,12 +2031,12 @@ Cluster.NodeBridge.Enabled = false
 #                     does not turn the bridge on (a warning is logged when Enabled is false). Only
 #                     read when Enabled is true.
 #        Type: string
-#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+#        Default: "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|30,33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusternodebridge
 #
-Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
+Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|30,33,34,35,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,369,389,409,429,449,450,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
 # Cluster:Peer
@@ -2184,7 +2227,7 @@ Cluster.Supervisor.CrashLoopWindowSeconds = 300
 #                     dump short.
 #        Type: int
 #        Default: 420
-#        Allowed: a whole number, -2147483648 to 2147483647
+#        Allowed: a whole number of seconds, 1 to 3600
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clustersupervisor
 #
@@ -2395,31 +2438,33 @@ Cluster.Worker.BindAddress = "127.0.0.1"
 #        Description: Characters schema version both ends must agree on (an override label, used
 #                     only while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 74
+#        Default: 75
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.CharactersSchemaVersion = 74
+Cluster.Worker.CharactersSchemaVersion = 75
 
 #
 #    Cluster.Worker.ContentRevision
 #        Description: Content revision label both ends of the link must agree on; an override, used
 #                     only while VersionsFromDatabase is false.
 #        Type: string
-#        Default: "world-schema-67"
+#        Default: "world-schema-69"
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.ContentRevision = "world-schema-67"
+Cluster.Worker.ContentRevision = "world-schema-69"
 
 #
 #    Cluster.Worker.Enabled
 #        Description: true opens the gateway listener (worker mode) and makes character fencing
 #                     mandatory: Cluster:Fencing:Enabled must be true, and the characters write
 #                     fence is attached either way. false, the default, is Combined mode: no
-#                     listener, no change.
+#                     listener, no change. The gateway reads this key too, only to attach the write
+#                     fence to its own characters connection (the handoff and transfer journals), as
+#                     it does for Cluster:Fencing:Enabled.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -2533,12 +2578,12 @@ Cluster.Worker.VersionsFromDatabase = true
 #        Description: World schema version both ends must agree on (an override label, used only
 #                     while VersionsFromDatabase is false).
 #        Type: int
-#        Default: 67
+#        Default: 69
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#clusterworker
 #
-Cluster.Worker.WorldSchemaVersion = 67
+Cluster.Worker.WorldSchemaVersion = 69
 
 #----------------------------------------------------------------------------
 # Cluster:Worker:Handoff
@@ -3689,6 +3734,22 @@ Creatures.RespawnPacifyMs = 5000
 Creatures.SendAiReaction = true
 
 #
+#    Creatures.SpellListContinueAfterCast
+#        Description: Creatures:SpellListContinueAfterCast (default off): a creature spell list
+#                     casts one blocking spell per tick, as cmangos doc/SpellLists.txt describes
+#                     retail ("always one spell is selected"). Switched on, the tick keeps walking
+#                     the eligible blocking entries after a success, as the cmangos loop in
+#                     UnitAI::UpdateSpellLists does; an instant spell can then fire a second one in
+#                     the same tick. A deviation from retail.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#creatures
+#
+Creatures.SpellListContinueAfterCast = false
+
+#
 #    Creatures.StealthAlertCooldownMs
 #        Description: Milliseconds between two alerts of one creature
 #                     (Creatures:StealthAlertCooldownMs): vmangos 10000 (AI/CreatureAI.cpp:366-367).
@@ -4376,11 +4437,13 @@ Diagnostics.CrashDump.Mode = Full
 #                     a minute). A timeout, or an unreachable diagnostics endpoint
 #                     (DOTNET_EnableDiagnostics=0), is not retried with a smaller type; a type the
 #                     runtime refuses is. While it dumps the daemon publishes the heartbeat state
-#                     dumping, which supervisors honour for a grace of this long plus a margin.
-#                     Default 120.
+#                     dumping, which supervisors honour for the announced maximum (three times this)
+#                     plus a minute, bounded by their own cap (Cluster:Supervisor:DumpGraceSeconds,
+#                     default 420; raise it with this value). Default 120. Checked at start (1 to
+#                     3600) so the product cannot overflow.
 #        Type: int
 #        Default: 120
-#        Allowed: a whole number of seconds, 1 or more (a lower value is raised to 1)
+#        Allowed: a whole number of seconds, 1 to 3600
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#diagnostics
 #
@@ -4433,12 +4496,14 @@ Diagnostics.FaultMaxSignatures = 512
 
 #
 #    Diagnostics.FirstChanceExceptions
-#        Description: Log every exception at the moment it is thrown
-#                     (AppDomain.FirstChanceException), before any handler sees it, at Debug level.
-#                     A development aid for finding swallowed exceptions; it is honoured only by a
-#                     Debug build of the Kernel (the hook is compiled out of Release), where a
-#                     Release daemon logs once that the key is ignored. Default off: the hook runs
-#                     on every throw, caught or not.
+#        Description: Log exceptions at the moment they are thrown (AppDomain.FirstChanceException),
+#                     before any handler sees them, at Debug level. The log is deduplicated per
+#                     exception type and throw site, rate limited and capped, so a hot throw site
+#                     cannot flood it; it is not a complete record of every throw. A development aid
+#                     for finding swallowed exceptions; it is honoured only by a Debug build of the
+#                     Kernel (the hook is compiled out of Release), where a Release daemon logs once
+#                     that the key is ignored. Default off: the hook runs on every throw, caught or
+#                     not.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4717,7 +4782,9 @@ Economy.AuctionDepositMin = 0
 #        Description: The three houses: Alliance 2, Horde 6, neutral (Blackwater/goblin) 7, with the
 #                     deposit and cut percentages of the build-5875 client AuctionHouse.dbc
 #                     (m_depositRate, m_consignmentRate), which vmangos reads: 5/5 for both faction
-#                     houses, 25/15 for the neutral one.
+#                     houses, 25/15 for the neutral one. A configured entry is added after these
+#                     three, whatever its index, and the last entry of an id is the one in force, so
+#                     an entry with id 2, 6 or 7 replaces that house's percentages.
 #        Type: List<AuctionHouseEntry>
 #        Default: 0:CutPercent = 5; 0:DepositPercent = 5; 0:Id = 2; 1:CutPercent = 5;
 #                 1:DepositPercent = 5; 1:Id = 6; 2:CutPercent = 15; 2:DepositPercent = 25; 2:Id = 7
@@ -4806,6 +4873,21 @@ Economy.CodExpireDays = 3
 #        Docs: docs/reference/configuration.md#economy
 #
 Economy.ExpirySweepSeconds = 60
+
+#
+#    Economy.GmCrossTeamTrade
+#        Description: Whether a game master with GM mode on may start a trade with a player of the
+#                     other team although AllowCrossTeamTrade is off (default true). An ArcaneCore
+#                     extension: vmangos HandleInitiateTradeOpcode (TradeHandler.cpp:634-636) has no
+#                     such rule, so false is the retail behaviour. Only the initiator is tested; a
+#                     player who invites a game master of the other team is refused.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#economy
+#
+Economy.GmCrossTeamTrade = true
 
 #
 #    Economy.LetterItemEntry
@@ -5150,6 +5232,20 @@ GameObjects.MiningAmountRate = 1
 #        Docs: docs/reference/configuration.md#gameobjects
 #
 GameObjects.MiningNextRate = 1
+
+#
+#    GameObjects.PersistRespawn
+#        Description: GameObjects:PersistRespawn: despawned database spawns keep their respawn time
+#                     across restarts (vmangos gameobject_respawn, characters database; the
+#                     counterpart of Creatures:Respawn:Persist). False keeps the timers in memory
+#                     only, as before the table existed.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gameobjects
+#
+GameObjects.PersistRespawn = true
 
 #
 #    GameObjects.RandomRespawn
@@ -8667,6 +8763,25 @@ SpellRules.ImmunityEnforcement = true
 SpellRules.MagicHitFloorPercent = 22
 
 #
+#    SpellRules.MagnetRequiresAttackable
+#        Description: Whether a spell redirected by a Grounding-style magnet (SPELL_MAGNET) skips a
+#                     magnet the caster may not attack (an unflagged or friendly owner's totem).
+#                     Default false: vmangos SpellCaster::SelectMagnetTarget (SpellCaster.cpp:31-68)
+#                     has no hostility test on the magnet and mangoszero (Unit.cpp:3590 via
+#                     CheckTarget) refuses only unattackable-flagged targets, with no reaction test.
+#                     true reproduces mangos-classic Unit::SelectMagnetTarget (Unit.cpp:6924,
+#                     CanAttack(magnet)). Reference-core evidence only, no retail capture. Applies
+#                     to non-triggered casts and client-named triggered blocks, creature casters
+#                     included.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.MagnetRequiresAttackable = false
+
+#
 #    SpellRules.ResistTablePath
 #        Description: Path of a file with vmangos' partial-resist outcome table (ResistOutcomeTable:
 #                     31 rows of resist100,resist75,resist50,resist25,resist0,chanceResist,
@@ -9234,7 +9349,8 @@ Warden.ChunkSize = 500
 #                     only a confirmed mismatch of an actionable evidence class (integrity, threat
 #                     signature) takes the scan's action. A confirmed unreadable result or a
 #                     corroboration (Lua, scripted) mismatch is logged once, and a failed timing
-#                     scan is logged. Default false: a failed scan acts at once.
+#                     scan is logged. A check with id 0 is never confirmed and never acts: its
+#                     failure is logged. Default false: a failed scan acts at once.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -9494,6 +9610,36 @@ World.CharactersPerRealm = 10
 World.CommandTimeBudgetMs = 5
 
 #
+#    World.CompressMovementCount
+#        Description: Movement packets a session must be sent within 10 seconds before further
+#                     movement relays to it are batched into SMSG_COMPRESSED_MOVES (vmangos
+#                     Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300,
+#                     here 0 = never, which is what retail did). Packets over 253 bytes are never
+#                     batched. A batch is flushed on the session's next tick.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.CompressMovementCount = 0
+
+#
+#    World.ExpectedSpamRecords
+#        Description: Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the
+#                     day; '@' separates records, empty (the default) sends no packet.
+#                     mangos-classic sends the rows of its spam_records table the same way
+#                     (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the
+#                     client's use of them is unconfirmed.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.ExpectedSpamRecords = ""
+
+#
 #    World.GmLevelInWhoList
 #        Description: Highest staff level ordinary players see in /who (vmangos/cmangos
 #                     GM.InWhoList.Level default SEC_ADMINISTRATOR, i.e. every account). Values:
@@ -9517,6 +9663,24 @@ World.GmLevelInWhoList = Administrator
 #        Docs: docs/reference/configuration.md#world
 #
 World.InstantLogoutSecurity = Moderator
+
+#
+#    World.LimitPlayTime
+#        Description: The consecutive-play-time limit (vmangos LimitPlayTime,
+#                     CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that
+#                     is not retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3
+#                     h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its
+#                     character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and
+#                     NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h
+#                     (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420).
+#                     ArcaneCore.Game.Entities.PlayTimeLimit.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.LimitPlayTime = false
 
 #
 #    World.ListenRangeSay
@@ -12472,6 +12636,156 @@ World.GmCommands.FirstLoginTools.ShowToolGuide = true
 # World.GmCommands.FirstLoginTools.SpellIds.0 =
 
 #----------------------------------------------------------------------------
+# World:GmTicketAssistant
+#----------------------------------------------------------------------------
+
+#
+#    World.GmTicketAssistant.ActionCooldownSeconds
+#        Description: Seconds before the same account gets another world-changing fix (unstuck,
+#                     revive, combat reset) (0..86400).
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.ActionCooldownSeconds = 600
+
+#
+#    World.GmTicketAssistant.AssistantName
+#        Description: The name the assistant's answers carry ("&lt;GM&gt;Name answers your ticket:
+#                     ...") and the actor of its audit lines.
+#        Type: string
+#        Default: "Ticketbot"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.AssistantName = "Ticketbot"
+
+#
+#    World.GmTicketAssistant.DeadSeconds
+#        Description: Seconds since the assistant first saw the author dead (not since the release)
+#                     before a ghost is resurrected at a graveyard (0..86400).
+#        Type: int
+#        Default: 180
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.DeadSeconds = 180
+
+#
+#    World.GmTicketAssistant.Enabled
+#        Description: Whether the assistant handles tickets at all (default false). .ticket
+#                     assistant on|off changes it until restart.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.Enabled = false
+
+#
+#    World.GmTicketAssistant.FaqPath
+#        Description: Path of the FAQ text the assistant answers questions from; empty uses the
+#                     starter FAQ built into the server.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.FaqPath = ""
+
+#
+#    World.GmTicketAssistant.MaxActionsPerAccountPerDay
+#        Description: The most automatic actions (fixes and answers) per account per UTC day
+#                     (0..1000); past it the ticket is left to a human. 0 allows none.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number from 0 to 1000
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.MaxActionsPerAccountPerDay = 3
+
+#
+#    World.GmTicketAssistant.ModelTimeoutSeconds
+#        Description: Seconds a model call (classification or answer) may take before the keyword
+#                     fallback or an escalation takes over (1..120).
+#        Type: int
+#        Default: 15
+#        Allowed: a whole number from 1 to 120
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.ModelTimeoutSeconds = 15
+
+#
+#    World.GmTicketAssistant.PollSeconds
+#        Description: Seconds between passes over the open tickets (1..86400).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number from 1 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.PollSeconds = 30
+
+#
+#    World.GmTicketAssistant.SignalWindowSeconds
+#        Description: Seconds an anomaly signal (under the terrain floor, client-reported) is shown
+#                     to the GM with a ticket; it never triggers an action (1..86400).
+#        Type: int
+#        Default: 900
+#        Allowed: a whole number from 1 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.SignalWindowSeconds = 900
+
+#
+#    World.GmTicketAssistant.StaleCombatSeconds
+#        Description: Seconds the author must have been "in combat" with nobody fighting them before
+#                     the combat state is cleared (0..86400).
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.StaleCombatSeconds = 30
+
+#
+#    World.GmTicketAssistant.StuckIdleSeconds
+#        Description: Seconds the author must not have moved before "stuck" counts as evidence
+#                     (0..86400).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number from 0 to 86400
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.StuckIdleSeconds = 120
+
+#
+#    World.GmTicketAssistant.UseModel
+#        Description: Whether a model may classify tickets and draft answers (when the playerbot
+#                     chat stack has a model provider). Default false: keywords only, no answers
+#                     drafted, so no model-written text reaches a player and an FAQ ticket is left
+#                     to a GM. On, the model picks the category and also writes the player-visible
+#                     answer that closes a Question ticket.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmticketassistant
+#
+World.GmTicketAssistant.UseModel = false
+
+#----------------------------------------------------------------------------
 # World:Guild
 #----------------------------------------------------------------------------
 
@@ -12620,6 +12934,18 @@ World.Honor.DishonorableKills = true
 #        Docs: docs/reference/configuration.md#worldhonor
 #
 World.Honor.Enabled = true
+
+#
+#    World.Honor.GmCrossFactionInspect
+#        Description: A game master with GM mode on may inspect the other faction (default true, an
+#                     ArcaneCore extension; false is the vmangos behaviour).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldhonor
+#
+World.Honor.GmCrossFactionInspect = true
 
 #
 #    World.Honor.MaintenanceDay
@@ -13073,15 +13399,16 @@ World.PacketHeuristics.DevOpcode = true
 
 #
 #    World.PacketHeuristics.Enabled
-#        Description: Run the checks at all. Default false: with it off a packet costs one volatile
-#                     read and no per-session state exists.
+#        Description: Run the checks at all. Default true: a server with no section runs them; false
+#                     switches them off, and then a packet costs one volatile read and no
+#                     per-session state exists.
 #        Type: bool
-#        Default: false
+#        Default: true
 #        Allowed: true | false
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
-World.PacketHeuristics.Enabled = false
+World.PacketHeuristics.Enabled = true
 
 #
 #    World.PacketHeuristics.ExemptBots
@@ -13106,6 +13433,28 @@ World.PacketHeuristics.ExemptBots = true
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
 World.PacketHeuristics.ExemptStaff = true
+
+#
+#    World.PacketHeuristics.FeedAntiCheatScore
+#        Description: Feed the reports of real players' traffic into the AntiCheat score (so they
+#                     count towards the escalation ladder of AntiCheat:Action). Default false:
+#                     findings stay report-only, as before. Only shape, dev-opcode and malformed are
+#                     fed, the checks whose only honest cause is a modified client. Every other
+#                     check has an honest false-positive risk in the check table of
+#                     docs/areas/packet-heuristics.md (latency, a crowded city's query burst, a late
+#                     acknowledgement, a legitimately repeated payload) and never scores. Bot, staff
+#                     and tool-injected traffic never scores; one score per reported finding, so the
+#                     report throttle (one per session, check and opcode per ReportIntervalSeconds)
+#                     also limits the score. With the default weight and decay a single finding
+#                     peaks at 3 and is gone in 1.5 s: raise ScoreWeight (30 reaches the default GM
+#                     alert in one finding) for it to escalate.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.FeedAntiCheatScore = false
 
 #
 #    World.PacketHeuristics.IncapacitatedAction
@@ -13221,6 +13570,21 @@ World.PacketHeuristics.ReplayWindowMs = 1000
 #        Docs: docs/reference/configuration.md#worldpacketheuristics
 #
 World.PacketHeuristics.ReportIntervalSeconds = 10
+
+#
+#    World.PacketHeuristics.ScoreWeight
+#        Description: The weight each fed finding adds to the AntiCheat score. The score decays by
+#                     AntiCheat:DecayPerSecond (2) and escalates at 30, 60 and 120 by default, so
+#                     the default weight 3 only escalates when about ten distinct check and opcode
+#                     pairs report within a second or two; use 30 or more for a single finding to
+#                     alert. 1-100, default 3.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldpacketheuristics
+#
+World.PacketHeuristics.ScoreWeight = 3
 
 #
 #    World.PacketHeuristics.Shape
@@ -14049,6 +14413,42 @@ World.Playerbots.Chat.InProcess.TopK = 40
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Chat.InProcess.TopP = 0.9
+
+#
+#    World.Playerbots.Chat.Lfg.AnswerRepeatSeconds
+#        Description: Seconds within which a player's repeated "inv" to the same waiting group is
+#                     applied without a second reply (10..600).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number from 10 to 600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.AnswerRepeatSeconds = 60
+
+#
+#    World.Playerbots.Chat.Lfg.Enabled
+#        Description: Let any bot of a waiting group answer a whisper "inv" for the group, not only
+#                     the bot that posted the call (on by default). Off: only the whisper to the
+#                     poster itself is answered.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.Enabled = true
+
+#
+#    World.Playerbots.Chat.Lfg.MaxTrackedVolunteers
+#        Description: The most (player, group) answers remembered for AnswerRepeatSeconds (8..512).
+#        Type: int
+#        Default: 64
+#        Allowed: a whole number from 8 to 512
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Lfg.MaxTrackedVolunteers = 64
 
 #
 #    World.Playerbots.Chat.MaxDailySpendUsd
@@ -14903,6 +15303,111 @@ World.Playerbots.Chat.Voice.Trade = true
 World.Playerbots.Chat.Voice.TradeRepeatSeconds = 900
 
 #
+#    World.Playerbots.City.BindInCapital
+#        Description: Make the capital's inn the bot's home on a trip (off by default). Players bind
+#                     where they quest, and a bot with its bind in a capital that is stranded or
+#                     stalled is sent there with nothing of its level to fight; this makes the
+#                     hearthstone lead to the capital's services instead. Only an innkeeper that
+#                     likes the bot is used, and a bind already in the capital stays.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.BindInCapital = false
+
+#
+#    World.Playerbots.City.Enabled
+#        Description: Let bots make capital city trips (on by default). Off: no trip starts; one
+#                     under way is dropped.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.Enabled = true
+
+#
+#    World.Playerbots.City.MaxStartsPerMinute
+#        Description: The most trips that start for one capital in a minute (1..600), so a restart
+#                     or a level-up wave does not send the whole population at once.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number from 1 to 600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxStartsPerMinute = 4
+
+#
+#    World.Playerbots.City.MaxTripYards
+#        Description: The longest straight line in yards (above 0, at most 100000) from the bot to a
+#                     capital on its own map for a trip to start by walking. A capital beyond it is
+#                     skipped. A bot whose home bind is in a capital may use its hearthstone for any
+#                     distance.
+#        Type: float
+#        Default: 6000
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxTripYards = 6000
+
+#
+#    World.Playerbots.City.MaxTripsPerCapital
+#        Description: The most trips under way to one capital at the same moment (1..1000). A bot
+#                     whose trigger fires while the city is at the cap waits and asks again.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number from 1 to 1000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MaxTripsPerCapital = 6
+
+#
+#    World.Playerbots.City.MinGoldForAuctionTrip
+#        Description: The copper a bot must hold (0..2000000000) for the gold to send it to the
+#                     auction house on its own: with this much money and something to buy or sell
+#                     there, and no trip for half a VisitIntervalMinutes, it leaves. 50000 is five
+#                     gold.
+#        Type: int
+#        Default: 50000
+#        Allowed: a whole number from 0 to 2000000000
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MinGoldForAuctionTrip = 50000
+
+#
+#    World.Playerbots.City.MinLevel
+#        Description: The level a bot must have reached (1..60) before it makes trips of its own
+#                     accord.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number from 1 to 60
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.MinLevel = 10
+
+#
+#    World.Playerbots.City.VisitIntervalMinutes
+#        Description: Minutes between two capital city trips of one bot when nothing else sent it
+#                     (1..10080). Each bot's own interval is this value plus or minus a quarter,
+#                     fixed by its guid, and the first one is a random point of the first interval,
+#                     so the bots do not all leave at once.
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number from 1 to 10080
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.City.VisitIntervalMinutes = 90
+
+#
 #    World.Playerbots.ClientFidelity
 #        Description: How much real-client packet work a bot's session does
 #                     (PlayerbotClientFidelity.Lean by default). Lean: a bot has no client, so the
@@ -15113,12 +15618,12 @@ World.Playerbots.CornerTurnLeadYards = 2.5
 #    World.Playerbots.CutRegionMaxPolygons
 #        Description: The most polygons a cut region (a navigation region that is the only way
 #                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
-#                     hold and still be exempt from shared world pins and from refusing a bot's
-#                     pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the
-#                     whole region, so a larger bound lets more real snags go unshared. The default,
-#                     5000, keeps the Timbermaw Hold tunnel's largest measured region inside it,
-#                     with about 2% headroom; re-check after regenerating mmaps. Bots only; no
-#                     retail behaviour depends on it.
+#                     hold and still need a crowd of bots for a shared world pin and be exempt from
+#                     refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The
+#                     exemption judges the whole region, so a larger bound makes more real snags
+#                     wait for that crowd. The default, 5000, keeps the Timbermaw Hold tunnel's
+#                     largest measured region inside it, with about 2% headroom; re-check after
+#                     regenerating mmaps. Bots only; no retail behaviour depends on it.
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number from 0 to 1000000 (0: no region is exempt)
@@ -15131,8 +15636,9 @@ World.Playerbots.CutRegionMaxPolygons = 5000
 #    World.Playerbots.DropGreyQuests
 #        Description: Abandon an incomplete quest that has turned grey for the bot (quest level at
 #                     or below its vmangos grey level) and hunt no objective of it (on by default).
-#                     A completed grey quest is still turned in. Off: grey quests are kept until a
-#                     full log sheds one. Live: .reload config.
+#                     A completed grey quest is still turned in, and a class-restricted or
+#                     chain-step quest is kept and still offered whatever its colour. Off: grey
+#                     quests are kept until a full log sheds one. Live: .reload config.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -15401,6 +15907,22 @@ World.Playerbots.Economy.MoneyGoal = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MoneyGoalCopperPerLevel = 500
+
+#
+#    World.Playerbots.Economy.UpgradeSlotSearches
+#        Description: How many of the bot's weakest equipment slots a visit searches the auction
+#                     house for (0..8), one page each, by inventory type; the main hand, and the off
+#                     hand and ranged slots of weapon builds, share one weapon page, while a shield,
+#                     a held-in-off-hand item or a relic is searched by its own inventory type; no
+#                     off-hand search while a two-hander is worn. 0 searches the two class-wide
+#                     pages (weapons, then armor) of earlier versions.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number from 0 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.UpgradeSlotSearches = 3
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes
@@ -20346,6 +20868,83 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.StallSeconds = 120
+
+#
+#    World.Playerbots.Summon.AnnounceToPlayers
+#        Description: Whether the warlock tells the party who it is summoning and to click the
+#                     portal, when the member is a real player (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.AnnounceToPlayers = true
+
+#
+#    World.Playerbots.Summon.Enabled
+#        Description: Let bots summon far group members with Ritual of Summoning and accept summons
+#                     from their group (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.Enabled = true
+
+#
+#    World.Playerbots.Summon.FarYards
+#        Description: A member on another map, or farther than this many yards from the summoner, is
+#                     summoned (50..5000).
+#        Type: float
+#        Default: 200
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.FarYards = 200
+
+#
+#    World.Playerbots.Summon.HelperYards
+#        Description: The farthest from the portal, in yards, a group bot walks over to help with a
+#                     ritual (5..100).
+#        Type: float
+#        Default: 40
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.HelperYards = 40
+
+#
+#    World.Playerbots.Summon.MeetingStones
+#        Description: Non-vanilla: let two group members at a dungeon meeting stone summon a third
+#                     (TBC summoning-stone rules; strict 1.12 meeting stones only queue for the
+#                     dungeon). On the server it lets CMSG_GAMEOBJ_USE on a meeting stone, with a
+#                     group member selected, send that member a summon request, for a real player as
+#                     well as for a bot (no reagent, no cooldown); the bots use it when no warlock
+#                     can summon. Off by default (retail: the use of a stone is refused); on is a
+#                     deliberate deviation.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.MeetingStones = false
+
+#
+#    World.Playerbots.Summon.RetrySeconds
+#        Description: Seconds before the same member is summoned again after an attempt that was
+#                     declined, ignored or failed (10..3600).
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number from 10 to 3600
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Summon.RetrySeconds = 120
 
 #
 #    World.Playerbots.SyncPathQueryMaxMs

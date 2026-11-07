@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Creatures.Scripts;
 /// (eastern_kingdoms/westfall.cpp) on script path 467. On accept he says his start line to the player and runs the path (instant respawn).
 /// At 65 he slows to a walk with his progress line; at 94 he gives his last line and the group credit and despawns after 3 s. On aggro he
 /// says one of three lines three times in four.
-/// Difference from SD2: his defensive react state is not modelled.
+/// Like the script's constructor his react state is defensive (he never aggroes on sight, only fights back); it is put back at every respawn.
 /// </summary>
 public sealed class DefiasTraitorAI(Creature creature) : EscortAI(creature), IQuestScriptAI
 {
@@ -22,6 +22,14 @@ public sealed class DefiasTraitorAI(Creature creature) : EscortAI(creature), IQu
             System?.SayText(Me, SayStart, player);
             Start(run: true, instantRespawn: true, player: player, questId: questId, waypointPath: EscortPath);
         }
+    }
+
+    protected override void JustSpawned() => Me.ReactState = CreatureReactState.Defensive;
+
+    protected override void JustRespawned()
+    {
+        base.JustRespawned();
+        Me.ReactState = CreatureReactState.Defensive;
     }
 
     protected override void WaypointReached(uint pointId)

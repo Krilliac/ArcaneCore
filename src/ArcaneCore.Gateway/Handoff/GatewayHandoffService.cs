@@ -296,7 +296,7 @@ internal sealed class GatewayHandoffSlot : IDisposable
 /// <list type="bullet">
 /// <item><description>Opt-in: it exists only with <c>Gateway:Handoff:Enabled</c>; the journal is the characters database, read validate-only.</description></item>
 /// <item><description>One handoff or recovery per slot at a time; a handoff past its epoch takeover is not cancellable and a host stop waits for it (bounded by the stop token).</description></item>
-/// <item><description><c>Resume</c>, <c>ReleaseWriterLock</c> and <c>Retire</c> are best effort when the worker's link is gone (a dead process holds no lock and cannot resume); the journal, not the verb, decides.</description></item>
+/// <item><description><c>Resume</c>, <c>RetireWrites</c>, <c>ReleaseWriterLock</c> and <c>Retire</c> are best effort when the worker's link is gone (a dead process holds no lock and cannot resume); the journal, not the verb, decides.</description></item>
 /// </list>
 /// Thread-safe. Disposing stops it like <see cref="StopAsync"/>.
 /// </summary>
@@ -347,6 +347,11 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
     /// <summary>How long a best-effort verb (and a promotion) waits for the link of its worker to come up before it gives up (default 5 s).</summary>
     internal TimeSpan LinkGrace { get; set; } = TimeSpan.FromSeconds(5);
+
+    private int _linkGraceTimeouts;
+
+    /// <summary>How many full <see cref="LinkGrace"/> waits ran out without the link coming up (a diagnostic; tests assert a dead source costs one, not one per verb).</summary>
+    internal int LinkGraceTimeouts => Volatile.Read(ref _linkGraceTimeouts);
 
     /// <summary>The slots that can be handed off (those with a standby configured), by <c>Gateway:Workers:N:NodeId</c>.</summary>
     public IReadOnlyCollection<string> Slots => _slots.Keys;
@@ -501,7 +506,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
                 ?? throw new WorldHandoffUnavailableException($"the standby link of slot '{slotNode}' is down");
             Guid id = handoffId is { } chosen && chosen != Guid.Empty ? chosen : Guid.NewGuid();
             RemoteWorldHandoffSource described = await RemoteWorldHandoffSource.ConnectAsync(active, id, token).ConfigureAwait(false);
-            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, token).ConfigureAwait(false);
+            RemoteWorldHandoffTarget target = await RemoteWorldHandoffTarget.ConnectAsync(standby, id, slot.SlotNode, token).ConfigureAwait(false);
             if (!slot.IsActive(described.WorkerId.Value) || !slot.IsStandby(target.WorkerId.Value))
             {
                 throw new InvalidOperationException(
@@ -637,10 +642,13 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         return slot.IsStandby(workerName) ? slot.Standby.Channel : null;
     }
 
-    /// <summary>Waits up to <see cref="LinkGrace"/> for the channel of <paramref name="workerName"/>; null when it did not come up.</summary>
-    internal async Task<LinkControlChannel?> WaitForChannelAsync(GatewayHandoffSlot slot, string workerName, CancellationToken cancellationToken)
+    /// <summary>
+    /// Waits up to <see cref="LinkGrace"/> for the channel of <paramref name="workerName"/>; null when it did not come up. With <paramref name="linkKnownDown"/> (an earlier wait of the same
+    /// handoff already found the link down) it only looks once, so a dead source costs one grace period, not one per verb.
+    /// </summary>
+    internal async Task<LinkControlChannel?> WaitForChannelAsync(GatewayHandoffSlot slot, string workerName, CancellationToken cancellationToken, bool linkKnownDown = false)
     {
-        DateTime deadline = DateTime.UtcNow + LinkGrace;
+        DateTime deadline = linkKnownDown ? DateTime.MinValue : DateTime.UtcNow + LinkGrace;
         while (true)
         {
             if (ChannelOf(slot, workerName) is { } channel)
@@ -650,6 +658,11 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
             if (DateTime.UtcNow >= deadline)
             {
+                if (!linkKnownDown)
+                {
+                    Interlocked.Increment(ref _linkGraceTimeouts);
+                }
+
                 return null;
             }
 
@@ -680,8 +693,8 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         }
 
         // The active process is the one that does not report Standby (design 3.3; Describe's flag is the one WorkerStatus carries). A retired source is not a Standby either, so after a gateway restart
-        // that followed a completed handoff, or a crash between MarkRerouted and Retire, both processes can report "not standby": the promoted standby is then the one that never held a source world
-        // (a standby has no handoff source, so its HeldSourceToken is always null) while the retired source still names the ownership it held.
+        // that followed a completed handoff, or a crash between MarkRerouted and Retire, both processes can report "not standby": the promoted standby is then the one that holds the higher
+        // ownership epoch (it attaches a draining source of its own at promotion, so both report a token) while the retired source still names the older ownership it held.
         ActiveSide side = ChooseActive(a, b);
         if (side == ActiveSide.Worker)
         {
@@ -726,14 +739,24 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
         if (!worker.IsStandby && !standby.IsStandby)
         {
-            if (worker.HeldSourceToken is not null && standby.HeldSourceToken is null)
+            // Both name a held ownership once the promoted standby has its draining source attached, so the ownership generation decides: the process that took the scope over holds the higher
+            // epoch, the retired source (or a source that was never retired after a crash) the lower one. When only one side holds a token (a promoted standby whose source reports none), the
+            // side holding one is the former source.
+            CharacterOwnershipToken? w = worker.HeldSourceToken;
+            CharacterOwnershipToken? s = standby.HeldSourceToken;
+            if (w is not null && s is null)
             {
                 return ActiveSide.Standby;
             }
 
-            if (worker.HeldSourceToken is null && standby.HeldSourceToken is not null)
+            if (w is null && s is not null)
             {
                 return ActiveSide.Worker;
+            }
+
+            if (w is not null && s is not null && w.Epoch != s.Epoch)
+            {
+                return w.Epoch > s.Epoch ? ActiveSide.Worker : ActiveSide.Standby;
             }
         }
 
@@ -773,6 +796,8 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
         public Task RetireAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.Retire, cancellationToken);
 
+        public Task RetireWritesAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.RetireWrites, cancellationToken);
+
         public Task ReleaseWriterLockAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.ReleaseWriterLock, cancellationToken);
 
         private async Task RequiredAsync(ControlVerb verb, CancellationToken cancellationToken)
@@ -782,10 +807,15 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
             await channel.CallAsync(ControlKind.WorldHandoff, handoffId, verb, ControlNoArguments.Instance, cancellationToken).ConfigureAwait(false);
         }
 
+        // Set once a best-effort wait found the link down: the next verbs of this handoff look once instead of waiting the grace again (RetireWrites then ReleaseWriterLock then Retire
+        // would otherwise cost 3 x LinkGrace for a dead source). A link that came back in between is still found by that one look.
+        private volatile bool _linkDown;
+
         // A dead process holds no writer lock, cannot be resumed and need not be retired: the journal, not this verb, is the truth. A worker that answers refusing still throws.
         private async Task BestEffortAsync(ControlVerb verb, CancellationToken cancellationToken)
         {
-            LinkControlChannel? channel = await owner.WaitForChannelAsync(slot, workerId.Value, CancellationToken.None).ConfigureAwait(false);
+            LinkControlChannel? channel = await owner.WaitForChannelAsync(slot, workerId.Value, CancellationToken.None, _linkDown).ConfigureAwait(false);
+            _linkDown = channel is null;
             if (channel is null)
             {
                 owner.Logger.LogWarning("Handoff {Handoff}: no control link to worker {Worker}; {Verb} skipped (best effort)", handoffId, workerId.Value, verb);
@@ -821,7 +851,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         public async Task PromoteAsync(CharacterOwnershipToken takenOver, CancellationToken cancellationToken)
         {
             LinkControlChannel channel = await RequireAsync(cancellationToken).ConfigureAwait(false);
-            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlTokenArguments(takenOver), cancellationToken).ConfigureAwait(false);
+            await channel.CallAsync(ControlKind.WorldHandoff, record.HandoffId, ControlVerb.Promote, new ControlPromoteArguments(takenOver, slot.SlotNode), cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<LinkControlChannel> RequireAsync(CancellationToken cancellationToken) =>

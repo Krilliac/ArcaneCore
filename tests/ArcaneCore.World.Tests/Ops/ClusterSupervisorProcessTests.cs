@@ -42,7 +42,9 @@ public sealed class ClusterSupervisorProcessTests : IDisposable
         "--Logging:ArcaneCore:File:Enabled=true", "--Logging:ArcaneCore:File:Path=" + Path.Combine(_dir, "world.log"),
         "--Cluster:Supervisor:Enabled=true",
         "--Cluster:Supervisor:MinClusterProcesses=1",
-        "--Cluster:Supervisor:MinFreeMemoryReserveMb=999999999",
+        "--Cluster:Supervisor:MinFreeMemoryReserveMb=0",
+        "--Cluster:Supervisor:MaxTotalAllocatedMemoryMb=1", // the probe needs 2 MiB: refused for the allocation ceiling, which waiting cannot cure (a memory-reserve refusal waits instead)
+        "--Cluster:Supervisor:Processes:probe:RequiredMemoryMb=2",
         "--Cluster:Supervisor:Processes:probe:Role=combined", // one combined world on SQLite is allowed (a worker child on SQLite is refused by ClusterSqliteConfigChecks)
         "--Cluster:Supervisor:Processes:probe:ExecutablePath=dotnet",
         "--Cluster:Supervisor:Processes:probe:Arguments=--version",
@@ -56,6 +58,19 @@ public sealed class ClusterSupervisorProcessTests : IDisposable
 
         Assert.Equal(ExitCodes.Failure, result.ExitCode);
         Assert.Contains("MinClusterProcesses", result.Output, StringComparison.Ordinal);
+        Assert.False(File.Exists(CharactersDb), "the characters database was created: the world started");
+        Assert.False(File.Exists(Path.Combine(_dir, "auth.db")), "the auth database was created: the world started");
+    }
+
+    [Fact]
+    public async Task World_SupervisorMode_WithAReserveAboveTheHostsMemory_ExitsWithAnError_InsteadOfWaitingForever_AndTouchesNoDatabase()
+    {
+        ConfProcess.Result result = await ConfProcess.RunWorldAsync(SupervisorArgs(
+            "--Cluster:Supervisor:MinFreeMemoryReserveMb=999999999",
+            "--Cluster:Supervisor:MaxTotalAllocatedMemoryMb=1000000")); // later arguments win: only the reserve refuses now
+
+        Assert.Equal(ExitCodes.Failure, result.ExitCode);
+        Assert.Contains("MinFreeMemoryReserveMb", result.Output, StringComparison.Ordinal);
         Assert.False(File.Exists(CharactersDb), "the characters database was created: the world started");
         Assert.False(File.Exists(Path.Combine(_dir, "auth.db")), "the auth database was created: the world started");
     }

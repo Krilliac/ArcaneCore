@@ -126,6 +126,8 @@ public sealed class ReputationCombatFeature(IServiceProvider services, ILogger<R
     {
         try
         {
+            // Group writes run under the serial gate: a read from a map thread outside it takes the gate (and is reported).
+            using ArcaneCore.Game.Maps.WorldRuntime.SerialScope gate = a.Map?.World is { } world ? world.EnterSerialForRead("GroupManager") : default;
             return services.GetService<SocialFeature>()?.Context.Groups.AreInSameGroup(a.Guid, b.Guid) ?? false;
         }
         catch (InvalidOperationException)

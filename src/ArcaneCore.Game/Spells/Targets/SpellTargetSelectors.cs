@@ -70,12 +70,13 @@ public static class SpellTargetSelectors
     /// has no radius index, "we don't want to use max spell range here"); the unit list falls back to
     /// the caster. The collision services constrain the path, model hit and ground height.
     /// </summary>
-    internal static List<(Unit Unit, float Multiplier)> SelectCasterRelativeLocation(SpellCast cast, SpellEffectInfo effect, float angleOffset)
+    internal static List<(Unit Unit, float Multiplier)> SelectCasterRelativeLocation(SpellSystem system, SpellCast cast, SpellEffectInfo effect, float angleOffset)
     {
         if (!cast.Targets.HasDest)
         {
             Unit caster = cast.Caster;
-            float radius = effect.Radius;
+            // Spell.cpp:2059-2062: SetTargetMap applies SPELLMOD_RADIUS to the effect radius before this case; radius 0 (no radius index) stays 0.
+            float radius = effect.Radius > 0 ? system.ModFloat(caster, cast.Spell, SpellModOp.Radius, effect.Radius) : effect.Radius;
             float angle = caster.Orientation + angleOffset;
             cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
             var point = SummonPosition.Resolve(caster, radius, angle);

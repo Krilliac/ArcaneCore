@@ -2,6 +2,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Casters;
+using ArcaneCore.Game.Tests.SpellMods;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -28,16 +30,20 @@ public sealed class ScriptLocationTargetTests
 
     private sealed class Rig : IDisposable
     {
-        public Rig(params SpellStore.ScriptTarget[] rows)
+        public Rig(params SpellStore.ScriptTarget[] rows) : this([FireworkSpell()], rows)
         {
-            Kit = new SpellTestKit([FireworkSpell()]);
+        }
+
+        public Rig(SpellInfo[] spells, SpellStore.ScriptTarget[] rows)
+        {
+            Kit = new SpellTestKit(spells);
             var map = Kit.World.GetMap(0);
             Objects = new GameObjectMapSystem(map, new GameObjectContent(
                 [GameObjectTestKit.GoTemplate(Firecracker, GameObjectType.Goober), GameObjectTestKit.GoTemplate(Fountain, GameObjectType.Goober)],
                 [], [], [], []));
             map.AddUpdater(Objects);
             (Caster, Session) = Kit.AddPlayer(1);
-            Kit.System.Store = new SpellStore([FireworkSpell()], [], [], rows);
+            Kit.System.Store = new SpellStore(spells, [], [], rows);
         }
 
         public SpellTestKit Kit { get; }
@@ -62,7 +68,137 @@ public sealed class ScriptLocationTargetTests
             return hits;
         }
 
+        /// <summary>The destination block of the only SMSG_SPELL_GO (the target block after the hit and miss lists).</summary>
+        public SpellCastTargets SpellGoTargets()
+        {
+            var reader = new PacketReader(Assert.Single(Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload);
+            reader.ReadPackedGuid();
+            reader.ReadPackedGuid();
+            reader.ReadUInt32();
+            reader.ReadUInt16();
+            int hits = reader.ReadByte();
+            for (int i = 0; i < hits; i++) reader.ReadUInt64();
+            Assert.Equal(0, (int)reader.ReadByte());
+            return SpellCastTargets.Read(ref reader);
+        }
+
         public void Dispose() => Kit.Dispose();
+    }
+
+    private const uint BeyondTheUnit = 990701;
+    private const uint RadiusMod = 990702;
+    private const uint DamageVsGuards = 990703;
+    private const uint Guard = 16398;
+
+    /// <summary>Target A names the caster, target B is 46: the shape of 12699 (A unit / B 46; 22393 is A38 / B46, see the 38 tests below), range 30.</summary>
+    private static SpellInfo UnitWithLocation() => Spell(BeyondTheUnit, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitCaster, targetB: (SpellImplicitTarget)Target46))
+        with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+
+    [Fact]
+    public void TargetB46BesideAUnit_SetsTheDestination_AndStillHitsTheUnitOfTargetA()
+    {
+        using var rig = new Rig([UnitWithLocation()], [new SpellStore.ScriptTarget(BeyondTheUnit, 0, Firecracker, 0)]);
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(BeyondTheUnit));
+
+        Assert.Contains(rig.Caster.Guid.Value, rig.SpellGoHits());
+        SpellCastTargets targets = rig.SpellGoTargets();
+        Assert.True(targets.HasDest);
+        Assert.Equal(listed.X, targets.Dest.X, 0.01f);
+        Assert.Equal(listed.Y, targets.Dest.Y, 0.01f);
+    }
+
+    [Fact]
+    public void TargetB46BesideAUnit_WithNoListedObjectInRange_FailsTheCast()
+    {
+        // vmangos SetTargetMap runs CheckScriptTargeting for target B too (Spell.cpp:2848-2860): nothing listed in range fails the cast.
+        using var rig = new Rig([UnitWithLocation()], [new SpellStore.ScriptTarget(BeyondTheUnit, 0, Firecracker, 0)]);
+        rig.Spawn(Fountain, 3);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast(BeyondTheUnit));
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void ANonTriggeredCast_WithNoListedObjectInRange_FailsWithBadTargets()
+    {
+        using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
+        rig.Spawn(Firecracker, 60);
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, Firework);
+
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.CastSpell(rig.Caster, Firework, SpellCastTargets.ForSelf(), triggered: false));
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void ARadiusMod_ExtendsTheSearchOfTarget46()
+    {
+        // SPELLMOD_RADIUS applies to the search radius (vmangos Spell.cpp:2059-2062): range 10 * 1.25 reaches an object 12 yards away.
+        SpellInfo spell = ModTestKit.InFamily(FireworkSpell() with { Range = new SpellRange(0, 10) });
+        using var rig = new Rig([spell, ModTestKit.Pct(RadiusMod, SpellModOp.Radius, 25)], [new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0)]);
+        CasterSpellModules.Register(rig.Kit.System, null);
+        GameObject listed = rig.Spawn(Firecracker, 12);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast());
+
+        rig.Kit.System.LearnSpell(rig.Caster, RadiusMod);
+        rig.Kit.Advance(100);
+        rig.Session.Clear();
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+        Assert.Contains(listed.Guid.Value, rig.SpellGoHits());
+    }
+
+    /// <summary>Damage vs. Guards shape (28364): range index 1 (self only, no radius), effect A6 / B46, a row for the guard entry; guards stand at the given distances.</summary>
+    private static (PetTestKit Kit, Player Caster, FakeSession Session, Creature[] Guards) DamageVsGuardsRig(params float[] distances)
+    {
+        SpellInfo spell = Spell(DamageVsGuards, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy, targetB: (SpellImplicitTarget)Target46))
+            with { StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        var kit = new PetTestKit([spell], extraTemplates: [CreatureTestKit.Template(Guard, b => b.Faction = 14)]);
+        kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [], [new SpellStore.ScriptTarget(DamageVsGuards, 1, Guard, 0)]);
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        Creature[] guards = distances.Select(d => kit.Creatures.SummonForInstance(Guard, d, 0f, caster.Z, 0f)!).ToArray();
+        return (kit, caster, session, guards);
+    }
+
+    [Fact]
+    public void ARadiusZeroSpell_Like28364_FindsAListedCreatureInMeleeReach()
+    {
+        // vmangos searches with NearestUnitFitConditionInCombatRangeCheck (combat distance, Spell.cpp:539), so a guard in melee reach is found at radius 0.
+        (PetTestKit kit, Player caster, FakeSession session, Creature[] guards) = DamageVsGuardsRig(1f);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.CastOk, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(guards[0].Guid)));
+
+            var reader = new PacketReader(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload);
+            reader.ReadPackedGuid();
+            reader.ReadPackedGuid();
+            reader.ReadUInt32();
+            reader.ReadUInt16();
+            int hits = reader.ReadByte();
+            for (int i = 0; i < hits; i++) reader.ReadUInt64();
+            Assert.Equal(0, (int)reader.ReadByte());
+            SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+            Assert.True(targets.HasDest);
+            Assert.Equal(guards[0].X, targets.Dest.X, 0.01f);
+            Assert.Equal(guards[0].Y, targets.Dest.Y, 0.01f);
+        }
+    }
+
+    [Fact]
+    public void ARadiusZeroSpell_Like28364_FailsWhenNoListedCreatureIsInMeleeReach()
+    {
+        // Only a guard 15 yards away: neither the explicit target nor the nearest-unit search (combat reach, radius 0) reaches it.
+        (PetTestKit kit, Player caster, FakeSession session, Creature[] guards) = DamageVsGuardsRig(15f);
+        using (kit)
+        {
+            Assert.Equal(SpellCastResult.DontReport, kit.Cast(caster, DamageVsGuards, SpellCastTargets.ForUnit(guards[0].Guid)));
+
+            Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+        }
     }
 
     [Fact]
@@ -82,14 +218,15 @@ public sealed class ScriptLocationTargetTests
     }
 
     [Fact]
-    public void AListedObjectBeyondTheSpellRange_IsNotSelected()
+    public void AListedObjectBeyondTheSpellRange_FailsTheCastWithoutReporting_AndNothingIsSent()
     {
+        // vmangos Spell::CheckScriptTargeting (Spell.cpp:603-616): rows but nothing in range fails the cast (DONT_REPORT when triggered).
         using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
-        GameObject outside = rig.Spawn(Firecracker, 60);
+        rig.Spawn(Firecracker, 60);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast());
 
-        Assert.DoesNotContain(outside.Guid.Value, rig.SpellGoHits());
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
     }
 
     [Fact]
@@ -141,6 +278,341 @@ public sealed class ScriptLocationTargetTests
 
         Assert.True(ran);
         Assert.DoesNotContain(near.Guid.Value, rig.SpellGoHits());
+    }
+
+    private const uint NearCaster38 = 990710;
+    private const uint CastTimeLocation = 990711;
+    private const uint LocationThenList = 990712;
+    private const uint UnitThenLocation = 990713;
+    private const int ListedByB = 99;
+
+    private static SpellInfo NearCasterSpell() => Spell(NearCaster38, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitScriptNearCaster))
+        with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+
+    [Fact]
+    public void Target38WithRows_AndNothingInRange_FailsTheCast_NoMatterTheKindOfRow()
+    {
+        // vmangos Spell::CheckScriptTargeting is the same search for 38 and 46; nothing found fails the cast (Spell.cpp:603-616).
+        using var rig = new Rig([NearCasterSpell()], [new SpellStore.ScriptTarget(NearCaster38, 0, Firecracker, 0)]);
+        rig.Spawn(Firecracker, 60);
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, NearCaster38);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast(NearCaster38));
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.System.CastSpell(rig.Caster, NearCaster38, SpellCastTargets.ForSelf(), triggered: false));
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void Target38_FindingAListedObject_IsNotRefused_AndGivesNoUnitTarget()
+    {
+        // A game object found for 38 is neither refused nor a unit target (Spell.cpp:566-585 adds only units for 38).
+        using var rig = new Rig([NearCasterSpell()], [new SpellStore.ScriptTarget(NearCaster38, 0, Firecracker, 0)]);
+        rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearCaster38));
+
+        Assert.DoesNotContain(rig.Caster.Guid.Value, rig.SpellGoHits());
+    }
+
+    [Fact]
+    public void AListedObjectFoundByTarget46_IsTheObjectTargetOfADummyEffect_NotTheCasterAsItsUnit()
+    {
+        // vmangos only calls AddGOTarget for a found object (Spell.cpp:590-591); the caster is no unit target of a Dummy effect.
+        using var rig = new Rig(new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0));
+        GameObject listed = rig.Spawn(Firecracker, 4);
+        int runs = 0;
+        (float X, float Y, float Z)? destSeen = null;
+        rig.Kit.System.RegisterEffect(SpellEffectName.Dummy, context =>
+        {
+            runs++;
+            destSeen = context.Cast.Targets.Dest;
+        });
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+
+        ulong[] hits = rig.SpellGoHits();
+        Assert.Contains(listed.Guid.Value, hits);
+        Assert.DoesNotContain(rig.Caster.Guid.Value, hits);
+        // The effect still runs for the found object (vmangos HandleEffects(nullptr, nullptr, go, i), Spell.cpp:1841-1843) and sees the object as its destination.
+        Assert.Equal(1, runs);
+        Assert.Equal(listed.X, destSeen!.Value.X, 0.01f);
+        Assert.Equal(listed.Y, destSeen.Value.Y, 0.01f);
+    }
+
+    [Fact]
+    public void ACastTimeSpell_IsNotRefusedAtPrepare_ButWhenTheCastGoesOff()
+    {
+        // vmangos refuses a missing script target only from SetTargetMap when the cast goes off, so an object that arrives during the cast bar counts.
+        SpellInfo spell = FireworkSpell(CastTimeLocation) with { CastTime = new SpellCastTime(2000, 0, 0) };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(CastTimeLocation, 0, Firecracker, 0)]);
+        rig.Kit.System.SpellBatchWindowMs = 0;
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, CastTimeLocation);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, CastTimeLocation, SpellCastTargets.ForSelf(), triggered: false));
+        GameObject listed = rig.Spawn(Firecracker, 4);
+        rig.Kit.Advance(2100);
+
+        Assert.Contains(listed.Guid.Value, rig.SpellGoHits());
+    }
+
+    [Fact]
+    public void ACastTimeSpell_WithNothingInRangeWhenItGoesOff_SendsNoGo()
+    {
+        SpellInfo spell = FireworkSpell(CastTimeLocation) with { CastTime = new SpellCastTime(2000, 0, 0) };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(CastTimeLocation, 0, Firecracker, 0)]);
+        rig.Kit.System.SpellBatchWindowMs = 0;
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, CastTimeLocation);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, CastTimeLocation, SpellCastTargets.ForSelf(), triggered: false));
+        rig.Kit.Advance(2100);
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+        // The client is told: SMSG_CAST_RESULT with the failure status and BAD_TARGETS (vmangos Spell::cast sends the result when SetTargetMap fails).
+        byte[] failure = Assert.Single(Packets(rig.Session, WorldOpcode.SmsgCastResult), p => p.Length > 5 && p[4] == (byte)SpellCastResultStatus.Failure);
+        Assert.Equal((byte)SpellCastResult.BadTargets, failure[5]);
+    }
+
+    [Fact]
+    public void TargetA46BesideAUnitTargetB_RunsTheSelectorOfBToo()
+    {
+        // 17616 is A46 / B16: vmangos FillTargetMap runs SetTargetMap for target B as well (Spell.cpp:381-392).
+        SpellInfo spell = Spell(LocationThenList, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46, targetB: (SpellImplicitTarget)ListedByB))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(LocationThenList, 0, Firecracker, 0)]);
+        bool ran = false;
+        rig.Kit.System.RegisterSpellTargetSelector(LocationThenList, (SpellImplicitTarget)ListedByB, (_, cast, _, _) =>
+        {
+            ran = true;
+            return [(cast.Caster, 1f)];
+        });
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationThenList));
+
+        Assert.True(ran);
+        ulong[] hits = rig.SpellGoHits();
+        Assert.Contains(listed.Guid.Value, hits);
+        Assert.Contains(rig.Caster.Guid.Value, hits);
+        Assert.True(rig.SpellGoTargets().HasDest);
+    }
+
+    [Fact]
+    public void TargetA46BesideAUnitTargetB_ANonCasterUnitOfB_IsRolledAndListedAsAHit_WhileTheCarrierIsNot()
+    {
+        SpellInfo spell = Spell(LocationThenList, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46, targetB: (SpellImplicitTarget)ListedByB))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(LocationThenList, 0, Firecracker, 0)]);
+        // Every spell hits: the hit roll (CombatRules.RollHit) must not decide whether the second player is listed as a hit.
+        rig.Kit.System.CombatRules = SpellCombatRules.Neutral;
+        (Player other, _) = rig.Kit.AddPlayer(2, 1f, 0f);
+        rig.Kit.System.RegisterSpellTargetSelector(LocationThenList, (SpellImplicitTarget)ListedByB, (_, _, _, _) => [(other, 1f)]);
+        GameObject listed = rig.Spawn(Firecracker, 4);
+
+        for (int run = 0; run < 25; run++)
+        {
+            rig.Session.Clear();
+            Assert.Equal(SpellCastResult.CastOk, rig.Cast(LocationThenList));
+
+            ulong[] hits = rig.SpellGoHits();
+            Assert.Contains(listed.Guid.Value, hits);
+            Assert.Contains(other.Guid.Value, hits);
+            Assert.DoesNotContain(rig.Caster.Guid.Value, hits); // the carrier of the found object is no hit
+        }
+    }
+
+    [Fact]
+    public void TargetB46BesideATarget38_WithNoRows_FailsWithBadTargets()
+    {
+        // 16074 and 28392 are A38 / B46 with no spell_script_target row: vmangos refuses on the B 46 too (Spell.cpp:446-460).
+        SpellInfo spell = Spell(UnitThenLocation, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitScriptNearCaster, targetB: (SpellImplicitTarget)Target46))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], []);
+        rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.BadTargets, rig.Cast(UnitThenLocation));
+    }
+
+    [Fact]
+    public void Target38WithNoRows_AndNoSelector_FailsWithBadTargets_EvenWhenTriggered()
+    {
+        // vmangos CheckScriptTargeting returns BAD_TARGETS at once when the spell has no spell_script_target row (Spell.cpp:449-460), triggered or not.
+        using var rig = new Rig([NearCasterSpell()], []);
+        rig.Spawn(Firecracker, 4);
+
+        Assert.Equal(SpellCastResult.BadTargets, rig.Cast(NearCaster38));
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
+    public void Target38WithNoRows_ButASpellSpecificSelector_IsNotRefused()
+    {
+        using var rig = new Rig([NearCasterSpell()], []);
+        rig.Kit.System.RegisterSpellTargetSelector(NearCaster38, SpellImplicitTarget.UnitScriptNearCaster, (_, cast, _, _) => [(cast.Caster, 1f)]);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(NearCaster38));
+    }
+
+    [Fact]
+    public void TheScriptTargetRefusal_WaitsForTheRangeCheck_OfAnExplicitDestination()
+    {
+        // vmangos reaches CheckScriptTargeting from SetTargetMap, after CheckCast's range check: a destination that drifted out of range during the
+        // cast bar answers OUT_OF_RANGE at the landing, not BAD_TARGETS, even though the spell (target 46) has no rows. At prepare the destination
+        // is in range, so only the landing check (strict: false) can tell the two orders apart.
+        SpellInfo spell = FireworkSpell(CastTimeLocation) with { CastTime = new SpellCastTime(2000, 0, 0) };
+        using var rig = new Rig([spell], []);
+        rig.Kit.System.SpellBatchWindowMs = 0;
+        rig.Kit.Spellbook.LearnSpell(rig.Caster, CastTimeLocation);
+        var near = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = (rig.Caster.X + 20f, rig.Caster.Y, rig.Caster.Z) };
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, CastTimeLocation, near, triggered: false));
+        rig.Caster.X -= 80f;
+        rig.Kit.Advance(2100);
+
+        Assert.DoesNotContain(rig.Session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo);
+        byte[] failure = Assert.Single(Packets(rig.Session, WorldOpcode.SmsgCastResult), p => p.Length > 5 && p[4] == (byte)SpellCastResultStatus.Failure);
+        Assert.Equal((byte)SpellCastResult.OutOfRange, failure[5]);
+    }
+
+    [Fact]
+    public void AGameObjectFoundByTarget46_CarriesOnlyDummyLikeEffects_NotDamage_AndIsNoUnitHit()
+    {
+        // vmangos runs HandleEffects(nullptr, nullptr, go): a damage effect has no unit and does nothing, the dummy effect runs, and no unit-hit
+        // bookkeeping (SpellHit observers, immunity) happens for the caster standing in as the carrier.
+        const uint DummyAndDamage = 990721;
+        SpellInfo spell = Spell(DummyAndDamage, Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)Target46),
+                Effect(SpellEffectName.SchoolDamage, 100, (SpellImplicitTarget)Target46))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        using var rig = new Rig([spell], [new SpellStore.ScriptTarget(DummyAndDamage, 0, Firecracker, 0)]);
+        rig.Spawn(Firecracker, 4);
+        int dummyRuns = 0;
+        rig.Kit.System.RegisterEffect(SpellEffectName.Dummy, _ => dummyRuns++);
+        List<Unit> unitHits = [];
+        rig.Kit.System.SpellHit += (_, target, hitSpell) =>
+        {
+            if (hitSpell.Id == DummyAndDamage) unitHits.Add(target);
+        };
+        uint healthBefore = rig.Caster.Health;
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(DummyAndDamage));
+
+        Assert.Equal(1, dummyRuns);
+        Assert.Equal(healthBefore, rig.Caster.Health);
+        Assert.Empty(unitHits);
+    }
+
+    [Fact]
+    public void AnAnywhereRange_GetsItsRadiusModFirst_AndTheCapAfterwards()
+    {
+        // vmangos applies SPELLMOD_RADIUS to the radius before CheckScriptTargeting (Spell.cpp:2059-2062); the 200 yd bound of an "anywhere" range (a
+        // mangos-classic rule) comes after the mod, so +25% never extends it to 250 yd.
+        SpellInfo spell = ModTestKit.InFamily(FireworkSpell() with { Range = new SpellRange(0, 50_000) });
+        using var rig = new Rig([spell, ModTestKit.Pct(RadiusMod, SpellModOp.Radius, 25)], [new SpellStore.ScriptTarget(Firework, 0, Firecracker, 0)]);
+        CasterSpellModules.Register(rig.Kit.System, null);
+        rig.Kit.System.LearnSpell(rig.Caster, RadiusMod);
+        rig.Kit.Advance(100);
+        rig.Spawn(Firecracker, 220);
+
+        Assert.Equal(SpellCastResult.DontReport, rig.Cast());
+
+        GameObject inside = rig.Spawn(Firecracker, 190);
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast());
+        Assert.Contains(inside.Guid.Value, rig.SpellGoHits());
+    }
+
+    private const uint TestItemEntry = 90_511;
+    private const uint DominionOfSoul = 990714;
+
+    /// <summary>A kit with a listed friendly creature for <paramref name="spell"/> (row type 1), a player holding a real inventory item, and the creature 5 yd away.</summary>
+    private static (PetTestKit Kit, Player Caster, FakeSession Session, Creature Listed, ArcaneCore.Game.Items.Item Item) ItemRig(SpellInfo spell)
+    {
+        const uint proxy = 16398;
+        var kit = new PetTestKit([spell], extraTemplates: [CreatureTestKit.Template(proxy, b => b.Faction = 35)]);
+        kit.Spells.System.Store = new SpellStore(kit.Spells.Store.All, [], [], [new SpellStore.ScriptTarget(spell.Id, 1, proxy, 0)]);
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        caster.Inventory.Templates = new ArcaneCore.Game.Items.ItemTemplateStore(
+            [new ArcaneCore.Kernel.Items.ItemTemplate { Entry = TestItemEntry, Class = 15, Name = "Script Target Test Item", DisplayId = 1 }], []);
+        caster.Inventory.GuidAllocator = new ArcaneCore.Game.Items.ItemGuidAllocator();
+        caster.Inventory.Load([]);
+        Creature listed = kit.Creatures.SummonForInstance(proxy, 5f, 0f, caster.Z, 0f)!;
+        ArcaneCore.Game.Items.Item item = ItemTestData.Give(caster.Inventory, TestItemEntry);
+        return (kit, caster, session, listed, item);
+    }
+
+    [Fact]
+    public void Target38CastFromAnItem_MakesTheFoundUnitTheExplicitTarget()
+    {
+        // vmangos CheckScriptTargeting: "if (m_CastItem) m_targets.setUnitTarget(unitScriptTarget)" for target 38 (Spell.cpp:567-568; Toss Fuel 28806).
+        (PetTestKit kit, Player caster, FakeSession session, Creature listed, ArcaneCore.Game.Items.Item item) = ItemRig(NearCasterSpell());
+        using PetTestKit owned = kit;
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastCustomSpell(caster, NearCaster38, SpellCastTargets.ForSelf(), null, castItem: item));
+
+        var reader = new PacketReader(Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgSpellGo).Payload);
+        reader.ReadPackedGuid();
+        reader.ReadPackedGuid();
+        reader.ReadUInt32();
+        reader.ReadUInt16();
+        int hits = reader.ReadByte();
+        for (int i = 0; i < hits; i++) reader.ReadUInt64();
+        Assert.Equal(0, (int)reader.ReadByte());
+        SpellCastTargets targets = SpellCastTargets.Read(ref reader);
+        Assert.NotEqual(0, (int)(targets.Mask & SpellCastTargetFlags.Unit));
+        Assert.Equal(listed.Guid, targets.Unit);
+    }
+
+    [Fact]
+    public void Target38CastFromAnItem_GivesTheFoundUnitToTheLaterEffects_AsInDominionOfSoul()
+    {
+        // Dominion of Soul 16053 (Spell.dbc 5875): effects 0-2 are A38 / A1 (the caster) / A6 (TARGET_UNIT_ENEMY). vmangos reads
+        // m_targets.getUnitTarget() for effect 2 after effect 0 set the found unit (Spell.cpp:567-568, 2227-2235), so effect 2 lands on the
+        // found unit and effect 1 stays on the caster.
+        SpellInfo spell = Spell(DominionOfSoul,
+                Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitScriptNearCaster),
+                Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitCaster),
+                Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy))
+            with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };
+        (PetTestKit kit, Player caster, _, Creature listed, ArcaneCore.Game.Items.Item item) = ItemRig(spell);
+        using PetTestKit owned = kit;
+        var targetsByEffect = new Dictionary<int, List<Unit>>();
+        kit.Spells.System.RegisterEffect(SpellEffectName.Dummy, context =>
+        {
+            if (!targetsByEffect.TryGetValue(context.EffectIndex, out List<Unit>? list)) targetsByEffect[context.EffectIndex] = list = [];
+            list.Add(context.Target);
+        });
+
+        Assert.Equal(SpellCastResult.CastOk, kit.Spells.System.CastCustomSpell(caster, DominionOfSoul, SpellCastTargets.ForSelf(), null, castItem: item));
+
+        Assert.Same(listed, Assert.Single(targetsByEffect[0]));
+        Assert.Same(caster, Assert.Single(targetsByEffect[1]));
+        Assert.Same(listed, Assert.Single(targetsByEffect[2]));
+    }
+
+    [Fact]
+    public void ADeathOnlyDestinationSpell_AimedAtALivingTarget_IsBadTargets()
+    {
+        // vmangos CanTargetAliveState (SpellEntry.h:944-950): a death-only spell refuses a living explicit target, the other half of the dead-target test.
+        const uint DeathRelay = 990722;
+        SpellInfo relay = Spell(DeathRelay, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.LocationCasterTargetPosition)) with
+        {
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+            AttributesEx3 = 0x00001000, // SPELL_ATTR_EX3_ONLY_ON_GHOSTS: IsDeathOnly
+        };
+        using var kit = new SpellTestKit(relay);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player foe, _) = kit.AddHostilePlayer(2, 3);
+        kit.Spellbook.Teach(caster, DeathRelay);
+        kit.System.Relations = CombatHookRelations.Instance;
+
+        Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, DeathRelay, SpellCastTargets.ForUnit(foe.Guid)));
+
+        foe.Health = 0;
+        Assert.False(foe.IsAlive);
+
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, DeathRelay, SpellCastTargets.ForUnit(foe.Guid)));
     }
 
     [Theory]

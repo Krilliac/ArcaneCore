@@ -42,7 +42,15 @@ public sealed class SupervisorWorkerRestartRequester(
         return Task.FromResult(true);
     }
 
-    /// <summary>The realm id of the supervised child named <paramref name="worker"/> (its <see cref="SupervisedProcessConfig.Name"/> or its key), or 0 when none matches (ordinal, like the handoff driver and the placement table: <see cref="WorkerNodeNames"/>).</summary>
+    /// <summary>
+    /// The realm id of the supervised child named <paramref name="worker"/> (its <see cref="SupervisedProcessConfig.Name"/> or its key), or 0 when none matches (ordinal, like the handoff driver and the placement table: <see cref="WorkerNodeNames"/>).
+    /// <para>
+    /// <paramref name="options"/> is this process's own copy of <c>Cluster:Supervisor</c>, fixed at its start: it names the child the id was configured on, not the child that holds the id now.
+    /// The supervisor moves the id to the slot's promoted world at each blue/green swap (<c>ClusterHostSupervisor.MoveRealmRoleUnderLock</c>) and forwards a lifecycle line by its own current
+    /// table, so after a swap a restart requested by this lookup reaches the world that serves the realm, which is the world <c>.cluster restart</c> has just handed off, and not the (standby)
+    /// child whose name was typed.
+    /// </para>
+    /// </summary>
     public static int RealmIdOf(ClusterSupervisorOptions options, WorkerNodeId worker)
     {
         ArgumentNullException.ThrowIfNull(options);

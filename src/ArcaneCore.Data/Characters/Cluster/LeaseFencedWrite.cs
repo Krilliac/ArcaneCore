@@ -131,8 +131,11 @@ public sealed class RealmLeaseNotHeldException(string scope)
 /// lease nobody has taken over yet is still the only one that could be written under, and the keeper's timer handles that case.
 /// <para>Two guards, by site: a write that verifies the lease row at commit uses <see cref="RequireFence"/> (the commit fence decides a node the keeper marked lost locally); a write with no commit check uses
 /// <see cref="RequireHeld"/>, which also refuses after a local loss. Known residual, accepted: a WAL stall that loses renewals (they commit with synchronous_commit off, see <see cref="EfRealmAuthorityLeaseStore"/>),
-/// plus a PostgreSQL crash, plus a concurrent start of another node can let that node take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
+/// plus a PostgreSQL crash can let another node (any live map worker: its renewal tick takes a lapsed instances, maintenance or worldstate lease, not only a node at start) take the lease over while this one still believes it holds it; until its next renewal fails, a store behind
 /// <see cref="RequireHeld"/> (no commit check) can still write briefly after the takeover. Stores behind <see cref="RequireFence"/> are refused at commit.</para>
+/// <para>Clock skew: a lease's expiry is written from its holder's clock and judged by the next acquirer's clock, so nodes whose clocks differ by more than roughly TTL minus the renewal interval (20 s with the 30 s and 10 s defaults,
+/// less the jitter of a renewal round) can see a healthy holder's lease as lapsed and take it over. The fencing token moves on and a deposed holder's writes behind <see cref="RequireFence"/> are refused at commit, then the keeper stops it. A store behind <see cref="RequireHeld"/> (worldstate, playerbot ledgers, honor first-start state: the scopes taken over at run time)
+/// has no commit check and keeps writing until its next renewal is refused, up to one renewal interval, alongside the new holder: a further window on top of the WAL-stall route. So a skew takeover is an outage of the holder and, for those stores, a brief double-writer window, so cluster nodes must run NTP (see docs/ops/realm-liveness.md, section 8).</para>
 /// <para>Stateless; every call works on the caller's context, which stays on the caller's logical call (a context is single-threaded).</para>
 /// </summary>
 public static class LeaseFencedWrite
@@ -182,17 +185,22 @@ public static class LeaseFencedWrite
     /// refuses only a node that has no fence for <paramref name="scope"/> (never taken, held by another node, given back). A keeper that marked the lease lost locally (a slow renewal round, a transient store failure)
     /// keeps the old token in <see cref="IRealmLeaseFenceSource.FenceFor"/>, so the commit fence decides: it refuses the write exactly when another node really took the lease over and accepts it while the token is still the
     /// row's. Never call it from a write that has no commit-time check: there nothing would stop a deposed node.
+    /// <para>Returns the fence it read (null only when there is no <paramref name="source"/>). A write passes that same fence to the commit check (<see cref="EnsureHeldAsync"/>, or the overloads of
+    /// <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/> and
+    /// <see cref="SaveChangesAsync(CharacterDbContext, RealmLeaseFence?, CancellationToken)"/>) instead of asking the source a second time: the keeper forgets its fences in
+    /// <c>ReleaseAllAsync</c>, so a second read after a release would be null and the write would go unchecked.</para>
     /// </summary>
-    public static void RequireFence(IRealmLeaseFenceSource? source, string scope)
+    public static RealmLeaseFence? RequireFence(IRealmLeaseFenceSource? source, string scope)
     {
         ArgumentException.ThrowIfNullOrEmpty(scope);
-        if (source is not null && source.FenceFor(scope) is null)
-            throw new RealmLeaseNotHeldException(scope);
+        if (source is null)
+            return null;
+        return source.FenceFor(scope) ?? throw new RealmLeaseNotHeldException(scope);
     }
 
     /// <summary>
     /// Whether this process may make the realm-singleton writes of <paramref name="scope"/>: always with no <paramref name="source"/> (nothing is clustered), otherwise only while the source
-    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder or a node that lost the lease (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/> (or <see cref="RequireFence"/> when they verify the lease row at commit).
+    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). <see cref="RequireHeld"/> asks this for writes with no commit check; boot sweeps use <see cref="TryBeginSweep"/> (which also reads the fence once), and writes that verify the lease row at commit use <see cref="RequireFence"/>.
     /// </summary>
     public static bool IsHolder(IRealmLeaseFenceSource? source, string scope)
     {
@@ -201,44 +209,53 @@ public static class LeaseFencedWrite
     }
 
     /// <summary>
-    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a node that is not the holder is refused before anything is written, and the holder's write is verified against the lease row
-    /// in the transaction that makes it. The one call a realm-singleton store write makes.
+    /// The entry of a boot sweep (an orphan delete or a bind cleanup that only the scope's holder may run): true when this process may sweep, with the <paramref name="fence"/> to verify at commit.
+    /// With no <paramref name="source"/> (nothing is clustered) it is true and the fence is null (no check, as <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/> does
+    /// for a null fence). With a source it is true only while the source holds the scope AND gave a fence: the fence is read first and once, so a release between the holder check and the write can no longer leave
+    /// the sweep with a null fence and unchecked (the gap <see cref="IsHolder"/> followed by a second <see cref="IRealmLeaseFenceSource.FenceFor"/> read left); a node that is not the holder, or that
+    /// has no fence, skips quietly (false). The caller passes the returned fence to <see cref="EnsureHeldAsync"/> or the fence overloads of <see cref="InTransactionAsync{T}(CharacterDbContext, RealmLeaseFence?, Func{Task{T}}, CancellationToken)"/>.
     /// </summary>
-    public static Task<T> HeldWriteAsync<T>(
-        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
+    public static bool TryBeginSweep(IRealmLeaseFenceSource? source, string scope, out RealmLeaseFence? fence)
     {
-        RequireHeld(source, scope);
-        return InTransactionAsync(db, source, scope, write, cancellationToken);
-    }
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        if (source is null)
+        {
+            fence = null;
+            return true;
+        }
 
-    /// <summary>The same as the generic overload, for a write with no result.</summary>
-    public static Task HeldWriteAsync(
-        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task> write, CancellationToken cancellationToken)
-    {
-        RequireHeld(source, scope);
-        return InTransactionAsync(db, source, scope, write, cancellationToken);
+        fence = source.FenceFor(scope); // read before the holder check, and only once
+        return fence is not null && source.Holds(scope);
     }
 
     /// <summary>
     /// Runs <paramref name="write"/> after verifying the lease <paramref name="source"/> reports for <paramref name="scope"/>, in one transaction (joining the caller's when there is one,
     /// whose owner then commits). With no source, or a source that holds no lease for the scope, the delegate is simply awaited.
     /// </summary>
-    public static async Task<T> InTransactionAsync<T>(
+    public static Task<T> InTransactionAsync<T>(
         CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
+        => InTransactionAsync(db, source?.FenceFor(scope), write, cancellationToken);
+
+    /// <summary>
+    /// <see cref="InTransactionAsync{T}(CharacterDbContext, IRealmLeaseFenceSource?, string, Func{Task{T}}, CancellationToken)"/> under a fence the caller already read (<see cref="RequireFence"/> returns it), so the
+    /// lease is not looked up a second time. A null <paramref name="fence"/> means no check (no source, or a scope this node never held), as the overload without a fence does.
+    /// </summary>
+    public static async Task<T> InTransactionAsync<T>(
+        CharacterDbContext db, RealmLeaseFence? fence, Func<Task<T>> write, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(write);
-        if (source?.FenceFor(scope) is not { } fence)
+        if (fence is not { } held)
             return await write().ConfigureAwait(false);
 
         if (db.Database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null)
         {
-            await EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            await EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
             return await write().ConfigureAwait(false);
         }
 
         await using IDbContextTransaction transaction = await CharacterWriteFence.BeginTransactionAsync(db, null, cancellationToken).ConfigureAwait(false);
-        await EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+        await EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
         T result = await write().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
@@ -259,6 +276,10 @@ public static class LeaseFencedWrite
     /// <summary><c>SaveChangesAsync</c> under the verified transaction of <see cref="InTransactionAsync{T}"/>.</summary>
     public static Task SaveChangesAsync(CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, CancellationToken cancellationToken)
         => InTransactionAsync<int>(db, source, scope, () => db.SaveChangesAsync(cancellationToken), cancellationToken);
+
+    /// <summary><see cref="SaveChangesAsync(CharacterDbContext, IRealmLeaseFenceSource?, string, CancellationToken)"/> under a fence the caller already read (<see cref="RequireFence"/> returns it).</summary>
+    public static Task SaveChangesAsync(CharacterDbContext db, RealmLeaseFence? fence, CancellationToken cancellationToken)
+        => InTransactionAsync<int>(db, fence, () => db.SaveChangesAsync(cancellationToken), cancellationToken);
 
     private static async Task<bool> LockSharedAsync(CharacterDbContext db, RealmLeaseFence fence, string incarnation, CancellationToken cancellationToken)
     {

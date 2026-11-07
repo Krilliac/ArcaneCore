@@ -1,6 +1,6 @@
 // Perf HUD (hotkey P): frame rate and frame time percentiles, what the renderer reports, the live feed's rate and lag, and what the host
-// says. Every number is shown only when it exists: a renderer without texture work has no `textureBytes`, and the row is then absent rather
-// than a fake zero. The numbers are also posted to the host with `perf.report` every 2 s so the CLI and MCP (`perf.stats`) see what the UI sees.
+// says. Every number is shown only when it exists: a number the renderer does not report (an older renderer) is absent rather than a fake zero.
+// A renderer without texture work reports `textureBytes` as 0, which is a real zero and is shown. The numbers are also posted to the host with `perf.report` every 2 s so the CLI and MCP (`perf.stats`) see what the UI sees.
 
 import { Emitter, formatBytes, formatCount, formatNumber, h, isFiniteNumber } from '../util.js';
 

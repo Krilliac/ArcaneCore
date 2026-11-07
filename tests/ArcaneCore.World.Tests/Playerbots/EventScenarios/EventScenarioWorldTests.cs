@@ -46,7 +46,7 @@ public sealed class EventScenarioWorldTests
         GameEventTestStore.Current.Value = new GameEventContent([new GameEventRecord(EventId, 0, 60, 60, 0, 0, "Scenario test")], [], [], [], [], [], []);
         try
         {
-            return await GroupTestWorld.StartAsync([], null,
+            GroupTestWorld started = await GroupTestWorld.StartAsync([], null,
                 services: collection => collection.AddScoped<IGameEventPlayerbotStore>(_ => new FixtureStore(content)),
                 extraCreatures: [(
                     new CreatureTemplate
@@ -58,6 +58,11 @@ public sealed class EventScenarioWorldTests
                     {
                         Guid = Objective, Entry = Objective, MapId = 0, X = Origin.X + 70f, Y = Origin.Y, Z = Origin.Z, SpawnTimeMinSeconds = 600, SpawnTimeMaxSeconds = 600,
                     })]);
+            // The tables are read on the thread pool and applied by an action posted to the world thread, which a manual clock runs on a
+            // zero-diff tick. Wait for that in real time without advancing game time, so the game clock does not depend on pool timing.
+            PlayerbotEventScenarioFeature feature = started.World.Services.GetRequiredService<PlayerbotEventScenarioFeature>();
+            await feature.Loading.WaitAsync(TimeSpan.FromSeconds(30));
+            return started;
         }
         finally
         {

@@ -189,6 +189,9 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
     /// <summary>Writes every queued Silithyst state before shutdown completes.</summary>
     public Task StopAsync() => _silithystSaves?.FlushAsync() ?? Task.CompletedTask;
 
+    /// <summary>A handoff's flush: write what is queued and retained again; faults while a state write is still not durable (see <see cref="StateSaveQueue{TKey, TState}.RetryRetainedAsync"/>).</summary>
+    internal Task FlushStateWritesAsync() => _silithystSaves?.RetryRetainedAsync() ?? Task.CompletedTask;
+
     private void OnWorldTick(uint diffMs)
     {
         foreach (OutdoorPvPZoneScript script in _scripts.Values.ToArray())

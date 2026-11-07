@@ -16,6 +16,7 @@ internal static class ModTestKit
         Spell(id, Effect(SpellEffectName.ApplyAura, value, aura: aura, misc: (int)op) with { ItemType = (uint)mask }) with
         {
             Attributes = SpellAttributes.Passive,
+            SpellVisual = 0, // a talent passive has no visual, so learning it sends no SMSG_SPELL_GO
             Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,

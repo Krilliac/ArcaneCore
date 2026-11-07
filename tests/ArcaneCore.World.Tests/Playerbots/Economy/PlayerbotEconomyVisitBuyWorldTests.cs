@@ -13,6 +13,7 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Bots.Progression;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
@@ -183,6 +184,167 @@ public sealed class PlayerbotEconomyVisitBuyWorldTests : PlayerbotEconomyWorldTe
             ScenarioContext.ExpectEqual(0, (await MailsAsync(c, buyer)).Count, "the buyer's won letter was emptied and deleted");
             ScenarioContext.ExpectEqual(1, await ItemRowsAsync(c, small.Low), "the ring exists once");
             await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    // --- the visit searches by the weakest slots ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A visit of a buyer with <paramref name="entry"/> listed at <paramref name="buyout"/>. <paramref name="worn"/> replaces the worn-score seam,
+    /// <paramref name="profile"/> the profile seam and <paramref name="gain"/> the gain seam (each null leaves the production default in place).
+    /// Returns what the visit searched for, how many purchases it made and the buyer's money afterwards.
+    /// </summary>
+    private static async Task<((uint InventoryType, uint ItemClass)[] Searches, int Purchases, uint Money, bool StillListed)> VisitWithWornScoresAsync(
+        ScenarioContext c, string buyerName, Func<Player, byte, float>? worn, int upgradeSlotSearches, uint entry = SmallRing, uint buyout = RingBuyout,
+        PlayerbotUpgradeProfile? profile = null, Func<Player, ItemTemplate, float?>? gain = null)
+    {
+        EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+        ScenarioBot seller = await c.LoginAsync("Econseller");
+        ScenarioBot buyer = await c.LoginAsync(buyerName);
+        await c.GiveMoneyAsync(seller, 1000);
+        uint auction = await ListAsync(seller, await c.GiveItemAsync(seller, entry), Math.Min(RingStartBid, buyout - 1), buyout, 480);
+        await c.GiveMoneyAsync(buyer, 4000);
+
+        PlayerbotOptions options = Options(listChance: 0, maxListings: 5, budget: 0.25f);
+        options.Economy.UpgradeSlotSearches = upgradeSlotSearches;
+        Driver driver = await AttachAsync(c, buyer, options);
+        Func<Player, byte, float> previousWorn = PlayerbotGearScoreSeam.WornScore;
+        Func<Player, PlayerbotUpgradeProfile> previousProfile = PlayerbotGearScoreSeam.UpgradeProfile;
+        Func<Player, ItemTemplate, float?> previousGain = PlayerbotGearScoreSeam.UpgradeGain;
+        try
+        {
+            await c.ReadAsync(() =>
+            {
+                if (worn is not null) PlayerbotGearScoreSeam.WornScore = worn;
+                if (profile is not null) PlayerbotGearScoreSeam.UpgradeProfile = _ => profile;
+                if (gain is not null) PlayerbotGearScoreSeam.UpgradeGain = gain;
+                return true;
+            });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+        }
+        finally
+        {
+            await c.ReadAsync(() =>
+            {
+                PlayerbotGearScoreSeam.WornScore = previousWorn;
+                PlayerbotGearScoreSeam.UpgradeProfile = previousProfile;
+                PlayerbotGearScoreSeam.UpgradeGain = previousGain;
+                return true;
+            });
+        }
+
+        (uint, uint)[] searches = await c.ReadAsync(() => driver.Economy.UpgradeSearchesMade.Select(s => (s.InventoryType, s.ItemClass)).ToArray());
+        int purchases = await c.ReadAsync(() => driver.Economy.PurchasesMade);
+        uint money = await buyer.ReadAsync(p => p.Money);
+        bool stillListed = await c.ReadAsync(() => economy.FindAuction(auction) is not null);
+        await c.ReadAsync(() => driver.Active = false);
+        return (searches, purchases, money, stillListed);
+    }
+
+    [Fact]
+    public async Task Visit_SearchesTheWeakestSlot_AndBuysTheRingWhenTheFingersAreWeakest()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-finger", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econfinger",
+                (_, slot) => slot is InventorySlots.Finger1 or InventorySlots.Finger2 ? 0f : 100f, upgradeSlotSearches: 1);
+
+            ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Finger, PlayerbotEconomyWire.Any)]), "the one search is for the finger slot");
+            ScenarioContext.ExpectEqual(1, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, result.Money, "money after the buyout");
+            ScenarioContext.Expect(!result.StillListed, "the ring left the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_SearchesBySlot_SoAWeakHeadSlotDoesNotFindTheRing()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-head", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econhead",
+                (_, slot) => slot == InventorySlots.Head ? 0f : 100f, upgradeSlotSearches: 1);
+
+            // The legacy class-wide armor page would have found the ring; the head search does not.
+            ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Head, PlayerbotEconomyWire.Any)]), "the one search is for the head slot");
+            ScenarioContext.ExpectEqual(0, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u, result.Money, "money");
+            ScenarioContext.Expect(result.StillListed, "the auction is still in the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_WithSlotSearchesOff_UsesTheLegacyWeaponAndArmorPages_AndBuysTheRing()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-off", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econlegacy",
+                (_, slot) => slot == InventorySlots.Head ? 0f : 100f, upgradeSlotSearches: 0);
+
+            ScenarioContext.Expect(result.Searches.SequenceEqual(
+                [(PlayerbotEconomyWire.Any, (uint)ItemClass.Weapon), (PlayerbotEconomyWire.Any, (uint)ItemClass.Armor)]), "weapons, then armor");
+            ScenarioContext.ExpectEqual(1, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, result.Money, "money after the buyout");
+            ScenarioContext.Expect(!result.StillListed, "the ring left the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_AShieldTankWithAWeakOffHand_SearchesForShields_AndBuysTheShield()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-shield", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            // Item content loads on first use (a login); nothing has logged in yet, so load it before reading the template.
+            await c.Services.GetRequiredService<ArcaneCore.World.Items.ItemsFeature>().EnsureLoadedAsync();
+            uint cap = BuyCap(economy, Template(economy, ScenarioShield));
+            ScenarioContext.Expect(cap > 1, "the shield has a buy cap to list at");
+            var result = await VisitWithWornScoresAsync(c, "Econshield", (_, slot) => slot == InventorySlots.OffHand ? 0f : 100f, upgradeSlotSearches: 1,
+                entry: ScenarioShield, buyout: cap,
+                profile: new PlayerbotUpgradeProfile(PlayerbotWeaponStyle.OneHandShield, false, Class.Warrior),
+                // Only the scenario shield gets the fixed gain; every other item falls through to the production scorer, so a class
+                // running in parallel that reads the seam while this visit runs sees its normal values.
+                gain: (player, template) => template.Entry == ScenarioShield ? 10f : PlayerbotGearScoreSeam.DefaultUpgradeGain(player, template));
+
+            // A class-wide weapon page cannot return the shield (class Armor): the off-hand slot searches by its own inventory type.
+            ScenarioContext.Expect(result.Searches.SequenceEqual([((uint)InventoryType.Shield, PlayerbotEconomyWire.Any)]), "the one search is for shields");
+            ScenarioContext.ExpectEqual(1, result.Purchases, "purchases");
+            ScenarioContext.ExpectEqual(4000u - cap, result.Money, "money after the buyout");
+            ScenarioContext.Expect(!result.StillListed, "the shield left the house");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_WithTheProductionScorer_SearchesThreeDistinctSlotPages()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-default-scorer", async c =>
+        {
+            // No seam is replaced: DefaultWornScore and DefaultUpgradeProfile read the real bot, and the option keeps the default of 3.
+            var result = await VisitWithWornScoresAsync(c, "Econdefault", worn: null, upgradeSlotSearches: new PlayerbotEconomyOptions().UpgradeSlotSearches);
+
+            ScenarioContext.ExpectEqual(3, result.Searches.Length, "searches at the default option");
+            ScenarioContext.ExpectEqual(3, result.Searches.Distinct().Count(), "distinct searches");
+            ScenarioContext.Expect(!result.Searches.Contains((PlayerbotEconomyWire.Any, (uint)ItemClass.Armor)), "not the legacy armor page");
+        });
+    }
+
+    [Fact]
+    public async Task Visit_WithAThrowingWornScorer_RanksEverySlotZero_AndSearchesChestLegsHead()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-slot-search-faulty-scorer", async c =>
+        {
+            var result = await VisitWithWornScoresAsync(c, "Econfault", (_, _) => throw new InvalidOperationException("scorer fault"), upgradeSlotSearches: 3);
+
+            ScenarioContext.Expect(result.Searches.SequenceEqual(
+            [
+                ((uint)InventoryType.Chest, PlayerbotEconomyWire.Any), ((uint)InventoryType.Legs, PlayerbotEconomyWire.Any), ((uint)InventoryType.Head, PlayerbotEconomyWire.Any),
+            ]), "a faulty scorer reads as all slots empty: the tie order's first three");
         });
     }
 

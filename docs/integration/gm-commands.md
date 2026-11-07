@@ -162,11 +162,12 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
      save about to be deleted); the GM enters like any unbound visitor.
   7. A far teleport that the destination refuses goes back to where it started and, when that is refused too (for example the origin
      match ended while the player was in the loading screen), to the bind point. This is vmangos behaviour (`HandleReturnOnTeleportFail`,
-     `Player.cpp:2122-2135`: `if (!TeleportTo(oldLoc)) TeleportToHomebind();`). Deviations: (a) ArcaneCore kicks the player when the
-     bind point refuses it too, where vmangos ignores the result of `TeleportToHomebind`; (b) the way back to the origin is entered
-     directly, without a new loading screen, so a client that loaded another map id than the origin's sees the wrong map (the bind
-     point does get a fresh far teleport and loading screen when its map id differs from the one the client loaded). The entry point of
-     a leaving participant is forgotten once the teleport back to it, or the bind point teleport that replaced it, was accepted.
+     `Player.cpp:2122-2135`: `if (!TeleportTo(oldLoc)) TeleportToHomebind();`). Deviation: ArcaneCore kicks the player when the
+     bind point refuses it too, where vmangos ignores the result of `TeleportToHomebind`. Like vmangos, a way back (to the origin, then to
+     the bind point) that is on another map id than the one the client loaded is a new far teleport with its own loading screen
+     (`TeleportTo(oldLoc)` is a far teleport when the maps differ, `Player.cpp:2130`); one on the loaded map id is entered directly. Each
+     fallback is tried once, so there is no loop. The entry point of a leaving participant is forgotten once the teleport back to it, or
+     the bind point teleport that replaced it, was accepted.
   Checked against vmangos 0e3ff01 for the GM teleport commands: `.recall`, `.tele`, `.go xyz` and `.go creature/object` to a
   battleground map are refused for a player that is bound to no match, exactly as vmangos `Player::TeleportTo` refuses them
   (`Player.cpp:1861-1864`, "don't let enter battlegrounds without assigned battleground id ... don't let gm level > 1 either"); only
@@ -175,6 +176,7 @@ No schema version is consumed; nothing was added to Auth, Characters or World.
   the vmangos instance checks (`TeleportCommands.cpp:203-248`: only the leader may summon into an instance, no summon from instance
   to instance).
 * Movement cheats (`.cheat fly`, `.cheat fixedz`): cleared only once a far teleport completes on arrival (the worldport-ack path); kept by a far teleport that never sends SMSG_NEW_WORLD (refused, bailed out, stalled while scheduled), matching the client's continuous flight. An ArcaneCore behaviour: vmangos never clears these cheats on a teleport.
+* With GM mode on the caller also inspects and trades with players of the other faction (the inspect attackability test and the cross-team trade option are skipped for a game master). vmangos has no such rule (`HandleInspectOpcode` `MiscHandler.cpp:943-960`, `HandleInitiateTradeOpcode` `TradeHandler.cpp:634-636`), so this is an ArcaneCore extension limited to GM-mode characters; the group invite already exempts a game master in `GroupAuthority`, and a duel challenge has no faction rule. With GM mode off the faction rules are unchanged. Each exemption has an option that defaults to the behaviour above and restores the vmangos rule when false: `Economy:GmCrossTeamTrade` (trade) and `World:Honor:GmCrossFactionInspect` (inspect). The trade exemption tests only the initiator: a player who invites a game master of the other team is refused as WrongFaction. Tests: `GmCrossFactionAccessTests` and `TradeGmCrossFactionTests`. A game master does not enter a battleground by `.go xyz`, `.tele` or `.recall` (vmangos refuses, `Player.cpp:1861-1864`); `.goname` and `.namego` use the GM move record (no battleground-entry grant for an unbound game master: retail wins, `GmGoBattlegroundBindingTests.GoXyzAndADirectTeleport_ToABattlegroundMap_AreRefusedForAnUnboundGm_AsInVmangos`). A game master is never the target of a battleground buff trap (a deliberate deviation: it would otherwise take the buff and start the cooldown), and a game master still on the map of a deleted match is sent to its entry point or bind point before the map unloads (vmangos `Map::TeleportAllPlayersTo`).
 * `.server info` prints "Core revision: ArcaneCore ...", the session count from the session registry (players in the world
   when none is registered), a maximum sampled whenever a player enters the world, and 0 queued (no login queue).
 * `.server shutdown` exit codes: the process exit code is set to 0 (shutdown) or 2 (restart) before the host is stopped.
@@ -197,7 +199,7 @@ Skipped because the primitive belongs to another lane or is absent, or because i
 * gm-teleport: `.tele group|add|del`, `.groupgo`, `.go` creature/object/grid/graveyard/forward/up/relative/target,
   `.start`, `.unstuck` (need group, spawn-index, graveyard and spell primitives). `.go xyz` keeps its cmangos optional-Z form.
 * gm-lookup: `.lookup spell|itemset|quest|area|faction|skill|taxinode|event|pool|player`, `.list`.
-* gm-spells (`.aura`, `.nameaura`, retail `.cast` subcommands and untriggered casts, `.learn all`, `.cooldown list|clear`),
+* gm-spells (`.aura`, `.nameaura`, untriggered plain `.cast`, `.learn all`, `.cooldown list|clear`),
   gm-npc (`.npc`, `.respawn`; the non-retail `.creature` root is **kept**, so creature tests and tools still work),
   gm-gobject, gm-spawn-persistence, gm-quest, gm-combat-cheats (`.damage`, `.cheat`): not started; several need the spell,
   creature-AI and quest lanes' primitives.

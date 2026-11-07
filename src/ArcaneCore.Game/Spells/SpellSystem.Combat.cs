@@ -26,7 +26,7 @@ public sealed partial class SpellSystem
     /// <summary>Hit, crit, resist and armor rules for spell landing (default <see cref="SpellCombatRules.Neutral"/>; the world daemon installs <see cref="VanillaSpellCombatRules"/>).</summary>
     public ISpellCombatRules CombatRules { get; set; } = SpellCombatRules.Neutral;
 
-    /// <summary>Where SPELL_EFFECT_SUMMON lands (null until the creatures area installs one: the effect is a reported stub).</summary>
+    /// <summary>Where SPELL_EFFECT_SUMMON lands (installed by the pets feature through SummonService; null only in a bare spell system, where the effect is reported as unsupported).</summary>
     public ISpellSummonSink? Summons { get; set; }
 
     /// <summary>
@@ -85,7 +85,7 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(spell);
         // Capture this before the sink: a lethal queued spell can stop combat and clear Victim.
         bool queuedMeleeSpell = spell.IsNextMeleeSwing && ReferenceEquals(caster.Combat.Victim, target);
-        uint amount = CombatRules.ApplyArmor(caster, target, spell, damage);
+        uint amount = CombatRules.ApplyArmor(this, caster, target, spell, damage);
         // A game object never crits (SpellCaster::IsSpellCrit, SpellCaster.h:320): neither does the unit standing in for one.
         bool crit = allowCrit && amount > 0 && !IsGameObjectStandIn(caster) && CombatRules.RollCrit(this, caster, target, spell);
         if (crit)

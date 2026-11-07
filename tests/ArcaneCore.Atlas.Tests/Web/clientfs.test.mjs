@@ -1561,6 +1561,38 @@ test('the webkitdirectory fallback caches parsed results and asks again only whe
     }, { helpers: PAGE_HELPERS_NO_PICKER });
 });
 
+test('a textured terrain tile is not served from the cache without a live folder: the visitor is asked, not given checkered chunks', async () => {
+    await withBrowser(async ({ fx, harness, page }) => {
+        assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog');
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "ready")()', 'the folder to validate', 60_000);
+        const tile = fx.manifest.tiles[1];
+        const request = `cf.localTileProvider().tile('ref.terrain.tex', 0, ${tile.x}, ${tile.y}, new AbortController().signal).then((r) => r.state)`;
+        const first = await page.evaluate(request);
+        assert.equal(first, 'Ok', 'the first visit answers from the live folder and is cacheable');
+
+        // File objects die with the page: after a reload only the cache is left. A textured tile may not come out of it.
+        await reload(page, harness);
+        await page.evaluate('window.__changed = 0; cf.onClientFilesChanged(() => { window.__changed++; }); true');
+        // The answer is immediate: the request never waits on the visitor, so it cannot hold one of the page's tile-fetch slots.
+        const answer = await page.evaluate(`Promise.race([${request}, new Promise((resolve) => setTimeout(() => resolve('still pending'), 10000))])`);
+        assert.equal(answer, 'NotApplicable', 'no cached textured tile and no wait for the dialog');
+        await page.waitFor('!!document.querySelector(\'[data-clientfs="dialog"]\')', 'the dialog on the second visit', 15_000);
+        assert.equal(await page.evaluate('window.__changed'), 0, 'nothing changed while the dialog is open');
+
+        // Answering the dialog tells the page, which asks the tile again.
+        await clickText(page, 'Choose folder');
+        await page.waitFor('!!document.querySelector(\'input[type=file][webkitdirectory]\')', 'the fallback input');
+        await page.evaluate(`window.__t.chooseFiles(${JSON.stringify(fx.manifest.tree)})`);
+        await page.waitFor('window.__changed === 1', 'the change notification after the folder opened', 60_000);
+        assert.equal(await page.evaluate(request), 'Ok', 'with the folder open the tile is served');
+        assert.deepEqual(problems(page), []);
+    }, { helpers: PAGE_HELPERS_NO_PICKER });
+});
+
 test('Skip on a cache-miss dialog is remembered for the session', async () => {
     await withBrowser(async ({ fx, harness, page }) => {
         assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true);
@@ -1764,7 +1796,9 @@ test('settings show folder, build and cache size; Forget folder deletes the hand
 
         // Change folder reopens the picker and re-validates.
         await clickText(page, 'Change folder');
-        await page.waitFor('window.__pickerCalls.length === 2 && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again', 60_000);
+        // The state stays "ready" from the first pick while the second validates, so the state alone does not say the re-pick is done: the
+        // dialog that Change folder opens closes only when the new folder is stored. Forgetting earlier raced the store of the re-pick.
+        await page.waitFor('window.__pickerCalls.length === 2 && !document.querySelector(\'[data-clientfs="dialog"]\') && (async () => (await cf.clientFilesStatus()).state === "ready")()', 'the picker to run again and its folder to be stored', 60_000);
 
         // Forget folder.
         await page.evaluate('cf.openClientFilesSettings()');
@@ -1774,6 +1808,25 @@ test('settings show folder, build and cache size; Forget folder deletes the hand
         assert.deepEqual(await page.evaluate('window.__t.opfsNames()'), [], 'the OPFS cache is deleted');
         assert.equal((await status(page)).cacheBytes, 0);
         assert.equal(await page.evaluate('cf.showFirstEntryDialogIfNeeded()'), true, 'a forgotten folder means a first visit again');
+        assert.deepEqual(problems(page), []);
+    });
+});
+
+test('Forget folder while Change folder is still validating ends with no folder, no handle and no cache', async () => {
+    await withBrowser(async ({ fx, page }) => {
+        await stageTree(page, fx);
+        await pickAndWait(page);
+        await page.evaluate('cf.openClientFilesSettings()');
+        await clickText(page, 'Change folder');
+        await page.waitFor('window.__pickerCalls.length === 2', 'the picker to run again');
+        // The re-pick is validating or storing now: forget it from the settings panel (the state is still "ready" from the first pick).
+        await page.evaluate('cf.openClientFilesSettings()');
+        await clickText(page, 'Forget folder');
+        await page.waitFor('(async () => (await cf.clientFilesStatus()).state === "none")()', 'the folder to be forgotten');
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        assert.equal((await status(page)).state, 'none', 'a pick that finished after Forget must not bring the folder back');
+        assert.equal((await page.evaluate('window.__t.handleRecords()')).count, 0, 'no handle may be stored after Forget');
+        assert.deepEqual(await page.evaluate('window.__t.opfsNames()'), []);
         assert.deepEqual(problems(page), []);
     });
 });

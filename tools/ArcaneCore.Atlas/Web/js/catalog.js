@@ -135,6 +135,18 @@ function layerAvailable(item) {
     return undefined;
 }
 
+/** Layers the browser can build itself from the visitor's own client files (clientfs/index.js) when the host has no source for them. */
+export const CLIENT_READER_LAYERS = Object.freeze(['ref.terrain.tex']);
+
+/**
+ * The Local page's layer list with the client-file reader counted in: a layer the host reports without a source but the reader can
+ * serve (CLIENT_READER_LAYERS) is available, so its checkbox is usable and its tiles are requested; clientsource.js then asks the host
+ * first and the reader second. Returns new objects; `viaClientFiles` marks the overridden layers. The public page never calls this.
+ */
+export function withClientReaderLayers(layers) {
+    return layers.map((l) => (CLIENT_READER_LAYERS.includes(l.id) && l.available === false ? { ...l, available: true, viaClientFiles: true } : l));
+}
+
 /** Layers grouped in catalog order: [{group, layers: [...]}], empty groups omitted. */
 export function groupLayers(layers) {
     const out = [];

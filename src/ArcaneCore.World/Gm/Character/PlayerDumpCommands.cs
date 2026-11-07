@@ -12,6 +12,7 @@ using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Core;
 using ArcaneCore.World.Items;
 using ArcaneCore.World.Pets;
+using ArcaneCore.World.RealmList;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -80,12 +81,14 @@ public sealed class PlayerDumpCommands : ICommandGroup
             : PlayerNames.TryNormalize(StripLink(who), out string name) ? directory.FindByName(name) : null;
         if (target is null)
         {
+            context.Fail("player-not-found");
             context.Reply(GmStrings.PlayerNotFound);
             return true;
         }
 
         if (ResolvePath(context, file) is not { } path)
         {
+            context.Fail("file-open-failed");
             context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
             return true;
         }
@@ -95,6 +98,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             string? dump = await new PlayerDumpWriter(services.GetRequiredService<CharacterDbContext>()).GetDumpAsync(target.Id).ConfigureAwait(false);
             if (dump is null)
             {
+                context.Fail("player-not-found");
                 ReplyLater(context, GmStrings.PlayerNotFound);
                 return;
             }
@@ -106,6 +110,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                context.Fail("file-open-failed");
                 ReplyLater(context, string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
                 return;
             }
@@ -132,6 +137,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             CharacterCreationOptions options = context.Session.Services.GetService<CharacterCreationFeature>()?.Options ?? new();
             if (!PlayerNames.TryNormalize(rawName, out name) || CharacterNameRules.Check(name, NameRuleSettings.From(options, create: true)) is not null)
             {
+                context.Fail("invalid-name");
                 context.Reply(InvalidName);
                 return true;
             }
@@ -145,12 +151,14 @@ public sealed class PlayerDumpCommands : ICommandGroup
 
                 if (guid == 0 || guid > int.MaxValue)
                 {
+                    context.Fail("invalid-guid");
                     context.Reply(InvalidGuid);
                     return true;
                 }
 
                 if (context.Session.Services.GetRequiredService<CharacterDirectory>().Find((int)guid) is not null)
                 {
+                    context.Fail("guid-in-use");
                     context.Reply(string.Format(CultureInfo.InvariantCulture, GuidInUse, guid));
                     return true;
                 }
@@ -159,6 +167,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
 
         if (ResolvePath(context, file) is not { } path)
         {
+            context.Fail("file-open-failed");
             context.Reply(string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
             return true;
         }
@@ -194,6 +203,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
                     Kernel.Characters.CharacterRecord record = (await db.Characters.FindAsync(load.CharacterId).ConfigureAwait(false))!;
                     world.GetRequiredService<CharacterDirectory>().Add(new CharacterIdentity(record.Id, record.AccountId, record.Name,
                         record.Race, record.Gender, record.Class, record.Level, record.ZoneId));
+                    await RealmCharacterCounts.RefreshAsync(services, context.Session.Logger, owner.Id).ConfigureAwait(false); // an irreversible `account delete` trusts this count
                     ReplyLater(context, ImportSuccess);
                     break;
                 case DumpReturn.FileBroken or DumpReturn.UnexpectedEnd:

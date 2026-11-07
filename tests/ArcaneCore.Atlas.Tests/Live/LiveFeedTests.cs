@@ -363,6 +363,132 @@ public sealed class LiveFeedTests
         Assert.Equal(2.0, kept["hz"]!.GetValue<double>());
     }
 
+    // The reader marks the session ended before its close notice empties the store. BeforeClose holds the reader in that gap, so each
+    // test below runs inside it deterministically: "disconnected" must never be reported next to the dead connection's entities.
+    private static async Task<(LiveRig Rig, ManualResetEventSlim Release)> HoldReaderInTheGapAsync()
+    {
+        var rig = new LiveRig();
+        var entered = new ManualResetEventSlim(false);
+        var release = new ManualResetEventSlim(false);
+        try
+        {
+            FakeFeedServer server = await rig.ConnectAsync();
+            rig.Feed.BeforeClose = _ =>
+            {
+                entered.Set();
+                release.Wait(FakeFeedServer.Patience);
+            };
+            await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3), Wire.Entity("2", "creature", 4, 5, 6)));
+            await Wait.UntilAsync(() => rig.Feed.Store.EntityCount == 2, "the frame is applied");
+
+            server.Drop();
+            Assert.True(await Task.Run(() => entered.Wait(FakeFeedServer.Patience)), "the drop was never noticed");
+            Assert.Equal(2, rig.Feed.Store.EntityCount);
+            return (rig, release);
+        }
+        catch
+        {
+            release.Set();
+            await rig.DisposeAsync();
+            throw;
+        }
+    }
+
+    [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_IsConnectedIsFalse_AndTheEntityListIsAlreadyEmpty()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            Assert.False(rig.Feed.IsConnected);
+            Assert.Equal(0, rig.Feed.Store.EntityCount);
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_StatusReportsDisconnected_WithNoEntities()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            JsonObject status = rig.Feed.Status();
+
+            Assert.False(status["connected"]!.GetValue<bool>());
+            Assert.Equal(0, status["entities"]!["total"]!.GetValue<int>());
+            Assert.Empty(status["frames"]!.AsArray());
+            Assert.DoesNotContain("connected to process", status["detail"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.Equal(0, rig.Feed.Store.EntityCount);
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_FindReportsDisconnected_WithNoEntities()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            CommandResult found = await rig.RunAsync("live.find", Obj("{}"));
+
+            Assert.True(found.Ok, found.ErrorMessage);
+            Assert.False(found.Data!["connected"]!.GetValue<bool>());
+            Assert.Equal(0, found.Data["count"]!.GetValue<int>());
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_EntitiesReportDisconnected_WithNoEntities()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            CommandResult listed = await rig.RunAsync("live.entities", Obj("{}"));
+
+            Assert.True(listed.Ok, listed.ErrorMessage);
+            Assert.False(listed.Data!["connected"]!.GetValue<bool>());
+            Assert.Equal(0, listed.Data["matched"]!.GetValue<int>());
+            Assert.Equal(0, listed.Data["returned"]!.GetValue<int>());
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InTheGapBeforeTheCloseNotice_HotspotsReportDisconnected_WithNoCells()
+    {
+        (LiveRig rig, ManualResetEventSlim release) = await HoldReaderInTheGapAsync();
+        try
+        {
+            CommandResult spots = await rig.RunAsync("live.hotspots", Obj("{}"));
+
+            Assert.True(spots.Ok, spots.ErrorMessage);
+            Assert.False(spots.Data!["connected"]!.GetValue<bool>());
+            Assert.Equal(0, spots.Data["count"]!.GetValue<int>());
+        }
+        finally
+        {
+            release.Set();
+            await rig.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task SubscribingTheSameMapAgain_ReplacesTheRememberedRequest()
     {
@@ -577,7 +703,7 @@ public sealed class LiveFeedTests
         await first.WriteAsync(Wire.Frame(1, 4, 1, Wire.Entity("1", "bot", 1, 2, 3)));
         await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
         first.Drop();
-        // IsConnected goes false when the reader ends, slightly before the store is emptied; the disconnected status is published after both.
+        // Earlier connected statuses are skipped; the disconnected one is published after the store is emptied.
         JsonObject closed;
         do
         {
@@ -769,6 +895,97 @@ public sealed class LiveFeedTests
         Assert.False(pushed["connected"]!.GetValue<bool>());
         Assert.Equal(2, pushed["pid"]!.GetValue<int>());
         Assert.Equal("the server closed the connection right after hello.", pushed["detail"]!.GetValue<string>());
+    }
+
+    // AfterRetire runs after the installed connection was retired and before it is detached or replaced. If the order were detach first, the
+    // connection would already be gone (IsConnected false) or its entities still there at that point; the pair below pins both.
+    [Fact]
+    public async Task AReplacementThatClosesAfterTheRetire_FindsThePreviousConnectionAlreadyRetiredAndStillInstalled()
+    {
+        string nameA = FakeFeedServer.NewName();
+        string nameB = FakeFeedServer.NewName();
+        await using var rig = new LiveRig(o => o with { PipeNameFor = pid => pid == 1 ? nameA : nameB });
+        FakeFeedServer a = rig.NewServer(nameA);
+        FakeFeedServer b = rig.NewServer(nameB);
+        await rig.ConnectAsync(pid: 1, Wire.Hello(pid: 1), a);
+        await a.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+        Assert.Equal(1, rig.Feed.Store.EntityCount);
+
+        bool installedAtRetire = false;
+        int entitiesAtRetire = -1;
+        FeedSession? incoming = null;
+        rig.Feed.BeforeSwap = session => incoming = session;
+        rig.Feed.AfterRetire = () =>
+        {
+            // The new connection closes after the retire step and before the swap lock: the interleaving the closed path must survive.
+            b.Drop();
+            Assert.True(SpinWait.SpinUntil(() => !incoming!.IsOpen, FakeFeedServer.Patience));
+            installedAtRetire = rig.Feed.IsConnected;
+            entitiesAtRetire = rig.Feed.Store.EntityCount;
+        };
+
+        (FakeFeedServer _, Task<JsonObject> connect) = await rig.BeginConnectAsync(pid: 2, server: b);
+        await b.AnswerHelloAsync(Wire.Hello(pid: 2));
+        _ = await FailureOf(connect);
+
+        Assert.True(installedAtRetire, "the previous connection is still installed when its entities are retired");
+        Assert.Equal(0, entitiesAtRetire);
+        Assert.False(rig.Feed.IsConnected);
+        Assert.Equal(0, rig.Feed.Store.EntityCount);
+    }
+
+    [Fact]
+    public async Task Disconnect_RetiresTheEntitiesWhileTheConnectionIsStillInstalled()
+    {
+        await using var rig = new LiveRig();
+        FakeFeedServer server = await rig.ConnectAsync();
+        await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+        await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+
+        bool installedAtRetire = false;
+        int entitiesAtRetire = -1;
+        rig.Feed.AfterRetire = () =>
+        {
+            installedAtRetire = rig.Feed.IsConnected;
+            entitiesAtRetire = rig.Feed.Store.EntityCount;
+        };
+
+        CommandResult result = await rig.RunAsync("live.disconnect");
+
+        Assert.True(result.Ok, result.ErrorMessage);
+        Assert.True(installedAtRetire);
+        Assert.Equal(0, entitiesAtRetire);
+        Assert.False(rig.Feed.IsConnected);
+    }
+
+    [Fact]
+    public async Task Dispose_RetiresTheEntitiesWhileTheConnectionIsStillInstalled()
+    {
+        var rig = new LiveRig();
+        try
+        {
+            FakeFeedServer server = await rig.ConnectAsync();
+            await server.WriteAsync(Wire.Frame(0, 0, 1, Wire.Entity("1", "creature", 1, 2, 3)));
+            await rig.Log.NextAsync(EventHub.Topics.LiveFrame);
+
+            bool installedAtRetire = false;
+            int entitiesAtRetire = -1;
+            rig.Feed.AfterRetire = () =>
+            {
+                installedAtRetire = rig.Feed.IsConnected;
+                entitiesAtRetire = rig.Feed.Store.EntityCount;
+            };
+
+            rig.Feed.Dispose();
+
+            Assert.True(installedAtRetire);
+            Assert.Equal(0, entitiesAtRetire);
+        }
+        finally
+        {
+            await rig.DisposeAsync();
+        }
     }
 
     [Fact]

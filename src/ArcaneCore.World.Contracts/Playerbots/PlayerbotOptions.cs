@@ -211,7 +211,7 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it
-    /// (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
+    /// (on by default). A completed grey quest is still turned in, and a class-restricted or chain-step quest is kept and still offered whatever its colour. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
     /// </summary>
     public bool DropGreyQuests { get; set; } = true;
 
@@ -230,8 +230,8 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw
-    /// Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is
-    /// exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the
+    /// Hold tunnel) may hold and still need a crowd of bots for a shared world pin and be exempt from refusing a bot's pinned plan end (0..1000000; 0: no region is
+    /// exempt). The exemption judges the whole region, so a larger bound makes more real snags wait for that crowd. The default, 5000, keeps the
     /// Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps.
     /// Bots only; no retail behaviour depends on it.
     /// </summary>
@@ -300,6 +300,9 @@ public sealed class PlayerbotOptions
     /// <summary>Bots group up for content they cannot do alone (<c>World:Playerbots:Groups</c>; live).</summary>
     public PlayerbotGroupOptions Groups { get; set; } = new();
 
+    /// <summary>Bots summon far group members with Ritual of Summoning (and meeting stones) and accept summons (<c>World:Playerbots:Summon</c>; live).</summary>
+    public PlayerbotSummonOptions Summon { get; set; } = new();
+
     /// <summary>How a following bot keeps up with its leader and catches up when it cannot walk (<c>World:Playerbots:Follow</c>; live).</summary>
     public PlayerbotFollowOptions Follow { get; set; } = new();
 
@@ -326,6 +329,9 @@ public sealed class PlayerbotOptions
 
     /// <summary>Bots use the faction auction house and mailbox (<c>World:Playerbots:Economy</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotEconomyOptions Economy { get; set; } = new();
+
+    /// <summary>Bots make trips to their capital cities (<c>World:Playerbots:City</c>; live; docs/areas/playbots-city.md).</summary>
+    public PlayerbotCityOptions City { get; set; } = new();
 
     /// <summary>How bots save money for what they will need: class spells, riding, a mount (<c>World:Playerbots:Budget</c>; live; docs/areas/playbots-economy.md).</summary>
     public PlayerbotBudgetOptions Budget { get; set; } = new();
@@ -428,6 +434,8 @@ public sealed class PlayerbotOptions
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
         Groups.Validate();
+        if (Summon is null) throw new InvalidOperationException($"{SectionName}:Summon is missing.");
+        Summon.Validate();
         if (Follow is null) throw new InvalidOperationException($"{SectionName}:Follow is missing.");
         Follow.Validate();
         if (Home is null) throw new InvalidOperationException($"{SectionName}:Home is missing.");
@@ -446,6 +454,8 @@ public sealed class PlayerbotOptions
         Social.Validate();
         if (Economy is null) throw new InvalidOperationException($"{SectionName}:Economy is missing.");
         Economy.Validate();
+        if (City is null) throw new InvalidOperationException($"{SectionName}:City is missing.");
+        City.Validate();
         if (Budget is null) throw new InvalidOperationException($"{SectionName}:Budget is missing.");
         Budget.Validate();
         if (Mounts is null) throw new InvalidOperationException($"{SectionName}:Mounts is missing.");

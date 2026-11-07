@@ -97,6 +97,15 @@ public abstract class GmGoBattlegroundAndInstanceTestBase
             }
         }
 
+        /// <summary>Acknowledge the held SMSG_NEW_WORLD but keep holding the next one (a second loading screen).</summary>
+        public async Task AcknowledgeHeldNewWorldAsync()
+        {
+            if (Interlocked.Exchange(ref _heldNewWorld, 0) != 0)
+            {
+                await SendRawAsync(WorldOpcode.MsgMoveWorldportAck, []);
+            }
+        }
+
         /// <summary>Whether <paramref name="opcode"/> was received since <paramref name="since"/>.</summary>
         public bool Saw(long since, WorldOpcode opcode)
         {

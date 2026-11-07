@@ -1,4 +1,3 @@
-using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Characters.Pets;
 using Microsoft.Extensions.Logging;
 
@@ -23,7 +22,7 @@ public sealed partial class SummonService
     /// <paramref name="replacedCurrentRow"/> says the finished write replaced or removed the character's character_pet row (a stable or
     /// unstable), a failed abandon delete still owed for that row is cancelled: the store deletes by character, so running it later would
     /// destroy the pet the stable just wrote. <paramref name="write"/> runs on the thread pool. A failure is rethrown unrecorded: the caller
-    /// (<see cref="PetStableController"/>) owns recording and logging it.
+    /// (<see cref="PetStableController"/>) owns recording and logging it. The handoff fence seams (<see cref="WritesRetired"/>, <see cref="WritesSealed"/>) are not consulted here: these writes come from session handlers, so a refusal is the caller's failure to report.
     /// </summary>
     public async Task<T> QueueSerializedWriteAsync<T>(int characterId, Func<CancellationToken, Task<T>> write, Func<T, bool>? replacedCurrentRow = null)
     {
@@ -42,14 +41,11 @@ public sealed partial class SummonService
             {
                 await prior.ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+            catch (Exception ex)
             {
-                if (ex is not OperationCanceledException)
-                {
-                    FaultLedger.Shared.Record("pet.stable", ex);
-                    AnomalyLedger.Shared.Report("pet", "stable-fault", $"character {characterId}", ex.Message);
-                    _logger.LogFault(LogLevel.Warning, "pet-stable", ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
-                }
+                // Observe only, an OutOfMemoryException included: a failed predecessor was already recorded (an OutOfMemoryException is deliberately never recorded), and its failure must not
+                // stop this write or pass down the queue.
+                _logger.LogDebug(ex, "previous persistent pet write failed for character {CharacterId}; continuing with the stable write", characterId);
             }
 
             // The tail slot above fixed the order; the store call itself runs on the thread pool, never on the caller (a world/map thread).

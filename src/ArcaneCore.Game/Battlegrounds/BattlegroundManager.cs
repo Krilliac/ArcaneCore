@@ -24,6 +24,13 @@ public interface IBattlegroundManagerHost
     /// <summary>The effects channel of one match (broadcasts to its players, spawns its objects).</summary>
     IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId);
 
+    /// <summary>
+    /// Whether this process may build a match on <paramref name="mapId"/> (it owns instance copies of that map). A split cluster worker that does
+    /// not own the map answers false and the manager creates no match, instead of the map creation throwing after the match object exists.
+    /// The default, true, is the combined behaviour.
+    /// </summary>
+    bool CanCreateMatch(uint mapId) => true;
+
     /// <summary>A new map instance id for a match (the shared instance id generator, vmangos <c>MapManager::CreateBgMap</c>).</summary>
     uint AllocateInstanceId();
 
@@ -230,6 +237,7 @@ public sealed record BattlegroundStatusReport(uint QueueSlot, BattlegroundStatus
 public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.IBattlegroundPresence
 {
     private readonly Dictionary<BattlegroundType, BattlegroundTemplate> _templates = [];
+    private readonly HashSet<uint> _refusedMaps = [];
     private readonly BattlegroundQueue[] _queues;
     private readonly Dictionary<BattlegroundType, SortedDictionary<uint, Battleground>> _running = [];
     private readonly Dictionary<BattlegroundType, List<Battleground>> _freeSlots = [];
@@ -263,7 +271,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
 
     internal IBattlegroundManagerHost Host { get; }
 
-    /// <summary>The manager clock in milliseconds: the sum of the <see cref="Update"/> diffs.</summary>
+    /// <summary>The manager clock in milliseconds: the sum of the <see cref="Update"/> diffs. Advanced only by <see cref="Update"/>, which the world thread runs from the world-tick phase, after the tick's commands and the cluster pump and before the maps phase. Map workers (opcode handlers in the Packets stage, gated or not, when map updates run in parallel) run only inside the maps phase, which the world thread starts after the world tick and waits on, so no reader overlaps the writer; a method that needs it twice reads it once into a local.</summary>
     public uint NowMs { get; private set; }
 
     // ------------------------------------------------------------------ templates and types
@@ -362,6 +370,17 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         if (!Invariant.Check(bracket is >= 0 and <= BattlegroundConstants.LastBracket, $"battleground bracket {bracket} is out of range")
             || !_templates.TryGetValue(type, out BattlegroundTemplate? template))
         {
+            return null;
+        }
+
+        if (!Host.CanCreateMatch(template.MapId))
+        {
+            // Split stopgap: another worker owns this map, so a match built here could never get its map. The queue keeps retrying every update, so say it once per map. With the cluster link wired the joins run on the holder, which owns the map; this is reached only when no link is registered or on a node that still gets local joins.
+            if (_refusedMaps.Add(template.MapId))
+            {
+                AnomalyLedger.Shared.Report("battleground", "match-refused", $"map={template.MapId}", $"type={type} bracket={bracket} reason=this node does not own the battleground map");
+            }
+
             return null;
         }
 
@@ -720,9 +739,10 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         BattlegroundPlayerState state = StateOf(player);
         BattlegroundQueueType queueType = bg.Template.QueueType;
         state.SetInvite(queueType, group.InvitedToInstanceId);
+        uint now = NowMs;
 
-        AddEvent(NowMs + BattlegroundConstants.InvitationRemindTimeMs, remove: false, player, group.InvitedToInstanceId, bg.Type, group.RemoveInviteTimeMs);
-        AddEvent(NowMs + BattlegroundConstants.InviteAcceptWaitTimeMs, remove: true, player, group.InvitedToInstanceId, bg.Type, group.RemoveInviteTimeMs);
+        AddEvent(now + BattlegroundConstants.InvitationRemindTimeMs, remove: false, player, group.InvitedToInstanceId, bg.Type, group.RemoveInviteTimeMs);
+        AddEvent(now + BattlegroundConstants.InviteAcceptWaitTimeMs, remove: true, player, group.InvitedToInstanceId, bg.Type, group.RemoveInviteTimeMs);
 
         int slot = state.SlotOf(queueType);
         Host.SendStatus(player, (uint)Math.Max(slot, 0), BattlegroundStatusSubject.Of(bg), BattlegroundStatus.WaitJoin, BattlegroundConstants.InviteAcceptWaitTimeMs, 0);
@@ -1085,6 +1105,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         }
 
         BattlegroundPlayerState state = StateOf(player);
+        uint now = NowMs; // one reading for the whole call: NowMs is the Update accumulator and the host callbacks below run mid-loop
         for (int q = 1; q <= BattlegroundOptions.MaxQueuesPerPlayer; q++)
         {
             var queueType = (BattlegroundQueueType)q;
@@ -1101,14 +1122,14 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
             int slot = state.AddSlot(queueType);
             if (template is not null && slot >= 0)
             {
-                Host.SendStatus(player, (uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.WaitQueue, avg, NowMs - group.JoinTimeMs);
+                Host.SendStatus(player, (uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.WaitQueue, avg, now - group.JoinTimeMs);
             }
 
             if (group.InvitedToInstanceId != 0 && slot >= 0)
             {
                 state.SetInvite(queueType, group.InvitedToInstanceId);
-                uint offset = NowMs > group.RemoveInviteTimeMs ? 1 : group.RemoveInviteTimeMs - NowMs;
-                AddEvent(NowMs + offset, remove: true, player, group.InvitedToInstanceId, type, group.RemoveInviteTimeMs);
+                uint offset = now > group.RemoveInviteTimeMs ? 1 : group.RemoveInviteTimeMs - now;
+                AddEvent(now + offset, remove: true, player, group.InvitedToInstanceId, type, group.RemoveInviteTimeMs);
             }
         }
     }
@@ -1125,6 +1146,7 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
         }
 
         BattlegroundPlayerState state = StateOf(player);
+        uint now = NowMs; // one reading for every slot of the answer
         for (int slot = 0; slot < BattlegroundOptions.MaxQueuesPerPlayer; slot++)
         {
             BattlegroundQueueType queueType = state.QueueTypeInSlot(slot);
@@ -1154,13 +1176,13 @@ public sealed partial class BattlegroundManager : IBattlegroundLifecycle, Death.
                     continue;
                 }
 
-                uint remaining = group.RemoveInviteTimeMs > NowMs ? group.RemoveInviteTimeMs - NowMs : 0;
+                uint remaining = group.RemoveInviteTimeMs > now ? group.RemoveInviteTimeMs - now : 0;
                 reports.Add(new BattlegroundStatusReport((uint)slot, BattlegroundStatusSubject.Of(invitedTo), BattlegroundStatus.WaitJoin, remaining, 0));
             }
             else if (TemplateOf(type) is { } template)
             {
                 uint avg = AverageWaitOf(player, type, level);
-                reports.Add(new BattlegroundStatusReport((uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.WaitQueue, avg, NowMs - group.JoinTimeMs));
+                reports.Add(new BattlegroundStatusReport((uint)slot, BattlegroundStatusSubject.OfTemplate(template), BattlegroundStatus.WaitQueue, avg, now - group.JoinTimeMs));
             }
         }
 

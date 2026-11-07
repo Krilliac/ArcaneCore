@@ -179,6 +179,27 @@ public sealed class LiveLogPathTests : IDisposable
         Assert.Equal(expected, RunLiveEnv(body, env).Trim());
     }
 
+    /// <summary>The daemons run as Development, so appsettings.Development.json's Format wins over appsettings.json's; the environment still wins over both.</summary>
+    [PwshTheory]
+    [InlineData("Json", "Text", null, "Text")]
+    [InlineData("Text", "Json", null, "Json")]
+    [InlineData(null, "Text", null, "Text")]
+    [InlineData("Text", null, null, "Text")]
+    [InlineData("Json", "Text", "Json", "Json")]
+    public void LiveLogFormatSetting_LaysDevelopmentSettingsOverTheBaseProfile(string? baseFormat, string? developmentFormat, string? envFormat, string expected)
+    {
+        string profile = WriteProfile(baseFormat, "true", "false");
+        if (developmentFormat is not null)
+        {
+            File.WriteAllText(Path.Combine(profile, "appsettings.Development.json"), JsonSerializer.Serialize(new { Logging = new { ArcaneCore = new { Format = developmentFormat } } }));
+        }
+
+        Dictionary<string, string> env = envFormat is null ? [] : new() { ["Logging__ArcaneCore__Format"] = envFormat };
+        string body = $"$f = Get-LiveLogFormatSetting -LiveProfile '{Quote(profile)}'; if ($null -eq $f) {{ '<null>' }} else {{ $f }}";
+
+        Assert.Equal(expected, RunLiveEnv(body, env).Trim());
+    }
+
     [PwshFact]
     public void LiveLogFormatSetting_IsNull_WithoutAReadableProfileOrFormat()
     {
@@ -227,9 +248,9 @@ public sealed class LiveLogPathTests : IDisposable
     public void LaunchDaemon_AppliesTheRoleLogEnvironment_BeforeStartingTheDaemon()
     {
         string script = File.ReadAllText(Path.Combine(LiveDir, "launch-daemon.ps1"));
-        int set = script.IndexOf("Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome", StringComparison.Ordinal);
+        int set = script.IndexOf("Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome -LiveProfile $LiveProfile", StringComparison.Ordinal);
         int start = script.IndexOf("& $exe", StringComparison.Ordinal);
-        Assert.True(set >= 0, "launch-daemon.ps1 does not call Set-LiveDaemonLogEnvironment");
+        Assert.True(set >= 0, "launch-daemon.ps1 does not call Set-LiveDaemonLogEnvironment with -LiveProfile $LiveProfile");
         Assert.True(start > set, "launch-daemon.ps1 starts the daemon before setting its log paths");
     }
 

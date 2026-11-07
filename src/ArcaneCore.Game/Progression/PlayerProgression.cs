@@ -92,6 +92,27 @@ public sealed partial class PlayerProgression : IQuestExperience
         return rate >= 0.0f ? (uint)Math.Min(xp * rate, (float)uint.MaxValue) : xp;
     }
 
+    /// <summary>
+    /// vmangos Player::GiveXP's play-time step (Player.cpp:3011-3015; the flags are only ever set under <c>World:LimitPlayTime</c>): NO_PLAY_TIME gains
+    /// nothing, PARTIAL_PLAY_TIME halves the gain (integer division), otherwise unchanged.
+    /// </summary>
+    public static uint ApplyPlayTimeRule(Player player, uint xp)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if ((player.Flags & PlayerFlags.NoPlayTime) != 0)
+        {
+            return 0;
+        }
+
+        return (player.Flags & PlayerFlags.PartialPlayTime) != 0 ? xp / 2 : xp;
+    }
+
+    /// <summary>
+    /// The experience <see cref="GiveXp(Player, uint, ObjectGuid)"/> adds for a gain of <paramref name="xp"/> before rested bonus: the play-time rule,
+    /// then the personal rate. The quest settlement preview calls the same function, so the level it commits is the level the live grant reaches.
+    /// </summary>
+    public static uint EffectiveXp(Player player, uint xp) => ApplyPersonalRate(player, ApplyPlayTimeRule(player, xp));
+
     /// <summary>IPlayerExperience: non-kill experience (quests, exploration), no rested bonus.</summary>
     public void GiveXp(Player player, uint xp) => GiveXp(player, xp, ObjectGuid.Empty);
 
@@ -103,7 +124,8 @@ public sealed partial class PlayerProgression : IQuestExperience
     public uint GiveXp(Player player, uint xp, ObjectGuid victim)
     {
         ArgumentNullException.ThrowIfNull(player);
-        xp = ApplyPersonalRate(player, xp);
+        // vmangos Player::GiveXP (Player.cpp:3011-3019): the play-time flags (only set under World:LimitPlayTime) act before the personal rate.
+        xp = EffectiveXp(player, xp);
         if (xp < 1 || !player.IsAlive || !player.CanMutateQuestSettlementState || player.Level >= Options.MaxPlayerLevel)
         {
             return 0;
@@ -114,15 +136,13 @@ public sealed partial class PlayerProgression : IQuestExperience
         ulong newXp = (ulong)CurrentXp(player) + xp + rested;
         uint next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
         bool leveled = false;
+        byte firstOldLevel = player.Level;
         while (next > 0 && newXp >= next && player.Level < Options.MaxPlayerLevel)
         {
             newXp -= next;
-            byte oldLevel = player.Level;
-            if (ApplyLevel(player, (byte)(oldLevel + 1)))
+            if (ApplyLevel(player, (byte)(player.Level + 1)))
             {
                 leveled = true;
-                // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires per level.
-                player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
             }
 
             next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
@@ -132,6 +152,15 @@ public sealed partial class PlayerProgression : IQuestExperience
         if (leveled)
         {
             LevelChanged?.Invoke(player);
+
+            // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires once per level (oldLevel
+            // counts up). It runs after LevelChanged and PLAYER_XP, like GiveLevel, so a script sees talents, skills and XP already
+            // updated; Level is the final level for every call.
+            byte finalLevel = player.Level;
+            for (byte oldLevel = firstOldLevel; oldLevel < finalLevel; oldLevel++)
+            {
+                player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
+            }
         }
 
         return xp + rested;

@@ -113,6 +113,13 @@ public sealed partial record SpellInfo
 
     public SpellCastTime CastTime { get; init; }
 
+    /// <summary>
+    /// Whether the spell has a SpellCastTimes row (vmangos <c>LookupEntry(CastingTimeIndex)</c> found). Row 1 is an all-zero
+    /// "instant" row, so <see cref="CastTime"/> equal to default cannot tell it from a missing row; the +500 ms ranged-slot
+    /// surcharge applies only when a row exists. Null (hand-built spells) means "present when <see cref="CastTime"/> is not default".
+    /// </summary>
+    public bool? HasCastTimeEntry { get; init; }
+
     public uint RecoveryTime { get; init; }
 
     public uint CategoryRecoveryTime { get; init; }
@@ -344,12 +351,12 @@ public sealed partial record SpellInfo
     /// scaled by the ranged attack speed modifier instead; USES_RANGED_SLOT adds 500 ms unless
     /// the spell is the auto-repeat spell itself (Auto Shot, wand Shoot). Ranged (hunter lane):
     /// <paramref name="autoRepeat"/> and <paramref name="rangedHaste"/> (vmangos SpellEntry.cpp:504-512).
-    /// A spell without a SpellCastTimes entry is instant.
+    /// A spell without a SpellCastTimes entry is instant (no +500 ms either); an all-zero row (index 1) still takes it, see <see cref="HasCastTimeEntry"/>.
     /// </summary>
     /// <param name="castTimeModifier">Applied to the base time after the minimum and only when it is not 0, before the cast-speed scaling (vmangos SpellEntry.cpp:487-494, SPELLMOD_CASTING_TIME).</param>
     public int GetCastTime(byte casterLevel, float castSpeed = 1.0f, bool autoRepeat = false, float rangedHaste = 1.0f, Func<int, int>? castTimeModifier = null)
     {
-        if (CastTime == default)
+        if (!(HasCastTimeEntry ?? CastTime != default))
         {
             return 0;
         }

@@ -58,6 +58,28 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         Spells.RemoveAuras(unit, spellId);
     }
 
+    public SpellInfo? FindSpell(uint spellId) => Spells.Store.Get(spellId);
+
+    public bool IsSpellReady(Creature caster, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        return spells.Store.Get(spellId) is { } spell && spells.IsSpellReady(caster, spell);
+    }
+
+    public IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return Spells.GetAuras(unit);
+    }
+
+    public bool IsImmuneToSpell(Unit target, SpellInfo spell)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(spell);
+        return ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(Spells, target, spell, castOnSelf: false);
+    }
+
     public CreatureCastResult AddAura(Unit unit, uint spellId, bool permanent)
     {
         ArgumentNullException.ThrowIfNull(unit);

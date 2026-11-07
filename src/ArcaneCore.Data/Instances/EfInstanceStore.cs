@@ -20,9 +20,10 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
         // missing instances go first. It runs after the world's claim, so under the fence it is one verified transaction.
         // In a cluster only the Instances lease holder cleans up (writer-lock design section 4, row 2): a bind committed before its instance row on one worker would be
         // deleted by another worker's boot. A node that is not the holder loads read-only.
-        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
+        // TryBeginSweep reads the fence once, before the holder check, so a release in between cannot leave the cleanup without a fence (unchecked).
+        if (LeaseFencedWrite.TryBeginSweep(leaseFences, RealmAuthorityScopes.Instances, out RealmLeaseFence? sweepFence))
         {
-            await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync(db, leaseFences, RealmAuthorityScopes.Instances, async () =>
+            await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync<bool>(db, sweepFence, async () =>
             {
                 await db.Set<CharacterInstanceRow>()
                     .Where(b => !db.Characters.Any(c => c.Id == b.CharacterId))
@@ -38,6 +39,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
                 await db.Set<GroupInstanceRow>()
                     .Where(b => !db.Characters.Any(c => c.Id == b.LeaderCharacterId) || !db.Set<InstanceRow>().Any(i => i.Id == b.InstanceId))
                     .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+                return true;
             }, cancellationToken), cancellationToken).ConfigureAwait(false);
         }
 
@@ -141,7 +143,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
     public async Task SaveGroupBindAsync(GroupInstanceBindRecord bind, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(bind);
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // leader-keyed and cross-character: only the Instances holder writes it
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // leader-keyed and cross-character: only the Instances holder writes it
         int instanceId = (int)bind.InstanceId;
         GroupInstanceRow? row = await db.Set<GroupInstanceRow>()
             .FirstOrDefaultAsync(b => b.LeaderCharacterId == bind.LeaderCharacterId && b.InstanceId == instanceId, cancellationToken).ConfigureAwait(false);
@@ -154,21 +156,21 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
             row.Permanent = bind.Permanent;
         }
 
-        await SaveAsync(cancellationToken).ConfigureAwait(false);
+        await SaveAsync(fence, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteGroupBindAsync(int leaderCharacterId, uint instanceId, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances);
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances);
         int id = (int)instanceId;
         await CharacterWrites.InTransactionAsync(
-            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Instances, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken), cancellationToken),
+            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, fence, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SaveResetTimeAsync(InstanceResetRecord reset, CancellationToken cancellationToken = default)
     {
-        LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // the raid reset schedule is the Instances holder's (writer-lock design section 2b, row 1)
+        RealmLeaseFence? fence = LeaseFencedWrite.RequireFence(leaseFences, RealmAuthorityScopes.Instances); // the raid reset schedule is the Instances holder's (writer-lock design section 2b, row 1)
         int mapId = (int)reset.MapId;
         InstanceResetRow? row = await db.Set<InstanceResetRow>().FirstOrDefaultAsync(r => r.MapId == mapId, cancellationToken).ConfigureAwait(false);
         if (row is null)
@@ -180,7 +182,7 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
             row.ResetTime = reset.ResetTime;
         }
 
-        await SaveAsync(cancellationToken).ConfigureAwait(false);
+        await SaveAsync(fence, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SaveLastInstanceAsync(CharacterLastInstanceRecord last, CancellationToken cancellationToken = default)
@@ -213,17 +215,24 @@ public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSourc
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task FenceAsync(CancellationToken cancellationToken)
+    private Task FenceAsync(CancellationToken cancellationToken)
+        => FenceAsync(leaseFences?.FenceFor(RealmAuthorityScopes.Instances), cancellationToken);
+
+    private async Task FenceAsync(RealmLeaseFence? fence, CancellationToken cancellationToken)
     {
-        if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+        if (fence is { } held)
         {
-            await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            await LeaseFencedWrite.EnsureHeldAsync(db, held, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private async Task SaveAsync(CancellationToken cancellationToken)
+    private Task SaveAsync(CancellationToken cancellationToken)
+        => SaveAsync(leaseFences?.FenceFor(RealmAuthorityScopes.Instances), cancellationToken);
+
+    // A write that called RequireFence passes the fence it got; the keeper may have released since, and a second read would then be null (unchecked).
+    private async Task SaveAsync(RealmLeaseFence? fence, CancellationToken cancellationToken)
     {
-        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Instances, cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, fence, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 }

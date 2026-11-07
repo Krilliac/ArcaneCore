@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 
@@ -12,8 +13,8 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// Ported: the nineteen states and their save string; SPECIAL breaks the crumbling wall (177220) once; DONE breaks it if that has not happened
 /// and opens the corrupted vine (179502); a wall or vine created while Alzzin is done (or the wall already broken) is created open; a loaded
 /// state of DONE or more counts as the wall broken. The Gordok Tribute run continues in DireMaul/DireMaulTribute.cs.
-/// Not ported (logged at debug level): the Felvine shards' respawn on DONE. Zevrim, Ironbark, Warpwood, Immol'thar, the prince and the
-/// pylons are in DireMaul/DireMaulWest.cs. The Dreadsteed ritual (TYPE_DREADSTEED) is in DireMaul/DireMaulDreadsteed.cs.
+/// DONE also respawns every Felvine shard (179559) created in the instance (<c>DoRespawnGameObject(guid)</c>, 60 s despawn).
+/// Zevrim, Ironbark, Warpwood, Immol'thar, the prince and the pylons are in DireMaul/DireMaulWest.cs. The Dreadsteed ritual (TYPE_DREADSTEED) is in DireMaul/DireMaulDreadsteed.cs.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
@@ -26,6 +27,16 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
 
     public const uint GoCrumbleWall = 177220;
     public const uint GoCorruptVine = 179502;
+    public const uint GoFelvineShard = 179559;
+
+    /// <summary>ScriptedInstance::DoRespawnGameObject's default <c>timeToDespawn</c> (MINUTE, sc_instance.h).</summary>
+    public const uint FelvineShardDespawnSeconds = 60;
+
+    /// <summary><c>m_lFelvineShardGUIDs</c>.</summary>
+    private readonly List<ObjectGuid> _felvineShards = [];
+
+    /// <summary>The Felvine shards created so far, in creation order.</summary>
+    internal IReadOnlyList<ObjectGuid> FelvineShards => _felvineShards;
 
     private bool _wallDestroyed;
 
@@ -75,6 +86,9 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
             case GoCorruptVine:
                 OpenIf(go, Encounters[TypeAlzzin] == EncounterState.Done);
                 break;
+            case GoFelvineShard:
+                _felvineShards.Add(go.Guid);
+                return;
             default:
                 CreateWestObject(go);
                 return;
@@ -103,7 +117,7 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
             }
 
             DoUseDoorOrButton(GoCorruptVine);
-            NotPorted(type, data, "(the Felvine shards' respawn)");
+            RespawnFelvineShards();
         }
         else if (data == EncounterState.Special && !_wallDestroyed)
         {
@@ -113,6 +127,24 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
 
         Encounters[TypeAlzzin] = data;
         SaveIfDone(data);
+    }
+
+    /// <summary>instance_dire_maul SetData(TYPE_ALZZIN, DONE): <c>DoRespawnGameObject</c> for every stored Felvine shard.</summary>
+    private void RespawnFelvineShards()
+    {
+        if (_felvineShards.Count == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } creatures
+            || Instance.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        {
+            return;
+        }
+
+        foreach (ObjectGuid guid in _felvineShards)
+        {
+            if (objects.Find(guid) is { } shard)
+            {
+                creatures.RespawnGameObjectFor(shard, FelvineShardDespawnSeconds);
+            }
+        }
     }
 
     public override uint GetData(uint type) => type < MaxEncounter ? Encounters[type] : 0;

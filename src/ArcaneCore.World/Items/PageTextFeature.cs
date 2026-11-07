@@ -1,4 +1,4 @@
-using ArcaneCore.Data.Items;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
@@ -6,58 +6,54 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Items;
 
-/// <summary>The "PageText" configuration section (docs/areas/items.md, "Page text").</summary>
-public sealed class PageTextOptions
-{
-    public const string SectionName = "PageText";
-
-    /// <summary>
-    /// A MySQL world dump (vmangos or cmangos classic-db, plain or .gz) holding the <c>page_text</c> table; only that table is read. Empty: no
-    /// page text, so every page a client asks for is answered "Item page missing." (the vmangos answer for an unknown page). A configured file
-    /// that cannot be read refuses startup.
-    /// </summary>
-    public string? DumpPath { get; set; }
-}
-
 /// <summary>
 /// Readable pages of items (books, letters, plaques: <c>item_template.page_text</c> with CMSG_READ_ITEM) and of text objects
 /// (SMSG_GAMEOBJECT_PAGETEXT): the client asks for each page with CMSG_PAGE_TEXT_QUERY and this feature answers from the immutable
-/// <see cref="PageTextCatalog"/>, read once at startup from <see cref="PageTextOptions.DumpPath"/>.
+/// <see cref="PageTextCatalog"/>, read once at startup from the world database's <c>page_text</c> table (<see cref="IPageTextStore"/>; filled by
+/// <c>arcane-content-importer import</c> or <c>refresh</c> from the content dump).
 /// </summary>
 public sealed class PageTextFeature : IWorldFeature
 {
+    private readonly IServiceProvider _services;
     private readonly ILogger<PageTextFeature> _logger;
 
     public PageTextFeature(IServiceProvider services, ILogger<PageTextFeature> logger)
     {
-        ArgumentNullException.ThrowIfNull(services);
+        _services = services ?? throw new ArgumentNullException(nameof(services));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        Options = new PageTextOptions();
-        services.GetService<IConfiguration>()?.GetSection(PageTextOptions.SectionName).Bind(Options);
     }
 
-    public PageTextOptions Options { get; }
-
-    /// <summary>The pages in force (<see cref="PageTextCatalog.Empty"/> without a configured dump).</summary>
+    /// <summary>The pages in force (<see cref="PageTextCatalog.Empty"/> when the world database has no <c>page_text</c> rows).</summary>
     public PageTextCatalog Pages { get; private set; } = PageTextCatalog.Empty;
 
     public void Attach(WorldRuntime world)
     {
-        if (string.IsNullOrWhiteSpace(Options.DumpPath))
+        IReadOnlyList<PageTextRecord> rows = [];
+        if (_services.GetService<IServiceScopeFactory>() is { } scopes)
         {
-            _logger.LogWarning("PageText:DumpPath is not set: item and object pages answer \"{Missing}\"", ItemMiscPackets.MissingPageText);
+            using IServiceScope scope = scopes.CreateScope();
+            if (scope.ServiceProvider.GetService<IPageTextStore>() is { } store)
+            {
+                // Fail closed: a database that cannot be read refuses startup.
+#pragma warning disable ARC0006 // synchronous IWorldFeature.Attach runs once at startup before the world thread ticks and the realm accepts connections, so blocking the startup thread is intended (fail closed)
+                rows = store.LoadAsync().GetAwaiter().GetResult();
+#pragma warning restore ARC0006
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            _logger.LogWarning("The world database has no page_text rows (import the content dump): item and object pages answer \"{Missing}\"", ItemMiscPackets.MissingPageText);
             return;
         }
 
-        // Fail closed: a configured dump that cannot be read refuses startup.
-        Pages = new PageTextCatalog(PageTextDumpReader.Load(Options.DumpPath), message => _logger.LogWarning("{Message}", message));
-        _logger.LogInformation("Loaded {Count} page texts from {Path}", Pages.Count, Options.DumpPath);
+        Pages = new PageTextCatalog(rows, message => _logger.LogWarning("{Message}", message));
+        _logger.LogInformation("Loaded {Count} page texts from the world database", Pages.Count);
     }
 
     /// <summary>Replace the pages (tests and tools; the world thread or before the first query).</summary>

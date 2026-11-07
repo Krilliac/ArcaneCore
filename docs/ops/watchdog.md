@@ -93,6 +93,8 @@ recorder are appended to each line so both views are on one line.
     and the report counts the hangs it consumed, so a hang that closes while the check runs is reported once with its own record; with no record left the line says
     `hung frame described in the previous report` and nothing goes to bot QA. World-thread work after `RunTick` returns (the tick observer, the tick-completed event, the
     performance log) is not in the tick body, so it counts as outside tick code.
+  Both modes, and the hung-frame text, carry process totals since start once there are any: `; terrain/vmap tile file reads since start (prefetch misses): <caller kind> <N> (<M> ms), ...`
+  and `; terrain/vmap tile prefetches dropped untaken since start: <Terrain|VMap> <N> evicted, <N> arrival evicted, <N> expired`. An expiry is counted when a later prefetch request sweeps it.
   Both modes end with `; save queue depth <N>, oldest pending <M> ms`, the character save queue's backlog
   (see [persistence](../areas/persistence.md)), when the queue is registered. The same phase split is added to the runtime's own
   `Slow world update` performance-log line. Cost on the world thread: a few stores per phase change and per handler, a top-five insertion
@@ -164,7 +166,7 @@ The state `dumping` is written once when the process starts its own crash dump (
 | `None` | Nothing, whatever the environment says. |
 | `Systemd` | `sd_notify(3)` in managed code: datagrams on the unix socket named by `NOTIFY_SOCKET` (a leading `@` is the abstract namespace). `READY=1` + `STATUS=` at start, `WATCHDOG=1` every interval, `STOPPING=1` at stop. The interval defaults to half of `WATCHDOG_USEC` (at least one second) when systemd set it for this process (`WATCHDOG_PID` absent or equal to our pid); without `WATCHDOG_USEC` only READY and STOPPING go out and a warning says so. The socket is non-blocking: a reader that stopped draining fails the beat (reported, rate-limited) instead of parking the watchdog thread in `sendmsg`. Without the socket, or on a platform without unix datagram sockets (Windows), one warning and no heartbeat; nothing throws. |
 | `File` | Every beat rewrites `FilePath` (relative paths are under the content root) with `<UTC ISO-8601> pid=<pid> <ready\|alive\|stopping\|dumping>`, written to a sibling `.tmp` and renamed over the target, so a supervisor checking the modification time or the content never reads a half-written file. The file is left in place at stop with `stopping` as its last word. `File` without a `FilePath` is a configuration error. |
-| `Stdout` | One `heartbeat <UTC> pid=<pid> <state>` line per beat on standard output. |
+| `Stdout` | One `heartbeat <UTC> pid=<pid> <state>` line per beat on standard output; under a cluster host supervisor each line ends with ` token=<per-run token>` (a heartbeat without it is ordinary output to the supervisor, see docs/ops/supervisor.md). |
 
 `IntervalSeconds` (default 0 = the systemd rule above, otherwise 10) is the beat period. **Fail closed**: before each beat every
 `ILivenessSource` is asked; if any reports not alive the beat is withheld, counted in `watchdog.heartbeat.withheld` and one rate-limited

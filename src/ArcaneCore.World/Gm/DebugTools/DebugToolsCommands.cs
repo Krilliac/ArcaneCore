@@ -270,7 +270,7 @@ public sealed class DebugToolsCommands : ICommandExtension
         return true;
     }
 
-    private static string TruncateFault(string? fault)
+    internal static string TruncateFault(string? fault)
         => fault is null ? "-" : fault.Length <= 120 ? fault : string.Concat(fault.AsSpan(0, 117), "...");
 
     private static bool Sqlite(CommandContext context, string args)

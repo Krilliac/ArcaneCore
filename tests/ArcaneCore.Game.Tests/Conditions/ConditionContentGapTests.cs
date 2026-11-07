@@ -66,6 +66,22 @@ public sealed class ConditionContentGapTests
     }
 
     [Fact]
+    public void DeadOrAwayGroupModes_FailClosedWithoutTheirCollaborator_AndCountAsUndecidable()
+    {
+        ConditionEvaluator e = Evaluator(new ConditionContext(),
+            Row(1, ConditionType.DeadOrAway, 1),
+            Row(2, ConditionType.DeadOrAway, 2),
+            Row(3, ConditionType.DeadOrAway, 3));
+        Player player = CreatePlayer();
+        Assert.False(e.IsSatisfied(1, player, null));
+        Assert.False(e.IsSatisfied(2, player, null));
+
+        ConditionSummary summary = e.Summarize();
+        Assert.Equal(1, summary.Evaluable);
+        Assert.Equal(2, summary.UnavailableByType[(int)ConditionType.DeadOrAway]);
+    }
+
+    [Fact]
     public void DeadOrAwayChecksPlayerAndSourceCreature()
     {
         ConditionEvaluator e = Evaluator(null,

@@ -491,9 +491,12 @@ public sealed class LogonSession(
 
         if (!LogonChallengeRequest.TryParse(body, out LogonChallengeRequest? request) || request is null)
         {
-            logger.LogWarning("[{Endpoint}] malformed logon challenge", remoteEndpoint);
+            // A challenge that does not parse is refused and the connection ends, as the reference authservers end a
+            // connection whose challenge handler refuses it; left open, one socket could resend it (and log it) without end.
+            logger.LogWarning("[{Endpoint}] malformed logon challenge; closing", remoteEndpoint);
             RecordFailure();
             await SendChallengeFailureAsync(AuthResult.UnknownAccount, cancellationToken).ConfigureAwait(false);
+            _closeRequested = true;
             return;
         }
 
@@ -1263,7 +1266,12 @@ public sealed class LogonSession(
 
         if (!_authenticated)
         {
-            logger.LogWarning("[{Endpoint}] realm list requested before authentication", remoteEndpoint);
+            // REALM_LIST is only accepted once authenticated (vmangos and AzerothCore dispatch it in STATUS_AUTHED only and
+            // drop a connection that sends a command in the wrong state). Closing here also bounds the warning to one per
+            // connection; a session left open could repeat the request and flood the logon log.
+            logger.LogWarning("[{Endpoint}] realm list requested before authentication; closing", remoteEndpoint);
+            RecordFailure();
+            _closeRequested = true;
             return;
         }
 

@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Ops.Accounts;
 /// <summary>
 /// The PIN/TOTP second factor of an account, shared by every world-side login (the Atlas web login and remote admin) so the per-account
 /// "newest TOTP step used" record is one table: a code spent on one login surface cannot be replayed on the other inside the +-1 step window
-/// (vmangos AuthSocket.cpp:497-517 and ArcaneCore.Realm LogonSession judge the same PIN/TOTP). Registered as a singleton; the record is in
+/// (vmangos AuthSocket.cpp:697-749 and ArcaneCore.Realm LogonSession judge the same PIN/TOTP). Registered as a singleton; the record is in
 /// memory and per process. Thread safety: every member is safe to call concurrently.
 /// </summary>
 public sealed class SecondFactorChecker

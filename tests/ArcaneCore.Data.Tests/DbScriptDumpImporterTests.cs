@@ -27,6 +27,25 @@ public sealed class DbScriptDumpImporterTests
     }
 
     [Fact]
+    public void GameObjectUseAndTemplateUseTables_AreImportedInTheirOwnNamespaces()
+    {
+        // Synthetic ids: dbscripts_on_go_use is keyed by the spawn guid, dbscripts_on_go_template_use by the template entry.
+        string dump = $"""
+            INSERT INTO `dbscripts_on_go_use` ({ScriptColumns}) VALUES
+            (2890009,5000,0,10,10506,900000,0,0,0,0,0,0,0,0,0,309.65,93.47,101.66,0.03,0,0,'summon');
+            INSERT INTO `dbscripts_on_go_template_use` ({ScriptColumns}) VALUES
+            (180515,0,0,15,12345,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'cast');
+            """;
+        var importer = new DbScriptDumpImporter();
+        importer.Read(new StringReader(dump));
+
+        Assert.Equal(1, importer.Counts[DbScriptDataModule.GameObjectUseTable]);
+        Assert.Equal(1, importer.Counts[DbScriptDataModule.GameObjectTemplateUseTable]);
+        Assert.Contains(importer.Scripts, s => s.Kind == DbScriptKind.GameObject && s.Step.Id == 2890009 && s.Step.DelayMs == 5000 && s.Step.DataLong == 10506);
+        Assert.Contains(importer.Scripts, s => s.Kind == DbScriptKind.GameObjectTemplate && s.Step.Id == 180515 && s.Step.DataLong == 12345);
+    }
+
+    [Fact]
     public void ParsesFourIndependentNamespaces_AndKeepsScriptWaypointSeparateFromPatrols()
     {
         string dump = $"""

@@ -59,6 +59,18 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         }
     }
 
+    /// <summary>Ids of characters with a quest or taxi write queued or in progress, or retained (quarantined characters excluded: nothing of theirs is written), ascending.</summary>
+    public IReadOnlyList<int> OpenCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _characters.Where(c => (c.Value.Pending != 0 || c.Value.Failure is not null) && !_quarantined.Contains(c.Key) && !CharacterRetirementRegistry.Retired(Retirement, c.Key)).Select(c => c.Key).Order()];
+            }
+        }
+    }
+
     /// <summary>The failure that halted the queue for good (a rejected character ownership), or null while it is running.</summary>
     public Exception? TerminalFailure
     {
@@ -426,7 +438,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
 
                 pending.Done?.TrySetResult();
             }
-            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, pending.CharacterId))
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, pending.CharacterId))
             {
                 // Refused because the character moved to another world: counted, neither logged nor terminal.
                 lock (_gate)

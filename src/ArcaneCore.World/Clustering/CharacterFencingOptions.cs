@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Social;
 
@@ -23,7 +24,8 @@ public sealed class CharacterFencingOptions
 {
     public const string SectionName = "Cluster:Fencing";
 
-    /// <summary>Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database.</summary>
+    /// <summary>Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database. The gateway reads this key too: with it or Cluster:Worker:Enabled true, the write fence is attached to the gateway's own characters connection (the handoff and transfer journals).</summary>
+    [ConfigDaemons(ConfigDaemon.World | ConfigDaemon.Gateway)]
     public bool Enabled { get; set; }
 
     /// <summary>The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. Must be distinct for each world of a multi-world cluster (the supervisor check refuses a duplicate).</summary>
@@ -48,7 +50,7 @@ public sealed class CharacterFencingOptions
 
     public const int DefaultHeartbeatSeconds = 10;
 
-    /// <summary>With Scope=Worker, how often the worker records that it is alive on its ownership row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds.</summary>
+    /// <summary>With Scope=Worker, how often the worker records that it is alive on its heartbeat row, in seconds (1 to 60). A reap only ever fires on a heartbeat older than ReapAfterSeconds.</summary>
     public int HeartbeatSeconds { get; set; } = DefaultHeartbeatSeconds;
 
     public const int DefaultReapAfterSeconds = 150;

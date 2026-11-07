@@ -48,7 +48,7 @@ internal sealed class SyntheticNavWorld : IAsyncDisposable
         if (unloadedTiles is null)
         {
             // The terrain tile these meshes sit on has no file of its own (the tiles are loaded under other indices): settle its one
-            // background read now, so a bot's first plan is not answered "pending" while the pool finds that out.
+            // background read now, so a bot's first plan is not answered "pending" while a reader thread finds that out.
             Vector3 probe = new(5, 5, 0);
             var nonBlocking = new PathOptions { LoadTiles = true, NonBlockingTiles = true };
             // The read can finish between the query and the lookup, leaving no pending task to await: query again then.

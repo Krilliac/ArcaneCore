@@ -307,6 +307,24 @@ function Find-LiveChildProcess {
     return Get-Process -Id ([int]$row.ProcessId) -ErrorAction SilentlyContinue
 }
 
+function Get-LiveLogFailureDetail {
+    <#
+    .SYNOPSIS
+      A short suffix naming why a daemon's log says it stopped: the last few refusal, error or critical lines of -LogPath (text or JSON lines),
+      each cut to 300 characters; an empty string when there is no log, no such line, or the log cannot be read. A supervisor that refuses a
+      child on capacity (host memory below its reserve) writes the reason there and exits, and its console window gives only an exit code.
+    #>
+    param([string]$LogPath)
+    if (-not $LogPath -or -not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { return '' }
+    try {
+        $hits = @(Get-Content -LiteralPath $LogPath -Tail 60 -ErrorAction Stop |
+            Where-Object { $_ -match '(?i)refus|admission|reserve|"(level|lvl)"\s*:\s*"(error|critical|fail|crit)' -or $_ -cmatch '\b(FAIL|CRIT)\b' } |
+            Select-Object -Last 3 | ForEach-Object { $line = "$_".Trim(); if ($line.Length -gt 300) { $line.Substring(0, 300) + '...' } else { $line } })
+    } catch { return '' }
+    if ($hits.Count -eq 0) { return '' }
+    return " Last relevant log lines ($LogPath): " + ($hits -join ' | ')
+}
+
 function Wait-LiveDaemonUp {
     <#
     .SYNOPSIS
@@ -321,6 +339,8 @@ function Wait-LiveDaemonUp {
       continues for the image's next process (a child of -ParentPid again) within -TimeoutSec instead of throwing; -WatchPid (the
       supervisor) going away still stops it. Without the switch (a daemon this script started itself) an early exit throws.
       -ArgumentToken names the child among several of the same image (see Find-LiveChildProcess); it is passed on only when given.
+      -LogPath is the log of the process that launches it (the supervisor's): when the launcher exits or is gone before the daemon is up, the
+      error carries the last refusal/error lines of that log (Get-LiveLogFailureDetail; every throw about the launcher or the child going away does), since the exit code alone does not say why.
     #>
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -331,7 +351,8 @@ function Wait-LiveDaemonUp {
         [int]$WatchPid = 0,
         [int]$SettleSeconds = 3,
         [string]$ArgumentToken = '',
-        [switch]$FollowRelaunch
+        [switch]$FollowRelaunch,
+        [string]$LogPath = ''
     )
     $find = @{ ParentPid = $ParentPid; ImageName = $ImageName }
     if ($ArgumentToken) { $find.ArgumentToken = $ArgumentToken }
@@ -346,7 +367,7 @@ function Wait-LiveDaemonUp {
                 Start-Sleep -Seconds $SettleSeconds
                 $child.Refresh()
                 if (-not $child.HasExited) { return $child }
-                if (-not $FollowRelaunch) { throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log." }
+                if (-not $FollowRelaunch) { throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log.$(Get-LiveLogFailureDetail -LogPath $LogPath)" }
                 Write-Host "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); its supervisor relaunches it, waiting for the new process."
                 $seen = $null
             }
@@ -354,12 +375,12 @@ function Wait-LiveDaemonUp {
             Write-Host "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); its supervisor relaunches it, waiting for the new process."
             $seen = $null
         } elseif ($null -ne $seen) {
-            throw "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); see its console window and log."
+            throw "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); see its console window and log.$(Get-LiveLogFailureDetail -LogPath $LogPath)"
         } elseif ($parent -and $parent.HasExited) {
-            throw "$Label never started: its console window (pid $ParentPid) exited with code $($parent.ExitCode)."
+            throw "$Label never started: its console window (pid $ParentPid) exited with code $(if ($null -ne $parent.ExitCode) { $parent.ExitCode } else { 'unknown' }).$(Get-LiveLogFailureDetail -LogPath $LogPath)"
         }
         if ($WatchPid -gt 0 -and -not (Get-Process -Id $WatchPid -ErrorAction SilentlyContinue)) {
-            throw "$Label is not up and the process that launches it (pid $WatchPid) has exited; see its console window."
+            throw "$Label is not up and the process that launches it (pid $WatchPid) has exited; see its console window.$(Get-LiveLogFailureDetail -LogPath $LogPath)"
         }
         if ([DateTime]::UtcNow -gt $deadline) {
             throw "$Label was not up after $TimeoutSec s ($(if ($Port) { "port $Port not listening" } else { 'process not running' })); nothing was stopped."

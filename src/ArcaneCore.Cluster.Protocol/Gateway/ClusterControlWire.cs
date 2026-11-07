@@ -16,7 +16,7 @@ public enum ControlKind : byte
 }
 
 /// <summary>
-/// What a control request asks the worker to do. Handoff verbs are 1..9 and transfer verbs 17..24, so a verb alone names its <see cref="ControlKind"/>
+/// What a control request asks the worker to do. Handoff verbs are 1..10 and transfer verbs 17..24, so a verb alone names its <see cref="ControlKind"/>
 /// (<see cref="ClusterControlWire.KindOf"/>); a frame whose kind and verb disagree is malformed. The values are wire format and never change.
 /// </summary>
 public enum ControlVerb : byte
@@ -31,6 +31,7 @@ public enum ControlVerb : byte
     ReleaseWriterLock = 7,
     Retire = 8,
     Promote = 9,
+    RetireWrites = 10,
 
     // Transfer (kind 2): sent to the target or the source worker of one transfer.
     TargetDescribe = 17,
@@ -174,7 +175,7 @@ public enum ControlTransferOptions : byte
 /// <summary>Verb arguments of a <see cref="ControlRequest"/>. The concrete type is fixed by the verb.</summary>
 public abstract record ControlArguments;
 
-/// <summary>No arguments: Describe, StopAdmissions, Freeze, Flush, Resume, ReleaseWriterLock, Retire, TargetDescribe, Install (the tokens and bundles come from the journal).</summary>
+/// <summary>No arguments: Describe, StopAdmissions, Freeze, Flush, Resume, ReleaseWriterLock, RetireWrites, Retire, TargetDescribe, Install (the tokens and bundles come from the journal).</summary>
 public sealed record ControlNoArguments : ControlArguments
 {
     public static ControlNoArguments Instance { get; } = new();
@@ -183,8 +184,14 @@ public sealed record ControlNoArguments : ControlArguments
 /// <summary>Warm: the incarnation the standby is expected to have.</summary>
 public sealed record ControlWarmArguments(Guid ExpectedIncarnation) : ControlArguments;
 
-/// <summary>Promote, Activate and RetireSource: an ownership token (scope, epoch, incarnation).</summary>
+/// <summary>Activate and RetireSource: an ownership token (scope, epoch, incarnation).</summary>
 public sealed record ControlTokenArguments(CharacterOwnershipToken Token) : ControlArguments;
+
+/// <summary>
+/// Promote: the ownership token the standby runs under, and the slot it takes over (<c>Gateway:Workers:N:NodeId</c>). Transfer journal rows, bundles and transfer verbs name a worker by its slot, and a standby's own
+/// <c>Cluster:Worker:NodeId</c> differs from it, so the gateway tells the standby the name it answers transfers under from now on.
+/// </summary>
+public sealed record ControlPromoteArguments(CharacterOwnershipToken Token, string SlotNode) : ControlArguments;
 
 /// <summary>Reserve: the character and the destination map and instance (instance 0 on an instanced map asks the target to allocate one).</summary>
 public sealed record ControlReserveArguments(ulong CharacterGuid, uint MapId, uint InstanceId) : ControlArguments;
@@ -297,7 +304,7 @@ public static class ClusterControlWire
     /// <summary>The kind a verb belongs to, or null for a value that is not a verb.</summary>
     public static ControlKind? KindOf(ControlVerb verb) => verb switch
     {
-        >= ControlVerb.Describe and <= ControlVerb.Promote => ControlKind.WorldHandoff,
+        >= ControlVerb.Describe and <= ControlVerb.RetireWrites => ControlKind.WorldHandoff,
         >= ControlVerb.TargetDescribe and <= ControlVerb.RetireSource => ControlKind.PlayerTransfer,
         _ => null,
     };
@@ -319,7 +326,15 @@ public static class ClusterControlWire
             case ControlVerb.Warm:
                 w.Guid(Expect<ControlWarmArguments>(request).ExpectedIncarnation);
                 break;
-            case ControlVerb.Promote or ControlVerb.Activate or ControlVerb.RetireSource:
+            case ControlVerb.Promote:
+            {
+                var args = Expect<ControlPromoteArguments>(request);
+                w.Text(args.SlotNode);
+                w.Token(args.Token);
+                break;
+            }
+
+            case ControlVerb.Activate or ControlVerb.RetireSource:
                 w.Token(Expect<ControlTokenArguments>(request).Token);
                 break;
             case ControlVerb.Reserve:
@@ -367,7 +382,14 @@ public static class ClusterControlWire
             case ControlVerb.Warm:
                 args = new ControlWarmArguments(r.Guid());
                 break;
-            case ControlVerb.Promote or ControlVerb.Activate or ControlVerb.RetireSource:
+            case ControlVerb.Promote:
+            {
+                string slotNode = r.Text();
+                args = new ControlPromoteArguments(r.Token(), slotNode);
+                break;
+            }
+
+            case ControlVerb.Activate or ControlVerb.RetireSource:
                 args = new ControlTokenArguments(r.Token());
                 break;
             case ControlVerb.Reserve:

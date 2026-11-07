@@ -58,6 +58,12 @@ public sealed record HonorOptions
     /// </summary>
     public float Rate { get; set; } = 1.0f;
 
+    /// <summary>
+    /// A game master with GM mode on inspects players of the other faction (default true). An ArcaneCore extension: vmangos HandleInspectOpcode
+    /// (MiscHandler.cpp:943-960) has no such rule, so false is the retail behaviour.
+    /// </summary>
+    public bool GmCrossFactionInspect { get; init; } = true;
+
     /// <summary>The weekly calculation's options.</summary>
     public HonorMaintenanceOptions Maintenance => new(RpDecay, MinHonorKills, PoolSizePerFaction);
 }

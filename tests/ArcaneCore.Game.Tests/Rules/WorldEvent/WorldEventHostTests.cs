@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Rules;
 using ArcaneCore.Game.Rules.WorldEvent;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Rules;
 using Xunit;
 
@@ -17,6 +18,8 @@ public sealed class WorldEventHostTests
 
         public Func<ushort, bool>? OnStart { get; set; }
 
+        public Func<ushort, bool>? OnStop { get; set; }
+
         public bool StartEvent(ushort eventId)
         {
             Log.Add($"start {eventId}");
@@ -26,7 +29,7 @@ public sealed class WorldEventHostTests
         public bool StopEvent(ushort eventId)
         {
             Log.Add($"stop {eventId}");
-            return true;
+            return OnStop?.Invoke(eventId) ?? true;
         }
 
         public void Announce(string text) => Log.Add($"say {text}");
@@ -198,6 +201,176 @@ public sealed class WorldEventHostTests
     }
 
     [Fact]
+    public void AnEntryReplacedDuringATick_GetsNoExtraUpdate_AndItsDelayedRunIsDropped()
+    {
+        // Rule 1 (event 7, on its first tick) restarts event 9; rule 2 (event 9, on start) says hello at once and bye after 100 ms.
+        // The tick visits the entries in the order they were created (event 7, then event 9: the dictionary has had no removal), so rule 1 runs before event 9's entry is reached; the test relies on that order.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 9)],
+            [Act(1, WorldEventRuleIds.StartEvent, 9), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
+        h.Control.OnStart = id =>
+        {
+            h.Runner.OnEventChanged(id, active: true, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        h.Runner.OnEventChanged(9, active: true, resume: false);
+        Assert.Equal(["say hello"], h.Control.Log);
+
+        h.Now = 200; // the first run's "bye" is due, but its entry is replaced by rule 1 earlier in this same tick
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 9", "say hello"], h.Control.Log);
+
+        h.Now = 400; // the replacement's own "bye" runs on the next tick, once
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 9", "say hello", "say bye"], h.Control.Log);
+        Assert.Equal(2, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryReplacedByItsOwnUpdateRule_GetsNoDelayedRunInThatTick()
+    {
+        // Event 7's Update rule restarts event 7 itself. The old entry holds a delayed "bye" that is due; it is replaced before its own update step,
+        // so its "bye" must not run in that tick. The replacement's own pending bye is not asserted: the fresh state re-fires rule 1 on the next tick and replaces the entry again.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StartEvent, 7), Act(2, SayAction, 1), Act(2, SayAction, 2, seq: 1, delayMs: 100)]));
+        h.Control.OnStart = id =>
+        {
+            h.Runner.OnEventChanged(id, active: true, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        Assert.Equal(["say hello"], h.Control.Log);
+
+        h.Now = 200; // the first entry's "bye" is due, but its own Update rule replaces it first
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "start 7", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryRemovedByAnotherEntrysUpdateRule_IsNotUpdatedOrRemovedAgain()
+    {
+        // Event 7's Update rule stops event 9, which has no pending run: entry 9 is removed in the middle of the tick, before the loop reaches
+        // it in _scratch (the entries are visited in creation order). The tick must not touch it afterwards, and later ticks find only event 7.
+        // A removed entry has Running false and no due run, so this guards double update and double removal only; it cannot tell the removed
+        // branch of IsCurrent apart from the unguarded path.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 9)],
+            [Act(1, WorldEventRuleIds.StopEvent, 9), Act(2, SayAction, 1)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+        h.Runner.OnEventChanged(9, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 9", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 9", "say hello"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AnEntryStoppedByItsOwnUpdateRule_IsRemovedAtTheTickTail_NotInsideTheRule()
+    {
+        // Event 7's Update rule stops event 7: the entry is kept while the rule runs (Firing) and the tick tail removes it, so the tick does not
+        // touch it afterwards and later ticks find nothing.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7), Rule(2, WorldEventRuleIds.Stopped, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StopEvent, 7), Act(2, SayAction, 1)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+    }
+
+    [Fact]
+    public void AnUpdateRuleThatStopsItsEvent_StillRunsItsLaterDelayedAction()
+    {
+        // Event 7's Update rule stops event 7 with its first action and has a delayed second action. The stop must not remove the entry while the
+        // rule is still running, or the delayed action would park into an orphaned state and never run.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7)],
+            [Act(1, WorldEventRuleIds.StopEvent, 7), Act(1, SayAction, 1, seq: 1, delayMs: 100)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 100;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 250;
+        h.Runner.Update();
+
+        Assert.Equal(["stop 7", "say hello"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
+    }
+
+    [Fact]
+    public void AResumedRunThatStopsItsEvent_StillParksAndRunsItsLaterDelayedAction()
+    {
+        // Actions: say hello after 100 ms, stop event 7, say bye 100 ms later. The resumed run clears its pending slot before it runs, so when
+        // it stops its own event nothing is pending; the entry must still survive until the last action parked and ran.
+        var h = new Harness(Content(
+            [Rule(1, WorldEventRuleIds.Update, ownerId: 7)],
+            [Act(1, SayAction, 1, delayMs: 100), Act(1, WorldEventRuleIds.StopEvent, 7, seq: 1), Act(1, SayAction, 2, seq: 2, delayMs: 100)]));
+        h.Control.OnStop = id =>
+        {
+            h.Runner.OnEventChanged(id, active: false, resume: false);
+            return true;
+        };
+        h.Runner.OnEventChanged(7, active: true, resume: false);
+
+        h.Now = 0;
+        h.Runner.Update(); // the Update rule fires and parks its first action
+        Assert.Empty(h.Control.Log);
+
+        h.Now = 100;
+        h.Runner.Update(); // resumed: hello, stop, then parks bye
+
+        Assert.Equal(["say hello", "stop 7"], h.Control.Log);
+        Assert.Equal(1, h.Runner.EntryCount);
+
+        h.Now = 200;
+        h.Runner.Update();
+
+        Assert.Equal(["say hello", "stop 7", "say bye"], h.Control.Log);
+        Assert.Equal(0, h.Runner.EntryCount);
+    }
+
+    [Fact]
     public void AnEventThatRestartsItself_IsCutAtTheNestingLimit()
     {
         var h = new Harness(Content([Rule(1, WorldEventRuleIds.Started, global: true, flags: RuleFlags.Repeatable)], [Act(1, WorldEventRuleIds.StartEvent, 7)]));
@@ -220,11 +393,14 @@ public sealed class WorldEventHostTests
             [Rule(1, WorldEventRuleIds.Started, ownerId: 7), Rule(2, WorldEventRuleIds.Started, ownerId: 8)],
             [Act(1, WorldEventRuleIds.StartEvent, 9), Act(2, SayAction, 1)]));
         h.Control.OnStart = _ => throw new InvalidOperationException("boom");
+        long before = FaultLedger.Shared.Snapshot().Where(f => f.Site == "world-event.rules").Sum(f => f.Count);
 
         h.Runner.OnEventChanged(7, active: true, resume: false);
         h.Runner.OnEventChanged(8, active: true, resume: false);
 
         Assert.Equal(["start 9", "say hello"], h.Control.Log);
+        // The harness passes no logger, so the fault goes to the shared ledger (the runner's null-logger branch): exactly the one throwing action is recorded.
+        Assert.Equal(before + 1, FaultLedger.Shared.Snapshot().Where(f => f.Site == "world-event.rules").Sum(f => f.Count));
     }
 
     /// <summary>A control that behaves like <c>GameEventService</c>: it refuses to start a running event, ignores a stop of a stopped one, and tells the runner.</summary>

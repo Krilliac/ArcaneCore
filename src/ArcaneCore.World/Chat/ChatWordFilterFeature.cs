@@ -36,7 +36,7 @@ public sealed class ChatWordFilterFeature(IServiceProvider services) : IWorldFea
         }
 
         Enabled = true;
-        Publish(new ChatWordFilter(store.LoadAsync().GetAwaiter().GetResult()));
+        Publish(new ChatWordFilter(store.LoadAsync().GetAwaiter().GetResult(), services.GetService<ILoggerFactory>()?.CreateLogger<ChatWordFilter>()));
     }
 
     /// <summary>Publishes a new filter and its name patterns (world thread, or before the world starts).</summary>

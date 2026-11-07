@@ -31,6 +31,9 @@ public sealed class HonorCpRow
     public float Cp { get; set; }
     public uint Date { get; set; }
     public byte Type { get; set; }
+
+    /// <summary>The write identity (<see cref="ArcaneCore.Kernel.Honor.HonorCpRecord.OperationId"/>, "D" format), unique; null for rows written before it existed.</summary>
+    public string? OperationId { get; set; }
 }
 
 /// <summary>The single weekly maintenance bookkeeping row (vmangos saved_variables honor_* columns).</summary>
@@ -104,6 +107,8 @@ public sealed class CharacterHonorDataModule : IDataModule, ICharacterDataCleanu
             entity.Property(r => r.Cp).HasColumnName("cp");
             entity.Property(r => r.Date).HasColumnName("date");
             entity.Property(r => r.Type).HasColumnName("type");
+            entity.Property(r => r.OperationId).HasColumnName("operation_id").HasMaxLength(36);
+            entity.HasIndex(r => new { r.CharacterId, r.OperationId }).IsUnique();
             entity.HasIndex(r => new { r.CharacterId, r.Date });
             entity.HasIndex(r => r.Date);
         });

@@ -65,6 +65,9 @@ public sealed class DbScriptDumpImporter
     /// <summary>The vmangos <c>spell_scripts</c> ids refused whole, with the reason of their first refused row.</summary>
     public IReadOnlyDictionary<uint, string> VmangosSpellScriptRejections => _vmangosSpellRejections;
 
+    /// <summary>The vmangos <c>conditions</c> row (a table without the cmangos <c>comments</c> column) read with this id, or null.</summary>
+    internal ConditionRow? VmangosCondition(uint conditionEntry) => _vmangosConditions.GetValueOrDefault(conditionEntry);
+
     /// <summary>What the last write left out: vmangos spell scripts whose condition did not resolve.</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
@@ -76,6 +79,8 @@ public sealed class DbScriptDumpImporter
         [DbScriptDataModule.GossipTable] = StepCount(DbScriptKind.Gossip),
         [DbScriptDataModule.EventTable] = StepCount(DbScriptKind.Event),
         [DbScriptDataModule.CreatureMovementTable] = StepCount(DbScriptKind.CreatureMovement),
+        [DbScriptDataModule.GameObjectUseTable] = StepCount(DbScriptKind.GameObject),
+        [DbScriptDataModule.GameObjectTemplateUseTable] = StepCount(DbScriptKind.GameObjectTemplate),
         [DbScriptDataModule.SpellTable] = StepCount(DbScriptKind.Spell)
             + _vmangosSpellScripts.Where(pair => !_scripts.ContainsKey((DbScriptKind.Spell, pair.Key))).Sum(pair => pair.Value.Count),
         [DbScriptDataModule.WaypointTable] = WaypointRows().Count(),
@@ -294,7 +299,7 @@ public sealed class DbScriptDumpImporter
         steps.Add((step.Row, step.VmangosConditionId));
     }
 
-    /// <summary>A <c>conditions</c> row, kept only to resolve vmangos spell script conditions (the conditions importer writes the table).</summary>
+    /// <summary>A <c>conditions</c> row, kept only to resolve vmangos conditions: the spell script conditions and the <c>spell_script_target.conditionId</c> translation (the conditions importer writes the table).</summary>
     private void ReadCondition(DumpRow row)
     {
         var parsed = new ConditionRow
@@ -302,7 +307,7 @@ public sealed class DbScriptDumpImporter
             ConditionEntry = U32(row, "condition_entry"),
             Type = I32(row, "type"),
             // vmangos conditions.value1..4 are signed int(11) (mangos.sql); ConditionRow stores them as uint, so a negative keeps its
-            // two's-complement bits. Only TEAM rows with value2..4 = 0 are ever resolved, and no such row is negative-valued.
+            // two's-complement bits. The rows that are resolved (TEAM with value2..4 = 0, and the five spell_script_target types) are not negative-valued; an AND operand id is an unsigned id.
             Value1 = ConditionValue(row, "value1"),
             Value2 = ConditionValue(row, "value2"),
             Value3 = ConditionValue(row, "value3"),
@@ -332,6 +337,8 @@ public sealed class DbScriptDumpImporter
         await db.Set<EventScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CreatureMovementScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<SpellScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GameObjectUseScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<GameObjectTemplateUseScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScriptWaypointRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -442,6 +449,8 @@ public sealed class DbScriptDumpImporter
             DbScriptDataModule.EventTable => (true, DbScriptKind.Event),
             DbScriptDataModule.CreatureMovementTable => (true, DbScriptKind.CreatureMovement),
             DbScriptDataModule.SpellTable => (true, DbScriptKind.Spell),
+            DbScriptDataModule.GameObjectUseTable => (true, DbScriptKind.GameObject),
+            DbScriptDataModule.GameObjectTemplateUseTable => (true, DbScriptKind.GameObjectTemplate),
             _ => (false, default(DbScriptKind)),
         };
         return known;

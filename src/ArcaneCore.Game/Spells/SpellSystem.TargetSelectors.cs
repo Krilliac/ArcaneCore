@@ -182,9 +182,9 @@ public sealed partial class SpellSystem
 
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {
-        [SpellImplicitTarget.LocationUnitMinionPosition] = new((_, cast, effect, _) =>
+        [SpellImplicitTarget.LocationUnitMinionPosition] = new((system, cast, effect, _) =>
             effect.Effect == SpellEffectName.Duel ? [(cast.Caster, 1.0f)]
-                : SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f), LocationOnly: true),
+                : SpellTargetSelectors.SelectCasterRelativeLocation(system, cast, effect, MathF.PI * 0.25f), LocationOnly: true),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterFrontRight] = Location(1.75f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBackRight] = Location(1.25f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBackLeft] = Location(0.75f),
@@ -202,5 +202,5 @@ public sealed partial class SpellSystem
     };
 
     private static TargetSelectorEntry Location(float piMultiple)
-        => new((_, cast, effect, _) => SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * piMultiple), LocationOnly: true);
+        => new((system, cast, effect, _) => SpellTargetSelectors.SelectCasterRelativeLocation(system, cast, effect, MathF.PI * piMultiple), LocationOnly: true);
 }

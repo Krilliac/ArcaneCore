@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
@@ -209,7 +210,12 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        player.Inventory.AutoEquipItem(srcBag, srcSlot);
+        // vmangos HandleAutoEquipItemOpcode (ItemHandler.cpp:225-227): a bag that ends up in a bag slot is opened on the client.
+        ObjectGuid moving = player.Inventory.GetItem(srcBag, srcSlot)?.Guid ?? ObjectGuid.Empty;
+        if (player.Inventory.AutoEquipItem(srcBag, srcSlot)) // false for an empty source slot, so a moving bag always has a guid here
+        {
+            session.Send(WorldOpcode.SmsgOpenContainer, ItemMiscPackets.OpenContainer(moving));
+        }
     }
 
     /// <summary>CMSG_AUTOSTORE_BAG_ITEM: u8 src bag, u8 src slot, u8 dst bag (WorldSession::HandleAutoStoreBagItemOpcode).</summary>

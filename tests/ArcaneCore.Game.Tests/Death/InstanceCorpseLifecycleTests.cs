@@ -5,6 +5,7 @@ using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Tests.Instances;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Instances;
 using Xunit;
 using static ArcaneCore.Game.Tests.Instances.InstanceFixture;
 
@@ -44,6 +45,42 @@ public sealed class InstanceCorpseLifecycleTests
         Map map = Assert.IsType<Map>(f.World.FindMap(Dungeon, id));
         Assert.Same(map, a.Combat.Corpse!.Map);
         return (a, id, map);
+    }
+
+    /// <summary>
+    /// A continent worker with Cluster:Worker:AllowInstanceMaps off loads every bound save at startup all the same. A ghost transferred there whose body lies in such an instance must keep
+    /// the body outside every map: creating the map throws MapNotOwnedException, which used to escape before the body was set, so the next save stored a ghost without a body (a free revive at the next login).
+    /// </summary>
+    [Fact]
+    public void AGhostOnAWorkerWithoutInstanceCopies_KeepsItsBodyOutsideEveryMap_WithItsInstanceId()
+    {
+        const uint Instance = 150;
+        using InstanceFixture f = Create();
+        Assert.True(MapOwnership.TryParse("0", allowInstanceMaps: false, out MapOwnership continentOnly, out string? error), error);
+        f.World.Ownership = continentOnly;
+        f.Manager.Load(new InstanceStoreSnapshot([new InstanceRecord(Instance, Dungeon, Start + 3600)], [new CharacterInstanceBindRecord(1, Instance, false)], [], []));
+        Assert.True(f.Manager.IsSaveLive(Dungeon, Instance)); // the save is here: only the ownership check keeps the map from being created
+        Assert.False(f.World.Owns(Dungeon, Instance));
+        Player a = f.AddPlayer(1);
+
+        f.World.GetMap(0).Combat.RestoreGhost(a, Body(Instance));
+
+        Assert.Null(f.World.FindMap(Dungeon, Instance));
+        Corpse body = Assert.IsType<Corpse>(a.Combat.Corpse);
+        Assert.Null(body.Map);
+        Assert.Equal((Dungeon, Instance), (body.MapId, body.InstanceId));
+        Assert.Empty(f.World.GetMap(0).Combat.Corpses);
+
+        // The next save keeps the ghost and its body: no half-health revive at the next login.
+        CharacterLife saved = PlayerLife.Capture(a);
+        Assert.True(PlayerLife.IsGhostWithBody(saved));
+        Assert.False(PlayerLife.HasNoBodyToReturnTo(saved));
+        Assert.Equal((Dungeon, Instance), (saved.Corpse!.MapId, saved.Corpse.InstanceId));
+
+        // The refusal is the ownership alone: the worker that owns the copy resolves the very same save.
+        Assert.Null(f.Manager.ResolveCorpseMap(Dungeon, Instance));
+        f.World.Ownership = MapOwnership.All;
+        Assert.IsType<Map>(f.Manager.ResolveCorpseMap(Dungeon, Instance));
     }
 
     [Fact]

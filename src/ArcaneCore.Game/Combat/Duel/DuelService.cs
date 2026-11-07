@@ -181,7 +181,7 @@ public sealed partial class DuelService
 
     /// <summary>
     /// vmangos <c>Unit::CombatStopWithPets(includingCast)</c> (Unit.cpp:4627-4667): leave all fighting and, with <paramref name="includingCast"/>,
-    /// interrupt a non-melee cast. Pets, guardians and charmed units are not handled: this base has none (docs/areas/duels.md).
+    /// interrupt a non-melee cast. The pet, guardians and charmed unit stop too (<see cref="MapCombat.CombatStopWithPets"/>).
     /// </summary>
     public void CombatStopWithPets(Unit unit, bool includingCast)
     {
@@ -192,7 +192,7 @@ public sealed partial class DuelService
             spells.CancelChannel(unit);
         }
 
-        unit.Map?.Combat.CombatStop(unit);
+        unit.Map?.Combat.CombatStopWithPets(unit);
     }
 
     private static void SendWinner(Player player, Player opponent, byte[] winner)

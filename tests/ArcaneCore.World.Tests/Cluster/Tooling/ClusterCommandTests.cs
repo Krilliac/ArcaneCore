@@ -296,8 +296,8 @@ public sealed class ClusterCommandTests
         public virtual Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
             => Task.FromException<int>(new InvalidOperationException("store offline"));
 
-        public void SeedCharacterOwnership(ulong characterGuid, CharacterOwnershipToken ownershipToken) => throw new NotSupportedException();
-        public CharacterOwnershipToken? GetActiveOwnership(ulong characterGuid) => throw new NotSupportedException();
+        public Task SeedCharacterOwnershipAsync(ulong characterGuid, CharacterOwnershipToken ownershipToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<CharacterOwnershipToken?> GetActiveOwnershipAsync(ulong characterGuid, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<TransferDecisionRecord> CreateReservationAsync(Guid transferId, ulong characterGuid, int accountId, long sessionGeneration, WorkerNodeId sourceWorkerId, WorkerNodeId targetWorkerId, uint sourceMapId, uint sourceInstanceId, uint targetMapId, uint targetInstanceId, CharacterOwnershipToken sourceOwnershipToken, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<TransferDecisionRecord> RebindTargetInstanceAsync(Guid transferId, uint targetInstanceId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();

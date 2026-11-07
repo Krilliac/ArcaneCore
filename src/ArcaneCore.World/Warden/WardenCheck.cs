@@ -56,10 +56,18 @@ internal sealed class WardenCheck
         };
 
     /// <summary>
-    /// Whether a failure may be rescanned alone (MaNGOS Zero IsConfirmationEligible: everything but timing). A scripted scan is not: its
-    /// reply drives a per-session chain that a repeat would restart.
+    /// Whether a failure may be rescanned alone (MaNGOS Zero IsConfirmationEligible: everything but timing; NeedsConfirmation in WardenEvidence.cpp adds
+    /// that the check id is non-zero). A scripted scan is not: its reply drives a per-session chain that a repeat would restart. Id 0 is the
+    /// unset default, and the session's per-id confirmation and audit bookkeeping could not tell such checks apart, so none is confirmed
+    /// (see <see cref="UnconfirmableUnnumbered"/>).
     /// </summary>
-    public bool ConfirmationEligible => _script is null && Kind != WardenCheckKind.Timing;
+    public bool ConfirmationEligible => _script is null && Kind != WardenCheckKind.Timing && Id != 0;
+
+    /// <summary>
+    /// A non-scripted, non-timing check with id 0. MaNGOS Zero never acts on it (no confirmation decision is produced and its catalogue rejects
+    /// id 0 at load), so under ConfirmFailedScans its failure is logged only, never acted on.
+    /// </summary>
+    public bool UnconfirmableUnnumbered => _script is null && Kind != WardenCheckKind.Timing && Id == 0;
 
     /// <summary>
     /// Run a scripted scan's follow-up (store what it read, queue the next stage) once the whole reply it came in has been validated, so a

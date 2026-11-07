@@ -81,7 +81,7 @@ internal static class ProcScenarioContent
         // The retaliatory strike: physical damage at the attacker (TARGET_UNIT_ENEMY 6), always hits (SPELL_ATTR_EX3_ALWAYS_HIT).
         new SpellTemplateRow
         {
-            Id = RetaliationStrike, SpellName = "Retaliation", RangeIndex = 4, DmgClass = 2, SpellFamilyName = 4,
+            Id = RetaliationStrike, SpellName = "Retaliation", RangeIndex = 4, SpellVisual = 1, DmgClass = 2, SpellFamilyName = 4,
             AttributesEx3 = (uint)SpellAttributesEx3Combat.AlwaysHit,
             Effect1 = 2, EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectBasePoints1 = RetaliationDamage - 1, EffectImplicitTargetA1 = 6,
         },

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.IO.Compression;
 using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Items;
@@ -49,10 +48,11 @@ public static class ItemRandomPropertiesDbcReader
 }
 
 /// <summary>
-/// Reads <c>item_enchantment_template</c> (<c>entry</c>, <c>ench</c>, <c>chance</c>) out of a MySQL world dump, plain or <c>.gz</c>, through
+/// Parses <c>item_enchantment_template</c> (<c>entry</c>, <c>ench</c>, <c>chance</c>) out of a MySQL world dump through
 /// <see cref="MySqlDumpReader"/>; every other table is skipped. vmangos dumps carry <c>patch_min</c>/<c>patch_max</c>: only rows whose range holds
 /// patch 10 (1.12) are kept, as vmangos LoadRandomEnchantmentsTable does for its configured patch; cmangos classic-db rows have no range and are
-/// all kept. This is the data contract until a world-database table carries the rows. A value that is not a number refuses the file.
+/// all kept. The front end of <see cref="ArcaneCore.Data.Content.Import.ItemTextDumpImporter"/>, which writes the rows to the world database (the
+/// world no longer reads a dump; <c>ItemRandomProperties:EnchantmentTemplateDumpPath</c> is retired). A value that is not a number refuses the file.
 /// </summary>
 public static class ItemEnchantmentTemplateDumpReader
 {
@@ -61,40 +61,42 @@ public static class ItemEnchantmentTemplateDumpReader
     /// <summary>vmangos WowPatch for 1.12.1.</summary>
     public const int Patch = CreatureDumpImporter.MaxPatch;
 
-    public static IReadOnlyList<ItemEnchantmentChance> Load(string path)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        using Stream file = File.OpenRead(path);
-        using Stream input = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase) ? new GZipStream(file, CompressionMode.Decompress) : file;
-        using var reader = new StreamReader(input);
-        return Read(reader);
-    }
-
     public static IReadOnlyList<ItemEnchantmentChance> Read(TextReader dump)
     {
         ArgumentNullException.ThrowIfNull(dump);
         var rows = new List<ItemEnchantmentChance>();
         foreach (object item in new MySqlDumpReader(dump).Read())
         {
-            if (item is not DumpRow row || !string.Equals(row.Table, Table, StringComparison.OrdinalIgnoreCase))
+            if (item is DumpRow row && Parse(row) is { } chance)
             {
-                continue;
+                rows.Add(chance);
             }
-
-            if (row.TryGet(out string? min, "patch_min") && min is not null && Integer(min, "patch_min") > Patch)
-            {
-                continue;
-            }
-
-            if (row.TryGet(out string? max, "patch_max") && max is not null && Integer(max, "patch_max") < Patch)
-            {
-                continue;
-            }
-
-            rows.Add(new ItemEnchantmentChance(UInt(Required(row, "entry"), "entry"), UInt(Required(row, "ench"), "ench"), Float(Required(row, "chance"))));
         }
 
         return rows;
+    }
+
+    /// <summary>One dump row as a candidate, or null when it belongs to another table or lies outside patch 10.</summary>
+    /// <exception cref="InvalidDataException">The row has no entry, ench or chance, or a value that is not a number.</exception>
+    public static ItemEnchantmentChance? Parse(DumpRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (!string.Equals(row.Table, Table, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (row.TryGet(out string? min, "patch_min") && min is not null && Integer(min, "patch_min") > Patch)
+        {
+            return null;
+        }
+
+        if (row.TryGet(out string? max, "patch_max") && max is not null && Integer(max, "patch_max") < Patch)
+        {
+            return null;
+        }
+
+        return new ItemEnchantmentChance(UInt(Required(row, "entry"), "entry"), UInt(Required(row, "ench"), "ench"), Float(Required(row, "chance")));
     }
 
     private static string Required(DumpRow row, string column)

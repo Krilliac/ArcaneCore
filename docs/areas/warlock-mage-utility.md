@@ -185,10 +185,18 @@ extension of the wlm-02 dispatcher: `[SpellScript(ids, ExecuteEffects = new[] { 
 that effect so the script's `OnEffectExecute` runs before it (vmangos raises it before every effect). Declared effects the world does not handle are not
 chained, so they stay "not implemented".
 
-Limits, recorded: (1) no persistence: the design's `IWarlockPetStore` and the `character_pet` table (wlm-10) are not delivered, so a demon is a fresh pet of the
-caster's level each time (vmangos reloads the saved demon, with its name, from `character_pet`); (2) the random demon name (`pet_name_generation`, wlm-11) is not
-generated, the pet keeps its creature name; (3) the Soul Shard reagent of Summon Voidwalker/Succubus/Felhunter and every other reagent is a cross-lane
-primitive owned by crafting-professions and is not charged here; (4) entry 0 (hunter Call Pet) is not served; (5) Enslave Demon (charm) and the Inferno /
+Persistence and names (Z16): a player's demon is saved as the current `character_pet` row (the hunter's table; a character has one or the other, so no `IWarlockPetStore` is
+needed) with its summoning spell and comes back at login with its pet number, name, health, mana, experience, react state, spells, bar and cooldowns at the owner's level.
+Every demon is also kept under its creature entry (a `character_pet_stable` row from slot 100, vmangos PET_SAVE_NOT_IN_SLOT; `EfPersistentPetStore.WriteDemonRowAsync`, no new
+table), and a summon looks there first (`Unit::EffectSummonPet` -> `LoadPetFromDB(player, petEntry)`, `SpellEffects.cpp:3221`): after a dismissal (the dismiss command, Enslave
+Demon's dismiss-first), a replacement by another demon, a reagent-refund unsummon, a death or a talent reset the Imp comes back with the same pet number, name and spells at full health and mana (a SUMMON_PET that is not the current load starts full, `Pet.cpp:360-364`, and is never loaded dead, `Pet.cpp:415`; only a relog's current load keeps the saved health), and only a first
+summon creates a new pet with a generated name (`GeneratePetName`, `SpellEffects.cpp:3293`). Those unsummons save the final state and delete only the
+current-slot row, so a login does not restore the demon. A login with the owner dead or on a taxi flight does not summon it either: like `IsPetNeedBeTemporaryUnsummoned`
+(`Pet.cpp:217`, `Player.cpp:20941`) it is remembered for `ResummonTemporarilyUnsummonedPet`, which the end of the flight calls, landed or aborted (`NpcServicesFeature.OnFlightEnded`; vmangos `Player::Unmount`, `Player.cpp:18251`, from `FlightPathMovementGenerator::Finalize`). A demon that is dead at login is not restored as the current pet, but is still summoned by its entry. A demon is named from `pet_name_generation`
+(world schema 70, read from a vmangos dump by the content importer) when its entry has rows in both halves.
+
+Limits, recorded: (1) a demon whose entry has no `pet_name_generation` rows keeps its creature name (vmangos then answers the creature family's pet name; no CreatureFamily pet-name table is loaded); (2) the Soul Shard reagent of Summon Voidwalker/Succubus/Felhunter and every other reagent is a cross-lane
+primitive owned by crafting-professions and is not charged here; (3) entry 0 (hunter Call Pet) is not served here; (4) Enslave Demon (charm) and the Inferno /
 Ritual of Doom summons (SUMMON_DEMON) are not built.
 
 Tests: `tests/ArcaneCore.Game.Tests/Pets/WarlockDemonTests.cs` (13 tests; RED first with an empty `InstallDemons` and no script: 12 failed, the "without the install"

@@ -14,29 +14,24 @@ namespace ArcaneCore.World.Cluster.Peer;
 public sealed record PeerHolder(string Scope, string NodeId, Guid Incarnation, long FencingToken, string Host, int Port);
 
 /// <summary>
-/// Finds the node that holds the Social lease (else the Economy lease) in the lease store and maps its node id to a peer endpoint through
-/// <see cref="PeerLinkOptions.Nodes"/> or <see cref="PeerLinkOptions.Endpoints"/>. A holder with no (or a malformed) endpoint entry is skipped, so it is not dialled. Reads only
+/// Finds the node that holds the Social lease in the lease store and maps its node id to a peer endpoint through <see cref="PeerLinkOptions.Nodes"/> or
+/// <see cref="PeerLinkOptions.Endpoints"/>. Only Social: every request on this link belongs to the Social holder, and while that lease has lapsed there is nobody to dial, so the link waits
+/// (an Economy holder that answered instead would ack group commands it can never run). A holder with no (or a malformed) endpoint entry is not dialled. Reads only
 /// (<see cref="IRealmAuthorityLeaseStore.GetCurrent"/>); the store call is synchronous and may touch a database, so callers run it off the world thread.
 /// Thread-safe when the store is.
 /// </summary>
 public sealed class PeerHolderLocator(IRealmAuthorityLeaseStore store, PeerLinkOptions options, TimeProvider? time = null)
 {
-    private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy];
-
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     /// <summary>The current dialable holder, or null when no lease is held or the holder has no endpoint entry.</summary>
     public PeerHolder? Locate()
     {
-        DateTimeOffset now = _time.GetUtcNow();
-        foreach (string scope in Scopes)
+        if (store.GetCurrent(RealmAuthorityScopes.Social, _time.GetUtcNow()) is { } lease
+            && options.ResolveNodes().TryGetValue(lease.OwnerNodeId, out string? endpoint)
+            && PeerLinkOptions.TryParseEndpoint(endpoint, out string host, out int port))
         {
-            if (store.GetCurrent(scope, now) is { } lease
-                && options.ResolveNodes().TryGetValue(lease.OwnerNodeId, out string? endpoint)
-                && PeerLinkOptions.TryParseEndpoint(endpoint, out string host, out int port))
-            {
-                return new PeerHolder(scope, lease.OwnerNodeId, lease.OwnerIncarnation, lease.FencingToken, host, port);
-            }
+            return new PeerHolder(RealmAuthorityScopes.Social, lease.OwnerNodeId, lease.OwnerIncarnation, lease.FencingToken, host, port);
         }
 
         return null;
@@ -138,8 +133,8 @@ public sealed class PeerLinkClient : IAsyncDisposable
     }
 
     /// <summary>
-    /// Sends <paramref name="payload"/> to the holder and returns what it echoes. <paramref name="idempotencyId"/> null takes a fresh id; pass the id of an earlier
-    /// attempt to retry it. Throws <see cref="InvalidOperationException"/> when not connected or too many requests are pending, <see cref="TimeoutException"/> when
+    /// Sends <paramref name="payload"/> to the holder and returns what it echoes. <paramref name="idempotencyId"/> null takes a fresh id (always positive, so a caller that picks its own
+    /// ids and keeps them negative cannot collide with one); pass the id of an earlier attempt to retry it. Throws <see cref="InvalidOperationException"/> when not connected or too many requests are pending, <see cref="TimeoutException"/> when
     /// no answer came within <paramref name="timeout"/> (default <see cref="PeerLinkOptions.RequestTimeout"/>), <see cref="IOException"/> when the link was lost.
     /// </summary>
     public async Task<byte[]> EchoAsync(ReadOnlyMemory<byte> payload, long? idempotencyId = null, TimeSpan? timeout = null, CancellationToken cancellationToken = default)

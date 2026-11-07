@@ -266,4 +266,45 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
             Assert.False(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out _));
         });
     }
+
+    /// <summary>
+    /// Switching <c>Travel:AreaTriggers</c> off while a trigger leg is under way ends the journey as switched off at the next step (the leg's
+    /// own watch reads the switch, as a walk leg's does), with the bot stopped short of the trigger and never teleported.
+    /// </summary>
+    [Fact]
+    public async Task SwitchingTheAreaTriggersOffMidLeg_EndsTheJourneySwitchedOff_WithoutTheTeleport()
+    {
+        await using SyntheticNavWorld world = await StartAsync();
+        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0);
+        await world.PlaceAsync(TravelIslands.Start);
+        PlayerbotOptions options = TravelIslands.Options();
+        var brain = new PlayerbotBrain(world.Session, options);
+        var travel = new PlayerbotTravel(options);
+        try
+        {
+            await world.Host.OnWorldAsync(() =>
+            {
+                Assert.True(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why), why);
+                Assert.Equal(["Walk", "AreaTrigger", "Walk"], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Select(l => l.Means.ToString()));
+            });
+
+            bool switchedOff = false;
+            JourneyState? state = await RunAsync(world, brain, 300_000, (_, j) =>
+            {
+                if (!switchedOff && j is { LegIndex: 1 })
+                {
+                    options.Travel.AreaTriggers = false;
+                    switchedOff = true;
+                }
+            });
+
+            Assert.True(switchedOff, "the trigger leg began");
+            Assert.Equal(JourneyState.SwitchedOff, state);
+            await world.Host.OnWorldAsync(() => Assert.True(world.Player.X < 200f, "the bot was never teleported to the far island"));
+        }
+        finally
+        {
+            brain.Stop();
+        }
+    }
 }

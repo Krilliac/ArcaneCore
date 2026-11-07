@@ -8,8 +8,9 @@ namespace ArcaneCore.Game.Pets;
 /// <summary>
 /// Pet untraining at a hunter trainer (vmangos GOSSIP_OPTION_UNLEARNPETSKILLS, Player::SendPetSkillWipeConfirm, WorldSession::HandlePetUnlearnOpcode
 /// and Pet::resetTalentsCost). The trainer option sends SMSG_PET_UNLEARN_CONFIRM with the price; the client answers CMSG_PET_UNLEARN.
-/// The last price and time live on the <see cref="CharmInfo"/> only (character_pet resettalents_cost/time are not persisted: a relog
-/// restarts the price at 10 silver).
+/// The last price and time live on the <see cref="CharmInfo"/> and are saved with the pet (character_pet ResetTalentsCost and ResetTalentsTime,
+/// vmangos reset_talents_cost and reset_talents_time, Pet.cpp:582-583), so a relog keeps the climbing price; the price falls back to 10 silver
+/// once a day has passed (Pet::GetResetTalentsCost, Pet.cpp:2130).
 /// </summary>
 public sealed partial class PetController
 {

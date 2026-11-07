@@ -117,13 +117,21 @@ public sealed class ClusterOptions
     /// that default, so the two continent rows are seeded with it. False, the default, seeds nothing.
     /// </summary>
     public bool SeedDeadminesTemplate { get; init; }
+
+    /// <summary>
+    /// With more than one worker: runs the layout of <c>start-cluster.ps1 -Topology Split</c> including its peer link: every world (and the standby) gets <c>Cluster:Peer:BindAddress</c>, its own
+    /// <c>Cluster:Peer:Port</c>, the full node map as <c>Cluster:Peer:Endpoints:n:NodeId/Address</c> (the list form the script uses) and the peer link secret in
+    /// <c>ARCANECORE_PEER_LINK_SECRET</c> (the run's link secret, as the script reuses it). The node that holds the Social or Economy lease then listens on its peer port and the others dial it.
+    /// False, the default, leaves the peer link unconfigured.
+    /// </summary>
+    public bool PeerLink { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
-public sealed record ClusterWorkerInfo(int Index, string NodeId, int ClientPort, int LinkPort, IReadOnlyList<int> OwnedMaps);
+public sealed record ClusterWorkerInfo(int Index, string NodeId, int ClientPort, int LinkPort, IReadOnlyList<int> OwnedMaps, int PeerPort = 0);
 
 /// <summary>The standby process of one worker's slot (<see cref="ClusterOptions.StandbyWorkerIndex"/>): its own node id and ports, and the index of the worker it stands behind.</summary>
-public sealed record ClusterStandbyInfo(int ForWorkerIndex, string NodeId, int ClientPort, int LinkPort);
+public sealed record ClusterStandbyInfo(int ForWorkerIndex, string NodeId, int ClientPort, int LinkPort, int PeerPort = 0);
 
 /// <summary>
 /// The real <c>ArcaneCore.Gateway</c>, the realm daemon and fenced <c>ArcaneCore.World</c> worker(s) as subprocesses of the test process,
@@ -147,7 +155,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private static readonly string[] ScrubbedEnvironmentPrefixes =
     [
         "Cluster__", "Gateway__", "World__", "Auth__", "Database__", "Realm__", "Realms__", "Net__", "Ops__", "Logging__", "ClientData__",
-        "DOTNET_gc", "DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT", "ARCANECORE_TEST_", "ARCANECORE_CONFIG",
+        "DOTNET_gc", "DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT", "ARCANECORE_TEST_", "ARCANECORE_CONFIG", "ARCANECORE_PEER_LINK_SECRET",
     ];
 
     private readonly ClusterOptions _options;
@@ -161,6 +169,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-cluster-e2e-" + Guid.NewGuid().ToString("N"));
     private readonly DateTime _startedUtc = DateTime.UtcNow;
     private readonly object _gate = new();
+    private readonly PortReservations _ports = new(PortLockDirectory);
     private Task? _disposeTask;
     private int _realmId;
     private string _authConnection = string.Empty;
@@ -274,13 +283,13 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     /// </summary>
     public static async Task<ClusterProcessFixture> StartAsync(ClusterOptions? options, ITestOutputHelper? output, CancellationToken cancellationToken = default)
     {
+        options ??= new ClusterOptions();
+        Validate(options); // before the skip check: an invalid layout is refused whether or not this host can run the cluster
         if (SkipReason is { } skip)
         {
             throw new InvalidOperationException(skip);
         }
 
-        options ??= new ClusterOptions();
-        Validate(options);
         var fixture = new ClusterProcessFixture(options) { _output = output };
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         startup.CancelAfter(StartupTimeout);
@@ -349,6 +358,10 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 throw new ArgumentOutOfRangeException(nameof(options), "LateWorkerIndex must name a worker without a standby.");
             }
         }
+        else if (options.PeerLink)
+        {
+            throw new ArgumentException("PeerLink needs more than one worker: the peer link joins the workers of a Split layout.", nameof(options));
+        }
         else if (options.Transfers || options.StandbyWorkerIndex is not null || options.LateWorkerIndex is not null)
         {
             throw new ArgumentException("Transfers and a standby need more than one worker (the gateway's Workers list names the slots).", nameof(options));
@@ -369,12 +382,13 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         {
             _workers.Add(new ClusterWorkerInfo(
                 index, $"e2e-w{index}", FreePort(), FreePort(),
-                _options.WorkerCount > 1 ? _options.WorkerMaps![index] : []));
+                _options.WorkerCount > 1 ? _options.WorkerMaps![index] : [],
+                _options.PeerLink ? FreePort() : 0));
         }
 
         if (_options.StandbyWorkerIndex is { } standbyFor)
         {
-            _standby = new ClusterStandbyInfo(standbyFor, _workers[standbyFor].NodeId + "-standby", FreePort(), FreePort());
+            _standby = new ClusterStandbyInfo(standbyFor, _workers[standbyFor].NodeId + "-standby", FreePort(), FreePort(), _options.PeerLink ? FreePort() : 0);
         }
 
         await PrepareDatabasesAsync(cancellationToken).ConfigureAwait(false);
@@ -581,6 +595,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             env["Cluster__Worker__Transfers__Enabled"] = "true";
         }
 
+        if (_options.PeerLink)
+        {
+            AddPeerLinkEnvironment(env, worker.PeerPort);
+        }
+
         if (_options.StartPlayerMoney > 0)
         {
             env["CharacterCreation__StartPlayerMoney"] = _options.StartPlayerMoney.ToString(CultureInfo.InvariantCulture);
@@ -606,7 +625,36 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         env["Cluster__Worker__Port"] = standby.LinkPort.ToString(CultureInfo.InvariantCulture);
         env["Cluster__Worker__NodeId"] = standby.NodeId;
         env["Cluster__Worker__Standby"] = "true";
+        if (_options.PeerLink)
+        {
+            AddPeerLinkEnvironment(env, standby.PeerPort);
+        }
+
         return env;
+    }
+
+    /// <summary>
+    /// The peer link settings of one world, as start-cluster.ps1 -Topology Split passes them: bind address, this world's own peer port, every world's (and the standby's) node id and
+    /// address in the list form (<c>Cluster:Peer:Endpoints:n</c>, which a node id containing a colon needs) and the secret in its environment variable (never a configuration key).
+    /// </summary>
+    private void AddPeerLinkEnvironment(Dictionary<string, string> env, int ownPeerPort)
+    {
+        env["Cluster__Peer__BindAddress"] = IPAddress.Loopback.ToString();
+        env["Cluster__Peer__Port"] = ownPeerPort.ToString(CultureInfo.InvariantCulture);
+        env["Cluster__Peer__HolderPollMs"] = "250"; // a failover test does not wait the production second; the default still applies to every other setting
+        env["ARCANECORE_PEER_LINK_SECRET"] = _linkSecret;
+        var nodes = new List<(string NodeId, int PeerPort)>(_workers.Select(worker => (worker.NodeId, worker.PeerPort)));
+        if (_standby is { } standby)
+        {
+            nodes.Add((standby.NodeId, standby.PeerPort));
+        }
+
+        for (int n = 0; n < nodes.Count; n++)
+        {
+            string prefix = $"Cluster__Peer__Endpoints__{n.ToString(CultureInfo.InvariantCulture)}__";
+            env[prefix + "NodeId"] = nodes[n].NodeId;
+            env[prefix + "Address"] = $"{IPAddress.Loopback}:{nodes[n].PeerPort.ToString(CultureInfo.InvariantCulture)}";
+        }
     }
 
     private Dictionary<string, string> GatewayEnvironment(bool firstLaunch)
@@ -688,15 +736,33 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     // there are seconds of database preparation and child startup, and a test host that picked the same port in that window took the
     // child's port (the child died at startup with "the world port ... is already in use") and answered the readiness probe in its place.
     private const int PortRangeStart = 12000;
-    private const int PortRangeSize = 8000;
+    internal const int PortRangeSize = 8000;
     private static int s_nextPort = RandomNumberGenerator.GetInt32(PortRangeSize);
 
-    private static int FreePort()
+    // Cross-process reservation: a port is also claimed by an exclusive lock file (FileShare.None, an flock on Linux) in a shared temp directory, held until
+    // this fixture is disposed (the OS drops it when the process dies). Concurrent gate runs on one host then never pick the same port, even though the
+    // probe cannot bind it for a child. An unusable directory means no reservation (PortReservations.Enabled is false): the listener probe alone decides, as before.
+    private static readonly string PortLockDirectory = Path.Combine(Path.GetTempPath(), "arcanecore-cluster-e2e-ports");
+
+    private int FreePort() => PickFreePort(_ports, CanListenEverywhere, () => PortRangeStart + (int)((uint)Interlocked.Increment(ref s_nextPort) % PortRangeSize));
+
+    private static bool CanListenEverywhere(int port) => CanListen(IPAddress.Any, port) && CanListen(IPAddress.Loopback, port);
+
+    /// <summary>
+    /// The fixture's port choice, parameterised so a test can pin it to <see cref="PortReservations"/>: takes candidates from <paramref name="next"/> (at most <see cref="PortRangeSize"/> of them),
+    /// skips one <paramref name="canListen"/> refuses or <paramref name="ports"/> cannot reserve, and returns the first it reserved.
+    /// </summary>
+    internal static int PickFreePort(PortReservations ports, Func<int, bool> canListen, Func<int> next)
     {
         for (int attempt = 0; attempt < PortRangeSize; attempt++)
         {
-            int port = PortRangeStart + (int)((uint)Interlocked.Increment(ref s_nextPort) % PortRangeSize);
-            if (CanListen(IPAddress.Any, port) && CanListen(IPAddress.Loopback, port))
+            int port = next();
+            if (!canListen(port))
+            {
+                continue;
+            }
+
+            if (ports.TryReserve(port))
             {
                 return port;
             }
@@ -852,6 +918,20 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return gateway.WaitForLineAsync(fragment, cancellationToken, onlyNewLines: true);
     }
 
+    /// <summary>
+    /// Completes once the running world worker with this index has logged a line containing <paramref name="fragment"/> (secrets scrubbed; the fixture runs the <c>ArcaneCore.World.Cluster</c>
+    /// categories at Information). A line already written counts.
+    /// </summary>
+    public Task WaitForWorkerOutputAsync(int index, string fragment, CancellationToken cancellationToken)
+    {
+        if (!_workerProcesses.TryGetValue(index, out ChildProcess? child))
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), "No worker with that index.");
+        }
+
+        return child.WaitForLineAsync(fragment, cancellationToken);
+    }
+
     /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
     public Task KillGatewayAsync()
     {
@@ -975,6 +1055,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         {
             child.Dispose();
         }
+
+        _ports.Dispose();
 
         // The orphan assertion: nothing this fixture launched may outlive it.
         IReadOnlyList<int> alive = LiveProcessIds();

@@ -159,4 +159,104 @@ public sealed class ClusterHostSupervisorStopAuthTests
         Assert.Equal(["world"], plan.Admitted);
         Assert.Empty(plan.Denied);
     }
+
+    [Fact]
+    public async Task HeartbeatWithoutTheToken_IsOrdinaryOutput_AndIsNotALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+
+        rig.Launcher.Last.Beat("alive", withToken: false);
+
+        Assert.Contains("heartbeat 2026-10-29T00:00:00.000Z", rig.ConsoleText, StringComparison.Ordinal); // shown as the ordinary output it is
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task HeartbeatWithAWrongToken_IsOrdinaryOutput_AndIsNotALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = rig.Launcher.Last;
+
+        child.Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={child.ProcessId} alive token=not-the-token");
+
+        Assert.Contains("token=not-the-token", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    // Row Y4-3: a heartbeat-shaped line that no parser accepts (a stray control character, a trailing word) is ordinary output, but a child writes the real
+    // per-run token on every beat, so it must not reach the console or the child's log.
+    [Theory]
+    [InlineData("\r")]
+    [InlineData(" trailing")]
+    public async Task ARejectedHeartbeatShapedLine_CarryingTheRealToken_IsShownWithTheTokenRedacted(string suffix)
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = rig.Launcher.Last;
+
+        child.Emit($"heartbeat 2026-10-29T00:00:00.000Z pid={child.ProcessId} alive token={child.Token}{suffix}");
+
+        Assert.DoesNotContain(child.Token!, rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Contains("token=<redacted>", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Contains("heartbeat 2026-10-29T00:00:00.000Z", rig.ConsoleText, StringComparison.Ordinal); // still shown as the ordinary output it is
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    // Row Y4-3: the real token is replaced wherever it stands in a child line, not only in lines that start like the protocol.
+    [Theory]
+    [InlineData("heartbeat x pid=1 alive token=SECRET\r", "heartbeat x pid=1 alive token=<redacted>\r")]
+    [InlineData("heartbeat x pid=1 alive token=SECRETx", "heartbeat x pid=1 alive token=<redacted>x")]
+    [InlineData("noise heartbeat x pid=1 alive token=SECRET", "noise heartbeat x pid=1 alive token=<redacted>")]
+    [InlineData("lifecycle stopping token=SECRET intent=shutdown code=0 extra", "lifecycle stopping token=<redacted> intent=shutdown code=0 extra")]
+    [InlineData("a log line mentioning token=OTHER", "a log line mentioning token=OTHER")]
+    [InlineData("heartbeat garbage", "heartbeat garbage")]
+    public void RedactProtocolToken_ReplacesOnlyTheExactToken(string line, string expected)
+        => Assert.Equal(expected, ClusterHostSupervisor.RedactProtocolToken(line, "SECRET"));
+
+    [Theory]
+    [InlineData("noise heartbeat 2026-10-29T00:00:00.000Z pid=1 alive token={0}")]
+    [InlineData("heartbeat 2026-10-29T00:00:00.000Z pid=1 alive token={0}x")]
+    [InlineData("a note: {0}")]
+    public async Task AChildLine_CarryingTheRealTokenAnywhere_IsShownWithTheTokenRedacted(string template)
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = rig.Launcher.Last;
+
+        child.Emit(string.Format(System.Globalization.CultureInfo.InvariantCulture, template, child.Token));
+
+        Assert.DoesNotContain(child.Token!, rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Contains("<redacted>", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.Null(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task HeartbeatWithTheToken_IsConsumed_AndIsALifeSign()
+    {
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess());
+        await rig.Supervisor.StartProcessAsync("world");
+
+        rig.Launcher.Last.Beat();
+
+        Assert.DoesNotContain("heartbeat", rig.ConsoleText, StringComparison.Ordinal);
+        Assert.NotNull(Snap(rig).LastBeatAgeMs);
+    }
+
+    [Fact]
+    public async Task ForgedTokenlessHeartbeats_CannotKeepAHungChildFromBeingDrained()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess child = launcher.Last;
+        child.Beat(); // the one real beat arms the hang watch
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(100));
+        child.Beat("alive", withToken: false); // a forged line from logged text: it must not reset the silence
+        rig.Clock.Advance(TimeSpan.FromSeconds(21)); // 121 s since the real beat
+
+        await rig.Delays.ReleaseUntilAsync(() => child.Drains == 1, "the hang watch to act on a child whose only recent beat was forged");
+    }
 }

@@ -59,3 +59,20 @@ def _pattern(template: str) -> re.Pattern[str]:
 def check_log(text: str, no_transports: bool, no_optional_data: bool, no_elevators: bool) -> dict[str, bool]:
     """Each expected line template mapped to whether the log text contains a line matching it."""
     return {t: _pattern(t).search(text) is not None for t in expected_lines(no_transports, no_optional_data, no_elevators)}
+
+
+# The level column of a world-log line, as src/ArcaneCore.Kernel/Logging/LogLineFormatter.cs writes it: "yyyy-MM-dd HH:mm:ss.fff LEVEL
+# category...", the level being the four-character LevelText (TRCE DBUG INFO WARN FAIL CRIT). A colour-mode log wraps the level in an ANSI
+# colour run. Counting only that column keeps a message that merely contains the word FAIL out of the count.
+_ANSI = r"(?:\x1b\[[0-9;]*m)?"
+_LEVEL_LINE = re.compile(rf"^{_ANSI}\d{{4}}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{{3}}{_ANSI} {_ANSI}(WARN|FAIL|CRIT){_ANSI} ", re.MULTILINE)
+
+
+def log_counts(text: str) -> dict[str, int]:
+    """Counts reported for a deploy: two known warning texts, then the WARN, FAIL (error) and CRIT (critical) log lines."""
+    levels = {"WARN": 0, "FAIL": 0, "CRIT": 0}
+    for m in _LEVEL_LINE.finditer(text):
+        levels[m.group(1)] += 1
+    counts = {k: text.count(k) for k in ("unknown target map", "not existing zone id")}
+    counts.update({f" {k} ": n for k, n in levels.items()})
+    return counts

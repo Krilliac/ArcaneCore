@@ -70,6 +70,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         }
         else if (player.GetMover() is { } mover && !ReferenceEquals(mover, player) && mover.Guid.Value == guid)
         {
+            session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnControlledTimeSkipped(session, player, mover, lag);
             // vmangos GetMoverFromGuid: a possessed unit's skip goes to its observers too.
             mover.Map?.BroadcastToObservers(mover, WorldOpcode.MsgMoveTimeSkipped, MiscPackets.BuildMoveTimeSkipped(mover.Guid, lag), except: player);
         }
@@ -97,14 +98,45 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // The same admission as HandleMovement before the block is judged, for every unit (vmangos HandleMoveNotActiveMoverOpcode
+        // MovementHandler.cpp:922-924 the sender's reject window, :937 the moved player's flight spline, then the cheat tests :948 before
+        // HandleMoverRelocation). A block stored without being judged would be laundered: the next packet sees the server position moved,
+        // takes it for a server relocation and re-baselines (docs/areas/anticheat.md).
+        bool selfBlock = ReferenceEquals(unit, player);
+        if (player.Locomotion.ShouldRejectMovement(session.CurrentPacketReceivedMs) || (unit is Player { } flying && (flying.UnitFlags & UnitFlags.TaxiFlight) != 0))
+        {
+            return;
+        }
+
+        AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         WorldOpcode relay = (movement.Flags & MovementFlags.MaskMoving) != 0 ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStop;
+        if (selfBlock)
+        {
+            antiCheat?.BeforeMovement(session, player, relay, movement);
+            session.SessionTrace?.Movement(session, player, relay, in movement);
+        }
+        else if (unit is Player or Creature { IsMoving: false })
+        {
+            antiCheat?.BeforeControlledMovement(session, player, unit, relay, movement);
+        }
+
         if (unit is Player moved)
         {
             ApplyObserved(session, moved, relay, movement);
+            if (selfBlock)
+            {
+                antiCheat?.AfterMovement(player);
+                session.SessionTrace?.AfterMovement(player);
+            }
+            else
+            {
+                antiCheat?.AfterControlledMovement(player, unit);
+            }
         }
         else if (unit is Creature creature && !creature.IsMoving)
         {
             creature.ApplyMovement(movement, session.World.NowMs);
+            antiCheat?.AfterControlledMovement(player, unit);
 
             // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
             bool creatureMoving = (creature.Movement.Flags & MovementFlags.MaskMoving) != 0;
@@ -328,9 +360,14 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // The controller's client sent the block, so the anticheat scores it against the controller (never refuses it: vmangos refuses nothing
+        // for a creature mover, MovementHandler.cpp:318-325 runs the cheat tests for a player mover only).
+        AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         if (mover is Player moved)
         {
+            antiCheat?.BeforeControlledMovement(session, controller, mover, opcode, movement);
             ApplyObserved(session, moved, opcode, movement);
+            antiCheat?.AfterControlledMovement(controller, mover);
         }
         else if (mover is Creature creature)
         {
@@ -340,7 +377,9 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
                 return;
             }
 
+            antiCheat?.BeforeControlledMovement(session, controller, mover, opcode, movement);
             creature.ApplyMovement(movement, session.World.NowMs);
+            antiCheat?.AfterControlledMovement(controller, mover);
 
             // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
             bool creatureMoving = (creature.Movement.Flags & MovementFlags.MaskMoving) != 0;
@@ -370,6 +409,22 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         {
             moved.Session.Send(opcode, packet);
         }
+    }
+
+    /// <summary>
+    /// Store the movement block of an honoured solicited acknowledgement. A flight owns the player's position (TaxiFlightSystem relocates it on every
+    /// step and ends the flight when the stored position drifts), so during a flight the acknowledgement is honoured (the order is no longer pending)
+    /// but its block is not stored: a pending order cannot be used to leave the flight at a chosen position. vmangos likewise erases the order first and
+    /// handles the position separately (HandleMoveRootAck, MovementHandler.cpp:671-723).
+    /// </summary>
+    internal static void ApplyObservedAck(WorldSession session, Player player, WorldOpcode opcode, MovementInfo movement)
+    {
+        if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
+        {
+            return;
+        }
+
+        ApplyObserved(session, player, opcode, movement);
     }
 
     /// <summary>

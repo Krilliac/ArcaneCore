@@ -134,7 +134,7 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         }
     }
 
-    private BotChatResult Finish(ChatGenerationResult result, BotChatPrompt prompt, PlayerbotChatInProcessOptions options)
+    internal BotChatResult Finish(ChatGenerationResult result, BotChatPrompt prompt, PlayerbotChatInProcessOptions options)
     {
         lock (_gate)
         {
@@ -162,7 +162,13 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
                 return Fallback("error", BotChatResult.Fail(BotChatOutcome.BadResponse));
         }
 
-        lock (_gate) _consecutiveOverruns = 0;
+        lock (_gate)
+        {
+            // A success resets the run of overruns, but not while the circuit is open: a reply admitted before the trip that
+            // finishes inside the rest must leave the half-open counter (N-1) alone, as Overran does for a late overrun.
+            if (_circuitOpenUntil <= _time.GetUtcNow()) _consecutiveOverruns = 0;
+        }
+
         Interlocked.Add(ref _tokens, result.GeneratedTokens);
         if (InProcessChatMeters.Tokens.Enabled) InProcessChatMeters.Tokens.Add(result.GeneratedTokens);
         string? text = InProcessChatPrompt.Screen(result.Text, BotNameOf(prompt), options.MaxReplyCharacters, truncated: result.StopReason == "length");
@@ -177,7 +183,10 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         return new BotChatResult(BotChatOutcome.Ok, text, result.PromptTokens, result.GeneratedTokens);
     }
 
-    private void Overran(PlayerbotChatInProcessOptions options)
+    /// <summary>When the open circuit rests until (a past time while closed). Tests; any thread.</summary>
+    internal DateTimeOffset CircuitOpenUntil { get { lock (_gate) return _circuitOpenUntil; } }
+
+    internal void Overran(PlayerbotChatInProcessOptions options)
     {
         Interlocked.Increment(ref _overruns);
         if (InProcessChatMeters.Overruns.Enabled) InProcessChatMeters.Overruns.Add(1);

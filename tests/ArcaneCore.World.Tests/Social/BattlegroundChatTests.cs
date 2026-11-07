@@ -66,6 +66,6 @@ public sealed class BattlegroundChatTests
         await using WorldTestClient a = await host.EnterWorldAsync("ALONE", "Alone");
         await a.CollectAsync();
         await a.SendChatAsync(ChatType.Battleground, Language.Common, "hello?");
-        await a.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+        await a.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat);
     }
 }

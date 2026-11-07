@@ -113,6 +113,9 @@ public class CreatureEventAI : AggressorAI
     /// <summary>Whether the current combat state is ranged (cmangos m_currentRangedMode).</summary>
     internal bool CurrentRangedMode => _currentRangedMode;
 
+    /// <inheritdoc/>
+    public override bool RunsSpellList => true;
+
     /// <summary>The configured ranged mode (cmangos m_rangedMode).</summary>
     internal bool RangedMode => _rangedMode;
 
@@ -144,9 +147,10 @@ public class CreatureEventAI : AggressorAI
 
     /// <summary>
     /// cmangos UnitAI::AddMainSpell as the EventAI constructor feeds it (CreatureEventAI.cpp:139-140): the spell ids of the creature's
-    /// ACTION_T_CAST rows that carry CAST_MAIN_SPELL (0x100). Rebuilt with the rows, which a respawn re-reads.
+    /// ACTION_T_CAST rows that carry CAST_MAIN_SPELL (0x100), then the ranged entries of its spell list (UnitAI::SpellListChanged). Rebuilt with
+    /// the rows, which a respawn re-reads, and when the list changes.
     /// </summary>
-    private void RebuildMainSpells()
+    internal void RebuildMainSpells()
     {
         _mainSpells.Clear();
         _mainSpellId = 0;
@@ -161,6 +165,23 @@ public class CreatureEventAI : AggressorAI
                     {
                         _mainSpellId = (uint)action.Param1; // cmangos AddMainSpell keeps the first as m_mainSpellId (UnitAI.cpp:962)
                     }
+                }
+            }
+        }
+
+        if (Me.SpellLists is not { } list)
+        {
+            return;
+        }
+
+        foreach (CreatureSpellListEntry entry in list.ActiveEntries)
+        {
+            if ((entry.Flags & CreatureSpellListFlags.RangedAction) != 0)
+            {
+                _mainSpells.Add(entry.SpellId);
+                if (_mainSpellId == 0)
+                {
+                    _mainSpellId = entry.SpellId;
                 }
             }
         }

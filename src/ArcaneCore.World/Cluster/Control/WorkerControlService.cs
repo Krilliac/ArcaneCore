@@ -43,7 +43,7 @@ public sealed record WorkerControlIdentity(
     string OwnershipScope,
     IReadOnlyList<uint> OwnedMaps);
 
-/// <summary>The handoff side of a worker: its journal and its participants. <paramref name="Source"/> is null on a standby, <paramref name="Target"/> on an active worker.</summary>
+/// <summary>The handoff side of a worker: its journal and its participants. <paramref name="Source"/> is null on a standby until it is promoted (then the control service attaches the draining source), <paramref name="Target"/> on an active worker.</summary>
 public sealed record WorkerControlHandoff(IWorldHandoffStore Journal, IWorldHandoffSource? Source, IWorldHandoffTarget? Target);
 
 /// <summary>
@@ -56,6 +56,9 @@ public sealed record WorkerControlTransfer(
     ITransferTargetWorker? Target,
     Func<bool> AdmissionOpen,
     Func<int> FreeReservations);
+
+/// <summary>What a promoted standby attaches to its <see cref="WorkerControlService"/>: the handoff side with the draining source it now has, and the transfer side it now builds (null: that side stays as it was).</summary>
+public sealed record WorkerPromotedParticipants(WorkerControlHandoff? Handoff, WorkerControlTransfer? Transfers);
 
 /// <summary>
 /// The worker end of the unified control channel (design _wf/handoff-control-DESIGN.md sections 2 and 3): executes the gateway's <see cref="ControlRequest"/>s
@@ -78,7 +81,10 @@ public sealed class WorkerControlService(
     bool transfersEnabled,
     WorkerControlTransfer? transfers,
     Func<WorkerControlIdentity> identity,
-    ILogger? logger = null) : IGatewayControlHandler
+    ILogger? logger = null,
+    Func<WorkerPromotedParticipants>? onPromoted = null,
+    Func<bool>? promotionCompleted = null,
+    WorkerTransferName? transferName = null) : IGatewayControlHandler
 {
     /// <summary>How many operations' replies and tombstones are remembered. A suspend reply holds up to 16 KiB, so the bound also bounds memory.</summary>
     private const int Remembered = 512;
@@ -90,6 +96,12 @@ public sealed class WorkerControlService(
     private readonly HashSet<(Guid Operation, ControlKind Kind)> _ended = [];
     private readonly Queue<(Guid Operation, ControlKind Kind)> _endedOrder = new();
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
+    // A standby has no draining handoff source and no transfer participants (it is the handoff's target and takes no players). Promotion makes it an active worker, so the participants
+    // are built then, once, by onPromoted and swapped in under _attachGate; null once attached (or for a worker that was never a standby).
+    private readonly Lock _attachGate = new();
+    private Func<WorkerPromotedParticipants>? _onPromoted = onPromoted;
+    private WorkerControlHandoff? _handoff = handoff;
+    private WorkerControlTransfer? _transfers = transfers;
 
     /// <summary>Whether the worker's handoff key is on.</summary>
     public bool HandoffEnabled => handoffEnabled;
@@ -98,10 +110,48 @@ public sealed class WorkerControlService(
     public bool TransfersEnabled => transfersEnabled;
 
     /// <summary>The handoff journal and participants this service runs against (null: none); read by <see cref="WorkerSelfHealService"/>.</summary>
-    public WorkerControlHandoff? Handoff => handoff;
+    public WorkerControlHandoff? Handoff => Current().Handoff;
 
     /// <summary>The transfer journal and participants this service runs against (null: none); read by <see cref="WorkerSelfHealService"/>.</summary>
-    public WorkerControlTransfer? Transfers => transfers;
+    public WorkerControlTransfer? Transfers => Current().Transfers;
+
+    /// <summary>
+    /// The participants now: those the service was built with, until the promotion has completed (<c>promotionCompleted</c>; without it, until the worker no longer reports Standby). The promotion
+    /// attaches the world's features after Describe already reports the worker as not standby, so the standby's participants keep serving through that window. Then, once, those <c>onPromoted</c> builds.
+    /// A build that throws attaches nothing and is retried by the next call (the request that hit it is answered Failed). Thread-safe: callers on any thread see either the standby's participants or the promoted ones, never a mix.
+    /// </summary>
+    private (WorkerControlHandoff? Handoff, WorkerControlTransfer? Transfers) Current()
+    {
+        if (Volatile.Read(ref _onPromoted) is { } build && (promotionCompleted?.Invoke() ?? !identity().IsStandby))
+        {
+            lock (_attachGate)
+            {
+                if (_onPromoted is not null)
+                {
+                    WorkerPromotedParticipants promoted = build();
+                    _handoff = promoted.Handoff ?? _handoff;
+                    _transfers = promoted.Transfers ?? _transfers;
+                    Volatile.Write(ref _onPromoted, null);
+                }
+            }
+        }
+
+        lock (_attachGate)
+            return (_handoff, _transfers);
+    }
+
+    /// <summary>
+    /// The gateway named the slot this process serves: Promote does for a standby, and every worker link does right after admission (the LinkSlot frame), which is what reaches a promoted process that was
+    /// relaunched as active with its own node id and no Promote coming. Journal rows, bundles and transfer verbs name the slot, so the transfer participants answer under it from now on. Thread-safe; any link's receive loop calls it.
+    /// </summary>
+    public void ServeSlot(string slotNode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(slotNode);
+        if (transferName?.Assign(new WorkerNodeId(slotNode)) == true)
+        {
+            _logger.LogInformation("This worker now answers transfers as slot {Slot}", slotNode);
+        }
+    }
 
     /// <summary>How many repeats of a single-shot verb joined an identical request that was still running or already answered (instead of calling the participant again). A test seam and a diagnostic.</summary>
     public int JoinedRepeats => Volatile.Read(ref _joinedRepeats);
@@ -136,7 +186,7 @@ public sealed class WorkerControlService(
 
     private async Task<ControlReply> HandoffAsync(ControlRequest request, GatewayControlContext context, CancellationToken ct)
     {
-        if (handoff is not { } h)
+        if (Current().Handoff is not { } h)
         {
             return Reply(request, ControlStatus.Refused, "this worker has no handoff journal");
         }
@@ -243,6 +293,15 @@ public sealed class WorkerControlService(
                 MarkEnded(request);
                 await h.Source!.ResumeAsync(ct).ConfigureAwait(false);
                 return Ok(request);
+            case ControlVerb.RetireWrites:
+                refusal = RowNamesSource(record, h.Source) ?? Committed(record);
+                if (refusal is not null)
+                {
+                    return Reply(request, ControlStatus.Refused, refusal);
+                }
+
+                await h.Source!.RetireWritesAsync(ct).ConfigureAwait(false);
+                return Ok(request);
             case ControlVerb.ReleaseWriterLock:
                 refusal = RowNamesSource(record, h.Source) ?? Committed(record);
                 if (refusal is not null)
@@ -263,11 +322,16 @@ public sealed class WorkerControlService(
                 return Ok(request);
             case ControlVerb.Promote:
             {
-                CharacterOwnershipToken token = ((ControlTokenArguments)request.Arguments).Token;
+                var args = (ControlPromoteArguments)request.Arguments;
                 refusal = RowNamesTarget(record, h.Target) ?? Committed(record);
-                if (refusal is null && record.TargetOwnershipToken != token)
+                if (refusal is null && record.TargetOwnershipToken != args.Token)
                 {
                     refusal = "the promotion token is not the target token the journal committed";
+                }
+
+                if (refusal is null && string.IsNullOrWhiteSpace(args.SlotNode))
+                {
+                    refusal = "the promotion names no slot";
                 }
 
                 if (refusal is not null)
@@ -275,7 +339,9 @@ public sealed class WorkerControlService(
                     return Reply(request, ControlStatus.Refused, refusal);
                 }
 
-                await h.Target!.PromoteAsync(token, ct).ConfigureAwait(false);
+                // Before the promotion runs: the transfer participants the attach builds answer under this slot from their first verb.
+                ServeSlot(args.SlotNode);
+                await h.Target!.PromoteAsync(args.Token, ct).ConfigureAwait(false);
                 return Ok(request);
             }
 
@@ -306,7 +372,7 @@ public sealed class WorkerControlService(
 
     private async Task<ControlReply> TransferAsync(ControlRequest request, GatewayControlContext context, CancellationToken ct)
     {
-        if (transfers is not { } t)
+        if (Current().Transfers is not { } t)
         {
             return Reply(request, ControlStatus.Refused, "this worker has no transfer journal");
         }

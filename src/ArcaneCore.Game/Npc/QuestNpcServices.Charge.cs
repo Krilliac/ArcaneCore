@@ -28,4 +28,28 @@ public sealed partial class QuestNpcServices
         Flush(state);
         return true;
     }
+
+    /// <summary>
+    /// A flight leg's fare at its path transition (vmangos FlightPathMovementGenerator::Update, WaypointMovementGenerator.cpp:421-423:
+    /// <c>ModifyMoney(-cost)</c>), which clamps at zero and never refuses (Player.h:1025-1031): a character that no longer holds the fare
+    /// pays what it has and the flight goes on. The up-front check of <c>ActivateTaxiPathTo</c> is the only gate. Used by a route resumed at
+    /// login, whose launch-time check was made in an earlier session. Always true for a tracked player, false when it is not tracked. World thread.
+    /// </summary>
+    public bool ChargeFlightLeg(Player player, uint copper)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (Ready(player) is not { } state)
+        {
+            return false;
+        }
+
+        if (copper != 0)
+        {
+            player.EnsureQuestSettlementMutationAllowed();
+            ModifyMoney(state, -(long)copper);
+            Flush(state);
+        }
+
+        return true;
+    }
 }

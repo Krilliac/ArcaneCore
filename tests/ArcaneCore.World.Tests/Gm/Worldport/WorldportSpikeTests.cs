@@ -222,6 +222,42 @@ public sealed class WorldportSpikeTests
     }
 
     [Fact]
+    public async Task Far_WithoutAnAck_IsAbandonedAtTheCustomAbandonAfter_AfterTheTimeoutWasReported()
+    {
+        await using Rig rig = await StartAsync("ABAND", ackTimeout: TimeSpan.FromMilliseconds(100), abandonAfter: TimeSpan.FromMilliseconds(1500)); // above the 10 x ack default (1 s), so a tick that ignored AbandonAfter abandons too early
+
+        await rig.Admin.SendChatAsync(ChatType.Say, Language.Common, ".worldport far");
+        await rig.Admin.ReadUntilAsync(WorldOpcode.SmsgNewWorld);
+        double finishedAtMs = -1; // read on the world thread the first time the run is seen finished; the trace clock keeps running after Finish
+        await rig.Host.WaitForWorldAsync(() =>
+        {
+            WorldportTrace last = rig.Spike.Recent[^1];
+            if (last.Finished && finishedAtMs < 0)
+            {
+                finishedAtMs = last.ElapsedMs;
+            }
+
+            return last.Finished;
+        }, "the run is abandoned");
+
+        WorldportTrace run = await LastRunAsync(rig);
+        Assert.Equal("failed: never re-added (abandoned)", run.Outcome);
+        Assert.Contains(run.Steps, s => s.Name == "ack-timeout");
+        Assert.True(finishedAtMs >= 1500, $"abandoned after {finishedAtMs} ms, before the custom 1500 ms");
+    }
+
+    [Fact]
+    public async Task AbandonAfter_DefaultsToTenTimesTheAckTimeout_AndRefusesAValueBelowIt()
+    {
+        await using Rig rig = await StartAsync("DEFAULT", ackTimeout: TimeSpan.FromSeconds(7));
+        Assert.Equal(TimeSpan.FromSeconds(70), rig.Spike.AbandonAfter);
+        Assert.Equal(TimeSpan.FromSeconds(600), new WorldportSpike(rig.Host.World, () => null!).AbandonAfter); // 10 x the 60 s default
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new WorldportSpike(rig.Host.World, () => null!, ackTimeout: TimeSpan.FromSeconds(5), abandonAfter: TimeSpan.FromSeconds(4)));
+        Assert.Equal(TimeSpan.FromSeconds(5), new WorldportSpike(rig.Host.World, () => null!, ackTimeout: TimeSpan.FromSeconds(5), abandonAfter: TimeSpan.FromSeconds(5)).AbandonAfter);
+    }
+
+    [Fact]
     public async Task ATeleportAnomalyReportedThroughServerAnomalies_IsRecordedInTheRun_ForAGuidAboveNine()
     {
         await using Rig rig = await StartAsync("ANOM", observeWindow: TimeSpan.FromSeconds(30), fillerCharacters: 9);

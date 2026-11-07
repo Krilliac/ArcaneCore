@@ -71,7 +71,7 @@ public sealed class AvBowmanAI : ScriptedAI
         if (Victim is not null || System is not { } system || !who.IsAlive || !ReferenceEquals(who.Map, Me.Map)
             || who is Player { IsGameMaster: true } || who is Creature { IsInEvadeMode: true } || ReferenceEquals(who, Me)
             || Me.IsInEvadeMode || !system.CanInitiateAttack(Me) || !system.IsProximityAggroAllowedFor(Me, who)
-            || !system.Map.Combat.Hooks.CanAttack(Me, who) || !system.AiServices.Hostility.IsHostile(Me, who)
+            || !system.Map.Combat.CanAttackSingleTarget(Me, who) || !system.AiServices.Hostility.IsHostile(Me, who)
             || !TargetWithinShootRange(who))
         {
             return;

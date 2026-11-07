@@ -11,7 +11,7 @@
 // only when it moved) and keeps the other sessions in `app.presence`, which the viewport draws as labelled markers.
 
 import { Api, ApiError, Socket, unwrap } from './api.js';
-import { normalizeLayerList } from './catalog.js';
+import { normalizeLayerList, withClientReaderLayers } from './catalog.js';
 import { cameraPatch, defaultView, normalizeView } from './view.js';
 import { resolveLayers } from './layerstate.js';
 import { LiveModel } from './live.js';
@@ -385,7 +385,7 @@ export class App {
 
     async refreshLayers() {
         const result = await this.runCommand('layers.list', {}, { quiet: true });
-        this.layers = normalizeLayerList(result.ok ? result.data : null);
+        this.layers = withClientReaderLayers(normalizeLayerList(result.ok ? result.data : null));
         if (!result.ok) {
             this.toast(`Layer details unavailable (${result.error?.message ?? 'layers.list failed'}); using built-in defaults.`, 'warn');
         }

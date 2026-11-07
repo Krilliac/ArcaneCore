@@ -12,7 +12,8 @@ allowlist 0, section 4.6) is **built** on `claude/hr-2b`; 2c and 2d are planned.
 `claude/hr2-gateway` (section 5.4, [gateway.md](../areas/gateway.md)); real-client acceptance and phases 3b/3c are open.
 Phase 3b **groundwork** (fencing mandatory in worker mode, the durable decision store, standby mode, the drain protocol
 in process) is **built and tested** on `claude/hr3-standby` (section 5.6); the seamless reroute and the operator trigger
-are not.
+(`.cluster restart`) were built later. Both run only under the opt-in keys, and a World handoff also needs a standby for the slot; they are tested with a mock client over real gateway and
+world processes (opt-in, PostgreSQL-gated: `CrossWorkerTransferTests`, `ClusterControlChannelScenarioTests`), never with a real 5875 client ([gateway.md](../areas/gateway.md)).
 All three lanes are merged on `claude/hr2-integrate`.
 "Redeploy prefers hot reload" (section 9.1) is **built and tested, not run on the live server** on `claude/hr3-redeploy-hot`.
 Base: `claude/hot-reload-tiers` @ `8baad0b1`.
@@ -324,6 +325,7 @@ Detachable bot features (`IDetachableWorldFeature`, every subscription through t
 | `PlayerbotBattlegroundCoordinator` | Stateless | nothing to stop | bots in a match leave it, queue state cleared |
 | `PlayerbotSocialFeature` | Stateless | start no new registry refresh (a flag the next attach clears), one world-thread hop, wait for the refresh in flight | conversations and chatter stopped, map and guild subscriptions undone |
 | `PlayerbotQaFeature` | Stateless | cancel the background pass and wait for it and the publish as long as the host allows (a pass still running fails the quiesce, it is not abandoned), then save and export | findings reloaded from the store file; hang sink and cast observer re-registered; a new pass starts only after the old one ended |
+| `PlayerbotQaInteractionFeature` | Stateless | nothing to stop | every map's kill handler and the map events go through the bag; the kill counters live in the monitor (a DI singleton) |
 
 A quiesce of `ManagedPlayerbotFeature` that fails (an operation such as a fleet reset, a start or a slow checkpoint holds
 the operation lock past the host's quiesce timeout) is undone safely (fix cycle 1 of the tier 2 review): `Detach`
@@ -337,7 +339,7 @@ operation queued on the lock just as the quiesce released it is refused the same
 Architecture test: `tests/ArcaneCore.World.Tests/Architecture/PlayerbotCoreBoundaryTests` reads the World assembly's IL
 (`System.Reflection.Metadata`: signatures, attributes, constraints, locals, catch types, every IL token) and fails if a
 core type (outermost type outside `ArcaneCore.World.Playerbots`) references a pack type and is not on the allowlist,
-or if an allowlist entry no longer references the pack (the list only shrinks). A positive control
+or if an allowlist entry no longer references the pack (a stale entry fails; a new use fails until a reasoned entry is added). A positive control
 (`ScannerFindsKnownReferences`) proves the scanner sees references at all. Before this lane it listed 17 core types.
 **Allowlist left (4)** at the end of 2a; **0** after 2b (section 4.6):
 
@@ -431,7 +433,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    lines changed there, because those files belong to another lane.
 5. **The 2a seam types are now public**: `PlayerbotExploreAtlas`, `PlayerbotItemScore`, `PlayerbotStatWeights`,
    `PlayerbotWeaponStyle` and `PlayerbotTalentBuild(s)`. They are core API that the pack calls.
-6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack still uses 44 internal core members:
+6. **World grants `InternalsVisibleTo` to the pack** for everything else. The pack uses 49 internal core members (it was 44 when 2b landed; later features added five, each a reasoned list entry such as `IManagedPacketTap` and `BattlegroundFeature.HoldsQueueState`):
    - managed-session `WorldSession` members
    - battleground internals
    - GM boost and death helpers
@@ -442,7 +444,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
    `InternalsVisibleTo` across a version skew is not safe for a collectible pack. The list is pinned by
    `PlayerbotCoreBoundaryTests.PackUsesOnlyTheAllowlistedCoreInternals`. That test resolves every type and member token
    in the pack and fails on any non-public core or contracts member that is not on the list. It also fails on a list
-   entry that is no longer used, so the list can only shrink.
+   entry that is no longer used. A new use is refused until someone adds a reasoned entry, so the list does not grow unnoticed, and 2c is meant to shrink it.
 7. **The executable cycle.** World is both the core library and the daemon executable: deploy, Docker, the dev runner
    and the cluster supervisor all run `ArcaneCore.World.dll`. So the host cannot reference its own pack. Instead:
    - The pack's build target `CopyPackBesideWorldHost` copies `ArcaneCore.Playerbots.dll` and `.pdb` next to World's
@@ -471,7 +473,7 @@ Dependency decisions. Each one is the smallest change that let World stop seeing
 What remains for 2c:
 
 - Load the pack collectibly through `ModuleHost`, and remove it from the startup set.
-- Turn the 44 internals into public seams or contracts.
+- Turn the 49 internals into public seams or contracts.
 - Move the handover values that are still World or pack types (`PlayerbotSetAside`, `PlayerbotHome`, the private
   `Quarantine`) into contracts.
 - Check the contracts version when the pack loads.
@@ -563,21 +565,21 @@ create, enter-world and ping through the gateway against the synthetic realm and
 
 Differences from 5.2 and what is left of 3a:
 
-- **Warden runs on the worker**, not the gateway: its opcodes are forwarded unchanged. Moving it to the gateway is needed
-  before 3b (a handoff must not restart the Warden exchange).
+- **Warden runs on the gateway** (`GatewayWarden`): it answers `CMSG_WARDEN_DATA` itself and sends a failing verdict to the worker over the link. It runs `Warden:Checks`
+  and the timing scan, not the `warden_checks` table, because the gateway has no world database.
 - **No real-client acceptance yet** (the 3a exit criterion in section 9).
-- Manifest schema and content versions are operator labels, not read from the databases.
-- The link protocol lives in `ArcaneCore.World`; the gateway references the whole World assembly until a shared protocol
-  assembly is split out.
-- The gateway's `Gateway:*` keys are not in the configuration catalog (no `ConfigDaemon` value, no `.conf.dist`, no
-  `--check-config`) and it exports no metrics.
+- Manifest schema and content versions are read from the databases by default (`Cluster:Worker:VersionsFromDatabase`), with operator labels as an explicit override.
+- The link protocol lives in `ArcaneCore.Cluster.Protocol`; the gateway still references `ArcaneCore.World` for the
+  `WorldSession` constants, the build protocols, the session link client and the handoff router seam.
+- The gateway records metrics but exports none (no Prometheus or OTLP exporter). Its `Gateway:*` keys are in the configuration catalog
+  ([reference](../reference/config/gateway.md), `gateway.conf.dist`, `--check-config`).
 - The gateway's session generation and `SessionRegistry`'s own generation are independent counters.
-- The worker is not authenticated to the gateway, and the link has neither encryption nor a per-frame MAC (gateway.md).
+- Both ends of the link prove the secret and every frame carries a MAC, but the link is not encrypted (gateway.md).
   Also open from the tier 3 review: no timeout on the gateway's wait for the worker's open reply, an owner-epoch change
-  drops packets without closing the session, unauthenticated connections to the worker port are not capped, one link
-  queue is shared by every client, and Warden timing includes link jitter.
-- The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, the transfer
-  coordinator is still test-only.
+  drops packets without closing the session, unauthenticated connections to the worker port are not capped, and one link
+  queue is shared by every client.
+- The 5.1 rows are unchanged otherwise: `GatewayWorkerTransport` is now used in production by worker mode, and the transfer
+  coordinator now runs on the gateway under `Gateway:Transfers:Enabled` (section 5.6).
 
 ### 5.5 Same-map world-port spike (`.worldport`; real-client run done 2026-10-17: the client accepts it)
 
@@ -682,7 +684,8 @@ reviewed (the one about a crashed B after the takeover and the one-coordinator a
 - **The worker retarget retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
   then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
 
-Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
+Not built when this groundwork landed (from 5.3; the per-player production transfer workers, the operator command and Warden on the gateway came later: see the next heading and
+[gateway.md](../areas/gateway.md)): the per-player production transfer workers (the handoff moves ownership and saved state, not live
 entities), gateway PING answering during the freeze (input is held, up to 256 packets per client), a real-client run of the
 seamless reroute (the world port ACK ordering and a passenger's transport form are unverified), the
 operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes
@@ -697,14 +700,22 @@ workers. It is a separate process from every world, so the coordinators it hosts
 
 - **Control channel.** Frames 28 to 32 of the gateway link (`ControlRequest`, `ControlReply`, `ControlSubmit`, `ControlSubmitReply`,
   `ControlNotice`; frames 24 to 27 are unchanged) carry one request per verb. Handoff verbs: `Describe`, `Warm`, `StopAdmissions`, `Freeze`,
-  `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
+  `Flush`, `Resume`, `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Promote`. Transfer verbs: `TargetDescribe`, `Reserve`, `Install`, `Activate`, `Discard`,
   `Suspend`, `ResumeSource`, `RetireSource`. A pending table keyed by request id correlates replies; link loss fails every pending request at
   once; each verb has a timeout (`Gateway:Control:*`: 10 s for the quick verbs, 30 s `Freeze` and `Suspend` (both read `Gateway:Control:Freeze`; there is no separate `Suspend` key), 60 s `Flush` and `Activate`,
-  120 s `Promote`). The link contract version is 5, so a gateway and its workers upgrade together.
+  120 s `Promote`). The link contract version is 7, so a gateway and its workers upgrade together.
 - **The journal is the source of truth.** A worker checks the journal row of the operation before it acts (a `Resume`, `Discard` or
-  `ResumeSource` is refused once the row is Committed; `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
+  `ResumeSource` is refused once the row is Committed; `RetireWrites`, `ReleaseWriterLock`, `Retire`, `Activate` and `RetireSource` need Committed) and remembers
   its last result per verb, so a repeated mutating verb runs once. Before the point of no return the gateway never resends a mutating verb;
   only the abort and roll-forward verbs are repeated, by recovery.
+- **The source's writes around the commit.** `Flush` writes every write the source has open in a character, instance or social queue, offline characters and writes of no one character (instance rows, guilds, petitions, purges) included, and in the group, GM audit, account data, account address, creature respawn, game object respawn and world-state save queues (Silithyst, Fishing Extravaganza, Elemental Invasion, Nightmare Dragons), and the war effort and Scourge invasion stores, and fails the handoff before the commit when one cannot be written. The shared writes are flushed one queue after the other, each is attempted even when an earlier one fails, and all share one 15 s budget. The group queue is fed once a second by a comparison on the world thread, so the freeze runs that comparison as it parks the simulation: a group change of the last second before the freeze is queued, then drained by the flush. A flush's retry of a keyed queue skips the keys a store refused for the realm lease (it neither re-runs nor checks them), so a non-holder cannot spend the budget on them.
+  A flush that succeeds seals the source: until `Resume` or `RetireWrites` decides, a fence refusal is dropped and counted, not terminal, because the takeover can land at any moment and that span lasts until recovery or
+  self-heal if the gateway dies after the commit. An ownership loss the worker heartbeat reports is ignored the same way. `RetireWrites` then closes every write of the character, instance and social queues and the save queue, named or not: the takeover moved the one scope they all run under. The group, GM audit, account, respawn and state-save queues are flushed but not fenced or closed by it.
+  The seal belongs to one freeze: `Flush` keeps running after the gateway's timeout and `Resume` does not wait for it, so a flush that finishes after the resume fails and seals nothing.
+  **Known limit:** a write made after the flush has no durability promise; it lands only if the takeover has not. A write of the group, GM audit, account or respawn queues made after the flush and refused after the takeover stays retained and is reported at stop. A state-save write (Silithyst, Fishing Extravaganza, Elemental Invasion, Nightmare Dragons) in the same case is logged as a failed save and kept in memory only; nothing reports it at stop (the feature's stop waits for the queue to drain, and does not throw for a retained value). A group or GM audit write that a non-holder of the social lease cannot store does not fail the flush: the flush does not check a lease refusal. For a group the holder owns the data. A GM ticket taken on a non-holder is not durable, is not on B, and stays retained and is only named at stop (no GM ticket routing to a holder exists). Pet saves are waited for by the flush, but have no fence handling of their own for a refusal after it. **Known limit:** the running game-event set is written by a separate sink to the characters database and is not part of the flush; a change of it made before the handoff and not yet written can be lost. The war effort (phase start, Colossus deaths) and Scourge invasion (start/stop, city defeats, Necropolis deaths) state are written to that database by their own stores and are flushed: each feature queues the write in memory on the world thread and runs it as one off-thread store job, so the freeze copies the queue as it parks the simulation, and the flush waits for the job in flight and writes the copy the way the feature's stop does (only a job's apply step needs the world thread, durability does not). A failed write fails the flush, including a Scourge write the job in flight refused or never reached (the freeze keeps that job's ops and the flush writes them again; one that failed in a job applied before the freeze was logged then and is not owed); a non-holder of the world-state lease writes nothing and is not checked. Their store calls are idempotent, so a refresh after an aborted handoff's resume writes them again.
+- **Known limit: one permanently failing shared write aborts every handoff.** The shared flush (`FlushSharedWritesAsync`) asks the instance and social queues to retry every write of no one character (instance rows, guilds, petitions, character purges) and fails when one is still retained; a write that keeps failing (a guild, petition, purge or instance key the database always refuses, for example a constraint violation) is never given up, so `Flush` fails before the commit and the handoff aborts and the source resumes, again and again, until that write is cleared (fixed in the database, or the process restarts and drops it). The operator signal is the failed `Flush` naming the queue. Nothing is lost by this: the abort is the safe outcome.
+- **Known limit: a client packet can be lost at a route switch.** The gateway chooses the link and the generation under its redirect gate but sends outside it. If a whole stage, commit and
+  route switch finish in that gap, the packet reaches the old worker under a generation that worker has closed, and its envelope rules drop it. One packet is lost; it is never applied to a character the worker no longer runs.
 - **Opt-in keys, all `false` by default:** `Cluster:Worker:Handoff:Enabled` and `Cluster:Worker:Transfers:Enabled` on a worker (it answers
   `Disabled` for a kind that is off), `Gateway:Handoff:Enabled` and `Gateway:Transfers:Enabled` on the gateway. With them off nothing is
   registered, the in-process coordinators and frames 24 to 27 behave as before, and a Combined or single-process world is unchanged
@@ -720,6 +731,11 @@ workers. It is a separate process from every world, so the coordinators it hosts
   slot's next standby (`--Cluster:Worker:Standby=true`); the supervisor persists the swapped roles, so a supervisor restart keeps them.
   `.cluster restart $worker` (Administrator, re-checked by the gateway against the auth database) starts this through the gateway; "started" is
   answered at once and the verdict reaches the same client after it has moved. `.cluster handoff status [id]` reads the journal.
+  Once its promotion has completed, a promoted standby runs player transfers, answering them under its slot (transfer rows name slots, and a standby's own node id differs), and is the draining source of the next gateway-driven handoff (its control service attaches both then). It has no local
+  handoff coordinator, in-flight tracker or start-up recovery (those are registered only for a worker that started active), so it cannot coordinate or recover a handoff on its own; the gateway drives it.
+  The slot name comes from the gateway: `Promote` carries it, and every worker link sends it right after admission (frame 33, `LinkSlot`). So when the supervisor relaunches the promoted process as active (a crash or hang,
+  or a restart without the standby argument), it starts with its own `Cluster:Worker:NodeId` and no `Promote` arrives, but the gateway's link names the slot before any transfer verb reaches it, and it runs transfers again as soon as that link is back.
+  Started active, it also has the coordinator, tracker and recovery above. Handoff rows keep naming the process.
   The promoted standby is the same process that was started as the standby, so the launcher gives standbys the worlds' hang timeout and hang
   capture: the supervisor's hang watch is armed by the first world-tick beat of whichever process beats (a standby that never beats is warned
   about once, never killed for silence). When a world that holds the supervisor `RealmId` (the lease-holder slot) is restarted as a standby, the

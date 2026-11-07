@@ -69,6 +69,16 @@ public static class CreatureAiServicesBinder
             Factory = services.GetService<CreatureAiFactory>() ?? new CreatureAiFactory(),
             // The conditions table is a world feature (ConditionFeature), not a registered IConditionEvaluator service.
             Conditions = services.GetService<IConditionEvaluator>() ?? services.GetServices<IWorldFeature>().OfType<IConditionEvaluator>().FirstOrDefault(),
+            JoinMeetingStone = (player, areaId) =>
+            {
+                if (services.GetService<ArcaneCore.World.GameObjects.MeetingStoneFeature>()?.Queue is not { } queue)
+                {
+                    return false;
+                }
+
+                queue.Join(player, areaId);
+                return true;
+            },
             TeamOf = creature => FactionTeams.Of(creature.FactionTemplate, templates.Value, factions.Value),
             QuestEvents = new EventAiQuestEvents(services),
             ScriptQuests = new ScriptQuestEvents(services),

@@ -39,7 +39,8 @@ public sealed class ThaddiusLightningVisualScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         if (context.EffectIndex == 0 && context.Target is Creature { IsAlive: true } creature && creature.System is { } creatures)
-            creatures.SetInCombatWithZone(creature);
+            // boss_thaddius.cpp: SetInCombatWithZone(false), he still carries his immunity flags at this point.
+            creatures.SetInCombatWithZone(creature, checkAttackability: false);
     }
 }
 

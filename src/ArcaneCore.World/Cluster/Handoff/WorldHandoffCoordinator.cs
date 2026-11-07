@@ -20,7 +20,12 @@ public interface IWorldHandoffSource
     /// <summary>Freeze the simulation at a tick boundary, capturing every online player's save as at logout. Idempotent.</summary>
     Task FreezeAsync(CancellationToken cancellationToken);
 
-    /// <summary>Wait until every save captured by the freeze is durable.</summary>
+    /// <summary>
+    /// Wait until every save captured by the freeze, and every other write A has open at that point in a character, instance or social queue, offline characters and writes of no one character
+    /// included, and in the group, GM audit, account data, account address, creature and game object respawn and world-state save queues, is durable; throws, before the commit, when one cannot be, with one exception: a keyed write refused with RealmLeaseNotHeldException (a non-holder) is not checked. For a group the holder has the data; a GM ticket taken on a non-holder is not durable, is not on B, and is only named at stop. Pet saves are waited for (per character); the running game-event set is not. A value a state-save queue (Silithyst, Fishing Extravaganza, Elemental Invasion, Nightmare Dragons) could not store is retained and checked, but StateSaveQueue.Write drops the value a store refused for the realm lease (counted, not retained, so not checked) and the failed value of a key a newer value is waiting for (the newer one is owed instead). The war effort (phase start, Colossus deaths) and Scourge invasion (start/stop, city defeats, Necropolis deaths) writes are covered: the freeze copies each feature's in-memory queue on the world thread, and the flush waits for the store job in flight and writes the copy, which needs no world thread (only a job's apply step does); a failed write fails the flush, including a Scourge write the job in flight refused or never reached (the freeze keeps that job's ops and the flush writes them again; one that failed in a job applied before the freeze was logged then and is not owed), and a non-holder of the world-state lease writes nothing (not checked). Their store calls are idempotent, so a refresh after a resume writes them again. On success A's writes are sealed until
+    /// <see cref="ResumeAsync"/> or <see cref="RetireWritesAsync"/> decides: the takeover can land at any moment, so a fence refusal is expected. A flush that outlives its freeze (A resumed
+    /// meanwhile) throws and seals nothing. A write made after this returns has no durability promise: it lands only if the takeover has not.
+    /// </summary>
     Task FlushAsync(CancellationToken cancellationToken);
 
     /// <summary>Abort before the point of no return: unfreeze and admit sessions again, under the unchanged ownership. Idempotent.</summary>
@@ -28,6 +33,14 @@ public interface IWorldHandoffSource
 
     /// <summary>After the point of no return: A never runs or admits again (its late writes are fenced anyway). Idempotent.</summary>
     Task RetireAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Right after the epoch takeover, before anything else of the roll-forward: stop every write the character, instance and social queues and the save queue could still attempt, of any character, because the takeover moved them all (pets, groups, GM audit, accounts, respawns and world-state saves have no fence handling and are not stopped; the flush made them durable before the commit). A retry that fires
+    /// while B is being promoted is skipped. Between the commit and this step the seal of <see cref="FlushAsync"/> covers the same retry: there it is refused and dropped, not terminal. Runs only
+    /// after the commit (A still owned them before it) and on every roll-forward, a recovery included. Idempotent. <see cref="RetireAsync"/> includes it, for a world that retires without a
+    /// coordinator. A source with no such queue (the default) does nothing.
+    /// </summary>
+    Task RetireWritesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     /// <summary>
     /// After the epoch takeover and before B is promoted: give up the characters database's process-lifetime writer lock (SQLite sidecar file or server advisory lock), which B's promotion
@@ -99,7 +112,7 @@ public sealed class WorldHandoffAbortedException(WorldHandoffRecord record, Exce
 /// <item>Begun; B warm (<see cref="IWorldHandoffTarget.WarmAsync"/>);</item>
 /// <item>A stops admissions, freezes at a tick boundary, and flushes the forced saves;</item>
 /// <item>the epoch takeover: the ownership moves from A (epoch N) to B (N + 1) in one transaction with the decision. Point of no return;</item>
-/// <item>B is promoted, the gateway reroutes, A retires.</item>
+/// <item>A retires its writes of the moved characters, B is promoted, the gateway reroutes, A retires.</item>
 /// </list>
 /// Any failure before the takeover aborts: the journal records it and A resumes under its unchanged ownership. After the takeover the handoff
 /// only rolls forward; a failure leaves it committed for <see cref="RecoverAsync"/> (or a repeat of it) to finish. One coordinator drives one
@@ -218,6 +231,11 @@ public sealed class WorldHandoffCoordinator(
     {
         CharacterOwnershipToken takenOver = record.TargetOwnershipToken
             ?? throw new InvalidOperationException($"committed world handoff {record.HandoffId} has no target ownership token");
+        // First of all, and on every path here (a recovery too): from the commit on, A's retries are refused by the fence. The flush's seal keeps a refusal from stopping A until this step ends them.
+        // The journal does not record it: every roll-forward repeats it, and the repeat changes nothing.
+        if (record.Stage < WorldHandoffStage.Retired)
+            await source.RetireWritesAsync(cancellationToken).ConfigureAwait(false);
+
         if (record.Stage < WorldHandoffStage.Rerouted)
         {
             // The takeover has fenced A out of the database: it gives up the writer lock so B's promotion can take it (a source still alive elsewhere would keep it and B would be refused).

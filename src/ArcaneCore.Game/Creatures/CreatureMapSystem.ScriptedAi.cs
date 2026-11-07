@@ -29,6 +29,9 @@ public sealed partial class CreatureMapSystem
     /// <summary>cmangos <c>Player::GetQuestStatus(questId) == QUEST_STATUS_INCOMPLETE</c> from a script; false without the quest seam.</summary>
     internal bool QuestIncomplete(Player player, uint questId) => _ai.ScriptQuests?.IsQuestIncomplete(player, questId) ?? false;
 
+    /// <summary>cmangos <c>Player::GetQuestStatus(questId) == QUEST_STATUS_COMPLETE</c> from a script; false without the quest seam.</summary>
+    internal bool QuestComplete(Player player, uint questId) => _ai.ScriptQuests?.IsQuestComplete(player, questId) ?? false;
+
     /// <summary>A player-linked escort failed (vmangos npc_escortAI::JustDied): its quest fails for the player's group.</summary>
     internal void FailEscortQuest(Player player, uint questId) => _ai.ScriptQuests?.GroupEventFailHappens(player, questId);
 
@@ -220,6 +223,7 @@ public sealed partial class CreatureMapSystem
             if (_reportedAi.Add($"summon:{entry}"))
             {
                 _logger.LogWarning("{Creature} script summons missing creature_template {Entry}; skipped", summoner.Guid, entry);
+                Qa?.OnCreatureAiGap(summoner, summoner.Template.Entry, "summon", entry, "script summon");
             }
 
             return null;
@@ -296,7 +300,7 @@ public sealed partial class CreatureMapSystem
 
         return candidates
             .Where(u => IsAggroTarget(creature, u) && WorldGeometry.DistanceSq3D(creature, u) <= rangeSq
-                && Map.Combat.Hooks.CanAttack(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
+                && Map.Combat.CanAttackSingleTarget(creature, u) && _ai.Hostility.IsHostile(creature, u) && InLineOfSight(creature, u))
             .OrderBy(u => WorldGeometry.DistanceSq3D(creature, u))
             .FirstOrDefault();
     }
@@ -307,6 +311,7 @@ public sealed partial class CreatureMapSystem
         if (_reportedEscorts.Add(creature.Template.Entry))
         {
             _logger.LogWarning("escort of creature {Entry} has no points ({Path}); it does not start", creature.Template.Entry, path);
+            Qa?.OnCreatureAiGap(creature, creature.Template.Entry, "escort", 0, path);
         }
     }
 }

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -941,6 +942,46 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task AHeldBackNote_ReachesTheActionLogLine_AndTheBandDeficitReport()
+    {
+        // The note a pass holds back (here the hung graveyard terrain lookup) is carried by the information line (PassContext.Note -> pass.Note ->
+        // PopulationActionLog.Due) and by the band-deficit anomaly (BandDeficitNote): dropping either call leaves the operator without the reason.
+        using var release = new ManualResetEventSlim(false);
+        var log = new CapturingLogger();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.Population.TargetOnline = 1;
+            o.Population.IntervalSeconds = 10;
+            o.Population.Bands = [new PopulationBand { MinLevel = 3, MaxLevel = 8, Weight = 1 }];
+        }, withRelocation: true, configureServices: s => s.AddSingleton<Microsoft.Extensions.Logging.ILogger<PlayerbotPopulationFeature>>(log));
+        world.Feature.TerrainLocator = location =>
+        {
+            release.Wait(TimeSpan.FromSeconds(60));
+            return (0, 0);
+        };
+        using AnomalyCapture capture = PlayerbotAnomalies.CaptureIn(world.Host.World, n => n.Key == "bot-population/band-deficit" && n.Subject == "band 3-8");
+
+        try
+        {
+            for (int pass = 1; pass <= 3; pass++)
+            {
+                world.Ticks.Set(200, 10);
+                await world.PassAsync();
+                world.Feature.ClockMs += 31_000;
+            }
+
+            Assert.Contains(log.Infos, line => line.StartsWith("Playerbot population:", StringComparison.Ordinal)
+                && line.Contains("held back: waiting for the graveyard terrain lookup", StringComparison.Ordinal));
+            AnomalyNotice notice = Assert.Single(capture.Notices);
+            Assert.Contains("held back: waiting for the graveyard terrain lookup", notice.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task ABotAtTheSlackBelowItsZone_StaysWhereItIs()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true);
@@ -1194,7 +1235,7 @@ public sealed class PlayerbotPopulationFeatureTests
         Assert.Contains("bands 1-10 want 1 have 1", first);
         await world.WaitForSettledAsync(1);
 
-        // A pass that changes nothing logs nothing; a second change inside the interval is held for the next line.
+        // A pass that changes nothing and holds nothing back logs nothing; a second change inside the interval is held for the next line.
         world.Ticks.Set(200, 10);
         await world.PassAsync();
         world.Population.TargetOnline = 2;

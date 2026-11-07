@@ -21,9 +21,9 @@ entered: a fixed PIN is checked digit for digit and a TOTP code is always six
 digits with its leading zeros, as authenticator apps display it.
 
 Behavior reference: vmangos `src/realmd/AuthSocket.cpp` challenge account policy
-and IP lock at lines 393-414, PIN grid at 497-517, PINData read at 578-587,
-factor check at 689-738, `VerifyPinData` at 1204-1272, and `GenerateTotpPin`
-at 1274-1301. The PIN permutation and hash use gtker's WowSrp source, recorded
+and IP lock at lines 411-441, PIN grid at 501-520, PINData read at 576-588,
+factor check at 697-749, `VerifyPinData` at 1221, and `GenerateTotpPin`
+at 1291. The PIN permutation and hash use gtker's WowSrp source, recorded
 in [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
 ## Manage a factor
@@ -43,7 +43,7 @@ GM reply should be enrolled in an authenticator before disconnecting.
 ## Client integrity
 
 `Auth:StrictVersionCheck` defaults to `false`, as in vmangos
-`AuthSocket::VerifyVersion` (lines 1433-1470). When enabled, configure exact
+`AuthSocket::VerifyVersion` (lines 1450-1486). When enabled, configure exact
 `Auth:IntegrityHashes` entries with `Build`, `Os`, `Platform` and `Hash` (40 hex
 characters). For example, build 5875 with `Win` and `x86` matches a native Windows
 client. `Hash` is the trusted 20-byte client integrity hash; it is **not** the

@@ -68,10 +68,16 @@ public sealed partial class SpellSystem
             // Location32 also prepares the destination when target B selects the units.
             if (selector != effect.TargetA && effect.TargetA == SpellImplicitTarget.LocationUnitMinionPosition
                 && effect.Effect != SpellEffectName.Duel)
-                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f);
+                SpellTargetSelectors.SelectCasterRelativeLocation(this, cast, effect, MathF.PI * 0.25f);
             // Target B 48/49/50 names a caster-relative place while target A picks the unit (Blink 29209-29211: A caster, B back/left/right).
             if (selector != effect.TargetB && SpellTargetSelectors.CasterSideAngle(effect.TargetB) is { } sideAngle)
-                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, sideAngle);
+                SpellTargetSelectors.SelectCasterRelativeLocation(this, cast, effect, sideAngle);
+            // Target B 46 beside a unit target A (12699: A unit / B46; 22393 is A38 / B46, whose selector is 38 and so takes this branch too): vmangos
+            // runs SetTargetMap for B as well, so the nearest listed object becomes the destination while A picks the unit. The destination flag this sets
+            // is kept from costing a self-aimed cast its explicit-or-self fallback by ScriptTargetKeptSelfAim (SelectEffectTargets).
+            if (effect.TargetB == SpellImplicitTarget.LocationScriptNearCaster && effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster
+                && selector != effect.TargetB && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, SpellImplicitTarget.LocationScriptNearCaster)))
+                SelectScriptLocationTarget(cast, effect, i, unitTarget);
             // TARGET_UNIT_ENEMY updates the explicit target for later effects too, including
             // UNIT / NONE selectors. Arcane Missiles' caster-selector exception leaves it alone.
             if (cast.MagnetTarget is { } magnet && cast.Targets.Unit == magnet.Guid)
@@ -84,6 +90,35 @@ public sealed partial class SpellSystem
             {
                 ReportUnsupported(cast, i, "implicit target", (uint)selector);
                 continue;
+            }
+
+            // An item cast of target 38 made the unit it found the cast's unit target (SelectScriptTargets, vmangos Spell.cpp:567-568), so the effects
+            // selected after this one see it as their explicit target (Dominion of Soul 16053: A38, A1, A6).
+            if (cast.CastItem is not null && selector == SpellImplicitTarget.UnitScriptNearCaster && effect.TargetA == selector
+                && units.Count == 1 && cast.Targets.Unit == units[0].Unit.Guid)
+            {
+                unitTarget = units[0].Unit;
+            }
+
+            // Target A 46 beside a unit target B (an A46 / B16 effect; 17616 has that shape but no spell_script_target row, so it is refused beforehand and
+            // the merge matters only for a spell with rows): vmangos FillTargetMap runs SetTargetMap for both (Spell.cpp:381-392), A's found
+            // unit first and then B's list; SelectorOf names only A here, so B is selected as well and the two lists are merged.
+            if (selector == SpellImplicitTarget.LocationScriptNearCaster && effect.TargetA == selector
+                && effect.TargetB is not (SpellImplicitTarget.None or SpellImplicitTarget.LocationScriptNearCaster) && !IsLocationTarget(effect.TargetB)
+                && !_spellTargetSelectors.ContainsKey((cast.Spell.Id, selector)))
+            {
+                List<(Unit Unit, float Multiplier)>? fromB = SelectEffectTargets(cast, effect, i, effect.TargetB, unitTarget);
+                if (fromB is null)
+                {
+                    ReportUnsupported(cast, i, "implicit target", (uint)effect.TargetB);
+                }
+                else
+                {
+                    // A unit B selected is a real target of the effect, even when it is also the A 46 carrier (the caster).
+                    if (cast.ObjectCarriersOrNull is { } carriers && carriers.TryGetValue(i, out Unit? carrier) && fromB.Exists(entryB => ReferenceEquals(entryB.Unit, carrier)))
+                        carriers.Remove(i);
+                    units = [.. units, .. fromB];
+                }
             }
 
             units = FilterRegistered(cast, effect, units);
@@ -122,7 +157,10 @@ public sealed partial class SpellSystem
     {
         Unit caster = cast.Caster;
         SpellInfo spell = cast.Spell;
-        Unit? explicitOrSelf = unitTarget ?? (cast.Targets.Mask == SpellCastTargetFlags.Self ? caster : null);
+        // A script-target selection of an earlier effect may have added the destination flag to a self cast (ScriptTargetKeptSelfAim): still self-aimed.
+        bool selfAimed = cast.Targets.Mask == SpellCastTargetFlags.Self
+            || cast.ScriptTargetKeptSelfAim && (cast.Targets.Mask & ~(SpellCastTargetFlags.DestLocation | SpellCastTargetFlags.Unit)) == 0;
+        Unit? explicitOrSelf = unitTarget ?? (selfAimed ? caster : null);
         switch (selector)
         {
             case SpellImplicitTarget.UnitCaster:

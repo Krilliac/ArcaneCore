@@ -67,7 +67,12 @@ public sealed class AntiCheatOptions
     /// </summary>
     public int SpeedChangeGraceMs { get; set; } = 2000;
 
-    /// <summary>A gap this long (milliseconds) between two movement packets starts a new baseline (loading screen, AFK). Default 3000.</summary>
+    /// <summary>
+    /// Caps the time-skip credit (milliseconds): all the skips the evidence supports in ten seconds together earn at most this much. It also
+    /// caps the time budget of any single step (a silence buys at most this much movement in one step) and, times four, the extra distance the
+    /// multi-packet budget grants after a stall (the packets a stall held arrive together). A silence between two movement packets is never a
+    /// free baseline; the step after it is judged against the time that passed. Default 3000.
+    /// </summary>
     public int BaselineGapMs { get; set; } = 3000;
 
     /// <summary>Movement packets per second, by the receive clock AND the client's own clock, that count as a burst. Default 50.</summary>
@@ -225,6 +230,16 @@ public sealed class SpeedClockOptions : ICloneable
     /// <summary>After firing it stays silent for this long (milliseconds). Default 10000.</summary>
     public int CooldownMs { get; set; } = 10000;
 
+    /// <summary>
+    /// Long-term drift: when the client clock has gained this many milliseconds on the server's receive clock (the client time elapsed since the
+    /// last restart of the count, a teleport or a previous fire, minus the real time elapsed, over every packet pair), a clock that runs fast by
+    /// less than <see cref="TolerancePercent"/> is reported too. 0 switches it off, which is the default (the sliding window alone, as before);
+    /// otherwise 1000 to 3600000. Honest play stays near zero: lag and the catch-up burst cancel. The excess is floored at minus twice the limit,
+    /// so a stall (or two close together) longer than about three times the limit leaves an honest running player at or above the limit: choose
+    /// the limit at no less than a third of the longest stall you expect (3000 survives a 9 second spike).
+    /// </summary>
+    public int LongTermDriftMs { get; set; }
+
     public object Clone() => MemberwiseClone();
 
     public IEnumerable<string> Validate()
@@ -252,6 +267,11 @@ public sealed class SpeedClockOptions : ICloneable
         if (MaxGapMs <= 0 || CooldownMs < 0)
         {
             yield return "AntiCheat:SpeedClock:MaxGapMs must be positive and CooldownMs not negative.";
+        }
+
+        if (LongTermDriftMs != 0 && (LongTermDriftMs < 1000 || LongTermDriftMs > 3_600_000))
+        {
+            yield return $"AntiCheat:SpeedClock:LongTermDriftMs ({LongTermDriftMs}) must be 0 (off) or 1000 to 3600000.";
         }
     }
 }

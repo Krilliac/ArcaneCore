@@ -266,6 +266,57 @@ public sealed class LootServiceTests
     }
 
     [Fact]
+    public void QuestDrop_TwoPlayersNeedIt_GoesToTheFirstPickupAndIsGoneForTheOther()
+    {
+        // vmangos LootHandler.cpp:223-224: without ITEM_FLAG_PARTY_LOOT the item is looted for everyone after one pickup.
+        Rig rig = CreateRig();
+        (Player first, FakeSession firstSession) = rig.Join(1);
+        (Player second, FakeSession secondSession) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.FreeForAll, first, second);
+        rig.Quests.Needs.Add((first.Guid, QuestItem));
+        rig.Quests.Needs.Add((second.Guid, QuestItem));
+        Creature wolf = rig.KillWolf(first);
+
+        rig.Loot.Open(first, wolf.Guid);
+        rig.Loot.Open(second, wolf.Guid);
+        byte slot = LootResponse(firstSession).Items.Single(i => i.ItemId == QuestItem).Slot;
+        Assert.Contains(LootResponse(secondSession).Items, i => i.ItemId == QuestItem);
+        firstSession.Clear();
+        secondSession.Clear();
+
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(first, slot));
+        Assert.Single(Packets(secondSession, WorldOpcode.SmsgLootRemoved)); // the other viewer's slot closes too
+        Assert.NotEqual(InventoryResult.Ok, rig.Loot.TakeItem(second, slot));
+        Assert.Equal(0u, second.Inventory.GetItemCount(QuestItem));
+        Assert.Equal(1u, first.Inventory.GetItemCount(QuestItem));
+    }
+
+    [Fact]
+    public void QuestItemBag_PartyLootFlagKeepsACopyPerLooter_OtherwiseOnePickupEndsIt()
+    {
+        (Player alice, _) = Player(1);
+        (Player bob, _) = Player(2);
+        var bag = new LootBag(new ObjectGuid(0xF130000000000001), LootSourceKind.Creature, LootType.Corpse);
+        var shared = new LootItem(0, 11, 1, true, false, 101);
+        var party = new LootItem(1, 12, 1, true, true, 102);
+        foreach (LootItem item in new[] { shared, party })
+        {
+            item.AllowedLooters.Add(alice.Guid);
+            item.AllowedLooters.Add(bob.Guid);
+            bag.Add(item);
+        }
+
+        bag.MarkTaken(shared, alice);
+        bag.MarkTaken(party, alice);
+        Assert.True(shared.IsLooted);
+        Assert.Null(bag.SlotFor(bob, shared));
+        Assert.False(party.IsLooted);
+        Assert.Equal(LootSlotType.AllowLoot, bag.SlotFor(bob, party));
+        bag.MarkTaken(party, bob);
+        Assert.True(party.IsLooted);
+    }
+
+    [Fact]
     public void FreeForAll_BothMembersLoot_AndMoneyIsSplitWithNotify()
     {
         Rig rig = CreateRig(minGold: 11, maxGold: 11);

@@ -146,6 +146,38 @@ public sealed class MatchRuntimeUpdateTests
         Assert.True(rig.Spells.System.HasAura(player, BuffSpell));
     }
 
+    /// <summary>A game master in reach is not the trap's target (a deliberate deviation from vmangos): it gets no buff and starts no cooldown, so a player in reach still gets the buff.</summary>
+    [Fact]
+    public void BuffTrap_SkipsAGameMaster_AndBuffsAPlayerInReach()
+    {
+        using var rig = new MatchRuntimeRig();
+        rig.AddObject(BuffTrap, 40f, 40f);
+        Player gm = rig.AddPlayer(40f, 40f);
+        gm.Flags |= PlayerFlags.Gm;
+        Player player = rig.AddPlayer(41f, 40f);
+
+        rig.Match.Update(100);
+
+        Assert.False(rig.Spells.System.HasAura(gm, BuffSpell));
+        Assert.True(rig.Spells.System.HasAura(player, BuffSpell));
+    }
+
+    [Fact]
+    public void BuffTrap_WithOnlyAGameMasterInReach_DoesNotFireOrStartItsCooldown()
+    {
+        using var rig = new MatchRuntimeRig();
+        rig.AddObject(BuffTrap, 40f, 40f);
+        Player gm = rig.AddPlayer(40f, 40f);
+        gm.Flags |= PlayerFlags.Gm;
+
+        rig.Match.Update(100);
+        Assert.False(rig.Spells.System.HasAura(gm, BuffSpell));
+
+        Player player = rig.AddPlayer(41f, 40f);
+        rig.Match.Update(100);                       // no cooldown was started by the game master
+        Assert.True(rig.Spells.System.HasAura(player, BuffSpell));
+    }
+
     [Fact]
     public void BuffTrap_OfAnotherKind_IsNeverTriggered()
     {

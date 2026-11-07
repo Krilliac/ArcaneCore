@@ -64,6 +64,12 @@ public sealed class WorldRuntimeOptions
     public string Motd { get; set; } = "Welcome to ArcaneCore.";
 
     /// <summary>
+    /// Records sent as SMSG_EXPECTED_SPAM_RECORDS at login, before the message of the day; '@' separates records, empty (the default) sends no packet. mangos-classic sends
+    /// the rows of its spam_records table the same way (CharacterHandler.cpp:755, WorldSession.cpp:856). ArcaneCore ships none: the client's use of them is unconfirmed.
+    /// </summary>
+    public string ExpectedSpamRecords { get; set; } = string.Empty;
+
+    /// <summary>
     /// Distance /say reaches. vmangos and cmangos-classic World.cpp default to 25 (cmangos'
     /// shipped mangosd.conf keeps 25; vmangos' raises it to 40). 0 = the whole map.
     /// </summary>
@@ -83,6 +89,21 @@ public sealed class WorldRuntimeOptions
 
     /// <summary>Show the other faction in /who (vmangos AllowTwoSide.WhoList, default off).</summary>
     public bool AllowTwoSideWhoList { get; set; }
+
+    /// <summary>
+    /// The consecutive-play-time limit (vmangos LimitPlayTime, CONFIG_BOOL_LIMIT_PLAY_TIME, default off; a regional anti-addiction rule that is not
+    /// retail 1.12.1 behaviour). On: a session that has played 2 h 30 min, 3 h, 4 h 30 min and 5 h is sent SMSG_PLAY_TIME_WARNING at each step, its
+    /// character is flagged PARTIAL_PLAY_TIME (half experience) from 3 h and NO_PLAY_TIME (no experience, no loot, no quest rewards, rolls pass) from 5 h
+    /// (vmangos WorldSession::CheckPlayedTimeLimit, WorldSession.cpp:377-420). <see cref="ArcaneCore.Game.Entities.PlayTimeLimit"/>.
+    /// </summary>
+    public bool LimitPlayTime { get; set; }
+
+    /// <summary>
+    /// Movement packets a session must be sent within 10 seconds before further movement relays to it are batched into SMSG_COMPRESSED_MOVES
+    /// (vmangos Compression.Movement.Count, WorldSession.cpp:221-266; vmangos defaults to 300, here 0 = never, which is what retail did). Packets over
+    /// 253 bytes are never batched. A batch is flushed on the session's next tick.
+    /// </summary>
+    public int CompressMovementCount { get; set; }
 
     /// <summary>
     /// How long a requested logout counts down before the player leaves the world (vmangos

@@ -35,6 +35,7 @@ no invented API surface, unfinished parts documented as limits).
 | [Live launch diagnostics](ops/live-diagnostics.md) | `launch-daemon.ps1 -Diagnostics Max` (the default): crash dumps, hang stacks, a counters CSV sidecar and the repo's diagnostic options at their most informative safe values, the disk caps, and what was left out and why. |
 | [Crash dumps](ops/crash-dumps.md) | WER LocalDumps setup (`register-crash-dumps.ps1`), the `dumping` heartbeat grace in the supervisors, and the verify-once two-dump recipe |
 | [Redeploy prefers hot reload](ops/redeploy.md) | How `tools/ops/live/redeploy.ps1` plans a redeploy (None, Hot, Restart, Blocked), the deploy record, the hot apply through the World's control pipe and when it falls back to the hard restart. |
+| [GM live stream](ops/gm-stream.md) | `.arcane stream`: the damage, procs, spells, moves and anticheat channels a GM can follow in chat, the target/near/all scopes, the range, and the rate limit and timeout. |
 | [Wiring audit](ops/wiring-audit.md) | `.server wiring` and the start-up summary line: client opcodes with no handler, options asked for but never configured, config checks `check-config` does not run, handlers on server-only opcodes; the CI guards behind them. |
 | [Security hardening](security/hardening.md) | The opt-in hardening switches and their defaults, and what is not delivered. |
 | [Realm PIN, TOTP and client integrity](security/realm-pin-integrity.md) | Account login factors, Administrator commands, and opt-in client integrity checks. |
@@ -42,7 +43,7 @@ no invented API surface, unfinished parts documented as limits).
 | [Network and packet protections](ops/netguard.md) | The `Net:Protection` limits (per-address caps, rates and failure budgets, frame deadlines), the bounds-checked packet readers and the fuzz harness. |
 | [Live bans](security/live-bans.md) | Ban tables, IP bans and the live enforcement options. |
 | [Anticheat](areas/anticheat.md) | The server-side movement checks, the score and escalation (log, GM alert, rubberband, kick, autoban), the `AntiCheat` options and the `.anticheat` commands. |
-| [Packet heuristics](areas/packet-heuristics.md) | Report-only analysis of client and bot packets (shape, cadence, replay, wrong state, orphan acknowledgements, incapacitated actions), off by default; `World:PacketHeuristics` and `.packetcheck`. |
+| [Packet heuristics](areas/packet-heuristics.md) | Report-only analysis of client and bot packets (shape, cadence, replay, wrong state, orphan acknowledgements, incapacitated actions), on by default; `World:PacketHeuristics` and `.packetcheck`. |
 | [Client error codes](areas/client-errors.md) | Which packet and code makes the 1.12.1 client show "Internal error" (and the other generic failures), verified against the client binary, and the `ClientError` API that sends them. |
 | [Operations and performance](areas/ops-perf.md) | `check-config`, exit codes, the performance log and shutdown commands. |
 | [Server console](areas/server-console.md) | Typed commands at the World and Realm console windows and the `World:Console:Enabled` and `Realm:Console:Enabled` options. |

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
@@ -10,6 +12,7 @@ using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
@@ -24,6 +27,7 @@ namespace ArcaneCore.World.Tests.Cluster.Transfer;
 /// world's own save queue) and a gateway-backed session: the shadow load must write nothing and must not run the battleground hook, and the
 /// activation follows the retail far-teleport order (loading screen first, map add on the worldport ack).
 /// </summary>
+[Collection(SharedFaultLedgerCollection.Name)] // the fault-count assertions read the process-wide ledger: nothing may reset it meanwhile
 public sealed class WorkerTransferTargetProductionTests
 {
     private const uint BattlegroundMapId = 489; // Warsong Gulch
@@ -250,6 +254,92 @@ public sealed class WorkerTransferTargetProductionTests
         Assert.Equal(1, offline.Completions);
     }
 
+    /// <summary>
+    /// The target half: the life of a ghost is restored from the characters database, not the bundle (the bundle's copy is the journal's record): the production loader reads what the source's
+    /// save wrote, and the arrival's logged-in notification puts the body back (DeathFeature, vmangos Player::LoadCorpse). So the spirit arrives as a spirit, with its body where it was stored.
+    /// The source half and the real save are in <c>GatewayCrossWorkerTeleportTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task AGhostThroughATransfer_ArrivesAsAGhost_WithItsBodyAtTheStoredPlace()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERGHOST", "Ghostmover", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var body = new CorpseSnapshot(0, -8940f, -130f, 83f, 1f, now - 100, (byte)CorpseType.ResurrectablePve);
+        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+        var target = new WorkerTransferTarget(Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f)) with { Health = 1, IsGhost = true, Corpse = body };
+        ObjectGuid guid = new(bundle.CharacterGuid);
+
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
+        Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
+        Assert.True(await host.World.InvokeAsync(() => teleports.HandleWorldportAck(player)));
+        await WorldTestHost.WaitForAsync(() => player.Map is not null && output.Opcodes.Contains(WorldOpcode.SmsgUpdateObject), "the ghost to enter its map");
+        await host.WaitForWorldAsync(() => player.Combat.Corpse is not null, "the body to be put back");
+
+        await host.OnWorldAsync(() =>
+        {
+            Assert.NotEqual(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.Equal(DeathState.Dead, player.Combat.DeathState);
+            Assert.False(player.IsAlive);
+            Assert.Equal(1u, player.Health);
+            Corpse corpse = Assert.Single(player.Map!.Combat.Corpses);
+            Assert.Equal((body.X, body.Y, body.Z), (corpse.X, corpse.Y, corpse.Z));
+            Assert.Equal(player.Guid.Value, corpse.Owner.Value);
+        });
+    }
+
+    /// <summary>
+    /// A ghost entering the dungeon of its body (vmangos Player::TeleportTo, Player.cpp:1953-1966) is revived by the target once it has arrived: the source no longer does it, because a refused
+    /// transfer could not undo the revive. It comes back at half health and the body goes. The whole way runs against a real dungeon template and the production allocator: the map is the
+    /// managed instance a worker reserves for an instance-0 request (never an unmanaged instance 0 of the dungeon), and the body lies in that instance.
+    /// </summary>
+    [Fact]
+    public async Task AGhostArrivingInTheMapOfItsBody_IsRevivedOnTheTarget_AndItsBodyGoes()
+    {
+        const uint Dungeon = 36;
+        await using var host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ArcaneCore.Kernel.WorldData.IMapDataStore, GridTerrain.InMemoryMapDataStore>());
+        (int accountId, CharacterRecord character, WorldSession session, RecordingOutput output, AsyncServiceScope scope) = await OpenAsync(host, "XFERREVIVE", "Ghostrevived", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        var instances = host.WorldServices.GetRequiredService<ArcaneCore.World.Instances.InstanceFeature>().Instances;
+        Assert.True(instances.IsInstancedMap(Dungeon)); // the registry holds the dungeon template: without it the arrival kicks the session
+        TeleportService teleports = host.WorldServices.GetRequiredService<TeleportFeature>().Teleports;
+        var target = new WorkerTransferTarget(
+            Target, host.World, new CharacterHooksShadowLoader(_ => session, host.WorldServices), new WorldSessionTransferEntry(host.WorldServices), instances: new InstanceManagerTransferAllocator(instances));
+        Guid id = Guid.NewGuid();
+
+        TransferSlotReservation reservation = await target.ReserveSlotAsync(id, ObjectGuid.Player((uint)character.Id).Value, Dungeon, 0);
+        Assert.True(reservation.Reserved);
+        Assert.NotEqual(0u, reservation.InstanceId);
+
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var body = new CorpseSnapshot(Dungeon, -16f, -383f, 61f, 1f, now - 100, (byte)CorpseType.ResurrectablePve, reservation.InstanceId);
+        host.Characters.SetLife(character.Id, new CharacterLife(1, [0, 0, 0, 0, 0], 0, now + 300, true, body));
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, Dungeon, new TransferPosition(-16f, -383f, 61f, 0f))
+            with { TargetInstanceId = reservation.InstanceId, SourceMapId = 0, Health = 1, IsGhost = true, Corpse = body };
+        ObjectGuid guid = new(bundle.CharacterGuid);
+
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(TimeSpan.FromSeconds(30));
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(TimeSpan.FromSeconds(30));
+        Player player = (await host.World.InvokeAsync(() => host.World.FindOnlinePlayer(guid)))!;
+        Assert.True(await host.World.InvokeAsync(() => teleports.HandleWorldportAck(player)));
+        await host.WaitForWorldAsync(() => player.IsAlive, "the ghost to be revived on arrival");
+
+        await host.OnWorldAsync(() =>
+        {
+            Assert.Equal(0u, (uint)(player.Flags & PlayerFlags.Ghost));
+            Assert.Equal((Dungeon, reservation.InstanceId), (player.Map!.MapId, player.Map.InstanceId));
+            Assert.True(player.Health > 1);
+            Assert.Null(player.Combat.Corpse);
+            Assert.Empty(player.Map.Combat.Corpses);
+        });
+    }
+
     [Fact]
     public async Task ReleasingAShadow_AfterItsSessionClosed_StillWorks()
     {
@@ -259,10 +349,54 @@ public sealed class WorkerTransferTargetProductionTests
         var loader = new CharacterHooksShadowLoader(_ => session, host.WorldServices);
         Player shadow = await loader.LoadAsync(NewBundle(Guid.NewGuid(), accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f)), CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(30));
+        HonorService honor = host.WorldServices.GetRequiredService<HonorFeature>().ActiveService!;
+        Assert.NotNull(honor.For(shadow)); // the load tracked it, so the check below can fail
 
         await scope.DisposeAsync();
 
         loader.Release(shadow); // the honor service is shared: a shadow it keeps tracking is a leak
+        Assert.Null(honor.For(shadow));
+    }
+
+    /// <summary>
+    /// A shadow load that ends because the client closed is the client leaving, not a fault: the install reports it to its caller and logs it, but does not add to the fault ledger.
+    /// The control in the same test: any other load failure is counted, so the zero below can fail. Counted per site and exception type, because the ledger is process-wide.
+    /// </summary>
+    [Fact]
+    public async Task AShadowLoadThatFoundTheClientClosed_IsNotCountedAsAFault_WhileAnyOtherLoadFailureIs()
+    {
+        await using var host = WorldTestHost.Start();
+        (int accountId, CharacterRecord character, _, _, AsyncServiceScope scope) = await OpenAsync(host, "XFERFAULTS", "Faultone", 0, 100f);
+        await using AsyncServiceScope ownedScope = scope;
+        Func<Exception> next = () => new TransferClientClosedException("the client closed", new ObjectDisposedException("scope"));
+        var target = new WorkerTransferTarget(Target, host.World, new ScriptedFailureLoader(() => next()), new WorldSessionTransferEntry(host.WorldServices));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character, 0, new TransferPosition(-8949f, -132f, 83f, 0f));
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+
+        long closedBefore = TargetFaults(nameof(TransferClientClosedException));
+        await Assert.ThrowsAsync<TransferClientClosedException>(() => target.InstallPassiveShadowAsync(id, bundle));
+        Assert.Equal(closedBefore, TargetFaults(nameof(TransferClientClosedException)));
+
+        next = () => new ShadowLoadBroke();
+        long brokeBefore = TargetFaults(nameof(ShadowLoadBroke));
+        await Assert.ThrowsAsync<ShadowLoadBroke>(() => target.InstallPassiveShadowAsync(id, bundle));
+        Assert.Equal(brokeBefore + 1, TargetFaults(nameof(ShadowLoadBroke)));
+    }
+
+    private static long TargetFaults(string exceptionType) => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot()
+        .Where(f => f.Site == "cluster.transfer-target" && f.ExceptionType.Contains(exceptionType, StringComparison.Ordinal))
+        .Sum(f => f.Count);
+
+    private sealed class ShadowLoadBroke : InvalidOperationException;
+
+    private sealed class ScriptedFailureLoader(Func<Exception> error) : ITransferShadowLoader
+    {
+        public Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken) => Task.FromException<Player>(error());
+
+        public void Release(Player shadow)
+        {
+        }
     }
 
     private sealed class RecordingOfflineArrival : ITransferOfflineArrival

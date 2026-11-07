@@ -72,9 +72,8 @@ public sealed class AntiCheatWorldTests
     /// <summary>
     /// Apply <paramref name="options"/> with no baseline gap. The mover paces itself in real time, but every check judges a step by the
     /// client's own elapsed time capped by the receive interval plus slack, so a late packet never makes a legitimate step look fast.
-    /// The one wall-clock rule is the baseline gap: a pause over <see cref="AntiCheatOptions.BaselineGapMs"/> (3 s) re-baselines (AFK, a
-    /// loading screen), and a test continuation the thread pool held back that long under full-suite load sent the blink as a fresh
-    /// baseline, which is never scored. With the gap out of reach every result here depends only on the packets.
+    /// <see cref="AntiCheatOptions.BaselineGapMs"/> only caps the time-skip credit now (a silence is no longer a free baseline); a large value
+    /// keeps a thread pool stall under full-suite load from widening what a skip can be credited with.
     /// </summary>
     private static Task ApplyAsync(WorldTestHost host, AntiCheatOptions options)
     {
@@ -117,6 +116,64 @@ public sealed class AntiCheatWorldTests
         await SettledAsync(host, "Legit", mover);
         await host.WaitForWorldAsync(() => !seen.IsEmpty, "the blink is scored");
         Assert.Contains(seen, s => s.Player == "Legit" && s.Finding.Type == AntiCheatViolation.Teleport);
+    }
+
+    /// <summary>
+    /// A run, a 500 ms silence, then a skip of 400 ms and a 4.5 yd step (4.5 yd is clean on 450 ms of budget, a Speed finding on the
+    /// 50 ms the client clock shows). <paramref name="otherPacketAfterSilence"/> sends a non-movement world packet (CMSG_PLAYED_TIME) just
+    /// before the skip: the session stamp then makes the silence the skip is supported by near zero.
+    /// </summary>
+    private static async Task<ConcurrentQueue<(string Player, AntiCheatFinding Finding)>> SkipAfterSilenceAsync(WorldTestHost host, string account, string name, bool otherPacketAfterSilence)
+    {
+        await ApplyAsync(host, new AntiCheatOptions());
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
+        await using WorldTestClient client = await host.EnterWorldAsync(account, name);
+        Mover mover = await MoverAsync(host, client, name);
+        ulong guid = await host.PlayerStateAsync(name, p => p.Guid.Value);
+
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        for (int i = 0; i < 5; i++)
+        {
+            await mover.StepAsync(100, 0.7f);
+        }
+
+        await SettledAsync(host, name, mover);
+        Assert.Empty(seen);
+
+        await Task.Delay(500);
+        if (otherPacketAfterSilence)
+        {
+            await client.SendAsync(WorldOpcode.CmsgPlayedTime, []);
+        }
+
+        var skip = new PacketWriter(12);
+        skip.WriteUInt64(guid);
+        skip.WriteUInt32(400);
+        await client.SendAsync(WorldOpcode.CmsgMoveTimeSkipped, skip.ToArray());
+
+        mover.Time += 50;
+        mover.X += 4.5f;
+        await mover.SendAsync(WorldOpcode.MsgMoveHeartbeat, MovementFlags.Forward);
+        await SettledAsync(host, name, mover);
+        return seen;
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")] // the forged arm needs the 500 ms silence to read as at least 500 ms on the receive clock, so a stalled thread pool changes the verdict
+    public async Task ASkipBackedByRealSilence_BuysTheStepItsSilenceCovers_ButNotAfterAnotherWorldPacketClosedTheSilence()
+    {
+        // Control: no packet between the last movement and the skip, so the 500 ms of silence backs the 400 ms skip.
+        await using (WorldTestHost control = WorldTestHost.Start())
+        {
+            ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = await SkipAfterSilenceAsync(control, "SKIPC", "Skipcontrol", otherPacketAfterSilence: false);
+            Assert.Empty(seen);
+        }
+
+        // Same bytes, but a stamped world packet arrived just before the skip: the silence is gone, the skip buys nothing.
+        await using WorldTestHost host = WorldTestHost.Start();
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> forged = await SkipAfterSilenceAsync(host, "SKIPF", "Skipforged", otherPacketAfterSilence: true);
+        await host.WaitForWorldAsync(() => !forged.IsEmpty, "the unbacked skip's step is scored");
+        Assert.Contains(forged, s => s.Player == "Skipforged" && s.Finding.Type == AntiCheatViolation.Speed);
     }
 
     [Fact]
@@ -186,6 +243,44 @@ public sealed class AntiCheatWorldTests
         await SettledAsync(host, "Staffer", mover);
         await host.WaitForWorldAsync(() => !seen.IsEmpty, "the blink is scored");
         Assert.Contains(seen, s => s.Player == "Staffer" && s.Finding.Type == AntiCheatViolation.Teleport);
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")] // real-time paced packets
+    public async Task AFarMoveWhileExempt_IsNoBaseline_TheStepAfterLeavingGmModeIsFreshAndNotAFalseTeleport()
+    {
+        await using var host = WorldTestHost.Start();
+        await ApplyAsync(host, new AntiCheatOptions { ExemptSecurity = AccountSecurity.Administrator });
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
+        await using WorldTestClient gm = await host.EnterWorldAsync("EXEMPTFAR", "Exemptfar", AccountSecurity.GameMaster);
+        Mover mover = await MoverAsync(host, gm, "Exemptfar");
+
+        // Judged: the checks hold a baseline at the start.
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SettledAsync(host, "Exemptfar", mover);
+        Assert.Empty(seen);
+
+        // GM mode: the player is carried 80 yards, stored unjudged (the position the server holds moves with it).
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".gm on");
+        await gm.ReadChatAsync();
+        await mover.StepAsync(100, 80f);
+        await SettledAsync(host, "Exemptfar", mover);
+        Assert.Empty(seen);
+
+        // Out of GM mode: the next block is a new baseline. Measured from the position before the exemption it was an 80 yard step.
+        await gm.SendChatAsync(ChatType.Say, Language.Common, ".gm off");
+        await gm.ReadChatAsync();
+        await mover.StepAsync(100, 0.7f);
+        await SettledAsync(host, "Exemptfar", mover);
+        await host.OnWorldAsync(() => 0);
+        Assert.Empty(seen);
+
+        // The checks are live again.
+        await mover.StepAsync(100, 80f);
+        await SettledAsync(host, "Exemptfar", mover);
+        await host.WaitForWorldAsync(() => !seen.IsEmpty, "the blink is scored");
+        Assert.Contains(seen, s => s.Player == "Exemptfar" && s.Finding.Type == AntiCheatViolation.Teleport);
     }
 
     [Fact]

@@ -132,7 +132,9 @@ public sealed class GrarkLorkrubAI(Creature creature) : EscortAI(creature), IQue
             case NpcSearscaleDrake:
                 if (_firstSearscale)
                 {
-                    _firstSearscale = false; // the first one flies (SetLevitate, not ported; its circling is a ToDo in the source too)
+                    // The first one flies: SetLevitate(true), as the source does (the circling above Grark is a ToDo there too, so it holds its place).
+                    _firstSearscale = false;
+                    summoned.AddMovementFlags(MovementFlags.Levitating);
                 }
 
                 _searscales.Add(summoned);

@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -110,6 +111,36 @@ public sealed class PetUnlearnTests
         // The next one costs 50 silver, and nothing trained is left to untrain.
         Assert.Equal(5_000u, kit.Controller.ResetCost(charm));
         Assert.False(kit.Controller.HandleUnlearn(hunter, pet.Guid));
+    }
+
+    [Fact]
+    public async Task Unlearn_PriceAndTime_SurviveARelog()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, _, Creature pet, CharmInfo charm) = Tame(kit);
+        charm.LearnSpell(Bite2);
+        hunter.Money = 20_000;
+        kit.Controller.UnixNow = () => 1_000;
+        PersistentPetSnapshot? saved = null;
+        kit.Service.SavePersistence = (snapshot, _) => { saved = snapshot; return Task.CompletedTask; };
+
+        Assert.True(kit.Controller.HandleUnlearn(hunter, pet.Guid));
+        await kit.Service.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.NotNull(saved);
+        Assert.Equal((1_000u, 1_000L), (saved.ResetTalentsCost, saved.ResetTalentsTime));
+
+        // the relog: the pet is rebuilt from the saved row and the next untraining is the 50 silver step, not 10 silver again
+        kit.Service.Unsummon(pet, PetUnsummonReason.OwnerLeft);
+        Creature? back = kit.Service.RestoreCurrentPet(hunter, saved);
+        Assert.NotNull(back);
+        CharmInfo restored = back.Summon!.Charm!;
+        Assert.Equal((1_000u, 1_000L), (restored.ResetTalentsCost, restored.ResetTalentsTime));
+        Assert.Equal(5_000u, kit.Controller.ResetCost(restored));
+
+        // a day later it is 10 silver again (Pet.cpp:2130)
+        kit.Controller.UnixNow = () => 1_000 + 86_400;
+        Assert.Equal(1_000u, kit.Controller.ResetCost(restored));
     }
 
     [Fact]

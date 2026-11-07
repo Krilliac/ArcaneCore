@@ -52,6 +52,170 @@ public sealed class GatewayHandoffHardeningTests
         Assert.Equal(NodeB, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
     }
 
+    /// <summary>The promoted standby attaches a draining source of its own, so after a handoff both processes report a held ownership; the higher epoch (the takeover's) marks the active one.</summary>
+    [Fact]
+    public async Task AfterAHandoff_BothProcessesHoldAToken_AndARestartedGatewayFollowsTheHigherEpoch()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+
+        await rig.RestartGatewayAsync(cts.Token);
+        ControlDescribePayload a = await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token);
+        ControlDescribePayload b = await DescribeAsync(rig.Service.StandbyChannel(NodeA)!, cts.Token);
+        Assert.Equal(NodeA, a.WorkerId);
+        Assert.Equal(NodeB, b.WorkerId);
+        Assert.False(a.IsStandby);
+        Assert.False(b.IsStandby);
+        Assert.NotNull(a.HeldSourceToken);
+        Assert.NotNull(b.HeldSourceToken);
+        Assert.True(b.HeldSourceToken!.Epoch > a.HeldSourceToken!.Epoch, $"{b.HeldSourceToken.Epoch} vs {a.HeldSourceToken.Epoch}");
+
+        await rig.Service.ReconcileAsync(cts.Token);
+        Assert.Equal(new[] { NodeA, NodeB, NodeA }, rig.Service.NodeNames(NodeA).ToArray());
+        Assert.Equal(rig.BEndpoint.Host!.BoundEndPoint, rig.Gateway.WorkerEndPoint);
+    }
+
+    /// <summary>
+    /// Y10 end to end: the standby the first handoff promoted (endpoint started, so the session acceptor exists when its transfer side is built) runs a transfer through its control service, then is
+    /// the source of a second, complete gateway-driven handoff to a third world (StopAdmissions, Freeze, Flush, takeover, reroute, RetireWrites, ReleaseWriterLock, Retire).
+    /// </summary>
+    [Fact]
+    public async Task APromotedStandby_RunsATransfer_AndIsTheSourceOfACompleteGatewayDrivenHandoff()
+    {
+        const string nodeC = "world-c";
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token, transfers: true);
+        WorldHandoffRecord first = await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+        Assert.Equal(WorldHandoffStage.Retired, first.Stage);
+
+        // B is promoted, its endpoint runs (so an acceptor exists) and its control service has attached the transfer side.
+        Assert.NotNull(rig.B.Services.GetRequiredService<GatewayWorkerEndpoint>().Acceptor);
+        WorkerControlService control = rig.B.Services.GetRequiredService<WorkerControlService>();
+        Assert.True(Host(rig.B).PromotionCompleted);
+        Assert.NotNull(control.Transfers);
+        Assert.NotNull(control.Handoff!.Source);
+
+        // A transfer through it: the journal names the target by slot, as the gateway writes it, and the real target participant reserves. PromotedStandbyTransferTests runs whole transfers through the gateway.
+        CharacterOwnershipToken held = rig.B.World.CharacterOwnership!;
+        Guid transferId = Guid.NewGuid();
+        await control.Transfers!.Journal.CreateReservationAsync(transferId, 4242UL, 1, 1, new WorkerNodeId("other-worker"), new WorkerNodeId(NodeA), 0, 0, 0, 0, held, cts.Token);
+        ControlReply reserved = await control.HandleAsync(
+            new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Reserve, new ControlReserveArguments(4242UL, 0, 0)), new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, reserved.Status);
+        Assert.True(Assert.IsType<ControlReservePayload>(reserved.Payload).Reserved);
+        ControlReply discarded = await control.HandleAsync(
+            new ControlRequest(2, ControlKind.PlayerTransfer, transferId, ControlVerb.Discard, new ControlReasonArguments("test: the transfer is abandoned before the next handoff")), new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, discarded.Status);
+
+        // A third world becomes the slot's standby; the second handoff drains B.
+        (SyntheticArcaneServer c, GatewayWorkerEndpoint cEndpoint) = await rig.StartExtraStandbyAsync(nodeC, cts.Token);
+        try
+        {
+            GatewayStandbyLink link = rig.Service.StandbyLink(NodeA)!;
+            link.Retarget(cEndpoint.Host!.BoundEndPoint);
+            LinkControlChannel standbyChannel = await link.WaitForChannelAsync(cts.Token);
+            Assert.Equal(nodeC, (await DescribeAsync(standbyChannel, cts.Token)).WorkerId);
+            Assert.Equal(NodeB, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
+
+            WorldHandoffRecord second = await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+
+            Assert.Equal(WorldHandoffStage.Retired, second.Stage);
+            Assert.Equal(NodeB, second.SourceWorkerId.Value);
+            Assert.Equal(nodeC, second.TargetWorkerId.Value);
+            Assert.False(Host(c).IsStandby);
+            Assert.True(Host(c).PromotionCompleted);
+            Assert.Equal(LocalWorldHandoffSource.RetiredReason, rig.B.Services.GetRequiredService<WorkerAdmission>().ClosedReason);
+            Assert.Equal(nodeC, (await DescribeAsync(rig.Service.ActiveChannel(NodeA)!, cts.Token)).WorkerId);
+            Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
+        }
+        finally
+        {
+            ((LocalWorldHandoffSource)rig.B.Services.GetRequiredService<IWorldHandoffSource>()).Dispose(); // release B's parked simulation thread before its host stops
+            ((LocalWorldHandoffSource)c.Services.GetRequiredService<IWorldHandoffSource>()).Dispose();
+            await cEndpoint.StopAsync(CancellationToken.None);
+            await c.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// A real player on the promoted standby goes through the source half of a transfer with the production participants: the journalled transfer names the promoted worker's slot as its source,
+    /// as the gateway writes it, Suspend takes the player out of the world (WorkerTransferSource runs, built by BuildTransfer for a promoted standby) and ResumeSource, the abort path, puts it back. The player
+    /// is a real gateway session, so the session acceptor the transfer side hooks is the one that carried the login.
+    /// </summary>
+    [Fact]
+    public async Task APromotedStandby_SuspendsAndResumesARealPlayer_AsTheSourceOfATransfer()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token, transfers: true);
+        WorldHandoffRecord first = await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+        Assert.Equal(WorldHandoffStage.Retired, first.Stage);
+        WorkerControlService control = rig.B.Services.GetRequiredService<WorkerControlService>();
+        Assert.NotNull(control.Transfers);
+        Assert.NotNull(control.Transfers!.Source);
+
+        // The gateway now sends new sessions to B: a real client enters B's world.
+        await using ArcaneCore.MockClient.Protocol.WorldClient client = await rig.EnterAsync("PROMOTEDSRC", "Promotedsrc", cts.Token);
+        ulong guid = ArcaneCore.Game.ObjectGuid.Player((uint)rig.CharacterId).Value;
+        ArcaneCore.Game.Maps.WorldRuntime world = rig.B.World;
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+
+        // The journalled transfer names this worker's slot as its source, at stage Reserve.
+        Guid transferId = Guid.NewGuid();
+        CharacterOwnershipToken held = world.CharacterOwnership!;
+        await control.Transfers.Journal.CreateReservationAsync(transferId, guid, rig.AccountId, 1, new WorkerNodeId(NodeA), new WorkerNodeId("other-worker"), 0, 0, 1, 0, held, cts.Token);
+        ControlReply suspended = await control.HandleAsync(
+            new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Suspend,
+                new ControlSuspendArguments(guid, "other-worker", 1, 0, new TransferPosition(-1196.22f, 29.0f, 176.949f, 3.1f))),
+            new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, suspended.Status);
+        Assert.NotEmpty(Assert.IsType<ControlSuspendPayload>(suspended.Payload).BundleJson);
+        Assert.False(await world.InvokeAsync(() => world.IsOnline(new ArcaneCore.Game.ObjectGuid(guid)), cts.Token));
+
+        await control.Transfers.Journal.AbortPreCommitAsync(transferId, "test: the target never answered", cts.Token);
+        ControlReply resumed = await control.HandleAsync(
+            new ControlRequest(2, ControlKind.PlayerTransfer, transferId, ControlVerb.ResumeSource, new ControlReasonArguments("test: the target never answered")),
+            new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, resumed.Status);
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+    }
+
+    /// <summary>
+    /// The gateway is gone after a player on the promoted standby was suspended and the journal says aborted: the worker's own self-heal finds the row, which names the slot, and puts the player back.
+    /// The self-heal is the production one (<see cref="WorkerSelfHealService.For"/>), which reads the participants the promotion attached.
+    /// </summary>
+    [Fact]
+    public async Task APromotedStandby_SelfHealsASuspendedPlayer_FromARowThatNamesItsSlot()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token, transfers: true);
+        await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+        WorkerControlService control = rig.B.Services.GetRequiredService<WorkerControlService>();
+        Assert.NotNull(control.Transfers);
+        await using WorkerSelfHealService heal = WorkerSelfHealService.For(control);
+
+        await using ArcaneCore.MockClient.Protocol.WorldClient client = await rig.EnterAsync("PROMOTEDHEAL", "Promotedheal", cts.Token);
+        ulong guid = ArcaneCore.Game.ObjectGuid.Player((uint)rig.CharacterId).Value;
+        ArcaneCore.Game.Maps.WorldRuntime world = rig.B.World;
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+
+        Guid transferId = Guid.NewGuid();
+        await control.Transfers!.Journal.CreateReservationAsync(
+            transferId, guid, rig.AccountId, 1, new WorkerNodeId(NodeA), new WorkerNodeId("other-worker"), 0, 0, 1, 0, world.CharacterOwnership!, cts.Token);
+        ControlReply suspended = await heal.HandleAsync(
+            new ControlRequest(1, ControlKind.PlayerTransfer, transferId, ControlVerb.Suspend,
+                new ControlSuspendArguments(guid, "other-worker", 1, 0, new TransferPosition(-1196.22f, 29.0f, 176.949f, 3.1f))),
+            new GatewayControlContext(1), cts.Token);
+        Assert.Equal(ControlStatus.Ok, suspended.Status);
+        Assert.False(await world.InvokeAsync(() => world.IsOnline(new ArcaneCore.Game.ObjectGuid(guid)), cts.Token));
+
+        await control.Transfers.Journal.AbortPreCommitAsync(transferId, "test: the gateway died before the commit", cts.Token);
+
+        Assert.Equal(0, await heal.RunPassAsync(cts.Token));
+        Assert.Equal(1, heal.Healed);
+        Assert.True(await world.InvokeAsync(() => world.FindOnlinePlayer(new ArcaneCore.Game.ObjectGuid(guid)) is { Map: not null }, cts.Token));
+    }
+
     [Fact]
     public async Task AGatewayRestartedAfterACrashFollowingTheReroute_FollowsTheStandbyAndRetiresTheSource()
     {
@@ -87,6 +251,38 @@ public sealed class GatewayHandoffHardeningTests
         Assert.Equal(WorldHandoffStage.Retired, (await rig.Store.GetAsync(handoffId, cts.Token))!.Stage);
         Assert.Equal(LocalWorldHandoffSource.RetiredReason, rig.A.Services.GetRequiredService<WorkerAdmission>().ClosedReason);
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
+    }
+
+    /// <summary>The roll-forward of a handoff whose source died sends RetireWrites, ReleaseWriterLock and Retire, each best effort: the first finds the link down after the grace, the others must not wait it again.</summary>
+    [Fact]
+    public async Task ADeadSourceAfterTheReroute_CostsOneLinkGraceForTheWholeRollForward_NotOnePerBestEffortVerb()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        Guid handoffId = Guid.Empty;
+        await Assert.ThrowsAsync<CoordinatorCrash>(() => rig.Service.HandoffAsync(NodeA, async (stage, _) =>
+        {
+            if (stage == WorldHandoffStage.Begun)
+            {
+                handoffId = (await rig.Store.GetUnresolvedAsync(cts.Token)).Single().HandoffId;
+            }
+
+            if (stage == WorldHandoffStage.Rerouted)
+            {
+                throw new CoordinatorCrash();
+            }
+        }, cts.Token));
+
+        // A dies: after the reroute it is reached through the standby link, which goes down with it.
+        await rig.AEndpoint.StopAsync(CancellationToken.None);
+        await WaitUntilAsync(() => Task.FromResult(rig.Service.StandbyChannel(NodeA) is null), cts.Token);
+        rig.Service.LinkGrace = TimeSpan.FromMilliseconds(400);
+        int before = rig.Service.LinkGraceTimeouts;
+
+        Assert.Equal(1, await rig.Recovery.RecoverOnceAsync(cts.Token));
+
+        Assert.Equal(WorldHandoffStage.Retired, (await rig.Store.GetAsync(handoffId, cts.Token))!.Stage);
+        Assert.Equal(1, rig.Service.LinkGraceTimeouts - before);
     }
 
     [Fact]
@@ -498,15 +694,15 @@ public sealed class GatewayHandoffHardeningTests
 
         public GatewayHandoffRecoveryService Recovery { get; private set; }
 
-        public static async Task<Rig> StartAsync(CancellationToken token)
+        public static async Task<Rig> StartAsync(CancellationToken token, bool transfers = false)
         {
             SyntheticArcaneServer a = await SyntheticArcaneServer.StartAsync(
-                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false) }, configureServices: QuietSelfHeal, token);
+                new SyntheticServerOptions { EnableFencing = true, Configuration = Worker(NodeA, standby: false, transfers) }, configureServices: QuietSelfHeal, token);
             SyntheticArcaneServer? b = null;
             try
             {
                 b = await SyntheticArcaneServer.StartAsync(
-                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true) }, configureServices: QuietSelfHeal, token);
+                    new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = a.DataDirectory, Configuration = Worker(NodeB, standby: true, transfers) }, configureServices: QuietSelfHeal, token);
                 GatewayWorkerEndpoint aEndpoint = a.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 GatewayWorkerEndpoint bEndpoint = b.Services.GetRequiredService<GatewayWorkerEndpoint>();
                 await aEndpoint.StartAsync(token);
@@ -665,14 +861,88 @@ public sealed class GatewayHandoffHardeningTests
                 return new WorkerSelfHealService(control, control.Handoff, control.Transfers, TimeSpan.FromHours(1));
             });
 
-        private static Dictionary<string, string?> Worker(string nodeId, bool standby) => new()
+        public int CharacterId { get; private set; }
+
+        public int AccountId { get; private set; }
+
+        /// <summary>A fresh account's client that logs in through the gateway, to whichever world is the slot's active one, with its character saved in Elwynn under that world's ownership token. <see cref="CharacterId"/> and <see cref="AccountId"/> are its ids.</summary>
+        public async Task<ArcaneCore.MockClient.Protocol.WorldClient> EnterAsync(string account, string character, CancellationToken token)
         {
-            ["Cluster:Worker:Enabled"] = "true",
-            ["Cluster:Worker:Standby"] = standby ? "true" : "false",
-            ["Cluster:Worker:NodeId"] = nodeId,
-            ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["Cluster:Worker:LinkSecret"] = Secret,
-            ["Cluster:Worker:Handoff:Enabled"] = "true",
-        };
+            SyntheticArcaneServer db = B; // the databases are shared; B is the promoted world whose token the save must carry
+            AccountId = await db.AddAccountAsync(account, "PASSWORD", token);
+            ArcaneCore.MockClient.Protocol.LogonResult logon = await ArcaneCore.MockClient.Protocol.LogonClient.AuthenticateAsync(db.RealmEndpoint, account, "PASSWORD", token);
+            ArcaneCore.MockClient.Protocol.WorldClient client = await ArcaneCore.MockClient.Protocol.WorldClient.ConnectAsync(Gateway.ListenEndPoint, token);
+            try
+            {
+                Assert.Equal((byte)ArcaneCore.Protocol.AuthResponseCode.Ok, await client.AuthenticateAsync(account, logon.SessionKey, token));
+                byte[] text = System.Text.Encoding.ASCII.GetBytes(character);
+                byte[] create = new byte[text.Length + 10];
+                text.CopyTo(create, 0);
+                create[text.Length + 1] = 1; // human
+                create[text.Length + 2] = 1; // warrior
+                await client.SendAsync((ushort)ArcaneCore.Protocol.WorldOpcode.CmsgCharCreate, create, token);
+                ArcaneCore.MockClient.Protocol.WorldFrame created = await client.ReadUntilAsync((ushort)ArcaneCore.Protocol.WorldOpcode.SmsgCharCreate, token);
+                Assert.Equal(new byte[] { 0x2E }, created.Payload);
+                await client.SendAsync((ushort)ArcaneCore.Protocol.WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, token);
+                ArcaneCore.MockClient.Protocol.WorldFrame list = await client.ReadUntilAsync((ushort)ArcaneCore.Protocol.WorldOpcode.SmsgCharEnum, token);
+                Assert.Equal(1, list.Payload[0]);
+                int id = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(list.Payload.AsSpan(1, 8)));
+
+                await using (AsyncServiceScope scope = db.Services.CreateAsyncScope())
+                {
+                    ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
+                    await store.SaveStateAsync(new CharacterState(id, 0, 1, 100f, 100f, 50f, 0f, 1, 0, Ownership: db.World.CharacterOwnership), token);
+                }
+
+                byte[] login = new byte[8];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(login, (ulong)id);
+                await client.SendAsync((ushort)ArcaneCore.Protocol.WorldOpcode.CmsgPlayerLogin, login, token);
+                await client.ReadUntilAsync((ushort)ArcaneCore.Protocol.WorldOpcode.SmsgLoginVerifyWorld, token);
+                CharacterId = id;
+                return client;
+            }
+            catch
+            {
+                await client.DisposeAsync();
+                throw;
+            }
+        }
+
+        /// <summary>Another standby world on the same databases (its endpoint started), for a second handoff whose source is the standby the first one promoted. The caller owns both and disposes them.</summary>
+        public async Task<(SyntheticArcaneServer Server, GatewayWorkerEndpoint Endpoint)> StartExtraStandbyAsync(string nodeId, CancellationToken token)
+        {
+            SyntheticArcaneServer extra = await SyntheticArcaneServer.StartAsync(
+                new SyntheticServerOptions { EnableFencing = true, SharedDatabaseDirectory = A.DataDirectory, Configuration = Worker(nodeId, standby: true, transfers: true) }, configureServices: QuietSelfHeal, token);
+            try
+            {
+                GatewayWorkerEndpoint endpoint = extra.Services.GetRequiredService<GatewayWorkerEndpoint>();
+                await endpoint.StartAsync(token);
+                return (extra, endpoint);
+            }
+            catch
+            {
+                await extra.DisposeAsync();
+                throw;
+            }
+        }
+
+        private static Dictionary<string, string?> Worker(string nodeId, bool standby, bool transfers = false)
+        {
+            var configuration = new Dictionary<string, string?>
+            {
+                ["Cluster:Worker:Enabled"] = "true",
+                ["Cluster:Worker:Standby"] = standby ? "true" : "false",
+                ["Cluster:Worker:NodeId"] = nodeId,
+                ["Cluster:Worker:Port"] = ArcaneCore.TestSupport.LoopbackPorts.Next().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Cluster:Worker:LinkSecret"] = Secret,
+                ["Cluster:Worker:Handoff:Enabled"] = "true",
+            };
+            if (transfers)
+            {
+                configuration["Cluster:Worker:Transfers:Enabled"] = "true";
+            }
+
+            return configuration;
+        }
     }
 }

@@ -7,8 +7,9 @@ namespace ArcaneCore.Game.Spells;
 /// vmangos and mangos-classic (cmangos) source trees, mangoszero and classic-db (ACID and Updates): every id below is either only cast or applied as a
 /// marker or visual, or (the NeverCast entries) nothing in those trees or the vmangos migrations and classic-db Full_DB reaches it. The spells of the lane that DO have a handler are scripts:
 /// Lunar Teleport Caps 26406, 26408-26410, 26412 and 26414 (<c>LunarTeleportCapScript</c>) and Muglash's Brazier Trap 20863
-/// (<c>MuglashBrazierTrapScript</c>); the Undercity Guardian Valentine 26924 is handled by <c>ValentineAnswerScript</c>. Celebras' spells 21914 and 21917 are not listed: classic-db Full_DB dbscripts_on_spell has rows for both, which run through
-/// <c>SpellSystem.StartDbSpellScript</c> (no code script claims them). 24746 is not listed either: vmangos conditions 887 and 888 test for its aura, so something applies it.
+/// (<c>MuglashBrazierTrapScript</c>); the Undercity Guardian Valentine 26924 is handled by <c>ValentineAnswerScript</c>. Celebras' spells 21914 and 21917 and Temperature Reading 16378 are not listed here: classic-db Full_DB dbscripts_on_spell has rows for them, which run through
+/// <c>SpellSystem.StartDbSpellScript</c> (no code script claims them); they are <c>QaSpellConsumers</c> entries. 24746 is a consumer entry too: vmangos conditions 887 and 888 test for its aura
+/// (<c>ConditionType.Aura</c>). 19502 and 5302 are listed below.
 /// </summary>
 public static partial class DeliberatelyInertSpells
 {
@@ -53,6 +54,8 @@ public static partial class DeliberatelyInertSpells
         new(10848, R.SpawnAura, WhySpawnAura, "vmangos sql/migrations/20210717172913_world.sql:221 (creature_template auras '10848' for entry 16110) and 20220613183352_world.sql:1733 (auras '10848 9036' for entries 13056 and 18153); mangos-classic spell_scripts.cpp:46 only names it as a constant (npcs that are only interactable while dead)"),
         new(27978, R.SpawnAura, WhySpawnAura, "vmangos sql/migrations/20230723234305_world.sql:14 (creature_template auras '27978 27614') and classic-db ACID creature_ai_scripts 1601601 (Anthion Harmon casts it on spawn); mangos-classic spell_scripts.cpp:429 only sets the client-side alive-invisible aura flag, which ArcaneCore does not model"),
         new(20783, R.Marker, WhyHitTrigger, "vmangos src/scripts/kalimdor/ashenvale/ashenvale.cpp:447 and :663 (SPELL_DESTROY_KARANG_S_BANNER_2, read only by the SpellHit of the Foulweald mound creature script to end the mound event)"),
+        new(19502, R.SpawnAura, WhySpawnAura, "visual gap on record: ArcaneCore does not import template addon auras (commit ec972c5ee), so the aura is absent on these creatures. classic-db Full_DB creature_template_addon auras '19502' for entries 12296 (Sickly Gazelle) and 12298 (Sickly Deer); vmangos npcs_special.cpp:1709 only names it as SPELL_SICKY_CRITTER_AURA and removes it at :1796 once the cure spell hit lands; no core handles the aura itself"),
+        new(5302, R.Marker, "Defensive State: the Revenge aura-state marker; the state the abilities read is the AURA_STATE_DEFENSE bit, which ArcaneCore sets from the block, dodge and parry outcome (ReactiveService) and no code reads the aura", "vmangos Unit.cpp:8862-8901 (ModifyAuraState(AURA_STATE_DEFENSE, true) on dodge, parry and block, no spell cast) and SpellMgr.cpp:3984-3986 (CasterAuraState of the after-parry spells); mangoszero SpellMgr.cpp:1806 only exempts 5302 from the Shield Block stacking rule"),
         new(21830, R.NeverCast, WhyNoHandler, CitNeverCastScan),
         new(22518, R.NeverCast, WhyNoHandler, CitNeverCastScan),
         new(22581, R.NeverCast, WhyNoHandler, CitNeverCastScan),

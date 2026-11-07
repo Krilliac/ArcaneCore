@@ -181,6 +181,7 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 148 | `creature.set_immobilized` | creature | 1 `apply` (Bool): <br>2 `combat_only` (Bool):  | Root or free the creature; a combat-only root ends at the next reset. |
 | 149 | `creature.set_immunity_set` | creature | 1 `set_id` (NonNegative):  | Switch the creature to a creature_immunities set of its entry. |
 | 150 | `creature.set_follow_movement` | creature | 1 `state` (Int):  | 0 holds a follow movement still, 1 lets it follow again. |
+| 151 | `creature.set_spell_list` | creature | 1 `list_id` (NonNegative):  | Change the creature's spell list: 0 clears it, an unknown id keeps the current one, and a list set in combat arms its initial cooldowns. |
 | 100 | `world_event.start_event` | world_event | 1 `event_id` (Int): game_event.entry. | Start another game event (GameEventService.StartEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event is stopped again by its own window. |
 | 101 | `world_event.stop_event` | world_event | 1 `event_id` (Int): game_event.entry. | Stop a game event (GameEventService.StopEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event inside its window is started again by the schedule. |
 

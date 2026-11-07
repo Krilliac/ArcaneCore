@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Items;
@@ -10,8 +11,9 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Items;
 
 /// <summary>
-/// The random property feature in the daemon: ItemRandomProperties.dbc and the item_enchantment_template dump are read from the configured
-/// paths, the roll reaches every inventory at login, and a new item of a template with random_property gets its property and enchantments.
+/// The random property feature in the daemon: ItemRandomProperties.dbc is read from the configured path and the item_enchantment_template rows
+/// from the world database (<see cref="IItemEnchantmentTemplateStore"/>), the roll reaches every inventory at login, and a new item of a
+/// template with random_property gets its property and enchantments.
 /// </summary>
 public sealed class ItemRandomPropertyWorldTests
 {
@@ -34,13 +36,19 @@ public sealed class ItemRandomPropertyWorldTests
         return image;
     }
 
-    private static WorldTestHost Start(ItemTestContent content, Dictionary<string, string?> config)
+    private static WorldTestHost Start(ItemTestContent content, Dictionary<string, string?> config, params ItemEnchantmentChance[] chances)
     {
         content.Templates.Templates.Add(new ItemTemplate { Entry = Sword, Class = 2, SubClass = 7, Name = "Random Sword", DisplayId = 1, InventoryType = 13, Delay = 2000, RandomProperty = 6 });
         using (content.Use())
         {
             return WorldTestHost.Start(configureServices: services =>
-                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(config).Build()));
+            {
+                services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(config).Build());
+                if (chances.Length > 0)
+                {
+                    services.AddSingleton<IItemEnchantmentTemplateStore>(new InMemoryItemEnchantmentTemplateStore(chances));
+                }
+            });
         }
     }
 
@@ -48,19 +56,10 @@ public sealed class ItemRandomPropertyWorldTests
     public async Task ConfiguredContent_GivesNewItemsTheirProperty()
     {
         string dbc = Path.Combine(Path.GetTempPath(), "arcane-irp-" + Guid.NewGuid().ToString("N") + ".dbc");
-        string dump = Path.Combine(Path.GetTempPath(), "arcane-iet-" + Guid.NewGuid().ToString("N") + ".sql");
         await File.WriteAllBytesAsync(dbc, Dbc(1001, 74));
-        await File.WriteAllTextAsync(dump, """
-            CREATE TABLE `item_enchantment_template` (`entry` int, `ench` int, `chance` float);
-            INSERT INTO `item_enchantment_template` VALUES (6,1001,100);
-            """);
         try
         {
-            await using WorldTestHost host = Start(new ItemTestContent(), new()
-            {
-                ["ItemRandomProperties:DbcPath"] = dbc,
-                ["ItemRandomProperties:EnchantmentTemplateDumpPath"] = dump,
-            });
+            await using WorldTestHost host = Start(new ItemTestContent(), new() { ["ItemRandomProperties:DbcPath"] = dbc }, new ItemEnchantmentChance(6, 1001, 100f));
             ItemRandomPropertyFeature feature = host.WorldServices.GetRequiredService<ItemRandomPropertyFeature>();
             Assert.Equal((1, 1), (feature.Properties!.Catalog.PropertyCount, feature.Properties.Catalog.GroupCount));
             await using WorldTestClient client = await host.EnterWorldAsync("RANDPROP", "Lucky");
@@ -74,7 +73,22 @@ public sealed class ItemRandomPropertyWorldTests
         finally
         {
             File.Delete(dbc);
-            File.Delete(dump);
+        }
+    }
+
+    [Fact]
+    public async Task ADbcWithoutTemplateRows_LeavesRandomPropertiesOff()
+    {
+        string dbc = Path.Combine(Path.GetTempPath(), "arcane-irp-" + Guid.NewGuid().ToString("N") + ".dbc");
+        await File.WriteAllBytesAsync(dbc, Dbc(1001, 74));
+        try
+        {
+            await using WorldTestHost host = Start(new ItemTestContent(), new() { ["ItemRandomProperties:DbcPath"] = dbc });
+            Assert.Null(host.WorldServices.GetRequiredService<ItemRandomPropertyFeature>().Properties);
+        }
+        finally
+        {
+            File.Delete(dbc);
         }
     }
 

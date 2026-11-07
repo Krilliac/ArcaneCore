@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ArcaneCore.Atlas.Core.Commands;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32.SafeHandles;
 
 namespace ArcaneCore.Atlas.Live;
 
@@ -26,7 +27,7 @@ internal interface IFeedSink
 /// <summary>
 /// One connection to a map feed: the pipe, the handshake, the NDJSON reader loop and the queries waiting for their results.
 /// <para>
-/// Ownership: created by <see cref="OpenAsync"/>, owned by <see cref="LiveFeed"/>, which disposes it. Threads: the reader loop runs on the
+/// Ownership: created by <see cref="OpenAsync"/>, owned by <see cref="LiveFeed"/>, which disposes it; the reader loop also disposes it when it ends. Threads: the reader loop runs on the
 /// thread pool and is the only reader of the pipe; any thread may send (writes are serialised) or query. Every failure is a
 /// <see cref="CommandException"/> with a precise message; bad input from the server is counted in <see cref="Stats"/> and never thrown.
 /// </para>
@@ -87,6 +88,12 @@ internal sealed class FeedSession : IDisposable
 
     /// <summary>True until the session is disposed or the pipe ends.</summary>
     public bool IsOpen => Volatile.Read(ref _disposed) == 0 && Volatile.Read(ref _ended) == 0;
+
+    /// <summary>
+    /// The client end of the pipe, so a test can watch <c>SafePipeHandle.IsClosed</c>. <see cref="IsOpen"/> cannot show that the handle closed: it is
+    /// already false once the reader ends.
+    /// </summary>
+    internal SafePipeHandle PipeHandle => _pipe.SafePipeHandle;
 
     /// <summary>
     /// Connects, verifies the pipe's owner, starts the reader loop and completes the hello exchange. On any failure the pipe is closed and a
@@ -363,7 +370,20 @@ internal sealed class FeedSession : IDisposable
 
         Volatile.Write(ref _ended, 1);
         FailWaiters(reason);
-        _sink.Closed(this, reason);
+
+        // The reader has ended, so nothing reads the pipe again: close the client handle now instead of leaving it to the finalizer. The end
+        // of the stream does not close it. It is closed before the close notice, so no sink sees an ended session still holding its handle.
+        // That ordering holds only for closes the reader starts here: a close started by a caller's Dispose can reach the sinks' other
+        // paths first. There are two sinks: LiveFeed's handler reads only Id and Hello (which survive disposal) and does not dispose the
+        // session, while PipeFeedConnector's Adapter forwards the notice to the public feed sink, which owns that connection's teardown.
+        try
+        {
+            Dispose();
+        }
+        finally
+        {
+            _sink.Closed(this, reason);
+        }
     }
 
     private async Task<string> ReadLoopAsync()

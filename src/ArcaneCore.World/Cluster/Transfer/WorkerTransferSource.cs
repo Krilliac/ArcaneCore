@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
@@ -142,7 +143,8 @@ public sealed class WorkerTransferSource(
     ITransferPersistence persistence,
     ITransferPlayerProbe probe,
     TimeProvider? timeProvider = null,
-    ILogger<WorkerTransferSource>? logger = null) : ITransferSourceWorker
+    ILogger<WorkerTransferSource>? logger = null,
+    WorkerTransferName? servedName = null) : ITransferSourceWorker
 {
     /// <summary>The failure code of a suspend whose player is not online here.</summary>
     public const string ErrorPlayerNotOnline = "player-not-online";
@@ -153,7 +155,8 @@ public sealed class WorkerTransferSource(
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     private readonly ILogger _logger = logger ?? NullLogger<WorkerTransferSource>.Instance;
 
-    public WorkerNodeId WorkerId => workerId;
+    /// <summary>The name this source answers under: <c>servedName</c> as it is now, else the id it was built with.</summary>
+    public WorkerNodeId WorkerId => servedName?.Current ?? workerId;
 
     /// <summary>Characters this worker has frozen for a transfer and still holds the claim on.</summary>
     public int SuspendedCount
@@ -356,7 +359,7 @@ public sealed class WorkerTransferSource(
         }
 
         Player player = world.FindOnlinePlayer(new ObjectGuid(characterGuid))
-            ?? throw new KeyNotFoundException($"{ErrorPlayerNotOnline}: character {characterGuid} is not online on worker '{workerId}'");
+            ?? throw new KeyNotFoundException($"{ErrorPlayerNotOnline}: character {characterGuid} is not online on worker '{WorkerId}'");
         Map map = player.Map ?? throw new InvalidOperationException($"character {characterGuid} is online but not in a map");
         CharacterOwnershipToken token = player.CharacterOwnership ?? world.CharacterOwnership
             ?? throw new InvalidOperationException("the source world holds no characters ownership");
@@ -471,7 +474,7 @@ public sealed class WorkerTransferSource(
             CharacterId = checked((int)player.Guid.Low),
             AccountId = player.Session.AccountId,
             SessionGeneration = player.Session.SessionGeneration,
-            SourceWorkerId = workerId,
+            SourceWorkerId = WorkerId,
             TargetWorkerId = targetWorkerId,
             SourceOwnershipToken = token,
             CapturedAtUtcMs = _time.GetUtcNow().ToUnixTimeMilliseconds(),
@@ -490,6 +493,8 @@ public sealed class WorkerTransferSource(
             StandState = (byte)player.StandState,
             IsGhost = (player.Flags & PlayerFlags.Ghost) != 0,
             HomeBind = player.Home,
+            // The body as the settlement save stores it. The target restores the ghost from that stored life; this copy is the journal's record of what was captured.
+            Corpse = PlayerLife.Capture(player).Corpse,
             Blockers = blockers,
         };
     }

@@ -46,7 +46,7 @@ that is not listed; `ClientDbcConsumers.Directories` holds the `*DbcDirectory` k
 | `Creatures:FactionTemplateDbcPath`, `Quests:FactionTemplateDbcPath` | FactionTemplate.dbc | nobody aggroes on sight; unknown NPC factions |
 | `Enchanting:SpellItemEnchantmentDbcPath` | SpellItemEnchantment.dbc | enchanting off |
 | `GameObjects:TransportAnimationDbcPath` | TransportAnimation.dbc | elevator progress stays 0 |
-| `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc | no random properties (also needs `EnchantmentTemplateDumpPath`, a SQL dump, not a DBC) |
+| `ItemRandomProperties:DbcPath` | ItemRandomProperties.dbc | no random properties (also needs the `item_enchantment_template` rows of the world database) |
 | `ItemSets:DbcPath` | ItemSet.dbc | no set bonuses |
 | `Items:CharStartOutfitDbcPath` | CharStartOutfit.dbc | SQL starting items only |
 | `Names:NamesProfanityDbcPath`, `Names:NamesReservedDbcPath` | NamesProfanity.dbc, NamesReserved.dbc | SQL reserved names only |

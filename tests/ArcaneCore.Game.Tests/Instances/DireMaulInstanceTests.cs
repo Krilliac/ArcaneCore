@@ -64,14 +64,20 @@ public sealed class DireMaulInstanceTests
             goRows.Add(GameObjectTestKit.GoSpawn(goGuid++, DireMaulInstance.CrystalGenerators[i], i * 50f, Y) with { MapId = Dungeon, Z = Z });
         }
 
-        uint[] others = [DireMaulInstance.GoForcefield, DireMaulInstance.GoWarpwoodDoor, DireMaulInstance.GoPrincesChestAura];
+        uint[] others = [DireMaulInstance.GoForcefield, DireMaulInstance.GoWarpwoodDoor, DireMaulInstance.GoPrincesChestAura,
+            DireMaulInstance.GoFelvineShard];
         foreach (uint entry in others)
         {
             goRows.Add(GameObjectTestKit.GoSpawn(goGuid++, entry, 10f + goGuid, Y + 40f) with { MapId = Dungeon, Z = Z });
         }
 
+        // The felvine shard carries door data3 (noDamageImmune), so GetDespawnPossibility is true and its spawn is not NODESPAWN
+        // (GameObject::LoadFromDB, GameObject.cpp:985-991): without it the shard could never despawn, and the respawn test below would
+        // assert over an object Despawn had left in the world. The generators and doors are never despawned, so they keep the plain template.
         var templates = DireMaulInstance.CrystalGenerators.Concat(others)
-            .Select(e => GameObjectTestKit.GoTemplate(e, GameObjectType.Door)).ToArray();
+            .Select(e => e == DireMaulInstance.GoFelvineShard
+                ? GameObjectTestKit.GoTemplate(e, GameObjectType.Door, (3, 1))
+                : GameObjectTestKit.GoTemplate(e, GameObjectType.Door)).ToArray();
         var objects = new GameObjectContent(templates, [.. goRows], [], [], []);
         fixture.World.MapCreated += map =>
         {
@@ -107,6 +113,33 @@ public sealed class DireMaulInstanceTests
             Assert.Equal(GameObjectState.Active, run.Go(DireMaulInstance.CrystalGenerators[i]).State);
             Assert.Equal(i == 4, run.Go(DireMaulInstance.GoForcefield).State == GameObjectState.Active);
         }
+    }
+
+    [Fact]
+    public void AlzzinDone_RespawnsADespawnedFelvineShard_ButSpecialDoesNot()
+    {
+        using Run run = Enter();
+        GameObject shard = run.Go(DireMaulInstance.GoFelvineShard);
+        Assert.Contains(shard.Guid, run.Data.FelvineShards);
+        run.Objects.Despawn(shard);
+        Assert.False(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Special);
+        Assert.False(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Done);
+        Assert.True(shard.IsSpawned);
+    }
+
+    [Fact]
+    public void AlzzinDone_LeavesASpawnedFelvineShardAlone()
+    {
+        using Run run = Enter();
+        GameObject shard = run.Go(DireMaulInstance.GoFelvineShard);
+        Assert.True(shard.IsSpawned);
+
+        run.Data.SetData(DireMaulInstance.TypeAlzzin, EncounterState.Done);
+        Assert.True(shard.IsSpawned);
     }
 
     [Fact]

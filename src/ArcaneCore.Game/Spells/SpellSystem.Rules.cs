@@ -33,6 +33,12 @@ public sealed partial class SpellSystem
     /// </summary>
     public bool ImmunityEnforcement { get; set; } = true;
 
+    /// <summary>
+    /// Whether SelectMagnetTarget skips a magnet the caster may not attack (<c>SpellRules:MagnetRequiresAttackable</c>). Default false:
+    /// vmangos SpellCaster::SelectMagnetTarget has no such test. true is the mangos-classic rule (Unit.cpp:6924).
+    /// </summary>
+    public bool MagnetRequiresAttackable { get; set; }
+
     /// <summary>The static immunities of creatures: <see cref="Rules.Immunity.CreatureDataImmunities"/> from the built-in <see cref="Rules.Immunity.CreatureDataImmunityModule"/> (wrapped by script modules); null means none.</summary>
     public ICreatureImmunityProvider? CreatureImmunities { get; set; }
 
@@ -55,6 +61,13 @@ public sealed partial class SpellSystem
     /// which is then marked removed without any handler, slot, packet or <see cref="HolderAdded"/>. Empty by default.
     /// </summary>
     public List<Func<SpellAuraHolder, bool>> HolderAddRefusals { get; } = [];
+
+    /// <summary>
+    /// Stacking rules that remove the holders a new aura holder replaces, after no <see cref="HolderAddRefusals"/> refused it and before it is
+    /// given a visible slot (vmangos RemoveNoStackAurasDueToAuraHolder removes them at Unit.cpp:3575-3576, before AddSpellAuraHolder checks the
+    /// visible slot limit at :3282-3305), so a replaced debuff frees its own slot at the 16 debuff cap. Empty by default.
+    /// </summary>
+    public List<Action<SpellAuraHolder>> HolderAddDisplacements { get; } = [];
 
     /// <summary>An aura holder was put on its target (after its handlers ran); a refreshed stack does not raise it.</summary>
     public event Action<SpellAuraHolder>? HolderAdded;

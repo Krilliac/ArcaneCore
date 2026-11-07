@@ -32,8 +32,8 @@ public sealed partial class Map
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // The caller never receives the scope, so nothing else would release the gate: the map threads would block on it for good.
-            scope.Dispose();
-            _outbox.Clear(); // a packet that throws would otherwise fail every later flush too
+            scope.Dispose(); // FlushOutbox has already cleared the outbox in its finally, so a throwing packet cannot fail later flushes
+            // Recorded here and again after the rethrow by the map.update catch (serial path) or the world.parallel-map-update catch (parallel path, WorldRuntime.Parallel.cs): kept on purpose (decision: this site names the gate release, the other the tick that failed).
             _logger.LogFault("map.gate-flush", ex, "map {MapId} instance {InstanceId} outbox flush failed; the serial gate was released", MapId, InstanceId);
             throw;
         }

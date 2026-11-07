@@ -193,6 +193,43 @@ public sealed class CrossWorkerTeleportTests : IDisposable
         Assert.Equal(1, router.InFlightCount);
     }
 
+    [Fact]
+    public async Task ALostLink_EndsTheEntryOfItsSession_SoTheCharacterCanTryAgainAtOnce_AndALateAnswerIsIgnored()
+    {
+        GatewayClusterFarTeleportRouter router = NewRouter();
+        Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
+
+        router.OnSessionLinkLost(Generation + 1); // another session's link
+        Assert.Equal(1, router.InFlightCount);
+
+        router.OnSessionLinkLost(Generation);
+        Assert.Equal(0, router.InFlightCount);
+
+        router.OnSubmitReply(new ControlSubmitReply(_submits[0].Submit.RequestId, false, Guid.Empty, "too late", ControlReasonCode.NoEligibleWorker));
+        await FlushWorldAsync();
+        Assert.DoesNotContain(_session.Sent, message => message.Opcode == WorldOpcode.SmsgMessagechat);
+
+        Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
+        Assert.Equal(1, router.InFlightCount);
+    }
+
+    [Fact]
+    public async Task OverARealLink_ALinkThatDiesBeforeTheAnswer_EndsTheEntry()
+    {
+        LinkRig rig = await LinkRig.StartAsync(Generation, AccountId);
+        var linked = new GatewayClusterFarTeleportRouter(_world, _probe, _ => Generation, (gen, submit) => rig.Host.TrySendControlSubmit(gen, submit));
+        rig.Host.SubmitSink = linked;
+        rig.Client.ControlSubmitReceived += rig.Received.Enqueue; // received, never answered
+
+        Assert.True(linked.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
+        await rig.WaitForSubmitAsync();
+        Assert.Equal(1, linked.InFlightCount);
+
+        await rig.DisposeAsync(); // the link goes down with the answer outstanding
+
+        await WaitUntilAsync(() => linked.InFlightCount == 0);
+    }
+
     // ------------------------------------------------------------------ the answers
 
     [Fact]

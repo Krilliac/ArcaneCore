@@ -400,6 +400,17 @@ public interface ICollisionTilePrefetch
 }
 
 /// <summary>
+/// Optional: a pathfinder that can read a map's navigation parameters (the small per-map file) ahead of its first query, on the
+/// thread pool, so that the first query on a new map does not read the file on the calling thread. Called when a map is created; it
+/// changes nothing but when the file is read. Thread-safe.
+/// </summary>
+public interface ICollisionMapPrefetch
+{
+    /// <summary>Start reading the map's navigation parameters in the background (no effect when already read or on its way).</summary>
+    void PrefetchMap(uint mapId);
+}
+
+/// <summary>
 /// Optional: a collision service that can load a tile for a question about a place no grid may cover (a bot choosing the landing beside
 /// a lift far from it). The service holds such tiles among a bounded number per map and releases the one asked for longest ago to make
 /// room; a grid created on one takes it over and releases it with itself. The grid hooks are not for this:

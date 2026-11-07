@@ -29,6 +29,12 @@ public interface ISpellCombatRules
 
     /// <summary>Physical damage after the target's armor (unchanged for other schools).</summary>
     uint ApplyArmor(Unit caster, Unit target, SpellInfo spell, uint damage);
+
+    /// <summary>
+    /// <see cref="ApplyArmor(Unit, Unit, SpellInfo, uint)"/> with the spell system, so the caster's armor penetration auras
+    /// (MOD_TARGET_RESISTANCE, physical) can be read. The default ignores the system.
+    /// </summary>
+    uint ApplyArmor(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage) => ApplyArmor(caster, target, spell, damage);
 }
 
 /// <summary>Stock <see cref="ISpellCombatRules"/> implementations.</summary>
@@ -59,9 +65,8 @@ public static class SpellCombatRules
 public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISpellResistRoll, ISchoolResistRoll
 {
     /// <summary>
-    /// Base spell critical chance (percent) of a player before stat-driven bonuses. The stats area
-    /// owns vmangos Player::UpdateSpellCritChance (intellect and class base); until then a flat value
-    /// is used, recorded as a limitation.
+    /// Fallback base spell critical chance (percent) of a player, used only when no <see cref="CritSource"/> is set;
+    /// the world host installs the intellect-driven source (vmangos Unit::GetSpellCritFromIntellect).
     /// </summary>
     public float PlayerBaseSpellCrit { get; init; } = 5.0f;
 
@@ -611,11 +616,29 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
-        if (damage == 0 || spell.School != SpellSchool.Normal)
+        if (damage == 0 || spell.School != SpellSchool.Normal || (spell.CustomFlags & SpellInfo.CustomIgnoreArmor) != 0)
         {
             return damage;
         }
 
         return MeleeHitTable.ApplyArmor(damage, target.GetInt32(UpdateFields.UnitFieldResistances), caster.Level);
+    }
+
+    /// <summary>
+    /// <see cref="ApplyArmor(Unit, Unit, SpellInfo, uint)"/> plus the caster's physical MOD_TARGET_RESISTANCE auras (SpellCaster.cpp:1121-1145,
+    /// called for physical spells at :1284). Other schools take the four-argument form.
+    /// </summary>
+    public virtual uint ApplyArmor(SpellSystem system, Unit caster, Unit target, SpellInfo spell, uint damage)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(spell);
+        if (damage == 0 || spell.School != SpellSchool.Normal || (spell.CustomFlags & SpellInfo.CustomIgnoreArmor) != 0)
+        {
+            return ApplyArmor(caster, target, spell, damage);
+        }
+
+        return Procs.Talents.TalentProcSupport.ArmorReducedDamage(system, caster, target, damage);
     }
 }

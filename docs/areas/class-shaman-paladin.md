@@ -97,7 +97,7 @@ References (read only, never copied): **vmangos** `<refs-root>\vmangos` (primary
   family mask `0x4006000` bypass these checks. Damage in a mixed spell still lands;
   a spell with every effect excluded reports an immune miss. See
   [totem immunity evidence](../integration/totem-immunity-20261004.md).
-- `SPELL_AURA_SPELL_MAGNET` (96) redirects eligible hostile magic casts to the live aura caster,
+- `SPELL_AURA_SPELL_MAGNET` (96) redirects eligible hostile magic casts to the live aura caster (by default, like vmangos, a magnet the caster may not attack is still redirected onto; with `SpellRules:MagnetRequiresAttackable` on, that magnet is skipped, a mangos-classic rule, except a totem of a free-for-all opponent, which stays attackable; see the spells Discrepancies table),
   spends one protection charge per cast, and updates the spell-go target and outcome.
   Consuming the last charge removes the source protection and party children. Normal damage
   can kill the totem; a miss or non-damaging cast consumes protection without creating a death.

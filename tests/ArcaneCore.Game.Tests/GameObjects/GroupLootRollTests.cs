@@ -28,6 +28,7 @@ public sealed class GroupLootRollTests
     private const uint NeedyHelm = 92003;
     private const uint UniqueGem = 92004;
     private const uint PartyGem = 92005;
+    private const uint RolledBlade = 92006;
 
     private static readonly ItemTemplateStore Items = new(
     [
@@ -36,6 +37,7 @@ public sealed class GroupLootRollTests
         new ItemTemplate { Entry = GreenRing, Class = 15, Name = "Test Green", DisplayId = 302, Quality = 2 },
         new ItemTemplate { Entry = NeedyHelm, Class = 15, Name = "Test Level Ten", DisplayId = 303, Quality = 3, RequiredLevel = 10 },
         new ItemTemplate { Entry = UniqueGem, Class = 15, Name = "Test Unique Gem", DisplayId = 304, Quality = 3, MaxCount = 1 },
+        new ItemTemplate { Entry = RolledBlade, Class = 15, Name = "Test Rolled Blade", DisplayId = 306, Quality = 3, RandomProperty = 5 },
         new ItemTemplate { Entry = PartyGem, Class = 15, Name = "Test Party Gem", DisplayId = 305, Quality = 3, Flags = LootService.ItemFlagPartyLoot },
     ], ItemTestData.StartingItems);
 
@@ -763,6 +765,65 @@ public sealed class GroupLootRollTests
         Assert.False(rig.Loot.FindLoot(wolf.Guid)!.FindSlot(0)!.IsLooted);
         Assert.Equal(MasterGiveResult.Given, rig.Loot.GiveMasterLoot(alice, wolf.Guid, 0, alice.Guid)); // he can still give it to someone who can take it
         Assert.Equal(1u, alice.Inventory.GetItemCount(UniqueGem));
+    }
+
+    [Fact]
+    public void RandomProperty_RolledAtGeneration_ReachesEveryRollPacket_AndTheWinnersItem()
+    {
+        // The property is rolled once with the loot (the catalog gives 1001 a 100% chance for random property group 5) and LootRollManager
+        // hands item.RandomPropertyId to StartRoll, VoteAnnouncement, ResolvedRoll and RollWon; the winner's bag item keeps it.
+        var catalog = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0])], [new ItemEnchantmentChance(5, 1001, 100f)]);
+        Rig rig = CreateRig(RolledBlade);
+        (Player alice, FakeSession aliceSession) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        alice.Inventory.RandomProperties = new ItemRandomProperties(catalog, () => 10f);
+        bob.Inventory.RandomProperties = alice.Inventory.RandomProperties;
+        rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+        rig.Loot.Open(alice, wolf.Guid);
+        Assert.Equal(1001, rig.Loot.FindLoot(wolf.Guid)!.Items.Single(i => i.ItemId == RolledBlade).RandomPropertyId);
+        byte slot = SlotOf(rig, wolf, RolledBlade);
+
+        Assert.Equal(GroupLootPackets.StartRoll(wolf.Guid, slot, RolledBlade, 60000, 1001), Assert.Single(Packets(bobSession, WorldOpcode.SmsgLootStartRoll)).Payload);
+        Forget(aliceSession);
+        Forget(bobSession);
+
+        Vote(rig, alice, wolf, slot, RollVote.Need);
+        Vote(rig, bob, wolf, slot, RollVote.Pass);
+        Assert.Equal(0, rig.Loot.Rolls.ActiveRollCount);
+
+        List<(WorldOpcode Opcode, byte[] Payload)> rolls = Packets(aliceSession, WorldOpcode.SmsgLootRoll);
+        Assert.Equal(3, rolls.Count); // alice's vote, bob's vote, alice's own need roll
+        Assert.Equal(GroupLootPackets.VoteAnnouncement(wolf.Guid, slot, alice.Guid, RolledBlade, RollVote.Need, 1001), rolls[0].Payload);
+        Assert.Equal(GroupLootPackets.VoteAnnouncement(wolf.Guid, slot, bob.Guid, RolledBlade, RollVote.Pass, 1001), rolls[1].Payload);
+        byte number = rolls[2].Payload[32];
+        Assert.Equal(GroupLootPackets.ResolvedRoll(wolf.Guid, slot, alice.Guid, RolledBlade, number, RollVote.Need, 1001), rolls[2].Payload);
+        Assert.Equal(GroupLootPackets.RollWon(wolf.Guid, slot, RolledBlade, alice.Guid, number, RollVote.Need, 1001), Assert.Single(Packets(bobSession, WorldOpcode.SmsgLootRollWon)).Payload);
+        Item won = Assert.Single(alice.Inventory.AllItems, i => i.Entry == RolledBlade);
+        Assert.Equal(1001, won.RandomPropertyId);
+    }
+
+    [Fact]
+    public void RandomProperty_AllPassed_CarriesTheProperty()
+    {
+        var catalog = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0])], [new ItemEnchantmentChance(5, 1001, 100f)]);
+        Rig rig = CreateRig(RolledBlade);
+        (Player alice, FakeSession aliceSession) = rig.Join(1);
+        (Player bob, _) = rig.Join(2, 1, 0);
+        alice.Inventory.RandomProperties = new ItemRandomProperties(catalog, () => 10f);
+        bob.Inventory.RandomProperties = alice.Inventory.RandomProperties;
+        rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
+        Creature wolf = rig.KillWolf(alice);
+        rig.Loot.Open(alice, wolf.Guid);
+        byte slot = SlotOf(rig, wolf, RolledBlade);
+        Forget(aliceSession);
+
+        Vote(rig, alice, wolf, slot, RollVote.Pass);
+        Vote(rig, bob, wolf, slot, RollVote.Pass);
+
+        Assert.Equal(GroupLootPackets.AllPassed(wolf.Guid, slot, RolledBlade, 1001), Assert.Single(Packets(aliceSession, WorldOpcode.SmsgLootAllPassed)).Payload);
     }
 
     [Fact]

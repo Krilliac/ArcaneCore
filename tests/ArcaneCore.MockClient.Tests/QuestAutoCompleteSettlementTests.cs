@@ -35,12 +35,14 @@ public sealed class QuestAutoCompleteSettlementTests
     [Fact]
     public async Task MethodZeroQuest_IsTurnedInWithoutAJournalEntry_PersistsOnce_AndSurvivesALoginAgain()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(services =>
             services.AddScoped<IQuestContentStore>(provider => new AutoQuestContent(
                 new EfQuestContentStore(provider.GetRequiredService<WorldDbContext>()))), token);
         await server.AddAccountAsync(AccountName, Password, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         QuestNpcFeature feature = server.Services.GetRequiredService<QuestNpcFeature>();
 
         WorldClient client = await AuthenticateAsync(server, token);

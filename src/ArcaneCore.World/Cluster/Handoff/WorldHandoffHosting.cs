@@ -3,6 +3,8 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Social;
+using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -64,7 +66,22 @@ public sealed class WorldHandoffInFlight
     /// <summary>The number of handoffs still running.</summary>
     public int Count
     {
-        get { lock (_gate) return _running.Count; }
+        get
+        {
+            // A task that has completed is no longer running even if its removal continuation has not run yet (it can lag the awaiting waiter on the thread pool). Counted, not removed: a getter changes
+            // nothing, and the continuation of Track is the only thing that removes a task.
+            lock (_gate)
+            {
+                int running = 0;
+                foreach (Task task in _running)
+                {
+                    if (!task.IsCompleted)
+                        running++;
+                }
+
+                return running;
+            }
+        }
     }
 
     /// <summary>Completes when every handoff running now has ended (faulted ones included); throws only when <paramref name="cancellationToken"/> is cancelled.</summary>
@@ -93,7 +110,7 @@ public sealed class WorldHandoffInFlight
 /// <summary>
 /// Builds the production <see cref="WorldHandoffCoordinator"/> from the participants the node registered: the journal (<see cref="IWorldHandoffStore"/>, the
 /// characters database's <c>EfTransferDecisionStore</c> with its per-scope handoff), the draining <see cref="IWorldHandoffSource"/> (registered by
-/// <see cref="WorldHandoffHosting.AddWorldHandoff"/> for an active worker), the warmed standby <see cref="IWorldHandoffTarget"/> and the
+/// <see cref="WorldHandoffHosting.AddWorldHandoff"/> for every worker; a standby resolves it only after its promotion), the warmed standby <see cref="IWorldHandoffTarget"/> and the
 /// <see cref="IWorldHandoffRouter"/> (the gateway's router). The coordinator exists only when all four resolve: a node with no standby configured has no coordinator and
 /// <see cref="Coordinator"/> is null, which the driver reports as unavailable. Resolved on first use, so participants registered after this object was built still count.
 /// Thread-safe; the coordinator is stateless between handoffs.
@@ -204,8 +221,7 @@ public sealed class WorldHandoffRecoveryService(
 }
 
 /// <summary>
-/// Production registration of the whole-World handoff for a worker node. Registered only in worker mode (<c>Cluster:Worker:Enabled</c>) on an active worker
-/// (a standby is the handoff's target, never its source). <c>TryAdd</c>: a source, provider or in-flight tracker registered earlier (a test, a custom host) wins.
+/// Production registration of the whole-World handoff for a worker node. Registered only in worker mode (<c>Cluster:Worker:Enabled</c>) (on a standby only the source, resolved after its promotion). <c>TryAdd</c>: a source, provider or in-flight tracker registered earlier (a test, a custom host) wins.
 /// <para>
 /// Registers the draining source over this process's own world (<see cref="LocalWorldHandoffSource"/>), the coordinator provider and the start-up recovery. The journal comes
 /// from the characters data module (<c>EfTransferDecisionStore</c>). The standby target (<see cref="IWorldHandoffTarget"/>) and the router (<see cref="IWorldHandoffRouter"/>,
@@ -222,11 +238,14 @@ public static class WorldHandoffHosting
         ArgumentNullException.ThrowIfNull(configuration);
 
         IConfigurationSection worker = configuration.GetSection(GatewayWorkerOptions.SectionName);
-        if (!worker.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)) || worker.GetValue<bool>(nameof(GatewayWorkerOptions.Standby)))
+        if (!worker.GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
         {
             return services;
         }
 
+        // The source is registered for a standby too, but only resolved once it is promoted (WorkerTransferHosting hands it to the control service then): a standby is the handoff's
+        // target while it waits, and the draining source of the next handoff after its promotion. The coordinator provider, the in-flight tracker and the start-up recovery stay off a standby, so a promoted
+        // standby differs from a native active worker: it cannot coordinate or recover a handoff locally; the gateway drives the control verbs against it (docs/design/hot-reload-tiers.md section 5.6).
         services.TryAddSingleton<IWorldHandoffSource>(sp => new LocalWorldHandoffSource(
             new WorkerNodeId(sp.GetRequiredService<IOptions<GatewayWorkerOptions>>().Value.NodeId),
             sp.GetRequiredService<WorldRuntime>(),
@@ -234,7 +253,15 @@ public static class WorldHandoffHosting
             sp.GetRequiredService<WorkerAdmission>(),
             sp.GetRequiredService<WorldWriterGuard>(),
             sp.GetService<CharacterPersistenceBarrier>(),
-            sp.GetService<CharacterRetirementRegistry>()));
+            sp.GetService<CharacterRetirementRegistry>(),
+            sp.GetService<SocialGroupPersistenceFeature>(),
+            sp.GetService<WarEffortFeature>(),
+            sp.GetService<ScourgeInvasionFeature>()));
+        if (worker.GetValue<bool>(nameof(GatewayWorkerOptions.Standby)))
+        {
+            return services;
+        }
+
         services.TryAddSingleton<WorldHandoffInFlight>();
         services.TryAddSingleton(sp => new WorldHandoffCoordinatorProvider(sp));
         services.AddHostedService(sp => new WorldHandoffRecoveryService(

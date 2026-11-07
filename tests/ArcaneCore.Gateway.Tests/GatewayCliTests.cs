@@ -52,6 +52,18 @@ public sealed class GatewayCliTests
         Assert.Contains("Gateway:LinkSecret", stdout, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("--Diagnostics:CrashDump:TimeoutSeconds=2000000000", "Diagnostics:CrashDump:TimeoutSeconds")]
+    [InlineData("--Diagnostics:CrashDump:TimeoutSeconds=0", "Diagnostics:CrashDump:TimeoutSeconds")]
+    [InlineData("--Diagnostics:CrashDump:Mode=Everything", "Diagnostics:CrashDump:Mode")]
+    public void CheckConfig_WithABadCrashDumpValue_ExitsInvalidConfiguration_AndNamesTheKey(string argument, string key)
+    {
+        (int? exit, string stdout, _) = Run("--check-config", GoodSecret, argument);
+
+        Assert.Equal(ExitCodes.InvalidConfiguration, exit);
+        Assert.Contains(key, stdout, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void CheckConfig_ReportsEveryProblemAtOnce()
     {

@@ -18,6 +18,7 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 | `world/<provider>/0003_tuning_tables.sql` | 63 | the shipped rows of the tuning tables: auction bot value and loot matrices, bot ship routes, lift regions and the Deeprun Tram ([tuning tables](../../docs/areas/tuning-tables.md)); the world also seeds an empty table with the same rows at start |
 | `world/<provider>/0004_item_enchant_procs.sql` | 33 | the `spell_proc_item_enchant` PPM rows of Frostbrand, Fiery Weapon, Lifestealing and Icy Chill, as mangos-classic ships them ([crafting](../../docs/areas/crafting.md)) |
 | `world/<provider>/0005_spell_enchant_charges.sql` | 35 | the 19 `spell_enchant_charges` rows (poison and temporary enchant charges) of the vmangos migration `20180830022134_world.sql` ([crafting](../../docs/areas/crafting.md)) |
+| `world/<provider>/0006_creature_spell_lists_av.sql` | 68 | the spell lists of the Alterac Valley wing commanders and the Ram Rider Commander, list ids `entry * 100 + 1` ([creature spell lists](../../docs/design/creature-spell-lists.md)) |
 
 ## Rules every content file follows
 
@@ -31,7 +32,7 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 - **A custom id range.** Game events 900 to 999 are reserved for shipped bot scenarios. The file deletes and recreates the `game_event` row
   of its id, so check an imported `game_event` table for a row of that number you want to keep before installing.
 - **A test applies it** to a clean SQLite world database twice and compares the rows (`GameEventPlayerbotDataTests`), and the World.Tests
-  project (`EventScenarioFeatureWiringTests`) loads the shipped SQLite file and validates the scenario it describes. `EnchantSeedContentTests` applies files 0004 and 0005 twice on every available provider and compares the rows.
+  project (`EventScenarioFeatureWiringTests`) loads the shipped SQLite file and validates the scenario it describes. `EnchantSeedContentTests` applies files 0004 and 0005 twice on every available provider and compares the rows, and `CreatureSpellListImportTests` does the same for file 0006.
 
 ## Applying a file
 
@@ -47,6 +48,8 @@ The server reads the scenario tables when the playerbot pack attaches (server st
 after installing a file. Then `.event start 900` brings the scenario up.
 
 ## Order against the content importer
+
+`0006_creature_spell_lists_av.sql` and an import or refresh of a dump that carries the cmangos spell list tables write the same tables, and the import replaces them whole. Apply the file after the import, and again after each later one.
 
 `arcane-content-importer` ([content import](../../docs/areas/content-import.md)) and a content file both write `game_event`, so the order matters:
 

@@ -50,10 +50,10 @@ public sealed partial class CreatureMapSystem
     {
         uint inhabit = creature.Template.InhabitType;
         // The same exemptions as CreatureAnomalies' under-map check: fliers, water-only creatures, a creature on a transport (its heights are
-        // the transport's) and one a script set flying or hovering.
+        // the transport's) and one a script set flying, hovering or levitating.
         if (!GroundSnapEnabled || corners.Count == 0 || (inhabit & 4) != 0 || inhabit == 2
             || creature.Movement.TransportGuid != 0
-            || (creature.Movement.Flags & (MovementFlags.Flying | MovementFlags.Hover)) != 0)
+            || (creature.Movement.Flags & (MovementFlags.Flying | MovementFlags.Hover | MovementFlags.Levitating)) != 0)
         {
             return corners as List<Vector3> ?? [.. corners];
         }

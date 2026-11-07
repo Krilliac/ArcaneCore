@@ -13,6 +13,12 @@ namespace ArcaneCore.Data.Characters.Pets;
 /// </summary>
 public sealed class PetStableRow
 {
+    /// <summary>
+    /// The first slot of a warlock's saved demons (vmangos PET_SAVE_NOT_IN_SLOT = 100, which character_pet rows of a pet that is out of its slot use). A demon row
+    /// of the character with entry E sits in the lowest free slot from here up and is the one <c>LoadPetFromDB(owner, E)</c> reads; hunter stable slots are far below it.
+    /// </summary>
+    public const byte DemonSlotBase = 100;
+
     public int CharacterId { get; set; }
     public byte Slot { get; set; }
     public uint PetNumber { get; set; }
@@ -85,7 +91,7 @@ public sealed class EfPetStableStore(CharacterDbContext db) : IPetStableStore
         PetStableSlotsRow? slots = await db.Set<PetStableSlotsRow>().AsNoTracking()
             .SingleOrDefaultAsync(r => r.CharacterId == characterId, cancellationToken).ConfigureAwait(false);
         List<PetStableRow> rows = await db.Set<PetStableRow>().AsNoTracking()
-            .Where(r => r.CharacterId == characterId).OrderBy(r => r.Slot).ToListAsync(cancellationToken).ConfigureAwait(false);
+            .Where(r => r.CharacterId == characterId && r.Slot < PetStableRow.DemonSlotBase).OrderBy(r => r.Slot).ToListAsync(cancellationToken).ConfigureAwait(false);
         return new PetStableState(slots?.Slots ?? 0, rows.Select(r => new StabledPet(r.Slot, ToSnapshot(characterId, r))).ToArray());
     }
 

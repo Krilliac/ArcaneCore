@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
 
 namespace ArcaneCore.World.Warden;
 
@@ -102,7 +103,9 @@ public sealed class WardenCheckOptions
 /// <summary>
 /// Warden for build 5875 (<c>Warden</c> section). Off by default. Ported from MaNGOS Zero src/game/Warden (module delivery, handshake,
 /// RC4 keys) and vmangos src/game/Anticheat/WardenAnticheat (the memory, page and driver scans and the penalty).
+/// The gateway binds the same section and runs the scans (GatewayServiceCollectionExtensions), so the keys belong in world.conf and gateway.conf.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.World | ConfigDaemon.Gateway)]
 public sealed class WardenOptions
 {
     public const string SectionName = "Warden";
@@ -177,7 +180,7 @@ public sealed class WardenOptions
     /// Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua,
     /// page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of
     /// an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration
-    /// (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. Default false: a failed scan acts at once.
+    /// (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. A check with id 0 is never confirmed and never acts: its failure is logged. Default false: a failed scan acts at once.
     /// </summary>
     public bool ConfirmFailedScans { get; set; }
 

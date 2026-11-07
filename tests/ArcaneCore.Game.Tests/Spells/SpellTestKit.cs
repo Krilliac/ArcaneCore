@@ -106,6 +106,7 @@ internal sealed class SpellTestKit : IDisposable
     {
         Id = id,
         Name = $"Spell {id}",
+        SpellVisual = 1, // a visible spell: an invisible triggered cast sends no SMSG_SPELL_GO (vmangos Spell::IsNeedSendToClient)
         RangeIndex = SpellConstants.RangeIndexSelfOnly,
         Range = new SpellRange(0, 0),
         StartRecoveryCategory = SpellConstants.GlobalCooldownCategory,
@@ -136,6 +137,7 @@ internal sealed class SpellTestKit : IDisposable
         Spell(Passive, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy)) with
         {
             Attributes = SpellAttributes.Passive,
+            SpellVisual = 0, // a passive is only shown (SpellAuraHolder visible slot) when it has a visual
             Duration = new SpellDuration(-1, 0, -1),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,

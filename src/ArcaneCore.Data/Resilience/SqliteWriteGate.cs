@@ -146,7 +146,9 @@ public sealed class SqliteWriteGate
             {
                 // Wake at least every poll (1 s) to release a stuck hold, so a leaked transaction cannot block for longer than max hold plus a poll.
                 // The waiter keeps its place in the queue across wake-ups.
+#pragma warning disable ARC0006 // the documented blocking entry point: the bounded slice wait is the contract (async callers use TryEnterAsync)
                 if (waiter!.Task.Wait(SliceMs(left))) return Entered(Granted(start, owner, contended: true));
+#pragma warning restore ARC0006
                 ReleaseIfStuck(maxHoldMs);
                 left = Advance(ref progress, timeoutMs, timeoutMs);
             }
@@ -410,7 +412,7 @@ public sealed class SqliteWriteGate
 
         hold.WaitedMs = waited;
         Volatile.Write(ref _current, hold); // last of the hold's own state: nothing after this can throw and leave an orphan hold published
-        if (contended) Volatile.Write(ref _pendingGrantSinceMs, double.NaN); // published: the grant is taken up (a next hand-off racing this may be cleared early; cosmetic)
+        if (contended) Volatile.Write(ref _pendingGrantSinceMs, double.NaN); // the waiter resumed and now holds the gate, so the pending-grant age is cleared. A later hand-off to another waiter can publish its own age just before this write and lose it, which only drops the pending-grant age from the timeout message (SqliteException text)
         return hold;
     }
 

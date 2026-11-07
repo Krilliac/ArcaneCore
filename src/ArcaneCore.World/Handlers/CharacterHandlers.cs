@@ -395,13 +395,9 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
-        ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
-        var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
-        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
-        {
-            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
-        }
+        (RaceInfo? raceInfo, ClassInfo? classInfo, HomeBind home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+        // The keys raceInfo and classInfo were read for. The claim loop below may replace `character` with a newer record, so the post-claim comparison must not use the variable.
+        (byte Race, byte Gender, byte Class) worldDataKeys = (character.Race, character.Gender, character.Class);
 
         if (raceInfo is null || classInfo is null || home.IsUnset)
         {
@@ -480,24 +476,72 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             }
 
             // A claim was taken (Worker scope): the record read before it may predate the previous owner's final save, which was durable before that owner's claim was
-            // released (CharacterClaimService.ScheduleRelease) and so before this claim was admitted. The player is built only from a record read after the claim; the checks made
-            // on the older record are made again, and the claim is given back when the login does not go on here.
+            // released (CharacterClaimService.ScheduleRelease) and so before this claim was admitted. The player is built only from a record read after the claim. The rename
+            // gate and the bind point are read again from it; the race and class data only when its keys differ from the ones that data was read for. The claim is given back
+            // when the login does not go on here.
             if (claimTicket != 0)
             {
-                CharacterRecord? fresh = await RereadForLoginAsync(session, characters, character.Id).ConfigureAwait(false);
-                if (fresh is null)
+                // Any failure of these reads must give the claim back: nothing else releases it for a login that has no player yet (the logout release needs a Player).
+                try
                 {
-                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                    CharacterRecord? fresh = await RereadForLoginAsync(session, characters, character.Id).ConfigureAwait(false);
+                    if (fresh is null)
+                    {
+                        ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                        return;
+                    }
+
+                    if (TryRedirectToOwner(session, fresh))
+                    {
+                        ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                        return;
+                    }
+
+                    // Race, gender and class are fixed once a character exists; only when they differ from the keys raceInfo and classInfo were read for (never in normal play, but
+                    // possible across the claim wait: the loop above replaces `character`) is the data looked up again. Otherwise the race and class rows already read stand, and
+                    // only the bind point (which the previous owner's save may have moved) is recomputed.
+                    bool sameKeys = (fresh.Race, fresh.Gender, fresh.Class) == worldDataKeys;
+                    character = fresh;
+
+                    // On this record the rename gate is checked again, and the bind point is read again (the previous owner's final save may have moved it; the player's Home comes
+                    // from here, not from the older record). Race and class data follow the keys, below.
+                    if (!await CharacterRename.MayLogInAsync(session, character).ConfigureAwait(false))
+                    {
+                        session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                        ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                        return;
+                    }
+
+                    if (sameKeys)
+                    {
+                        home = await LoadHomeAsync(worldData, character).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        (raceInfo, classInfo, home) = await LoadLoginWorldDataAsync(worldData, character).ConfigureAwait(false);
+                    }
+
+                    if (raceInfo is null || classInfo is null || home.IsUnset)
+                    {
+                        session.Logger.LogError("[{Endpoint}] missing world data for character {Guid}", session.RemoteEndpoint, character.Id);
+                        session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                        ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
+                        return;
+                    }
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("handler.char-login-postclaim", ex);
+                    AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"post-claim check error={ex.GetType().Name}: {ex.Message}");
+                    session.Logger.LogError(ex, "[{Endpoint}] the checks after the claim of character {Guid} failed", session.RemoteEndpoint, character.Id);
+                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
+                    if (!session.IsDisconnected)
+                    {
+                        session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                    }
+
                     return;
                 }
-
-                if (TryRedirectToOwner(session, fresh))
-                {
-                    ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
-                    return;
-                }
-
-                character = fresh;
             }
         }
 
@@ -505,17 +549,27 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         try
         {
             IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
+#pragma warning disable ARC0002 // the player is built by this statement and not yet published (no session, map or world holds it), so no world thread owns Home or CharacterOwnership
             player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
             {
                 Home = home,
                 CharacterOwnership = session.World.CharacterOwnership,
             };
+#pragma warning restore ARC0002
         }
-        catch
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // A ticket that never reached a player would stay "newest" and make the older login's release skip: stop counting it.
-            claimService?.AbandonTicket(character.Id, claimTicket);
-            throw;
+            // No player will carry this ticket: the claim is given back (the logout release needs a Player), which also stops the ticket counting as "newest".
+            FaultLedger.Shared.Record("handler.char-login-build", ex);
+            AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"player build error={ex.GetType().Name}: {ex.Message}");
+            session.Logger.LogError(ex, "[{Endpoint}] could not build the player of character {Guid}", session.RemoteEndpoint, character.Id);
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
+            if (!session.IsDisconnected)
+            {
+                session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            }
+
+            return;
         }
 
         if (claimTicket != 0)
@@ -543,8 +597,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             FaultLedger.Shared.Record("handler.char-login-load", ex);
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"load error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
+            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket); // first: an outbound observer can throw from Send
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
-            ReleaseUnenteredClaim(session, claimService, character.Id, claimTicket);
             return;
         }
 
@@ -562,6 +616,26 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         CharacterSaveQueue? saveQueue = session.Services.GetService<CharacterSaveQueue>();
         QuestNpcFeature? questFeature = session.Services.GetService<QuestNpcFeature>();
         world.Post(() => EnterWorld(session, world, character, player, account, claimService, saveQueue, questFeature));
+    }
+
+    /// <summary>Race and class data for <paramref name="character"/>, and its bind point (the race and class start position when none is stored). Session task.</summary>
+    private static async Task<(RaceInfo? Race, ClassInfo? Class, HomeBind Home)> LoadLoginWorldDataAsync(IWorldDataStore worldData, CharacterRecord character)
+    {
+        RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
+        ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
+        return (raceInfo, classInfo, await LoadHomeAsync(worldData, character).ConfigureAwait(false));
+    }
+
+    /// <summary>The bind point of <paramref name="character"/>: its stored one, or the race and class start position when none is stored. Session task.</summary>
+    private static async Task<HomeBind> LoadHomeAsync(IWorldDataStore worldData, CharacterRecord character)
+    {
+        var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
+        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class).ConfigureAwait(false) is { } start)
+        {
+            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
+        }
+
+        return home;
     }
 
     /// <summary>

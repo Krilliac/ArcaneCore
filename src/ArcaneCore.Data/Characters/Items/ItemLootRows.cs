@@ -70,13 +70,14 @@ public sealed class EfItemLootMaintenance(CharacterDbContext db, IRealmLeaseFenc
 {
     public async Task<int> DeleteOrphanedLootAsync(CancellationToken cancellationToken = default)
     {
-        if (!LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Maintenance))
+        // TryBeginSweep reads the fence once, before the holder check, so a release in between cannot leave the sweep without a fence (unchecked).
+        if (!LeaseFencedWrite.TryBeginSweep(leaseFences, RealmAuthorityScopes.Maintenance, out RealmLeaseFence? fence))
         {
             return 0;
         }
 
         IQueryable<ItemInstanceRow> items = db.Set<ItemInstanceRow>();
-        return await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Maintenance, async () =>
+        return await CharacterWrites.InTransactionAsync(db, () => LeaseFencedWrite.InTransactionAsync<int>(db, fence, async () =>
         {
             int stacks = await db.Set<ItemLootRow>().Where(r => !items.Any(i => i.Guid == r.ItemGuid))
                 .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);

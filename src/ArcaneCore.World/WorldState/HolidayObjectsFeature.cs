@@ -104,4 +104,7 @@ public sealed class HolidayObjectsFeature(IServiceScopeFactory scopes, GameEvent
 
     /// <summary>Writes every queued state before shutdown completes.</summary>
     public Task StopAsync() => _saves?.FlushAsync() ?? Task.CompletedTask;
+
+    /// <summary>A handoff's flush: write what is queued and retained again; faults while a state write is still not durable (see <see cref="StateSaveQueue{TKey, TState}.RetryRetainedAsync"/>).</summary>
+    internal Task FlushStateWritesAsync() => _saves?.RetryRetainedAsync() ?? Task.CompletedTask;
 }

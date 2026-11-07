@@ -60,7 +60,7 @@ public sealed class KeeperPeerLeaseSource(RealmAuthorityLeaseKeeper keeper) : IP
 public sealed class PeerLinkHost : IAsyncDisposable
 {
     /// <summary>Most (incarnation, idempotency id) answers remembered.</summary>
-    public const int IdempotencyCacheSize = 1024;
+    public const int IdempotencyCacheSize = 8192;
 
     private static readonly TimeSpan RejectFlushBound = TimeSpan.FromSeconds(1);
 
@@ -161,9 +161,15 @@ public sealed class PeerLinkHost : IAsyncDisposable
     /// <summary>
     /// What answers a request: given the request payload, returns the answer payload (the presence protocol's <c>PresenceHolderService.Handle</c>). Null (the default) echoes the
     /// payload. Set before <see cref="Start"/>; called on the link's receive task, so it must be thread-safe and must not throw for bad input. The answer is cached per
-    /// (peer incarnation, idempotency id) like an echo, so a retried request is not executed twice.
+    /// (peer incarnation, idempotency id) like an echo, so a retried request is not executed twice, unless <see cref="RememberAnswer"/> says otherwise.
     /// </summary>
     public Func<ReadOnlyMemory<byte>, byte[]>? PayloadHandler { get; set; }
+
+    /// <summary>
+    /// Which answers the idempotency cache keeps, given the request and the answer; null keeps all. An answer not kept is sent but forgotten, so a repeat of its id runs again: use it for an answer that says the request was
+    /// not executed, and to keep traffic that is never retried from pushing out what is. Set before <see cref="Start"/>; called with the cache lock held.
+    /// </summary>
+    public Func<ReadOnlyMemory<byte>, byte[], bool>? RememberAnswer { get; set; }
 
     /// <summary>Binds the port and starts accepting. Call once.</summary>
     public void Start()
@@ -394,11 +400,14 @@ public sealed class PeerLinkHost : IAsyncDisposable
             else
             {
                 answer = PayloadHandler is { } handler ? handler(payload) : payload;
-                _answers[key] = answer;
-                _answerOrder.Enqueue(key);
-                while (_answerOrder.Count > IdempotencyCacheSize)
+                if (RememberAnswer is not { } remember || remember(payload, answer))
                 {
-                    _answers.Remove(_answerOrder.Dequeue());
+                    _answers[key] = answer;
+                    _answerOrder.Enqueue(key);
+                    while (_answerOrder.Count > IdempotencyCacheSize)
+                    {
+                        _answers.Remove(_answerOrder.Dequeue());
+                    }
                 }
             }
         }

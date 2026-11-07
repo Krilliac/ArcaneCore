@@ -130,6 +130,7 @@ public static class CreatureRuleIds
     public const short ActionSetImmobilized = 148;
     public const short ActionSetImmunitySet = 149;
     public const short ActionSetFollowMovement = 150;
+    public const short ActionSetSpellList = 151;
 
     /// <summary>The shared <c>set_phase</c> action (RuleHostKind.Any id 1), which EventAI SET_PHASE converts to.</summary>
     public const short SharedActionSetPhase = 1;

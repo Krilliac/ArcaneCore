@@ -71,6 +71,37 @@ public sealed class ItemLootWorldTests
         Assert.Equal(25u, await host.OnWorldAsync(() => player.Money));
     }
 
+    /// <summary>
+    /// World:LimitPlayTime's NO_PLAY_TIME flag on OPEN_LOCK_ITEM (vmangos Spell::CheckCast, Spell.cpp:5975-5976): the same refusal as OPEN_LOCK, proven here because the
+    /// two effects only share the check by registration. The box stays locked; clearing the flag is the positive control. Written without a build or test run (lane rule);
+    /// unproven until the integration gate.
+    /// </summary>
+    [Fact]
+    public async Task PickLock_WithNoPlayTime_FailsWithPlayTimeAndLeavesTheBoxLocked_AndOpensOnceTheFlagIsGone()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("PICKTIRED", "Picktired");
+        Player player = await host.PlayerAsync("Picktired");
+        await host.WaitForWorldAsync(() => player.Skills is not null, "skills attached");
+        await host.OnWorldAsync(() => player.Skills!.Set(SkillIds.Lockpicking, 100, 300, 1)); // no orange-failure roll, as above
+        Item box = await GiveAsync(host, player, Lockbox);
+        await host.OnWorldAsync(() => player.Flags |= PlayerFlags.NoPlayTime);
+
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastOn(box));
+        List<(WorldOpcode Opcode, byte[] Payload)> refused = await client.CollectFromAsync(WorldOpcode.SmsgCastResult);
+        byte[] playTimeFailure = [.. BitConverter.GetBytes(PickLockCast), 2, 0x8E]; // u32 spell, u8 status 2 (failed), u8 SPELL_FAILED_PLAY_TIME
+        Assert.Equal(playTimeFailure, Assert.Single(refused, p => p.Opcode == WorldOpcode.SmsgCastResult).Payload);
+        Assert.DoesNotContain(refused, p => p.Opcode is WorldOpcode.SmsgSpellGo or WorldOpcode.SmsgLootResponse);
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgSpellGo, WorldOpcode.SmsgLootResponse);
+        Assert.False(await host.OnWorldAsync(() => (box.DynamicFlags & ItemDynFlags.Unlocked) != 0));
+
+        await host.OnWorldAsync(() => player.Flags &= ~PlayerFlags.NoPlayTime);
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastOn(box));
+        var loot = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgLootResponse));
+        Assert.Equal(box.Guid.Value, loot.ReadUInt64());
+        Assert.True(await host.OnWorldAsync(() => (box.DynamicFlags & ItemDynFlags.Unlocked) != 0));
+    }
+
     [Fact]
     public async Task PickLock_CastTriggeredOnCommit_SkipsTheOrangeRoll_WhileAPlayerCastStillRollsIt()
     {

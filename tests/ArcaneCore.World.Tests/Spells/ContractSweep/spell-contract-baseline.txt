@@ -8,21 +8,23 @@
 #     dotnet test tests/ArcaneCore.World.Tests --filter "FullyQualifiedName~SpellContractSweepTests.Sweep_"
 # The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
 # Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
+#
+# What the remaining lines are (triage 2026-11, lane Y35). The rest of the former baseline is listed in DeliberatelyInertSpells or QaSpellConsumers.
+#  a.unhandled-other 17619, 30012, 6277: Alchemists Stone, Chess Move (DND), Bind Sight (PT). Only azerothcore or TrinityCore (WotLK) handles them; no 1.12 source or capture
+#    exists, so they stay exactly as they are (decision N-unsettled, 2026-11-05). Reopen only with a capture or a 1.12-era source.
+#    (mangos-classic sql/base/dbc/cmangos_fixes/Spell.sql:132 lists 17619 in an item-equip DEATH_PERSISTENT fix; that is a spell attribute, not a handler, so the ruling stands.)
+#  b.removed-early 6410: Food (Scorpid Surprise). Hypothesis, not shown by a run: vmangos ScorpidSurpriseScript (spell_item.cpp:170-183) lets effect 1 (the poison) run on a draw of 0
+#    in urand(0, 10), and the sweep's seeded roll for this spell (SpellSweepRunner.cs:299-300) may land on it; the poison's damage would then stand the eater up and end the food
+#    (ScorpidSurpriseScript.cs). If so it is retail randomness. Unconfirmed until a gate run shows the draw.
+#  b.removed-early 13711: zzOLDGoblin Rocket Helmet. Static analysis, pending the gate run: the Spell.dbc row (classic-db Full_DB, mangos-classic sql/base/dbc/original_data/Spell.sql)
+#    is Charge (effect 96) plus a stun aura (type 12) with AuraInterruptFlags=2 (Damage), DurationIndex=9. ChargeEffects.EffectCharge starts the caster's melee on the target for a
+#    negative spell (mangos-classic SpellEffects.cpp:5026-5027 does too, under its own conditions), and the caster's first swing breaks the damage-interrupt stun. The sweep calls Isolate()
+#    (stops those swings) only at SpellSweepRunner.cs:620, never before CheckLifetime (:444), so this is a sweep artefact of the melee the cast itself started
+#    (SpellSweepInterruptSliceTests.cs:10 names the same mechanism, 13711 is in its slice at :22), or equally the retail rule. Not confirmed by a run; if the gate shows it, keep the line.
+#  a.error-log 8324: Perm. Illusion HE Hunter names creature 6029, which the retail world database does not have either, so the live server logs it too (SweepCreatureContentTests keeps it on purpose).
 a.error-log	8324	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
-a.unhandled-other	16378	dummy:Dummy
 a.unhandled-other	17619	no-consumer:Dummy
-a.unhandled-other	18350	dummy:Dummy
-a.unhandled-other	18800	no-consumer:Dummy
-a.unhandled-other	19502	no-consumer:Dummy
-a.unhandled-other	21914	dummy:Dummy
-a.unhandled-other	21917	dummy:Dummy
-a.unhandled-other	22690	no-consumer:Dummy
-a.unhandled-other	23852	dummy:Dummy
-a.unhandled-other	24746	no-consumer:Dummy
-a.unhandled-other	28349	dummy:Dummy
 a.unhandled-other	30012	dummy:Dummy
-a.unhandled-other	5302	no-consumer:Dummy
 a.unhandled-other	6277	no-consumer:Dummy
-a.unhandled-other	84	dummy:Dummy
 b.removed-early	13711	gone before its duration
 b.removed-early	6410	gone before its duration

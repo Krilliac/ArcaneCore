@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Safety;
 
 namespace ArcaneCore.World.Playerbots.Scenarios;
 
@@ -52,7 +53,7 @@ public interface IScenarioClock
     /// Manual clock: run the world tick by tick until <paramref name="condition"/> (world thread, after every tick) holds
     /// (true) or <paramref name="max"/> has passed (false). The real clock just sleeps <paramref name="max"/> and returns false.
     /// </summary>
-    Task<bool> AdvanceUntilAsync(TimeSpan max, Func<bool> condition, CancellationToken cancellationToken = default);
+    Task<bool> AdvanceUntilAsync(TimeSpan max, [RunsOnWorldThread] Func<bool> condition, CancellationToken cancellationToken = default);
 }
 
 /// <summary>The scenario clocks: real time (a live world) and the deterministic manual world clock (tests).</summary>
@@ -98,7 +99,7 @@ public sealed class ScenarioClock : IScenarioClock
         await _world.AdvanceClockAsync(Milliseconds(by)).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<bool> AdvanceUntilAsync(TimeSpan max, Func<bool> condition, CancellationToken cancellationToken = default)
+    public async Task<bool> AdvanceUntilAsync(TimeSpan max, [RunsOnWorldThread] Func<bool> condition, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(condition);
         if (_world is null)

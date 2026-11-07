@@ -145,6 +145,18 @@ public interface ICreatureSpellCaster
     /// </summary>
     bool CanCastMainSpell(Creature caster, uint spellId) => true;
 
+    /// <summary>The spell's data, or null when the spell is unknown or there is no spell system. Null by default.</summary>
+    SpellInfo? FindSpell(uint spellId) => null;
+
+    /// <summary>The spell is off cooldown for <paramref name="caster"/> (cmangos Unit::IsSpellReady). True by default.</summary>
+    bool IsSpellReady(Creature caster, uint spellId) => true;
+
+    /// <summary>The auras on <paramref name="unit"/>; none by default.</summary>
+    IReadOnlyList<SpellAuraHolder> GetAuras(Unit unit) => [];
+
+    /// <summary><paramref name="target"/> is immune to <paramref name="spell"/> (cmangos Unit::IsImmuneToSpell). False by default.</summary>
+    bool IsImmuneToSpell(Unit target, SpellInfo spell) => false;
+
     bool IsCasting(Creature caster);
 
     bool HasAura(Unit unit, uint spellId);
@@ -276,6 +288,7 @@ public sealed class CreatureAiFactory
         [Scripts.StinkyIgnatzAI.Entry] = E(static c => new Scripts.StinkyIgnatzAI(c)),
         [Scripts.MagramiSpectreAI.Entry] = E(static c => new Scripts.MagramiSpectreAI(c)),
         [Scripts.PluckyJohnsonAI.Entry] = E(static c => new Scripts.PluckyJohnsonAI(c)),
+        [Scripts.ChickenCluckAI.Entry] = E(static c => new Scripts.ChickenCluckAI(c)),
         [Scripts.TriageDoctorAI.DoctorAlliance] = E(static c => new Scripts.TriageDoctorAI(c)),
         [Scripts.TriageDoctorAI.DoctorHorde] = E(static c => new Scripts.TriageDoctorAI(c)),
         [12923] = E(static c => new Scripts.InjuredPatientAI(c)),
@@ -420,6 +433,7 @@ public sealed class CreatureAiFactory
         Instances.Scripts.Naxxramas.GothikAnchorAI.Register(this);
         Instances.Scripts.Naxxramas.InvisibleManAI.Register(this);
         Instances.Scripts.Stratholme.AuriusScript.Register(this);
+        Instances.Scripts.BlackrockDepths.DepthsNpcScripts.Register(this);
     }
 
     public IReadOnlyCollection<string> Names => _factories.Keys;
@@ -685,6 +699,14 @@ public sealed class CreatureAiServices
 
     /// <summary>Aura stacks and casting state of any unit (EventAI aura and target-casting events); null: no auras, nobody casting.</summary>
     public IUnitSpellQueries? UnitSpells { get; init; }
+
+    /// <summary>
+    /// Queue a player for a meeting stone area (vmangos LFGMgr::AddToQueue; the DB script command MEETINGSTONE, 200); null: no queue, the command
+    /// is reported and skipped. The delegate answers true when the player was queued and false when there is no queue (no meeting stone feature,
+    /// or its queue is off), which is reported and skipped the same way. Bound by the world from the meeting stone feature, resolved when the
+    /// command runs.
+    /// </summary>
+    public Func<Player, uint, bool>? JoinMeetingStone { get; init; }
 
     /// <summary>The towns' guard posts (vmangos GuardMgr), shared by every map system built with these services.</summary>
     public GuardPostTable GuardPosts { get; init; } = new();

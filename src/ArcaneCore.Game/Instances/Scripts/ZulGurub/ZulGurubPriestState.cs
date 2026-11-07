@@ -110,6 +110,18 @@ public sealed partial class ZulGurubInstance
             Instance.FindUpdater<CreatureMapSystem>()?.CastSpell(hakkar, 24693, hakkar, triggered: true);
         }
 
+        if (data == EncounterState.Fail)
+        {
+            if (type == 2)
+            {
+                RespawnSpiderEggs();
+            }
+            else if (type == 4)
+            {
+                RespawnGong();
+            }
+        }
+
         SaveIfDone(data);
         return true;
     }

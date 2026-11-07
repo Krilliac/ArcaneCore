@@ -420,7 +420,7 @@ public sealed class SpellStatePersistence
 
                     return;
                 }
-                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
                 {
                     ForgetRetired(characterId); // refused because the character moved to another world: counted, neither logged nor terminal
                     return;
@@ -490,7 +490,7 @@ public sealed class SpellStatePersistence
                     await store.DeleteCharacterAsync(characterId).ConfigureAwait(false);
                 }
             }
-            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.DropsRefused(Retirement, QueueName, characterId))
             {
                 // refused because the character moved to another world: counted, neither logged nor terminal
             }
