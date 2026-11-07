@@ -146,7 +146,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             collection.AddScoped<ILootDataStore>(_ => content);
             if (collection.LastOrDefault(d => d.ServiceType == typeof(IItemTemplateSource))?.ImplementationInstance is ArcaneCore.World.Tests.Items.InMemoryItemTemplateSource items)
             {
-                items.Templates.Add(new ItemTemplate { Entry = BossTrophy, Name = "Deadmines Boss's Trophy", Class = 12, Quality = 1, Stackable = 1, MaxCount = 1 });
+                // ITEM_FLAG_PARTY_LOOT (LootService.ItemFlagPartyLoot): the quest drop every member of the group needs is a copy per allowed
+                // looter, as a real quest drop that several party members are on carries. Without the flag vmangos (and LootBag.Take) gives
+                // the drop to whoever picks it up first and closes the slot for the others.
+                items.Templates.Add(new ItemTemplate { Entry = BossTrophy, Name = "Deadmines Boss's Trophy", Class = 12, Quality = 1, Stackable = 1, MaxCount = 1,
+                    Flags = ArcaneCore.Game.Loot.LootService.ItemFlagPartyLoot });
                 foreach (ItemTemplate extra in extraItems ?? []) items.Templates.Add(extra);
             }
 
