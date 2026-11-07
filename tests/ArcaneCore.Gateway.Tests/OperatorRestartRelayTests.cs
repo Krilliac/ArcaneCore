@@ -213,7 +213,7 @@ public sealed class OperatorRestartRelayTests
 
         /// <summary>
         /// Reads frames until a system chat message containing <paramref name="fragment"/> arrives. A handoff is silent for as long as it runs,
-        /// and the client's 5 s deadline bounds each read, so the silence is waited out first (<see cref="WorldClient.WaitForTrafficAsync"/>,
+        /// and the client's per-operation deadline (30 s in this suite) bounds each read, so the silence is waited out first (<see cref="WorldClient.WaitForTrafficAsync"/>,
         /// bounded by <paramref name="token"/>) and only an arriving frame is held to that deadline; a slow Windows run failed it otherwise.
         /// </summary>
         public async Task<WorldFrame> ReadSystemTextAsync(string fragment, CancellationToken token)

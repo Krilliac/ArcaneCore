@@ -190,9 +190,10 @@ public sealed class PlayerbotSummonWorldTests
         bool offered = await world.RunUntilAsync(180_000, () => Real(world, "Summonreal").PendingSummon is not null);
         Assert.True(offered, await world.TraceAsync());
         // The warlock tells the party when its cast is taken, before the portal turns active and the request is sent: read the line first (reading to the request would skip it).
+        // The bots also make party small talk on their own schedule ("what u up to?"), which can land before it; skip every party line that is not a summon announcement.
         ChatMessage line;
         do { line = await player.ReadChatAsync(); }
-        while (line.Type != ChatType.Party);
+        while (line.Type != ChatType.Party || !line.Text.StartsWith("Summoning ", StringComparison.Ordinal));
         Assert.Equal("Summoning Summonreal, click the portal.", line.Text);
         byte[] request = await player.ReadUntilAsync(WorldOpcode.SmsgSummonRequest);
         Assert.Equal(await world.OnWorldAsync(() => world.Player(warlock.Id).Guid.Value), BitConverter.ToUInt64(request, 0));

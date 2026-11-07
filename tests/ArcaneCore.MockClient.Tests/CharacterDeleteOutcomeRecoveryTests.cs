@@ -31,11 +31,13 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task Delete_CommitThenAckLost_AnswersSuccessAndRunsTheFinalizers()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         var observed = new CountingHook();
         await using SyntheticArcaneServer server = await StartAsync(faults, observed, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         (WorldClient client, ScenarioConnection connection, ulong doomed) = await SetUpAsync(server, token);
         await using WorldClient _ = client;
         CharacterDirectory directory = server.Services.GetRequiredService<CharacterDirectory>();
@@ -52,11 +54,13 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task Delete_CommitThenAckLostAndTheReconcileReadFails_AResendFinalizes()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         var observed = new CountingHook();
         await using SyntheticArcaneServer server = await StartAsync(faults, observed, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         (WorldClient client, ScenarioConnection connection, ulong doomed) = await SetUpAsync(server, token);
         await using WorldClient _ = client;
         CharacterDirectory directory = server.Services.GetRequiredService<CharacterDirectory>();
@@ -76,11 +80,13 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task CharEnum_AfterALostAck_FinalizesThePendingDeletion()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         var observed = new CountingHook();
         await using SyntheticArcaneServer server = await StartAsync(faults, observed, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         (WorldClient client, ScenarioConnection connection, ulong doomed) = await SetUpAsync(server, token);
         await using WorldClient _ = client;
         CharacterDirectory directory = server.Services.GetRequiredService<CharacterDirectory>();
@@ -100,11 +106,13 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task ResendFromAnotherAccount_ForAPendingDeletion_FailsAndFinalizesNothing()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         var observed = new CountingHook();
         await using SyntheticArcaneServer server = await StartAsync(faults, observed, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         (WorldClient client, ScenarioConnection connection, ulong doomed) = await SetUpAsync(server, token);
         await using WorldClient _ = client;
         CharacterDirectory directory = server.Services.GetRequiredService<CharacterDirectory>();
@@ -123,11 +131,13 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task Finalizers_RerunAfterCompleteFails_AtMostOncePerSession()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         var observed = new CountingHook();
         await using SyntheticArcaneServer server = await StartAsync(faults, observed, token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         (WorldClient client, ScenarioConnection connection, ulong doomed) = await SetUpAsync(server, token);
         await using WorldClient _ = client;
         faults.FailCompletes = 1;
@@ -145,10 +155,12 @@ public sealed class CharacterDeleteOutcomeRecoveryTests
     [Fact]
     public async Task CharCreate_WhenTheStoreThrows_AnswersCharCreateErrorAndKeepsTheSession()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         var faults = new Faults();
         await using SyntheticArcaneServer server = await StartAsync(faults, new CountingHook(), token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
         await server.AddAccountAsync(Account, Password, token);
         await using WorldClient client = await AuthenticateAsync(server, Account, token);
         var connection = new ScenarioConnection(client);

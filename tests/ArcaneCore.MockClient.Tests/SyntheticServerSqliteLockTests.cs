@@ -19,9 +19,11 @@ public sealed class SyntheticServerSqliteLockTests
     [Trait("Category", "Timing")] // wall-bound: the point is surviving a real SQLite lock held past 1 s against the shipped 5 s bound
     public async Task AWriteOfTheServer_WaitsOutAnotherConnectionsWriteLockHeldPastOneSecond()
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        using var deadline = new CancellationTokenSource();
         CancellationToken token = deadline.Token;
         await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(token);
+        // The fixture starts under its own hang bound; the scenario deadline is armed after it returns (TestDeadlines).
+        deadline.CancelAfter(TimeSpan.FromSeconds(45));
 
         await using var holder = new SqliteConnection(new SqliteConnectionStringBuilder
         {
