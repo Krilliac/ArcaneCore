@@ -213,6 +213,12 @@ public sealed partial class CreatureMapSystem
     /// cmangos Creature::SetInCombatWithZone (Entities/Creature.cpp:2360-2403, EventAI ZONE_COMBAT_PULSE): only on a dungeon or raid map
     /// (Map::IsDungeon, the map template's type: a battleground is not one); every living player on the map who is not a game master and
     /// whom the creature can attack is put on the creature's threat list and in combat with it. Returns how many.
+    /// <para>
+    /// The pulse is script-forced, so it ignores the UNIT_FLAG_IMMUNE_TO_PLAYER / IMMUNE_TO_NPC clause of
+    /// <see cref="CombatHooks.CanAttack"/>: the reference gates only on <c>IsFriendlyTo</c> (Entities/Creature.cpp:2393), and a script that
+    /// pulls the zone before its boss is unflagged would otherwise find nobody. Thaddius' overload is that case (boss_thaddius.cpp:117-123
+    /// takes his flags off in his own Aggro, which this call reaches).
+    /// </para>
     /// </summary>
     public int SetInCombatWithZone(Creature creature)
     {
@@ -222,7 +228,8 @@ public sealed partial class CreatureMapSystem
             return 0;
         }
 
-        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster && Map.Combat.CanAttackSingleTarget(creature, p))];
+        Player[] players = [.. Map.Players.Where(p => p.IsAlive && !p.IsGameMaster
+            && Map.Combat.CanAttackSingleTargetIgnoringImmuneToFlags(creature, p))];
         if (creature.Combat.Victim is null && players.Length > 0)
         {
             // Engaged first: the unit AttackClosestEnemy would pick from the threat list once every player is on it.
