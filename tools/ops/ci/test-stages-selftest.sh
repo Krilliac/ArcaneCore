@@ -54,6 +54,7 @@ case "$flt" in
       main-flaky|main-twice) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 1 ;;
       main-rc124) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 124 ;;   # GATE_WRAP's timeout: a kill, never a plain failure
       main-rc255) echo "  Failed Ns.M.Flaky [1 ms]"; block 9 1 0 Failed; exit 255 ;;
+      main-killed) echo "  Passed Ns.M.One [1 ms]"; echo "  Passed Ns.M.Two [1 ms]"; exit 124 ;;   # GATE_WRAP's timeout mid-run: result lines, no totals
       main-setup) echo "  Failed Ns.M.Flaky [1 ms]"; echo "error MSB4057: The target \"VSTest\" does not exist in the project."; block 9 1 0 Failed; exit 1 ;;
       main-timeout) echo "  Failed Ns.M.Flaky [1 ms]"; echo "Aborting test run: test run timeout of ${tmo:-0} milliseconds exceeded."; block 9 1 0 Failed; exit 1 ;;
       main-crash) echo "  Failed Ns.M.Flaky [1 ms]"; echo "  Failed Ns.M.Other [1 ms]"; block 8 1 0 Failed; exit 1 ;;   # 2 lines, f=1: not attributable
@@ -167,6 +168,13 @@ grep -q 'no rerun: the test run aborted' "$work/main-abort.out" || { echo "FAIL 
 # though the stub's rerun of the test would pass. Both stages.
 check main-rc124 1 "--stage main" 'no rerun: rc=124 is not a plain test failure' 'rerunning|FLAKY'
 check main-rc255 1 "--stage main" 'no rerun: rc=255 is not a plain test failure' 'rerunning|FLAKY'
+# A suite killed before its totals: the reason says so and counts the result lines, and neither "executed 0 tests" nor "filter matched 0 tests" appears in it.
+tag=main-killed-plain
+check main-killed 1 "--stage main" 'main tests/ci/X\.slnf was killed \(rc=124\) before it reported totals \(the log has 2 Passed and 0 Failed result lines\)' 'executed 0 tests|filter matched 0 tests'
+tag=main-killed-filtered
+check main-killed 1 "--stage main --filter FullyQualifiedName~X" 'main tests/ci/X\.slnf was killed \(rc=124\) before it reported totals' 'filter matched 0 tests'
+tag=
+check main-empty 1 "--stage main --filter FullyQualifiedName~X" 'filter matched 0 tests'
 check main-setup 1 "--stage main" 'no rerun: the log shows a build or test-setup error' 'rerunning|FLAKY'
 check main-timeout 1 "--stage main" 'no rerun: the run was stopped at its time budget' 'rerunning|FLAKY'
 check main-crash 1 "--stage main" 'no rerun: 1 failed but 2 attributable failure lines' 'rerunning|FLAKY'

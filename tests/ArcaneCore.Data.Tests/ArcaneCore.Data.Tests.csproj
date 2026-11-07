@@ -5,6 +5,8 @@
     <RootNamespace>ArcaneCore.Data.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- Dozens of EF bootstraps run at once here. Workstation GC stopped them all for about 30 % of the wall time of the upgrade-step theory; server GC took 8m30s to 5m41s on the same rows (Node1, 2026-11-05). -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
