@@ -672,6 +672,9 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         // The retry's pick passes the ownership check (map 0 is owned); while its Starting row is written another worker takes the claim and this worker stops owning the login map, so the login is refused
         // and the second probe finds the holder: the raced-login path of the start, reached through a whole pass.
         // The trigger is filtered to the retried bot: the pass's pre-loop create also writes a Starting row (for a new bot) and must not spend the race.
+        // Dropping the ownership of map 0 alone does not refuse the login: WorldRuntime.GetMap throws MapNotOwnedException only for a map copy that is not loaded yet, and the pre-loop
+        // create's own start logs its new bot into map 0 first (while map 0 is still owned), so the copy is there. The bot login gate (PlayerbotMapPolicy.MayStayOnMap over
+        // PlayerbotOptions.AllowedMaps) is dropped with it, which refuses this login on the same "login-refused" path whatever the map cache holds.
         (PopulationTestHost world, FakeLiveOwners live, Guid poisoned, ManagedPlayerbot record) = await RestartedFaultedBotAsync(baseMs);
         world.Feature.ForeignBotMemoryMs = foreignMs;
         ManagedPlayerbot before = world.Owners.Peek(poisoned)!;
@@ -688,6 +691,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
             {
                 raced = true;
                 world.Host.World.Ownership = Owning(1);
+                world.Options.AllowedMaps = [1];
                 live.Holders[record.CharacterId] = "worker:Kalimdor";
             }
 
@@ -711,6 +715,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         Assert.Equal(before with { Revision = after.Revision, UpdatedUnix = after.UpdatedUnix }, after); // put back as it was: still Faulted/start-failed, no fault written on top
         Assert.Equal(baseline + 2, live.CallsFor(before.CharacterId)); // the check, then the probe after the refused login
         world.Host.World.Ownership = Owning(0, 1);
+        world.Options.AllowedMaps = [0, 1];
         await PassAfterAsync(world, 500); // the foreign memory (500 ms) is over, the attempt's wait (1000 ms) is not
         Assert.Equal(1, retries());
         await PassAfterAsync(world, 500);
@@ -728,6 +733,7 @@ public sealed class ManagedPlayerbotLiveOwnerTests
         Assert.Equal(1, retries());
         Assert.Equal(baseline + 2, live.CallsFor(before.CharacterId)); // the check, then the probe after the refused login: the raced path, not a first-probe LiveOnOtherWorker
         world.Host.World.Ownership = Owning(0, 1);
+        world.Options.AllowedMaps = [0, 1];
         await PassAfterAsync(world, 1000); // the attempt's wait is over, the foreign memory (1500 ms) is not: the bot is skipped without a read
         Assert.Equal(1, retries());
         await PassAfterAsync(world, 500);
