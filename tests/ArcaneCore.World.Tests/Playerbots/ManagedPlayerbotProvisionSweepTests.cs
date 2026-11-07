@@ -349,6 +349,21 @@ public sealed class ManagedPlayerbotProvisionSweepTests
     }
 
     [Fact]
+    public async Task TheStaleSweep_OfASplitHolder_DoesRun_SoTheNegativeControlsAboveCanFail()
+    {
+        // Positive control for TheStaleSweep_IsSplitOnly_AndHolderOnly: the same stale row, a split holder that does sweep.
+        var holder = new Shared();
+        await holder.JournalRowAsync("PBSWEEPHOLD", ageSeconds: 5000);
+        await using WorldTestHost holderHost = holder.Host(0);
+
+        await BotsOf(holderHost).SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(1, holder.Provisions.LoadPendingCalls);
+        Assert.Equal(1, holder.Provisions.RollbackCount);
+        Assert.Empty(await holder.Provisions.LoadPendingAsync());
+    }
+
+    [Fact]
     public async Task TheStaleSweep_UnderALatchedSplitBrain_IssuesNoWrites_AndRunsAgainOnceItIsCleared()
     {
         var shared = new Shared();
@@ -364,6 +379,51 @@ public sealed class ManagedPlayerbotProvisionSweepTests
         await bots.ClearSplitBrainAsync();
         await bots.SweepStaleProvisionsAsync(default); // the refused sweep did not use up the interval
         Assert.Equal(1, shared.Provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task ASweep_LatchedBetweenItsUnlockedCheckAndTheLock_IssuesNoWrites_AndDoesNotUseUpTheInterval()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPRECHK", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        bots.SweepAfterUnlockedCheckForTests = () => bots.ForceSplitBrainForTests(); // the latch lands after the unlocked check passed: only the check under the lock can see it
+
+        await bots.SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(0, shared.Provisions.LoadPendingCalls);
+        Assert.Equal(0, shared.Provisions.RollbackCount);
+        bots.SweepAfterUnlockedCheckForTests = null;
+        await bots.ClearSplitBrainAsync();
+        await bots.SweepStaleProvisionsAsync(default); // the refused sweep did not stamp the slot
+        Assert.Equal(1, shared.Provisions.RollbackCount);
+    }
+
+    [Fact]
+    public async Task ASweep_StampsTheSlotWithTheClockReadUnderTheLock_NotTheOneReadBeforeTheWait()
+    {
+        var shared = new Shared();
+        await shared.JournalRowAsync("PBSWEEPCLOCK", ageSeconds: 5000);
+        await using WorldTestHost host = shared.Host(0);
+        ManagedPlayerbotFeature bots = BotsOf(host);
+        long clock = 1_000;
+        bots.ProvisionSweepClock = () => Interlocked.Read(ref clock);
+        bots.SweepAfterUnlockedCheckForTests = () =>
+        {
+            Interlocked.Add(ref clock, 5_000); // time passes while the sweep waits for the lock
+            return Task.CompletedTask;
+        };
+
+        await bots.SweepStaleProvisionsAsync(default);
+
+        Assert.Equal(1, shared.Provisions.RollbackCount); // it ran
+        bots.SweepAfterUnlockedCheckForTests = null;
+        long interval = bots.ProvisionSweepIntervalMs;
+        Interlocked.Exchange(ref clock, 6_000 + interval - 1);
+        Assert.False(bots.TakeProvisionSweepSlot()); // stamped at 6000, not 1000: the interval is not over yet
+        Interlocked.Exchange(ref clock, 6_000 + interval);
+        Assert.True(bots.TakeProvisionSweepSlot());
     }
 
     [Fact]

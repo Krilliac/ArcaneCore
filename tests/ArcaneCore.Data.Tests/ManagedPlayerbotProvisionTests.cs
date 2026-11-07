@@ -247,6 +247,115 @@ public sealed class ManagedPlayerbotProvisionTests
         }
     }
 
+    public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
+
+    /// <summary>Two workers' contexts over one real database of the provider (SQLite always; MariaDB and PostgreSQL when their server variable is set, see TestDatabases).</summary>
+    private static async Task<(AuthDbContext A, AuthDbContext B)> ProviderWorkersAsync(TestDatabases databases, DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await databases.CreateAsync(provider);
+        AuthDbContext a = TestContexts.Create<AuthDbContext>(connection);
+        await SchemaBootstrapper.EnsureAsync(a, AuthDbContext.Schema);
+        return (a, TestContexts.Create<AuthDbContext>(connection));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_CompleteTheSameRowAtTheSameTime_ExactlyOneCompletes(DatabaseProvider provider)
+    {
+        // The two store calls a sweep and a creator race on (a sweep completing a row whose creator completes it too), on the real provider's locking.
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            Guid botId = Guid.NewGuid();
+            Account stored = await storeA.CreateAsync(botId, NewAccount($"PBPCOMP{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Complete(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CompleteAsync(botId, stored.Id);
+            });
+            Task<bool> first = Complete(storeA);
+            Task<bool> second = Complete(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost a lock: it did not complete */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Empty(await storeB.LoadPendingAsync());
+            Assert.NotNull(await b.Accounts.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stored.Id));
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_RollBackTheSameRowAtTheSameTime_RollBackExactlyOnce(DatabaseProvider provider)
+    {
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            Guid botId = Guid.NewGuid();
+            Account stored = await storeA.CreateAsync(botId, NewAccount($"PBPROLL{round:D3}"));
+            using var gate = new ManualResetEventSlim(false);
+            Task<bool> Rollback(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.RollbackEmptyOwnerAsync(botId, stored.Id);
+            });
+            Task<bool> first = Rollback(storeA);
+            Task<bool> second = Rollback(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* a worker that lost a lock: it did not roll back */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully && t.Result));
+            Assert.Null(await b.Accounts.AsNoTracking().SingleOrDefaultAsync(x => x.Id == stored.Id));
+            Assert.Empty(await storeB.LoadPendingAsync());
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Provider_TwoWorkers_CreatingTheSameAccountNameAtTheSameTime_ExactlyOneWins(DatabaseProvider provider)
+    {
+        for (int round = 0; round < 4; round++)
+        {
+            await using var databases = new TestDatabases();
+            (AuthDbContext dbA, AuthDbContext dbB) = await ProviderWorkersAsync(databases, provider);
+            await using AuthDbContext a = dbA;
+            await using AuthDbContext b = dbB;
+            var storeA = new EfManagedPlayerbotProvisionStore(a);
+            var storeB = new EfManagedPlayerbotProvisionStore(b);
+            string name = $"PBPRACE{round:D3}";
+            using var gate = new ManualResetEventSlim(false);
+            Task<Account> Create(EfManagedPlayerbotProvisionStore store) => Task.Run(() =>
+            {
+                gate.Wait();
+                return store.CreateAsync(Guid.NewGuid(), NewAccount(name));
+            });
+            Task<Account> first = Create(storeA);
+            Task<Account> second = Create(storeB);
+            gate.Set();
+
+            try { await Task.WhenAll(first, second); }
+            catch (Exception) when (first.IsFaulted || second.IsFaulted) { /* the loser's refusal */ }
+            Assert.Equal(1, new[] { first, second }.Count(t => t.IsCompletedSuccessfully));
+            Account winner = await (first.IsCompletedSuccessfully ? first : second);
+            ManagedPlayerbotProvision only = Assert.Single(await storeA.LoadPendingAsync());
+            Assert.Equal(winner.Id, only.AccountId);
+            Assert.Equal(1, await b.Accounts.AsNoTracking().CountAsync(x => x.Username == name));
+        }
+    }
+
     private static Account NewAccount(string username, AccountSecurity security = AccountSecurity.Player, byte[]? sessionKey = null)
         => new() { Username = username, Salt = new byte[32], Verifier = new byte[32], Security = security, SessionKey = sessionKey };
 }

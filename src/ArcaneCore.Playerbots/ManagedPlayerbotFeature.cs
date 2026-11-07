@@ -2041,9 +2041,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 (string? racedHolder, bool racedProbeFailed) = await ProbeLiveOwnerAsync(scope.ServiceProvider, bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
                 if (racedHolder is not null || racedProbeFailed)
                 {
-                    try { await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false); }
+                    bool putBack = false;
+                    try
+                    {
+                        await PersistAsync(scope.ServiceProvider, beforeStart with { Revision = bot.Revision }, CancellationToken.None).ConfigureAwait(false);
+                        putBack = true;
+                    }
                     catch (ManagedRevisionConflictException) { }
-                    logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder ?? "(unknown, the check failed)");
+                    catch (Exception putBackEx) when (putBackEx is not OutOfMemoryException and not OperationCanceledException)
+                    {
+                        // The store refused the put-back too: the row stays Starting with DesiredEnabled as the start wrote it (so a row an operator had stopped can come back through the startup restore, which filters on DesiredEnabled only;
+                        // the same limit as the fault-row write below), and the race is still reported, never thrown.
+                        logger.LogFault(LogLevel.Warning, "playerbot.lifecycle", putBackEx, "Playerbot {BotId} login raced and its row could not be put back ({Type}: {Message}); the row stays as it was", bot.BotId, putBackEx.GetType().Name, putBackEx.Message);
+                    }
+                    if (putBack) logger.LogDebug("Playerbot {BotId} login refused: live on {Holder}; its row was put back", bot.BotId, racedHolder ?? "(unknown, the check failed)");
                     return new(false, LoginRaced, bot.BotId);
                 }
             }
@@ -2058,8 +2069,12 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (bot is not null)
             {
                 // An operator start that fails is reported and not retried; a quarantine retry that fails is one more fault.
-                (bool desired, string code) = quarantineRetry ? RecordFault(bot.BotId, "start-failed: " + ex.Message, session?.Player) : (false, "start-failed");
+                // The fault is planned before the write (the row stores its verdict) but counted only once the write did not lose to another writer.
+                FaultPlan? faultPlan = quarantineRetry ? PlanFault(bot.BotId, "start-failed: " + ex.Message) : null;
+                bool desired = faultPlan?.Desired ?? false;
+                string code = faultPlan?.ErrorCode ?? "start-failed";
                 bool faultWritten = false;
+                bool faultRowConflict = false;
                 try
                 {
                     bot = await PersistAsync(scope.ServiceProvider, bot with { DesiredEnabled = desired, State = ManagedPlayerbotState.Faulted, ErrorCode = code }, CancellationToken.None).ConfigureAwait(false);
@@ -2069,14 +2084,17 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 {
                     // Another writer owns the row: not a fault (as in the start's outer handler); its row stands.
                     WarnConflictOnce(bot.BotId, "start (fault row)");
+                    faultRowConflict = true;
                 }
                 catch (Exception persistEx) when (persistEx is not OutOfMemoryException and not OperationCanceledException)
                 {
                     // The store refuses the fault row too (a Starting row written earlier stays as it is): the failure is reported as a failed start like any other, never thrown, so a caller that counts
                     // attempts (the population's bounded retries) still counts it and its pass goes on.
-                    FaultLedger.Shared.Record("playerbot.lifecycle", persistEx);
-                    logger.LogWarning(persistEx, "Managed playerbot {BotId} start failed and its fault row could not be written ({Type}: {Message}); the registry row stays as it was", bot.BotId, persistEx.GetType().Name, persistEx.Message);
+                    logger.LogFault(LogLevel.Warning, "playerbot.lifecycle", persistEx, "Managed playerbot {BotId} start failed and its fault row could not be written ({Type}: {Message}); the registry row stays as it was", bot.BotId, persistEx.GetType().Name, persistEx.Message);
                 }
+                // Another writer owns the row: the same code as the start's outer conflict path. Nothing was counted (no fault, no quarantine entry, no quarantined/disabled anomaly) on any start kind, and no operation-fault anomaly.
+                if (faultRowConflict) return new(false, "managed-revision-conflict", bot.BotId);
+                if (faultPlan is { } plan) ApplyFault(plan, session?.Player);
                 if (faultWritten)
                 {
                     character = await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(bot.CharacterId, CancellationToken.None).ConfigureAwait(false);
@@ -4372,7 +4390,34 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private (bool Desired, string ErrorCode) RecordFault(Guid botId, string fault, Player? player = null, string? fallbackSubject = null)
     {
+        FaultPlan plan = PlanFault(botId, fault);
+        ApplyFault(plan, player, fallbackSubject);
+        return (plan.Desired, plan.ErrorCode);
+    }
+
+    /// <summary>The verdict of one more fault of a bot, computed without counting it (see <see cref="PlanFault"/>, <see cref="ApplyFault"/>).</summary>
+    private readonly record struct FaultPlan(Guid BotId, string Fault, long Now, int Count, bool Desired, string ErrorCode);
+
+    /// <summary>Compute what <see cref="RecordFault"/> would decide, with no side effect: the fault is not counted, no entry is created, nothing is reported.</summary>
+    private FaultPlan PlanFault(Guid botId, string fault)
+    {
         long now = ClockMs;
+        int prior = 0;
+        if (_quarantine.TryGetValue(botId, out Quarantine? existing))
+        {
+            lock (existing) prior = existing.Faults.Count(at => now - at < _options.FaultWindowSeconds * 1000L);
+        }
+
+        int count = prior + 1;
+        return count >= _options.MaxFaults
+            ? new(botId, fault, now, count, false, Code($"disabled after {count} faults: {fault}"))
+            : new(botId, fault, now, count, true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
+    }
+
+    /// <summary>Count the fault <paramref name="plan"/> describes: record it, schedule the retry (or drop the entry when it disables the bot) and report the anomaly.</summary>
+    private void ApplyFault(FaultPlan plan, Player? player = null, string? fallbackSubject = null)
+    {
+        (Guid botId, string fault, long now, int count) = (plan.BotId, plan.Fault, plan.Now, plan.Count);
         Quarantine quarantine = _quarantine.GetOrAdd(botId, static _ => new Quarantine());
         lock (quarantine)
         {
@@ -4389,8 +4434,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             string subject = quarantine.Subject ?? $"bot {botId:D}";
             quarantine.Faults.RemoveAll(at => now - at >= _options.FaultWindowSeconds * 1000L);
             quarantine.Faults.Add(now);
-            int count = quarantine.Faults.Count;
-            if (count >= _options.MaxFaults)
+            if (!plan.Desired)
             {
                 _quarantine.TryRemove(botId, out _);
                 logger.LogWarning("Playerbot {BotId} disabled after {Count} faults within {Window} s: {Fault}",
@@ -4410,7 +4454,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                         AnomalySeverity.Error,
                         origin: _world?.Identity);
                 }
-                return (false, Code($"disabled after {count} faults: {fault}"));
+                return;
             }
 
             long backoffMs = Math.Min(3_600_000L, (_options.FaultBackoffSeconds * 1000L) << Math.Min(count - 1, 20));
@@ -4432,9 +4476,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                     AnomalySeverity.Warning,
                     origin: _world?.Identity);
             }
-            return (true, Code($"quarantined (fault {count}/{_options.MaxFaults}): {fault}"));
         }
-
     }
 
     /// <summary>
@@ -4529,18 +4571,27 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             => (OnlyBotId is null || row.BotId == OnlyBotId) && (CreatedAtOrBeforeUnix is null || row.CreatedUnix <= CreatedAtOrBeforeUnix);
     }
 
-    /// <summary>Whole-process rate limit of <see cref="SweepStaleProvisionsAsync"/>, in milliseconds of <see cref="Environment.TickCount64"/> (tests lower it).</summary>
+    /// <summary>
+    /// Whole-process rate limit of the stale-row sweep, shared by <see cref="TakeProvisionSweepSlot"/> (the create path) and <see cref="SweepStaleProvisionsAsync"/> (the population pass): one run of either per
+    /// interval, in milliseconds of <see cref="ProvisionSweepClock"/> (tests lower it).
+    /// </summary>
     internal long ProvisionSweepIntervalMs { get; set; } = 60_000;
 
     private long _lastProvisionSweepMs = long.MinValue;
+
+    /// <summary>Test seam: the clock of the sweep's slot, in milliseconds (<see cref="Environment.TickCount64"/> in production).</summary>
+    internal Func<long> ProvisionSweepClock { get; set; } = static () => Environment.TickCount64;
+
+    /// <summary>Test seam: awaited by <see cref="SweepStaleProvisionsAsync"/> after its unlocked slot check and before it takes the lock (null in production).</summary>
+    internal Func<Task>? SweepAfterUnlockedCheckForTests { get; set; }
 
     /// <summary>
     /// Whether a split holder's create may run its stale-row sweep now: one run per <see cref="ProvisionSweepIntervalMs"/>, sharing the clock of <see cref="SweepStaleProvisionsAsync"/>, so a stale row that
     /// cannot be deleted costs a session once per interval and not once per create. Called under the operations lock (every create holds it), so the read-then-write cannot interleave with another create.
     /// </summary>
-    private bool TakeProvisionSweepSlot()
+    internal bool TakeProvisionSweepSlot()
     {
-        long now = Environment.TickCount64;
+        long now = ProvisionSweepClock();
         long last = Volatile.Read(ref _lastProvisionSweepMs);
         if (last != long.MinValue && now - last < ProvisionSweepIntervalMs) return false;
         Volatile.Write(ref _lastProvisionSweepMs, now);
@@ -4551,19 +4602,21 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// Split cluster, maintenance lease holder only: take the journal rows of dead creates (older than <see cref="ProvisionSweepGrace"/>), rate limited to one run per
     /// <see cref="ProvisionSweepIntervalMs"/>. The population pass calls it, so a holder that never creates itself (it owns no allowed map) still cleans up what a dead worker left.
     /// It runs under the operations lock like any create, but never waits for it: when an operation is running the sweep is skipped and the next pass tries again, so it cannot
-    /// block a pass behind a long create or deadlock with one. A failure is logged and never thrown: the pass goes on.
+    /// block a pass behind a long create or deadlock with one. It shares its once-per-interval clock with <see cref="TakeProvisionSweepSlot"/> (the create path's slot), so either one running defers the other. A failure is logged and never thrown: the pass goes on.
     /// </summary>
     internal async Task SweepStaleProvisionsAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled || !SplitScope || !HoldsMaintenanceLease || _stopping || _detaching || SplitBrainLatched) return; // a latched split brain issues no playerbot writes (a rollback deletes rows and characters)
-        long now = Environment.TickCount64;
+        long now = ProvisionSweepClock();
         long last = Volatile.Read(ref _lastProvisionSweepMs);
         if (last != long.MinValue && now - last < ProvisionSweepIntervalMs) return;
+        if (SweepAfterUnlockedCheckForTests is { } afterCheck) await afterCheck().ConfigureAwait(false);
         if (!await _operations.WaitAsync(0, cancellationToken).ConfigureAwait(false)) return;
         try
         {
             if (_stopping || _detaching || SplitBrainLatched) return;
             // Hardening: the check above ran before WaitAsync(0), so a whole create that took the slot and released the lock in between would be missed (a create still holding the lock makes WaitAsync(0) fail instead). Look again under the lock.
+            now = ProvisionSweepClock(); // re-read under the lock: the slot's clock must not be stamped with a value read before the wait
             long takenMeanwhile = Volatile.Read(ref _lastProvisionSweepMs);
             if (takenMeanwhile != long.MinValue && now - takenMeanwhile < ProvisionSweepIntervalMs) return;
             Volatile.Write(ref _lastProvisionSweepMs, now);
