@@ -136,12 +136,14 @@ public sealed class ItemTextImportTests : IDisposable
     }
 
     [Fact]
-    public void TheWorldSchemaStepCreatesBothTables_OnTheNextWorldVersion()
+    public void TheWorldSchemaStepCreatesBothTables_AtItsDeclaredWorldVersion()
     {
         IDataModule module = new ItemTextWorldDataModule();
 
         Assert.Equal(DatabaseComponent.World, module.Component);
-        Assert.Equal(WorldDbContext.Schema.CurrentVersion, module.SchemaVersion);
+        Assert.Equal(ItemTextWorldDataModule.Version, module.SchemaVersion);
+        Assert.True(WorldDbContext.Schema.CurrentVersion >= module.SchemaVersion);
+        Assert.Contains(WorldDbContext.Schema.Steps, s => s.Version == module.SchemaVersion);
         Assert.Equal(["item_enchantment_template", "page_text"], module.SchemaChanges.OfType<CreateTableChange>().Select(c => c.Table).Order(StringComparer.Ordinal));
     }
 
