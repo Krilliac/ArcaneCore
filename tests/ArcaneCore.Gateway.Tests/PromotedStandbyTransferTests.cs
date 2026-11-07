@@ -103,7 +103,7 @@ public sealed class PromotedStandbyTransferTests
         using var cts = new CancellationTokenSource(Deadline);
         await using Cluster cluster = await Cluster.StartPromotedAsync(cts.Token);
         await cluster.RelaunchThePromotedProcessAsActiveAsync(cts.Token);
-        await using WorldClient client = await cluster.EnterEastAsync("RELAUNCHSOURCE", "Relaunchsource", cts.Token);
+        await using WorldClient client = await cluster.EnterEastAsync("RELAUNCHSOURCE", "Relaunchsrc", cts.Token);
         ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
         await Cluster.WaitUntilAsync(() => Task.FromResult(Cluster.TeleportsOf(cluster.Promoted).ClusterFarRouter is not null), cts.Token);
         GatewayClusterFarTeleportRouter router = Cluster.RouterOf(cluster.Promoted);
@@ -128,7 +128,7 @@ public sealed class PromotedStandbyTransferTests
         using var cts = new CancellationTokenSource(Deadline);
         await using Cluster cluster = await Cluster.StartPromotedAsync(cts.Token);
         await cluster.RelaunchThePromotedProcessAsActiveAsync(cts.Token);
-        await using WorldClient client = await cluster.EnterKalimdorAsync("RELAUNCHTARGET", "Relaunchtarget", cts.Token);
+        await using WorldClient client = await cluster.EnterKalimdorAsync("RELAUNCHTARGET", "Relaunchtgt", cts.Token);
         ObjectGuid guid = ObjectGuid.Player((uint)cluster.CharacterId);
         await Cluster.WaitUntilAsync(() => Task.FromResult(Cluster.TeleportsOf(cluster.Kalimdor).ClusterFarRouter is not null), cts.Token);
         GatewayClusterFarTeleportRouter router = Cluster.RouterOf(cluster.Kalimdor);
@@ -442,6 +442,7 @@ public sealed class PromotedStandbyTransferTests
 
         private async Task<int> CreateCharacterOnMapAsync(WorldClient client, string name, uint mapId, CancellationToken token)
         {
+            Assert.InRange(name.Length, 2, 12); // the character name limit: a longer name is refused with CharNameTooLong (71) before any world is involved
             byte[] text = Encoding.ASCII.GetBytes(name);
             byte[] create = new byte[text.Length + 10];
             text.CopyTo(create, 0);
