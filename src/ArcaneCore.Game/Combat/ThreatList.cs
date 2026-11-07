@@ -305,8 +305,8 @@ public sealed partial class ThreatList
     }
 
     /// <summary>
-    /// Re-check one entry's online state (vmangos HostileReference::updateOnlineStatus, ThreatManager.cpp:128-149): a game
-    /// master target is offline, so is a target for which <see cref="ThreatRules.IsTargetUnreachable"/> holds. Moves the entry
+    /// Re-check one entry's online state (vmangos HostileReference::updateOnlineStatus, ThreatManager.cpp:128-149): a target for
+    /// which <see cref="ThreatRules.IsTargetUnreachable"/> holds (a game master, a taxi passenger) is offline. Moves the entry
     /// between the online and the offline list; an offline current victim is dropped (ThreatManager.cpp:526-543).
     /// </summary>
     public void UpdateOnlineStatus(Unit target)

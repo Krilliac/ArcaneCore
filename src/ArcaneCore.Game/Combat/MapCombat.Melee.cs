@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
@@ -138,6 +139,37 @@ public sealed partial class MapCombat
         CombatPackets.SendToSet(attacker, WorldOpcode.SmsgAttackstop,
             CombatPackets.AttackStop(attacker.Guid, victim.Guid, attacker.Health == 0));
         return true;
+    }
+
+    /// <summary>
+    /// vmangos Unit::CombatStopWithPets without the cast interrupt (Unit.cpp:4657-4667): the unit and every unit it controls (its pet,
+    /// its guardians and the unit it charms, CONTROLLED_PET | CONTROLLED_GUARDIANS | CONTROLLED_CHARM) leave all fighting. A controlled
+    /// unit that is not in this map is skipped.
+    /// </summary>
+    public void CombatStopWithPets(Unit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        CombatStop(unit);
+
+        ObjectGuid petGuid = unit.PetGuid;
+        if (!petGuid.IsEmpty && _map.FindObject(petGuid) is Unit pet)
+        {
+            CombatStop(pet);
+        }
+
+        if (_map.Pets is { } pets)
+        {
+            foreach (Creature guardian in pets.GuardiansOf(unit).ToArray())
+            {
+                CombatStop(guardian);
+            }
+        }
+
+        ObjectGuid charmGuid = unit.CharmGuid;
+        if (!charmGuid.IsEmpty && _map.FindObject(charmGuid) is Unit charm)
+        {
+            CombatStop(charm);
+        }
     }
 
     /// <summary>
@@ -517,10 +549,10 @@ public sealed partial class MapCombat
         var creatureVictim = victim as ICombatCreature;
         var creatureAttacker = attacker as ICombatCreature;
         // vmangos Unit::GetUnitDodgeChance / GetUnitParryChance / GetUnitBlockChance (Unit.cpp:2474-2550): nothing while stunned
-        // (UNIT_STATE_STUNNED proxy) or casting a non-melee spell (IsNonMeleeSpellCasted(false)), and a totem never defends.
+        // (UNIT_STATE_STUNNED proxy) or casting a non-melee spell (IsNonMeleeSpellCasted(false)). A totem's own exemptions are applied
+        // per chance below: dodge and block test Creature::IsTotem (the summoned subtype), parry tests the creature type TOTEM.
         bool victimCanDefend = (victim.UnitFlags & UnitFlags.Stunned) == 0
-            && Environment.MeleeSpells?.IsNonMeleeSpellCasted(victim) != true
-            && !IsTotem(victim);
+            && Environment.MeleeSpells?.IsNonMeleeSpellCasted(victim) != true;
 
         SpellSystem? auras = SpellMitigation;
         bool ranged = attackType == WeaponAttackType.RangedAttack;
@@ -537,9 +569,12 @@ public sealed partial class MapCombat
             else
             {
                 // A creature: 5% plus its MOD_DODGE/PARRY/BLOCK_PERCENT auras, never negative (Unit.cpp:2484-2486, 2504-2510, 2545-2549).
-                dodge = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModDodgePercent) ?? 0));
-                parry = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModParryPercent) ?? 0));
-                block = Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModBlockPercent) ?? 0));
+                // A summoned totem (Creature::IsTotem) has no dodge or block (Unit.cpp:2481, 2544); parry is withheld for creature type TOTEM
+                // alone (Unit.cpp:2501-2508), so a summoned totem of another type still parries and a TOTEM-typed creature still dodges and blocks.
+                bool summonedTotem = Totems.TotemQuery.IsTotem(victim);
+                dodge = summonedTotem ? 0f : Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModDodgePercent) ?? 0));
+                parry = Spells.Rules.CrowdControl.CcState.IsTotem(victim) ? 0f : Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModParryPercent) ?? 0));
+                block = summonedTotem ? 0f : Math.Max(0f, 5f + (auras?.GetTotalAuraModifier(victim, AuraType.ModBlockPercent) ?? 0));
             }
         }
 
@@ -589,9 +624,6 @@ public sealed partial class MapCombat
             BlockChance = block,
         };
     }
-
-    /// <summary>vmangos Creature::IsTotem (a summoned totem) or a creature of type TOTEM (GetUnitParryChance tests the type).</summary>
-    private static bool IsTotem(Unit unit) => Totems.TotemQuery.IsTotem(unit) || Spells.Rules.CrowdControl.CcState.IsTotem(unit);
 
     /// <summary>
     /// vmangos Unit::CalculateMeleeDamage for a white swing: weapon damage, armor, the hit

@@ -281,7 +281,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             }
         }
         if (player.IsAlive && mount != 0 && Flights?.ResumeFlight(player, route, mount,
-            (p, cost) => services.GetService<QuestNpcFeature>()?.Services.TryCharge(p, cost) == true) == true)
+            (p, cost) => services.GetService<QuestNpcFeature>()?.Services.ChargeFlightLeg(p, cost) == true) == true)
         {
             return;
         }

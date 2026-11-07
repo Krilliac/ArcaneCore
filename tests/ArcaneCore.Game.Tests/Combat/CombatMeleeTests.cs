@@ -49,6 +49,22 @@ public sealed class CombatMeleeTests
     }
 
     [Fact]
+    public void SetGameMaster_On_StopsTheCombatTheGameMasterWasIn()
+    {
+        // vmangos Player::SetGameMaster(on) ends with CombatStopWithPets() (Player.cpp:2640).
+        var t = TwoPlayers();
+        using WorldRuntime world = t.World;
+        Assert.True(t.Map.Combat.Attack(t.A, t.V));
+        Assert.Same(t.V, t.A.Combat.Victim);
+
+        t.A.SetGameMaster(true);
+
+        Assert.Null(t.A.Combat.Victim);
+        Assert.False(t.A.Combat.IsInCombat);
+        Assert.DoesNotContain(t.A, t.V.Combat.Attackers);
+    }
+
+    [Fact]
     public void Swing_DealsDamage_SendsAttackerStateUpdate_AndRestartsTheTimer()
     {
         var t = TwoPlayers();

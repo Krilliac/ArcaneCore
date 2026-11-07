@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Combat.Threat;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Locomotion;
@@ -340,6 +341,7 @@ public sealed partial class Player : Unit
             Flags |= PlayerFlags.Gm;
             FactionTemplate = GameMasterFactionTemplate;
             HostileRefs.SetOnlineOfflineState(this, false); // vmangos Player.cpp:2639: every threat list holding the GM parks the entry offline
+            Map?.Combat.CombatStopWithPets(this); // Player.cpp:2640: CombatStopWithPets()
         }
         else
         {

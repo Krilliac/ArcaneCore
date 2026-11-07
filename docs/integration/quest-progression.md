@@ -135,10 +135,9 @@ No GPL text was copied.
 - Source items (`SrcItemId`/`SrcItemCount`) are given on accept. A full inventory
   refuses the accept with the equip error. They are taken back on abandon (bank
   included) unless the quest also requires that item.
-- `AcceptableQuest` widens the old journal-only gate to quest types 0/1/21/62/81.
-  These stay denied: `SrcSpell`, `ReqSource*`, PartyAccept, AutoRewarded, StayAlive,
-  reputation objectives without a reputation owner, and exploration quests without a
-  relation.
+- `AcceptableQuest` is now the adapter gate: quest types and StayAlive are no longer
+  refusals, and a quest is withheld only when a behaviour it needs has no provider
+  (the table in [quests-advanced.md](quests-advanced.md)).
 
 ## Allowlist (superseded by wave 4: see quests-advanced.md)
 Since the advanced-quests lane the allowlist is only the Quests:RewardMode = AllowlistOnly fallback; by default every quest
@@ -212,8 +211,8 @@ persisted). Fixing this needs a reserved characters migration that adds `xp` (an
   login reconcile fixes counters, but an orphaned source item stays in the inventory.
 - Repeatable "turn in without accepting" (`CanCompleteRepeatableQuest` from the
   giver's ender list) isn't implemented.
-- These remain denied: `SrcSpell`, `ReqSource*`, PartyAccept, StayAlive and the PvP
-  quest type. Timed quests keep the existing quest-log timer.
+- Timed quests keep the existing quest-log timer. A quest is withheld only when a
+  behaviour it needs has no provider (the table in [quests-advanced.md](quests-advanced.md)).
 - Area trigger relations come from config only, with no world-DB table/loader yet.
 - Gameobject-use credit is wired (see above). Quest-giver gameobjects (`gameobject_questrelation` rows are stored but not consumed by the quest area) are not.
 - The native mock-client scenario isn't extended. It still passes, but there are no

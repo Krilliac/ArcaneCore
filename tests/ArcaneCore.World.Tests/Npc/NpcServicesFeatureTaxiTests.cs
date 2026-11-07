@@ -11,6 +11,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
@@ -167,6 +168,31 @@ public sealed class NpcServicesFeatureTaxiTests
 
         Assert.True(rig.Pets.HasTemporarilyUnsummonedPet(warlock)); // no demon was spawned on the map the owner left
         Assert.True(warlock.PetGuid.IsEmpty);
+    }
+
+    [Fact]
+    public async Task ResumedFlight_ChargesALaterLegAtThePurse_ItNeverRefusesAndTheFlightGoesOn()
+    {
+        // vmangos FlightPathMovementGenerator::Update charges a later leg with ModifyMoney(-cost), which clamps at zero (Player.h:1025-1031):
+        // a character that cannot pay the second leg's fare after a relog pays what it has and still reaches the last node.
+        await using var rig = await Rig.CreateAsync(questNpcs: true);
+        CharacterRecord stored = Assert.IsType<CharacterRecord>(await rig.Characters.GetByIdAsync(rig.CharacterId));
+        stored.X = 32;
+        stored.Z = 90;
+        stored.Money = 20;
+        await rig.Store.SaveAsync(rig.CharacterId, new TaxiFlightRoute([1, 2, 3], [10, 11], [0, 50]));
+
+        Player relogged = await rig.LoadAsync();
+        rig.Enter(relogged);
+        QuestNpcServices quests = rig.Services.GetRequiredService<QuestNpcFeature>().Services;
+        quests.CompleteLoad(quests.Track(relogged), CharacterQuestData.Empty);
+        Assert.True(rig.Npcs.Flights!.IsFlying(relogged));
+        Assert.Equal(20u, relogged.Money);
+
+        rig.FlyUntilLanded(relogged);
+
+        Assert.Equal((64f, 64f), (relogged.X, relogged.Y));
+        Assert.Equal(0u, relogged.Money);
     }
 
     [Fact]
@@ -378,7 +404,8 @@ public sealed class NpcServicesFeatureTaxiTests
         /// <param name="drain">The shutdown drain, if the test needs one.</param>
         /// <param name="withSpells">When true, a <see cref="SpellFeature"/> is the spell service the feature finds.</param>
         /// <param name="petCreatures">When set, a <see cref="SummonService"/> over these creatures is the service the feature finds (<see cref="Pets"/>).</param>
-        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null, bool withSpells = false, CreatureContent? petCreatures = null)
+        /// <param name="questNpcs">When true, a <see cref="QuestNpcFeature"/> is built first and takes the taxi content (see below).</param>
+        public static async Task<Rig> CreateAsync(ShutdownDrain? drain = null, bool withSpells = false, CreatureContent? petCreatures = null, bool questNpcs = false)
         {
             var store = new FakeTaxiStore();
             var characters = new InMemoryCharacterStore();
@@ -402,6 +429,11 @@ public sealed class NpcServicesFeatureTaxiTests
             if (petCreatures is not null)
             {
                 collection.AddSingleton(new SummonService(systems: _ => petSystem));
+            }
+
+            if (questNpcs)
+            {
+                collection.AddSingleton(sp => new QuestNpcFeature(sp, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<QuestNpcFeature>.Instance));
             }
 
             ServiceProvider services = collection
@@ -429,8 +461,12 @@ public sealed class NpcServicesFeatureTaxiTests
                 world.GetMap(0).AddUpdater(petSystem);
             }
 
+            // The quest feature is built first: its ctor extends the NPC feature with an empty store. NpcServicesFeature.Node prefers the
+            // quest feature's store, so that store takes the taxi content too, and Extend then leaves Flights on the same content.
+            QuestNpcFeature? questFeature = questNpcs ? services.GetRequiredService<QuestNpcFeature>() : null;
             NpcServicesFeature npcs = services.GetRequiredService<NpcServicesFeature>();
             npcs.Attach(world);
+            questFeature?.Services.ReplaceNpcs(new NpcStore(TaxiContent));
             npcs.Extend(new QuestNpcDependencies(), new NpcStore(TaxiContent));
             return new Rig(services, store, characters, saves, world, npcs, record.Id);
         }

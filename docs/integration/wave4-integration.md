@@ -23,7 +23,7 @@ that was not a local branch with commits; no branch was empty or missing.
 | 14 | vw5-crafting-professions | yes | |
 | 15 | vw5-reputation-factions | yes | |
 | 16 | vw5-honor-pvp-ranks | yes | worktree was clean at merge time |
-| 17 | vw5-battlegrounds | yes | pure code (state machine, packets, queue); nothing constructs the manager yet |
+| 17 | vw5-battlegrounds | yes | pure code at merge (state machine, packets, queue); the rest was delivered since (see open questions) |
 | 18 | vw5-creature-movement-spawns | yes | |
 | 19 | vw5-game-events-weather | yes | worktree was clean at merge time |
 | 20 | vw5-quests-advanced | yes | |
@@ -85,8 +85,8 @@ Tips after integration: **Characters 25, World 28, Auth 3**. The lane docs that 
 * **Spell casting (Prepare/AddCooldown/cast)**: ranged auto-repeat (`autoRepeatShot`), crafting (`castItem`, item cooldown category), spell
   mods (`ModScope`, cooldown mod) all compose; `AddCooldown` uses the picked item cooldown's category with the cooldown spell mod applied.
 * **ReputationChanged**: reputation lane and quests-advanced both implemented `QuestNpcServices.ReputationChanged`; kept the quests-advanced
-  (status filtered) version. The reputation feature calls it directly; the quests lane's `QuestReputationBinding` finds no
-  `IReputationChangeSource` and logs one information line (see open questions).
+  (status filtered) version. The reputation feature calls it directly; the quests lane's `QuestReputationBinding` was a dead
+  subscriber and has been removed (see open questions).
 * **Evade health snap**: creature-movement-spawns (`Creatures:Movement:EvadeRestoresFullHealth`) and threat (a top-level duplicate)
   added the same switch. One switch remains: `Creatures:Movement:EvadeRestoresFullHealth` (default false = retail). The threat lane's
   `EvadeResetsAuras` stays.
@@ -103,10 +103,9 @@ Tips after integration: **Characters 25, World 28, Auth 3**. The lane docs that 
 ## Aura registration and crit mods
 
 No aura type is registered twice (`SpellSystem.RegisterModules` would throw; the full World and Game suites compose every module and pass).
-Aura 52 (MOD_CRIT_PERCENT) is registered by nobody: the aura lane keeps it "Referenced" (spell crit reads the total through
-`GetTotalAuraModifier`, so spell crit is wired once). The character-sheet and melee/ranged crit field (`PlayerStatSystem.UpdateCritPercentage`
-passes `flatMod = 0`) is still not wired; retail needs the weapon-dependent `_ApplyWeaponDependentAuraCritMod` path, which belongs to the
-unscheduled aura-stat ledger. Open item.
+Aura 52 (MOD_CRIT_PERCENT) was left unregistered at merge time; that has since been closed (see open questions). `CombatStatAuras` registers it, and
+`PlayerStatSystem.UpdateCritPercentage` builds the melee and ranged crit fields from `GenericCrit()` plus `WeaponCrit(...)`, which covers the
+weapon-dependent `_ApplyWeaponDependentAuraCritMod` path.
 
 ## RED proof of the cx-sec-fixes tests (mutate, run, restore)
 
@@ -122,19 +121,20 @@ At integration, setting the `MaxListedEntries` default to 0 did **not** fail the
 
 Config-gated and default-off or retail: `Forms:ResetFistAttackTimeOnFormLoss` (off), `Creatures:Movement:EvadeRestoresFullHealth` (off),
 `Combat:CastingConsumesSwing` (off), `Combat:CastResetsMeleeSwing` (retail on), honor `MaintenanceMode` Startup (Live is opt-in),
-`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off), `Auras:ProcEngineBreaksDamageAuras` (off: no proc engine exists; Wyvern Sting and Prowl are exempted by spell id instead).
+`Reputation:SendForcedReactions` (off), `World:GameEvents:ManualStartLengthUnit` (Seconds), `Creatures:ImplicitEventAi` (off).
+
+`Auras:ProcEngineBreaksDamageAuras` is not a deviation and not default-off: its default is true, the vmangos `checkProcFlags` rule, and the proc engine is present (`src/ArcaneCore.Game/Spells/Procs/`, docs/areas/procs.md). The damage break skips auras whose spell has proc flags, which spares Wyvern Sting; false removes those auras on the damage break too. No spell is special-cased by id.
 
 Not switchable (flagged for a decision; none is default-on non-retail by intent, but these are unswitched deviations):
 
 * Pet and totem casts never spend the owner's spell-mod charges (retail leaves a stuck -1 mod); `PassiveReapply` depth cap of 2.
-* `EffectHealthLeech` and the periodic leech tick treat an unset multiple value as 1.0 (vmangos heals 0).
+* `EffectHealthLeech` treats an unset multiple value as 1.0 (vmangos heals 0, `SpellEffects.cpp:1863`). The periodic leech tick matches vmangos (`SpellAuras.cpp:5979`).
 * Closed: `SpellInfo.HasCastTimeEntry` makes `GetCastTime` treat the all-zero cast time row as present, so Throw and Multi-Shot are 500 ms casts (the +500 ms ranged slot time).
-* With `Auras:ProcEngineBreaksDamageAuras=false` (no proc engine exists) the damage break still removes auras that carry proc flags so Polymorph, Sap, Gouge and Freezing Trap stay breakable; Wyvern Sting and Prowl (`SpellSystem.DamageBreakExemptSpells`) are spared, as vmangos does through `checkProcFlags`. Set the key once a proc engine exists.
 * Enchant spells fail closed with no `SpellItemEnchantment.dbc` or `Enchanting:Enabled=false` (no retail counterpart; safe direction).
 * Reputation: hardened packet length checks, kill credit by killer's group (no loot-tap primitive), forced reactions not sent by default.
 * Honor: tap model simplified, Live mode limits (documented in docs/areas/honor.md).
 * Battlegrounds: `SMSG_BATTLEFIELD_STATUS` status is a u32 (vmangos and mangos-classic) while wow_messages says u8; no winner for a premature
-  finish with no winner; only the code half is delivered (S3, S5, S6, S7 not built).
+  finish with no winner.
 * Combat: float32 attack time truncation reproduced on purpose.
 
 Config-defaulted-on behaviours worth a second look because their default is "on": `Creatures:Respawn:DrawDelayAtLoad` (true),
@@ -142,20 +142,35 @@ Config-defaulted-on behaviours worth a second look because their default is "on"
 
 ## Open questions (lanes' plus integration)
 
-* Aura 52 crit percent on the character sheet and weapon-dependent crit mods (above).
-* `QuestReputationBinding` logs "No reputation change source is registered" at startup because the reputation lane calls the quest service
-  directly; either register `ReputationService` as the source and drop the direct call, or remove the binding.
-* Per-entry `.reload creature_template <entry>` is not supported (no entry-aware contract on `IContentReloadable`).
-* Spell mods: should pet/totem casts spend charges, should `PassiveReapply` be uncapped, should the leech multiplier follow vmangos?
-* Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest.
-* Battlegrounds S3/S5/S6/S7 need the integrator's schema numbers (now free: Characters 26+, World 29+) and a composite map resolver.
-* Reputation: wire widths (u16 versus u32 slots, forced reactions) need a client capture; forced reactions across login unproven.
-* Graveyards: durability exemption `NO_DURABILITY_LOSS` not modelled; resurrection request packet layout vs real client unverified.
-* Warlock-mage: `PaysPerSecondCost` is a heuristic verified on Health Funnel only. (The dropped invisibility rule's group-mate and Hunter's Mark clauses were compared against `StealthVisibilityRule` at release review and are present; its owner/charmer clause was missing and is now restored.)
-* Aura lane: real Spell.dbc flags of Polymorph, Sap, Gouge, Freezing Trap, Wyvern Sting, Prowl need checking.
-* Hot reload: `LootService.Content`/`Generator` are plain fields swapped on the world thread; make them volatile if a session thread reads them.
-* Threat: `Player.SetGameMaster` does not call `CombatStopWithPets`; no taxi producer for the offline threat state.
-* druid-forms: the Transform guard in shapeshift display code has no test.
+Each item was re-checked against the code at the uc2 integration branch (Y96). Resolved items say how; the rest are real limits.
+
+* Aura 52 crit percent on the character sheet: resolved. `CombatStatAuras.ApplyCrit` registers MOD_CRIT_PERCENT (vmangos `HandleAuraModCritPercent`) and
+  the crit fields take the generic and the weapon-fitting amounts (`AuraSupportBaseline` lists it as a handler).
+* `QuestReputationBinding`: removed. The reputation feature calls `QuestNpcServices.ReputationChanged` directly (one delivery path), nothing registers an
+  `IReputationChangeSource` in the container, and the binding only ever logged "No reputation change source is registered" at startup.
+* Per-entry `.reload creature_template <entry>` (and gameobject_template): the entry is accepted and the whole table is reloaded, a superset of vmangos'
+  single-template reload (`ServerCommands.cpp:1758-1785`); the reply says so and the entry is no longer taken for the reason text. An entry-aware
+  `IContentReloadable` contract is not built: a full reload is the stricter result.
+* Spell mods: `EffectHealthLeech` deviates from vmangos, which uses the raw `EffectMultipleValue` (`SpellEffects.cpp:1863`; unset heals 0), while
+  `SpellSystem.Combat.cs` substitutes 1.0 when it is not above 0; the periodic leech matches vmangos (`SpellAuras.cpp:5979`, `> 0 ? value : 1`). The effect
+  deviation is unswitched and awaits a developer decision (`docs/areas/spell-mods.md`). Whether pet/totem casts should spend the owner's charges and
+  whether `PassiveReapply` should be uncapped are recorded there as unswitched deviations awaiting a developer decision (neither retail behaviour is a sensible default).
+* Ranged: SpellRange.dbc numbers unverified, projectile flight time (S09) not built, ON_EQUIP engine owner, real-client playtest (a real client is needed).
+* Battlegrounds S3, S5, S6 and S7: delivered since (`BattlegroundFeature`, `CharacterBattlegroundDataModule`); the schema numbers were assigned in merge order.
+* Reputation wire widths (u16 versus u32 slots) and forced reactions across login need a client capture. Nothing can settle this without one.
+* Graveyards: the death durability exemption (`SPELL_ATTR_EX3_NO_DURABILITY_LOSS`, vmangos `Unit.cpp:1196`) is modelled in `MapCombat.DeathDurability.cs`
+  and tested in `DeathDurabilityTests`. The resurrection request packet layout against a real client is still unverified.
+* Warlock-mage `PaysPerSecondCost`: checked against the vmangos spell table (build 5875), where every spell with both `SPELL_ATTR_EX2_NO_TARGET_PER_SECOND_COSTS`
+  and a per-second cost is a Health Funnel rank (755, 3698-3700, 11693-11695 and the build 4222 row 16569). The heuristic covers all of them.
+* Aura lane damage-break flags, checked in the vmangos spell table: Polymorph, Sap, Gouge and Freezing Trap Effect carry the damage interrupt flag and no
+  proc flags, so they break even while the break skips auras with proc flags; Wyvern Sting (19386, 24132, 24133) carries both and is spared by that rule alone;
+  Prowl (5215, 6783, 9913) has no proc flags and interrupt flags 0x3C07, which include the damage bit 0x2, so it breaks on damage like Polymorph, as in vmangos.
+  No spell is special-cased by id (`DamageBreakExemptSpells` was removed). Nothing to change.
+* Hot reload: `LootService` now holds `Content` and `Generator` in volatile fields.
+* Threat: `Player.SetGameMaster(true)` now ends combat for the player, its pet, its guardians and the unit it charms (vmangos `CombatStopWithPets`, `Player.cpp:2640`, `Unit.cpp:4663-4667`;
+  `MapCombat.CombatStopWithPets`, shared with the duel service; test `PetAiTests.SetGameMaster_On_StopsThePetTheGuardiansAndTheCharmToo`), and a taxi flight parks the player offline in every threat list and brings it back on landing (`WaypointMovementGenerator.cpp:394, 366-368`).
+  Limits: a GM stays offline in the threat lists after landing, and a player who is logging out is brought back online by the landing (vmangos gates that on an empty taxi); both are harmless because the player is leaving or the GM is untargetable, and neither has a switch.
+* druid-forms: the Transform guard has a test (`FormDisplayTests.RemovingFormUnderTransform_PreservesTransformAndRestoresNative`, both orders).
 
 ## Release notes
 
@@ -170,7 +185,7 @@ Config-defaulted-on behaviours worth a second look because their default is "on"
   each allocated schema version 21 for their own tables; the integrated numbers are Characters 21-25 and World 21-28 (table above). A database that
   applied one of those lane branches records 21 for a different step and will not line up. Recreate it, or run the upgrader against a copy and review
   the drift report. A release database upgraded from main (Characters 20, World 20) is not affected.
-* **New switch:** `Auras:ProcEngineBreaksDamageAuras` (default false). **New GM-visible default:** `Bans:MaxListedEntries` = 200 (0 restores the
+* **New switch:** `Auras:ProcEngineBreaksDamageAuras` (default true, the vmangos rule; false also removes auras with proc flags on the damage break). **New GM-visible default:** `Bans:MaxListedEntries` = 200 (0 restores the
   unbounded retail listing).
 
 ## Verification (local, Release, through the throttle `dn.ps1`)
