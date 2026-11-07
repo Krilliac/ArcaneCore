@@ -24,11 +24,23 @@ public sealed record BattlegroundPortCommand(BattlegroundPortRequest Request) : 
 /// <summary>CMSG_BATTLEFIELD_STATUS: poll the queue slots.</summary>
 public sealed record BattlegroundStatusCommand(ObjectGuid Player, uint Level) : BattlegroundCommand;
 
+/// <summary>
+/// CMSG_BATTLEMASTER_HELLO of a player on a node that holds no queue state: the holder answers with the client instance ids of the running matches of <paramref name="Type"/>
+/// in <paramref name="Bracket"/> (<see cref="BattlegroundListNotice"/>). <paramref name="Source"/> is the battlemaster, echoed back for the packet.
+/// </summary>
+public sealed record BattlegroundListCommand(ObjectGuid Player, ObjectGuid Source, BattlegroundType Type, byte Bracket) : BattlegroundCommand;
+
 /// <summary>A player entered the world on the worker: the holder learns its team, level and deserter state (group queueing needs them) and where it is served.</summary>
 public sealed record BattlegroundLoginCommand(BattlegroundMember Member) : BattlegroundCommand;
 
 /// <summary>A player left the world on the worker: its queue entries go.</summary>
 public sealed record BattlegroundLogoutCommand(ObjectGuid Player) : BattlegroundCommand;
+
+/// <summary>
+/// The hub saw no sign of a worker for its time to live (the worker crashed or lost its link for good): every player the holder serves for it is logged out, so no queue slot or
+/// invitation outlives the worker. The worker's id is the command's sender id. Produced by the hub, never by a worker.
+/// </summary>
+public sealed record BattlegroundWorkerGoneCommand : BattlegroundCommand;
 
 /// <summary>A message for a player served by another worker (holder to worker). Immutable.</summary>
 public abstract record BattlegroundNotice(ObjectGuid Player);
@@ -36,6 +48,9 @@ public abstract record BattlegroundNotice(ObjectGuid Player);
 /// <summary>SMSG_BATTLEFIELD_STATUS for a queue slot.</summary>
 public sealed record BattlegroundStatusNotice(ObjectGuid Player, uint QueueSlot, BattlegroundStatusSubject Subject, BattlegroundStatus Status, uint Time1, uint Time2)
     : BattlegroundNotice(Player);
+
+/// <summary>SMSG_BATTLEFIELD_LIST content from the holder: the map, the bracket and the client instance ids of its running matches (the worker builds the packet).</summary>
+public sealed record BattlegroundListNotice(ObjectGuid Player, ObjectGuid Source, uint MapId, byte Bracket, IReadOnlyList<uint> InstanceIds) : BattlegroundNotice(Player);
 
 /// <summary>SMSG_GROUP_JOINED_BATTLEGROUND.</summary>
 public sealed record BattlegroundGroupJoinedNotice(ObjectGuid Player, uint Result) : BattlegroundNotice(Player);
@@ -154,9 +169,27 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
                 manager.PlayerLoggedOut(logout.Player);
                 break;
 
+            case BattlegroundWorkerGoneCommand:
+                if (remote)
+                {
+                    DropWorker(workerId, manager);
+                }
+
+                break;
+
             case BattlegroundStatusCommand status:
                 Touch(workerId, status.Player, remote);
                 manager.SendStatusReports(status.Player, status.Level);
+                break;
+
+            case BattlegroundListCommand list:
+                Touch(workerId, list.Player, remote);
+                // A command of the holder's own node is answered by its feature from the local manager; only a remote player gets the notice.
+                if (remote && manager.TemplateOf(list.Type) is { } template)
+                {
+                    TryNotify(list.Player, () => new BattlegroundListNotice(list.Player, list.Source, template.MapId, list.Bracket, manager.ClientInstanceIds(list.Type, list.Bracket)));
+                }
+
                 break;
 
             case BattlegroundPortCommand port:
@@ -178,6 +211,17 @@ internal sealed class BattlegroundClusterQueue(IBattlegroundManagerHost local, A
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>Log out every remote player this holder serves for a worker that is gone, so its queue slots and invitations are released.</summary>
+    private void DropWorker(string workerId, BattlegroundManager manager)
+    {
+        List<ObjectGuid> gone = [.. _players.Where(p => p.Value.WorkerId == workerId).Select(p => p.Key)];
+        foreach (ObjectGuid player in gone)
+        {
+            _players.Remove(player);
+            manager.PlayerLoggedOut(player);
         }
     }
 
@@ -325,6 +369,8 @@ internal sealed class BattlegroundWorkerClient(string workerId, IBattlegroundHol
     public void Port(BattlegroundPortRequest request) => holder.Submit(WorkerId, new BattlegroundPortCommand(request));
 
     public void Poll(ObjectGuid player, uint level) => holder.Submit(WorkerId, new BattlegroundStatusCommand(player, level));
+
+    public void RequestList(ObjectGuid player, ObjectGuid source, BattlegroundType type, byte bracket) => holder.Submit(WorkerId, new BattlegroundListCommand(player, source, type, bracket));
 
     public void Login(BattlegroundMember member) => holder.Submit(WorkerId, new BattlegroundLoginCommand(member));
 

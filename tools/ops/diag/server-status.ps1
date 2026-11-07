@@ -277,7 +277,7 @@ $servicesList = @(
 $splitNodes = @(
     @{ N = 'worker:EK';        P = $SplitNodePortBase;       Role = 'map 0 (EK)' },
     @{ N = 'worker:Kalimdor';  P = $SplitNodePortBase + 1;   Role = 'map 1 (Kalimdor)' },
-    @{ N = 'worker:instances'; P = $SplitNodePortBase + 2;   Role = '28 instance/BG maps' },
+    @{ N = 'worker:instances'; P = $SplitNodePortBase + 2;   Role = '33 instance/BG maps' },
     @{ N = 'gateway';          P = $SplitNodePortBase + 3;   Role = 'session router' },
     @{ N = 'social';           P = $SplitNodePortBase + 4;   Role = 'presence & chat' },
     @{ N = 'coordinator';      P = $SplitNodePortBase + 5;   Role = 'economy & instances' },

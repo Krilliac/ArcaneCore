@@ -698,7 +698,10 @@ internal static class PresenceWireCodec
 
             case PresenceOp.BattlegroundTake:
             {
-                BattlegroundTakeResult taken = service.Battlegrounds.Take(r.ReadString());
+                string takeNode = r.ReadString();
+                // The preferred flag was appended after the first release: a request without it is a node with no gateway preference.
+                bool preferred = r.BaseStream.Position < r.BaseStream.Length && r.ReadBoolean();
+                BattlegroundTakeResult taken = service.Battlegrounds.Take(takeNode, preferred);
                 return EncodeReply(w =>
                 {
                     w.Write(taken.IsHolder);

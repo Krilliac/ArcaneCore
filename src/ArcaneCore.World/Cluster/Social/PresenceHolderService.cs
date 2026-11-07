@@ -94,6 +94,8 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
 
     public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => Battlegrounds.Take(nodeId);
 
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred) => Battlegrounds.Take(nodeId, preferred);
+
     public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices) => Battlegrounds.Post(nodeId, notices);
 
     public IReadOnlyList<ArcaneCore.World.Battlegrounds.BattlegroundNotice> DrainBattlegroundNotices(string workerId) => Battlegrounds.Drain(workerId);

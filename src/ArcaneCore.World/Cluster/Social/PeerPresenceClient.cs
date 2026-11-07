@@ -86,10 +86,16 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
             },
             static r => r.ReadBoolean());
 
-    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId)
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId) => TakeBattlegroundCommands(nodeId, preferred: false);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred)
         => Send(
             PresenceOp.BattlegroundTake,
-            w => w.Write(nodeId),
+            w =>
+            {
+                w.Write(nodeId);
+                w.Write(preferred);
+            },
             static r =>
             {
                 bool isHolder = r.ReadBoolean();
@@ -356,6 +362,9 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
 
     public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId)
         => holdsSocial() ? local.TakeBattlegroundCommands(nodeId) : Remote.TakeBattlegroundCommands(nodeId);
+
+    public BattlegroundTakeResult TakeBattlegroundCommands(string nodeId, bool preferred)
+        => holdsSocial() ? local.TakeBattlegroundCommands(nodeId, preferred) : Remote.TakeBattlegroundCommands(nodeId, preferred);
 
     public bool PostBattlegroundNotices(string nodeId, IReadOnlyList<BattlegroundQueuedNotice> notices)
         => holdsSocial() ? local.PostBattlegroundNotices(nodeId, notices) : Remote.PostBattlegroundNotices(nodeId, notices);

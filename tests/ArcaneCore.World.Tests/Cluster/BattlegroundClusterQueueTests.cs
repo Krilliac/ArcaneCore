@@ -1,7 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
@@ -325,6 +324,70 @@ public sealed class BattlegroundClusterQueueTests
 
         // The return point each worker sent with the join was stored for its players.
         Assert.Equal(4, rig.Local.EntryPoints.Count);
+    }
+
+    [Fact]
+    public void ABattlefieldListRequest_IsAnsweredWithTheHoldersInstanceIds_ToTheAskingWorkerOnly()
+    {
+        var rig = new Rig();
+        Battleground first = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        Battleground second = Assert.IsAssignableFrom<Battleground>(rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5));
+        ObjectGuid master = ObjectGuid.Player(77);
+        rig.A.Login(new BattlegroundMember(Alliance[0], Team.Alliance, 60, InWorld: true, Deserter: false));
+        rig.A.RequestList(Alliance[0], master, BattlegroundType.WarsongGulch, 5);
+
+        Assert.Equal(2, rig.Holder.Pump());
+
+        BattlegroundListNotice notice = Assert.Single(rig.Links.To<BattlegroundListNotice>(WorkerA));
+        Assert.Empty(rig.Links.To<BattlegroundListNotice>(WorkerB));
+        Assert.Equal(Alliance[0], notice.Player);
+        Assert.Equal(master, notice.Source);
+        Assert.Equal(WsgMap, notice.MapId);
+        Assert.Equal((byte)5, notice.Bracket);
+        Assert.Equal(new[] { first.ClientInstanceId, second.ClientInstanceId }.OrderBy(i => i), notice.InstanceIds);
+        Assert.Equal(2, notice.InstanceIds.Count);
+    }
+
+    [Fact]
+    public void ABattlefieldListRequestFromTheHoldersOwnNode_SendsNoNotice()
+    {
+        var rig = new Rig();
+        rig.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 5);
+        rig.Holder.Submit(HolderId, new BattlegroundListCommand(Alliance[0], ObjectGuid.Empty, BattlegroundType.WarsongGulch, 5));
+
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Empty(rig.Links.Sent);
+    }
+
+    [Fact]
+    public void AWorkerThatIsGone_LosesItsPlayersQueueSlots_AndNobodyElse()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+
+        rig.Holder.Submit(WorkerA, new BattlegroundWorkerGoneCommand());
+        Assert.Equal(1, rig.Holder.Pump());
+
+        Assert.Equal(2, rig.Holder.RemotePlayerCount);
+        Assert.False(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+        Assert.False(rig.Manager.StateOf(Alliance[1]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[0]).InAnyQueue);
+        Assert.True(rig.Manager.StateOf(Horde[1]).InAnyQueue);
+    }
+
+    [Fact]
+    public void AWorkerGoneCommandNamingTheHoldersOwnNode_ChangesNothing()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+
+        rig.Holder.Submit(HolderId, new BattlegroundWorkerGoneCommand());
+        rig.Holder.Pump();
+
+        Assert.Equal(4, rig.Holder.RemotePlayerCount);
+        Assert.True(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
     }
 
     [Fact]
