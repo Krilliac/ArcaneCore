@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Targets;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.GameObjects;

@@ -3,6 +3,7 @@ using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.World.Spells;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
