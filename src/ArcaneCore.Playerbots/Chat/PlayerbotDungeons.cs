@@ -38,7 +38,7 @@ internal static partial class PlayerbotDungeons
         new("Onyxia's Lair", "Ony", ["ony", "onyxia"], 60, 60, Raid: true, MapId: 249),
         new("Zul'Gurub", "ZG", ["zg", "zulgurub"], 60, 60, Raid: true, MapId: 309),
         new("Blackwing Lair", "BWL", ["bwl"], 60, 60, Raid: true, MapId: 469),
-        new("Ruins of Ahn'Qiraj", "AQ20", ["aq20", "raq", "ruins"], 60, 60, Raid: true, MapId: 509),
+        new("Ruins of Ahn'Qiraj", "AQ20", ["aq20", "raq"], 60, 60, Raid: true, MapId: 509),
         new("Temple of Ahn'Qiraj", "AQ40", ["aq40", "taq"], 60, 60, Raid: true, MapId: 531),
         new("Naxxramas", "Naxx", ["naxx", "nax", "naxxramas"], 60, 60, Raid: true, MapId: 533),
     ];
