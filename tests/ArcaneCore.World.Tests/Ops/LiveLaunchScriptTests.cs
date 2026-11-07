@@ -1414,14 +1414,24 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("CrashHandler.Install(options, StandardErrorCrashSink.Instance);", hosting, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A real -Gateway start refuses before it starts anything when the gateway image is missing; the plan of the same home warns instead
+    /// (the fresh-home rule of <see cref="StartCluster_MissingImage_PlanWarnsAndPrints_RealStartRefuses"/>), and names the image either way.
+    /// </summary>
     [PwshFact]
     public void StartCluster_RefusesAMissingGatewayExecutable()
     {
         File.Delete(Path.Combine(_home, "bin", "ArcaneCore.Gateway.exe"));
-        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Gateway"], Secret);
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Gateway"], Secret);
         Assert.NotEqual(0, code);
         Assert.Contains("ArcaneCore.Gateway.exe", output, StringComparison.Ordinal);
         Assert.False(started);
+
+        (int planCode, string plan, bool planStarted) = RunLauncher("start-cluster.ps1", ["-Plan", "-Gateway"], Secret);
+        Assert.Equal(0, planCode);
+        Assert.False(planStarted, "the plan started a process");
+        Assert.Contains("ArcaneCore.Gateway.exe", plan, StringComparison.Ordinal);
+        Assert.Contains("A real start would refuse.", plan, StringComparison.Ordinal);
     }
 
     [Fact]
