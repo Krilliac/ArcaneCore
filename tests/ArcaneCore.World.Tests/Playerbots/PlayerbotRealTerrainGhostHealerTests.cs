@@ -43,13 +43,21 @@ public sealed partial class PlayerbotRealTerrainNavigationTests
 
     private async Task GhostAtGraveyardTakesTheHealer(uint map, Vector3 bodyAt, Vector3 graveyardAt, uint graveyardId, Vector3 healerAt)
     {
-        await using Terrain terrain = await Terrain.StartAsync();
+        // The world needs a faction template catalog: without one CreatureQuestLookup.Find cannot settle the hostility of any NPC, so
+        // Player::GetNPCIfCanInteractWith refuses every interaction (here CMSG_SPIRIT_HEALER_ACTIVATE) with "the NPC is not found or
+        // not visible to the player". Two templates are enough: the bot's own (1, as Terrain's withFactions set uses) and the healer's
+        // (vmangos FACTION_TEMPLATE_FRIENDLY_TO_ALL = 35 — faction 0, so no reputation and no group it is hostile to).
+        await using Terrain terrain = await Terrain.StartAsync(services: s => s.AddSingleton(new ArcaneCore.Kernel.Npc.FactionTemplateCatalog(
+        [
+            new ArcaneCore.Kernel.Npc.FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),
+            new ArcaneCore.Kernel.Npc.FactionTemplateRecord(35, 0, 0, OwnMask: 0, FriendlyMask: 0, HostileMask: 0),
+        ])));
         await terrain.PlaceAsync(bodyAt, map);
         Vector3 body = await terrain.KillAndReleaseAsync();
         await terrain.PlaceAsync(graveyardAt, map);
         Creature healer = await terrain.Host.OnWorldAsync(() =>
             DungeonBotHost.AddCreature(terrain.Player.Map!, 996491u, healerAt.X, healerAt.Y, healerAt.Z, (uint)NpcFlags.SpiritHealer,
-                terrain.Host.World.NowMs));
+                terrain.Host.World.NowMs, faction: 35)); // the real spirit healers' faction template (creature_template.faction_A/H 35)
         await terrain.WaitAsync(() => terrain.Player.VisibleObjects.Contains(healer.Guid), "the ghost sees the spirit healer");
         // As live: the bot was revived at this healer before and stalled there twice as a living bot ("teleports home ... stalled on
         // ground no route leaves" from the healer's spot), so the healer's 10-yard cell is a dead-end pin for it, and every route of
