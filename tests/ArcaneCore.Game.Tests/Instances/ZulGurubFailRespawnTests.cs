@@ -35,7 +35,9 @@ public sealed class ZulGurubFailRespawnTests
         uint[] entries = [ZulGurubInstance.GoSpiderEgg, ZulGurubInstance.GoGongOfBethekk];
         var creatures = new CreatureContent([], [], [], [], []);
         var rows = entries.Select((entry, i) => GameObjectTestKit.GoSpawn((uint)i + 1, entry, -10f + (i * 5f), -383.07f) with { MapId = Dungeon, Z = 61.78f });
-        var templates = entries.Select(e => GameObjectTestKit.GoTemplate(e, GameObjectType.Door)).ToArray();
+        // door data3 (noDamageImmune) set, so GetDespawnPossibility is true and the spawn is not NODESPAWN (GameObject::LoadFromDB,
+        // GameObject.cpp:985-991): a door template without it never despawns, and Despawn below would leave the object in the world.
+        var templates = entries.Select(e => GameObjectTestKit.GoTemplate(e, GameObjectType.Door, (3, 1))).ToArray();
         var objects = new GameObjectContent(templates, [.. rows], [], [], []);
         fixture.World.MapCreated += map =>
         {

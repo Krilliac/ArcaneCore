@@ -71,8 +71,13 @@ public sealed class DireMaulInstanceTests
             goRows.Add(GameObjectTestKit.GoSpawn(goGuid++, entry, 10f + goGuid, Y + 40f) with { MapId = Dungeon, Z = Z });
         }
 
+        // The felvine shard carries door data3 (noDamageImmune), so GetDespawnPossibility is true and its spawn is not NODESPAWN
+        // (GameObject::LoadFromDB, GameObject.cpp:985-991): without it the shard could never despawn, and the respawn test below would
+        // assert over an object Despawn had left in the world. The generators and doors are never despawned, so they keep the plain template.
         var templates = DireMaulInstance.CrystalGenerators.Concat(others)
-            .Select(e => GameObjectTestKit.GoTemplate(e, GameObjectType.Door)).ToArray();
+            .Select(e => e == DireMaulInstance.GoFelvineShard
+                ? GameObjectTestKit.GoTemplate(e, GameObjectType.Door, (3, 1))
+                : GameObjectTestKit.GoTemplate(e, GameObjectType.Door)).ToArray();
         var objects = new GameObjectContent(templates, [.. goRows], [], [], []);
         fixture.World.MapCreated += map =>
         {
