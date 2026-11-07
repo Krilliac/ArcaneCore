@@ -543,24 +543,30 @@ public sealed class PlayerbotSummonWorldTests
     {
         await using GroupTestWorld world = await StartAsync(stone: true);
         var userOne = await BotAsync(world, "Stonelogouta", Warrior, Camp + new Vector3(6f, 3f, 0f));
-        var userTwo = await BotAsync(world, "Stonelogoutb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        // 20 yd from the stone: inside HelperYards (40), so it takes the job's one place, and outside StonePartnerYards (8), so the summoner is
+        // still waiting for it and the job is open. With both candidates beside the stone the summoner used it at once and DriveStone's End
+        // closed the job in the same think, so nothing was left to drop.
+        var userTwo = await BotAsync(world, "Stonelogoutb", Warrior, Camp + new Vector3(6f, -20f, 0f));
         var far = await BotAsync(world, "Stonelogoutc", Warrior, FarCamp);
         await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
         await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
-        string summonerName = await world.OnWorldAsync(() =>
-            world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) is not null ? userOne.Name : userTwo.Name);
-        string helperName = summonerName == userOne.Name ? userTwo.Name : userOne.Name;
 
-        // The other bot takes the helper place at the stone before the summoner goes: that is the hold the drop has to release.
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Bots.Summons.IsHelper(world.World.Host.World.FindOnlinePlayer(helperName)!.Guid)), await world.TraceAsync());
-        ObjectGuid helperGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(helperName)!.Guid);
-
-        await world.OnWorldAsync(() =>
+        // The other bot takes the helper place at the stone before the summoner goes: that is the hold the drop has to release. The job, its
+        // helper and the summoner's logout are read and done inside one world tick, so no tick of the job can pass between them.
+        string summonerName = string.Empty, helperName = string.Empty;
+        ObjectGuid helperGuid = default;
+        Assert.True(await world.RunUntilAsync(180_000, () =>
         {
-            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(summonerName)!);
+            if (world.Bots.Summons.Active < 1) return false;
+            Player one = world.Player(userOne.Id), two = world.Player(userTwo.Id);
+            Player? helper = world.Bots.Summons.IsHelper(one.Guid) ? one : world.Bots.Summons.IsHelper(two.Guid) ? two : null;
+            if (helper is null) return false;
+            Player summoner = ReferenceEquals(helper, one) ? two : one;
+            if (world.Bots.Summons.JobOf(summoner.Guid) is null) return false;
+            (helperGuid, helperName, summonerName) = (helper.Guid, helper.Name, summoner.Name);
+            world.World.Host.World.LogoutPlayer(summoner);
             return true;
-        });
+        }), await world.TraceAsync());
         Assert.Null(await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(summonerName)));
 
         // The other bots keep thinking: any of them drops the job (its summoner is gone) instead of holding still for it until the summoner thinks again.
@@ -730,18 +736,21 @@ public sealed class PlayerbotSummonWorldTests
         var far = await BotAsync(world, "Stoneboundc", Warrior, FarCamp);
         await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
         await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
-
-        (bool keptAtTheBound, bool droppedPastIt) = await world.OnWorldAsync(() =>
+        // The job is taken and both drops are made in the tick that first sees it: a stone job is closed by DriveStone's End as soon as the
+        // summoner's offer is out, so a job read in a later call is already gone (it was a NullReferenceException here).
+        bool keptAtTheBound = false, droppedPastIt = false;
+        Assert.True(await world.RunUntilAsync(180_000, () =>
         {
-            SummonJob job = world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) ?? world.Bots.Summons.JobOf(world.Player(userTwo.Id).Guid)!;
+            SummonJob? job = world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) ?? world.Bots.Summons.JobOf(world.Player(userTwo.Id).Guid);
+            if (job is null) return false;
             WorldSession session = world.Session(userOne.Id);
             uint bound = job.StartMs + PlayerbotSummons.StoneMaxMs + PlayerbotSummons.StaleGraceMs;
             world.Bots.Summons.DropStale(session, bound);
-            bool kept = world.Bots.Summons.Active == 1;
+            keptAtTheBound = world.Bots.Summons.Active == 1;
             world.Bots.Summons.DropStale(session, bound + 1);
-            return (kept, world.Bots.Summons.Active == 0);
-        });
+            droppedPastIt = world.Bots.Summons.Active == 0;
+            return true;
+        }), await world.TraceAsync());
 
         Assert.True(keptAtTheBound, "a job exactly at its limit plus the grace was dropped");
         Assert.True(droppedPastIt, "a job past its limit plus the grace was kept");
