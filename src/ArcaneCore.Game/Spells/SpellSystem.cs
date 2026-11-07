@@ -668,12 +668,13 @@ public sealed partial class SpellSystem
             castTime = triggered ? 0 : CastTimeFor(caster, spell);
         }
 
+        GameObjects.GameObject? castingGo = TakeCastingObject(caster);
         var cast = new SpellCast(spell, caster, targets, triggered, castTime,
             castItem is null ? PowerCostFor(caster, spell) : 0, DurationFor(caster, spell), triggeringSpell, castItem, itemSpellIndex,
             castItem is null ? (byte)0 : castItem.BagSlot, castItem is null ? (byte)0 : castItem.Slot,
             itemCooldownMs, itemCategoryCooldownMs, itemCategory, customAuraAmounts)
             { ModScope = modScope, IsItemEquipCast = itemEquipCast, IsItemTriggeredCast = itemTriggeredCast, IsTriggeredByAura = triggeredByAura,
-              CasterGameObject = TakeCastingObject(caster),
+              CasterGameObject = castingGo, IsObjectUse = castingGo is not null && _castingObjectUse,
               OriginalCasterOverride = ReferenceEquals(originalCaster, caster) ? null : originalCaster };
         cast.AutoRepeatShot = autoRepeatShot;
         cast.InItemUseDispatch = castItem is not null && CurrentItemUseDispatch(castItem) is not null;
@@ -778,9 +779,16 @@ public sealed partial class SpellSystem
             unitTarget = ResolveUnitTarget(caster, cast.Targets, spell);
             RollTargetOutcomes(cast, targetEffects, out List<ObjectGuid> hits, out List<(ObjectGuid Guid, SpellMissInfo Reason)> misses);
 
-            SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
-                cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
-                RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
+            // vmangos Spell::SendSpellGo returns before the packet when !IsNeedSendToClient (Spell.cpp:4532-4537): an invisible triggered cast
+            // (a passive or proc trigger with no visual, no speed and no channel) tells the client nothing. Misses of such a cast still go out
+            // one SMSG_SPELLLOGMISS per missed target from ApplyMissedTarget, so the SendAllTargetsMiss branch (Spell.cpp:4692) needs no packet here.
+            // SendLogExecute (m_needSpellLog, Spell.cpp:3945) has no counterpart in this server: SMSG_SPELLLOGEXECUTE is not built anywhere.
+            if (IsNeedSendToClient(cast))
+            {
+                SendToSet(caster, WorldOpcode.SmsgSpellGo, SpellPackets.BuildSpellGo(
+                    cast.CastItem?.Guid ?? caster.Guid, caster.Guid, spell.Id, WithAmmoFlag(SpellCastFlags.Unknown9, spell), hits, misses, cast.Targets,
+                    RangedSpellFacts.IsRanged(spell) ? GetAmmoVisual(caster) : default), includeSelf: true); // ranged (hunter lane): ammo trailer
+            }
 
             // Proc engine: the cast-end procs before the effects (vmangos Spell::cast, Spell.cpp:3724-3749), and for a channel the target triggers
             // as soon as the targets are known (Spell.cpp:3682-3683).
@@ -1074,6 +1082,22 @@ public sealed partial class SpellSystem
             }
         }
     }
+
+    /// <summary>
+    /// vmangos Spell::IsNeedSendToClient (Spell.cpp:7705-7709): a cast is shown to the client when it has a spell visual, is channeled, has a
+    /// missile speed, or is not triggered. A game object's own <c>GameObject::Use</c> spell counts as not triggered (GameObject.cpp:1403, 2001-2005;
+    /// only the summoning ritual sets triggered, :1793), though it is cast through the triggered object-cast path here.
+    /// <para>
+    /// The channeling-visual clause (<c>m_caster->IsChannelingVisual</c>, set for the ritual helper's animation, GameObject.cpp:766-767) has no
+    /// separate flag here: the helper's animation is a triggered cast (GameObjectTypesFeature.StartRitualAnimation) and is shown when its spell has a
+    /// visual. The in-world clause always holds for a cast that reaches this point (the caster is in a world, <c>WorldObject.IsInWorld</c>).
+    /// </para>
+    /// </summary>
+    private static bool IsNeedSendToClient(SpellCast cast)
+        => IsShownWhenTriggered(cast.Spell) || cast.IsObjectUse || (!cast.IsTriggeredByAura && !cast.IsTriggered);
+
+    /// <summary>The spell-level half of <see cref="IsNeedSendToClient"/>: a triggered cast of this spell is shown, because it has a visual, a channel or a missile speed.</summary>
+    private static bool IsShownWhenTriggered(SpellInfo spell) => spell.SpellVisual != 0 || spell.IsChanneled || spell.Speed > 0.0f;
 
     /// <summary>A target the hit roll missed (or was immune): the miss procs, the miss packets, the zero-damage combat start and the observers.</summary>
     private void ApplyMissedTarget(SpellCast cast, Unit target, SpellTargetEntry entry)

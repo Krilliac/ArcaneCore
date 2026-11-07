@@ -23,7 +23,7 @@ public sealed class ItemCombatProcWorldTests
             Spells = [new ItemSpell(proc, 2, 3, 0, 1000, 77, 1000)] });
         items.Templates.StartingItems.Add(new StartingItem(1, 1, 49412, 1));
         SpellContent baseContent = SpellTestServices.Content();
-        var row = new SpellTemplateRow { Id = proc, SpellName = "Combat Proc", RangeIndex = 4, Effect1 = 3, EffectBasePoints1 = -1,
+        var row = new SpellTemplateRow { Id = proc, SpellName = "Combat Proc", RangeIndex = 4, SpellVisual = 1, Effect1 = 3, EffectBasePoints1 = -1,
             EffectBaseDice1 = 1, EffectDieSides1 = 1, EffectImplicitTargetA1 = 6, ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0 };
         WorldTestHost host;
         using (items.Use()) host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ISpellContentStore>(new Store(baseContent with { Spells = [.. baseContent.Spells, row] })));

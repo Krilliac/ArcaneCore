@@ -3,6 +3,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.GameObjects.GameObjectTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -17,6 +18,7 @@ public sealed class GameObjectCastTests : IDisposable
 {
     private const uint FireSpell = 951001;
     private const uint FireNova = 951002;
+    private const uint QuietSpell = 951003;
     private const uint NovaTrap = 951012;
     private const uint WildTrap = 951010;
     private const uint FactionTrap = 951011;
@@ -52,6 +54,12 @@ public sealed class GameObjectCastTests : IDisposable
             {
                 RangeIndex = SpellConstants.RangeIndexSelfOnly,
             },
+            // A spell with no visual, speed or channel: the client hears of it only when it is not triggered (Spell::IsNeedSendToClient).
+            Spell(QuietSpell, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.UnitEnemy)) with
+            {
+                SpellVisual = 0,
+                RangeIndex = SpellConstants.RangeIndexSelfOnly,
+            },
         ], [], []);
         _spells = new SpellSystem(store, () => _now, random: new Random(1)) { MapUpdateIntervalMs = 0, Relations = new FakeRelations() };
         _spells.SpellHit += (caster, target, spell) =>
@@ -70,6 +78,9 @@ public sealed class GameObjectCastTests : IDisposable
     {
         public bool Cast(GameObject source, uint spellId, Unit target, Unit? unitCaster)
             => spells.CastForGameObject(source, spellId, target, unitCaster) == SpellCastResult.CastOk;
+
+        public bool CastUse(GameObject source, uint spellId, Unit target)
+            => spells.CastForGameObject(source, spellId, target, unitCaster: null, objectUse: true) == SpellCastResult.CastOk;
 
         public float? MaxRange(uint spellId) => spells.Store.Get(spellId)?.Range.Max;
 
@@ -175,5 +186,50 @@ public sealed class GameObjectCastTests : IDisposable
         (Unit caster, Unit target) = Assert.Single(_hits);
         Assert.Same(owner, caster);
         Assert.Same(victim, target);
+    }
+
+    private static int QuietSpellGoCount(FakeSession session) => session.Sent
+        .Where(p => p.Opcode == WorldOpcode.SmsgSpellGo)
+        .Count(p =>
+        {
+            var reader = new PacketReader(p.Payload);
+            reader.ReadPackedGuid(); // the cast item or the caster
+            reader.ReadPackedGuid(); // the caster
+            return reader.ReadUInt32() == QuietSpell;
+        });
+
+    [Fact]
+    public void AGooberOrSpellCasterUse_IsShownToTheClient_EvenWithoutASpellVisual()
+    {
+        // vmangos GameObject::Use starts with triggered = false (GameObject.cpp:1403); a goober's and a spell caster's spell reach
+        // new Spell(..., triggered, ...) as such (:2001-2005), so Spell::IsNeedSendToClient is true and SMSG_SPELL_GO is sent.
+        var session = new FakeSession(1);
+        Player player = TestWorld.CreatePlayer(1, 30, 30, session);
+        _world.AddPlayer(player);
+        _world.RunTick(0);
+        GameObject goober = _objects.Summon(WildTrap, 33, 30, 83.5f, 0)!;
+        session.Clear();
+
+        Assert.True(new Adapter(_spells).CastUse(goober, QuietSpell, player));
+
+        Assert.Equal(1, QuietSpellGoCount(session));
+        Assert.Equal(player.MaxHealth - 5, player.Health); // the cast itself ran as an object cast
+    }
+
+    [Fact]
+    public void ATrapSpellWithoutAVisual_StaysHidden_ItIsTriggered()
+    {
+        // An object's trap spell is CastSpell(..., true) (GameObject.cpp:535-537, 1495-1497): triggered, so with no visual no SMSG_SPELL_GO.
+        var session = new FakeSession(1);
+        Player player = TestWorld.CreatePlayer(1, 30, 30, session);
+        _world.AddPlayer(player);
+        _world.RunTick(0);
+        GameObject trap = _objects.Summon(WildTrap, 33, 30, 83.5f, 0)!;
+        session.Clear();
+
+        Assert.True(new Adapter(_spells).Cast(trap, QuietSpell, player, null));
+
+        Assert.Equal(0, QuietSpellGoCount(session));
+        Assert.Equal(player.MaxHealth - 5, player.Health);
     }
 }

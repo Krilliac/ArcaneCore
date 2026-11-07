@@ -60,9 +60,9 @@ public sealed class GameObjectResetStateTests
     [Fact]
     public void AnObjectWithoutASlowOpenLock_SendsNoResetStateWhenItRespawns()
     {
-        GameObjectTypeRig rig = Create([GoSpawn(1, EveryoneGoober, 3, 0)]);
+        GameObjectTypeRig rig = Create([GoSpawn(1, DespawnableGoober, 3, 0)]);
         (_, var session) = rig.Join(1, 1, 0);
-        GameObject goober = rig.Single(EveryoneGoober);
+        GameObject goober = rig.Single(DespawnableGoober);
         session.Clear();
 
         RespawnAfterDespawn(rig, goober);

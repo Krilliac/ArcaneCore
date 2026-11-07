@@ -76,7 +76,7 @@ public sealed class GroundingTotemWorldTests
                     },
                     new SpellInfo
                     {
-                        Id = HostileSpell, Name = "Incoming Magic", School = SpellSchool.Fire,
+                        Id = HostileSpell, Name = "Incoming Magic", School = SpellSchool.Fire, SpellVisual = 1,
                         DamageClass = SpellDamageClass.Magic, RangeIndex = 4, Range = new SpellRange(0, 30),
                         TargetCreatureType = 1 << 6, // humanoid; 8179 explicitly allows Grounding to intercept it
                         Duration = new SpellDuration(3000, 0, 3000),

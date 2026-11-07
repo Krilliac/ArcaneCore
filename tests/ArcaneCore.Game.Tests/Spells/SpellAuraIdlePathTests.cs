@@ -30,6 +30,7 @@ public sealed class SpellAuraIdlePathTests
     private static SpellInfo Passive(uint id) => Spell(id, Effect(SpellEffectName.ApplyAura, 3, SpellImplicitTarget.UnitCaster, AuraType.Dummy)) with
     {
         Attributes = SpellAttributes.Passive,
+        SpellVisual = 0, // a passive is only shown (SpellAuraHolder visible slot) when it has a visual
         StartRecoveryCategory = 0,
         StartRecoveryTime = 0,
     };

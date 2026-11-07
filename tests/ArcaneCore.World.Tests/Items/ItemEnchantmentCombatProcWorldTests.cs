@@ -52,7 +52,7 @@ public sealed class ItemEnchantmentCombatProcWorldTests
         items.Templates.Templates.Add(new ItemTemplate { Entry = 49603, Class = 2, SubClass = 7, InventoryType = 21, Delay = 1000, Stackable = 1 });
         items.Templates.StartingItems.Add(new StartingItem(1, 1, 49603, 1));
         SpellContent content = SpellTestServices.Content();
-        content = content with { Spells = [.. content.Spells, new SpellTemplateRow { Id = proc, SpellName = "Enchant damage", RangeIndex = 4,
+        content = content with { Spells = [.. content.Spells, new SpellTemplateRow { Id = proc, SpellName = "Enchant damage", RangeIndex = 4, SpellVisual = 1,
             Effect1 = 2, EffectBasePoints1 = 9, EffectImplicitTargetA1 = 6, StartRecoveryCategory = 0, StartRecoveryTime = 0 }] };
         using (items.Use())
         {

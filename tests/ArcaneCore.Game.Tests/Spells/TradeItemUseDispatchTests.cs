@@ -101,6 +101,51 @@ public sealed class TradeItemUseDispatchTests
             [], [], expectedTargets), Assert.Single(SpellTestKit.Packets(session, WorldOpcode.SmsgSpellGo).Skip(1)));
     }
 
+    // vmangos TradeHandler.cpp:362, :399: a trade spell is triggered, so Spell::IsNeedSendToClient shows it only for a visual, a channel or a missile speed.
+    [Theory]
+    [InlineData(0u, 0f, false, false, false)]
+    [InlineData(0u, 0f, false, true, false)]
+    [InlineData(1u, 0f, false, false, true)]
+    [InlineData(1u, 0f, false, true, true)]
+    [InlineData(0u, 20f, false, false, true)]
+    [InlineData(0u, 20f, false, true, true)]
+    [InlineData(0u, 0f, true, false, true)]
+    [InlineData(0u, 0f, true, true, true)]
+    public void TradePublication_SendsSpellGoOnlyForAVisibleTriggeredSpell_AndAlwaysStartsTheCooldown(uint visual, float speed, bool channeled, bool itemCast, bool shown)
+    {
+        const uint spellId = 99161;
+        const uint sourceEntry = 99162;
+        using var kit = new SpellTestKit(SpellTestKit.Spell(spellId, SpellTestKit.Effect(SpellEffectName.Dummy, 0)) with
+        {
+            SpellVisual = visual,
+            Speed = speed,
+            AttributesEx = channeled ? SpellAttributesEx.IsChanneled : default,
+            RecoveryTime = 9_000,
+        });
+        (Player caster, FakeSession session) = kit.AddPlayer(1);
+        (Player recipient, _) = kit.AddPlayer(2, 2, 0);
+        var sourceSpell = new ItemSpell(spellId, 0, 2, 0, 1_200, 77, 2_400);
+        var store = new ItemTemplateStore([
+            new ItemTemplate { Entry = sourceEntry, Class = 0, Stackable = 1, Spells = [sourceSpell] },
+            ItemTestData.Templates.Single(t => t.Entry == ItemTestData.WornShortsword),
+        ]);
+        caster.Inventory.Templates = store;
+        recipient.Inventory.Templates = store;
+        caster.Inventory.GuidAllocator = new ItemGuidAllocator();
+        recipient.Inventory.GuidAllocator = new ItemGuidAllocator();
+        caster.Inventory.Load([]);
+        recipient.Inventory.Load([]);
+        Assert.Equal(InventoryResult.Ok, caster.Inventory.AddItem(sourceEntry, 1, out Item? source));
+        Assert.Equal(InventoryResult.Ok, recipient.Inventory.AddItem(ItemTestData.WornShortsword, 1, out Item? target));
+        var plan = new TradeEnchantmentPlan(target!.ToData(), [], SpellSnapshot: kit.System.Store.Get(spellId),
+            ItemCast: itemCast ? new TradeItemCastContext(source!.Guid, sourceEntry, 0, sourceSpell, source.BagSlot, source.Slot, false, ItemUsePaymentPlan.Create(source)) : null);
+
+        Assert.True(kit.System.PublishCommittedTradeEnchantment(Guid.NewGuid(), caster, target, plan));
+
+        Assert.Equal(shown ? 1 : 0, SpellTestKit.Packets(session, WorldOpcode.SmsgSpellGo).Count);
+        Assert.Contains(kit.System.GetActiveCooldowns(caster), cooldown => cooldown.SpellId == spellId);
+    }
+
     [Fact]
     public void TradeItemUse_RefusesSecondPassiveTemplateSpell()
     {

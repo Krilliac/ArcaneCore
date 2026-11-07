@@ -94,6 +94,9 @@ public sealed class GameObjectTypesFeature(IServiceProvider services, ILogger<Ga
         public bool Cast(GameObject source, uint spellId, Unit target, Unit? unitCaster)
             => System?.CastForGameObject(source, spellId, target, unitCaster) == SpellCastResult.CastOk;
 
+        public bool CastUse(GameObject source, uint spellId, Unit target)
+            => System?.CastForGameObject(source, spellId, target, unitCaster: null, objectUse: true) == SpellCastResult.CastOk;
+
         public float? MaxRange(uint spellId) => System?.Store.Get(spellId)?.Range.Max;
 
         public bool IsChanneling(Unit unit) => System?.IsChanneling(unit) == true;

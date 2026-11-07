@@ -15,6 +15,13 @@ public interface IGameObjectSpells
     /// </summary>
     bool Cast(GameObject source, uint spellId, Unit target, Unit? unitCaster);
 
+    /// <summary>
+    /// The object's own <c>GameObject::Use</c> spell (a goober's data10 or spell caster's data0, GameObject.cpp:2001-2005): cast by the object at
+    /// <paramref name="target"/>, the user. vmangos casts it non-triggered, so the client is told of it even when the spell has no visual. The
+    /// default is a plain <see cref="Cast"/> for seams that do not tell the two apart.
+    /// </summary>
+    bool CastUse(GameObject source, uint spellId, Unit target) => Cast(source, spellId, target, null);
+
     /// <summary>The spell's maximum range (vmangos GetSpellMaxRange of its range index), or null for an unknown spell.</summary>
     float? MaxRange(uint spellId);
 
