@@ -70,6 +70,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.World.Playerbots.PlayerbotTravel.s_staticRoutes"] = "Volatile reference to an immutable route list",
         ["ArcaneCore.World.Playerbots.Scenarios.PlayerbotScenarioCommands.s_running"] = "Interlocked.CompareExchange flag",
         ["ArcaneCore.World.Playerbots.Scenarios.ScenarioPacketLog.s_sequence"] = "sequence, Interlocked.Increment",
+        ["ArcaneCore.World.Spells.SpellCommands.s_facingSplineId"] = "spline id counter for the .cast facing splines, Interlocked.Increment (like ArcaneCore.Game.Locomotion.ForcedMovement.s_splineId)",
     };
 
     [Fact]

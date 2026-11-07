@@ -78,8 +78,12 @@ internal sealed class IdentityRows : ICharacterStore
     private readonly ConcurrentDictionary<int, CharacterIdentity> _rows = new();
     private readonly TaskCompletionSource _readFailed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _readHeld = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly ConcurrentDictionary<int, CharacterState> _saved = new();
     private TaskCompletionSource? _release;
     private int _failReads;
+
+    /// <summary>The last state written per character id (<see cref="SaveStateAsync"/>).</summary>
+    public IReadOnlyDictionary<int, CharacterState> Saved => _saved;
 
     /// <summary>A read failed (<see cref="FailNextRead"/>).</summary>
     public Task ReadFailed => _readFailed.Task;
@@ -127,7 +131,16 @@ internal sealed class IdentityRows : ICharacterStore
 
     public Task<bool> DeleteAsync(int id, int accountId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-    public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    /// <summary>
+    /// Accepted and kept. The social takeover rigs run a real <c>CharacterSaveQueue</c> over this store, and since the stop drain retries
+    /// every retained snapshot a refusal here would fail their shutdown rather than the behaviour they pin.
+    /// </summary>
+    public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        _saved[state.Id] = state;
+        return Task.CompletedTask;
+    }
 
     public Task<IReadOnlyList<ActionButton>> GetActionButtonsAsync(int characterId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 }
