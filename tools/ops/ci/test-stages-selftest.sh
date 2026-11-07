@@ -281,7 +281,7 @@ check sweep-skipped 0 "--filter FullyQualifiedName~X" '^GATE RESULT: PASS$' 'exe
 # GATE_BATCH_LEG=off; --stage batch with nothing to run fails.
 tag=batch-pass; envs=; tgts=tests/ci/Game.slnf
 check batch-pass 0 "" 'batch tests/ci/Game.slnf rc=0 executed 10' 'stage batch: skipped'
-grep -q '^unset tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt" && grep -q '^400 tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt" || { echo "FAIL batch-pass: main run did not go without the window or the leg with 400"; cat "$work/batch-batch-pass.txt"; bad=1; }
+if ! { grep -q '^unset tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt" && grep -q '^400 tests/ci/Game.slnf Category!=Timing$' "$work/batch-batch-pass.txt"; }; then echo "FAIL batch-pass: main run did not go without the window or the leg with 400"; cat "$work/batch-batch-pass.txt"; bad=1; fi
 tag=batch-fail
 check batch-fail 1 "" 'batch tests/ci/Game.slnf \(spell batching 400 ms\) rc=1 failed=1' 'rerunning|FLAKY'
 grep -q '^  Failed Ns.G.Batchy' "$work/batch-fail.out" || { echo "FAIL batch-fail: Failed line missing"; bad=1; }
