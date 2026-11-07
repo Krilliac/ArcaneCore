@@ -682,22 +682,28 @@ public sealed class PlayerbotSummonWorldTests
     {
         await using GroupTestWorld world = await StartAsync(stone: true);
         var userOne = await BotAsync(world, "Stonegonea", Warrior, Camp + new Vector3(6f, 3f, 0f));
-        var userTwo = await BotAsync(world, "Stonegoneb", Warrior, Camp + new Vector3(6f, -3f, 0f));
+        // The helper candidate stands 20 yd from the stone: inside HelperYards (40), so it takes the job's one place, and outside
+        // StonePartnerYards (8), so the summoner is still waiting for it (DriveStone's "the partner is still on its way") while it walks.
+        // With both candidates beside the stone the summoner used it at once and DriveStone's End closed the job in the same think.
+        var userTwo = await BotAsync(world, "Stonegoneb", Warrior, Camp + new Vector3(6f, -20f, 0f));
         var far = await BotAsync(world, "Stonegonec", Warrior, FarCamp);
         await using WorldTestClient anchor = await world.World.EnterWorldAsync("SUMMONANCHOR", "Summonanchor", AccountSecurity.Player);
         await GroupAsync(world, "Summonanchor", userOne, userTwo, far);
-        Assert.True(await world.RunUntilAsync(180_000, () => world.Bots.Summons.Active >= 1), await world.TraceAsync());
-        string summonerName = await world.OnWorldAsync(() =>
-            world.Bots.Summons.JobOf(world.Player(userOne.Id).Guid) is not null ? userOne.Name : userTwo.Name);
-        string helperName = summonerName == userOne.Name ? userTwo.Name : userOne.Name;
-        Assert.True(await world.RunUntilAsync(60_000, () => world.Bots.Summons.IsHelper(world.World.Host.World.FindOnlinePlayer(helperName)!.Guid)), await world.TraceAsync());
-        ObjectGuid helperGuid = await world.OnWorldAsync(() => world.World.Host.World.FindOnlinePlayer(helperName)!.Guid);
 
-        await world.OnWorldAsync(() =>
+        // One tick takes the helper out of the world: the job and its helper are read and the logout is done inside the same world tick, so no
+        // tick of the job can pass between them.
+        ObjectGuid helperGuid = default;
+        Assert.True(await world.RunUntilAsync(180_000, () =>
         {
-            world.World.Host.World.LogoutPlayer(world.World.Host.World.FindOnlinePlayer(helperName)!);
+            if (world.Bots.Summons.Active < 1) return false;
+            Player? helper = world.Bots.Summons.IsHelper(world.Player(userOne.Id).Guid) ? world.Player(userOne.Id)
+                : world.Bots.Summons.IsHelper(world.Player(userTwo.Id).Guid) ? world.Player(userTwo.Id)
+                : null;
+            if (helper is null) return false;
+            helperGuid = helper.Guid;
+            world.World.Host.World.LogoutPlayer(helper);
             return true;
-        });
+        }), await world.TraceAsync());
 
         // The helper no longer thinks; the summoner's and the target's thinks drop it from the job well inside the job's time bound.
         Assert.True(await world.RunUntilAsync(20_000, () => !world.Bots.Summons.IsHelper(helperGuid)), await world.TraceAsync());
