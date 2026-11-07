@@ -103,21 +103,31 @@ public sealed partial class SpellSystem
     /// Wrappers installed through <see cref="RegisterTransparentEffectWrapper"/>, keyed by the wrapper delegate: the handler each one wraps
     /// and whether it currently adds nothing of its own.
     /// </summary>
-    private readonly Dictionary<SpellEffectHandler, (SpellEffectHandler? Inner, Func<bool> IsTransparent)> _transparentWrappers =
+    private readonly Dictionary<SpellEffectHandler, TransparentWrapper> _transparentWrappers =
         new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// One registered wrapper: the handler it calls, whether it currently adds nothing of its own for any spell
+    /// (<paramref name="IsTransparent"/>), and whether it adds nothing for one given spell (<paramref name="IsTransparentForSpell"/>, null
+    /// when the wrapper cannot tell spells apart).
+    /// </summary>
+    private readonly record struct TransparentWrapper(SpellEffectHandler? Inner, Func<bool> IsTransparent, Func<uint, bool>? IsTransparentForSpell);
 
     /// <summary>
     /// Install <paramref name="wrapper"/> as the handler of <paramref name="effect"/> over <paramref name="inner"/> (the handler it calls,
     /// read by the caller before this call). While <paramref name="isTransparent"/> returns true the wrapper only calls
     /// <paramref name="inner"/>, so <see cref="HasBuiltInEffectHandler"/> looks through it: the spell script dispatcher's chained effects,
     /// which run a script only while some script declares the effect, count as the built-in handler again once no script does.
+    /// <paramref name="isTransparentForSpell"/> answers the same question for one spell id, so
+    /// <see cref="HasBuiltInEffectHandler(SpellEffectName, uint)"/> still looks through the wrapper for the spells no script claims.
     /// </summary>
-    internal void RegisterTransparentEffectWrapper(SpellEffectName effect, SpellEffectHandler wrapper, SpellEffectHandler? inner, Func<bool> isTransparent)
+    internal void RegisterTransparentEffectWrapper(SpellEffectName effect, SpellEffectHandler wrapper, SpellEffectHandler? inner,
+        Func<bool> isTransparent, Func<uint, bool>? isTransparentForSpell = null)
     {
         ArgumentNullException.ThrowIfNull(wrapper);
         ArgumentNullException.ThrowIfNull(isTransparent);
         RegisterEffect(effect, wrapper);
-        _transparentWrappers[wrapper] = (inner, isTransparent);
+        _transparentWrappers[wrapper] = new TransparentWrapper(inner, isTransparent, isTransparentForSpell);
         _scriptChains.Add(wrapper);
     }
 
@@ -127,7 +137,16 @@ public sealed partial class SpellSystem
     /// looked through while it reports itself transparent. Quest reward preflight models only the
     /// built-in teleport and summon handlers; replacement code cannot be modelled.
     /// </summary>
-    public bool HasBuiltInEffectHandler(SpellEffectName effect)
+    public bool HasBuiltInEffectHandler(SpellEffectName effect) => HasBuiltInEffectHandler(effect, spellId: null);
+
+    /// <summary>
+    /// <see cref="HasBuiltInEffectHandler(SpellEffectName)"/> for one spell: a wrapper that only runs a script for the spells some script
+    /// claims (the spell script dispatcher's chained effects) is looked through for every other spell, so a single scripted spell does not
+    /// make the effect unmodellable for the rest. Pass the spell whose effect is being judged.
+    /// </summary>
+    public bool HasBuiltInEffectHandler(SpellEffectName effect, uint spellId) => HasBuiltInEffectHandler(effect, (uint?)spellId);
+
+    private bool HasBuiltInEffectHandler(SpellEffectName effect, uint? spellId)
     {
         if (!_builtInEffectHandlers.TryGetValue(effect, out SpellEffectHandler? builtIn)
             || !EffectHandlers.TryGetValue(effect, out SpellEffectHandler? active))
@@ -136,7 +155,9 @@ public sealed partial class SpellSystem
         }
 
         while (active is not null && !ReferenceEquals(builtIn, active)
-            && _transparentWrappers.TryGetValue(active, out (SpellEffectHandler? Inner, Func<bool> IsTransparent) wrapper) && wrapper.IsTransparent())
+            && _transparentWrappers.TryGetValue(active, out TransparentWrapper wrapper)
+            && (wrapper.IsTransparent()
+                || (spellId is { } id && wrapper.IsTransparentForSpell is { } forSpell && forSpell(id))))
         {
             active = wrapper.Inner;
         }
