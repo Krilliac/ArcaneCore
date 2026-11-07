@@ -1,6 +1,7 @@
 using System.Globalization;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Ops.MapFeed;
 using Xunit;
 
@@ -285,5 +286,82 @@ public sealed class MapFeedAnomalyRingTests
         Assert.Equal(Threads * PerThread, last.Latest);
         Assert.Equal(MapFeedAnomalyRing.Capacity, last.Slots.Length);
         Assert.Equal((long)Threads * PerThread - MapFeedAnomalyRing.Capacity + 1, last.Slots[0].Seq);
+    }
+
+    private static AnomalyNotice PacketNotice(string subject)
+        => new("packet/shape", "packet", "shape", AnomalySeverity.Warning, subject, "detail", 1, 0);
+
+    [Fact]
+    public void OneClientCyclingOpcodes_CannotTakeMoreThanItsPacketBudget_AndLeavesOtherNoticesAlone()
+    {
+        var clock = new ManualTimeProvider(1_700_000_000);
+        object world = new();
+        using var ring = new MapFeedAnomalyRing(new AnomalyLedger(), world, keepUnowned: true, clock);
+
+        ring.Offer(Notice("bot Alice (guid 1)", origin: world));
+        for (int i = 0; i < 1000; i++)
+        {
+            ring.Offer(PacketNotice("account 7"));
+        }
+
+        ring.Offer(PacketNotice("account 8"));
+        ring.Offer(Notice("bot Bob (guid 2)", origin: world));
+
+        AnomalySlot[] slots = ring.Query(0, MapFeedAnomalyRing.Capacity).Slots;
+        Assert.Equal(MapFeedAnomalyRing.PacketPerSubjectPerWindow, slots.Count(s => s.Subject == "account 7"));
+        Assert.Equal(1, slots.Count(s => s.Subject == "account 8"));
+        Assert.Equal(2, slots.Count(s => s.Subsystem == "bot-test"));
+        Assert.Equal(1000 - MapFeedAnomalyRing.PacketPerSubjectPerWindow, ring.PacketDropped);
+    }
+
+    [Fact]
+    public void ManyClients_AreHeldToTheWindowTotal_AndTheBudgetRefillsWhenTheWindowPasses()
+    {
+        var clock = new ManualTimeProvider(1_700_000_000);
+        using var ring = new MapFeedAnomalyRing(new AnomalyLedger(), new object(), keepUnowned: true, clock);
+
+        for (int i = 0; i < MapFeedAnomalyRing.PacketPerWindow + 100; i++)
+        {
+            ring.Offer(PacketNotice(string.Create(CultureInfo.InvariantCulture, $"account {i}")));
+        }
+
+        Assert.Equal(MapFeedAnomalyRing.PacketPerWindow, ring.Query(0, MapFeedAnomalyRing.Capacity).Slots.Length);
+        Assert.Equal(100, ring.PacketDropped);
+
+        clock.Advance(MapFeedAnomalyRing.PacketWindowMs / 1000);
+        ring.Offer(PacketNotice("account 0"));
+
+        Assert.Equal(MapFeedAnomalyRing.PacketPerWindow + 1, ring.Query(0, MapFeedAnomalyRing.Capacity).Slots.Length);
+    }
+
+    [Fact]
+    public void ARealLedgerPacketReport_IsUnowned_AndIsHeldToThePerAccountBudget()
+    {
+        var ledger = new AnomalyLedger();
+        using var ring = new MapFeedAnomalyRing(ledger, new object(), keepUnowned: true, new ManualTimeProvider(1_700_000_000));
+
+        for (int i = 0; i < MapFeedAnomalyRing.PacketPerSubjectPerWindow + 4; i++)
+        {
+            ledger.Report(PacketChecks.Subsystem, "shape", "account 7", "detail " + i.ToString(CultureInfo.InvariantCulture));
+        }
+
+        Assert.Equal(MapFeedAnomalyRing.PacketPerSubjectPerWindow, ring.Accepted);
+        Assert.Equal(4, ring.PacketDropped);
+        Assert.Equal(0, ring.Refused);
+    }
+
+    [Fact]
+    public void AnOwnedPacketNotice_IsNotBudgeted()
+    {
+        object world = new();
+        using var ring = new MapFeedAnomalyRing(new AnomalyLedger(), world, keepUnowned: false, new ManualTimeProvider(1_700_000_000));
+
+        for (int i = 0; i < MapFeedAnomalyRing.PacketPerSubjectPerWindow + 5; i++)
+        {
+            ring.Offer(PacketNotice("account 7") with { Origin = world });
+        }
+
+        Assert.Equal(MapFeedAnomalyRing.PacketPerSubjectPerWindow + 5, ring.Accepted);
+        Assert.Equal(0, ring.PacketDropped);
     }
 }
